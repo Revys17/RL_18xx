@@ -1,0 +1,34 @@
+Steps
+
+Parts
+* Initialization
+  * Get Player count
+  * Distribute Money
+  * Initialize Objects and Board State
+  * Set starting player
+* Private Auction
+
+* Stock Round
+  * Par Value
+  * Stock Value
+  * IPO
+  * Bank Pool
+  * Actions
+    * Buy Share
+      * Includes starting a new company
+    * Sell Share
+      * Must keep track of who sold what shares shares
+    * Pass
+* Operating Round
+  * Players receive private income
+  * First Turn Housekeeping
+  * Lay Track
+  * Place Station
+  * Run trains
+  * Collect Revenue
+  * Buy trains
+    ** At any point after phase 3 starts, buy private companies during your turn
+
+  * Calculate valid tile lays
+  * Calculate train routes
+  * How to write interface
