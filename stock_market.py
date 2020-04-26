@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from stock_market_slot import StockMarketSlot
 
@@ -20,22 +20,22 @@ class StockMarket:
         ]
 
         self.node_map: Dict[str, StockMarketSlot] = {}
-        market_slots = []
+        market_slots: List[List[Optional[StockMarketSlot]]] = []
 
         for i in range(len(market)):
-            market_slots_row = []
-            for j in range(market[i]):
+            market_slots_row: List[Optional[StockMarketSlot]] = []
+            for j in range(len(market[i])):
                 if market[i][j] is None:
-                    market_slots.append(None)
+                    market_slots_row.append(None)
                 else:
                     slot = StockMarketSlot(market[i][j])
                     self.node_map[market[i][j]] = slot
-                    market_slots.append(slot)
+                    market_slots_row.append(slot)
             market_slots.append(market_slots_row)
 
         for i in range(len(market_slots)):
             for j in range(len(market_slots[i])):
-                slot = market_slots[i][j]
+                slot: Optional[StockMarketSlot] = market_slots[i][j]
                 if slot is None:
                     continue
 
@@ -63,7 +63,7 @@ class StockMarket:
                     left = market_slots[i][j-1]
                 slot.set_left(left)
 
-        self.par_locations = {
+        self.par_locations: Dict[int, StockMarketSlot] = {
             100: self.node_map["100A"],
             90:  self.node_map["90B"],
             82:  self.node_map["82C"],
@@ -75,17 +75,17 @@ class StockMarket:
     def get_par_value_slot(self, value: int) -> StockMarketSlot:
         return self.par_locations[value]
 
-    def get_share_price_after_sale(self, current_price, num_shares_sold):
-        for x in num_shares_sold:
+    def get_share_price_after_sale(self, current_price: StockMarketSlot, num_shares_sold: int) -> StockMarketSlot:
+        for _ in range(num_shares_sold):
             current_price = current_price.down
         return current_price
 
-    def get_price_after_dividends(self, current_price, dividends_paid):
+    def get_price_after_dividends(self, current_price: StockMarketSlot, dividends_paid: bool) -> StockMarketSlot:
         if dividends_paid:
             return current_price.right
         return current_price.left
 
-    def get_price_for_fully_owned(self, current_price, fully_owned):
+    def get_price_for_fully_owned(self, current_price: StockMarketSlot, fully_owned: bool) -> StockMarketSlot:
         if fully_owned:
             return current_price.up
         return current_price
