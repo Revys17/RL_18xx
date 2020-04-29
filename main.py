@@ -7,6 +7,12 @@ from company import Company
 from game_state import GameState
 from player import Player
 from private_company import Private
+from privates.BO import BO
+from privates.CA import CA
+from privates.CS import CS
+from privates.DH import DH
+from privates.MH import MH
+from privates.SV import SV
 
 TOTAL_STARTING_MONEY = 2400
 
@@ -110,7 +116,7 @@ def get_players(num_players) -> List[Player]:
 def get_companies() -> List[Company]:
     return [
         Company("Pennsylvania", "PRR", 4, "Altoona", "H-12"),
-        Company("New York Central", "NYC", 4, "albany", "E-19"),
+        Company("New York Central", "NYC", 4, "Albany", "E-19"),
         Company("Canadian Pacific", "CPR", 4, "Montreal", "A-19"),
         Company("Baltimore & Ohio", "B&O", 3, "Baltimore", "I-15"),
         Company("Chesapeake & Ohio", "C&O", 3, "Cleveland(Richmond)", "F-6 (K-13)"),
@@ -122,19 +128,7 @@ def get_companies() -> List[Company]:
 
 def get_privates() -> List[Private]:
     return [
-        Private("Schuylkill Valley", "SV", "No special ability", 20, 5, "G-15"),
-        Private("Champlain & St. Lawrence", "CS", "Additional track lay on home tile. No connecting track needed.", 40,
-                10, "B-20"),
-        Private("Delaware & Hudson", "DH", "Allows lay of track and station on DH's hex. Lay costs regular amount " +
-                "but station is free. Not an additional tile lay. Does not require route. Station must be placed " +
-                "immediately to utilize track-free allowance.", 70, 15, "F-16"),
-        Private("Mohawk & Hudson", "MH", "May exchange for a 10% share of NYC (max 60% and shares must be available). " +
-                "May be done during player's stock turn or between other players' turns at any time. Closes the MH.",
-                110, 20, "D-18"),
-        Private("Camden & Amboy", "CA", "Purchaser receives 10% of the PRR.", 160, 25, "H-18"),
-        Private("Baltimore & Ohio", "BO", "Purchaser receives the president's certificate of the B&O railroad and " +
-                "immediately sets the par value. This company may not be sold or traded. Closes when the BO buys " +
-                "its first train.", 220, 30, "I-15")
+        SV(), CS(), DH(), MH(), CA(), BO()
     ]
 
 

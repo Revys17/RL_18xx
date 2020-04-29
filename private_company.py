@@ -1,6 +1,7 @@
 from typing import List, Dict
 
 from exceptions.exceptions import InvalidOperationException
+from game_state import GameState
 from player import Player
 
 
@@ -75,3 +76,7 @@ class Private:
 
         self.all_bidders = None
         self.bids = None
+
+    def do_special_action(self, game_state: GameState):
+        # implement special action in subclasses
+        pass
