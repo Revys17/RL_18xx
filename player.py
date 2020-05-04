@@ -3,11 +3,12 @@ from typing import List
 from action_blob import ActionBlob
 from company import Company
 from game_state import GameState
+from agent import Agent
 from private_company import Private
 
 
 class Player:
-    def __init__(self, starting_money: int):
+    def __init__(self, starting_money: int, agent: Agent):
         self.number: int = 0
         self.money: int = starting_money
         self.shares: List = []
@@ -15,11 +16,12 @@ class Player:
         self.privates: List[Private] = []
         self.name: str = "TODO"
         self.available_money: int = 0
+        self.agent = agent
 
     def get_action_blob(self, game_state: GameState) -> ActionBlob:
         # needs to return the action the player wants to take
         # this is how we link to our AI
-        pass
+        return self.agent.get_action_blob(game_state)
 
     def pay_private_income(self) -> None:
         for private in self.privates:

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
+import getopt
 import math
 import random
+import sys
 from typing import List
 
+from agent import Agent, HumanAgent, AIAgent
 from company import Company
 from game_state import GameState
 from player import Player
@@ -25,16 +28,48 @@ __version__ = "0.1.0"
 __license__ = "MIT"
 
 
-def main():
+def print_help() -> None:
+    print('main.py -n <number of players> -a <human or AI agent>')
+    sys.exit(1)
+
+
+def main(argv):
     """ Main entry point of the app """
-    game: GameState = initialize()
+    num_players: int = 4
+    agent_type: str = "human"
+    agents: List[Agent]
+
+    try:
+        opts, args = getopt.getopt(argv, "hn:a:")
+    except getopt.GetoptError:
+        print_help()
+
+    for opt, arg in opts:
+        if opt == '-h':
+            print_help()
+        elif opt == '-n':
+            num_players = arg
+            if num_players < 4 or num_players > 7:
+                raise RuntimeError("Invalid number of players: " + arg)
+        elif opt == '-a':
+            if arg != 'human' or arg != 'ai':
+                raise RuntimeError("Invalid agent type: " + arg)
+            agent_type = arg
+
+    # TODO: agents should be able to be a mix of human and AI agents
+    if agent_type == 'human':
+        agents = [HumanAgent() for _ in range(num_players)]
+    else:
+        agents = [AIAgent() for _ in range(num_players)]
+
+    game: GameState = initialize(agents)
     run_game(game)
     exit()
 
 
-def initialize() -> GameState:
+def initialize(agents: List[Agent]) -> GameState:
     # init
-    return GameState()
+    return GameState(agents)
 
 
 def run_game(game_state) -> None:
@@ -108,9 +143,9 @@ def determine_first_player(num_players) -> int:
     return random.randrange(0, num_players)
 
 
-def get_players(num_players) -> List[Player]:
+def get_players(num_players: int, agents: List[Agent]) -> List[Player]:
     starting_money: int = get_starting_money(num_players)
-    return [Player(starting_money) for _ in range(num_players)]
+    return [Player(starting_money, agents[i]) for i in range(num_players)]
 
 
 def get_companies() -> List[Company]:

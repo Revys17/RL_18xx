@@ -2,6 +2,7 @@ from typing import List
 
 from company import Company
 from main import get_players, determine_first_player, get_companies, get_privates
+from agent import Agent
 from player import Player
 from private_company import Private
 from stock_market import StockMarket
@@ -10,11 +11,11 @@ from bank import Bank
 
 class GameState:
     # TODO: variable players
-    def __init__(self, num_players: int = 4):
+    def __init__(self, agents: List[Agent]):
         self.game_in_progress: bool = True
-        self.num_players: int = num_players
-        self.players: List[Player] = get_players(num_players)
-        self.priority_deal: int = determine_first_player(num_players)
+        self.num_players: int = len(agents)
+        self.players: List[Player] = get_players(self.num_players, agents)
+        self.priority_deal: int = determine_first_player(self.num_players)
         self.current_player_index: int = self.priority_deal
         self.companies: List[Company] = get_companies()
         self.privates: List[Private] = get_privates()
