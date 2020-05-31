@@ -1,4 +1,4 @@
-from game_state import GameState
+import game_state
 from private_company import Private
 
 
@@ -8,5 +8,5 @@ class BO(Private):
                          "railroad and immediately sets the par value. This company may not be sold or traded. " +
                          "Closes when the BO buys its first train.", 220, 30, "I-15")
 
-    def do_special_action(self, game_state: GameState):
+    def do_special_action(self, game_state: 'game_state.GameState'):
         pass
