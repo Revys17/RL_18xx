@@ -5,9 +5,10 @@ import random
 import sys
 from typing import List
 
-from agent import Agent, HumanAgent, AIAgent
+import agent
+import game_state
+from action_blob import ActionBlob
 from company import Company
-from game_state import GameState
 from player import Player
 from private_company import Private
 from privates.BO import BO
@@ -33,16 +34,19 @@ def print_help() -> None:
     sys.exit(1)
 
 
-def main(argv):
+def main():
     """ Main entry point of the app """
     num_players: int = 4
     agent_type: str = "human"
-    agents: List[Agent]
+    agents: List[agent.Agent]
 
     try:
-        opts, args = getopt.getopt(argv, "hn:a:")
+        opts, args = getopt.getopt(sys.argv, "hn:a:")
     except getopt.GetoptError:
         print_help()
+
+    print(opts)
+    print(args)
 
     for opt, arg in opts:
         if opt == '-h':
@@ -58,21 +62,21 @@ def main(argv):
 
     # TODO: agents should be able to be a mix of human and AI agents
     if agent_type == 'human':
-        agents = [HumanAgent() for _ in range(num_players)]
+        agents = [agent.HumanAgent() for _ in range(num_players)]
     else:
-        agents = [AIAgent() for _ in range(num_players)]
+        agents = [agent.AIAgent() for _ in range(num_players)]
 
-    game: GameState = initialize(agents)
+    game: game_state.GameState = initialize(agents)
     run_game(game)
     exit()
 
 
-def initialize(agents: List[Agent]) -> GameState:
+def initialize(agents: List['agent.Agent']) -> 'game_state.GameState':
     # init
-    return GameState(agents)
+    return game_state.GameState(agents)
 
 
-def run_game(game_state) -> None:
+def run_game(game_state: 'game_state.GameState') -> None:
     # do game stuff
     do_private_auction(game_state)
 
@@ -82,15 +86,15 @@ def run_game(game_state) -> None:
     return
 
 
-def do_private_auction(game_state) -> None:
+def do_private_auction(game_state: 'game_state.GameState') -> None:
     auction_completed: bool = False
-    privates = game_state.privates
-    current_private = 0
-    consecutive_passes = 0
+    privates: List[Private] = game_state.privates
+    current_private: int = 0
+    consecutive_passes: int = 0
 
     while not auction_completed:
-        current_player = game_state.get_next_player()
-        action_blob = current_player.get_action_blob(game_state)
+        current_player: Player = game_state.get_next_player()
+        action_blob: ActionBlob = current_player.get_action_blob(game_state)
 
         if action_blob.action == "pass":
             # check if everyone passed
@@ -121,7 +125,7 @@ def do_private_auction(game_state) -> None:
         consecutive_passes = 0
 
 
-def do_run_off_auction(privates, starting_player, current_private):
+def do_run_off_auction(privates: List[Private], starting_player: Player, current_private: int):
     privates[current_private].buy_private(starting_player)
     for i in range(current_private + 1, len(privates)):
         if privates[i].current_bid is not None:
@@ -131,19 +135,19 @@ def do_run_off_auction(privates, starting_player, current_private):
     return -1
 
 
-def do_stock_round(game_state: GameState) -> None:
+def do_stock_round(game_state: 'game_state.GameState') -> None:
     pass
 
 
-def do_operating_rounds(game_state: GameState) -> None:
+def do_operating_rounds(game_state: 'game_state.GameState') -> None:
     pass
 
 
-def determine_first_player(num_players) -> int:
+def determine_first_player(num_players: int) -> int:
     return random.randrange(0, num_players)
 
 
-def get_players(num_players: int, agents: List[Agent]) -> List[Player]:
+def get_players(num_players: int, agents: List['agent.Agent']) -> List[Player]:
     starting_money: int = get_starting_money(num_players)
     return [Player(starting_money, agents[i]) for i in range(num_players)]
 
