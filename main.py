@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import getopt
+import argparse
 import math
 import random
 import sys
@@ -34,31 +34,30 @@ def print_help() -> None:
     sys.exit(1)
 
 
+def init_argparse() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        usage="%(prog)s [-h] [--num_players] n [--agent_type] a",
+        description="Something spicy"
+    )
+    parser.add_argument("-n", "--num_players", nargs=1, default=4, help="number of players", type=int)
+    parser.add_argument("-a", "--agent_type", nargs=1, default="human", help="agent type of 'human' or 'ai'", type=str)
+    return parser
+
+
 def main():
     """ Main entry point of the app """
-    num_players: int = 4
-    agent_type: str = "human"
+    parser = init_argparse()
+    args = parser.parse_args()
+
     agents: List[agent.Agent]
+    agent_type: str = args.agent_type
+    num_players: int = args.num_players
 
-    try:
-        opts, args = getopt.getopt(sys.argv, "hn:a:")
-    except getopt.GetoptError:
-        print_help()
+    if num_players < 4 or num_players > 7:
+        raise RuntimeError("Invalid number of players: " + str(num_players))
 
-    print(opts)
-    print(args)
-
-    for opt, arg in opts:
-        if opt == '-h':
-            print_help()
-        elif opt == '-n':
-            num_players = arg
-            if num_players < 4 or num_players > 7:
-                raise RuntimeError("Invalid number of players: " + arg)
-        elif opt == '-a':
-            if arg != 'human' or arg != 'ai':
-                raise RuntimeError("Invalid agent type: " + arg)
-            agent_type = arg
+    if agent_type != 'human' and agent_type != 'ai':
+        raise RuntimeError("Invalid agent type: " + agent_type)
 
     # TODO: agents should be able to be a mix of human and AI agents
     if agent_type == 'human':
