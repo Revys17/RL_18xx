@@ -9,6 +9,8 @@ import agent
 import game_state
 from action_blob import ActionBlob
 from company import Company
+from enums.Phase import Phase
+from enums.Round import Round
 from player import Player
 from private_company import Private
 from privates.BO import BO
@@ -86,42 +88,64 @@ def run_game(game_state: 'game_state.GameState') -> None:
 
 
 def do_private_auction(game_state: 'game_state.GameState') -> None:
-    auction_completed: bool = False
-    privates: List[Private] = game_state.privates
-    current_private: int = 0
+    # private companies are ordered by lowest face value
+    unowned_privates: List[Private] = game_state.privates
+    lowest_face_value_private: Private
     consecutive_passes: int = 0
 
-    while not auction_completed:
-        current_player: Player = game_state.get_next_player()
-        action_blob: ActionBlob = current_player.get_action_blob(game_state)
+    # private company auction ends when all the private companies are bought
+    while len(unowned_privates) > 0:
+        current_player: Player = game_state.current_player
+        lowest_face_value_private = unowned_privates[0]
 
-        if action_blob.action == "pass":
-            # check if everyone passed
-            consecutive_passes += 1
-            if consecutive_passes == game_state.num_players:
-                # everyone passed
-                # if private is the SV
-                if current_private == 0:
-                    # if price is already 0, force player to purchase
-                    if privates[current_private].price == 0:
-                        current_private = do_run_off_auction(privates, current_player, current_private)
-                        if current_private == -1:
-                            auction_completed = True
-                    # otherwise, lower price and continue
+        if lowest_face_value_private.should_resolve_bid():
+            game_state.progression = (Phase.PRIVATE_AUCTION, Round.BID_BUY_RESOLUTION)
+            lowest_face_value_private.resolve_bid(game_state)
+            unowned_privates.remove(lowest_face_value_private)
+        else:
+            game_state.progression = (Phase.PRIVATE_AUCTION, Round.BID_BUY)
+
+            # TODO: try/catch invalid moves and have the player re-do. Could auto-pass if invalid
+            # TODO: setup different types of action blobs, e.g. private auction action and bid resolution action
+            # and possible inputs types and inputs
+            action_blob: ActionBlob = current_player.get_action_blob(game_state)
+
+            if action_blob.action == "pass":
+                # check if everyone passed
+                consecutive_passes += 1
+                if consecutive_passes == game_state.num_players:
+                    # everyone passed
+                    # if private is the SV
+                    if lowest_face_value_private.short_name == 'SV':
+                        # if price is already 0, force player to purchase
+                        if lowest_face_value_private.price == 0:
+                            complete_purchase(game_state, current_player, lowest_face_value_private, unowned_privates)
+                        # otherwise, lower price and continue
+                        else:
+                            lowest_face_value_private.lower_price(5)
+                    # if private is not SV, pay private revenue and resume with priority deal
                     else:
-                        privates[current_private].lower_price(5)
-                # if private is not SV, pay private revenue and resume with priority deal
+                        game_state.pay_private_revenue()
                 else:
-                    game_state.pay_private_revenue()
-                    game_state.reset_next_player()
-            continue
-        elif action_blob.action == "buy":
-            current_private = do_run_off_auction(privates, current_player, current_private)
-            if current_private == -1:
-                auction_completed = True
-        elif action_blob.action == "bid":
-            privates[action_blob.private].add_bid(current_player, action_blob.bid)
+                    # player passed, but it's not a full pass cycle yet
+                    game_state.set_next_as_current_player(current_player)
+                    continue
+            elif action_blob.action == "buy":
+                complete_purchase(game_state, current_player, lowest_face_value_private)
+            elif action_blob.action == "bid":
+                # TODO: receive input from private
+                unowned_privates[action_blob.private].add_bid(current_player, action_blob.bid)
+        game_state.set_next_as_current_player(current_player)
+        # reset passes after every action except passes that don't complete full pass cycles
         consecutive_passes = 0
+
+
+def complete_purchase(game_state: 'game_state.GameState', player: Player, private: Private,
+                      unowned_privates: List[Private]):
+    private.buy_private(player)
+    # private is now owned, remove from the unowned list
+    unowned_privates.remove(private)
+    game_state.set_next_as_priority_deal(player)
 
 
 def do_run_off_auction(privates: List[Private], starting_player: Player, current_private: int):
@@ -142,13 +166,13 @@ def do_operating_rounds(game_state: 'game_state.GameState') -> None:
     pass
 
 
-def determine_first_player(num_players: int) -> int:
+def determine_first_player_index(num_players: int) -> int:
     return random.randrange(0, num_players)
 
 
 def get_players(num_players: int, agents: List['agent.Agent']) -> List[Player]:
     starting_money: int = get_starting_money(num_players)
-    return [Player(starting_money, agents[i]) for i in range(num_players)]
+    return [Player(i, starting_money, agents[i]) for i in range(num_players)]
 
 
 def get_companies() -> List[Company]:
