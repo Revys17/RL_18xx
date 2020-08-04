@@ -19,7 +19,6 @@ class Player:
         self.charters: List = []
         self.privates: List[Private] = []
         self.name: str = random.choice(RANDOM_NAMES) + str(self.index)
-        self.available_money: int = 0
         self.agent = agent
 
     def get_action_blob(self, game_state: 'game_state.GameState') -> ActionBlob:
@@ -48,7 +47,7 @@ class Player:
         pass
 
     def set_aside_money(self, bid: int) -> None:
-        pass
+        self.remove_money(bid)
 
     def return_money(self, money: int) -> None:
         self.add_money(money)
