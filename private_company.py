@@ -2,7 +2,7 @@ import logging
 from collections import OrderedDict
 from typing import List
 
-from action_blob import ActionBlob
+from actions.bid_resolution_action import BidResolutionAction, BidResolutionActionType
 from exceptions.exceptions import InvalidOperationException
 import game_state
 import player
@@ -66,21 +66,20 @@ class Private:
             retry: bool = True
 
             while retry:
-                # TODO: define and use a bid resolution action type
                 retry = False
-                action_blob: ActionBlob = current_bidder.get_action_blob(game_state)
+                bid_resolution_action: BidResolutionAction = current_bidder.get_bid_resolution_action(game_state)
 
-                if is_highest_bidder and action_blob.action == "pass":
+                if is_highest_bidder and bid_resolution_action.type == BidResolutionActionType.PASS:
                     # Do nothing when the highest bidder passes
                     continue
-                elif action_blob.action == "pass":
+                elif bid_resolution_action.type == BidResolutionActionType.PASS:
                     # release bid money when lower bidders pass
                     current_bidder.return_money(self.bids[current_bidder])
                     self.bids.pop(current_bidder)
                 else:
                     # if it's not a pass, it's a bid
                     try:
-                        self.add_bid(current_bidder, int(action_blob.bid))
+                        self.add_bid(current_bidder, int(bid_resolution_action.bid))
                     except InvalidOperationException as e:
                         log.error(e)
                         retry = True
