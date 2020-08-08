@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import logging
 import math
 import random
 import sys
@@ -11,6 +12,7 @@ from action_blob import ActionBlob
 from company import Company
 from enums.Phase import Phase
 from enums.Round import Round
+from exceptions.exceptions import InvalidOperationException
 from player import Player
 from private_company import Private
 from privates.BO import BO
@@ -20,6 +22,7 @@ from privates.DH import DH
 from privates.MH import MH
 from privates.SV import SV
 
+log = logging.getLogger(__name__)
 TOTAL_STARTING_MONEY = 2400
 
 """
@@ -105,36 +108,46 @@ def do_private_auction(game_state: 'game_state.GameState') -> None:
         else:
             game_state.progression = (Phase.PRIVATE_AUCTION, Round.BID_BUY)
 
-            # TODO: try/catch invalid moves and have the player re-do. Could auto-pass if invalid
             # TODO: setup different types of action blobs, e.g. private auction action and bid resolution action
             # and possible inputs types and inputs
-            action_blob: ActionBlob = current_player.get_action_blob(game_state)
+            retry: bool = True
 
-            if action_blob.action == "pass":
-                # check if everyone passed
-                consecutive_passes += 1
-                if consecutive_passes == game_state.num_players:
-                    # everyone passed
-                    # if private is the SV
-                    if lowest_face_value_private.short_name == 'SV':
-                        # if price is already 0, force player to purchase
-                        if lowest_face_value_private.price == 0:
-                            complete_purchase(game_state, current_player, lowest_face_value_private, unowned_privates)
-                        # otherwise, lower price and continue
+            while retry:
+                retry = False
+                action_blob: ActionBlob = current_player.get_action_blob(game_state)
+
+                try:
+                    if action_blob.action == "pass":
+                        # check if everyone passed
+                        consecutive_passes += 1
+                        if consecutive_passes == game_state.num_players:
+                            # everyone passed
+                            # if private is the SV
+                            if lowest_face_value_private.short_name == 'SV':
+                                # if price is already 0, force player to purchase
+                                if lowest_face_value_private.price == 0:
+                                    complete_purchase(game_state, current_player, lowest_face_value_private,
+                                                      unowned_privates)
+                                # otherwise, lower price and continue
+                                else:
+                                    lowest_face_value_private.lower_price(5)
+                            # if private is not SV, pay private revenue and resume with priority deal
+                            else:
+                                game_state.pay_private_revenue()
                         else:
-                            lowest_face_value_private.lower_price(5)
-                    # if private is not SV, pay private revenue and resume with priority deal
-                    else:
-                        game_state.pay_private_revenue()
-                else:
-                    # player passed, but it's not a full pass cycle yet
-                    game_state.set_next_as_current_player(current_player)
-                    continue
-            elif action_blob.action == "buy":
-                complete_purchase(game_state, current_player, lowest_face_value_private)
-            elif action_blob.action == "bid":
-                # TODO: receive input from private
-                unowned_privates[action_blob.private].add_bid(current_player, action_blob.bid)
+                            # player passed, but it's not a full pass cycle yet
+                            game_state.set_next_as_current_player(current_player)
+                            continue
+                    elif action_blob.action == "buy":
+                        # only the lowest face value private company can be bought outright
+                        complete_purchase(game_state, current_player, lowest_face_value_private, unowned_privates)
+                    elif action_blob.action == "bid":
+                        # TODO: receive input from private
+                        unowned_privates[action_blob.private].add_bid(current_player, action_blob.bid)
+                except InvalidOperationException as e:
+                    log.error(e)
+                    retry = True
+
         game_state.set_next_as_current_player(current_player)
         # reset passes after every action except passes that don't complete full pass cycles
         consecutive_passes = 0
@@ -146,16 +159,6 @@ def complete_purchase(game_state: 'game_state.GameState', player: Player, privat
     # private is now owned, remove from the unowned list
     unowned_privates.remove(private)
     game_state.set_next_as_priority_deal(player)
-
-
-def do_run_off_auction(privates: List[Private], starting_player: Player, current_private: int):
-    privates[current_private].buy_private(starting_player)
-    for i in range(current_private + 1, len(privates)):
-        if privates[i].current_bid is not None:
-            privates[i].resolve_bid()
-        else:
-            return i
-    return -1
 
 
 def do_stock_round(game_state: 'game_state.GameState') -> None:
