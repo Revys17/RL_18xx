@@ -8,10 +8,10 @@ from typing import List
 
 import agent
 import game_state
-from action_blob import ActionBlob
+from actions.bid_buy_action import BidBuyAction, BidBuyActionType
 from company import Company
-from enums.Phase import Phase
-from enums.Round import Round
+from enums.phase import Phase
+from enums.round import Round
 from exceptions.exceptions import InvalidOperationException
 from player import Player
 from private_company import Private
@@ -107,17 +107,14 @@ def do_private_auction(game_state: 'game_state.GameState') -> None:
             unowned_privates.remove(lowest_face_value_private)
         else:
             game_state.progression = (Phase.PRIVATE_AUCTION, Round.BID_BUY)
-
-            # TODO: setup different types of action blobs, e.g. private auction action and bid resolution action
-            # and possible inputs types and inputs
             retry: bool = True
 
             while retry:
                 retry = False
-                action_blob: ActionBlob = current_player.get_action_blob(game_state)
+                bid_buy_action: BidBuyAction = current_player.get_bid_buy_action(game_state)
 
                 try:
-                    if action_blob.action == "pass":
+                    if bid_buy_action.type is BidBuyActionType.PASS:
                         # check if everyone passed
                         consecutive_passes += 1
                         if consecutive_passes == game_state.num_players:
@@ -138,12 +135,18 @@ def do_private_auction(game_state: 'game_state.GameState') -> None:
                             # player passed, but it's not a full pass cycle yet
                             game_state.set_next_as_current_player(current_player)
                             continue
-                    elif action_blob.action == "buy":
+                    elif bid_buy_action.type is BidBuyActionType.BUY:
                         # only the lowest face value private company can be bought outright
                         complete_purchase(game_state, current_player, lowest_face_value_private, unowned_privates)
-                    elif action_blob.action == "bid":
-                        # TODO: receive input from private
-                        unowned_privates[action_blob.private].add_bid(current_player, action_blob.bid)
+                    elif bid_buy_action.type is BidBuyActionType.BID:
+                        # TODO: validate here, in the agent decision, or both?
+                        try:
+                            unowned_privates[bid_buy_action.private_company_index]
+                        except IndexError:
+                            raise InvalidOperationException("Index " + str(bid_buy_action.private_company_index) +
+                                                            " does not refer to a valid unowned private company")
+                        unowned_privates[bid_buy_action.private_company_index].add_bid(current_player,
+                                                                                       bid_buy_action.bid)
                 except InvalidOperationException as e:
                     log.error(e)
                     retry = True

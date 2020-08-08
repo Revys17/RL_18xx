@@ -1,8 +1,8 @@
 from typing import List, Tuple
 
 from company import Company
-from enums.Phase import Phase
-from enums.Round import Round
+from enums.phase import Phase
+from enums.round import Round
 from main import get_players, determine_first_player_index, get_companies, get_privates
 import agent
 from player import Player

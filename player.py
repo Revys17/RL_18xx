@@ -3,8 +3,10 @@ from typing import List
 
 import company
 import game_state
-from action_blob import ActionBlob
+from actions.action_blob import ActionBlob
 import agent
+from actions.bid_buy_action import BidBuyAction
+from actions.bid_resolution_action import BidResolutionAction
 from private_company import Private
 
 RANDOM_NAMES: List[str] = ['CHIMERA_ANT_ARC_LOVER', 'GREED_ISLAND_ARC_LOVER', 'HEAVENS_ARENA_ARC_LOVER',
@@ -25,6 +27,16 @@ class Player:
         # needs to return the action the player wants to take
         # this is how we link to our AI
         return self.agent.get_action_blob(game_state)
+
+    def get_bid_buy_action(self, game_state: 'game_state.GameState') -> BidBuyAction:
+        # needs to return the action the player wants to take
+        # this is how we link to our AI
+        return self.agent.get_bid_buy_action(game_state)
+
+    def get_bid_resolution_action(self, game_state: 'game_state.GameState') -> BidResolutionAction:
+        # needs to return the action the player wants to take
+        # this is how we link to our AI
+        return self.agent.get_bid_resolution_action(game_state)
 
     def pay_private_income(self) -> None:
         for private in self.privates:
