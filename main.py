@@ -153,7 +153,6 @@ def do_private_auction(game_state: 'game_state.GameState') -> None:
                         # only the lowest face value private company can be bought outright
                         complete_purchase(game_state, current_player, lowest_face_value_private, unowned_privates)
                     elif bid_buy_action.type is BidBuyActionType.BID:
-                        # TODO: validate here, in the agent decision, or both?
                         try:
                             unowned_privates[bid_buy_action.private_company_index]
                         except IndexError:
