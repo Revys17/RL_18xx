@@ -37,6 +37,7 @@ class Player:
         # needs to return the action the player wants to take
         # this is how we link to our AI
         log.info("Current bid resolution player turn: {}".format(self.name))
+        log.info("Available money: {}".format(self.money))
         return self.agent.get_bid_resolution_action(game_state)
 
     def pay_private_income(self) -> None:
