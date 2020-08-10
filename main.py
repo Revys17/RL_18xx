@@ -22,6 +22,7 @@ from privates.DH import DH
 from privates.MH import MH
 from privates.SV import SV
 
+logging.basicConfig(level=logging.DEBUG)
 log = logging.getLogger(__name__)
 TOTAL_STARTING_MONEY = 2400
 
@@ -70,6 +71,8 @@ def main():
     else:
         agents = [agent.AIAgent() for _ in range(num_players)]
 
+    log.debug("Running the game with agents:")
+    [log.debug(type(agent).__name__) for agent in agents]
     game: game_state.GameState = initialize(agents)
     run_game(game)
     exit()
@@ -82,10 +85,13 @@ def initialize(agents: List['agent.Agent']) -> 'game_state.GameState':
 
 def run_game(game_state: 'game_state.GameState') -> None:
     # do game stuff
+    log.info("Starting private company auction")
     do_private_auction(game_state)
 
     while game_state.game_in_progress:
+        log.info("Starting stock round")
         do_stock_round(game_state)
+        log.info("Starting operating round")
         do_operating_rounds(game_state)
     return
 
@@ -98,11 +104,14 @@ def do_private_auction(game_state: 'game_state.GameState') -> None:
 
     # private company auction ends when all the private companies are bought
     while len(unowned_privates) > 0:
+        log.info("Num unowned privates: {}".format(len(unowned_privates)))
         current_player: Player = game_state.current_player
-        lowest_face_value_private = unowned_privates[0]
+        lowest_face_value_private: Private = unowned_privates[0]
+        non_full_cycle_pass: bool = False
 
         if lowest_face_value_private.should_resolve_bid():
             game_state.progression = (Phase.PRIVATE_AUCTION, Round.BID_BUY_RESOLUTION)
+            log.info("Resolving bid for: {}".format(lowest_face_value_private.short_name))
             lowest_face_value_private.resolve_bid(game_state)
             unowned_privates.remove(lowest_face_value_private)
         else:
@@ -117,22 +126,27 @@ def do_private_auction(game_state: 'game_state.GameState') -> None:
                     if bid_buy_action.type is BidBuyActionType.PASS:
                         # check if everyone passed
                         consecutive_passes += 1
+                        log.info("Consecutive passes: {}".format(consecutive_passes))
                         if consecutive_passes == game_state.num_players:
                             # everyone passed
                             # if private is the SV
                             if lowest_face_value_private.short_name == 'SV':
                                 # if price is already 0, force player to purchase
                                 if lowest_face_value_private.price == 0:
+                                    log.info("SV price reached 0. Purchase is forced")
                                     complete_purchase(game_state, current_player, lowest_face_value_private,
                                                       unowned_privates)
                                 # otherwise, lower price and continue
                                 else:
                                     lowest_face_value_private.lower_price(5)
+                                    log.info("SV price reduced to: {}".format(lowest_face_value_private.price))
                             # if private is not SV, pay private revenue and resume with priority deal
                             else:
+                                log.info("All players passed, private company revenue pays out")
                                 game_state.pay_private_revenue()
                         else:
                             # player passed, but it's not a full pass cycle yet
+                            non_full_cycle_pass = True
                             game_state.set_next_as_current_player(current_player)
                             continue
                     elif bid_buy_action.type is BidBuyActionType.BUY:
@@ -151,9 +165,10 @@ def do_private_auction(game_state: 'game_state.GameState') -> None:
                     log.error(e)
                     retry = True
 
-        game_state.set_next_as_current_player(current_player)
-        # reset passes after every action except passes that don't complete full pass cycles
-        consecutive_passes = 0
+        if not non_full_cycle_pass:
+            game_state.set_next_as_current_player(current_player)
+            # reset passes after every action except passes that don't complete full pass cycles
+            consecutive_passes = 0
 
 
 def complete_purchase(game_state: 'game_state.GameState', player: Player, private: Private,

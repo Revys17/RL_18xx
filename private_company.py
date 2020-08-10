@@ -23,6 +23,7 @@ class Private:
         self.current_winning_bid: int = 0
 
     def add_bid(self, player: 'player.Player', bid: int) -> None:
+        log.info("Player {} placing {} bid on private company {}".format(player.name, bid, self.short_name))
         if bid < self.price + 5:
             raise InvalidOperationException("Bid must be a minimum of $5 more than price")
 
@@ -58,6 +59,7 @@ class Private:
         while True:
             if len(self.bids.keys()) == 1:
                 winning_player: player.Player = list(self.bids.keys())[0]
+                log.info("Bid resolution winner: {}".format(winning_player.name))
                 self.buy_private(winning_player)
                 break
 
@@ -91,9 +93,10 @@ class Private:
         self.price -= lower_amount
 
     def buy_private(self, player: 'player.Player'):
+        log.info("Player {} buying private company {}".format(player.name, self.short_name))
         # player hasn't bid on the private company yet, buy it outright. Otherwise, bid money was already taken from
         # the player when the bid was placed and is consumed
-        if self.bids[player] is None:
+        if player not in self.bids:
             if player.money < self.price:
                 raise InvalidOperationException("Player does not have enough available money")
             player.remove_money(self.price)

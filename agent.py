@@ -1,12 +1,16 @@
-from actions.action_blob import ActionBlob
+import logging
+from typing import List
+
+from actions.bid_buy_action import BidBuyAction, BidBuyActionType
+from actions.bid_resolution_action import BidResolutionAction, BidResolutionActionType
+from exceptions.exceptions import InvalidOperationException
 from game_state import GameState
+
+log = logging.getLogger(__name__)
 
 
 class Agent(object):
-    def get_action_blob(self, game_state: GameState):
-        pass
-
-    def get_bid_buy_action(self, game_state: GameState):
+    def get_bid_buy_action(self, game_state: GameState) -> BidBuyAction:
         pass
 
     def get_bid_resolution_action(self, game_state: GameState):
@@ -14,22 +18,78 @@ class Agent(object):
 
 
 class HumanAgent(Agent):
-    def get_action_blob(self, game_state: GameState):
-        # TODO prompt command line for decision
-        return ActionBlob
+    def get_bid_buy_action(self, game_state: GameState) -> BidBuyAction:
+        game_state.print_bid_buy_turn_game_state()
 
-    def get_bid_buy_action(self, game_state: GameState):
-        # TODO prompt command line for decision
-        # passing in unowned privates, give some choices for actions and possibilities, descriptions and guidelines
-        # unit tests should be able to mock this action without defining another mock agent type for unit tests
-        pass
+        directions: str = """
+        Bid buy turn.
+        Your turn to bid/buy/pass.
+        '1' to give up your turn and pass.
+        '2' to buy the lowest face value private company
+        '3 (index) (bid amount)' to bid for an unowned private company
+        """
+        max_private_company_index: int = len(game_state.privates) - 1
+        while True:
+            user_input: str = input(directions)
+            user_input_split: List = user_input.split(" ")
+            if len(user_input_split) < 1:
+                log.error("Invalid input, try again")
+                continue
+            action: str = user_input_split[0]
+            if action.lower().startswith("1"):
+                return BidBuyAction(BidBuyActionType.PASS)
+            elif action.lower().startswith("2"):
+                return BidBuyAction(BidBuyActionType.BUY)
+            elif action.lower().startswith("3"):
+                if len(user_input_split) >= 3:
+                    try:
+                        private_company_index: int = int(user_input_split[1])
+                        bid_amount: int = int(user_input_split[2])
+                        if private_company_index < 0 or private_company_index > max_private_company_index:
+                            raise InvalidOperationException("Invalid private company index to bid on: " +
+                                                            str(private_company_index))
+                        if bid_amount <= 0:
+                            raise InvalidOperationException("Invalid bid amount: " + str(bid_amount))
+                        return BidBuyAction(BidBuyActionType.BID, private_company_index, bid_amount)
+                    except Exception as e:
+                        log.error(e)
 
-    def get_bid_resolution_action(self, game_state: GameState):
-        # TODO prompt command line for decision
-        pass
+            log.error("Invalid input, try again")
+
+    def get_bid_resolution_action(self, game_state: GameState) -> BidResolutionAction:
+        game_state.print_bid_resolution_turn_game_state()
+
+        directions: str = """
+        Bid buy resolution.
+        Your turn to bid/pass.
+        '1' to give up your turn and pass.
+        '2 (bid amount)' to set the winning bid for the private company 
+        """
+        while True:
+            user_input: str = input(directions)
+            user_input_split: List = user_input.split(" ")
+            if len(user_input_split) < 1:
+                log.error("Invalid input, try again")
+                continue
+            action: str = user_input_split[0]
+            if action.lower().startswith("1"):
+                return BidResolutionAction(BidResolutionActionType.PASS)
+            elif action.lower().startswith("2"):
+                if len(user_input_split) >= 2:
+                    try:
+                        bid_amount: int = int(user_input_split[1])
+                        if bid_amount <= 0:
+                            raise InvalidOperationException("Invalid bid amount: " + str(bid_amount))
+                        return BidResolutionAction(BidResolutionActionType.BID, bid_amount)
+                    except Exception as e:
+                        log.error(e)
+
+            log.error("Invalid input, try again")
 
 
 class AIAgent(Agent):
-    def get_action_blob(self, game_state: GameState):
-        # TODO game_state -> feature map -> AI processing -> ActionBlob
-        return ActionBlob
+    def get_bid_buy_action(self, game_state: GameState):
+        pass
+
+    def get_bid_resolution_action(self, game_state: GameState):
+        pass

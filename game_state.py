@@ -1,4 +1,5 @@
 from typing import List, Tuple
+import logging
 
 from company import Company
 from enums.phase import Phase
@@ -9,6 +10,8 @@ from player import Player
 from private_company import Private
 from stock_market import StockMarket
 from bank import Bank
+
+log = logging.getLogger(__name__)
 
 
 class GameState:
@@ -50,3 +53,18 @@ class GameState:
 
     def increment_progression(self) -> None:
         pass
+
+    def print_bid_buy_turn_game_state(self) -> None:
+        log.info("Current priority deal player: {}".format(self.priority_deal.name))
+        log.info("Current bids and unowned private companies:")
+        log.info("Name | index | price | revenue | current winning bid | bids:")
+        for i, private in enumerate(self.privates):
+            log.info("{} | {} | {} | {} | {} | {}".format(private.short_name, str(i), str(private.price),
+                     str(private.revenue), str(private.current_winning_bid), str(private.bids)))
+
+    def print_bid_resolution_turn_game_state(self) -> None:
+        bid_target: Private = self.privates[0]
+        log.info("Currently bidding for: {}".format(bid_target.short_name))
+        log.info("Price | revenue | current winning bid | bids:")
+        log.info("{} | {} | {} | {}".format(str(bid_target.price), str(bid_target.revenue),
+                 str(bid_target.current_winning_bid), str(bid_target.bids)))

@@ -1,3 +1,4 @@
+import logging
 import random
 from typing import List
 
@@ -8,6 +9,8 @@ import agent
 from actions.bid_buy_action import BidBuyAction
 from actions.bid_resolution_action import BidResolutionAction
 from private_company import Private
+
+log = logging.getLogger(__name__)
 
 RANDOM_NAMES: List[str] = ['CHIMERA_ANT_ARC_LOVER', 'GREED_ISLAND_ARC_LOVER', 'HEAVENS_ARENA_ARC_LOVER',
                            'ZOLDYCK_FAMILY_ARC_LOVER', 'YORKNEW_CITY_ARC_LOVER', 'ELECTION_ARC_LOVER']
@@ -23,23 +26,23 @@ class Player:
         self.name: str = random.choice(RANDOM_NAMES) + str(self.index)
         self.agent = agent
 
-    def get_action_blob(self, game_state: 'game_state.GameState') -> ActionBlob:
-        # needs to return the action the player wants to take
-        # this is how we link to our AI
-        return self.agent.get_action_blob(game_state)
-
     def get_bid_buy_action(self, game_state: 'game_state.GameState') -> BidBuyAction:
         # needs to return the action the player wants to take
         # this is how we link to our AI
+        log.info("Current bid buy player turn: {}".format(self.name))
+        log.info("Available money: {}".format(self.money))
         return self.agent.get_bid_buy_action(game_state)
 
     def get_bid_resolution_action(self, game_state: 'game_state.GameState') -> BidResolutionAction:
         # needs to return the action the player wants to take
         # this is how we link to our AI
+        log.info("Current bid resolution player turn: {}".format(self.name))
         return self.agent.get_bid_resolution_action(game_state)
 
     def pay_private_income(self) -> None:
         for private in self.privates:
+            log.info("Player {} gained {} from private company {}".format(self.name, private.revenue,
+                                                                          private.short_name))
             self.money += private.revenue
 
     def add_money(self, money: int) -> None:
