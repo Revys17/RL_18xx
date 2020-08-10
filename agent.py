@@ -5,6 +5,7 @@ from actions.bid_buy_action import BidBuyAction, BidBuyActionType
 from actions.bid_resolution_action import BidResolutionAction, BidResolutionActionType
 from exceptions.exceptions import InvalidOperationException
 from game_state import GameState
+from private_company import Private
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +49,10 @@ class HumanAgent(Agent):
                         if private_company_index < 0 or private_company_index > max_private_company_index:
                             raise InvalidOperationException("Invalid private company index to bid on: " +
                                                             str(private_company_index))
-                        if bid_amount <= 0:
+                        private: Private = game_state.privates[private_company_index]
+                        if bid_amount < private.price + 5 or bid_amount < private.current_winning_bid + 5:
+                            log.info("Private company price: {}, current winning bid: {}"
+                                     .format(private.price, private.current_winning_bid))
                             raise InvalidOperationException("Invalid bid amount: " + str(bid_amount))
                         return BidBuyAction(BidBuyActionType.BID, private_company_index, bid_amount)
                     except Exception as e:
@@ -78,7 +82,10 @@ class HumanAgent(Agent):
                 if len(user_input_split) >= 2:
                     try:
                         bid_amount: int = int(user_input_split[1])
-                        if bid_amount <= 0:
+                        private: Private = game_state.privates[0]
+                        if bid_amount < private.price + 5 or bid_amount < private.current_winning_bid + 5:
+                            log.info("Private company price: {}, current winning bid: {}"
+                                     .format(private.price, private.current_winning_bid))
                             raise InvalidOperationException("Invalid bid amount: " + str(bid_amount))
                         return BidResolutionAction(BidResolutionActionType.BID, bid_amount)
                     except Exception as e:
