@@ -31,7 +31,7 @@ class Private:
             raise InvalidOperationException("Bid must be a minimum of $5 more than previous bid")
 
         # check if the player already has an existing bid. Players can add to the existing bid
-        existing_bid: int = 0 if self.bids[player] is None else self.bids[player]
+        existing_bid: int = 0 if player not in self.bids else self.bids[player]
 
         if player.money + existing_bid < bid:
             raise InvalidOperationException("Player does not have enough available money")
@@ -76,8 +76,9 @@ class Private:
                     continue
                 elif bid_resolution_action.type == BidResolutionActionType.PASS:
                     # release bid money when lower bidders pass
-                    current_bidder.return_money(self.bids[current_bidder])
-                    self.bids.pop(current_bidder)
+                    if current_bidder in self.bids:
+                        current_bidder.return_money(self.bids[current_bidder])
+                        self.bids.pop(current_bidder)
                 else:
                     # if it's not a pass, it's a bid
                     try:

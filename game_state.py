@@ -57,14 +57,18 @@ class GameState:
     def print_bid_buy_turn_game_state(self) -> None:
         log.info("Current priority deal player: {}".format(self.priority_deal.name))
         log.info("Current bids and unowned private companies:")
-        log.info("Name | index | price | revenue | current winning bid | bids:")
+        log.info("Name | index | price | revenue | current winning bid")
         for i, private in enumerate(self.privates):
-            log.info("{} | {} | {} | {} | {} | {}".format(private.short_name, str(i), str(private.price),
-                     str(private.revenue), str(private.current_winning_bid), str(private.bids)))
+            log.info("{} | {} | {} | {} | {}".format(private.short_name, str(i), str(private.price),
+                     str(private.revenue), str(private.current_winning_bid)))
+            [log.info("Player: {} bid amount: {}".format(player.name, bid_amount))
+             for player, bid_amount in private.bids.items()]
 
     def print_bid_resolution_turn_game_state(self) -> None:
         bid_target: Private = self.privates[0]
         log.info("Currently bidding for: {}".format(bid_target.short_name))
-        log.info("Price | revenue | current winning bid | bids:")
-        log.info("{} | {} | {} | {}".format(str(bid_target.price), str(bid_target.revenue),
-                 str(bid_target.current_winning_bid), str(bid_target.bids)))
+        log.info("Price | revenue | current winning bid")
+        log.info("{} | {} | {}".format(str(bid_target.price), str(bid_target.revenue),
+                 str(bid_target.current_winning_bid)))
+        [log.info("Player: {} bid amount: {}".format(player.name, bid_amount))
+         for player, bid_amount in bid_target.bids.items()]
