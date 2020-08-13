@@ -1,6 +1,8 @@
 # RL_18xx
 RL agent for 18xx (currently 1830)
 
+`python3 src/main.py` runs the game
+
 ### Unit tests
 * `python3 -m unittest` runs the full suite
 * `python3 -m unittest test.test_bank` runs the test_bank.py file
