@@ -4,7 +4,6 @@ from typing import List
 
 import company
 import game_state
-from actions.action_blob import ActionBlob
 import agent
 from actions.bid_buy_action import BidBuyAction
 from actions.bid_resolution_action import BidResolutionAction
@@ -67,9 +66,6 @@ class Player:
 
     def return_money(self, money: int) -> None:
         self.add_money(money)
-
-    def get_private_mini_auction_bid(self) -> ActionBlob:
-        pass
 
     def remove_money(self, money: int) -> None:
         # TODO: is it possible to go negative? Should any actions or considerations be taken into account if that happens?
