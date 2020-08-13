@@ -9,6 +9,7 @@ import player
 
 log = logging.getLogger(__name__)
 
+
 class Private:
     def __init__(self, name: str, short_name: str, description: str, price: int, revenue: int, location: str):
         self.name: str = name
