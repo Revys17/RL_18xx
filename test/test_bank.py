@@ -1,12 +1,12 @@
 import unittest
 
-from src.bank import Bank
+import e30.bank as bank
 
 
 class BankTest(unittest.TestCase):
 
     def test_bank_money(self):
-        self.assertEqual(9600, Bank().money)
+        self.assertEqual(9600, bank.Bank().money)
 
 
 if __name__ == '__main__':
