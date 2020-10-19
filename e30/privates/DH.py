@@ -1,5 +1,5 @@
-import game_state
-from private_company import Private
+from e30 import game_state
+from e30.private_company import Private
 
 
 class DH(Private):

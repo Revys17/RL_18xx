@@ -2,10 +2,9 @@ import logging
 from collections import OrderedDict
 from typing import List
 
-from actions.bid_resolution_action import BidResolutionAction, BidResolutionActionType
-from exceptions.exceptions import InvalidOperationException
-import game_state
-import player
+from e30.actions.bid_resolution_action import BidResolutionAction, BidResolutionActionType
+from e30.exceptions.exceptions import InvalidOperationException
+from e30 import player, game_state
 
 log = logging.getLogger(__name__)
 

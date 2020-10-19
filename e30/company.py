@@ -1,10 +1,10 @@
 from typing import List
 
-from exceptions.exceptions import InvalidOperationException
-from player import Player
-from private_company import Private
-from stock_market import StockMarket
-from stock_market_slot import StockMarketSlot
+from e30.exceptions.exceptions import InvalidOperationException
+from e30.player import Player
+from e30.private_company import Private
+from e30.stock_market import StockMarket
+from e30.stock_market_slot import StockMarketSlot
 
 
 class Company:

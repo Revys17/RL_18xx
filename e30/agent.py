@@ -1,25 +1,25 @@
 import logging
 from typing import List
 
-from actions.bid_buy_action import BidBuyAction, BidBuyActionType
-from actions.bid_resolution_action import BidResolutionAction, BidResolutionActionType
-from exceptions.exceptions import InvalidOperationException
-from game_state import GameState
-from private_company import Private
+from e30.actions.bid_buy_action import BidBuyAction, BidBuyActionType
+from e30.actions.bid_resolution_action import BidResolutionAction, BidResolutionActionType
+from e30.exceptions.exceptions import InvalidOperationException
+import e30.game_state
+from e30.private_company import Private
 
 log = logging.getLogger(__name__)
 
 
 class Agent(object):
-    def get_bid_buy_action(self, game_state: GameState) -> BidBuyAction:
+    def get_bid_buy_action(self, game_state: e30.game_state.GameState) -> BidBuyAction:
         pass
 
-    def get_bid_resolution_action(self, game_state: GameState):
+    def get_bid_resolution_action(self, game_state: e30.game_state.GameState):
         pass
 
 
 class HumanAgent(Agent):
-    def get_bid_buy_action(self, game_state: GameState) -> BidBuyAction:
+    def get_bid_buy_action(self, game_state: e30.game_state.GameState) -> BidBuyAction:
         game_state.print_bid_buy_turn_game_state()
 
         directions: str = """
@@ -60,7 +60,7 @@ class HumanAgent(Agent):
 
             log.error("Invalid input, try again")
 
-    def get_bid_resolution_action(self, game_state: GameState) -> BidResolutionAction:
+    def get_bid_resolution_action(self, game_state: e30.game_state.GameState) -> BidResolutionAction:
         game_state.print_bid_resolution_turn_game_state()
 
         directions: str = """
@@ -95,8 +95,8 @@ class HumanAgent(Agent):
 
 
 class AIAgent(Agent):
-    def get_bid_buy_action(self, game_state: GameState):
+    def get_bid_buy_action(self, game_state: e30.game_state.GameState):
         pass
 
-    def get_bid_resolution_action(self, game_state: GameState):
+    def get_bid_resolution_action(self, game_state: e30.game_state.GameState):
         pass

@@ -1,6 +1,6 @@
 from typing import List, Dict, Optional
 
-from stock_market_slot import StockMarketSlot
+from e30.stock_market_slot import StockMarketSlot
 
 
 class StockMarket:
