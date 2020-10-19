@@ -1,7 +1,11 @@
 # RL_18xx
 RL agent for 18xx (currently 1830)
 
-`python3 src/main.py` runs the game
+Add the script directory to PYTHONPATH for the module to be found (Otherwise `No module named 'e30'` errors can occur on execution)
+* e.g. export PYTHONPATH=$PYTHONPATH:~/workspace/RL_18xx/e30
+
+`python3 e30/main.py` runs the game
+* or `python3 -m main.py`
 
 ### Unit tests
 * `python3 -m unittest` runs the full suite
