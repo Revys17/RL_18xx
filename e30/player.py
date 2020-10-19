@@ -2,12 +2,7 @@ import logging
 import random
 from typing import List
 
-import company
-import game_state
-import agent
-from actions.bid_buy_action import BidBuyAction
-from actions.bid_resolution_action import BidResolutionAction
-from private_company import Private
+import e30
 
 log = logging.getLogger(__name__)
 
@@ -16,23 +11,24 @@ RANDOM_NAMES: List[str] = ['CHIMERA_ANT_ARC_LOVER', 'GREED_ISLAND_ARC_LOVER', 'H
 
 
 class Player:
-    def __init__(self, index: int, starting_money: int, agent: 'agent.Agent'):
+    def __init__(self, index: int, starting_money: int, agent: 'e30.agent.Agent'):
         self.index: int = index
         self.money: int = starting_money
         self.shares: List = []
         self.charters: List = []
-        self.privates: List[Private] = []
+        self.privates: List[e30.private_company.Private] = []
         self.name: str = random.choice(RANDOM_NAMES) + str(self.index)
         self.agent = agent
 
-    def get_bid_buy_action(self, game_state: 'game_state.GameState') -> BidBuyAction:
+    def get_bid_buy_action(self, game_state: 'e30.game_state.GameState') -> e30.actions.bid_buy_action.BidBuyAction:
         # needs to return the action the player wants to take
         # this is how we link to our AI
         log.info("Current bid buy player turn: {}".format(self.name))
         log.info("Available money: {}".format(self.money))
         return self.agent.get_bid_buy_action(game_state)
 
-    def get_bid_resolution_action(self, game_state: 'game_state.GameState') -> BidResolutionAction:
+    def get_bid_resolution_action(self, game_state: 'e30.game_state.GameState') -> \
+            e30.actions.bid_resolution_action.BidResolutionAction:
         # needs to return the action the player wants to take
         # this is how we link to our AI
         log.info("Current bid resolution player turn: {}".format(self.name))
@@ -48,17 +44,17 @@ class Player:
     def add_money(self, money: int) -> None:
         self.money += money
 
-    def add_share(self, company: 'company.Company') -> None:
+    def add_share(self, company: 'e30.company.Company') -> None:
         pass
 
     def get_name(self) -> str:
         return self.name
 
-    def has_share(self, company: 'company.Company') -> bool:
+    def has_share(self, company: 'e30.company.Company') -> bool:
         # TODO
         return True
 
-    def sell_shares(self, company: 'company.Company', num_shares: int) -> None:
+    def sell_shares(self, company: 'e30.company.Company', num_shares: int) -> None:
         pass
 
     def set_aside_money(self, bid: int) -> None:

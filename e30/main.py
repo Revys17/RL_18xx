@@ -6,21 +6,21 @@ import random
 import sys
 from typing import List
 
-import agent
-import game_state
-from actions.bid_buy_action import BidBuyAction, BidBuyActionType
-from company import Company
-from enums.phase import Phase
-from enums.round import Round
-from exceptions.exceptions import InvalidOperationException
-from player import Player
-from private_company import Private
-from privates.BO import BO
-from privates.CA import CA
-from privates.CS import CS
-from privates.DH import DH
-from privates.MH import MH
-from privates.SV import SV
+import e30.game_state
+import e30.agent
+from e30.actions.bid_buy_action import BidBuyAction, BidBuyActionType
+from e30.company import Company
+from e30.enums.phase import Phase
+from e30.enums.round import Round
+from e30.exceptions.exceptions import InvalidOperationException
+from e30.player import Player
+from e30.private_company import Private
+from e30.privates.BO import BO
+from e30.privates.CA import CA
+from e30.privates.CS import CS
+from e30.privates.DH import DH
+from e30.privates.MH import MH
+from e30.privates.SV import SV
 
 logging.basicConfig(level=logging.DEBUG)
 log = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ def main():
     parser = init_argparse()
     args = parser.parse_args()
 
-    agents: List[agent.Agent]
+    agents: List[e30.agent.Agent]
     agent_type: str = args.agent_type
     num_players: int = args.num_players
 
@@ -67,23 +67,23 @@ def main():
 
     # TODO: agents should be able to be a mix of human and AI agents
     if agent_type == 'human':
-        agents = [agent.HumanAgent() for _ in range(num_players)]
+        agents = [e30.agent.HumanAgent() for _ in range(num_players)]
     else:
-        agents = [agent.AIAgent() for _ in range(num_players)]
+        agents = [e30.agent.AIAgent() for _ in range(num_players)]
 
     log.debug("Running the game with agents:")
     [log.debug(type(agent).__name__) for agent in agents]
-    game: game_state.GameState = initialize(agents)
+    game: e30.game_state.GameState = initialize(agents)
     run_game(game)
     exit()
 
 
-def initialize(agents: List['agent.Agent']) -> 'game_state.GameState':
+def initialize(agents: List['e30.agent.Agent']) -> 'e30.game_state.GameState':
     # init
-    return game_state.GameState(agents)
+    return e30.game_state.GameState(agents)
 
 
-def run_game(game_state: 'game_state.GameState') -> None:
+def run_game(game_state: 'e30.game_state.GameState') -> None:
     # do game stuff
     log.info("Starting private company auction")
     do_private_auction(game_state)
@@ -96,7 +96,7 @@ def run_game(game_state: 'game_state.GameState') -> None:
     return
 
 
-def do_private_auction(game_state: 'game_state.GameState') -> None:
+def do_private_auction(game_state: 'e30.game_state.GameState') -> None:
     # private companies are ordered by lowest face value
     unowned_privates: List[Private] = game_state.privates
     lowest_face_value_private: Private
@@ -170,7 +170,7 @@ def do_private_auction(game_state: 'game_state.GameState') -> None:
             consecutive_passes = 0
 
 
-def complete_purchase(game_state: 'game_state.GameState', player: Player, private: Private,
+def complete_purchase(game_state: 'e30.game_state.GameState', player: Player, private: Private,
                       unowned_privates: List[Private]):
     private.buy_private(player)
     # private is now owned, remove from the unowned list
@@ -178,11 +178,11 @@ def complete_purchase(game_state: 'game_state.GameState', player: Player, privat
     game_state.set_next_as_priority_deal(player)
 
 
-def do_stock_round(game_state: 'game_state.GameState') -> None:
+def do_stock_round(game_state: 'e30.game_state.GameState') -> None:
     pass
 
 
-def do_operating_rounds(game_state: 'game_state.GameState') -> None:
+def do_operating_rounds(game_state: 'e30.game_state.GameState') -> None:
     pass
 
 
@@ -190,7 +190,7 @@ def determine_first_player_index(num_players: int) -> int:
     return random.randrange(0, num_players)
 
 
-def get_players(num_players: int, agents: List['agent.Agent']) -> List[Player]:
+def get_players(num_players: int, agents: List['e30.agent.Agent']) -> List[Player]:
     starting_money: int = get_starting_money(num_players)
     return [Player(i, starting_money, agents[i]) for i in range(num_players)]
 
