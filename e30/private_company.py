@@ -64,17 +64,15 @@ class Private:
                 break
 
             current_bidder: player.Player = bid_order.pop(0)
-            is_highest_bidder: bool = current_bidder is list(self.bids.keys())[-1]
             retry: bool = True
 
             while retry:
                 retry = False
                 bid_resolution_action: BidResolutionAction = current_bidder.get_bid_resolution_action(game_state)
+                log.info("{} {} {}".format(current_bidder.get_name(), bid_resolution_action.type,
+                                           bid_resolution_action.bid))
 
-                if is_highest_bidder and bid_resolution_action.type == BidResolutionActionType.PASS:
-                    # Do nothing when the highest bidder passes
-                    continue
-                elif bid_resolution_action.type == BidResolutionActionType.PASS:
+                if bid_resolution_action.type == BidResolutionActionType.PASS:
                     # release bid money when lower bidders pass
                     if current_bidder in self.bids:
                         current_bidder.return_money(self.bids[current_bidder])

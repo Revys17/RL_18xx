@@ -4,6 +4,7 @@ import e30.actions
 import e30.company
 import e30.player
 import e30.agent
+import e30.exceptions
 import e30.game_state
 import e30.private_company
 import e30.privates
