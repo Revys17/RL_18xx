@@ -106,63 +106,67 @@ def do_private_auction(game_state: 'e30.game_state.GameState') -> None:
     while len(unowned_privates) > 0:
         log.info("Num unowned privates: {}".format(len(unowned_privates)))
         current_player: Player = game_state.current_player
+        log.info("Current player: {}".format(current_player.get_name()))
         lowest_face_value_private: Private = unowned_privates[0]
         non_full_cycle_pass: bool = False
+
+        game_state.progression = (Phase.PRIVATE_AUCTION, Round.BID_BUY)
+        retry: bool = True
+
+        while retry:
+            retry = False
+            try:
+                bid_buy_action: BidBuyAction = current_player.get_bid_buy_action(game_state)
+                bid_buy_action.print()
+
+                if bid_buy_action.type is BidBuyActionType.PASS:
+                    # check if everyone passed
+                    consecutive_passes += 1
+                    log.info("Consecutive passes: {}".format(consecutive_passes))
+                    if consecutive_passes == game_state.num_players:
+                        # everyone passed
+                        # if private is the SV
+                        if lowest_face_value_private.short_name == 'SV':
+                            # if price is already 0, force player to purchase
+                            if lowest_face_value_private.price == 0:
+                                log.info("SV price reached 0. Purchase is forced for next player")
+                                complete_purchase(game_state, game_state.get_next_player(current_player),
+                                                  lowest_face_value_private, unowned_privates)
+                                # set current player as the forced purchaser - this is the execution of the purchase
+                                current_player = game_state.get_next_player(current_player)
+                            # otherwise, lower price and continue
+                            else:
+                                lowest_face_value_private.lower_price(5)
+                                log.info("SV price reduced to: {}".format(lowest_face_value_private.price))
+                        # if private is not SV, pay private revenue and resume with priority deal
+                        else:
+                            log.info("All players passed, private company revenue pays out")
+                            game_state.pay_private_revenue()
+                    else:
+                        # player passed, but it's not a full pass cycle yet
+                        non_full_cycle_pass = True
+                        game_state.set_next_as_current_player(current_player)
+                        continue
+                elif bid_buy_action.type is BidBuyActionType.BUY:
+                    # only the lowest face value private company can be bought outright
+                    complete_purchase(game_state, current_player, lowest_face_value_private, unowned_privates)
+                elif bid_buy_action.type is BidBuyActionType.BID:
+                    try:
+                        unowned_privates[bid_buy_action.private_company_index]
+                    except IndexError:
+                        raise InvalidOperationException("Index " + str(bid_buy_action.private_company_index) +
+                                                        " does not refer to a valid unowned private company")
+                    unowned_privates[bid_buy_action.private_company_index].add_bid(current_player,
+                                                                                   bid_buy_action.bid)
+            except InvalidOperationException as e:
+                log.error(e)
+                retry = True
 
         if lowest_face_value_private.should_resolve_bid():
             game_state.progression = (Phase.PRIVATE_AUCTION, Round.BID_BUY_RESOLUTION)
             log.info("Resolving bid for: {}".format(lowest_face_value_private.short_name))
             lowest_face_value_private.resolve_bid(game_state)
             unowned_privates.remove(lowest_face_value_private)
-        else:
-            game_state.progression = (Phase.PRIVATE_AUCTION, Round.BID_BUY)
-            retry: bool = True
-
-            while retry:
-                retry = False
-                bid_buy_action: BidBuyAction = current_player.get_bid_buy_action(game_state)
-
-                try:
-                    if bid_buy_action.type is BidBuyActionType.PASS:
-                        # check if everyone passed
-                        consecutive_passes += 1
-                        log.info("Consecutive passes: {}".format(consecutive_passes))
-                        if consecutive_passes == game_state.num_players:
-                            # everyone passed
-                            # if private is the SV
-                            if lowest_face_value_private.short_name == 'SV':
-                                # if price is already 0, force player to purchase
-                                if lowest_face_value_private.price == 0:
-                                    log.info("SV price reached 0. Purchase is forced")
-                                    complete_purchase(game_state, current_player, lowest_face_value_private,
-                                                      unowned_privates)
-                                # otherwise, lower price and continue
-                                else:
-                                    lowest_face_value_private.lower_price(5)
-                                    log.info("SV price reduced to: {}".format(lowest_face_value_private.price))
-                            # if private is not SV, pay private revenue and resume with priority deal
-                            else:
-                                log.info("All players passed, private company revenue pays out")
-                                game_state.pay_private_revenue()
-                        else:
-                            # player passed, but it's not a full pass cycle yet
-                            non_full_cycle_pass = True
-                            game_state.set_next_as_current_player(current_player)
-                            continue
-                    elif bid_buy_action.type is BidBuyActionType.BUY:
-                        # only the lowest face value private company can be bought outright
-                        complete_purchase(game_state, current_player, lowest_face_value_private, unowned_privates)
-                    elif bid_buy_action.type is BidBuyActionType.BID:
-                        try:
-                            unowned_privates[bid_buy_action.private_company_index]
-                        except IndexError:
-                            raise InvalidOperationException("Index " + str(bid_buy_action.private_company_index) +
-                                                            " does not refer to a valid unowned private company")
-                        unowned_privates[bid_buy_action.private_company_index].add_bid(current_player,
-                                                                                       bid_buy_action.bid)
-                except InvalidOperationException as e:
-                    log.error(e)
-                    retry = True
 
         if not non_full_cycle_pass:
             game_state.set_next_as_current_player(current_player)
@@ -172,6 +176,7 @@ def do_private_auction(game_state: 'e30.game_state.GameState') -> None:
 
 def complete_purchase(game_state: 'e30.game_state.GameState', player: Player, private: Private,
                       unowned_privates: List[Private]):
+    log.info("Player {} buying {}".format(player.get_name(), private.short_name))
     private.buy_private(player)
     # private is now owned, remove from the unowned list
     unowned_privates.remove(private)
