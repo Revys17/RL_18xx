@@ -1,10 +1,13 @@
 from enum import Enum
+import logging
+
+log = logging.getLogger(__name__)
 
 
 class BidBuyActionType(Enum):
     PASS = 0
     BID = 1
-    BUY = 2#@
+    BUY = 2
 
 
 class BidBuyAction(object):
@@ -12,3 +15,6 @@ class BidBuyAction(object):
         self.type = type
         self.private_company_index = private_company_index
         self.bid = bid
+
+    def print(self):
+        log.info("{} {} {}".format(self.type, self.private_company_index, self.bid))
