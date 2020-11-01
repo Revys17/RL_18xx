@@ -1,11 +1,11 @@
 import unittest
-from unittest.mock import Mock, MagicMock, call
+from unittest.mock import MagicMock, call
 
 import e30
 from e30.actions.bid_buy_action import BidBuyAction, BidBuyActionType
+from e30.agent import HumanAgent
 from e30.exceptions.exceptions import InvalidOperationException
 from e30.game_state import GameState
-from e30.agent import HumanAgent
 from e30.privates.BO import BO
 from e30.privates.SV import SV
 
