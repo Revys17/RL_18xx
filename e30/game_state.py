@@ -1,7 +1,9 @@
-from typing import List, Tuple
+import heapq
+from typing import List, Tuple, Dict
 import logging
 
 import e30
+from e30.player import Player
 
 log = logging.getLogger(__name__)
 
@@ -14,15 +16,29 @@ class GameState:
         self.players: List[e30.player.Player] = e30.main.get_players(self.num_players, agents)
         self.priority_deal: e30.player.Player = self.players[e30.main.determine_first_player_index(self.num_players)]
         self.current_player: e30.player.Player = self.priority_deal
-        self.companies: List[e30.company.Company] = e30.main.get_companies()
+        self.companies_pq: List[e30.company.Company] = e30.main.get_companies()
+        # make companies list a PQ, ordered from highest stock price to lowest stock price
+        heapq.heapify(e30.main.get_companies())
+        self.re_sort_companies()
         self.privates: List[e30.private_company.Private] = e30.main.get_privates()
         self.bank: e30.bank.Bank = e30.bank.Bank()
         self.stock_market: e30.stock_market.StockMarket = e30.stock_market.StockMarket()
-        self.progression: Tuple[e30.enums.phase.Phase, e30.enums.round.Round] = (e30.enums.phase.Phase.PRIVATE_AUCTION,
-                                                                                 e30.enums.round.Round.BID_BUY)
+        self.phase: e30.enums.phase.Phase = e30.enums.phase.Phase.PRIVATE_AUCTION
+        self.progression: Tuple[e30.enums.round.Round, int] = (e30.enums.round.Round.BID_BUY, 0)
+        self.num_player_to_total_cert_limit_map: List = [0, 0, 28, 20, 16, 13, 11, 11]
+        self.player_total_cert_limit: int = self.num_player_to_total_cert_limit_map[self.num_players]
         #self.train_market = TrainMarket()
         #self.tile_bank = TileBank()
         #self.map = Map()
+
+    def re_sort_companies(self) -> None:
+        """
+        must be called when company stock prices change, so that the companies pq remains a max heap based on stock
+        price
+        :return: None
+        """
+        # heapq are by default a minheap, maintain a maxheap by reverse sorting
+        self.companies_pq.sort(reverse=True)
 
     def get_priority_deal_player(self) -> e30.player.Player:
         return self.players[self.priority_deal.index]
@@ -65,3 +81,12 @@ class GameState:
                  str(bid_target.current_winning_bid)))
         [log.info("Player: {} bid amount: {}".format(player.name, bid_amount))
          for player, bid_amount in bid_target.bids.items()]
+
+    def print_game_progression(self) -> None:
+        log.info("Phase {}, Round {}, Round number {}".format(self.phase, self.progression[0], self.progression[1]))
+
+    def print_priority_deal_player(self) -> None:
+        log.info("Priority deal player: {}".format(self.get_priority_deal_player().get_name()))
+
+    def print_stock_market_turn_game_state(self) -> None:
+        [print(company) for company in self.companies_pq]

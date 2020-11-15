@@ -3,6 +3,8 @@ import random
 from typing import List
 
 import e30
+from e30.actions.stock_market_buy_action import StockMarketBuyAction
+from e30.actions.stock_market_sell_action import StockMarketSellAction
 
 log = logging.getLogger(__name__)
 
@@ -66,3 +68,9 @@ class Player:
     def remove_money(self, money: int) -> None:
         # TODO: is it possible to go negative? Should any actions or considerations be taken into account if that happens?
         self.money -= money
+
+    def get_stock_market_sell_action(self, game_state: 'e30.game_state.GameState') -> StockMarketSellAction:
+        return self.agent.get_stock_market_sell_action(game_state)
+
+    def get_stock_market_buy_action(self, game_state: 'e30.game_state.GameState') -> StockMarketBuyAction:
+        return self.agent.get_stock_market_buy_action(game_state)

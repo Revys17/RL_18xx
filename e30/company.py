@@ -1,22 +1,19 @@
 from typing import List
 
+import e30
 from e30.exceptions.exceptions import InvalidOperationException
 from e30.player import Player
 from e30.private_company import Private
-from e30.stock_market import StockMarket
 from e30.stock_market_slot import StockMarketSlot
 
 
 class Company:
     def __init__(self, name: str, initials: str, num_station_tokens: int, starting_city_name: str,
                  starting_city_location: str):
-        # company info
-        # TODO: stock market maybe shouldn't be a field here
-        self.stock_market: StockMarket = StockMarket()
         self.name: str = name
         self.short_name: str = initials
-        self.president: int = 0
-        self.owning_players: List[int] = []
+        self.president: Player
+        self.owning_players: List[Player] = []
         self.par_value: int = 0
         self.current_share_price: StockMarketSlot
 
@@ -24,6 +21,7 @@ class Company:
         self.presidency_share: int = 1
         self.ipo_shares: int = 8
         self.market_shares: int = 0
+        # what are company shares?
         self.company_shares: int = 0
 
         # operations info
@@ -36,12 +34,14 @@ class Company:
         self.privates: List[Private] = []
         self.tokens: List = []
 
+    # initialize all the companies, then set the start when they're bought. Or initialize when bought.
+
     # TODO: where is this used? Can it be initialized in the constructor?
-    def start_company(self, president: int, par_value: int) -> None:
+    def start_company(self, president: Player, par_value: int) -> None:
         if self.presidency_share == 0:
             raise InvalidOperationException("Company " + self.name + " already started")
 
-        self.president: int = president
+        self.president: Player = president
         self.owning_players[president] = 2
         self.presidency_share: int = 0
         self.par_value: int = par_value
@@ -99,3 +99,26 @@ class Company:
         player.sell_shares(self, num_shares)
         # TODO: current_share_price is a StockMarketSlot or int?
         current_share_price: int = self.stock_market.get_share_price_after_sale(self.current_share_price, num_shares)
+
+    def __str__(self):
+        president = self.president.get_name() if hasattr(self, 'president') else None
+        share_price = '{}{} {}'.format(str(self.current_share_price.get_value()[0]),
+                                       self.current_share_price.get_value()[1],
+                                       self.current_share_price.get_color())\
+            if hasattr(self, 'current_share_price') else None
+
+        return f'Company: {self.short_name}, president: {president}, owning players: {self.owning_players}, ' \
+               f'par value: {self.par_value}, current share price: {share_price}, ' \
+               f'ipo shares: {self.ipo_shares}, market shares: {self.market_shares}, operating: {self.operating}, ' \
+               f'money: {self.money}'
+
+    def __lt__(self, other_company: 'e30.company.Company'):
+        # do nothing on ties
+        if not hasattr(other_company, 'current_share_price'):
+            return False
+        if not hasattr(self, 'current_share_price'):
+            return True
+        # compare int component, if equal, compare str component
+        if self.current_share_price.get_value()[0] == other_company.current_share_price.get_value()[0]:
+            return self.current_share_price.get_value()[1] < other_company.current_share_price.get_value()[1]
+        return self.current_share_price.get_value()[0] < other_company.current_share_price.get_value()[0]
