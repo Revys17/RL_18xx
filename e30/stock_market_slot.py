@@ -1,10 +1,11 @@
-from typing import Optional, Union
+from typing import Optional, Union, Tuple
 
 
 class StockMarketSlot:
     def __init__(self, location: str):
         self.location: str = location
-        self.value: int = self.get_value(location)
+        # value has an int component, and a str component to break ties
+        self.value: Tuple[int, str] = (int(location[:-1]), location[-1])
         self.up: StockMarketSlot = self
         self.right: StockMarketSlot = self
         self.down: StockMarketSlot = self
@@ -27,8 +28,8 @@ class StockMarketSlot:
             return self
         return node
 
-    def get_value(self, location: str) -> int:
-        return int(location[:-1])
+    def get_value(self) -> Tuple[int, str]:
+        return self.value
 
     def get_color(self) -> str:
         if self.value <= 30:

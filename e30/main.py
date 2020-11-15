@@ -9,8 +9,9 @@ from typing import List
 import e30.game_state
 import e30.agent
 from e30.actions.bid_buy_action import BidBuyAction, BidBuyActionType
+from e30.actions.stock_market_buy_action import StockMarketBuyAction, StockMarketBuyActionType
+from e30.actions.stock_market_sell_action import StockMarketSellAction, StockMarketSellActionType
 from e30.company import Company
-from e30.enums.phase import Phase
 from e30.enums.round import Round
 from e30.exceptions.exceptions import InvalidOperationException
 from e30.player import Player
@@ -88,11 +89,15 @@ def run_game(game_state: 'e30.game_state.GameState') -> None:
     log.info("Starting private company auction")
     do_private_auction(game_state)
 
+    num_round: int = 0
     while game_state.game_in_progress:
         log.info("Starting stock round")
+        game_state.progression = (Round.STOCK_MARKET, num_round)
         do_stock_round(game_state)
         log.info("Starting operating round")
+        game_state.progression = (Round.OPERATING_1, num_round)
         do_operating_rounds(game_state)
+        num_round = num_round + 1
     return
 
 
@@ -110,7 +115,7 @@ def do_private_auction(game_state: 'e30.game_state.GameState') -> None:
         lowest_face_value_private: Private = unowned_privates[0]
         non_full_cycle_pass: bool = False
 
-        game_state.progression = (Phase.PRIVATE_AUCTION, Round.BID_BUY)
+        game_state.progression = (Round.BID_BUY, 0)
         retry: bool = True
 
         while retry:
@@ -163,7 +168,7 @@ def do_private_auction(game_state: 'e30.game_state.GameState') -> None:
                 retry = True
 
         if lowest_face_value_private.should_resolve_bid():
-            game_state.progression = (Phase.PRIVATE_AUCTION, Round.BID_BUY_RESOLUTION)
+            game_state.progression = (Round.BID_BUY_RESOLUTION, 0)
             log.info("Resolving bid for: {}".format(lowest_face_value_private.short_name))
             lowest_face_value_private.resolve_bid(game_state)
             unowned_privates.remove(lowest_face_value_private)
@@ -183,8 +188,79 @@ def complete_purchase(game_state: 'e30.game_state.GameState', player: Player, pr
     game_state.set_next_as_priority_deal(player)
 
 
+def process_stock_round_sell_action(game_state: 'e30.game_state.GameState', player: Player) -> bool:
+    retry: bool = True
+
+    while retry:
+        retry = False
+        try:
+            sell_action: StockMarketSellAction = player.get_stock_market_sell_action(game_state)
+
+            if sell_action.action_type is StockMarketSellActionType.PASS:
+                return False
+
+            return True
+        except InvalidOperationException as e:
+            log.error(e)
+            retry = True
+
+
+def process_stock_round_buy_action(game_state: 'e30.game_state.GameState', player: Player) -> bool:
+    retry: bool = True
+
+    while retry:
+        retry = False
+        try:
+            sell_action: StockMarketBuyAction = player.get_stock_market_buy_action(game_state)
+
+            if sell_action.action_type is StockMarketBuyActionType.PASS:
+                return False
+
+            return True
+        except InvalidOperationException as e:
+            log.error(e)
+            retry = True
+
+
 def do_stock_round(game_state: 'e30.game_state.GameState') -> None:
-    pass
+    consecutive_passes: int = 0
+
+    # stock round ends when a full consecutive pass cycle occurs
+    while consecutive_passes < game_state.num_players:
+        turn_has_action: bool = False
+        game_state.print_game_progression()
+        current_player: Player = game_state.get_priority_deal_player()
+        game_state.print_priority_deal_player()
+
+        # sell
+        game_state.print_stock_market_turn_game_state()
+        is_sell: bool = process_stock_round_sell_action(game_state, current_player)
+
+        if is_sell:
+            turn_has_action = True
+
+        # buy
+        game_state.print_stock_market_turn_game_state()
+        is_buy: bool = process_stock_round_buy_action(game_state, current_player)
+
+        if is_buy:
+            turn_has_action = True
+
+        # sell
+        game_state.print_stock_market_turn_game_state()
+        is_sell: bool = process_stock_round_sell_action(game_state, current_player)
+
+        if is_sell:
+            turn_has_action = True
+
+        if turn_has_action:
+            consecutive_passes = 0
+            game_state.set_next_as_priority_deal(current_player)
+        else:
+            consecutive_passes += 1
+            log.info("No sell or buy, consecutive passes: {}".format(consecutive_passes))
+
+    # end of stock round actions
 
 
 def do_operating_rounds(game_state: 'e30.game_state.GameState') -> None:

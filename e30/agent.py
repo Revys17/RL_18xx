@@ -3,6 +3,8 @@ from typing import List
 
 from e30.actions.bid_buy_action import BidBuyAction, BidBuyActionType
 from e30.actions.bid_resolution_action import BidResolutionAction, BidResolutionActionType
+from e30.actions.stock_market_buy_action import StockMarketBuyAction
+from e30.actions.stock_market_sell_action import StockMarketSellAction
 from e30.exceptions.exceptions import InvalidOperationException
 import e30.game_state
 from e30.private_company import Private
@@ -15,6 +17,12 @@ class Agent(object):
         pass
 
     def get_bid_resolution_action(self, game_state: e30.game_state.GameState):
+        pass
+
+    def get_stock_market_buy_action(self, game_state: e30.game_state.GameState):
+        pass
+
+    def get_stock_market_sell_action(self, game_state: e30.game_state.GameState):
         pass
 
 
@@ -93,10 +101,32 @@ class HumanAgent(Agent):
 
             log.error("Invalid input, try again")
 
+    def get_stock_market_buy_action(self, game_state: e30.game_state.GameState) -> StockMarketBuyAction:
+        directions: str = """
+        Stock market buy action.
+        Your turn to buy 1 company certificate or pass.
+        """
+        user_input: str = input(directions)
+        return StockMarketBuyAction()
+
+    def get_stock_market_sell_action(self, game_state: e30.game_state.GameState) -> StockMarketSellAction:
+        directions: str = """
+        Stock market sell action.
+        Your turn to sell company certificates or pass.
+        """
+        user_input: str = input(directions)
+        return StockMarketSellAction()
+
 
 class AIAgent(Agent):
     def get_bid_buy_action(self, game_state: e30.game_state.GameState):
         pass
 
     def get_bid_resolution_action(self, game_state: e30.game_state.GameState):
+        pass
+
+    def get_stock_market_buy_action(self, game_state: e30.game_state.GameState):
+        pass
+
+    def get_stock_market_sell_action(self, game_state: e30.game_state.GameState):
         pass
