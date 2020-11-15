@@ -44,6 +44,8 @@ class Private:
         player.set_aside_money(bid - existing_bid)
 
     def should_resolve_bid(self) -> bool:
+        if self.bids is None:
+            return False
         return len(self.bids.keys()) > 0
 
     def resolve_bid(self, game_state: 'game_state.GameState') -> None:
