@@ -96,6 +96,13 @@ class PrivateCompanyTest(unittest.TestCase):
         # call
         self.assertTrue(self.test_private_company.should_resolve_bid())
 
+    def test_should_resolve_bid_false_when_bids_cleared(self):
+        # this occurs for SV after a forced buy from consecutive passes lowering the price to 0
+        self.test_private_company.bids = None
+
+        # call
+        self.assertFalse(self.test_private_company.should_resolve_bid())
+
     def test_resolve_bid_1_bidder(self):
         self.test_private_company.add_bid(self.player, 225)
 
