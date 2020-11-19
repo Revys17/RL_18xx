@@ -20,13 +20,15 @@ class GameState:
         # make companies list a PQ, ordered from highest stock price to lowest stock price
         heapq.heapify(e30.main.get_companies())
         self.re_sort_companies()
+        self.companies_map: Dict[str, e30.company.Company] = {company.short_name: company
+                                                              for company in self.companies_pq}
         self.privates: List[e30.private_company.Private] = e30.main.get_privates()
         self.bank: e30.bank.Bank = e30.bank.Bank()
         self.stock_market: e30.stock_market.StockMarket = e30.stock_market.StockMarket()
         self.phase: e30.enums.phase.Phase = e30.enums.phase.Phase.PRIVATE_AUCTION
         self.progression: Tuple[e30.enums.round.Round, int] = (e30.enums.round.Round.BID_BUY, 0)
-        self.num_player_to_total_cert_limit_map: List = [0, 0, 28, 20, 16, 13, 11, 11]
-        self.player_total_cert_limit: int = self.num_player_to_total_cert_limit_map[self.num_players]
+        num_player_to_total_cert_limit_map: List = [0, 0, 28, 20, 16, 13, 11, 11]
+        self.player_total_cert_limit: int = num_player_to_total_cert_limit_map[self.num_players]
         #self.train_market = TrainMarket()
         #self.tile_bank = TileBank()
         #self.map = Map()

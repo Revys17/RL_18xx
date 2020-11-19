@@ -1,6 +1,7 @@
 from typing import List
 
 import e30
+from e30.bank import Bank
 from e30.exceptions.exceptions import InvalidOperationException
 from e30.player import Player
 from e30.private_company import Private
@@ -18,11 +19,8 @@ class Company:
         self.current_share_price: StockMarketSlot
 
         # share info
-        self.presidency_share: int = 1
         self.ipo_shares: int = 8
         self.market_shares: int = 0
-        # what are company shares?
-        self.company_shares: int = 0
 
         # operations info
         self.operating: bool = False
@@ -38,12 +36,11 @@ class Company:
 
     # TODO: where is this used? Can it be initialized in the constructor?
     def start_company(self, president: Player, par_value: int) -> None:
-        if self.presidency_share == 0:
+        if hasattr(self, 'president'):
             raise InvalidOperationException("Company " + self.name + " already started")
 
         self.president: Player = president
         self.owning_players[president] = 2
-        self.presidency_share: int = 0
         self.par_value: int = par_value
         self.current_share_price: StockMarketSlot = self.stock_market.get_par_value_slot(par_value)
 
@@ -87,7 +84,7 @@ class Company:
 
         # add check for change of presidency
 
-    def sell_share(self, player: Player, num_shares: int) -> None:
+    def sell_share(self, player: Player, num_shares: int, bank: Bank) -> None:
         if not player.has_share(self):
             raise InvalidOperationException("Player " + player.get_name() + " does not have any shares of company " +
                                             self.name + " to sell!")
@@ -96,9 +93,21 @@ class Company:
             raise InvalidOperationException("Company " + self.name + " has too many shares in the open market!")
 
         self.market_shares += num_shares
-        player.sell_shares(self, num_shares)
-        # TODO: current_share_price is a StockMarketSlot or int?
-        current_share_price: int = self.stock_market.get_share_price_after_sale(self.current_share_price, num_shares)
+        value_gained = player.sell_shares(self, num_shares)
+        # TODO: when can the game end? Bank could have negative money at this point
+        bank.money -= value_gained
+        self.current_share_price = self.current_share_price.get_share_price_after_sale(num_shares)
+
+    def transfer_presidency(self, new_president: Player):
+        if not hasattr(self, 'president'):
+            raise InvalidOperationException(self.short_name + " has no president. Can't transfer to "
+                                            + new_president.get_name())
+        # trade president's certificate for 2 regular certs
+        self.president.presiding_companies.remove(self.short_name)
+        self.president.share_map[self.short_name] += 2
+        self.president = new_president
+        self.president.presiding_companies.append(self.short_name)
+        self.president.share_map[self.short_name] -= 2
 
     def __str__(self):
         president = self.president.get_name() if hasattr(self, 'president') else None
@@ -122,3 +131,4 @@ class Company:
         if self.current_share_price.get_value()[0] == other_company.current_share_price.get_value()[0]:
             return self.current_share_price.get_value()[1] < other_company.current_share_price.get_value()[1]
         return self.current_share_price.get_value()[0] < other_company.current_share_price.get_value()[0]
+

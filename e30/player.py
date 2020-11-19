@@ -1,6 +1,6 @@
 import logging
 import random
-from typing import List
+from typing import List, Dict, Set
 
 import e30
 from e30.actions.stock_market_buy_action import StockMarketBuyAction
@@ -16,11 +16,15 @@ class Player:
     def __init__(self, index: int, starting_money: int, agent: 'e30.agent.Agent'):
         self.index: int = index
         self.money: int = starting_money
-        self.shares: List = []
-        self.charters: List = []
+        # company short name to # shares owned, this doesn't include presidency certs, implied when a company's
+        # short name is in the player's 'presiding_companies' list
+        self.share_map: Dict[str, int] = {}
+        self.presiding_companies: List[str] = []
         self.privates: List[e30.private_company.Private] = []
         self.name: str = random.choice(RANDOM_NAMES) + str(self.index)
         self.agent = agent
+        # sold companies cannot be bought by a player in the same stock round
+        self.buy_restricted_companies: Set[str] = set()
 
     def get_bid_buy_action(self, game_state: 'e30.game_state.GameState') -> e30.actions.bid_buy_action.BidBuyAction:
         # needs to return the action the player wants to take
@@ -53,11 +57,18 @@ class Player:
         return self.name
 
     def has_share(self, company: 'e30.company.Company') -> bool:
-        # TODO
-        return True
+        if company.short_name in self.share_map and self.share_map[company.short_name] > 0:
+            return True
+        return False
 
-    def sell_shares(self, company: 'e30.company.Company', num_shares: int) -> None:
-        pass
+    def sell_shares(self, company: 'e30.company.Company', num_shares: int) -> int:
+        value_gained = company.current_share_price.get_value()[0] * num_shares
+        self.add_money(value_gained)
+        self.share_map[company.short_name] -= num_shares
+        if self.share_map[company.short_name] == 0:
+            del self.share_map[company.short_name]
+            company.owning_players.remove(self)
+        return value_gained
 
     def set_aside_money(self, bid: int) -> None:
         self.remove_money(bid)
@@ -74,3 +85,6 @@ class Player:
 
     def get_stock_market_buy_action(self, game_state: 'e30.game_state.GameState') -> StockMarketBuyAction:
         return self.agent.get_stock_market_buy_action(game_state)
+
+    def reset_restricted_companies_buy_list(self):
+        self.buy_restricted_companies.clear()
