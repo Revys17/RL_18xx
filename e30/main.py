@@ -4,10 +4,11 @@ import logging
 import math
 import random
 import sys
-from typing import List
+from collections import dict_keys
+from typing import List, OrderedDict, Set, Dict
 
-import e30.game_state
 import e30.agent
+import e30.game_state
 from e30.actions.bid_buy_action import BidBuyAction, BidBuyActionType
 from e30.actions.stock_market_buy_action import StockMarketBuyAction, StockMarketBuyActionType
 from e30.actions.stock_market_sell_action import StockMarketSellAction, StockMarketSellActionType
@@ -22,6 +23,7 @@ from e30.privates.CS import CS
 from e30.privates.DH import DH
 from e30.privates.MH import MH
 from e30.privates.SV import SV
+from e30.stock_market_slot import StockMarketSlot
 
 logging.basicConfig(level=logging.DEBUG)
 log = logging.getLogger(__name__)
@@ -188,16 +190,118 @@ def complete_purchase(game_state: 'e30.game_state.GameState', player: Player, pr
     game_state.set_next_as_priority_deal(player)
 
 
+def get_clockwise_distance_from_player(src_index, other_index, num_players):
+    diff = other_index - src_index
+    if diff < 0:
+        return diff + num_players
+
+
 def process_stock_round_sell_action(game_state: 'e30.game_state.GameState', player: Player) -> bool:
     retry: bool = True
 
     while retry:
         retry = False
         try:
+            game_state.print_stock_market_turn_game_state()
             sell_action: StockMarketSellAction = player.get_stock_market_sell_action(game_state)
 
             if sell_action.action_type is StockMarketSellActionType.PASS:
                 return False
+
+            # does the player actually own shares of the companies in the request?
+            requested_sales: OrderedDict[str, int] = sell_action.sell_map
+            requested_sale_names: Set[str] = set(requested_sales.keys())
+            owned_share_names: Set[str] = set(player.share_map.keys())
+            if not requested_sale_names.issubset(owned_share_names):
+                raise InvalidOperationException("Can't sell shares from unowned companies")
+
+            # does the player actually have enough shares to sell?
+            # does it uphold the required maximum number of shares in the bank pool?
+            for company_name, num_sell in requested_sales:
+                if num_sell > player.share_map[company_name]:
+                    raise InvalidOperationException("Can't sell more shares of " + company_name + " than owned")
+                if num_sell + game_state.companies_map[company_name].market_shares > 5:
+                    raise InvalidOperationException(company_name + " can't have more than 5 bank pool shares")
+
+            # would the sale cause a change in presidency?
+            new_presidents: Dict[str, Player] = {} # get new presidents if there would be any changes
+            for company_name, num_sell in requested_sales:
+                if company_name in player.presiding_companies:
+                    # total shares: 2x president cert + other certs - shares to sell
+                    num_shares_after_sale = 2 + player.share_map[company_name] - num_sell
+                    other_players = list(filter(lambda pl: pl is not player,
+                                                game_state.companies_map[company_name].owning_players))
+
+                    contenders: Dict[Player, int] = {}
+                    for p in other_players:
+                        # must have at least 2 shares to become the new president
+                        if company_name in p.share_map and p.share_map[company_name] > num_shares_after_sale \
+                                and p.share_map[company_name] >= 2:
+                            contenders[p] = p.share_map[company_name]
+
+                    if num_shares_after_sale < 2 and len(contenders.keys()) == 0:
+                        raise InvalidOperationException("No player able to receive presidency of " + company_name)
+
+                    highest_shares = 0
+                    closest_clockwise_player_distance = 999 # set to a number higher than the max index of players
+                    for p, num_shares in contenders:
+                        distance_from_selling_player = get_clockwise_distance_from_player(player.index, p.index,
+                                                                                          game_state.num_players)
+                        if num_shares > highest_shares:
+                            highest_shares = num_shares
+                            closest_clockwise_player_distance = distance_from_selling_player
+                            new_presidents[company_name] = p
+                        elif num_shares == highest_shares and distance_from_selling_player <\
+                                closest_clockwise_player_distance:
+                            closest_clockwise_player_distance = distance_from_selling_player
+                            new_presidents[company_name] = p
+
+            # would the player be over any certificate limits after the sale?
+            # create a view of shares owned after sales
+            # create a view of the share price of companies after sales
+            # count total certs, exclude shares in orange, brown, yellow slots, add 1 for presidency transfers
+            new_shares_map = player.share_map.copy()
+            for company_name, num_shares in requested_sales:
+                new_shares_map[company_name] = new_shares_map[company_name] - num_shares
+
+            new_slots_map: Dict[str, StockMarketSlot] = {}
+            for company_name in owned_share_names:
+                new_slots_map[company_name] = game_state.companies_map[company_name].current_share_price.copy()
+            # apply slot movement from selling shares
+            for company_name, num_sell in requested_sales:
+                for _ in range(num_sell):
+                    new_slots_map[company_name].set_down(new_slots_map[company_name].down)
+
+            cert_limit_excluded_companies = []
+            for company_name, slot in new_slots_map:
+                if slot.get_color() is not "white":
+                    cert_limit_excluded_companies.append(company_name)
+
+            total_num_certs_after_sale = 0
+            for company_name, num_shares in new_shares_map:
+                if company_name not in cert_limit_excluded_companies:
+                    total_num_certs_after_sale += num_shares
+
+            # transferring the president's cert for a company means gaining a regular share in cert conversion
+            for company_name in new_presidents:
+                if company_name not in cert_limit_excluded_companies:
+                    total_num_certs_after_sale += 1
+
+            if total_num_certs_after_sale > game_state.player_total_cert_limit:
+                raise InvalidOperationException(
+                    "Must sell more shares. Shares after sale {} would still be over the {} limit".format(
+                        total_num_certs_after_sale, game_state.player_total_cert_limit))
+
+            # apply presidency changes
+            for company_name, new_president in new_presidents:
+                game_state.companies_map[company_name].transfer_presidency(new_president)
+
+            # ordered selling of companies
+            for company_name, num_shares in requested_sales:
+                game_state.companies_map[company_name].sell_share(player, num_shares, game_state.bank)
+                # re-sort on stock value changes, order of changes matter
+                game_state.re_sort_companies()
+                player.buy_restricted_companies.add(company_name)
 
             return True
         except InvalidOperationException as e:
@@ -211,6 +315,7 @@ def process_stock_round_buy_action(game_state: 'e30.game_state.GameState', playe
     while retry:
         retry = False
         try:
+            game_state.print_stock_market_turn_game_state()
             sell_action: StockMarketBuyAction = player.get_stock_market_buy_action(game_state)
 
             if sell_action.action_type is StockMarketBuyActionType.PASS:
@@ -224,6 +329,7 @@ def process_stock_round_buy_action(game_state: 'e30.game_state.GameState', playe
 
 def do_stock_round(game_state: 'e30.game_state.GameState') -> None:
     consecutive_passes: int = 0
+    [player.reset_restricted_companies_buy_list() for player in game_state.players]
 
     # stock round ends when a full consecutive pass cycle occurs
     while consecutive_passes < game_state.num_players:
@@ -233,25 +339,24 @@ def do_stock_round(game_state: 'e30.game_state.GameState') -> None:
         game_state.print_priority_deal_player()
 
         # sell
-        game_state.print_stock_market_turn_game_state()
-        is_sell: bool = process_stock_round_sell_action(game_state, current_player)
+        if game_state.progression is not (Round.STOCK_MARKET, 0):
+            is_sell: bool = process_stock_round_sell_action(game_state, current_player)
 
-        if is_sell:
-            turn_has_action = True
+            if is_sell:
+                turn_has_action = True
 
         # buy
-        game_state.print_stock_market_turn_game_state()
         is_buy: bool = process_stock_round_buy_action(game_state, current_player)
 
         if is_buy:
             turn_has_action = True
 
         # sell
-        game_state.print_stock_market_turn_game_state()
-        is_sell: bool = process_stock_round_sell_action(game_state, current_player)
+        if game_state.progression is not (Round.STOCK_MARKET, 0):
+            is_sell: bool = process_stock_round_sell_action(game_state, current_player)
 
-        if is_sell:
-            turn_has_action = True
+            if is_sell:
+                turn_has_action = True
 
         if turn_has_action:
             consecutive_passes = 0
