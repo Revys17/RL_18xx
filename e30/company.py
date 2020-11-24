@@ -116,7 +116,8 @@ class Company:
                                        self.current_share_price.get_color())\
             if hasattr(self, 'current_share_price') else None
 
-        return f'Company: {self.short_name}, president: {president}, owning players: {self.owning_players}, ' \
+        return f'Company: {self.short_name}, president: {president}, owning players: ' \
+               f'{[p.get_name() for p in self.owning_players]}, ' \
                f'par value: {self.par_value}, current share price: {share_price}, ' \
                f'ipo shares: {self.ipo_shares}, market shares: {self.market_shares}, operating: {self.operating}, ' \
                f'money: {self.money}'
