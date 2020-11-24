@@ -5,7 +5,8 @@ from e30.bank import Bank
 from e30.exceptions.exceptions import InvalidOperationException
 from e30.player import Player
 from e30.private_company import Private
-from e30.stock_market_slot import StockMarketSlot
+from e30.stock_market import StockMarket
+from e30.stock_market_slot import StockMarketSlot, StockMarketSlotColor
 
 
 class Company:
@@ -32,57 +33,47 @@ class Company:
         self.privates: List[Private] = []
         self.tokens: List = []
 
-    # initialize all the companies, then set the start when they're bought. Or initialize when bought.
-
-    # TODO: where is this used? Can it be initialized in the constructor?
-    def start_company(self, president: Player, par_value: int) -> None:
+    def start_company(self, president: Player, par_value: int, stock_market: StockMarket, bank: Bank) -> None:
         if hasattr(self, 'president'):
             raise InvalidOperationException("Company " + self.name + " already started")
 
         self.president: Player = president
-        self.owning_players[president] = 2
+        self.owning_players.append(president)
         self.par_value: int = par_value
-        self.current_share_price: StockMarketSlot = self.stock_market.get_par_value_slot(par_value)
+        self.current_share_price: StockMarketSlot = stock_market.get_par_value_slot(par_value)
+        president.money -= par_value * 2
+        bank.money += par_value * 2
 
-    def buy_ipo_share(self, player: Player) -> None:
+    def buy_ipo_share(self, player: Player, bank: Bank) -> None:
         if self.ipo_shares <= 0:
             raise InvalidOperationException("No IPO shares available for company " + self.name)
 
-        # add check for number of shares owned
-        if not self.can_purchase_share(player):
-            raise InvalidOperationException("Player " + player.name + " cannot purchase more shares of company " +
-                                            self.name)
-
         self.ipo_shares -= 1
-        player.add_share(self)
-        self.owning_players[player.number] = self.owning_players[player.number] + 1
-
-        # add check for change of presidency
+        self.add_share(bank, player, 1, self.par_value)
 
         if self.ipo_shares == 4:
             self.float_company()
 
-    def can_purchase_share(self, player: Player) -> bool:
-        if self.current_share_price.get_color() == "orange" or self.current_share_price.get_color() == "brown":
-            return True
-
-        return self.owning_players[player.number] < 6
+    def add_share(self, bank: Bank, player: Player, num_shares: int, share_price: int):
+        player.money -= num_shares * share_price
+        bank.money += num_shares * share_price
+        if player not in self.owning_players:
+            self.owning_players.append(player)
+        if self.short_name not in player.share_map:
+            player.share_map[self.short_name] = num_shares
+        else:
+            player.share_map[self.short_name] += num_shares
 
     def float_company(self) -> None:
         self.money = 10 * self.par_value
         self.operating = True
 
-    def buy_market_share(self, player: Player) -> None:
-        if self.market_shares <= 0:
-            raise InvalidOperationException("No Market shares available for company " + self.name)
+    def buy_market_share(self, player: Player, num_buy: int, bank: Bank) -> None:
+        if self.market_shares < num_buy:
+            raise InvalidOperationException("Not enough market shares available for company " + self.name)
 
-        # add check for number of shares owned
-
-        self.market_shares -= 1
-        player.add_share(self)
-        self.owning_players[player.number] = self.owning_players[player.number] + 1
-
-        # add check for change of presidency
+        self.market_shares -= num_buy
+        self.add_share(bank, player, num_buy, self.current_share_price.get_value()[0])
 
     def sell_share(self, player: Player, num_shares: int, bank: Bank) -> None:
         if not player.has_share(self):

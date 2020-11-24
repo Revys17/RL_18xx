@@ -1,4 +1,12 @@
+from enum import Enum
 from typing import Optional, Union, Tuple
+
+
+class StockMarketSlotColor(Enum):
+    BROWN = 0
+    ORANGE = 1
+    YELLOW = 2
+    WHITE = 3
 
 
 class StockMarketSlot:
@@ -31,14 +39,14 @@ class StockMarketSlot:
     def get_value(self) -> Tuple[int, str]:
         return self.value
 
-    def get_color(self) -> str:
+    def get_color(self) -> StockMarketSlotColor:
         if self.value[0] <= 30:
-            return "brown"
+            return StockMarketSlotColor.BROWN
         if self.value[0] <= 45:
-            return "orange"
+            return StockMarketSlotColor.BROWN
         if self.value[0] <= 60:
-            return "yellow"
-        return "white"
+            return StockMarketSlotColor.YELLOW
+        return StockMarketSlotColor.WHITE
 
     def copy(self) -> 'StockMarketSlot':
         return StockMarketSlot(self.location, self.up, self.right, self.down, self.left)
@@ -48,3 +56,12 @@ class StockMarketSlot:
         for _ in range(num_shares_sold):
             share_price = self.down
         return share_price
+
+    def ignore_total_cert_limit(self) -> bool:
+        return self.get_color() is not StockMarketSlotColor.WHITE
+
+    def can_buy_multiple_certs(self) -> bool:
+        return self.get_color() is StockMarketSlotColor.BROWN
+
+    def ignore_company_ownership_percent_limit(self) -> bool:
+        return self.get_color() is StockMarketSlotColor.BROWN or self.get_color() is StockMarketSlotColor.ORANGE

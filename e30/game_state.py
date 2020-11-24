@@ -4,6 +4,7 @@ import logging
 
 import e30
 from e30.player import Player
+from e30.stock_market_slot import StockMarketSlotColor
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +62,23 @@ class GameState:
     def pay_private_revenue(self) -> None:
         for player in self.players:
             player.pay_private_income()
+
+    def get_total_num_non_excluded_certs(self, player):
+        companies = set(player.share_map.keys())
+        companies.update(player.presiding_companies)
+        total_num_certs = 0
+        for company_name in companies:
+            c = self.companies_map[company_name]
+            if not c.current_share_price.ignore_total_cert_limit():
+                if company_name in player.share_map:
+                    total_num_certs += player.share_map[company_name]
+                if company_name in player.presiding_companies:
+                    total_num_certs += 1
+            else:
+                print(f"Excluding {company_name} with slot value {c.current_share_price.get_value()} "
+                      f"from total cert count")
+
+        return total_num_certs
 
     def increment_progression(self) -> None:
         pass

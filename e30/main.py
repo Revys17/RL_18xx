@@ -10,7 +10,8 @@ from typing import List, Set, Dict
 import e30.agent
 import e30.game_state
 from e30.actions.bid_buy_action import BidBuyAction, BidBuyActionType
-from e30.actions.stock_market_buy_action import StockMarketBuyAction, StockMarketBuyActionType
+from e30.actions.stock_market_buy_action import StockMarketBuyAction, StockMarketBuyActionType, \
+    StockMarketBuyActionBuyType
 from e30.actions.stock_market_sell_action import StockMarketSellAction, StockMarketSellActionType
 from e30.company import Company
 from e30.enums.round import Round
@@ -214,6 +215,7 @@ def process_stock_round_sell_action(game_state: 'e30.game_state.GameState', play
     sell_action: StockMarketSellAction = player.get_stock_market_sell_action(game_state)
 
     if sell_action.action_type is StockMarketSellActionType.PASS:
+        print("Sell action passed")
         return False
 
     # does the player actually own shares of the companies in the request?
@@ -288,7 +290,7 @@ def process_stock_round_sell_action(game_state: 'e30.game_state.GameState', play
     print('Share limit excluded companies:')
     cert_limit_excluded_companies = []
     for company_name, slot in new_slots_map.items():
-        if slot.get_color() != "white":
+        if slot.ignore_total_cert_limit():
             cert_limit_excluded_companies.append(company_name)
             print(f'{company_name} would move to {slot.value}')
 
@@ -324,26 +326,142 @@ def process_stock_round_sell_action(game_state: 'e30.game_state.GameState', play
 
 
 def process_stock_round_buy_action(game_state: 'e30.game_state.GameState', player: Player) -> bool:
-    retry: bool = True
+    game_state.print_stock_market_turn_game_state()
+    buy_action: StockMarketBuyAction = player.get_stock_market_buy_action(game_state)
 
-    while retry:
-        retry = False
-        try:
-            game_state.print_stock_market_turn_game_state()
-            sell_action: StockMarketBuyAction = player.get_stock_market_buy_action(game_state)
+    if buy_action.action_type is StockMarketBuyActionType.PASS:
+        print("Buy action passed")
+        return False
 
-            if sell_action.action_type is StockMarketBuyActionType.PASS:
-                return False
+    print(buy_action)
 
+    if buy_action.company in player.buy_restricted_companies:
+        raise InvalidOperationException(f"Player already sold shares of {buy_action.company} in the same stock round")
+
+    if buy_action.buy_type is StockMarketBuyActionBuyType.PRESIDENT_CERT:
+        # president cert available?
+        if game_state.companies_map[buy_action.company].president is not None:
+            raise InvalidOperationException(f"{buy_action.company} already has president "
+                                            f"{game_state.companies_map[buy_action.company].president.get_name()}")
+
+        # player has enough money?
+        price = buy_action.par_value * 2
+        if player.money < price:
+            raise InvalidOperationException(f"{player.get_name()} has {player.money} and cannot afford {price}")
+
+        # will the player be over the total cert limit?
+        current_cert_count = game_state.get_total_num_non_excluded_certs(player)
+        if current_cert_count + 1 > game_state.player_total_cert_limit:
+            raise InvalidOperationException(
+                f"Shares after purchase: {current_cert_count + 1} would be over the "
+                f"{game_state.player_total_cert_limit} limit")
+
+        # do the actual purchase
+        game_state.companies_map[buy_action.company].start_company(player, buy_action.par_value,
+                                                                   game_state.stock_market, game_state.bank)
+        return True
+
+    if game_state.companies_map[buy_action.company].president is None:
+        raise InvalidOperationException(f"First stock bought must be the president cert for {buy_action.company}.")
+
+    if not game_state.companies_map[buy_action.company].current_share_price.can_buy_multiple_certs() and \
+            buy_action.num_buy > 1:
+        raise InvalidOperationException(
+            f"Cannot buy multiple stock of {buy_action.company}. "
+            f"It is in slot {game_state.companies_map[buy_action.company].current_share_price.get_value}")
+
+    if buy_action.buy_type is StockMarketBuyActionBuyType.IPO:
+        # ipo shares available?
+        if buy_action.num_buy > 1:
+            raise InvalidOperationException(f"Cannot purchase more than 1 IPO shares at a time")
+        if game_state.companies_map[buy_action.company].ipo_shares == 0:
+            raise InvalidOperationException(f"{buy_action.company} has no IPO shares available for purchase")
+        # player has enough money?
+        if player.money < game_state.companies_map[buy_action.company].par_value:
+            raise InvalidOperationException(f"{player.get_name()} has {player.money} and cannot afford "
+                                            f"{game_state.companies_map[buy_action.company].par_value}")
+        # will there be a new president?
+        presidential_transfer = has_presidency_transfer(buy_action.company, 1, game_state, player)
+
+        validate_ownership_percent_and_total_cert_limit(buy_action.company, game_state, player, presidential_transfer)
+
+        game_state.companies_map[buy_action.company].buy_ipo_share(player, game_state.bank)
+        if presidential_transfer:
+            game_state.companies_map[buy_action.company].transfer_presidency(player)
+
+    elif buy_action.buy_type is StockMarketBuyActionBuyType.BANK_POOL:
+        # bank pool shares available?
+        if game_state.companies_map[buy_action.company].market_shares < buy_action.num_buy:
+            raise InvalidOperationException(
+                f"{buy_action.company} does not have enough bank pool shares available at "
+                f"{game_state.companies_map[buy_action.company].market_shares} for purchase")
+        # player has enough money?
+        share_price = game_state.companies_map[buy_action.company].current_share_price.get_value()[0]
+        if player.money < share_price * buy_action.num_buy:
+            raise InvalidOperationException(
+                f"{player.get_name()} has {player.money} and cannot afford {share_price * buy_action.num_buy}")
+
+        # will there be a new president?
+        presidential_transfer = has_presidency_transfer(buy_action.company, buy_action.num_buy, game_state, player)
+
+        # multiple cert purchase
+        if buy_action.num_buy > 1:
+            # must be brown stock market slot color, ignore total cert limit, ignore ownership percent limit
+            game_state.companies_map[buy_action.company].buy_market_share(player, buy_action.num_buy, game_state.bank)
+            if presidential_transfer:
+                game_state.companies_map[buy_action.company].transfer_presidency(player)
             return True
-        except InvalidOperationException as e:
-            log.error(e)
-            retry = True
+
+        # single cert purchase
+        validate_ownership_percent_and_total_cert_limit(buy_action.company, game_state, player, presidential_transfer)
+
+        game_state.companies_map[buy_action.company].buy_market_share(player, buy_action.num_buy, game_state.bank)
+        if presidential_transfer:
+            game_state.companies_map[buy_action.company].transfer_presidency(player)
+
+    else:
+        raise InvalidOperationException(f"Unknown buy type {buy_action.buy_type}")
+
+    return True
+
+
+def validate_ownership_percent_and_total_cert_limit(company_name: str, game_state: 'e30.game_state.GameState',
+                                                    player: Player, presidential_transfer: bool):
+    if game_state.companies_map[company_name].current_share_price.ignore_company_ownership_percent_limit():
+        print(f"Ignoring company ownership percent limit for purchase of {company_name}.")
+    else:
+        if company_name in player.presiding_companies and company_name in player.share_map and \
+                player.share_map[company_name] == 4:
+            raise InvalidOperationException(f"{player.get_name()} already has 60% ownership of "
+                                            f"{company_name} as the president and cannot purchase more.")
+        # no way to pass individual ownership percent limits if you weren't the president already and stocks are
+        # available for purchase
+    if game_state.companies_map[company_name].current_share_price.ignore_total_cert_limit():
+        print(f"Ignoring total cert limit per player for purchase of {company_name}.")
+    else:
+        if not presidential_transfer and \
+                game_state.get_total_num_non_excluded_certs(player) == game_state.player_total_cert_limit:
+            raise InvalidOperationException(f"{player.get_name()} total cert limit will be surpassed with purchase")
+
+
+def has_presidency_transfer(company_name: str, num_buy: int, game_state: 'e30.game_state.GameState',
+                            player: Player) -> bool:
+    presidential_transfer = False
+    if company_name not in player.presiding_companies:
+        current_owned_percent_after_sale = 10 * num_buy
+        if company_name in player.share_map:
+            current_owned_percent_after_sale += 10 * player.share_map[company_name]
+        highest_owned_percent = 20  # current president
+        if company_name in game_state.companies_map[company_name].president.share_map:
+            highest_owned_percent += 10 * game_state.companies_map[company_name].president.share_map[
+                company_name]
+        if current_owned_percent_after_sale > highest_owned_percent:
+            presidential_transfer = True
+    return presidential_transfer
 
 
 def do_stock_round(game_state: 'e30.game_state.GameState') -> None:
     consecutive_passes: int = 0
-    [player.reset_restricted_companies_buy_list() for player in game_state.players]
 
     # stock round ends when a full consecutive pass cycle occurs
     while consecutive_passes < game_state.num_players:
@@ -380,6 +498,8 @@ def do_stock_round(game_state: 'e30.game_state.GameState') -> None:
             log.info("No sell or buy, consecutive passes: {}".format(consecutive_passes))
 
     # end of stock round actions
+    [player.reset_restricted_companies_buy_list() for player in game_state.players]
+    # check if all shares are held by player, stock market slot movement
 
 
 def do_operating_rounds(game_state: 'e30.game_state.GameState') -> None:
