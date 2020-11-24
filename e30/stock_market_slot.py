@@ -32,11 +32,11 @@ class StockMarketSlot:
         return self.value
 
     def get_color(self) -> str:
-        if self.value <= 30:
+        if self.value[0] <= 30:
             return "brown"
-        if self.value <= 45:
+        if self.value[0] <= 45:
             return "orange"
-        if self.value <= 60:
+        if self.value[0] <= 60:
             return "yellow"
         return "white"
 
