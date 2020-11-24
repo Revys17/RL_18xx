@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import MagicMock, Mock
 
 import e30
+from e30.company import Company
 
 
 class PlayerTest(unittest.TestCase):
@@ -9,6 +10,8 @@ class PlayerTest(unittest.TestCase):
     def setUp(self):
         self.agent_mock: e30.agent.Agent = Mock()
         self.game_state_mock: e30.game_state.GameState = Mock()
+        self.company_mock: Company = Mock()
+        self.company_mock.short_name = 'PRR'
 
         self.test_player: e30.player.Player = e30.player.Player(0, 1000, self.agent_mock)
         self.test_player.privates = [e30.privates.BO.BO(), e30.privates.CA.CA()]
@@ -54,8 +57,16 @@ class PlayerTest(unittest.TestCase):
     def test_get_name(self):
         self.assertEqual(self.test_player.name, self.test_player.get_name())
 
-    def test_has_share(self):
-        self.assertEqual(True, self.test_player.has_share(MagicMock()))
+    def test_has_share_false(self):
+        self.assertEqual(False, self.test_player.has_share(self.company_mock))
+
+    def test_has_share_0_shares_false(self):
+        self.test_player.share_map = {'PRR': 0}
+        self.assertEqual(False, self.test_player.has_share(self.company_mock))
+
+    def test_has_share_true(self):
+        self.test_player.share_map = {'PRR': 1}
+        self.assertEqual(True, self.test_player.has_share(self.company_mock))
 
     def test_set_aside_money(self):
         # call
