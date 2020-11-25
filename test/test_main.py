@@ -359,6 +359,74 @@ class MainTest(unittest.TestCase):
             self.assertEqual(self.game_state.stock_market.node_map["350A"],
                              self.game_state.companies_map[c].current_share_price)
 
+    def test_process_stock_round_sell_action_over_ownership_percent_limit_shareholder(self):
+        player = self.game_state.get_priority_deal_player()
+        player.share_map = {'PRR': 7}
+        companies = ['PRR']
+        # non-ownership percent limit excluded stock market slots
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["67H"]
+            self.game_state.companies_map[c].owning_players = [player]
+        player.get_stock_market_sell_action.return_value = \
+            StockMarketSellAction(StockMarketSellActionType.SELL, OrderedDict([('PRR', 1)]))
+        self.assertEqual(1200, player.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_sell_action, self.game_state,
+                          player)
+        self.assertEqual({'PRR': 7}, player.share_map)
+        self.assertEqual([], player.presiding_companies)
+        self.assertEqual(1200, player.money)
+        for c in companies:
+            self.assertEqual(self.game_state.stock_market.node_map["67H"],
+                             self.game_state.companies_map[c].current_share_price)
+
+    def test_process_stock_round_sell_action_over_ownership_percent_limit_as_president(self):
+        player = self.game_state.get_priority_deal_player()
+        player.share_map = {'PRR': 6}
+        player.presiding_companies = ['PRR']
+        companies = ['PRR']
+        # non-ownership percent limit excluded stock market slots
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["67H"]
+            self.game_state.companies_map[c].president = player
+            self.game_state.companies_map[c].owning_players = [player]
+        player.get_stock_market_sell_action.return_value = \
+            StockMarketSellAction(StockMarketSellActionType.SELL, OrderedDict([('PRR', 1)]))
+        self.assertEqual(1200, player.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_sell_action, self.game_state,
+                          player)
+        self.assertEqual({'PRR': 6}, player.share_map)
+        self.assertEqual(['PRR'], player.presiding_companies)
+        self.assertEqual(1200, player.money)
+        for c in companies:
+            self.assertEqual(self.game_state.stock_market.node_map["67H"],
+                             self.game_state.companies_map[c].current_share_price)
+
+    def test_process_stock_round_sell_action_over_ownership_percent_limit_but_excluded_success(self):
+        player = self.game_state.get_priority_deal_player()
+        player.share_map = {'PRR': 7}
+        companies = ['PRR']
+        # non-ownership percent limit excluded stock market slots
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["50F"]
+            self.game_state.companies_map[c].owning_players = [player]
+        player.get_stock_market_sell_action.return_value = \
+            StockMarketSellAction(StockMarketSellActionType.SELL, OrderedDict([('PRR', 1)]))
+        self.assertEqual(1200, player.money)
+
+        # call
+        e30.main.process_stock_round_sell_action(self.game_state, player)
+
+        self.assertEqual({'PRR': 6}, player.share_map)
+        self.assertEqual([], player.presiding_companies)
+        self.assertEqual(1200 + 50, player.money)
+        for c in companies:
+            self.assertEqual(self.game_state.stock_market.node_map["45G"],
+                             self.game_state.companies_map[c].current_share_price)
+
     def test_process_stock_round_sell_action_price_presidential_transfer_drop_color_exclusion_success(self):
         # 2 player limit is 28
         player = self.game_state.get_priority_deal_player()
