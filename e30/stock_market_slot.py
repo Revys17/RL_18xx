@@ -43,7 +43,7 @@ class StockMarketSlot:
         if self.value[0] <= 30:
             return StockMarketSlotColor.BROWN
         if self.value[0] <= 45:
-            return StockMarketSlotColor.BROWN
+            return StockMarketSlotColor.ORANGE
         if self.value[0] <= 60:
             return StockMarketSlotColor.YELLOW
         return StockMarketSlotColor.WHITE

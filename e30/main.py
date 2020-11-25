@@ -289,10 +289,14 @@ def process_stock_round_sell_action(game_state: 'e30.game_state.GameState', play
 
     print('Share limit excluded companies:')
     cert_limit_excluded_companies = []
+    cert_ownership_percent_excluded_companies = []
     for company_name, slot in new_slots_map.items():
         if slot.ignore_total_cert_limit():
             cert_limit_excluded_companies.append(company_name)
-            print(f'{company_name} would move to {slot.value}')
+            print(f'{company_name} would move to {slot.value}. Ignore for total cert limit')
+        if slot.ignore_company_ownership_percent_limit():
+            cert_ownership_percent_excluded_companies.append(company_name)
+            print(f'{company_name} would move to {slot.value}. Ignore for ownership percent limit')
 
     print(f'Adjusted share map: {new_shares_map}')
 
@@ -310,6 +314,18 @@ def process_stock_round_sell_action(game_state: 'e30.game_state.GameState', play
         raise InvalidOperationException(
             "Must sell more shares. Shares after sale: {} would still be over the {} limit".format(
                 total_num_certs_after_sale, game_state.player_total_cert_limit))
+
+    for company_name, num_shares in new_shares_map.items():
+        if company_name not in cert_ownership_percent_excluded_companies:
+            ownership_percent = 10 * num_shares
+            if company_name in player.presiding_companies and company_name not in new_presidents:
+                ownership_percent += 20
+                if ownership_percent > 60:
+                    raise InvalidOperationException(
+                        f"Must sell more shares. Player owns {ownership_percent}% of {company_name} as the president.")
+            elif ownership_percent > 50:
+                raise InvalidOperationException(
+                    f"Must sell more shares. Player owns {ownership_percent}% of {company_name} as a shareholder.")
 
     # apply presidency changes
     for company_name, new_president in new_presidents.items():
@@ -343,27 +359,25 @@ def process_stock_round_buy_action(game_state: 'e30.game_state.GameState', playe
         if game_state.companies_map[buy_action.company].president is not None:
             raise InvalidOperationException(f"{buy_action.company} already has president "
                                             f"{game_state.companies_map[buy_action.company].president.get_name()}")
-
         # player has enough money?
         price = buy_action.par_value * 2
         if player.money < price:
             raise InvalidOperationException(f"{player.get_name()} has {player.money} and cannot afford {price}")
-
         # will the player be over the total cert limit?
         current_cert_count = game_state.get_total_num_non_excluded_certs(player)
         if current_cert_count + 1 > game_state.player_total_cert_limit:
             raise InvalidOperationException(
                 f"Shares after purchase: {current_cert_count + 1} would be over the "
                 f"{game_state.player_total_cert_limit} limit")
-
         # do the actual purchase
         game_state.companies_map[buy_action.company].start_company(player, buy_action.par_value,
                                                                    game_state.stock_market, game_state.bank)
         return True
 
+    # to buy IPO or bank pool shares, company must already have a president
     if game_state.companies_map[buy_action.company].president is None:
         raise InvalidOperationException(f"First stock bought must be the president cert for {buy_action.company}.")
-
+    # multiple shares can only be bought if the stock market slot color is brown
     if not game_state.companies_map[buy_action.company].current_share_price.can_buy_multiple_certs() and \
             buy_action.num_buy > 1:
         raise InvalidOperationException(
