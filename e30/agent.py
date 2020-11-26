@@ -1,10 +1,12 @@
 import logging
+from collections import OrderedDict
 from typing import List
 
 from e30.actions.bid_buy_action import BidBuyAction, BidBuyActionType
 from e30.actions.bid_resolution_action import BidResolutionAction, BidResolutionActionType
-from e30.actions.stock_market_buy_action import StockMarketBuyAction
-from e30.actions.stock_market_sell_action import StockMarketSellAction
+from e30.actions.stock_market_buy_action import StockMarketBuyAction, StockMarketBuyActionType, \
+    StockMarketBuyActionBuyType
+from e30.actions.stock_market_sell_action import StockMarketSellAction, StockMarketSellActionType
 from e30.exceptions.exceptions import InvalidOperationException
 import e30.game_state
 from e30.private_company import Private
@@ -104,18 +106,95 @@ class HumanAgent(Agent):
     def get_stock_market_buy_action(self, game_state: e30.game_state.GameState) -> StockMarketBuyAction:
         directions: str = """
         Stock market buy action.
-        Your turn to buy 1 company certificate or pass.
+        Your turn to pass or buy a president cert, an IPO share, a market share, or any number of market shares if the
+        stock value is brown
+        '1' to give up your turn and pass.
+        '2 <company shortname> <X>' to buy the president cert  
+        '3 <company shortname> <X>' to buy X bank pool shares
+        '4 <company shortname>' to buy 1 IPO share
         """
-        user_input: str = input(directions)
-        return StockMarketBuyAction()
+        while True:
+            user_input: str = input(directions)
+            user_input_split: List = user_input.split(" ")
+            if len(user_input_split) < 1:
+                log.error("Invalid input, try again")
+                continue
+            action: str = user_input_split[0]
+            if action.lower().startswith("1"):
+                return StockMarketBuyAction()
+            elif action.lower().startswith("2") or action.lower().startswith("3"):
+                if len(user_input_split) != 3:
+                    log.error("Invalid input, try again")
+                    continue
+                company_name: str = user_input_split[1]
+                num: int = int(user_input_split[2])
+                if company_name not in game_state.companies_map:
+                    log.error(f"Invalid company name {company_name}, try again")
+                    continue
+                if action.lower().startswith("2"):
+                    if num not in game_state.stock_market.par_locations:
+                        log.error(f"Invalid par value {num} must be in "
+                                  f"{list(game_state.stock_market.par_locations.keys())}, try again")
+                        continue
+                    return StockMarketBuyAction(StockMarketBuyActionType.BUY, company_name,
+                                                StockMarketBuyActionBuyType.PRESIDENT_CERT, 1, num)
+                else:
+                    if num > 8:
+                        log.error(f"Cannot purchase {num} market shares, try again")
+                        continue
+                    return StockMarketBuyAction(StockMarketBuyActionType.BUY, company_name,
+                                                StockMarketBuyActionBuyType.BANK_POOL, num)
+            elif action.lower().startswith("4"):
+                if len(user_input_split) != 2:
+                    log.error("Invalid input, try again")
+                    continue
+                company_name: str = user_input_split[1]
+                if company_name not in game_state.companies_map:
+                    log.error(f"Invalid company name {company_name}, try again")
+                    continue
+
+                return StockMarketBuyAction(StockMarketBuyActionType.BUY, company_name,
+                                            StockMarketBuyActionBuyType.IPO, 1)
+            log.error("Invalid input, try again")
 
     def get_stock_market_sell_action(self, game_state: e30.game_state.GameState) -> StockMarketSellAction:
         directions: str = """
         Stock market sell action.
-        Your turn to sell company certificates or pass.
+        Your turn to sell any owned certs or pass.
+        '1' to give up your turn and pass.
+        '2 [<company shortname>:<num certs to sell>,...]' to specify companies and num certs to sell, in that order 
         """
-        user_input: str = input(directions)
-        return StockMarketSellAction()
+        while True:
+            user_input: str = input(directions)
+            user_input_split: List = user_input.split(" ")
+            if len(user_input_split) < 1:
+                log.error("Invalid input, try again")
+                continue
+            action: str = user_input_split[0]
+            if action.lower().startswith("1"):
+                return StockMarketSellAction()
+            elif action.lower().startswith("2"):
+                if len(user_input_split) != 2:
+                    log.error("Invalid input, try again")
+                    continue
+                # comma separated pairs
+                company_cert_pairs = user_input_split[1].split(",")
+                sell_map: OrderedDict[str, int] = {}
+                for pair in company_cert_pairs:
+                    # colon separated key value pair
+                    key_value_pair = pair.split(":")
+                    if len(key_value_pair) != 2:
+                        log.error("Invalid key value pair, try again")
+                        continue
+                    key = key_value_pair[0]
+                    value = int(key_value_pair[1])
+                    if value < 1 or value > 8:
+                        log.error(f"Cannot sell {value} shares")
+                        continue
+                    sell_map.update({key: value})
+                return StockMarketSellAction(StockMarketSellActionType.SELL, sell_map)
+
+            log.error("Invalid input, try again")
 
 
 class AIAgent(Agent):
