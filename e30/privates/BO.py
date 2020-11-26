@@ -9,4 +9,8 @@ class BO(Private):
                          "Closes when the BO buys its first train.", 220, 30, "I-15")
 
     def do_special_action(self, game_state: 'game_state.GameState'):
-        pass
+        # after the private auction presidency of B&O goes to the owner at no cost
+        # set par value and initial share price elsewhere
+        self.owner.presiding_companies = ['B&O']
+        game_state.companies_map['B&O'].owning_players.append(self.owner)
+        game_state.companies_map['B&O'].president = self.owner

@@ -93,5 +93,12 @@ class Player:
     def get_stock_market_buy_action(self, game_state: 'e30.game_state.GameState') -> StockMarketBuyAction:
         return self.agent.get_stock_market_buy_action(game_state)
 
+    def get_bo_par_value_action(self, game_state: 'e30.game_state.GameState') -> int:
+        par_value = self.agent.get_bo_par_value_action(game_state)
+        if par_value not in game_state.stock_market.par_locations:
+            raise InvalidOperationException(f"Invalid par value {par_value}. Must be one of "
+                                            f"{list(game_state.stock_market.par_locations.keys())}")
+        return par_value
+
     def reset_restricted_companies_buy_list(self):
         self.buy_restricted_companies.clear()

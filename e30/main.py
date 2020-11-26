@@ -92,6 +92,15 @@ def run_game(game_state: 'e30.game_state.GameState') -> None:
     log.info("Starting private company auction")
     do_private_auction(game_state)
 
+    # resolve special effects for owners of CA/B&O
+    log.info(f"CA owner {game_state.privates_map['CA'].owner.get_name()} gets 10% of PRR")
+    game_state.privates_map["CA"].do_special_action(game_state)
+    log.info(f"BO owner {game_state.privates_map['BO'].owner.get_name()} gets presidency of B&O and chooses par value")
+    bo_par_value = retryable_call_int_producer(game_state, game_state.privates_map["BO"].owner.get_bo_par_value_action)
+    game_state.companies_map['B&O'].par_value = bo_par_value
+    game_state.companies_map['B&O'].current_share_price = game_state.stock_market.par_locations[bo_par_value]
+    game_state.privates_map["BO"].do_special_action(game_state)
+
     num_round: int = 0
     while game_state.game_in_progress:
         log.info("Starting stock round")
@@ -195,6 +204,18 @@ def get_clockwise_distance_from_player(src_index, other_index, num_players):
     diff = other_index - src_index
     if diff < 0:
         return diff + num_players
+
+
+def retryable_call_int_producer(game_state: 'e30.game_state.GameState', call) -> int:
+    retry: bool = True
+
+    while retry:
+        retry = False
+        try:
+            return call(game_state)
+        except InvalidOperationException as e:
+            log.error(e)
+            retry = True
 
 
 def retryable_call(game_state: 'e30.game_state.GameState', player: Player, call) -> bool:
@@ -484,6 +505,8 @@ def do_stock_round(game_state: 'e30.game_state.GameState') -> None:
         if company.ipo_shares == 0 and company.market_shares == 0:
             game_state.companies_map[company.short_name].current_share_price = \
                 game_state.companies_map[company.short_name].current_share_price.up
+            # re-sort based on share price whenever share price changes
+            game_state.re_sort_companies()
 
 
 def do_operating_rounds(game_state: 'e30.game_state.GameState') -> None:

@@ -27,6 +27,9 @@ class Agent(object):
     def get_stock_market_sell_action(self, game_state: e30.game_state.GameState):
         pass
 
+    def get_bo_par_value_action(self, game_state: e30.game_state.GameState):
+        pass
+
 
 class HumanAgent(Agent):
     def get_bid_buy_action(self, game_state: e30.game_state.GameState) -> BidBuyAction:
@@ -195,6 +198,20 @@ class HumanAgent(Agent):
                 return StockMarketSellAction(StockMarketSellActionType.SELL, sell_map)
 
             log.error("Invalid input, try again")
+
+    def get_bo_par_value_action(self, game_state: e30.game_state.GameState) -> int:
+        directions: str = """
+        As the owner of the private BO, you start with the president cert of B&O.
+        Set a par value for B&O.
+        '<X>' to set X as the par value 
+        """
+        while True:
+            par_value: int = int(input(directions))
+            if par_value not in game_state.stock_market.par_locations:
+                log.error(f"Invalid par value {par_value} must be in "
+                          f"{list(game_state.stock_market.par_locations.keys())}, try again")
+                continue
+            return par_value
 
 
 class AIAgent(Agent):
