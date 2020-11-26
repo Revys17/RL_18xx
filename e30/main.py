@@ -356,7 +356,7 @@ def process_stock_round_buy_action(game_state: 'e30.game_state.GameState', playe
 
     if buy_action.buy_type is StockMarketBuyActionBuyType.PRESIDENT_CERT:
         # president cert available?
-        if game_state.companies_map[buy_action.company].president is not None:
+        if hasattr(game_state.companies_map[buy_action.company], 'president'):
             raise InvalidOperationException(f"{buy_action.company} already has president "
                                             f"{game_state.companies_map[buy_action.company].president.get_name()}")
         # player has enough money?
@@ -375,14 +375,14 @@ def process_stock_round_buy_action(game_state: 'e30.game_state.GameState', playe
         return True
 
     # to buy IPO or bank pool shares, company must already have a president
-    if game_state.companies_map[buy_action.company].president is None:
+    if not hasattr(game_state.companies_map[buy_action.company], 'president'):
         raise InvalidOperationException(f"First stock bought must be the president cert for {buy_action.company}.")
     # multiple shares can only be bought if the stock market slot color is brown
     if not game_state.companies_map[buy_action.company].current_share_price.can_buy_multiple_certs() and \
             buy_action.num_buy > 1:
         raise InvalidOperationException(
             f"Cannot buy multiple stock of {buy_action.company}. "
-            f"It is in slot {game_state.companies_map[buy_action.company].current_share_price.get_value}")
+            f"It is in slot {game_state.companies_map[buy_action.company].current_share_price.get_value()}")
 
     if buy_action.buy_type is StockMarketBuyActionBuyType.IPO:
         # ipo shares available?
@@ -395,9 +395,9 @@ def process_stock_round_buy_action(game_state: 'e30.game_state.GameState', playe
             raise InvalidOperationException(f"{player.get_name()} has {player.money} and cannot afford "
                                             f"{game_state.companies_map[buy_action.company].par_value}")
         # will there be a new president?
-        presidential_transfer = has_presidency_transfer(buy_action.company, 1, game_state, player)
+        presidential_transfer = game_state.has_presidency_transfer(buy_action.company, 1, player)
 
-        validate_ownership_percent_and_total_cert_limit(buy_action.company, game_state, player, presidential_transfer)
+        game_state.validate_ownership_percent_and_total_cert_limit(buy_action.company, player, presidential_transfer)
 
         game_state.companies_map[buy_action.company].buy_ipo_share(player, game_state.bank)
         if presidential_transfer:
@@ -416,7 +416,7 @@ def process_stock_round_buy_action(game_state: 'e30.game_state.GameState', playe
                 f"{player.get_name()} has {player.money} and cannot afford {share_price * buy_action.num_buy}")
 
         # will there be a new president?
-        presidential_transfer = has_presidency_transfer(buy_action.company, buy_action.num_buy, game_state, player)
+        presidential_transfer = game_state.has_presidency_transfer(buy_action.company, buy_action.num_buy, player)
 
         # multiple cert purchase
         if buy_action.num_buy > 1:
@@ -427,7 +427,7 @@ def process_stock_round_buy_action(game_state: 'e30.game_state.GameState', playe
             return True
 
         # single cert purchase
-        validate_ownership_percent_and_total_cert_limit(buy_action.company, game_state, player, presidential_transfer)
+        game_state.validate_ownership_percent_and_total_cert_limit(buy_action.company, player, presidential_transfer)
 
         game_state.companies_map[buy_action.company].buy_market_share(player, buy_action.num_buy, game_state.bank)
         if presidential_transfer:
@@ -437,41 +437,6 @@ def process_stock_round_buy_action(game_state: 'e30.game_state.GameState', playe
         raise InvalidOperationException(f"Unknown buy type {buy_action.buy_type}")
 
     return True
-
-
-def validate_ownership_percent_and_total_cert_limit(company_name: str, game_state: 'e30.game_state.GameState',
-                                                    player: Player, presidential_transfer: bool):
-    if game_state.companies_map[company_name].current_share_price.ignore_company_ownership_percent_limit():
-        print(f"Ignoring company ownership percent limit for purchase of {company_name}.")
-    else:
-        if company_name in player.presiding_companies and company_name in player.share_map and \
-                player.share_map[company_name] == 4:
-            raise InvalidOperationException(f"{player.get_name()} already has 60% ownership of "
-                                            f"{company_name} as the president and cannot purchase more.")
-        # no way to pass individual ownership percent limits if you weren't the president already and stocks are
-        # available for purchase
-    if game_state.companies_map[company_name].current_share_price.ignore_total_cert_limit():
-        print(f"Ignoring total cert limit per player for purchase of {company_name}.")
-    else:
-        if not presidential_transfer and \
-                game_state.get_total_num_non_excluded_certs(player) == game_state.player_total_cert_limit:
-            raise InvalidOperationException(f"{player.get_name()} total cert limit will be surpassed with purchase")
-
-
-def has_presidency_transfer(company_name: str, num_buy: int, game_state: 'e30.game_state.GameState',
-                            player: Player) -> bool:
-    presidential_transfer = False
-    if company_name not in player.presiding_companies:
-        current_owned_percent_after_sale = 10 * num_buy
-        if company_name in player.share_map:
-            current_owned_percent_after_sale += 10 * player.share_map[company_name]
-        highest_owned_percent = 20  # current president
-        if company_name in game_state.companies_map[company_name].president.share_map:
-            highest_owned_percent += 10 * game_state.companies_map[company_name].president.share_map[
-                company_name]
-        if current_owned_percent_after_sale > highest_owned_percent:
-            presidential_transfer = True
-    return presidential_transfer
 
 
 def do_stock_round(game_state: 'e30.game_state.GameState') -> None:

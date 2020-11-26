@@ -3,6 +3,7 @@ from typing import List, Tuple, Dict
 import logging
 
 import e30
+from e30.exceptions.exceptions import InvalidOperationException
 from e30.player import Player
 from e30.stock_market_slot import StockMarketSlotColor
 
@@ -63,7 +64,7 @@ class GameState:
         for player in self.players:
             player.pay_private_income()
 
-    def get_total_num_non_excluded_certs(self, player):
+    def get_total_num_non_excluded_certs(self, player: Player) -> int:
         companies = set(player.share_map.keys())
         companies.update(player.presiding_companies)
         total_num_certs = 0
@@ -79,6 +80,37 @@ class GameState:
                       f"from total cert count")
 
         return total_num_certs
+
+    def has_presidency_transfer(self, company_name: str, num_buy: int, player: Player) -> bool:
+        presidential_transfer = False
+        if company_name not in player.presiding_companies:
+            current_owned_percent_after_sale = 10 * num_buy
+            if company_name in player.share_map:
+                current_owned_percent_after_sale += 10 * player.share_map[company_name]
+            highest_owned_percent = 20  # current president
+            if company_name in self.companies_map[company_name].president.share_map:
+                highest_owned_percent += 10 * self.companies_map[company_name].president.share_map[company_name]
+            if current_owned_percent_after_sale > highest_owned_percent:
+                presidential_transfer = True
+        return presidential_transfer
+
+    def validate_ownership_percent_and_total_cert_limit(self, company_name: str, player: Player,
+                                                        presidential_transfer: bool):
+        if self.companies_map[company_name].current_share_price.ignore_company_ownership_percent_limit():
+            print(f"Ignoring company ownership percent limit for purchase of {company_name}.")
+        else:
+            if company_name in player.presiding_companies and company_name in player.share_map and \
+                    player.share_map[company_name] >= 4:
+                raise InvalidOperationException(f"{player.get_name()} already has 60% ownership of "
+                                                f"{company_name} as the president and cannot purchase more.")
+            # no way to pass individual ownership percent limits if you weren't the president already and stocks are
+            # available for purchase
+        if self.companies_map[company_name].current_share_price.ignore_total_cert_limit():
+            print(f"Ignoring total cert limit per player for purchase of {company_name}.")
+        else:
+            if not presidential_transfer and \
+                    self.get_total_num_non_excluded_certs(player) >= self.player_total_cert_limit:
+                raise InvalidOperationException(f"{player.get_name()} total cert limit will be surpassed with purchase")
 
     def increment_progression(self) -> None:
         pass

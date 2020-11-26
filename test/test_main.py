@@ -4,6 +4,8 @@ from unittest.mock import MagicMock, call
 
 import e30
 from e30.actions.bid_buy_action import BidBuyAction, BidBuyActionType
+from e30.actions.stock_market_buy_action import StockMarketBuyAction, StockMarketBuyActionType, \
+    StockMarketBuyActionBuyType
 from e30.actions.stock_market_sell_action import StockMarketSellAction, StockMarketSellActionType
 from e30.agent import HumanAgent
 from e30.exceptions.exceptions import InvalidOperationException
@@ -22,6 +24,7 @@ class MainTest(unittest.TestCase):
             p.get_bid_resolution_action = MagicMock()
             p.pay_private_income = MagicMock()
             p.get_stock_market_sell_action = MagicMock()
+            p.get_stock_market_buy_action = MagicMock()
 
     def test_do_private_auction_no_unowned_privates_exit(self):
         player = self.game_state.current_player
@@ -202,7 +205,7 @@ class MainTest(unittest.TestCase):
         self.assertEqual(1200, player.money)
 
         # call
-        e30.main.process_stock_round_sell_action(self.game_state, player)
+        self.assertFalse(e30.main.process_stock_round_sell_action(self.game_state, player))
 
         self.assertEqual({}, player.share_map)
         self.assertEqual([], player.presiding_companies)
@@ -418,7 +421,7 @@ class MainTest(unittest.TestCase):
         self.assertEqual(1200, player.money)
 
         # call
-        e30.main.process_stock_round_sell_action(self.game_state, player)
+        self.assertTrue(e30.main.process_stock_round_sell_action(self.game_state, player))
 
         self.assertEqual({'PRR': 6}, player.share_map)
         self.assertEqual([], player.presiding_companies)
@@ -450,7 +453,7 @@ class MainTest(unittest.TestCase):
         self.assertEqual(1200, player2.money)
 
         # call
-        e30.main.process_stock_round_sell_action(self.game_state, player)
+        self.assertTrue(e30.main.process_stock_round_sell_action(self.game_state, player))
 
         self.assertEqual({'PRR': 4, 'NYC': 4, 'CPR': 4, 'B&O': 4, 'C&O': 4, 'Erie': 4}, player.share_map)
         self.assertEqual({'PRR': 3}, player2.share_map)
@@ -489,7 +492,7 @@ class MainTest(unittest.TestCase):
         self.assertEqual(1200, player.money)
 
         # call
-        e30.main.process_stock_round_sell_action(self.game_state, player)
+        self.assertTrue(e30.main.process_stock_round_sell_action(self.game_state, player))
 
         self.assertEqual({'PRR': 3, 'NYC': 4, 'CPR': 4, 'B&O': 4, 'C&O': 4, 'Erie': 4}, player.share_map)
         self.assertEqual(['PRR', 'NYC', 'CPR', 'B&O', 'C&O', 'Erie'], player.presiding_companies)
@@ -517,7 +520,7 @@ class MainTest(unittest.TestCase):
         self.assertEqual(1200, player.money)
 
         # call
-        e30.main.process_stock_round_sell_action(self.game_state, player)
+        self.assertTrue(e30.main.process_stock_round_sell_action(self.game_state, player))
 
         self.assertEqual({'PRR': 2}, player.share_map)
         self.assertEqual([], player.presiding_companies)
@@ -527,6 +530,425 @@ class MainTest(unittest.TestCase):
                          self.game_state.companies_map['PRR'].current_share_price)
         self.assertEqual(9600 - 350, self.game_state.bank.money)
         self.assertEqual(1200 + 350, player.money)
+
+    def test_process_stock_round_buy_action_pass(self):
+        player = self.game_state.get_priority_deal_player()
+        # pass
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction()
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+        # call
+        self.assertFalse(e30.main.process_stock_round_buy_action(self.game_state, player))
+
+        self.assertEqual({}, player.share_map)
+        self.assertEqual([], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+    def test_process_stock_round_buy_action_buy_restricted_company(self):
+        player = self.game_state.get_priority_deal_player()
+        player.buy_restricted_companies = ['PRR']
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR')
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_buy_action, self.game_state,
+                          player)
+
+        self.assertEqual({}, player.share_map)
+        self.assertEqual([], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+    def test_process_stock_round_buy_action_buy_president_already_has_president(self):
+        player = self.game_state.get_priority_deal_player()
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR')
+        self.game_state.companies_map['PRR'].president = player
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_buy_action, self.game_state,
+                          player)
+
+        self.assertEqual({}, player.share_map)
+        self.assertEqual([], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+    def test_process_stock_round_buy_action_buy_president_not_enough_money(self):
+        player = self.game_state.get_priority_deal_player()
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               par_value=100)
+        player.money = 199
+        self.assertEqual(9600, self.game_state.bank.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_buy_action, self.game_state,
+                          player)
+
+        self.assertEqual({}, player.share_map)
+        self.assertEqual([], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(199, player.money)
+
+    def test_process_stock_round_buy_action_buy_president_over_total_cert_limit(self):
+        # total cert limit is 28 for 2 players
+        player = self.game_state.get_priority_deal_player()
+        # at the limit
+        player.share_map = {'PRR': 3, 'NYC': 5, 'CPR': 5, 'B&O': 5, 'C&O': 5, 'Erie': 5}
+        companies = ['PRR', 'NYC', 'CPR', 'B&O', 'C&O', 'Erie']
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["350A"]
+            self.game_state.companies_map[c].owning_players = [player]
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               par_value=100)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_buy_action, self.game_state,
+                          player)
+
+        self.assertEqual({'PRR': 3, 'NYC': 5, 'CPR': 5, 'B&O': 5, 'C&O': 5, 'Erie': 5}, player.share_map)
+        self.assertEqual([], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+    def test_process_stock_round_buy_action_buy_president_success(self):
+        player = self.game_state.get_priority_deal_player()
+        companies = ['PRR']
+        for c in companies:
+            self.assertFalse(hasattr(self.game_state.companies_map[c], 'current_share_price'))
+            self.assertFalse(hasattr(self.game_state.companies_map[c], 'president'))
+            self.assertEqual([], self.game_state.companies_map[c].owning_players)
+            self.assertEqual(0, self.game_state.companies_map[c].par_value)
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               par_value=100)
+        self.assertEqual({}, player.share_map)
+        self.assertEqual([], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+        # call
+        self.assertTrue(e30.main.process_stock_round_buy_action(self.game_state, player))
+
+        self.assertEqual({}, player.share_map)
+        self.assertEqual(['PRR'], player.presiding_companies)
+        self.assertEqual(player, self.game_state.companies_map['PRR'].president)
+        self.assertEqual(self.game_state.stock_market.node_map['100A'],
+                         self.game_state.companies_map['PRR'].current_share_price)
+        self.assertEqual(100, self.game_state.companies_map['PRR'].par_value)
+        self.assertEqual([player], self.game_state.companies_map['PRR'].owning_players)
+        self.assertEqual(9600 + 200, self.game_state.bank.money)
+        self.assertEqual(1200 - 200, player.money)
+
+    def test_process_stock_round_buy_action_not_buy_president_no_president(self):
+        player = self.game_state.get_priority_deal_player()
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               StockMarketBuyActionBuyType.IPO)
+        self.assertEqual({}, player.share_map)
+        self.assertEqual([], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_buy_action, self.game_state, player)
+
+        self.assertEqual({}, player.share_map)
+        self.assertEqual([], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+    def test_process_stock_round_buy_action_not_can_buy_multiple(self):
+        player = self.game_state.get_priority_deal_player()
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               StockMarketBuyActionBuyType.IPO, 2)
+        player.presiding_companies = ['PRR']
+        companies = ['PRR']
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["350A"]
+            self.game_state.companies_map[c].president = player
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_buy_action, self.game_state, player)
+
+        self.assertEqual({}, player.share_map)
+        self.assertEqual(['PRR'], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+    def test_process_stock_round_buy_action_ipo_buy_more_than_1(self):
+        player = self.game_state.get_priority_deal_player()
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               StockMarketBuyActionBuyType.IPO, 2)
+        player.presiding_companies = ['PRR']
+        companies = ['PRR']
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["30I"]
+            self.game_state.companies_map[c].president = player
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_buy_action, self.game_state, player)
+
+        self.assertEqual({}, player.share_map)
+        self.assertEqual(['PRR'], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+    def test_process_stock_round_buy_action_ipo_none_available(self):
+        player = self.game_state.get_priority_deal_player()
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               StockMarketBuyActionBuyType.IPO, 1)
+        player.presiding_companies = ['PRR']
+        companies = ['PRR']
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["30I"]
+            self.game_state.companies_map[c].president = player
+            self.game_state.companies_map[c].ipo_shares = 0
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_buy_action, self.game_state, player)
+
+        self.assertEqual({}, player.share_map)
+        self.assertEqual(['PRR'], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+    def test_process_stock_round_buy_action_ipo_not_enough_money(self):
+        player = self.game_state.get_priority_deal_player()
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               StockMarketBuyActionBuyType.IPO, 1)
+        player.money = 99
+        player.presiding_companies = ['PRR']
+        companies = ['PRR']
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["30I"]
+            self.game_state.companies_map[c].president = player
+            self.game_state.companies_map[c].par_value = 100
+        self.assertEqual(9600, self.game_state.bank.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_buy_action, self.game_state, player)
+
+        self.assertEqual({}, player.share_map)
+        self.assertEqual(['PRR'], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(99, player.money)
+
+    def test_process_stock_round_buy_action_ipo_transfer_president_success(self):
+        player = self.game_state.get_priority_deal_player()
+        player.share_map = {'PRR': 2}
+        # player2 as current president
+        player2 = self.game_state.get_next_player(player)
+        player2.presiding_companies = ['PRR']
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               StockMarketBuyActionBuyType.IPO, 1)
+        companies = ['PRR']
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["350A"]
+            self.game_state.companies_map[c].president = player2
+            self.game_state.companies_map[c].par_value = 100
+            self.game_state.companies_map[c].owning_players = [player, player2]
+            self.game_state.companies_map[c].ipo_shares = 1
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+        self.assertEqual(1200, player2.money)
+
+        # call
+        e30.main.process_stock_round_buy_action(self.game_state, player)
+
+        self.assertEqual({'PRR': 1}, player.share_map)
+        self.assertEqual({'PRR': 2}, player2.share_map)
+        self.assertEqual(['PRR'], player.presiding_companies)
+        self.assertEqual([], player2.presiding_companies)
+        self.assertEqual(self.game_state.stock_market.node_map["350A"],
+                         self.game_state.companies_map['PRR'].current_share_price)
+        self.assertEqual(player, self.game_state.companies_map['PRR'].president)
+        self.assertEqual(100, self.game_state.companies_map['PRR'].par_value)
+        self.assertEqual([player, player2], self.game_state.companies_map['PRR'].owning_players)
+        self.assertEqual(0, self.game_state.companies_map['PRR'].ipo_shares)
+        self.assertEqual(False, self.game_state.companies_map['PRR'].operating)
+        self.assertEqual(0, self.game_state.companies_map['PRR'].money)
+        self.assertEqual(9600 + 100, self.game_state.bank.money)
+        self.assertEqual(1200 - 100, player.money)
+        self.assertEqual(1200, player2.money)
+
+    def test_process_stock_round_buy_action_ipo_transfer_president_float_success(self):
+        player = self.game_state.get_priority_deal_player()
+        player.share_map = {'PRR': 2}
+        # player2 as current president
+        player2 = self.game_state.get_next_player(player)
+        player2.presiding_companies = ['PRR']
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               StockMarketBuyActionBuyType.IPO, 1)
+        companies = ['PRR']
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["350A"]
+            self.game_state.companies_map[c].president = player2
+            self.game_state.companies_map[c].par_value = 100
+            self.game_state.companies_map[c].owning_players = [player, player2]
+            self.game_state.companies_map[c].ipo_shares = 5
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+        self.assertEqual(1200, player2.money)
+
+        # call
+        e30.main.process_stock_round_buy_action(self.game_state, player)
+
+        self.assertEqual({'PRR': 1}, player.share_map)
+        self.assertEqual({'PRR': 2}, player2.share_map)
+        self.assertEqual(['PRR'], player.presiding_companies)
+        self.assertEqual([], player2.presiding_companies)
+        self.assertEqual(self.game_state.stock_market.node_map["350A"],
+                         self.game_state.companies_map['PRR'].current_share_price)
+        self.assertEqual(player, self.game_state.companies_map['PRR'].president)
+        self.assertEqual(100, self.game_state.companies_map['PRR'].par_value)
+        self.assertEqual([player, player2], self.game_state.companies_map['PRR'].owning_players)
+        self.assertEqual(4, self.game_state.companies_map['PRR'].ipo_shares)
+        self.assertEqual(True, self.game_state.companies_map['PRR'].operating)
+        self.assertEqual(100 * 10, self.game_state.companies_map['PRR'].money)
+        self.assertEqual(9600 + 100, self.game_state.bank.money)
+        self.assertEqual(1200 - 100, player.money)
+        self.assertEqual(1200, player2.money)
+
+    def test_process_stock_round_buy_action_bank_pool_none_available(self):
+        player = self.game_state.get_priority_deal_player()
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               StockMarketBuyActionBuyType.BANK_POOL, 1)
+        player.presiding_companies = ['PRR']
+        companies = ['PRR']
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["350A"]
+            self.game_state.companies_map[c].president = player
+            self.game_state.companies_map[c].market_shares = 0
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_buy_action, self.game_state, player)
+
+        self.assertEqual({}, player.share_map)
+        self.assertEqual(['PRR'], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+    def test_process_stock_round_buy_action_bank_pool_not_enough_money(self):
+        player = self.game_state.get_priority_deal_player()
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               StockMarketBuyActionBuyType.BANK_POOL, 1)
+        player.money = 349
+        player.presiding_companies = ['PRR']
+        companies = ['PRR']
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["350A"]
+            self.game_state.companies_map[c].president = player
+            self.game_state.companies_map[c].market_shares = 1
+        self.assertEqual(9600, self.game_state.bank.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_buy_action, self.game_state, player)
+
+        self.assertEqual({}, player.share_map)
+        self.assertEqual(['PRR'], player.presiding_companies)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(349, player.money)
+
+    def test_process_stock_round_buy_action_bank_pool_multiple_purchase_presidential_transfer_success(self):
+        player = self.game_state.get_priority_deal_player()
+        # player2 as current president
+        player2 = self.game_state.get_next_player(player)
+        player2.presiding_companies = ['PRR']
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               StockMarketBuyActionBuyType.BANK_POOL, 3)
+        companies = ['PRR']
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["30I"]
+            self.game_state.companies_map[c].president = player2
+            self.game_state.companies_map[c].owning_players = [player2]
+            self.game_state.companies_map[c].market_shares = 3
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+        self.assertEqual(1200, player2.money)
+
+        # call
+        e30.main.process_stock_round_buy_action(self.game_state, player)
+
+        self.assertEqual({'PRR': 1}, player.share_map)
+        self.assertEqual({'PRR': 2}, player2.share_map)
+        self.assertEqual(['PRR'], player.presiding_companies)
+        self.assertEqual([], player2.presiding_companies)
+        self.assertEqual(self.game_state.stock_market.node_map["30I"],
+                         self.game_state.companies_map['PRR'].current_share_price)
+        self.assertEqual(player, self.game_state.companies_map['PRR'].president)
+        self.assertEqual([player2, player], self.game_state.companies_map['PRR'].owning_players)
+        self.assertEqual(0, self.game_state.companies_map['PRR'].market_shares)
+        self.assertEqual(9600 + 3 * 30, self.game_state.bank.money)
+        self.assertEqual(1200 - 3 * 30, player.money)
+        self.assertEqual(1200, player2.money)
+
+    def test_process_stock_round_buy_action_bank_pool_single_purchase_presidential_transfer_success(self):
+        player = self.game_state.get_priority_deal_player()
+        player.share_map = {'PRR': 2}
+        # player2 as current president
+        player2 = self.game_state.get_next_player(player)
+        player2.presiding_companies = ['PRR']
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               StockMarketBuyActionBuyType.BANK_POOL, 1)
+        companies = ['PRR']
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["350A"]
+            self.game_state.companies_map[c].president = player2
+            self.game_state.companies_map[c].owning_players = [player, player2]
+            self.game_state.companies_map[c].market_shares = 1
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+        self.assertEqual(1200, player2.money)
+
+        # call
+        e30.main.process_stock_round_buy_action(self.game_state, player)
+
+        self.assertEqual({'PRR': 1}, player.share_map)
+        self.assertEqual({'PRR': 2}, player2.share_map)
+        self.assertEqual(['PRR'], player.presiding_companies)
+        self.assertEqual([], player2.presiding_companies)
+        self.assertEqual(self.game_state.stock_market.node_map["350A"],
+                         self.game_state.companies_map['PRR'].current_share_price)
+        self.assertEqual(player, self.game_state.companies_map['PRR'].president)
+        self.assertEqual([player, player2], self.game_state.companies_map['PRR'].owning_players)
+        self.assertEqual(0, self.game_state.companies_map['PRR'].market_shares)
+        self.assertEqual(9600 + 350, self.game_state.bank.money)
+        self.assertEqual(1200 - 350, player.money)
+        self.assertEqual(1200, player2.money)
+
+    def test_process_stock_round_buy_action_unknown_buy_type(self):
+        player = self.game_state.get_priority_deal_player()
+        player.get_stock_market_buy_action.return_value = StockMarketBuyAction(StockMarketBuyActionType.BUY, 'PRR',
+                                                                               999, 1)
+        companies = ['PRR']
+        for c in companies:
+            self.game_state.companies_map[c].current_share_price = self.game_state.stock_market.node_map["350A"]
+            self.game_state.companies_map[c].president = player
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
+
+        # call
+        self.assertRaises(InvalidOperationException, e30.main.process_stock_round_buy_action, self.game_state, player)
+
+        self.assertEqual({}, player.share_map)
+        self.assertEqual([], player.presiding_companies)
+        self.assertEqual(self.game_state.stock_market.node_map["350A"],
+                         self.game_state.companies_map['PRR'].current_share_price)
+        self.assertEqual(9600, self.game_state.bank.money)
+        self.assertEqual(1200, player.money)
 
 
 if __name__ == '__main__':
