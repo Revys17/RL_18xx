@@ -25,6 +25,8 @@ class GameState:
         self.companies_map: Dict[str, e30.company.Company] = {company.short_name: company
                                                               for company in self.companies_pq}
         self.privates: List[e30.private_company.Private] = e30.main.get_privates()
+        self.privates_map: Dict[str, e30.private_company.Private] = {private.short_name: private
+                                                                     for private in self.privates}
         self.bank: e30.bank.Bank = e30.bank.Bank()
         self.stock_market: e30.stock_market.StockMarket = e30.stock_market.StockMarket()
         self.phase: e30.enums.phase.Phase = e30.enums.phase.Phase.PRIVATE_AUCTION
