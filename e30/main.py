@@ -185,7 +185,7 @@ def do_private_auction(game_state: 'e30.game_state.GameState') -> None:
 def complete_purchase(game_state: 'e30.game_state.GameState', player: Player, private: Private,
                       unowned_privates: List[Private]):
     log.info("Player {} buying {}".format(player.get_name(), private.short_name))
-    private.buy_private(player)
+    private.buy_private(player, game_state.bank)
     # private is now owned, remove from the unowned list
     unowned_privates.remove(private)
     game_state.set_next_as_priority_deal(player)

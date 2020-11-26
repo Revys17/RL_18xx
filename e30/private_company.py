@@ -3,6 +3,7 @@ from collections import OrderedDict
 from typing import List
 
 from e30.actions.bid_resolution_action import BidResolutionAction, BidResolutionActionType
+from e30.bank import Bank
 from e30.exceptions.exceptions import InvalidOperationException
 from e30 import player, game_state
 
@@ -62,7 +63,7 @@ class Private:
             if len(self.bids.keys()) == 1:
                 winning_player: player.Player = list(self.bids.keys())[0]
                 log.info("Bid resolution winner: {}".format(winning_player.name))
-                self.buy_private(winning_player)
+                self.buy_private(winning_player, game_state.bank)
                 break
 
             current_bidder: player.Player = bid_order.pop(0)
@@ -93,7 +94,7 @@ class Private:
     def lower_price(self, lower_amount: int) -> None:
         self.price -= lower_amount
 
-    def buy_private(self, player: 'player.Player'):
+    def buy_private(self, player: 'player.Player', bank: Bank):
         log.info("Player {} buying private company {}".format(player.name, self.short_name))
         # player hasn't bid on the private company yet, buy it outright. Otherwise, bid money was already taken from
         # the player when the bid was placed and is consumed
@@ -101,6 +102,9 @@ class Private:
             if player.money < self.price:
                 raise InvalidOperationException("Player does not have enough available money")
             player.remove_money(self.price)
+            bank.money += self.price
+        else:
+            bank.money += self.bids[player]
 
         self.bids = None
         self.owner = player

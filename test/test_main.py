@@ -80,7 +80,7 @@ class MainTest(unittest.TestCase):
         # call
         e30.main.do_private_auction(self.game_state)
 
-        private.buy_private.assert_called_once_with(player)
+        private.buy_private.assert_called_once_with(player, self.game_state.bank)
         self.assertEqual(4, private.should_resolve_bid.call_count)
         player.get_bid_buy_action.assert_has_calls([call(self.game_state), call(self.game_state)])
         player2.get_bid_buy_action.assert_has_calls([call(self.game_state), call(self.game_state)])
@@ -103,7 +103,7 @@ class MainTest(unittest.TestCase):
         # call
         e30.main.do_private_auction(self.game_state)
 
-        private.buy_private.assert_called_once_with(player)
+        private.buy_private.assert_called_once_with(player, self.game_state.bank)
         self.assertEqual(3, private.should_resolve_bid.call_count)
         # private income paid for all passing
         [p.pay_private_income.assert_called_once_with() for p in self.game_state.players]
@@ -126,7 +126,7 @@ class MainTest(unittest.TestCase):
         # call
         e30.main.do_private_auction(self.game_state)
 
-        private.buy_private.assert_called_once_with(player)
+        private.buy_private.assert_called_once_with(player, self.game_state.bank)
         self.assertEqual(1, private.should_resolve_bid.call_count)
         player.get_bid_buy_action.assert_called_once_with(self.game_state)
         player2.get_bid_buy_action.assert_not_called()
@@ -149,7 +149,7 @@ class MainTest(unittest.TestCase):
         # call
         e30.main.do_private_auction(self.game_state)
 
-        private.buy_private.assert_called_once_with(player)
+        private.buy_private.assert_called_once_with(player, self.game_state.bank)
         self.assertEqual(1, private.should_resolve_bid.call_count)
         player.get_bid_buy_action.assert_has_calls([call(self.game_state), call(self.game_state)])
         player2.get_bid_buy_action.assert_not_called()
@@ -192,7 +192,7 @@ class MainTest(unittest.TestCase):
         # call
         e30.main.complete_purchase(self.game_state, player, private, self.game_state.privates)
 
-        private.buy_private.assert_called_once_with(player)
+        private.buy_private.assert_called_once_with(player, self.game_state.bank)
         self.assertEqual(0, len(self.game_state.privates))
         self.assertEqual(player2, self.game_state.priority_deal)
 
