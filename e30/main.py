@@ -478,7 +478,12 @@ def do_stock_round(game_state: 'e30.game_state.GameState') -> None:
 
     # end of stock round actions
     [player.reset_restricted_companies_buy_list() for player in game_state.players]
-    # check if all shares are held by player, stock market slot movement
+    companies = list(game_state.companies_pq)
+    for company in companies:
+        # are all shares held by players?
+        if company.ipo_shares == 0 and company.market_shares == 0:
+            game_state.companies_map[company.short_name].current_share_price = \
+                game_state.companies_map[company.short_name].current_share_price.up
 
 
 def do_operating_rounds(game_state: 'e30.game_state.GameState') -> None:

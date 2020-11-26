@@ -4,7 +4,8 @@ from typing import List, Dict, Set
 
 import e30
 from e30.actions.stock_market_buy_action import StockMarketBuyAction
-from e30.actions.stock_market_sell_action import StockMarketSellAction
+from e30.actions.stock_market_sell_action import StockMarketSellAction, StockMarketSellActionType
+from e30.exceptions.exceptions import InvalidOperationException
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +82,13 @@ class Player:
         self.money -= money
 
     def get_stock_market_sell_action(self, game_state: 'e30.game_state.GameState') -> StockMarketSellAction:
-        return self.agent.get_stock_market_sell_action(game_state)
+        sell_action: StockMarketSellAction = self.agent.get_stock_market_sell_action(game_state)
+        valid_action_types = [t for t in StockMarketSellActionType]
+        if sell_action.action_type not in valid_action_types:
+            raise InvalidOperationException(f"Invalid sell action type {sell_action.action_type}")
+        if sell_action.action_type is StockMarketSellActionType.SELL and len(sell_action.sell_map.keys()) == 0:
+            raise InvalidOperationException(f"Sell action with empty sell map")
+        return sell_action
 
     def get_stock_market_buy_action(self, game_state: 'e30.game_state.GameState') -> StockMarketBuyAction:
         return self.agent.get_stock_market_buy_action(game_state)
