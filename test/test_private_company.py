@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 import e30
 from e30.actions.bid_resolution_action import BidResolutionAction, BidResolutionActionType
+from e30.bank import Bank
 
 
 class PrivateCompanyTest(unittest.TestCase):
@@ -11,6 +12,7 @@ class PrivateCompanyTest(unittest.TestCase):
         self.player = e30.player.Player(index=0, starting_money=1000, agent=MagicMock())
         self.player2 = e30.player.Player(index=1, starting_money=1000, agent=MagicMock())
         self.game_state = MagicMock()
+        self.bank = Bank()
 
         #220 cost
         self.test_private_company = e30.privates.BO.BO()
@@ -218,34 +220,40 @@ class PrivateCompanyTest(unittest.TestCase):
         self.assertEqual(1000, self.player.money)
         self.test_private_company.add_bid(self.player, 225)
         self.assertEqual(1000 - 225, self.player.money)
+        self.assertEqual(9600, self.bank.money)
 
         # call
-        self.test_private_company.buy_private(self.player)
+        self.test_private_company.buy_private(self.player, self.bank)
 
         self.assertEqual(1000 - 225, self.player.money)
         self.assertEqual(self.player, self.test_private_company.owner)
         self.assertEqual([self.test_private_company], self.player.privates)
+        self.assertEqual(9600 + 225, self.bank.money)
 
     def test_buy_private_player_not_in_bids(self):
         self.assertEqual(1000, self.player.money)
+        self.assertEqual(9600, self.bank.money)
 
         # call
-        self.test_private_company.buy_private(self.player)
+        self.test_private_company.buy_private(self.player, self.bank)
 
         self.assertEqual(1000 - 220, self.player.money)
         self.assertEqual(self.player, self.test_private_company.owner)
         self.assertEqual([self.test_private_company], self.player.privates)
+        self.assertEqual(9600 + 220, self.bank.money)
 
     def test_buy_private_player_not_in_bids_not_enough(self):
         self.player.money = 219
+        self.assertEqual(9600, self.bank.money)
 
         # call
         self.assertRaises(e30.exceptions.exceptions.InvalidOperationException,
-                          self.test_private_company.buy_private, self.player)
+                          self.test_private_company.buy_private, self.player, self.bank)
 
         self.assertEqual(219, self.player.money)
         self.assertFalse(hasattr(self.test_private_company, 'owner'))
         self.assertEqual([], self.player.privates)
+        self.assertEqual(9600, self.bank.money)
 
 
 if __name__ == '__main__':
