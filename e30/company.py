@@ -38,6 +38,7 @@ class Company:
             raise InvalidOperationException("Company " + self.name + " already started")
 
         self.president: Player = president
+        president.presiding_companies.append(self.short_name)
         self.owning_players.append(president)
         self.par_value: int = par_value
         self.current_share_price: StockMarketSlot = stock_market.get_par_value_slot(par_value)
@@ -95,10 +96,13 @@ class Company:
                                             + new_president.get_name())
         # trade president's certificate for 2 regular certs
         self.president.presiding_companies.remove(self.short_name)
-        self.president.share_map[self.short_name] += 2
+        if self.short_name in self.president.share_map:
+            self.president.share_map[self.short_name] += 2
+        else:
+            self.president.share_map[self.short_name] = 2
         self.president = new_president
-        self.president.presiding_companies.append(self.short_name)
-        self.president.share_map[self.short_name] -= 2
+        new_president.presiding_companies.append(self.short_name)
+        new_president.share_map[self.short_name] -= 2
 
     def __str__(self):
         president = self.president.get_name() if hasattr(self, 'president') else None
