@@ -3,94 +3,118 @@
 # %% auto 0
 __all__ = ['BaseAction', 'AcquireCompany', 'Assign', 'Bankrupt', 'Bid', 'BlindBid', 'BorrowTrain', 'BuyCompany', 'BuyCorporation',
            'BuyPower', 'BuyShares', 'SellShares', 'BuyToken', 'BuyTrain', 'Choose', 'ChooseAbility', 'ClaimHexToken',
-           'CombinedTrains', 'Convert', 'CorporateBuyShares', 'CreditMobilier', 'DestinationConnection', 'DiscardTrain',
-           'Dividend', 'DoubleHeadTrains', 'EndGame', 'FailedMerge', 'HexToken', 'LayTile', 'Message', 'Log',
-           'ManualCloseCompany', 'Merge', 'MoveBid', 'Offer', 'Par', 'Pass', 'PayoffDebt', 'TakeLoan',
-           'PayoffPlayerDebt', 'PlaceToken', 'ProgramEnable', 'ProgramDisable', 'ProgramAuctionBid', 'ProgramBuyShares',
-           'ProgramClosePass', 'ProgramHarzbahnDraftPass', 'ProgramIndependentMines', 'ProgramMergerPass',
-           'ProgramSharePass', 'PurchaseTrain', 'ReassignTrains', 'Redo', 'RemoveHexToken', 'RemoveToken', 'Respond',
-           'RunRoutes', 'ScrapTrain', 'SellCompany', 'Short', 'SpecialBuy', 'Split', 'SwapTrain', 'SwitchTrains',
-           'Undo', 'UseGraph', 'ViewMergeOptions']
+           'CombinedTrains', 'Convert', 'CorporateBuyShares', 'CorporateSellShares', 'CreditMobilier',
+           'DestinationConnection', 'DiscardTrain', 'Dividend', 'DoubleHeadTrains', 'EndGame', 'FailedMerge',
+           'HexToken', 'LayTile', 'Message', 'Log', 'ManualCloseCompany', 'Merge', 'MoveBid', 'Offer', 'Par', 'Pass',
+           'PayoffDebt', 'TakeLoan', 'PayoffPlayerDebt', 'PlaceToken', 'ProgramEnable', 'ProgramDisable',
+           'ProgramAuctionBid', 'ProgramBuyShares', 'ProgramClosePass', 'ProgramHarzbahnDraftPass',
+           'ProgramIndependentMines', 'ProgramMergerPass', 'ProgramSharePass', 'PurchaseTrain', 'ReassignTrains',
+           'Redo', 'RemoveHexToken', 'RemoveToken', 'Respond', 'RunRoutes', 'ScrapTrain', 'SellCompany', 'Short',
+           'SpecialBuy', 'Split', 'SwapTrain', 'SwitchTrains', 'Undo', 'UseGraph', 'ViewMergeOptions', 'OperatingInfo']
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 3
-from .core import ShareBundle, Item
+from .core import Item
+from .entities import Player, ShareBundle
 from .graph import Route
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 5
-from abc import ABC, abstractmethod
 import time
+from typing import Any, Dict
 
 
-class BaseAction(ABC):
+class BaseAction:
     def __init__(self, entity):
         self.entity = entity
+        self.id = None
+        self.user = None
         self.created_at = time.time()
         self.auto_actions = []
 
-    @staticmethod
-    def from_h(h, game):
-        entity_type = h.get("entity_type")
-        entity_id = h.get("entity")
+    @classmethod
+    def action_from_dict(cls, data, game):
+        entity_type = data.get("entity_type")
+        entity_id = data.get("entity")
         entity = game.get(entity_type, entity_id) or Player(None, entity_id)
-        obj = new(entity, **Base.h_to_args(h, game))
-        if entity.player and h.get("user") != entity.player.id:
-            obj.user = h.get("user")
-        obj.created_at = h.get("created_at") or time.time()
+
+        action_type = cls.type(data["type"])
+        class_name = f"{action_type}"
+
+        # Dynamically access the class from globals
+        if class_name not in globals():
+            raise ValueError(f"Action class not found: {class_name}")
+
+        action_class = globals()[class_name]
+
+        obj = action_class(entity, **action_class.dict_to_args(data, game))
+
+        obj.id = data.get("id")
+        obj.user = (
+            data.get("user")
+            if hasattr(entity, "player")
+            and data.get("user") != getattr(entity, "player", None)
+            else None
+        )
+        obj.created_at = data.get("created_at", time.time())
         obj.auto_actions = [
-            Base.action_from_h(auto_h, game) for auto_h in h.get("auto_actions", [])
+            BaseAction.action_from_dict(auto_data, game)
+            for auto_data in data.get("auto_actions", [])
         ]
-        return obj
+
+        return action_class._from_dict(data, game)
+
+    def to_dict(self) -> Dict[str, Any]:
+        if not hasattr(self, "_dict_cache"):
+            self._dict_cache = {
+                "type": self.__class__.__name__,
+                "entity": self.entity.id(),
+                "entity_type": self.entity.__class__.__name__,
+                "id": self.id,
+                "user": self.user,
+                "created_at": int(self.created_at),
+                "auto_actions": [action.to_dict() for action in self.auto_actions]
+                if self.auto_actions
+                else None,
+                **self.args_to_dict(),
+            }
+            self._dict_cache = {
+                k: v for k, v in self._dict_cache.items() if v is not None
+            }
+        return self._dict_cache
 
     @staticmethod
-    def action_from_h(h, game):
-        action_type = Base.type(h.get("type"))
-        action_class = getattr(Engine.Action, action_type)
-        return action_class.from_h(h, game)
-
-    @staticmethod
-    def h_to_args(h, game):
+    def dict_to_args(data: Dict[str, Any], game) -> Dict[str, Any]:
         return {}
 
-    @property
-    def args_to_h(self):
+    def args_to_dict(self):
         return {}
 
     def clear_cache(self):
-        self._h = None
+        self._dict_cache = None
 
-    def to_h(self):
-        if not hasattr(self, "_h") or self._h is None:
-            self._h = {
-                "type": self.type,
-                "entity": self.entity.id,
-                "entity_type": self.type_s(self.entity),
-                "id": self.id,
-                "user": self.user if hasattr(self, "user") else None,
-                "created_at": int(self.created_at),
-                "auto_actions": [auto_action.to_h for auto_action in self.auto_actions]
-                if self.auto_actions
-                else None,
-                **self.args_to_h,
-            }
-            self._h = {k: v for k, v in self._h.items() if v is not None}
-        return self._h
-
-    @abstractmethod
     def pass_(self):
         return False
 
     def copy(self, game):
-        return self.from_h(self.to_h(), game)
+        return self.from_dict(self.to_h(), game)
 
-    @property
     def free(self):
         return False
 
     def __lt__(self, other):
-        if self.id and other.id:
-            return self.id < other.id
-        else:
-            return int(self.created_at) < int(other.created_at)
+        # Compare based on id if both have one, otherwise compare based on created_at timestamp
+        return (
+            (self.id < other.id)
+            if self.id and other.id
+            else (self.created_at < other.created_at)
+        )
+
+    # Implementing the rest of the comparison methods if needed
+    def __eq__(self, other):
+        return (
+            self.id == other.id
+            if self.id and other.id
+            else self.created_at == other.created_at
+        )
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 8
 class AcquireCompany(BaseAction):
@@ -98,22 +122,11 @@ class AcquireCompany(BaseAction):
         super().__init__(entity)
         self.company = company
 
-    @classmethod
-    def from_h(cls, h, game):
-        return cls(
-            entity=game.get(h["entity_type"], h["entity"]),
-            company=game.company_by_id(h["company"]),
-        )
+    @staticmethod
+    def dict_to_args(args, game):
+        return {"company": game.company_by_id(args["company"])}
 
-    def to_h(self):
-        return {
-            "type": "acquire_company",
-            "entity": self.entity.id,
-            "entity_type": type_s(self.entity),
-            "company": self.company.id,
-        }
-
-    def args_to_h(self):
+    def args_to_dict(self):
         return {
             "company": self.company.id,
         }
@@ -124,26 +137,16 @@ class Assign(BaseAction):
         super().__init__(entity)
         self.target = target
 
-    @classmethod
-    def from_h(cls, h, game):
-        return cls(
-            entity=game.get(h["entity_type"], h["entity"]),
-            target=game.get(h["target_type"], h["target"]),
-        )
-
-    def to_h(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "assign",
-            "entity": self.entity.id,
-            "entity_type": type_s(self.entity),
-            "target": self.target.id,
-            "target_type": type_s(self.target),
+            "target": game.get(args["target_type"], args["target"]),
         }
 
-    def args_to_h(self):
+    def args_to_dict(self):
         return {
             "target": self.target.id,
-            "target_type": type_s(self.target),
+            "target_type": self.target.__class__.__name__,
         }
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 12
@@ -152,18 +155,11 @@ class Bankrupt(BaseAction):
         super().__init__(entity)
         self.option = option
 
-    @classmethod
-    def from_h(cls, h, _game):
-        return cls(entity=h["entity"], option=h["option"])
+    @staticmethod
+    def dict_to_args(args, game):
+        return {"option": args["option"]}
 
-    def to_h(self):
-        return {
-            "type": "bankrupt",
-            "entity": self.entity.id,
-            "option": self.option,
-        }
-
-    def args_to_h(self):
+    def args_to_dict(self):
         return {
             "option": self.option,
         }
@@ -177,27 +173,16 @@ class Bid(BaseAction):
         self.minor = minor
         self.price = price
 
-    @classmethod
-    def from_h(cls, h, game):
-        return cls(
-            entity=h["entity"],
-            company=game.company_by_id(h["company"]),
-            corporation=game.corporation_by_id(h["corporation"]),
-            minor=game.minor_by_id(h["minor"]),
-            price=h["price"],
-        )
-
-    def to_h(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "bid",
-            "entity": self.entity.id,
-            "company": self.company.id if self.company else None,
-            "corporation": self.corporation.id if self.corporation else None,
-            "minor": self.minor.id if self.minor else None,
-            "price": self.price,
+            "company": game.company_by_id(args["company"]),
+            "corporation": game.corporation_by_id(args["corporation"]),
+            "minor": game.minor_by_id(args["minor"]),
+            "price": args["price"],
         }
 
-    def args_to_h(self):
+    def args_to_dict(self):
         return {
             "company": self.company.id if self.company else None,
             "corporation": self.corporation.id if self.corporation else None,
@@ -211,21 +196,13 @@ class BlindBid(BaseAction):
         super().__init__(entity)
         self.bids = bids or []
 
-    @classmethod
-    def from_h(cls, h, _game):
-        return cls(
-            entity=h["entity"],
-            bids=[int(bid) for bid in h["bids"]] if "bids" in h else [],
-        )
-
-    def to_h(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "blind_bid",
-            "entity": self.entity.id,
-            "bids": [str(bid) for bid in self.bids],
+            "bids": [int(bid) for bid in args.get["bids"]],
         }
 
-    def args_to_h(self):
+    def args_to_dict(self):
         return {"bids": [str(bid) for bid in self.bids]}
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 18
@@ -234,18 +211,13 @@ class BorrowTrain(BaseAction):
         super().__init__(entity)
         self.train = train
 
-    @classmethod
-    def from_h(cls, h, game):
-        return cls(entity=h["entity"], train=game.train_by_id(h["train"]))
-
-    def to_h(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "borrow_train",
-            "entity": self.entity.id,
-            "train": self.train.id,
+            "train": game.train_by_id(args["train"]),
         }
 
-    def args_to_h(self):
+    def args_to_dict(self):
         return {"train": self.train.id}
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 20
@@ -255,23 +227,11 @@ class BuyCompany(BaseAction):
         self.company = company
         self.price = price
 
-    @classmethod
-    def from_h(cls, h, game):
-        return cls(
-            entity=h["entity"],
-            company=game.company_by_id(h["company"]),
-            price=h["price"],
-        )
+    @staticmethod
+    def dict_to_args(args, game):
+        return {"company": game.company_by_id(args["company"]), "price": args["price"]}
 
-    def to_h(self):
-        return {
-            "type": "buy_company",
-            "entity": self.entity.id,
-            "company": self.company.id,
-            "price": self.price,
-        }
-
-    def args_to_h(self):
+    def args_to_dict(self):
         return {"company": self.company.id, "price": self.price}
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 22
@@ -282,25 +242,15 @@ class BuyCorporation(BaseAction):
         self.minor = minor
         self.price = price
 
-    @classmethod
-    def from_h(cls, h, game):
-        return cls(
-            entity=h["entity"],
-            corporation=game.corporation_by_id(h["corporation"]),
-            minor=game.minor_by_id(h["minor"]),
-            price=h["price"],
-        )
-
-    def to_h(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "buy_corporation",
-            "entity": self.entity.id,
-            "corporation": self.corporation.id if self.corporation else None,
-            "minor": self.minor.id if self.minor else None,
-            "price": self.price,
+            "corporation": game.corporation_by_id(args["corporation"]),
+            "minor": game.minor_by_id(args["minor"]),
+            "price": args["price"],
         }
 
-    def args_to_h(self):
+    def args_to_dict(self):
         return {
             "corporation": self.corporation.id if self.corporation else None,
             "minor": self.minor.id if self.minor else None,
@@ -313,14 +263,11 @@ class BuyPower(BaseAction):
         super().__init__(entity)
         self.power = power
 
-    @classmethod
-    def from_h(cls, h, game):
-        return cls(entity=h["entity"], power=h["power"])
+    @staticmethod
+    def dict_to_args(args, game):
+        return {"power": args["power"]}
 
-    def to_h(self):
-        return {"type": "buy_power", "entity": self.entity.id, "power": self.power}
-
-    def args_to_h(self):
+    def args_to_dict(self):
         return {"power": self.power}
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 26
@@ -346,63 +293,35 @@ class BuyShares(BaseAction):
         self.borrow_from = borrow_from
         self.total_price = total_price
 
-    @classmethod
-    def from_h(cls, h, game):
-        shares = [game.share_by_id(id) for id in h["shares"]]
-        share_price = h["share_price"]
-        percent = h["percent"]
-        swap = game.share_by_id(h["swap"]) if "swap" in h else None
-        purchase_for_type = h["purchase_for_type"]
-        purchase_for = (
-            game.get(purchase_for_type, h["purchase_for"])
-            if purchase_for_type
-            else None
-        )
-        borrow_from_type = h["borrow_from_type"]
-        borrow_from = (
-            game.get(borrow_from_type, h["borrow_from"]) if borrow_from_type else None
-        )
-        total_price = h["total_price"]
-
-        return cls(
-            entity=h["entity"],
-            shares=shares,
-            share_price=share_price,
-            percent=percent,
-            swap=swap,
-            purchase_for=purchase_for,
-            borrow_from=borrow_from,
-            total_price=total_price,
-        )
-
-    def to_h(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "buy_shares",
-            "entity": self.entity.id,
-            "shares": [share.id for share in self.bundle.shares],
-            "share_price": self.bundle.share_price,
-            "percent": self.bundle.percent,
-            "swap": self.swap.id if self.swap else None,
-            "purchase_for_type": type_s(self.purchase_for)
-            if self.purchase_for
+            "shares": [game.share_by_id(id) for id in args["shares"]],
+            "share_price": args.get("share_price"),
+            "percent": args.get("percent"),
+            "swap": game.share_by_id(args["swap"]) if args.get("swap") else None,
+            "purchase_for": game.get(args["purchase_for_type"], args["purchase_for"])
+            if args.get("purchase_for")
             else None,
-            "purchase_for": self.purchase_for.id if self.purchase_for else None,
-            "borrow_from_type": type_s(self.borrow_from) if self.borrow_from else None,
-            "borrow_from": self.borrow_from.id if self.borrow_from else None,
-            "total_price": self.total_price,
+            "borrow_from": game.get(args["borrow_from_type"], args["borrow_from"])
+            if args.get("borrow_from")
+            else None,
+            "total_price": args.get("total_price"),
         }
 
-    def args_to_h(self):
+    def args_to_dict(self):
         return {
             "shares": [share.id for share in self.bundle.shares],
             "percent": self.bundle.percent,
             "share_price": self.bundle.share_price,
             "swap": self.swap.id if self.swap else None,
-            "purchase_for_type": type_s(self.purchase_for)
+            "purchase_for_type": self.purchase_for.__class__.__name__
             if self.purchase_for
             else None,
             "purchase_for": self.purchase_for.id if self.purchase_for else None,
-            "borrow_from_type": type_s(self.borrow_from) if self.borrow_from else None,
+            "borrow_from_type": self.borrow_from.__class__.__name__
+            if self.borrow_from
+            else None,
             "borrow_from": self.borrow_from.id if self.borrow_from else None,
             "total_price": self.total_price,
         }
@@ -411,25 +330,23 @@ class BuyShares(BaseAction):
 class SellShares(BaseAction):
     def __init__(self, entity, shares, share_price=None, percent=None, swap=None):
         super().__init__(entity)
-        self.bundle = ShareBundle(shares, percent)
+        self.bundle = ShareBundle(
+            shares if isinstance(shares, list) else [shares], percent
+        )
         self.bundle.share_price = share_price
         self.swap = swap
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=game.get(data["entity_type"], data["entity"]),
-            shares=[game.share_by_id(id) for id in data["shares"]],
-            share_price=data["share_price"],
-            percent=data["percent"],
-            swap=game.share_by_id(data["swap"]) if "swap" in data else None,
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "sell_shares",
-            "entity": self.entity.id,
-            "entity_type": type_s(self.entity),
+            "shares": [game.share_by_id(id) for id in args["shares"]],
+            "share_price": args.get("share_price"),
+            "percent": args.get("percent"),
+            "swap": game.share_by_id(args["swap"]) if args.get("swap") else None,
+        }
+
+    def args_to_dict(self):
+        return {
             "shares": [share.id for share in self.bundle.shares],
             "share_price": self.bundle.share_price,
             "percent": self.bundle.percent,
@@ -444,24 +361,15 @@ class BuyToken(BaseAction):
         self.slot = slot
         self.price = price
 
-    @classmethod
-    def from_h(cls, h, game):
-        city = game.city_by_id(h["city"])
-        slot = h["slot"]
-        price = h["price"]
-
-        return cls(entity=h["entity"], city=city, slot=slot, price=price)
-
-    def to_h(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "buy_token",
-            "entity": self.entity.id,
-            "city": self.city.id,
-            "slot": self.slot,
-            "price": self.price,
+            "city": game.city_by_id(args["city"]),
+            "slot": args["slot"],
+            "price": args["price"],
         }
 
-    def args_to_h(self):
+    def args_to_dict(self):
         return {"city": self.city.id, "slot": self.slot, "price": self.price}
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 32
@@ -488,56 +396,6 @@ class BuyTrain(BaseAction):
         self.extra_due = extra_due
         self.warranties = warranties
 
-    @classmethod
-    def from_h(cls, h, game):
-        train = game.train_by_id(h["train"])
-        price = h["price"]
-        variant = h["variant"]
-        exchange = game.train_by_id(h["exchange"])
-        shell_name = h["shell"]
-        shell = cls.shell_by_name(shell_name, game)
-        slots = [int(slot) for slot in h["slots"]] if "slots" in h else None
-        extra_due = h["extra_due"]
-        warranties = h["warranties"]
-
-        return cls(
-            entity=h["entity"],
-            train=train,
-            price=price,
-            variant=variant,
-            exchange=exchange,
-            shell=shell,
-            slots=slots,
-            extra_due=extra_due,
-            warranties=warranties,
-        )
-
-    def to_h(self):
-        return {
-            "type": "buy_train",
-            "entity": self.entity.id,
-            "train": self.train.id,
-            "price": self.price,
-            "variant": self.variant,
-            "exchange": self.exchange.id if self.exchange else None,
-            "shell": self.shell.name if self.shell else None,
-            "slots": self.slots,
-            "extra_due": bool(self.extra_due) if self.extra_due else None,
-            "warranties": self.warranties,
-        }
-
-    def args_to_h(self):
-        return {
-            "train": self.train.id,
-            "price": self.price,
-            "variant": self.variant,
-            "exchange": self.exchange.id if self.exchange else None,
-            "shell": self.shell.name if self.shell else None,
-            "slots": self.slots,
-            "extra_due": bool(self.extra_due) if self.extra_due else None,
-            "warranties": self.warranties,
-        }
-
     @staticmethod
     def shell_by_name(name, game):
         if not name:
@@ -550,23 +408,45 @@ class BuyTrain(BaseAction):
 
         return None
 
+    @staticmethod
+    def dict_to_args(args, game):
+        return {
+            "train": game.train_by_id(args["train"]),
+            "price": args["price"],
+            "variant": args.get("variant"),
+            "exchange": game.train_by_id(args["exchange"])
+            if args.get("exchange")
+            else None,
+            "shell": shell_by_name(args.get("shell"), game),
+            "slots": args.get("slots", []),
+            "extra_due": args.get("extra_due"),
+            "warranties": args.get("warranties"),
+        }
+
+    def args_to_dict(self):
+        return {
+            "train": self.train.id,
+            "price": self.price,
+            "variant": self.variant,
+            "exchange": self.exchange.id if self.exchange else None,
+            "shell": self.shell.name if self.shell else None,
+            "slots": self.slots,
+            "extra_due": self.extra_due,
+            "warranties": self.warranties,
+        }
+
 # %% ../../../nbs/game/engine/03_actions.ipynb 34
 class Choose(BaseAction):
     def __init__(self, entity, choice):
         super().__init__(entity)
         self.choice = choice
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=game.get(data["entity_type"], data["entity"]), choice=data["choice"]
-        )
+    @staticmethod
+    def dict_to_args(args, game):
+        return {"choice": args["choice"]}
 
-    def to_dict(self):
+    def args_to_dict(self):
         return {
-            "type": "choose",
-            "entity": self.entity.id,
-            "entity_type": type_s(self.entity),
             "choice": self.choice,
         }
 
@@ -581,19 +461,15 @@ class ClaimHexToken(BaseAction):
         self.hex = hex
         self.token_type = token_type
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=game.get(data["entity_type"], data["entity"]),
-            hex=game.hex_by_id(data["hex"]),
-            token_type=data["token_type"],
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "claim_hex_token",
-            "entity": self.entity.id,
-            "entity_type": type_s(self.entity),
+            "hex": game.hex_by_id(args["hex"]),
+            "token_type": args["token_type"],
+        }
+
+    def args_to_dict(self):
+        return {
             "hex": self.hex.id,
             "token_type": self.token_type,
         }
@@ -606,24 +482,18 @@ class CombinedTrains(BaseAction):
         self.additional_train = additional_train
         self.additional_train_variant = additional_train_variant
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=game.get(data["entity_type"], data["entity"]),
-            base=game.train_by_id(data["base"]),
-            additional_train=game.train_by_id(data["additional_train"]),
-            additional_train_variant=data["additional_train_variant"],
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "combined_trains",
-            "entity": self.entity.id,
-            "entity_type": type_s(self.entity),
-            "base": self.base.id if self.base else None,
-            "additional_train": self.additional_train.id
-            if self.additional_train
-            else None,
+            "base": game.train_by_id(args["base"]),
+            "additional_train": game.train_by_id(args["additional_train"]),
+            "additional_train_variant": args["additional_train_variant"],
+        }
+
+    def args_to_dict(self):
+        return {
+            "base": self.base.id,
+            "additional_train": self.additional_train.id,
             "additional_train_variant": self.additional_train_variant,
         }
 
@@ -636,7 +506,7 @@ class CorporateBuyShares(BuyShares):
     pass
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 46
-class CorporateBuyShares(SellShares):
+class CorporateSellShares(SellShares):
     pass
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 48
@@ -646,22 +516,12 @@ class CreditMobilier(BaseAction):
         self.hex = hex
         self.amount = amount
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=game.get(data["entity_type"], data["entity"]),
-            hex=game.hex_by_id(data["hex"]),
-            amount=data["amount"],
-        )
+    @staticmethod
+    def dict_to_args(args, game):
+        return {"hex": game.hex_by_id(args["hex"]), "amount": args["amount"]}
 
-    def to_dict(self):
-        return {
-            "type": "credit_mobilier",
-            "entity": self.entity.id,
-            "entity_type": type_s(self.entity),
-            "hex": self.hex.id,
-            "amount": self.amount,
-        }
+    def args_to_dict(self):
+        return {"hex": self.hex.id, "amount": self.amount}
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 50
 class DestinationConnection(BaseAction):
@@ -671,25 +531,23 @@ class DestinationConnection(BaseAction):
         self.minors = minors if minors else []
         self.hexes = hexes if hexes else []
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=game.get(data["entity_type"], data["entity"]),
-            corporations=[
-                game.corporation_by_id(c) for c in data.get("corporations", [])
-            ],
-            minors=[game.minor_by_id(m) for m in data.get("minors", [])],
-            hexes=[game.hex_by_id(h) for h in data.get("hexes", [])],
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "destination_connection",
-            "entity": self.entity.id,
-            "entity_type": type_s(self.entity),
-            "corporations": [c.id for c in self.corporations],
-            "minors": [m.id for m in self.minors],
-            "hexes": [h.id for h in self.hexes],
+            "corporations": [
+                game.corporation_by_id(c) for c in args.get("corporations", [])
+            ],
+            "minors": [game.minor_by_id(m) for m in args.get("minors", [])],
+            "hexes": [game.hex_by_id(h) for h in args.get("hexes", [])],
+        }
+
+    def args_to_dict(self):
+        return {
+            "corporations": [corp.id for corp in self.corporations]
+            if self.corporations
+            else [],
+            "minors": [minor.id for minor in self.minors] if self.minors else [],
+            "hexes": [hex.id for hex in self.hexes] if self.hexes else [],
         }
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 52
@@ -698,18 +556,14 @@ class DiscardTrain(BaseAction):
         super().__init__(entity)
         self.train = train
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=game.get(data["entity_type"], data["entity"]),
-            train=game.train_by_id(data["train"]),
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "discard_train",
-            "entity": self.entity.id,
-            "entity_type": type_s(self.entity),
+            "train": game.train_by_id(args["train"]),
+        }
+
+    def args_to_dict(self):
+        return {
             "train": self.train.id,
         }
 
@@ -720,19 +574,15 @@ class Dividend(BaseAction):
         self.kind = kind
         self.amount = amount
 
-    @classmethod
-    def from_dict(cls, data, _game):
-        return cls(
-            entity=game.get(data["entity_type"], data["entity"]),
-            kind=data["kind"],
-            amount=data.get("amount"),
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, _game):
         return {
-            "type": "dividend",
-            "entity": self.entity.id,
-            "entity_type": type_s(self.entity),
+            "kind": args["kind"],
+            "amount": args["amount"],
+        }
+
+    def args_to_dict(self):
+        return {
             "kind": self.kind,
             "amount": self.amount,
         }
@@ -743,18 +593,14 @@ class DoubleHeadTrains(BaseAction):
         super().__init__(entity)
         self.trains = trains
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=game.get(data["entity_type"], data["entity"]),
-            trains=[game.train_by_id(train_id) for train_id in data["trains"]],
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "double_head_trains",
-            "entity": self.entity.id,
-            "entity_type": type_s(self.entity),
+            "trains": [game.train_by_id(t) for t in args.get("trains", [])],
+        }
+
+    def args_to_dict(self):
+        return {
             "trains": [train.id for train in self.trains],
         }
 
@@ -763,37 +609,23 @@ class EndGame(BaseAction):
     def free(self):
         return True
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(entity=game.get(data["entity_type"], data["entity"]))
-
-    def to_dict(self):
-        return {
-            "type": "end_game",
-            "entity": self.entity.id,
-            "entity_type": type_s(self.entity),
-        }
-
 # %% ../../../nbs/game/engine/03_actions.ipynb 60
 class FailedMerge(BaseAction):
     def __init__(self, entity, corporations):
         super().__init__(entity)
         self.corporations = corporations
 
-    @classmethod
-    def from_dict(cls, data, game):
-        corporations = [game.corporation_by_id(c_id) for c_id in data["corporations"]]
-        return cls(
-            entity=game.get(data["entity_type"], data["entity"]),
-            corporations=corporations,
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "failed_merge",
-            "entity": self.entity.id,
-            "entity_type": type_s(self.entity),
-            "corporations": [c.id for c in self.corporations],
+            "corporations": [
+                game.corporation_by_id(c_id) for c_id in args.get("corporations", [])
+            ],
+        }
+
+    def args_to_dict(self):
+        return {
+            "corporations": [corporation.id for corporation in self.corporations],
         }
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 62
@@ -802,28 +634,21 @@ class HexToken(BaseAction):
         super().__init__(entity)
         self.hex = hex
         self.cost = cost
-        self.token = token or entity.find_token_by_type(token_type) if entity else None
+        self.token = token or entity.find_token_by_type(token_type)
 
-    @classmethod
-    def from_dict(cls, data, game):
-        hex = game.hex_by_id(data["hex"])
-        cost = data["cost"]
-        token_type = data["token_type"]
-        entity = (
-            game.get(data["entity_type"], data["entity"]) if data["entity"] else None
-        )
-        return cls(entity=entity, hex=hex, cost=cost, token_type=token_type)
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "hex_token",
-            "entity": self.entity.id if self.entity else None,
-            "entity_type": type_s(self.entity) if self.entity else None,
+            "hex": game.hex_by_id(args["hex"]),
+            "cost": args["cost"],
+            "token_type": args.get("token_type"),
+        }
+
+    def args_to_dict(self):
+        return {
             "hex": self.hex.id,
             "cost": self.cost,
-            "token_type": self.token.type
-            if self.token and self.token.type != "normal"
-            else None,
+            "token_type": None if self.token.type == "normal" else self.token.type,
         }
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 64
@@ -835,34 +660,25 @@ class LayTile(BaseAction):
         self.rotation = rotation
         self.combo_entities = combo_entities or []
 
-    @classmethod
-    def from_dict(cls, data, game):
-        tile = game.tile_by_id(data["tile"])
-        hex = game.hex_by_id(data["hex"])
-        rotation = data["rotation"]
-        combo_entities = [
-            game.company_by_id(id) for id in (data.get("combo_entities") or [])
-        ]
-        entity = (
-            game.get(data["entity_type"], data["entity"]) if data["entity"] else None
-        )
-        return cls(
-            entity=entity,
-            tile=tile,
-            hex=hex,
-            rotation=rotation,
-            combo_entities=combo_entities,
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "lay_tile",
-            "entity": self.entity.id if self.entity else None,
-            "entity_type": type_s(self.entity) if self.entity else None,
+            "tile": game.tile_by_id(args["tile"]),
+            "hex": game.hex_by_id(args["hex"]),
+            "rotation": args["rotation"],
+            "combo_entities": [
+                game.company_by_id(id) for id in args.get("combo_entities", [])
+            ],
+        }
+
+    def args_to_dict(self):
+        return {
             "hex": self.hex.id,
             "tile": self.tile.id,
             "rotation": self.rotation,
-            "combo_entities": [entity.id for entity in self.combo_entities],
+            "combo_entities": [entity.id for entity in self.combo_entities]
+            if self.combo_entities
+            else None,
         }
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 66
@@ -871,13 +687,17 @@ class Message(BaseAction):
         super().__init__(entity)
         self.message = message
 
-    @classmethod
-    def from_dict(cls, data, _):
-        return cls(entity=None, message=data.get("message"))
+    def free(self):
+        return True
 
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, _):
         return {
-            "type": "message",
+            "message": args["message"],
+        }
+
+    def args_to_dict(self):
+        return {
             "message": self.message,
         }
 
@@ -896,20 +716,15 @@ class Merge(BaseAction):
         self.corporation = corporation
         self.minor = minor
 
-    @classmethod
-    def from_dict(cls, data, game):
-        corporation = game.corporation_by_id(data.get("corporation"))
-        minor = game.minor_by_id(data.get("minor"))
-        entity = (
-            game.get(data["entity_type"], data["entity"]) if data["entity"] else None
-        )
-        return cls(entity=entity, corporation=corporation, minor=minor)
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "merge",
-            "entity": self.entity.id if self.entity else None,
-            "entity_type": type_s(self.entity) if self.entity else None,
+            "corporation": game.corporation_by_id(args["corporation"]),
+            "minor": game.minor_by_id(args["minor"]),
+        }
+
+    def args_to_dict(self):
+        return {
             "corporation": self.corporation.id if self.corporation else None,
             "minor": self.minor.id if self.minor else None,
         }
@@ -926,24 +741,22 @@ class MoveBid(BaseAction):
         self.from_company = from_company
         self.from_price = from_price
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=None,
-            company=game.company_by_id(data.get("company")),
-            corporation=game.corporation_by_id(data.get("corporation")),
-            from_company=game.company_by_id(data.get("from_company")),
-            price=data.get("price"),
-            from_price=data.get("from_price"),
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "move_bid",
+            "company": game.company_by_id(args["company"]),
+            "corporation": game.corporation_by_id(args["corporation"]),
+            "from_company": game.company_by_id(args.get("from_company")),
+            "price": args["price"],
+            "from_price": args.get("from_price"),
+        }
+
+    def args_to_dict(self):
+        return {
             "company": self.company.id if self.company else None,
             "corporation": self.corporation.id if self.corporation else None,
-            "price": self.price,
             "from_company": self.from_company.id if self.from_company else None,
+            "price": self.price,
             "from_price": self.from_price,
         }
 
@@ -955,18 +768,16 @@ class Offer(BaseAction):
         self.company = company
         self.price = price
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=None,
-            corporation=game.corporation_by_id(data.get("corporation")),
-            company=game.company_by_id(data.get("company")),
-            price=data.get("price"),
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "offer",
+            "corporation": game.corporation_by_id(args["corporation"]),
+            "company": game.company_by_id(args["company"]),
+            "price": args["price"],
+        }
+
+    def args_to_dict(self):
+        return {
             "corporation": self.corporation.id if self.corporation else None,
             "company": self.company.id if self.company else None,
             "price": self.price,
@@ -990,28 +801,34 @@ class Par(BaseAction):
         self.purchase_for = purchase_for
         self.borrow_from = borrow_from
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=None,
-            corporation=game.corporation_by_id(data["corporation"]),
-            share_price=game.share_price_by_id(data["share_price"]),
-            slot=data.get("slot"),
-            purchase_for=game.get(
-                data.get("purchase_for_type"), data.get("purchase_for")
-            ),
-            borrow_from=game.get(data.get("borrow_from_type"), data.get("borrow_from")),
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "par",
+            "corporation": game.corporation_by_id(args["corporation"]),
+            "share_price": game.share_price_by_id(args["share_price"]),
+            "slot": args["slot"],
+            "purchase_for": game.get(
+                args.get("purchase_for_type"), args["purchase_for"]
+            )
+            if "purchase_for" in args
+            else None,
+            "borrow_from": game.get(args.get("borrow_from_type"), args["borrow_from"])
+            if "borrow_from" in args
+            else None,
+        }
+
+    def args_to_dict(self):
+        return {
             "corporation": self.corporation.id,
             "share_price": self.share_price.id,
             "slot": self.slot,
-            "purchase_for_type": type_s(self.purchase_for),
+            "purchase_for_type": self.purchase_for.__class__.__name__
+            if self.purchase_for
+            else None,
             "purchase_for": self.purchase_for.id if self.purchase_for else None,
-            "borrow_from_type": type_s(self.borrow_from),
+            "borrow_from_type": self.borrow_from.__class__.__name__
+            if self.borrow_from
+            else None,
             "borrow_from": self.borrow_from.id if self.borrow_from else None,
         }
 
@@ -1064,30 +881,24 @@ class PlaceToken(BaseAction):
         token_owner = tokener or (entity.owner if entity.company else entity)
         self.token = token_owner.find_token_by_type(token_type) if token_type else None
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=game.get_entity(data["entity_type"], data["entity"]),
-            city=game.get_city(data["city"]),
-            slot=data["slot"],
-            cost=data["cost"],
-            tokener=game.get_corporation(data["tokener"])
-            or game.get_minor(data["tokener"]),
-            token_type=data["token_type"],
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "place_token",
-            "entity": self.entity.id,
-            "entity_type": self.entity.type,
+            "city": game.city_by_id(args["city"]),
+            "slot": args["slot"],
+            "cost": args["cost"],
+            "tokener": game.corporation_by_id(args.get("tokener"))
+            or game.minor_by_id(args.get("tokener")),
+            "token_type": args.get("token_type"),
+        }
+
+    def args_to_dict(self):
+        return {
             "city": self.city.id,
             "slot": self.slot,
             "cost": self.cost,
             "tokener": self.tokener.id if self.tokener else None,
-            "token_type": self.token.type
-            if self.token and self.token.type != "normal"
-            else None,
+            "token_type": None if self.token.type == "normal" else self.token.type,
         }
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 92
@@ -1102,14 +913,14 @@ class ProgramDisable(BaseAction):
         self.reason = reason
         self.original_type = original_type
 
-    @classmethod
-    def h_to_args(cls, h, _game):
+    @staticmethod
+    def dict_to_args(args, _game):
         return {
-            "reason": h["reason"],
-            "original_type": h["original_type"],
+            "reason": args["reason"],
+            "original_type": args["original_type"],
         }
 
-    def args_to_h(self):
+    def args_to_dict(self):
         return {
             "reason": self.reason,
             "original_type": self.original_type,
@@ -1135,25 +946,27 @@ class ProgramAuctionBid(ProgramEnable):
         self.buy_price = buy_price
         self.auto_pass_after = auto_pass_after
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=game.get_entity(data["entity_type"], data["entity"]),
-            bid_target=game.get_corporation(data["bid_target"])
-            or game.get_company(data["bid_target"])
-            or game.get_minor(data["bid_target"]),
-            enable_maximum_bid=data["enable_maximum_bid"],
-            maximum_bid=data["maximum_bid"],
-            enable_buy_price=data["enable_buy_price"],
-            buy_price=data["buy_price"],
-            auto_pass_after=data["auto_pass_after"],
-        )
+    def disable(self, game):
+        return not game.round.auction
 
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
+        bid_target = (
+            game.corporation_by_id(args.get("bid_target"))
+            or game.company_by_id(args.get("bid_target"))
+            or game.minor_by_id(args.get("bid_target"))
+        )
         return {
-            "type": "program_auction_bid",
-            "entity": self.entity.id,
-            "entity_type": self.entity.type,
+            "bid_target": bid_target,
+            "enable_maximum_bid": args.get("enable_maximum_bid"),
+            "maximum_bid": args.get("maximum_bid"),
+            "enable_buy_price": args.get("enable_buy_price"),
+            "buy_price": args.get("buy_price"),
+            "auto_pass_after": args.get("auto_pass_after"),
+        }
+
+    def args_to_dict(self):
+        return {
             "bid_target": self.bid_target.id,
             "enable_maximum_bid": self.enable_maximum_bid,
             "maximum_bid": self.maximum_bid,
@@ -1173,9 +986,6 @@ class ProgramAuctionBid(ProgramEnable):
 
         return f"{buy}{bid}{suffix}"
 
-    def disable(self, game):
-        return not game.round.auction
-
 # %% ../../../nbs/game/engine/03_actions.ipynb 98
 class ProgramBuyShares(ProgramEnable):
     def __init__(
@@ -1192,21 +1002,17 @@ class ProgramBuyShares(ProgramEnable):
         self.from_market = from_market
         self.auto_pass_after = auto_pass_after
 
-    @classmethod
-    def from_dict(cls, data, game):
-        return cls(
-            entity=game.get_entity(data["entity_type"], data["entity"]),
-            corporation=game.get_corporation(data["corporation"]),
-            until_condition=data["until_condition"],
-            from_market=data["from_market"],
-            auto_pass_after=data["auto_pass_after"],
-        )
-
-    def to_dict(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "program_buy_shares",
-            "entity": self.entity.id,
-            "entity_type": self.entity.type,
+            "corporation": game.corporation_by_id(args["corporation"]),
+            "until_condition": args.get("until_condition"),
+            "from_market": args.get("from_market"),
+            "auto_pass_after": args.get("auto_pass_after"),
+        }
+
+    def args_to_dict(self):
+        return {
             "corporation": self.corporation.id,
             "until_condition": self.until_condition,
             "from_market": self.from_market,
@@ -1233,18 +1039,18 @@ class ProgramClosePass(ProgramEnable):
         super().__init__(entity)
         self.unconditional = unconditional
 
-    @classmethod
-    def h_to_args(cls, h, _game):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "unconditional": h["unconditional"],
+            "unconditional": args["unconditional"],
         }
 
-    def args_to_h(self):
+    def args_to_dict(self):
         return {
             "unconditional": self.unconditional,
         }
 
-    def to_s(self):
+    def __str__(self):
         unconditionally = ", unconditionally" if self.unconditional else ""
         return f"Pass in Closing Round{unconditionally}"
 
@@ -1258,20 +1064,20 @@ class ProgramHarzbahnDraftPass(ProgramEnable):
         self.until_premium = until_premium
         self.unconditional = unconditional
 
-    @classmethod
-    def h_to_args(cls, h, _game):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "until_premium": h["until_premium"],
-            "unconditional": h["unconditional"],
+            "until_premium": args["until_premium"],
+            "unconditional": args["unconditional"],
         }
 
-    def args_to_h(self):
+    def args_to_dict(self):
         return {
             "until_premium": self.until_premium,
             "unconditional": self.unconditional,
         }
 
-    def to_s(self):
+    def __str__(self):
         until_premium = (
             f", until premium {self.until_premium}" if self.until_premium else ""
         )
@@ -1290,16 +1096,16 @@ class ProgramIndependentMines(ProgramEnable):
         self.skip_close = skip_close
         self.indefinite = indefinite
 
-    @classmethod
-    def h_to_args(cls, h, _game):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "skip_track": h["skip_track"],
-            "skip_buy": h["skip_buy"],
-            "skip_close": h["skip_close"],
-            "indefinite": h["indefinite"],
+            "skip_track": args["skip_track"],
+            "skip_buy": args["skip_buy"],
+            "skip_close": args["skip_close"],
+            "indefinite": args["indefinite"],
         }
 
-    def args_to_h(self):
+    def args_to_dict(self):
         return {
             "skip_track": self.skip_track,
             "skip_buy": self.skip_buy,
@@ -1307,7 +1113,7 @@ class ProgramIndependentMines(ProgramEnable):
             "indefinite": self.indefinite,
         }
 
-    def to_s(self):
+    def __str__(self):
         steps = []
         if self.skip_track:
             steps.append("track")
@@ -1330,19 +1136,19 @@ class ProgramMergerPass(ProgramEnable):
         self.corporations_by_round = corporations_by_round
         self.options = options
 
-    @classmethod
-    def h_to_args(cls, h, game):
-        corporations_by_round = h.get("corporations_by_round", {})
+    @staticmethod
+    def dict_to_args(args, game):
+        corporations_by_round = args.get("corporations_by_round", {})
         transformed_corps = {}
         for phase, corps_ids in corporations_by_round.items():
             corps_list = [game.corporation_by_id(c_id) for c_id in corps_ids]
             transformed_corps[phase] = corps_list
         return {
             "corporations_by_round": transformed_corps,
-            "options": h.get("options", []),
+            "options": args.get("options", []),
         }
 
-    def args_to_h(self):
+    def args_to_dict(self):
         transformed_corps = {}
         for phase, corps_list in self.corporations_by_round.items():
             corps_ids = [corp.id for corp in corps_list]
@@ -1352,7 +1158,7 @@ class ProgramMergerPass(ProgramEnable):
             "options": self.options,
         }
 
-    def to_s(self):
+    def __str__(self):
         phases = [
             f"{phase} ({', '.join(corp.name for corp in corps)})"
             if corps
@@ -1375,14 +1181,14 @@ class ProgramSharePass(ProgramEnable):
         self.unconditional = unconditional
         self.indefinite = indefinite
 
-    @classmethod
-    def h_to_args(cls, h, _game):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "unconditional": h.get("unconditional", False),
-            "indefinite": h.get("indefinite", False),
+            "unconditional": args.get("unconditional"),
+            "indefinite": args.get("indefinite"),
         }
 
-    def args_to_h(self):
+    def args_to_dict(self):
         return {
             "unconditional": self.unconditional,
             "indefinite": self.indefinite,
@@ -1406,22 +1212,31 @@ class ReassignTrains(BaseAction):
         super().__init__(entity)
         self.assignments = assignments if assignments else []
 
-    @classmethod
-    def h_to_args(cls, h, game):
-        assignments = []
-        for assignment in h.get("assignments", []):
-            train = game.train_by_id(assignment["train"])
-            corporation = game.corporation_by_id(assignment["corporation"])
-            assignments.append({"train": train, "corporation": corporation})
-
-        return {"assignments": assignments}
-
-    def args_to_h(self):
+    @staticmethod
+    def dict_to_args(args, game):
         assignments = [
-            {"train": item["train"].id, "corporation": item["corporation"].id}
+            {
+                "train": game.train_by_id(assignment["train"]),
+                "corporation": game.corporation_by_id(assignment["corporation"]),
+            }
+            for assignment in args.get("assignments", [])
+        ]
+        return {
+            "assignments": assignments,
+        }
+
+    def args_to_dict(self):
+        assignments = [
+            {
+                "train": item["train"].id,
+                "corporation": item["corporation"].id,
+            }
             for item in self.assignments
         ]
-        return {"assignments": assignments}
+
+        return {
+            "assignments": assignments,
+        }
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 114
 class Redo(BaseAction):
@@ -1434,17 +1249,14 @@ class RemoveHexToken(BaseAction):
         super().__init__(entity)
         self.hex = hex
 
-    @classmethod
-    def from_input(cls, data, game):
-        return cls(
-            entity=game.get_entity(data["entity"]),
-            hex=game.get_hex_by_id(data["hex"]),
-        )
-
-    def to_input(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "remove_hex_token",
-            "entity": self.entity.id,
+            "hex": game.hex_by_id(args["hex"]),
+        }
+
+    def args_to_dict(self):
+        return {
             "hex": self.hex.id,
         }
 
@@ -1455,18 +1267,15 @@ class RemoveToken(BaseAction):
         self.city = city
         self.slot = slot
 
-    @classmethod
-    def from_input(cls, data, game):
-        return cls(
-            entity=game.get_entity(data["entity"]),
-            city=game.get_city_by_id(data["city"]),
-            slot=data["slot"],
-        )
-
-    def to_input(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "remove_token",
-            "entity": self.entity.id,
+            "city": game.city_by_id(args["city"]),
+            "slot": args["slot"],
+        }
+
+    def args_to_dict(self):
+        return {
             "city": self.city.id,
             "slot": self.slot,
         }
@@ -1479,19 +1288,16 @@ class Respond(BaseAction):
         self.company = company
         self.accept = accept
 
-    @classmethod
-    def from_input(cls, data, game):
-        return cls(
-            entity=game.get_entity(data["entity"]),
-            corporation=game.get_corporation_by_id(data["corporation"]),
-            company=game.get_company_by_id(data["company"]),
-            accept=data["accept"] == "true",
-        )
-
-    def to_input(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "respond",
-            "entity": self.entity.id,
+            "corporation": game.corporation_by_id(args["corporation"]),
+            "company": game.company_by_id(args["company"]),
+            "accept": args["accept"] == "true",
+        }
+
+    def args_to_dict(self):
+        return {
             "corporation": self.corporation.id,
             "company": self.company.id,
             "accept": "true" if self.accept else "false",
@@ -1504,30 +1310,58 @@ class RunRoutes(BaseAction):
         self.routes = routes
         self.extra_revenue = extra_revenue
 
-    @classmethod
-    def from_input(cls, data, game):
+    @staticmethod
+    def dict_to_args(args, game):
         routes = []
+        for route in args.get("routes", []):
+            opts = {
+                "connection_hexes": route["connections"],
+                "hexes": [game.hex_by_id(id) for id in route.get("hexes", []) if id],
+                "revenue": route["revenue"],
+                "revenue_str": route["revenue_str"],
+                "subsidy": route["subsidy"],
+                "halts": route["halts"],
+                "abilities": route["abilities"],
+                "nodes": route["nodes"],
+            }
+            # Filter out keys with None values
+            opts = {k: v for k, v in opts.items() if v is not None}
 
-        for route_data in data["routes"]:
-            route = Route.from_input(route_data, game)
-            routes.append(route)
-
-        return cls(
-            entity=game.get_entity(data["entity"]),
-            routes=routes,
-            extra_revenue=data["extra_revenue"],
-        )
-
-    def to_input(self):
-        routes_data = []
-        for route in self.routes:
-            route_data = route.to_input()
-            routes_data.append(route_data)
+            routes.append(
+                Route(
+                    game,
+                    game.phase,
+                    game.train_by_id(route["train"]),
+                    routes=routes,
+                    **opts,
+                )
+            )
 
         return {
-            "type": "run_routes",
-            "entity": self.entity.id,
-            "routes": routes_data,
+            "routes": routes,
+            "extra_revenue": args.get("extra_revenue"),
+        }
+
+    def args_to_dict(self):
+        routes = [
+            {
+                "train": route.train.id,
+                "connections": route.connection_hexes,
+                "hexes": [hex.id for hex in route.hexes],
+                "revenue": route.revenue,
+                "revenue_str": route.revenue_str,
+                "subsidy": route.subsidy,
+                "halts": route.halts,
+                "abilities": route.abilities,
+                "nodes": route.nodes,
+            }
+            for route in self.routes
+        ]
+        # Filter out keys with None or empty values
+        routes = [{k: v for k, v in route.items() if v} for route in routes]
+
+        return {
+            "routes": routes,
             "extra_revenue": self.extra_revenue,
         }
 
@@ -1537,17 +1371,14 @@ class ScrapTrain(BaseAction):
         super().__init__(entity)
         self.train = train
 
-    @classmethod
-    def from_input(cls, data, game):
-        return cls(
-            entity=game.get_entity(data["entity"]),
-            train=game.get_train(data["train"]),
-        )
-
-    def to_input(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "scrap_train",
-            "entity": self.entity.id,
+            "train": game.train_by_id(args["train"]),
+        }
+
+    def args_to_dict(self):
+        return {
             "train": self.train.id,
         }
 
@@ -1558,18 +1389,15 @@ class SellCompany(BaseAction):
         self.company = company
         self.price = price
 
-    @classmethod
-    def from_input(cls, data, game):
-        return cls(
-            entity=game.get_entity(data["entity"]),
-            company=game.get_company(data["company"]),
-            price=data["price"],
-        )
-
-    def to_input(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "sell_company",
-            "entity": self.entity.id,
+            "company": game.company_by_id(args["company"]),
+            "price": args["price"],
+        }
+
+    def args_to_dict(self):
+        return {
             "company": self.company.id,
             "price": self.price,
         }
@@ -1580,17 +1408,14 @@ class Short(BaseAction):
         super().__init__(entity)
         self.corporation = corporation
 
-    @classmethod
-    def from_input(cls, data, game):
-        return cls(
-            entity=game.get_entity(data["entity"]),
-            corporation=game.get_corporation(data["corporation"]),
-        )
-
-    def to_input(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "short",
-            "entity": self.entity.id,
+            "corporation": game.corporation_by_id(args["corporation"]),
+        }
+
+    def args_to_dict(self):
+        return {
             "corporation": self.corporation.id,
         }
 
@@ -1600,23 +1425,16 @@ class SpecialBuy(BaseAction):
         super().__init__(entity)
         self.item = item
 
-    @classmethod
-    def from_input(cls, data, _game):
-        item_data = data.get("item", {})
-        item = Item(
-            description=item_data.get("description", ""),
-            cost=item_data.get("cost", 0),
-        )
-        return cls(entity=data["entity"], item=item)
-
-    def to_input(self):
+    @staticmethod
+    def dict_to_args(args, _game):
         return {
-            "type": "special_buy",
-            "entity": self.entity.id,
-            "item": {
-                "description": self.item.description,
-                "cost": self.item.cost,
-            },
+            "item": Item(description=args["description"], cost=args["cost"]),
+        }
+
+    def args_to_dict(self):
+        return {
+            "description": self.item.description,
+            "cost": self.item.cost,
         }
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 132
@@ -1625,17 +1443,14 @@ class Split(BaseAction):
         super().__init__(entity)
         self.corporation = corporation
 
-    @classmethod
-    def from_input(cls, data, game):
-        return cls(
-            entity=data["entity"],
-            corporation=game.corporation_by_id(data["corporation"]),
-        )
-
-    def to_input(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "split",
-            "entity": self.entity.id,
+            "corporation": game.corporation_by_id(args["corporation"]),
+        }
+
+    def args_to_dict(self):
+        return {
             "corporation": self.corporation.id,
         }
 
@@ -1645,17 +1460,14 @@ class SwapTrain(BaseAction):
         super().__init__(entity)
         self.train = train
 
-    @classmethod
-    def from_input(cls, data, game):
-        return cls(
-            entity=data["entity"],
-            train=game.train_by_id(data["train"]),
-        )
-
-    def to_input(self):
+    @staticmethod
+    def dict_to_args(args, game):
         return {
-            "type": "swap_train",
-            "entity": self.entity.id,
+            "train": game.train_by_id(args["train"]),
+        }
+
+    def args_to_dict(self):
+        return {
             "train": self.train.id,
         }
 
@@ -1665,17 +1477,16 @@ class SwitchTrains(BaseAction):
         super().__init__(entity)
         self.slots = slots
 
-    @classmethod
-    def from_input(cls, data, _game):
-        return cls(
-            entity=data["entity"],
-            slots=[int(slot) for slot in data.get("slots", [])],
-        )
-
-    def to_input(self):
+    @staticmethod
+    def dict_to_args(args, _game):
         return {
-            "type": "switch_trains",
-            "entity": self.entity.id,
+            "slots": [int(m) for m in args.get("slots", [])]
+            if "slots" in args
+            else None,
+        }
+
+    def args_to_dict(self):
+        return {
             "slots": self.slots,
         }
 
@@ -1685,17 +1496,14 @@ class Undo(BaseAction):
         super().__init__(entity)
         self.action_id = action_id
 
-    @classmethod
-    def from_input(cls, data, _game):
-        return cls(
-            entity=data["entity"],
-            action_id=data.get("action_id"),
-        )
-
-    def to_input(self):
+    @staticmethod
+    def dict_to_args(args, _game):
         return {
-            "type": "undo",
-            "entity": self.entity.id,
+            "action_id": args["action_id"],
+        }
+
+    def args_to_dict(self):
+        return {
             "action_id": self.action_id,
         }
 
@@ -1705,20 +1513,30 @@ class UseGraph(BaseAction):
         super().__init__(entity)
         self.graph_id = graph_id
 
-    @classmethod
-    def from_input(cls, data, _game):
-        return cls(
-            entity=data["entity"],
-            graph_id=data["graph_id"],
-        )
-
-    def to_input(self):
+    @staticmethod
+    def dict_to_args(args, _game):
         return {
-            "type": "use_graph",
-            "entity": self.entity.id,
+            "graph_id": args["graph_id"],
+        }
+
+    def args_to_dict(self):
+        return {
             "graph_id": self.graph_id,
         }
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 142
 class ViewMergeOptions(BaseAction):
     pass
+
+# %% ../../../nbs/game/engine/03_actions.ipynb 145
+class OperatingInfo:
+    def __init__(self, runs, dividend, revenue, laid_hexes, dividend_kind=None):
+        self.routes = {run.train: run.connection_hexes for run in runs}
+        self.halts = {run.train: run.halts for run in runs}
+        self.nodes = {run.train: run.node_signatures for run in runs}
+        self.revenue = revenue
+        self.dividend = dividend
+        self.laid_hexes = laid_hexes
+        self.dividend_kind = dividend_kind or (
+            dividend.kind if isinstance(dividend, Dividend) else "withhold"
+        )
