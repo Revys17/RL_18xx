@@ -5,7 +5,10 @@ __all__ = ['PUBLISHER_INFO', 'GameError', 'OptionError', 'NoToken', 'RouteTooSho
            'Assignable', 'Entity', 'Item', 'Ownable', 'Passer', 'SharePrice', 'ShareHolder', 'Spender', 'BaseMovement',
            'TwoDimensionalMovement', 'OneDimensionalMovement', 'ZigZagMovement', 'StockMarket', 'Phase']
 
-# %% ../../../nbs/game/engine/00_core.ipynb 5
+# %% ../../../nbs/game/engine/00_core.ipynb 4
+from collections import defaultdict
+
+# %% ../../../nbs/game/engine/00_core.ipynb 6
 class GameError(RuntimeError):
     pass
 
@@ -29,7 +32,7 @@ class RouteTooLong(GameError):
 class ReusesCity(GameError):
     pass
 
-# %% ../../../nbs/game/engine/00_core.ipynb 8
+# %% ../../../nbs/game/engine/00_core.ipynb 9
 class GameLog(list):
     def __init__(self, game):
         super().__init__()
@@ -52,7 +55,7 @@ class GameLog(list):
             """Representation of the log entry."""
             return f"<Entry message='{self.message}', action_id={self.action_id}>"
 
-# %% ../../../nbs/game/engine/00_core.ipynb 11
+# %% ../../../nbs/game/engine/00_core.ipynb 12
 class Assignable:
     assignments = {}
 
@@ -77,7 +80,7 @@ class Assignable:
             if cls.assigned(assignable, key):
                 cls.remove_assignment(assignable, key)
 
-# %% ../../../nbs/game/engine/00_core.ipynb 13
+# %% ../../../nbs/game/engine/00_core.ipynb 14
 class Entity:
     def is_company(self):
         return False
@@ -106,7 +109,7 @@ class Entity:
     def is_closed(self):
         return False
 
-# %% ../../../nbs/game/engine/00_core.ipynb 15
+# %% ../../../nbs/game/engine/00_core.ipynb 16
 class Item:
     def __init__(self, description="", cost=0):
         self.description = description
@@ -115,7 +118,7 @@ class Item:
     def __eq__(self, other):
         return self.description == other.description and self.cost == other.cost
 
-# %% ../../../nbs/game/engine/00_core.ipynb 17
+# %% ../../../nbs/game/engine/00_core.ipynb 18
 class Ownable:
     def __init__(self):
         self._owner = None
@@ -147,24 +150,22 @@ class Ownable:
         )
 
     def corporation(self):
-        if self.corporation():
+        if self.is_corporation():
             return self
-        return getattr(self._owner, "corporation", None)
+        if getattr(self._owner, "corporation", None):
+            return self._owner.corporation()
+        return None
 
     def owned_by_corporation(self):
-        return hasattr(self._owner, "corporation") and callable(
-            getattr(self._owner, "corporation")
-        )
+        return self._owner and self._owner.is_corporation()
 
     def owned_by_player(self):
-        return hasattr(self._owner, "player") and callable(
-            getattr(self._owner, "player")
-        )
+        return self._owner and self._owner.is_player()
 
     def is_corporation(self):
         return False
 
-# %% ../../../nbs/game/engine/00_core.ipynb 19
+# %% ../../../nbs/game/engine/00_core.ipynb 20
 class Passer:
     def __init__(self):
         self._passed = False
@@ -183,7 +184,7 @@ class Passer:
     def unpass(self):
         self._passed = False
 
-# %% ../../../nbs/game/engine/00_core.ipynb 21
+# %% ../../../nbs/game/engine/00_core.ipynb 22
 import re
 
 
@@ -291,10 +292,10 @@ class SharePrice:
         self.types = [t for t in self.types if t not in self.PAR_TYPES]
         self.type = self.types[0] if self.types else None
 
-# %% ../../../nbs/game/engine/00_core.ipynb 23
+# %% ../../../nbs/game/engine/00_core.ipynb 24
 class ShareHolder:
     def __init__(self):
-        self._shares_by_corporation = {}
+        self._shares_by_corporation = defaultdict(list)
 
     @property
     def shares(self):
@@ -303,13 +304,13 @@ class ShareHolder:
         ]
 
     @property
-    def shares_by_corporation(self, sorted=False):
-        if sorted:
-            self._shares_by_corporation = dict(
-                sorted(self._shares_by_corporation.items())
-            )
+    def shares_by_corporation(self):
         return self._shares_by_corporation
 
+    @property
+    def shares_by_corporation_sorted(self):
+        return dict(sorted(self._shares_by_corporation.items()))
+    
     def shares_of(self, corporation):
         return self._shares_by_corporation.get(corporation, [])
 
@@ -343,7 +344,7 @@ class ShareHolder:
         num = percent / corporation.share_percent
         return int(num) if ceil else num
 
-# %% ../../../nbs/game/engine/00_core.ipynb 25
+# %% ../../../nbs/game/engine/00_core.ipynb 26
 class Spender:
     def __init__(self):
         self.cash = 0
@@ -375,7 +376,7 @@ class Spender:
 
         receiver.cash += cash
 
-# %% ../../../nbs/game/engine/00_core.ipynb 27
+# %% ../../../nbs/game/engine/00_core.ipynb 28
 class BaseMovement:
     def __init__(self, market):
         self.market = market
@@ -484,7 +485,7 @@ class ZigZagMovement(BaseMovement):
             c += 1
         return [r, c]
 
-# %% ../../../nbs/game/engine/00_core.ipynb 29
+# %% ../../../nbs/game/engine/00_core.ipynb 30
 class StockMarket:
     def __init__(
         self,
@@ -509,7 +510,7 @@ class StockMarket:
 
         for row in self.market:
             for price in row:
-                if price and price.can_par:
+                if price and price.can_par():
                     self.par_prices.append(price)
                 if price and price.type == "close":
                     self.has_close_cell = True
@@ -628,7 +629,7 @@ class StockMarket:
         self.par_prices.remove(price)
         price.remove_par()
 
-# %% ../../../nbs/game/engine/00_core.ipynb 32
+# %% ../../../nbs/game/engine/00_core.ipynb 33
 class Phase:
     def __init__(self, phases, game):
         self.index = 0
@@ -665,10 +666,10 @@ class Phase:
         )
 
     def train_limit(self, entity):
-        if isinstance(self.train_limit, dict):
-            return self.train_limit.get(entity.type, 0)
+        if isinstance(self._train_limit, dict):
+            return self._train_limit.get(entity.type, 0)
         else:
-            return self.train_limit
+            return self._train_limit
 
     def available(self, phase_name):
         if not phase_name:
@@ -684,7 +685,7 @@ class Phase:
 
         self.name = phase["name"]
         self.operating_rounds = phase.get("operating_rounds")
-        self.train_limit = phase.get("train_limit")
+        self._train_limit = phase.get("train_limit")
         self.tiles = list(phase.get("tiles", []))
         self.events = phase.get("events", [])
         self.status = phase.get("status", [])
@@ -728,7 +729,7 @@ class Phase:
         else:
             return str(train_limit)
 
-# %% ../../../nbs/game/engine/00_core.ipynb 37
+# %% ../../../nbs/game/engine/00_core.ipynb 38
 PUBLISHER_INFO = {
     "all_aboard_games": {
         "name": "All-Aboard Games",

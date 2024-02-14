@@ -66,6 +66,9 @@ from random import choice, randint
 from collections import defaultdict
 from itertools import combinations
 
+
+from IPython.core.debugger import set_trace
+
 # %% ../../../../nbs/game/engine/game/00_base.ipynb 6
 from ..core import PUBLISHER_INFO
 
@@ -167,7 +170,7 @@ class Meta:
     def game_variants(cls):
         if not hasattr(cls, "_game_variants"):
             cls._game_variants = {
-                v["sym"]: {**v, "meta": Engine.meta_by_title(v["title"])}
+                v["sym"]: {**v, "meta": meta_by_title(v["title"])}
                 for v in cls.GAME_VARIANTS
             }
         return cls._game_variants
@@ -211,7 +214,7 @@ class BaseGame:
         entities,
         map,
         id=0,
-        actions=[],
+        actions=None,
         at_action=None,
         pin=None,
         strict=False,
@@ -233,7 +236,7 @@ class BaseGame:
         self.finished = False
         self.log = GameLog(self)
         self.queued_log = []
-        self.actions = actions
+        self.actions = actions if actions else []
         self.raw_actions = []
         self.turn_start_action_id = 0
         self.last_turn_start_action_id = 0
@@ -305,12 +308,14 @@ class BaseGame:
         self.corporations = self.init_corporations(self.stock_market)
         self.closing_queue = {}
         self.corporations_are_closing = False
+        self._axes = None
+        self._crowded_corps = None
         self.bank = self.init_bank()
         self.tiles = self.init_tiles()
         self.all_tiles = self.tiles  # Assign to eliminate duplicate instantiation
         self.optional_tiles()
         self.tile_groups = []
-        self.cert_limit = self.init_cert_limit()
+        self._cert_limit = self.init_cert_limit()
         self.removals = []
 
         self.depot = self.init_train_handler()
@@ -321,8 +326,7 @@ class BaseGame:
 
         self.cities = [
             city
-            for hex_obj in self.hexes
-            for tile in (hex_obj.tile, *hex_obj.tile.upgrades)
+            for tile in ([hex.tile for hex in self.hexes] + self.tiles)
             for city in tile.cities
         ]
 
@@ -331,12 +335,12 @@ class BaseGame:
 
         self.round_history = []
         self.setup_preround()
-        self.round = self.init_round()
-
         self.cache_objects()
         self.connect_hexes()
 
         self.init_company_abilities()
+        self.round = self.init_round()
+        self.initial_round_type = self.round.__class__
 
         self.check_optional_rules()
         self.log_optional_rules()
@@ -354,7 +358,7 @@ class BaseGame:
             self.log.append(
                 "Please do not submit bug reports for pinned games. Pinned games cannot be debugged."
             )
-            if self.DEV_STAGE == "beta":
+            if self.metadata.DEV_STAGE == "beta":
                 self.log.append(
                     "Please note, pinned games may be deleted after 7 days."
                 )
@@ -381,7 +385,7 @@ class BaseGame:
     # all_but_one - all but one
     BANKRUPTCY_ENDS_GAME_AFTER = "one"
     BANK_CASH = 12000
-    CURRENCY_FORMAT_STR = "$%s"
+    CURRENCY_FORMAT_STR = "${}"
     FORMAT_UPGRADES_ON_HEXES = False
     STARTING_CASH = {}
     HEXES = {}
@@ -466,8 +470,6 @@ class BaseGame:
     COMPANY_CLASS = Company
     # Class for defining a corporation
     CORPORATION_CLASS = Corporation
-    # List of corporations in the game
-    CORPORATIONS = []
     # Class for defining a train
     TRAIN_CLASS = Train
     # Class for defining a depot
@@ -666,7 +668,7 @@ class BaseGame:
             return
 
         self.log.append("Optional rules used in this game:")
-        for optional_rule in self.OPTIONAL_RULES:
+        for optional_rule in self.metadata.OPTIONAL_RULES:
             if optional_rule["sym"] in self.optional_rules:
                 self.log.append(
                     f" * {optional_rule['short_name']}: {optional_rule['desc']}"
@@ -676,7 +678,7 @@ class BaseGame:
         return self.game_hexes()
 
     def game_hexes(self):
-        return self.HEXES
+        return self.map.HEXES
 
     def hex_neighbor(self, hex, edge):
         if hex.neighbors.get(edge):
@@ -719,7 +721,7 @@ class BaseGame:
         return self.hex_by_id(f"{new_letter}{number}")
 
     def location_name(self, coord):
-        return self.LOCATION_NAMES.get(coord)
+        return self.map.LOCATION_NAMES.get(coord)
 
     def optional_tiles(self):
         pass
@@ -814,6 +816,7 @@ class BaseGame:
         # By default assume normal 1830esk buy shares
         return [ProgramBuyShares, ProgramSharePass]
 
+    # Note: this class expects actions in to_dict() form
     @staticmethod
     def filtered_actions(actions):
         if not actions:
@@ -823,22 +826,22 @@ class BaseGame:
         filtered_actions = [None] * len(actions)
 
         for index, action in enumerate(actions):
-            if action["type"] == "undo":
+            if action["type"] == "Undo":
                 if "action_id" in action:
                     undo_to = (
                         actions.index(lambda a: a["id"] == action["action_id"]) + 1
                         if action["action_id"]
                         else filtered_actions[::-1].index(
-                            lambda a: a and a["type"] != "message"
+                            lambda a: a and a["type"] != "Message"
                         )
                     )
                 else:
                     undo_to = (
                         filtered_actions[::-1].index(
-                            lambda a: a and a["type"] != "message"
+                            lambda a: a and a["type"] != "Message"
                         )
                         if filtered_actions[::-1].index(
-                            lambda a: a and a["type"] != "message"
+                            lambda a: a and a["type"] != "Message"
                         )
                         is not None
                         else 0
@@ -847,17 +850,17 @@ class BaseGame:
                 undo_actions = [
                     (a, undo_to + i)
                     for i, a in enumerate(filtered_actions[undo_to:index])
-                    if a and a["type"] != "message"
+                    if a and a["type"] != "Message"
                 ]
                 active_undos.extend(undo_actions)
                 filtered_actions[undo_to:index] = [None] * len(undo_actions)
 
-            elif action["type"] == "redo":
+            elif action["type"] == "Redo":
                 undo_actions = active_undos.pop()
                 for undo_action in undo_actions:
                     filtered_actions[undo_action[1]] = undo_action[0]
 
-            elif action["type"] == "message":
+            elif action["type"] == "Message":
                 filtered_actions[index] = action
 
             else:
@@ -868,7 +871,7 @@ class BaseGame:
 
     def initialize_actions(self, actions, at_action=None):
         self.loading = True if not self.strict else False
-        self.filtered_actions, active_undos = self.filtered_actions(actions)
+        self._filtered_actions, active_undos = self.filtered_actions(actions)
 
         # Store all actions for history navigation
         self.raw_all_actions = actions
@@ -887,10 +890,10 @@ class BaseGame:
         self, action, add_auto_actions=False, validate_auto_actions=False
     ):
         if isinstance(action, dict):
-            action = BaseAction.action_from_h(action, self)
+            action = BaseAction.action_from_dict(action, self)
 
         action.id = self.current_action_id + 1
-        self.raw_actions.append(action.to_h())
+        self.raw_actions.append(action.to_dict())
 
         if isinstance(action, Undo) or isinstance(action, Redo):
             return self.clone(self.raw_actions)
@@ -919,7 +922,7 @@ class BaseGame:
             else:
                 action.clear_cache()
                 action.auto_actions = auto_actions
-                self.raw_actions[-1] = action.to_h()
+                self.raw_actions[-1] = action.to_dict()
         else:
             for a in action.auto_actions:
                 self.process_single_action(a)
@@ -942,7 +945,7 @@ class BaseGame:
         self.round.process_action(action)
         self.action_processed(action)
 
-        end_timing = self.game_end_check[-1] if self.game_end_check else None
+        end_timing = self.game_end_check()[-1] if self.game_end_check() else None
         if end_timing == "immediate":
             self.end_game()
         while self.round.finished() and not self.finished:
@@ -960,6 +963,7 @@ class BaseGame:
         self.broken_action = action
 
     def transition_to_next_round(self):
+        #set_trace()
         self.store_player_info()
         self.next_round()
         self.check_programmed_actions()
@@ -982,7 +986,7 @@ class BaseGame:
         if len(actions_a) != len(actions_b):
             return False
         return all(
-            a.to_h(exclude=["created_at"]) == b.to_h(exclude=["created_at"])
+            a.to_dict(exclude=["created_at"]) == b.to_dict(exclude=["created_at"])
             for a, b in zip(actions_a, actions_b)
         )
 
@@ -998,6 +1002,9 @@ class BaseGame:
                     self.player_value(p),
                 )
             )
+
+    def preprocess_action(self, action):
+        pass
 
     def all_corporations(self):
         return self.corporations
@@ -1017,6 +1024,7 @@ class BaseGame:
             entity for entity in (self.corporations + self.minors) if entity.operated
         ]
 
+    @property
     def current_action_id(self):
         return (
             self.raw_actions[-1]["id"]
@@ -1029,7 +1037,9 @@ class BaseGame:
 
     def previous_action_id_from(self, action_id):
         filtered_actions_rev = (
-            reversed(self.filtered_actions) if hasattr(self, "filtered_actions") else []
+            reversed(self._filtered_actions)
+            if hasattr(self, "_filtered_actions")
+            else []
         )
         for action in filtered_actions_rev:
             if action and action["id"] < action_id and action["type"] != "message":
@@ -1038,7 +1048,7 @@ class BaseGame:
 
     def next_action_id_from(self, action_id):
         for action in (
-            self.filtered_actions if hasattr(self, "filtered_actions") else []
+            self._filtered_actions if hasattr(self, "filtered_actions") else []
         ):
             if action and action["id"] > action_id and action["type"] != "message":
                 return action["id"]
@@ -1056,7 +1066,7 @@ class BaseGame:
                 continue
             if action["id"] > id:
                 break
-            if self.filtered_actions[index]:
+            if self._filtered_actions[index]:
                 self.process_action(action)
                 self.raw_actions[-1]["id"] = action["id"]
                 self.last_processed_action = action["id"]
@@ -1118,18 +1128,20 @@ class BaseGame:
 
     @property
     def layout(self):
-        return self.LAYOUT
+        return self.map.LAYOUT
 
+    @property
     def axes(self):
-        if self.axes:
-            return self.axes
+        if self._axes:
+            return self._axes
         elif self.layout == "flat":
-            return {"x": "letter", "y": "number"}
+            self._axes = {"x": "letter", "y": "number"}
         elif self.layout == "pointy":
-            return {"x": "number", "y": "letter"}
+            self._axes = {"x": "number", "y": "letter"}
+        return self._axes
 
     def format_currency(self, val):
-        return self.CURRENCY_FORMAT_STR % val
+        return self.CURRENCY_FORMAT_STR.format(val)
 
     def format_revenue_currency(self, val):
         return self.format_currency(val)
@@ -1152,10 +1164,12 @@ class BaseGame:
             company
             for company in self.companies
             if company.owner
+            and company.owner.is_player()
             and entity != company.owner
             and not self.abilities(company, "no_buy")
         ]
 
+    @property
     def buyable_bank_owned_companies(self):
         return [
             company
@@ -1165,7 +1179,9 @@ class BaseGame:
 
     def after_buy_company(self, player, company, price):
         for ability in self.abilities(company, "shares"):
+            print(ability)
             for share in ability.shares:
+                print(share.corporation)
                 if share.president:
                     self.round.companies_pending_par.append(company)
                 else:
@@ -1315,8 +1331,8 @@ class BaseGame:
         return sorted(all_bundles, key=lambda bundle: bundle.percent)
 
     def partial_bundles_for_presidents_share(self, corporation, bundle, percent):
-        normal_percent = corporation.share_percent
-        difference = corporation.presidents_percent - normal_percent
+        normal_percent = corporation.share_percent()
+        difference = corporation.presidents_percent() - normal_percent
         num_partial_bundles = difference / normal_percent
         return [
             ShareBundle(bundle[:], percent - (normal_percent * n))
@@ -1659,7 +1675,7 @@ class BaseGame:
             if owner != self.bank:
                 revenue = company.revenue
                 self.bank.spend(revenue, owner)
-                self.log(
+                self.log.append(
                     f"{owner.name} collects {self.format_currency(revenue)} from {company.name}"
                 )
 
@@ -1690,7 +1706,9 @@ class BaseGame:
                     return
                 hexes = [hex] if hex else self.home_token_locations(corporation)
                 if hexes:
-                    self.log(f"{corporation.name} must choose city for home token")
+                    self.log.append(
+                        f"{corporation.name} must choose city for home token"
+                    )
                     self.round.pending_tokens.append(
                         {
                             "entity": corporation,
@@ -1707,10 +1725,10 @@ class BaseGame:
             )
             token = corporation.find_token_by_type()
             if city and city.tokenable(corporation, tokens=token):
-                self.log(f"{corporation.name} places a token on {hex.name}")
+                self.log.append(f"{corporation.name} places a token on {hex.name}")
                 city.place_token(corporation, token)
             elif self.home_token_can_be_cheater():
-                self.log(f"{corporation.name} places a token on {hex.name}")
+                self.log.append(f"{corporation.name} places a token on {hex.name}")
                 city.place_token(corporation, token, cheater=True)
 
     def graph_for_entity(self, entity):
@@ -1775,7 +1793,7 @@ class BaseGame:
             return
 
         owners = ", ".join([a.owner.name for a in abilities])
-        self.log(
+        self.log.append(
             f"{spender.name} receives a discount of {self.format_currency(discount)} from {owners}"
         )
 
@@ -1786,7 +1804,7 @@ class BaseGame:
 
         player.bankrupt = True
         if self.CERT_LIMIT_CHANGE_ON_BANKRUPTCY:
-            self.cert_limit = self.init_cert_limit()
+            self._cert_limit = self.init_cert_limit()
 
     def tile_lays(self, entity):
         return self.TILE_LAYS
@@ -1878,12 +1896,12 @@ class BaseGame:
         return self.MULTIPLE_BUY_ONLY_FROM_MARKET
 
     def float_corporation(self, corporation):
-        self.log(f"{corporation.name} floats")
+        self.log.append(f"{corporation.name} floats")
         if corporation.capitalization not in ["incremental", "none"]:
             self.bank.spend(
                 corporation.par_price.price * corporation.total_shares, corporation
             )
-            self.log(
+            self.log.append(
                 f"{corporation.name} receives {self.format_currency(corporation.cash)}"
             )
 
@@ -1892,7 +1910,7 @@ class BaseGame:
 
     def close_corporation(self, corporation, quiet=False):
         if not quiet:
-            self.log(f"{corporation.name} closes")
+            self.log.append(f"{corporation.name} closes")
 
         for hex in self.hexes:
             for city in hex.tile.cities:
@@ -1929,7 +1947,7 @@ class BaseGame:
                 self.depot.reclaim_train(train)
 
         if corporation.companies:
-            self.log(
+            self.log.append(
                 f"{corporation.name}'s companies close: {', '.join([c.sym for c in corporation.companies])}"
             )
             for company in corporation.companies[:]:
@@ -1950,7 +1968,7 @@ class BaseGame:
             self.minors.discard(corporation)
 
         corporation.close()
-        self.cert_limit = self.init_cert_limit()
+        self._cert_limit = self.init_cert_limit()
 
         self.close_corporations_in_close_cell()
 
@@ -2056,7 +2074,7 @@ class BaseGame:
                         for share in ability.shares
                     )
                     self.bank.spend(amount, corporation)
-                    self.log(
+                    self.log.append(
                         f"{corporation.name} receives {self.format_currency(amount)} from {company.name}"
                     )
 
@@ -2072,7 +2090,7 @@ class BaseGame:
                         continue
                     company.close()
                     if not ability.silent:
-                        self.log(f"{company.name} closes")
+                        self.log.append(f"{company.name} closes")
 
     def train_help(self, entity, runnable_trains, routes):
         return []
@@ -2122,7 +2140,7 @@ class BaseGame:
         callable=False,
     ):
         if not entity:
-            return None
+            return []
 
         return [
             ability
@@ -2181,7 +2199,7 @@ class BaseGame:
         self.remove_train(train)
         train.owner = operator
         operator.trains.append(train)
-        self.crowded_corps = None
+        self._crowded_corps = None
         self.close_companies_on_event(operator, "bought_train")
 
     def discountable_trains_for(self, corporation):
@@ -2213,7 +2231,7 @@ class BaseGame:
                 self.depot.remove_train(train)
             else:
                 train.owner.trains.remove(train)
-            self.crowded_corps = None
+            self._crowded_corps = None
 
     def rust(self, train):
         train.rusted = True
@@ -2227,18 +2245,22 @@ class BaseGame:
             else len(entity.trains)
         )
 
+    @property
     def crowded_corps(self):
-        return [
+        if self._crowded_corps:
+            return self._crowded_corps
+        self._crowded_corps = [
             c
             for c in self.minors + self.corporations
             if self.num_corp_trains(c) > self.train_limit(c)
         ]
+        return self._crowded_corps
 
     def transfer(self, ownable_type, from_entity, to_entity):
         ownables = getattr(from_entity, ownable_type)
         to_ownables = getattr(to_entity, ownable_type)
 
-        self.crowded_corps = None if ownable_type == "trains" else self.crowded_corps
+        self._crowded_corps = None if ownable_type == "trains" else self._crowded_corps
 
         transferred = list(ownables)
         ownables.clear()
@@ -2303,7 +2325,7 @@ class BaseGame:
                 owners[t.owner.name] += 1
             self.rust(t)
 
-        self.crowded_corps = None
+        self._crowded_corps = None
 
         if obsolete_trains:
             self.log.append(
@@ -2326,7 +2348,7 @@ class BaseGame:
         pass
 
     def assignment_tokens(self, assignment, simple_logos=False):
-        if isinstance(assignment, Engine.Corporation):
+        if isinstance(assignment, Corporation):
             return (
                 assignment.simple_logo
                 if simple_logos and assignment.simple_logo
@@ -2374,7 +2396,7 @@ class BaseGame:
         return self.MARKET_SHARE_LIMIT
 
     def cert_limit(self, player=None):
-        return self.cert_limit
+        return self._cert_limit
 
     def corporation_show_interest(self):
         return True
@@ -2420,17 +2442,22 @@ class BaseGame:
 
     def init_cert_limit(self):
         cert_limit = self.game_cert_limit
+        print(cert_limit)
+        print(cert_limit.items())
+        print(list(cert_limit.items())[0])
         if isinstance(cert_limit, dict):
             player_count = len(
                 [player for player in self.players if not player.bankrupt]
             )
-            cert_limit = cert_limit.get(player_count, cert_limit.values()[0])
+            _, default = list(cert_limit.items())[0]
+            cert_limit = cert_limit.get(player_count, default)
         if isinstance(cert_limit, dict):
             cert_limit = min(
                 (k, v) for k, v in cert_limit.items() if k >= len(self.corporations)
             )[1] or next(iter(cert_limit.values()))
-        return cert_limit or self.cert_limit
+        return cert_limit or self._cert_limit
 
+    @property
     def game_cert_limit(self):
         return self.CERT_LIMIT
 
@@ -2519,7 +2546,7 @@ class BaseGame:
 
     @property
     def game_corporations(self):
-        return self.CORPORATIONS
+        return self.entities.CORPORATIONS
 
     def init_hexes(self, companies, corporations):
         blockers = defaultdict(list)
@@ -2537,14 +2564,9 @@ class BaseGame:
 
         reservations = defaultdict(list)
         for c in self.reservation_corporations():
-            for coord, city in zip(c.coordinates, c.city):
-                for idx, coord_item in enumerate(coord):
-                    reservations[coord_item].append(
-                        {
-                            "entity": c,
-                            "city": city if isinstance(c.city, list) else c.city,
-                        }
-                    )
+            for idx, coord in enumerate(c.coordinates):
+                city = c.city[idx] if isinstance(c.city, list) else c.city
+                reservations[coord].append({"entity": c, "city": city})
 
         for c in corporations + companies:
             for ability in self.abilities(c, "reservation"):
@@ -2562,7 +2584,7 @@ class BaseGame:
         hexes = []
 
         for color, hex_list in optional_hexes.items():
-            for coords, tile_string in hex_list:
+            for coords, tile_string in hex_list.items():
                 for idx, coord in enumerate(coords):
                     if color == "empty":
                         hexes.append(
@@ -2572,7 +2594,7 @@ class BaseGame:
 
                     try:
                         tile = Tile.for_tile(tile_string, preprinted=True, index=idx)
-                    except Engine.GameError:
+                    except GameError:
                         tile = Tile.from_code(
                             coord, color, tile_string, preprinted=True, index=idx
                         )
@@ -2598,7 +2620,9 @@ class BaseGame:
                             axes=self.axes,
                             tile=tile,
                             location_name=location_name,
-                            hide_location_name=self.HEXES_HIDE_LOCATION_NAMES[coord],
+                            hide_location_name=self.HEXES_HIDE_LOCATION_NAMES.get(
+                                coord
+                            ),
                         )
                     )
 
@@ -2661,6 +2685,7 @@ class BaseGame:
     def init_company_abilities(self):
         for company in self.companies:
             abilities = self.abilities(company, "shares")
+            print(abilities)
             ability = abilities[0] if abilities else None
             if not ability:
                 continue
@@ -2698,8 +2723,12 @@ class BaseGame:
                             f"{company.name} comes with a {share.percent}% share of {corporation.name}"
                         )
                 else:
+                    print(
+                        f"adding share {self.share_by_id(share)} for id {share} to ability {ability}"
+                    )
                     real_shares.append(self.share_by_id(share))
 
+            print(f"setting {ability}'s shares to {real_shares}")
             ability.shares = real_shares
 
     def init_share_pool(self):
@@ -2709,7 +2738,7 @@ class BaseGame:
         coordinates = {tuple([h.x, h.y]): h for h in self.hexes}
 
         for hex in self.hexes:
-            for xy, direction in Hex.DIRECTIONS[hex.layout]:
+            for xy, direction in Hex.DIRECTIONS[hex.layout].items():
                 x, y = xy
                 neighbor = coordinates.get((hex.x + x, hex.y + y))
                 if not neighbor:
@@ -2736,20 +2765,20 @@ class BaseGame:
         if isinstance(self.round, StockRound):
             self.operating_rounds = self.phase.operating_rounds
             self.reorder_players()
-            self.new_operating_round()
+            self.round = self.new_operating_round()
         elif isinstance(self.round, OperatingRound):
             if self.round.round_num < self.operating_rounds:
                 self.or_round_finished()
-                self.new_operating_round(self.round.round_num + 1)
+                self.round = self.new_operating_round(self.round.round_num + 1)
             else:
                 self.turn += 1
                 self.or_round_finished()
                 self.or_set_finished()
-                self.new_stock_round()
-        elif isinstance(self.round, type(self.init_round())):
+                self.round = self.new_stock_round()
+        elif isinstance(self.round, self.initial_round_type):
             self.init_round_finished()
             self.reorder_players()
-            self.new_stock_round()
+            self.round = self.new_stock_round()
 
     def clear_programmed_actions(self):
         self.programmed_actions.clear()
@@ -2937,38 +2966,34 @@ class BaseGame:
 
         return player_order.index(entity) if entity in player_order else None
 
+    @property
     def next_sr_player_order(self):
         return self.NEXT_SR_PLAYER_ORDER
 
     def reorder_players(self, order=None, log_player_order=False):
         order = order or self.next_sr_player_order
+    
         if order == "after_last_to_act":
-            player = self.round.entity
-            player_index = self.players.index(player)
-            self.players = self.players[player_index:] + self.players[:player_index]
+            player = next(filter(lambda p: not p.bankrupt, self.players), None)
+            if player:
+                self.players = self.players[self.players.index(player):] + self.players[:self.players.index(player)]
         elif order == "first_to_pass":
-            self.players = self.round.pass_order if self.round.pass_order else []
+            self.players = round.pass_order if round.pass_order else self.players
         elif order == "most_cash":
-            current_order = self.players.copy()
-            self.players.sort(
-                key=lambda p: (p.cash, current_order.index(p)), reverse=True
-            )
+            current_order = self.players[:]
+            current_order.reverse()
+            self.players.sort(key=lambda p: (p.cash, current_order.index(p)), reverse=True)
         elif order == "least_cash":
-            current_order = self.players.copy()
+            current_order = self.players[:]
             self.players.sort(key=lambda p: (p.cash, current_order.index(p)))
-
+            
         if log_player_order:
-            player_names = [
-                player.name for player in self.players if not player.bankrupt
-            ]
-            self.log.append(f"Priority order: {', '.join(player_names)}")
+            player_names = ", ".join(p.name for p in self.players if not p.bankrupt)
+            log_message = f"Priority order: {player_names}"
         else:
-            priority_deal_player = (
-                self.players[0].name
-                if self.players and not self.players[0].bankrupt
-                else ""
-            )
-            self.log.append(f"{priority_deal_player} has priority deal")
+            log_message = f"{self.players[0].name} has priority deal"
+    
+        self.log.append(log_message)
 
     def new_auction_round(self):
         return AuctionRound(
