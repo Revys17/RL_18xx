@@ -28,22 +28,32 @@ class BasePart:
     def hex(self):
         return self.tile.hex if self.tile else None
 
-    def __le__(self, other):
-        return isinstance(self, other.__class__)
-
     def __lt__(self, other):
-        if self.edge and other.edge:
-            return self.num - other.num
-        elif self.edge:
-            return -1
-        elif other.edge:
-            return 1
+        if self.is_edge and other.is_edge:
+            return self.num < other.num
+        elif self.is_edge:
+            return True
+        elif other.is_edge:
+            return False
         else:
-            return 0
+            return False
 
     def __eq__(self, other):
-        return self.num == other.num  # Implement equality comparison if neede
+        return self.num == other.num and self.is_edge == other.is_edge
 
+    def __gt__(self, other):
+        if self.is_edge and other.is_edge:
+            return self.num > other.num
+        elif self.is_edge:
+            return False
+        elif other.is_edge:
+            return True
+        else:
+            return False
+
+    def __hash__(self):
+        return hash((self.id, self.tile, self.loc, self.index))
+    
     def rotate(self, ticks):
         return self
 
@@ -773,7 +783,7 @@ class Border(BasePart):
             color and color.lower()
         )  # Converting to lowercase for symbol-like behavior
 
-    def is_border(self):
+    def border(self):
         return True
 
 # %% ../../../nbs/game/engine/05_graph.ipynb 38
@@ -2617,7 +2627,7 @@ class Tile:
             color, code = "brown", TileConfig.BROWNSEPIA[name]
             code = "stripes=color:sepia;" + code if code else "stripes=color:sepia"
         else:
-            raise ValueError(f"Tile '{name}' not found")
+            raise GameError(f"Tile '{name}' not found")
 
         return cls.from_code(name, color, code, **opts)
 
@@ -2633,7 +2643,8 @@ class Tile:
             )
 
             part = cls.part(type_param, params, cache)
-            parts.append(part)
+            if part:
+                parts.append(part)
 
         return parts
 
@@ -2641,6 +2652,7 @@ class Tile:
     def from_code(cls, name, color, code, **opts):
         return cls(name=name, color=color, code=code, parts=cls.decode(code), **opts)
 
+    @staticmethod
     def part(type, params, cache):
         if type == "path":
             params = {k: (int(v) if k == "lanes" else v) for k, v in params.items()}
@@ -2707,9 +2719,7 @@ class Tile:
         elif type == "future_label":
             return FutureLabel(**params)
 
-        # Add other part types as necessary
-        else:
-            raise ValueError(f"Unknown part type: {type}")
+        return None
 
     def __init__(
         self,
@@ -3430,7 +3440,7 @@ class Hex:
         token.place(self)
         self.tokens.append(token)
         # Assuming Part.Icon is a defined class elsewhere, similar to Ruby's OpenStruct or Struct for simple data holding
-        icon = Part.Icon(
+        icon = Icon(
             "", token.corporation.id, True, blocks_lay, preprinted, loc=loc
         )
         icon.image = logo or token.corporation.logo

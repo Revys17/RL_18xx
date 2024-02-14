@@ -16,7 +16,7 @@ __all__ = ['steps', 'BaseStep', 'Auctioner', 'Programmer', 'ShareBuying', 'Emerg
 from .core import Assignable, GameError, Passer
 from .entities import Corporation, Minor, Share
 from rl18xx.game.engine.actions import (
-    BuyTrain,
+    BuyTrain as BuyTrainAction,
     Bid,
     OperatingInfo,
     Pass,
@@ -51,10 +51,12 @@ from rl18xx.game.engine.actions import (
     ChooseAbility,
     TakeLoan,
 )
-from .graph import Hex, Tile, Token
+from .graph import Hex, Tile, Token as TokenPiece
 
 import copy
 from collections import defaultdict
+
+from IPython.core.debugger import set_trace
 
 # %% ../../../nbs/game/engine/06_round.ipynb 7
 class BaseStep(Passer):
@@ -72,7 +74,7 @@ class BaseStep(Passer):
 
     def setup(self):
         pass
-    
+
     def pass_description(self):
         return "Pass"
 
@@ -127,7 +129,7 @@ class BaseStep(Passer):
 
     @property
     def blocking(self):
-        return self.blocks and not self.current_actions
+        return self.blocks and self.current_actions
 
     @property
     def blocks(self):
@@ -171,7 +173,8 @@ class Auctioner:
 
     def setup_auction(self):
         self.bids = defaultdict(list)
-    
+
+    @property
     def auctioneer(self):
         return True
 
@@ -181,9 +184,11 @@ class Auctioner:
         else:
             return "Pass"
 
+    @property
     def visible(self):
         return True
 
+    @property
     def players_visible(self):
         return True
 
@@ -195,6 +200,7 @@ class Auctioner:
             self.resolve_bids()
 
     def pass_auction(self, entity):
+        print(f"{entity.name} passes on {self.auctioning.name}")
         self.log.append(f"{entity.name} passes on {self.auctioning.name}")
         self.remove_from_auction(entity)
 
@@ -236,8 +242,9 @@ class Auctioner:
         else:
             return bid.minor
 
-    def auctioning(self):
-        return self.active_auction(lambda company, _: company)
+    def auctioning_company(self):
+        company, _ = self.active_auction()
+        return company
 
     def highest_bid(self, company):
         return max(self.bids[company], key=lambda bid: bid.price, default=None)
@@ -264,8 +271,8 @@ class Auctioner:
             )
 
         bids = self.bids[company]
-        bids = [b for b in bids if b.entity != entity]
-        bids.append(bid)
+        self.bids[company] = [b for b in bids if b.entity != entity]
+        self.bids[company].append(bid)
 
     def replace_bid(self, bid):
         company = self.bid_target(bid)
@@ -393,7 +400,7 @@ class ShareBuying:
         if not bundle or not entity:
             return
         if (
-            bundle.owner.player
+            bundle.owner.is_player()
             and not self.game.BUY_SHARE_FROM_OTHER_PLAYER
             and (
                 not self.game.CORPORATE_BUY_SHARE_ALLOW_BUY_FROM_PRESIDENT
@@ -491,7 +498,7 @@ class Train(EmergencyMoney):
         self.last_share_sold_price = None
         self.last_share_issued_price = None
         self.corporations_sold = []
-    
+
     def can_buy_train(self, entity=None, shell=None):
         entity = entity or self.round.current_entity
         can_buy_normal = self.room(entity) and self.buying_power(
@@ -693,9 +700,9 @@ class BuyTrain(BaseStep, Train):
 
         # TODO: Not sure this is right
         if self.president_may_contribute(entity):
-            return [SellShares, BuyTrain]
+            return [SellShares, BuyTrainAction]
         elif self.can_buy_train(entity):
-            return [BuyTrain, Pass]
+            return [BuyTrainAction, Pass]
 
         return []
 
@@ -763,8 +770,8 @@ class PassableAuction(Auctioner):
         company = self.auctioning
         bids = self.bids[company]
         if not bids:
-            return
-        yield company, bids
+            return None, None
+        return company, bids
 
     def initial_auction_entities(self):
         return self.entities
@@ -852,7 +859,7 @@ class Tokener:
 
     def setup(self):
         self.round.tokened = False
-    
+
     @property
     def round_state(self):
         return {
@@ -992,7 +999,7 @@ class Tokener:
     ):
         if special_ability and special_ability.type == "teleport":
             if not special_ability.from_owner:
-                token = Token(entity)
+                token = TokenPiece(entity)
                 entity.tokens.append(token)
             token.price = 0
             return token, special_ability
@@ -1012,9 +1019,9 @@ class Tokener:
                     logo="open_city",
                     tokens=[0],
                 )
-                token = Token(neutral_corp, type="neutral")
+                token = TokenPiece(neutral_corp, type="neutral")
             elif ability.owner.is_company() and not ability.from_owner:
-                token = Token(entity)
+                token = TokenPiece(entity)
                 entity.tokens.append(token)
 
             if ability.teleport_price:
@@ -1094,9 +1101,7 @@ class TokenMerger:
 
         tokens = []
         for token in self.others_tokens(others):
-            new_token = Token(
-                surviving, price=price_for_new_token
-            )  # Assuming Token is defined elsewhere
+            new_token = TokenPiece(surviving, price=price_for_new_token)
             if token.hex:
                 used.append(new_token)
                 token.swap(new_token, check_tokenable=check_tokenable)
@@ -1292,9 +1297,11 @@ class Bankrupt(BaseStep):
             return []
         return self.ACTIONS
 
+    @property
     def description(self):
         return "Bankrupt"
 
+    @property
     def blocks(self):
         return False
 
@@ -1327,7 +1334,7 @@ class Bankrupt(BaseStep):
     def sell_bankrupt_shares(self, player, corp):
         self.log.append(f"-- {player.name} goes bankrupt and sells remaining shares --")
 
-        for corporation, _ in player.shares_by_corporation(sorted=True):
+        for corporation, _ in player.shares_by_corporation_sorted:
             if not corporation.share_price:
                 continue  # Skip corporations that have not parred
 
@@ -1350,7 +1357,7 @@ class BuyCompany(BaseStep):
 
     def setup(self):
         self.blocks = self.opts.get("blocks", False)
-    
+
     def actions(self, entity):
         if entity.is_minor():
             return []
@@ -1374,9 +1381,11 @@ class BuyCompany(BaseStep):
             <= self.buying_power(entity)
         )
 
+    @property
     def blocks(self):
         return self.opts.get("blocks", False)
 
+    @property
     def description(self):
         return "Buy Companies"
 
@@ -1481,22 +1490,22 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
     def actions(self, entity):
         if entity != self.current_entity:
             return []
-        actions = []
         if self.must_sell(entity):
+            return [SellShares]
+        actions = []
+        if self.can_buy_any(entity):
+            actions.append(BuyShares)
+        if self.can_ipo_any(entity):
+            actions.append(Par)
+        if self.purchasable_companies(entity) or self.buyable_bank_owned_companies(
+            entity
+        ):
+            actions.append(BuyCompanyAction)
+        if self.can_sell_any(entity):
             actions.append(SellShares)
-        else:
-            if self.can_buy_any(entity):
-                actions.append(BuyShares)
-            if self.can_ipo_any(entity):
-                actions.append(Par)
-            if not self.purchasable_companies(
-                entity
-            ) and not self.buyable_bank_owned_companies(entity):
-                actions.append(BuyCompanyAction)
-            if self.can_sell_any(entity):
-                actions.append(SellShares)
-            if not actions:
-                actions.append(Pass)
+
+        if actions:
+            actions.append(Pass)
         return actions
 
     def log_pass(self, entity):
@@ -1509,6 +1518,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
     def log_skip(self, entity):
         self.log.append(f"{entity.name} has no valid actions and passes")
 
+    @property
     def description(self):
         sell_buy_order = self.game.SELL_BUY_ORDER
         if sell_buy_order == "sell_buy_or_buy_sell":
@@ -1535,6 +1545,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         }
 
     def can_buy(self, entity, bundle):
+        # print(entity, bundle)
         if not bundle or not bundle.buyable:
             return False
         if entity == bundle.owner:
@@ -1542,7 +1553,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         corp = bundle.corporation
         return (
             self.available_cash(entity) >= self.modify_purchase_price(bundle)
-            and not self.round.players_sold[entity].get(corp)
+            and not self.round.players_sold.get(entity, {}).get(corp, None)
             and (self.can_buy_multiple(entity, corp, bundle.owner) or not self.bought())
             and self.can_gain(entity, bundle)
         )
@@ -1572,7 +1583,8 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
             )
             and not (
                 self.game.MUST_SELL_IN_BLOCKS
-                and self.round.players_sold[entity][corporation] == "now"
+                and self.round.players_sold.get(entity, {}).get(corporation, None)
+                == "now"
             )
             and self.can_sell_order()
             and self.game.share_pool.fit_in_bank(bundle)
@@ -1605,7 +1617,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         return sum(a.bundle.percent for a in sell_actions)
 
     def did_sell(self, corporation, entity):
-        return self.round.players_sold[entity].get(corporation)
+        return self.round.players_sold.get(entity, {}).get(corporation, None)
 
     def last_acted_upon(self, corporation, entity):
         return not not self.round.players_history[entity][corporation]
@@ -1666,12 +1678,12 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
 
     def can_buy_multiple(self, entity, corporation, owner):
         if self.game.multiple_buy_only_from_market:
-            if not owner.share_pool:
+            if not owner.is_share_pool():
                 return False
             if self.round.bought_from_ipo:
                 return False
         return (
-            corporation.buy_multiple
+            corporation.buy_multiple()
             and not any(isinstance(x, Par) for x in self.round.current_actions)
             and not any(
                 isinstance(x, BuyShares) and x.bundle.corporation != corporation
@@ -1692,10 +1704,11 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         if not shares:
             return False
 
+       # set_trace()
         sample_share = shares[0]
-        corporation = sample_share.corporation
+        corporation = sample_share.corporation()
         owner = sample_share.owner
-        if self.round.players_sold[entity].get(corporation) or (
+        if self.round.players_sold.get(entity, {}).get(corporation, None) or (
             self.bought() and not self.can_buy_multiple(entity, corporation, owner)
         ):
             return False
@@ -1716,7 +1729,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         ) and self.can_gain(entity, bundle)
 
     def can_buy_any_from_market(self, entity):
-        for corporation, shares in self.game.share_pool.shares_by_corporation().items():
+        for corporation, shares in self.game.share_pool.shares_by_corporation.items():
             if self.can_buy_shares(entity, shares):
                 return True
         return False
@@ -1792,7 +1805,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         if not self.can_sell(entity, shares) and not swap:
             raise GameError(f"Cannot sell shares of {shares.corporation.name}")
 
-        self.round.players_sold[shares.owner][shares.corporation] = "now"
+        self.round.players_sold.setdefault(shares.owner, {})[shares.corporation] = "now"
         self.game.sell_shares_and_change_price(shares, swap=swap)
 
     def bought(self):
@@ -2038,6 +2051,7 @@ class BuySellParSharesCompanies(BuySellParShares):
             actions.append(Pass)
         return actions
 
+    @property
     def description(self):
         sell_buy_order = self.game.SELL_BUY_ORDER
         if sell_buy_order == "sell_buy_or_buy_sell":
@@ -2104,7 +2118,7 @@ class BuySellParSharesCompanies(BuySellParShares):
         if (
             not entity.cash >= bundle.price
             or not self.can_gain(entity, bundle)
-            or self.round.players_sold[entity][corporation]
+            or self.round.players_sold.get(entity, {}).get(corporation, None)
             or (
                 not self.can_buy_multiple(entity, corporation, bundle.owner)
                 and self.bought
@@ -2135,7 +2149,8 @@ class BuySellParSharesCompanies(BuySellParShares):
             timing
             and (
                 not self.game.MUST_SELL_IN_BLOCKS
-                or self.round.players_sold[entity][corporation] != "now"
+                or self.round.players_sold.get(entity, {}).get(corporation, None)
+                != "now"
             )
             and self.can_sell_order()
             and self.game.share_pool.fit_in_bank(bundle)
@@ -2190,7 +2205,7 @@ class BuySellParSharesCompanies(BuySellParShares):
         self.log.append(
             f"{player.name} sells {company.name} to bank for {self.game.format_currency(price)}"
         )
-        self.round.players_sold[player][company] = "now"
+        self.round.players_sold.setdefault(player, {})[company] = "now"
 
 # %% ../../../nbs/game/engine/06_round.ipynb 42
 class BuySellParSharesViaBid(BuySellParShares, PassableAuction):
@@ -2246,7 +2261,7 @@ class BuySellParSharesViaBid(BuySellParShares, PassableAuction):
             self.resolve_bids()
 
     def process_bid(self, action):
-        if self.auctioning:
+        if self.auctioning_company():
             self.add_bid(action)
         else:
             self.selection_bid(action)
@@ -2321,6 +2336,7 @@ class BuySingleTrainOfType(BuyTrain):
 class CompanyPendingPar(BaseStep, Auctioner):
     ACTIONS = [Par]
 
+    @property
     def description(self):
         return "Choose Corporation Par Value"
 
@@ -2351,6 +2367,7 @@ class CompanyPendingPar(BaseStep, Auctioner):
         self.game.after_par(corporation)
         self.round.companies_pending_par.pop(0)
 
+    @property
     def companies_pending_par(self):
         return self.round.companies_pending_par
 
@@ -2366,16 +2383,19 @@ class CompanyPendingPar(BaseStep, Auctioner):
 # %% ../../../nbs/game/engine/06_round.ipynb 48
 class ConcessionAuction(BaseStep, Auctioner):
     ACTIONS = [Bid, Pass]
-    
+
     def __init__(self, game, round, **kwargs):
         BaseStep.__init__(self, game, round, **kwargs)
         Auctioner.__init__(self)
         self.setup()
-    
+
     def setup(self):
         self.setup_auction()
-        self.companies = [copy.copy(company) for company in self.game.initial_auction_companies]
+        self.companies = [
+            copy.copy(company) for company in self.game.initial_auction_companies
+        ]
 
+    @property
     def description(self):
         if self.auctioning:
             return "Bid on Selected Concession or Purchase Option"
@@ -2383,7 +2403,9 @@ class ConcessionAuction(BaseStep, Auctioner):
             return "Bid on Concession or Purchase Option"
 
     def available(self):
-        return [self.auctioning] if self.auctioning else self.companies
+        return (
+            [self.auctioning_company()] if self.auctioning_company() else self.companies
+        )
 
     def finished(self):
         return not self.companies or all(entity.passed for entity in self.entities)
@@ -2391,7 +2413,7 @@ class ConcessionAuction(BaseStep, Auctioner):
     def process_pass(self, action):
         entity = action.entity
 
-        if self.auctioning:
+        if self.auctioning_company():
             self.pass_auction(action.entity)
         else:
             self.log.append(f"{entity.name} passes bidding")
@@ -2401,7 +2423,7 @@ class ConcessionAuction(BaseStep, Auctioner):
     def process_bid(self, action):
         action.entity.unpass()
 
-        if self.auctioning:
+        if self.auctioning_company():
             self.add_bid(action)
         else:
             self.start_auction(action)
@@ -2459,7 +2481,8 @@ class ConcessionAuction(BaseStep, Auctioner):
         company = self.auctioning
         bids = self.bids[company]
         if len(bids) > 0:
-            yield company, bids
+            return company, bids
+        return None, None
 
     def can_auction(self, company):
         return company == self.companies[0] and len(self.bids[company]) > 1
@@ -2501,7 +2524,11 @@ class ConcessionAuction(BaseStep, Auctioner):
                 and self.max_bid(player, self.auctioning) > start_price
             ):
                 bids.append(
-                    Bid(player, corporation=self.auctioning, price=idx - len(self.entities))
+                    Bid(
+                        player,
+                        corporation=self.auctioning,
+                        price=idx - len(self.entities),
+                    )
                 )
 
     def add_bid(self, bid):
@@ -2512,6 +2539,7 @@ class ConcessionAuction(BaseStep, Auctioner):
 
 # %% ../../../nbs/game/engine/06_round.ipynb 50
 class CorporateBuyShares(BaseStep, ShareBuying):
+    @property
     def description(self):
         return "Corporate Share Buying"
 
@@ -2629,6 +2657,7 @@ class CorporateBuyShares(BaseStep, ShareBuying):
 
 # %% ../../../nbs/game/engine/06_round.ipynb 52
 class CorporateSellShares(BaseStep, ShareBuying):
+    @property
     def description(self):
         return "Corporate Share Sales"
 
@@ -2711,6 +2740,7 @@ class DiscardTrain(BaseStep):
     def active(self):
         return bool(self.crowded_corps)
 
+    @property
     def description(self):
         return "Discard Train"
 
@@ -2750,6 +2780,7 @@ class Dividend(BaseStep):
     def dividend_types(self):
         return self.DIVIDEND_TYPES
 
+    @property
     def description(self):
         return "Pay or Withhold Dividends"
 
@@ -2959,6 +2990,7 @@ class EndGame(BaseStep):
         self.game.end_game(player_initiated=True)
         self.log.append(f"Game ended manually by {action.entity.name}")
 
+    @property
     def blocks(self):
         return False
 
@@ -2972,6 +3004,7 @@ class Exchange(BaseStep, ShareBuying):
 
         return []
 
+    @property
     def blocks(self):
         return False
 
@@ -3069,6 +3102,7 @@ class HomeToken(BaseStep, Tokener):
     def pending_token(self):
         return self._round.get("pending_tokens", [{}])[0]
 
+    @property
     def description(self):
         if self.current_entity != self.token().corporation:
             return f"Place {self.token().corporation.name} Home Token"
@@ -3113,6 +3147,7 @@ class IssueShares(BaseStep):
                     available_actions.append(Pass)
         return available_actions
 
+    @property
     def description(self):
         return "Issue or Redeem Shares"
 
@@ -3159,6 +3194,7 @@ class Message(BaseStep):
     def unpass(self):
         pass
 
+    @property
     def blocks(self):
         return self.game.finished
 
@@ -3291,6 +3327,7 @@ class Program(BaseStep):
     def skip(self):
         pass
 
+    @property
     def blocks(self):
         return False
 
@@ -3304,14 +3341,14 @@ class ProgrammerAuctionBid(Programmer):
 
         if target and target.owner and target.owner.is_player():
             return [
-                ActionProgramDisable(
+                ProgramDisable(
                     entity, reason=f"{target.name} is owned by {target.owner.name}"
                 )
             ]
 
         if self.auto_requires_auctioning(entity, program):
             return [
-                ActionProgramDisable(
+                ProgramDisable(
                     entity,
                     reason=f"{self.auctioning.name} chosen instead of {target.name}",
                 )
@@ -3319,15 +3356,13 @@ class ProgrammerAuctionBid(Programmer):
 
         if target not in self.available:
             return [
-                ActionProgramDisable(
-                    entity, reason=f"{target.name} is no longer available"
-                )
+                ProgramDisable(entity, reason=f"{target.name} is no longer available")
             ]
 
         high_bid = self.highest_bid(target)
         if high_bid and high_bid.entity == entity:
             return [
-                ActionProgramDisable(
+                ProgramDisable(
                     entity,
                     reason=f"{entity.name} is already the high bid on {target.name}",
                 )
@@ -3342,23 +3377,21 @@ class ProgrammerAuctionBid(Programmer):
             bid_params["minor"] = target
 
         if self.auto_buy(entity, program):
-            return [ActionBid(entity, **bid_params)]
+            return [Bid(entity, **bid_params)]
         if self.auto_bid(entity, program):
-            return [ActionBid(entity, **bid_params)]
+            return [Bid(entity, **bid_params)]
 
         if self.auto_disable_if_bids(entity, program):
-            return [
-                ActionProgramDisable(entity, reason=f"Bids submitted for {target.name}")
-            ]
+            return [ProgramDisable(entity, reason=f"Bids submitted for {target.name}")]
 
         if self.auto_disable_if_exceeded_price(entity, program):
             return [
-                ActionProgramDisable(
+                ProgramDisable(
                     entity, reason=f"Price for {target.name} exceeded maximum bid"
                 )
             ]
 
-        return [ActionPass(entity)] if Pass in self.actions(entity) else []
+        return [Pass(entity)] if Pass in self.actions(entity) else []
 
     def auto_buy(self, entity, program):
         return (
@@ -3432,6 +3465,7 @@ class ProgrammerMergerPass(Programmer):
 class ReduceTokens(BaseStep, TokenMerger):
     REMOVE_TOKEN_ACTIONS = [RemoveToken]
 
+    @property
     def description(self):
         return f"Choose tokens to remove to drop below limit of {self.game.LIMIT_TOKENS_AFTER_MERGER} tokens"
 
@@ -3513,6 +3547,7 @@ class ReturnToken(BaseStep):
             return self.ACTIONS
         return []
 
+    @property
     def blocks(self):
         return False
 
@@ -3615,6 +3650,7 @@ class Route(BaseStep):
             return []
         return self.ACTIONS
 
+    @property
     def description(self):
         return "Run Routes"
 
@@ -3685,11 +3721,14 @@ class SelectionAuction(BaseStep, PassableAuction):
 
     def setup(self):
         self.setup_auction()
-        self.companies = [copy.copy(company) for company in self.game.initial_auction_companies]
+        self.companies = [
+            copy.copy(company) for company in self.game.initial_auction_companies
+        ]
         self.cheapest = self.companies[0]
         self.auction_entity(self.companies[0])
         self.auction_triggerer = self.current_entity
-    
+
+    @property
     def description(self):
         return "Bid on Companies"
 
@@ -3714,27 +3753,41 @@ class SelectionAuction(BaseStep, PassableAuction):
 
     def process_pass(self, action):
         entity = action.entity
-        if self.auctioning:
+
+        if self.auctioning_company():
             self.pass_auction(entity)
             self.resolve_bids()
         else:
             self.log.append(f"{entity.name} passes bidding")
             self.active_bidders.remove(entity)
             entity.pass_()
-            if all(entity.passed() for entity in self.entities):
+            if all(entity.passed for entity in self.entities):
                 self.all_passed()
             if not self.all_passed_win:
-                self.next_entity_()
+                self.next_entity()
+            self.all_passed_win = False
+
+    def next_entity(self):
+        self.round.next_entity_index()
+        entity = self.entities[self.entity_index]
+        if self.auctioning and self.max_bid(entity, self.auctioning) < self.min_bid(
+            self.auctioning
+        ):
+            entity.pass_action()
+        if entity.passed:
+            self.next_entity()
 
     def process_bid(self, action):
         action.entity.unpass()
-        if self.auctioning or len(self.active_bidders) == 1:
+        if self.auctioning_company():
+            self.add_bid(action)
+        elif len(self.active_bidders) == 1:
             self.add_bid(action)
             self.resolve_bids()
         else:
             self.selection_bid(action)
-            if self.auctioning:
-                self.next_entity_()
+            if self.auctioning_company():
+                self.next_entity()
 
     def actions(self, entity):
         if not self.companies:
@@ -3834,11 +3887,11 @@ class SimpleDraft(BaseStep):
     def __init__(self, game, round, **kwargs):
         super().__init__(game, round, **kwargs)
         self.setup()
-        
+
     def setup(self):
         self.companies = sorted(self.game.companies, key=lambda x: x.sort_order)
         self.choices = []
-    
+
     def available(self):
         return self.companies
 
@@ -3848,7 +3901,7 @@ class SimpleDraft(BaseStep):
     def may_choose(self, _company):
         return True
 
-    def auctioning(self):
+    def auctioning_company(self):
         pass
 
     def bids(self):
@@ -3863,6 +3916,7 @@ class SimpleDraft(BaseStep):
     def name(self):
         return "Draft"
 
+    @property
     def description(self):
         return "Draft One Company Each"
 
@@ -3951,12 +4005,13 @@ class SpecialBuyTrain(BaseStep, Train):
     def __init__(self, game, round, **kwargs):
         BaseStep.__init__(self, game, round, **kwargs)
         Train.__init__(self, game)
-    
+
     def actions(self, entity):
         if self.ability(entity):
             return self.ACTIONS
         return []
 
+    @property
     def blocks(self):
         return False
 
@@ -4030,6 +4085,7 @@ class SpecialBuy(BaseStep):
             return self.ACTIONS if self.blocks else self.ACTIONS_NO_PASS
         return []
 
+    @property
     def blocks(self):
         return self.blocks
 
@@ -4037,6 +4093,7 @@ class SpecialBuy(BaseStep):
         # Override this method in subclasses to return the items buyable by the entity
         return []
 
+    @property
     def description(self):
         return "Special Buy"
 
@@ -4069,6 +4126,7 @@ class SpecialChoose(BaseStep):
 
         return self.ACTIONS if action.type == "choose_ability" else []
 
+    @property
     def blocks(self):
         return False
 
@@ -4078,6 +4136,7 @@ class SpecialChoose(BaseStep):
     def abilities(self, entity, **kwargs):
         return self.game.abilities(entity, "choose_ability", **kwargs)
 
+    @property
     def description(self):
         return "Choose"
 
@@ -4104,15 +4163,18 @@ class SpecialToken(BaseStep, Tokener):
             actions.append(Pass)
         return actions
 
+    @property
     def description(self):
         return "Place teleport token"
 
     def pass_description(self):
         return "Pass (Token)"
 
+    @property
     def blocks(self):
         return self.can_token_after_teleport()
 
+    @property
     def blocking(self):
         return self.can_token_after_teleport()
 
@@ -4199,7 +4261,7 @@ class SpecialToken(BaseStep, Tokener):
     def available_tokens(self, entity):
         ability = self.ability(entity)
         if ability and ability.type in ["teleport", "token"] and not ability.from_owner:
-            return [Token(entity.owner)]  # Assuming Token class exists
+            return [TokenPiece(entity.owner)]
 
         return super().available_tokens(self.game.token_owner(entity))
 
@@ -4840,6 +4902,7 @@ class SpecialTrack(BaseStep, Tracker):
             else self.ACTIONS_WITH_PASS
         )
 
+    @property
     def description(self):
         return f"Lay Track for {self.company.name}"
 
@@ -4847,6 +4910,7 @@ class SpecialTrack(BaseStep, Tracker):
     def active_entities(self):
         return [self.company] if self.company else super().active_entities
 
+    @property
     def blocks(self):
         return bool(self.company)
 
@@ -4932,7 +4996,7 @@ class SpecialTrack(BaseStep, Tracker):
         entity = action.entity
         ability = self.abilities(entity)
         if entity != self.company:
-            raise GameError(f"Not {entity.name}'s turn: {action.to_h}")
+            raise GameError(f"Not {entity.name}'s turn: {action.to_dict()}")
 
         if ability.must_lay_all and ability.count > 0:
             raise GameError(f"{entity.name} must use all its tile lays")
@@ -5064,6 +5128,7 @@ class Token(BaseStep, Tokener):
 
         return self.ACTIONS
 
+    @property
     def description(self):
         return "Place a Token"
 
@@ -5099,6 +5164,7 @@ class Track(BaseStep, Tracker):
 
         return self.ACTIONS
 
+    @property
     def description(self):
         tile_lay = self.get_tile_lay(self.current_entity)
         if not tile_lay:
@@ -5141,7 +5207,7 @@ class TrackAndToken(Track, Tokener):
     def setup(self):
         super().setup()
         self.tokened = False
-    
+
     def actions(self, entity):
         actions = []
         if entity != self.current_entity:
@@ -5155,6 +5221,7 @@ class TrackAndToken(Track, Tokener):
             actions.append(Pass)
         return actions
 
+    @property
     def description(self):
         return "Place a Token or Lay Track"
 
@@ -5220,6 +5287,7 @@ class TrackLayWhenCompanySold:
         else:
             return super().actions(entity)
 
+    @property
     def blocking(self):
         return self.blocking_for_sold_company() or super().blocking()
 
@@ -5281,12 +5349,15 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
 
     def setup(self):
         self.setup_auction()
+        self.auctioning = None
         self.companies = sorted(
-            self.game.initial_auction_companies, key=lambda x: x.value
+            [copy.copy(company) for company in self.game.initial_auction_companies],
+            key=lambda x: x.value,
         )
         self.cheapest = self.companies[0]
         self.bidders = defaultdict(list)
-    
+
+    @property
     def description(self):
         return "Bid on Companies"
 
@@ -5296,12 +5367,12 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
     def process_pass(self, action):
         entity = action.entity
 
-        if self.auctioning:
+        if self.auctioning_company():
             self.pass_auction(entity)
         else:
             print(f"{entity.name} passes bidding")
             entity.pass_()
-            if all(e.passed() for e in self.entities):
+            if all(e.passed for e in self.entities):
                 self.all_passed()
             self.round.next_entity_index()
 
@@ -5309,7 +5380,7 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         entity = action.entity
         entity.unpass()
 
-        if self.auctioning:
+        if self.auctioning_company():
             self.add_bid(action)
         else:
             self.placement_bid(action)
@@ -5317,22 +5388,18 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
 
     @property
     def active_entities(self):
-        def active_auction_callback(company, bids):
+        _, bids = self.active_auction()
+        if bids:
             return [min(bids, key=lambda x: x.price).entity]
-
-        return active_auction_callback() if self.active_auction() else super()
+        return super().active_entities
 
     def actions(self, entity):
         if not self.companies:
             return []
-
         correct = False
-
-        def active_auction_callback(_company, bids):
-            nonlocal correct
+        _, bids = self.active_auction()
+        if bids:
             correct = min(bids, key=lambda x: x.price).entity == entity
-
-        active_auction_callback()
         return self.ACTIONS if correct or entity == self.current_entity else []
 
     @property
@@ -5349,8 +5416,9 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         return (high_bid.price if high_bid else company.min_bid) + self.min_increment()
 
     def may_purchase(self, company):
+        is_active, _ = self.active_auction()
         return (
-            self.active_auction() if company and company == self.companies[0] else False
+            is_active is None and company is not None and company == self.companies[0]
         )
 
     def committed_cash(self, player):
@@ -5365,14 +5433,18 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
 
     def resolve_bids(self):
         company = self.companies[0]
+        print("resolving bids")
         while company:
             if not self.resolve_bids_for_company(company):
                 break
-            company = self.companies[0]
+            company = self.companies[0] if self.companies else None
 
     def resolve_bids_for_company(self, company):
         resolved = False
         is_new_auction = company != self.auctioning
+        print(
+            f"company: {company}, auctioning: {self.auctioning}, is_new_auction: {is_new_auction}, bids: {self.bids[company]}"
+        )
         self.auctioning = None
         bids = self.bids[company]
 
@@ -5391,7 +5463,7 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         bids = self.bids[company]
         if bids and len(bids) > 1:
             return (company, bids)
-        return None
+        return None, None
 
     def can_auction(self, company):
         return company == self.companies[0] and len(self.bids[company]) > 1
@@ -5460,7 +5532,12 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         price = bid.price
         company = bid.company
         player = bid.entity
-        del self.bids[company]
+        min_bid = self.min_bid(company)
+        if price < min_bid:
+            raise GameError(
+                f"Minimum bid is {self.game.format_currency(min_bid)} for {company.name}"
+            )
+        self.bids[company] = []
         self.buy_company(player, company, price)
 
     def add_bid(self, bid):
@@ -5519,7 +5596,7 @@ class BaseRound:
 
     def setup(self):
         pass
-    
+
     def name(self):
         raise NotImplementedError
 
@@ -5530,6 +5607,7 @@ class BaseRound:
     def current_entity(self):
         return self.active_entities[0] if self.active_entities else None
 
+    @property
     def description(self):
         return self.active_step().description
 
@@ -5539,22 +5617,20 @@ class BaseRound:
 
     def can_act(self, entity):
         return (
-            self.active_step().current_entity == entity
-            if self.active_step()
-            else None
+            self.active_step().current_entity == entity if self.active_step() else None
         )
 
     def pass_description(self):
         return self.active_step().pass_description
 
     def process_action(self, action):
-        type = action.type
+        type = action.__class__
         self.clear_cache()
 
         self.before_process(action)
 
         for step in self.steps:
-            if not step.active():
+            if not step.active:
                 continue
 
             process = type in step.actions(action.entity)
@@ -5566,7 +5642,7 @@ class BaseRound:
 
             if blocking or process:
                 step.acted = True
-                getattr(step, f"process_{action.type}")(action)
+                getattr(step, f"process_{action.__class__.__name__.lower()}")(action)
 
                 self.at_start = False
 
@@ -5577,7 +5653,7 @@ class BaseRound:
                 return
 
         raise GameError(
-            f"No step found for action {type} at {action.id}: {action.to_h}"
+            f"No step found for action {type.__name__} at {action.id}: {action.to_dict()}"
         )
 
     def actions_for(self, entity):
@@ -5613,7 +5689,7 @@ class BaseRound:
 
     def step_passed(self, action_klass):
         return any(
-            step.passed() and isinstance(step, action_klass) for step in self.steps
+            step.passed and isinstance(step, action_klass) for step in self.steps
         )
 
     def active_step(self, entity=None):
@@ -5628,9 +5704,10 @@ class BaseRound:
                 ),
                 None,
             )
-        if not self._active_step:
-            self._active_step = next((step for step in self.steps if step.active and step.blocking), None)
-        return self._active_step
+        steps = [step for step in self.steps if step.active and step.blocking]
+        if steps:
+            return steps[0]
+        return None
 
     def auto_actions(self):
         return (
@@ -5655,8 +5732,8 @@ class BaseRound:
         self.entity_index = 0
 
     def clear_cache(self):
-        if hasattr(self, "_active_step"):
-            delattr(self, "_active_step")
+        if self._active_step:
+            self._active_step = None
 
     def operating(self):
         return False
@@ -5682,8 +5759,8 @@ class BaseRound:
     def skip_steps(self):
         for step in self.steps:
             if (
-                not step.active()
-                or not step.blocks()
+                not step.active
+                or not step.blocks
                 or (
                     self.entities[self.entity_index]
                     and self.entities[self.entity_index].is_closed()
@@ -5913,6 +5990,7 @@ class Stock(BaseRound):
         return "Stock Round"
 
     def setup(self):
+        #set_trace()
         self.skip_steps()
         if not self.active_step():
             self.next_entity()

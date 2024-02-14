@@ -43,15 +43,6 @@ class AbilityBase(Ownable):
         self.start_count = self.count
         self.passive = passive if passive is not None else len(self.when) == 0
 
-    def __copy__(self):
-        new_object = self.__class__()  # Instantiate a new object of the same class
-        
-        # Copy all attributes from the original object to the new object
-        for attr_name, attr_value in self.__dict__.items():
-            setattr(new_object, attr_name, attr_value)
-        
-        return new_object
-    
     def used(self):
         return self.used
 
@@ -432,11 +423,14 @@ class Abilities:
         self._abilities = []
 
         for ability in abilities:
-            class_name = snake_to_pascal(ability["type"])
-            if ability.get("from"):
-                ability["from_"] = ability.pop("from")
-            ability_instance = globals()[class_name](**ability)
-            ability_instance.owner = self
+            if not isinstance(ability, AbilityBase):
+                class_name = snake_to_pascal(ability["type"])
+                if ability.get("from"):
+                    ability["from_"] = ability.pop("from")
+                ability_instance = globals()[class_name](**ability)
+                ability_instance.owner = self
+            else:
+                ability_instance = ability
             self._abilities.append(ability_instance)
 
         self._update_start_counter()
