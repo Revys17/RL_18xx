@@ -1436,7 +1436,7 @@ class BaseGame:
                 dirs.append("right")
             dir_str = " and ".join(dirs)
             self.log.append(
-                f"{entity.name}'s share price moves {dir_str} from {self.format_currency(from_price)} to {self.format_currency(to_price)}{jumps}"
+                f"{entity.name}'s share price moves {dir_str} from {self.format_currency(from_price.price)} to {self.format_currency(to_price)}{jumps}"
             )
 
     def consenter_for_buy_shares(self, entity, bundle):
@@ -1899,7 +1899,7 @@ class BaseGame:
         self.log.append(f"{corporation.name} floats")
         if corporation.capitalization not in ["incremental", "none"]:
             self.bank.spend(
-                corporation.par_price.price * corporation.total_shares, corporation
+                corporation.par_price().price * corporation.total_shares(), corporation
             )
             self.log.append(
                 f"{corporation.name} receives {self.format_currency(corporation.cash)}"
@@ -2070,7 +2070,7 @@ class BaseGame:
             for company, ability in self.all_companies_with_ability("shares"):
                 if corporation.name == ability.shares[0].corporation.name:
                     amount = sum(
-                        corporation.par_price.price * share.num_shares
+                        corporation.par_price().price * share.num_shares
                         for share in ability.shares
                     )
                     self.bank.spend(amount, corporation)
@@ -2806,7 +2806,7 @@ class BaseGame:
         triggers = {
             "bankrupt": self.bankruptcy_limit_reached(),
             "bank": self.bank.broken,
-            "stock_market": self.stock_market.max_reached(),
+            "stock_market": self.stock_market.max_reached,
             "final_train": self.depot.empty(),
             "final_phase": self.phase.phases[-1] == self.phase.current,
             "custom": self.custom_end_game_reached(),
@@ -2971,12 +2971,11 @@ class BaseGame:
         return self.NEXT_SR_PLAYER_ORDER
 
     def reorder_players(self, order=None, log_player_order=False):
+        #set_trace()
         order = order or self.next_sr_player_order
     
         if order == "after_last_to_act":
-            player = next(filter(lambda p: not p.bankrupt, self.players), None)
-            if player:
-                self.players = self.players[self.players.index(player):] + self.players[:self.players.index(player)]
+            self.players = self.players[self.round.entity_index:] + self.players[:self.round.entity_index]
         elif order == "first_to_pass":
             self.players = round.pass_order if round.pass_order else self.players
         elif order == "most_cash":
