@@ -13,7 +13,7 @@ __all__ = ['steps', 'BaseStep', 'Auctioner', 'Programmer', 'ShareBuying', 'Emerg
            'BaseRound', 'Auction', 'Choices', 'Draft', 'Merger', 'Operating', 'Stock']
 
 # %% ../../../nbs/game/engine/06_round.ipynb 4
-from .core import Assignable, GameError, Passer
+from .core import Assignable, GameError, Passer, pascal_to_snake
 from .entities import Corporation, Minor, Share
 from rl18xx.game.engine.actions import (
     BuyTrain as BuyTrainAction,
@@ -1629,9 +1629,8 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         self.round.players_history.setdefault(action.entity.player, {}).setdefault(corporation, []).append(action)
 
     def process_buy_shares(self, action):
-        self.round.players_bought[action.entity][
-            action.bundle.corporation
-        ] += action.bundle.percent
+        self.round.players_bought.setdefault(action.entity, {}).setdefault(action.bundle.corporation, 0)
+        self.round.players_bought[action.entity][action.bundle.corporation] += action.bundle.percent
         if action.bundle.owner.corporation:
             self.round.bought_from_ipo = True
         self.buy_shares(
@@ -5666,7 +5665,7 @@ class BaseRound:
 
             if blocking or process:
                 step.acted = True
-                getattr(step, f"process_{action.__class__.__name__.lower()}")(action)
+                getattr(step, f"process_{pascal_to_snake(action.__class__.__name__)}")(action)
 
                 self.at_start = False
 
