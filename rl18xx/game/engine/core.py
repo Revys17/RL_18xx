@@ -509,6 +509,7 @@ class StockMarket:
     ):
         self.par_prices = []
         self.has_close_cell = False
+        self.max_reached = False
         self.zigzag = zigzag
         self.market = [
             [
@@ -544,7 +545,7 @@ class StockMarket:
     def set_par(self, corporation, share_price):
         share_price.corporations.append(corporation)
         corporation.share_price = share_price
-        corporation.par_price = share_price
+        corporation._par_price = share_price
         corporation.original_par_price = share_price
 
     def right_ledge(self, coordinates):
@@ -601,9 +602,6 @@ class StockMarket:
             price = self.share_price(coordinates) or price
 
         return price
-
-    def max_reached(self):
-        return self.max_reached
 
     def move(self, corporation, coordinates, force=False):
         share_price = self.share_price(coordinates)

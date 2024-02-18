@@ -18,6 +18,7 @@ from .graph import Token
 from .abilities import Abilities
 
 from collections import defaultdict
+from IPython.core.debugger import set_trace
 
 # %% ../../../nbs/game/engine/01_entities.ipynb 7
 class Operator(Entity):
@@ -208,7 +209,7 @@ class Share(Ownable):
 
     def price_per_share(self):
         share_price = (
-            self._corporation.par_price
+            self._corporation.par_price()
             if self.owner == self._corporation.ipo_owner
             else self._corporation.share_price
         )
@@ -307,7 +308,7 @@ class SharePool(Entity, ShareHolder):
             corporation.ipoed = True
 
         price = bundle.price
-        par_price = corporation.par_price.price if corporation.par_price else None
+        par_price = corporation.par_price().price if corporation.par_price() else None
 
         if ipoed != corporation.ipoed and not silent:
             self.log.append(
@@ -364,6 +365,7 @@ class SharePool(Entity, ShareHolder):
                     f"for {self.game.format_currency(price)}{swap_text}{borrowed_text}"
                 )
 
+        #set_trace()
         if price == 0:
             self.transfer_shares(
                 bundle, entity, allow_president_change=allow_president_change
@@ -375,8 +377,9 @@ class SharePool(Entity, ShareHolder):
                     corporation.capitalization in ("escrow", "incremental")
                     and bundle.owner.is_corporation()
                 )
+                or (bundle.owner.is_corporation() and not corporation.ipo_is_treasury())
                 or (bundle.owner.is_corporation() and bundle.owner != corporation)
-                or (bundle.owner.is_corporation() or bundle.owner.is_player())
+                or  bundle.owner.is_player()
             ):
                 receiver = bundle.owner
             else:
@@ -1073,7 +1076,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
         self.second_share = corp_shares[1] if len(corp_shares) > 1 else None
 
         self.share_price = None
-        self.par_price = None
+        self._par_price = None
         self.original_par_price = None
         self.ipoed = False
         self.companies = []
@@ -1146,9 +1149,9 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
         return self.hide_shares
 
     def par_price(self):
-        if self.closed():
+        if self.is_closed():
             return None
-        return self.share_price if self.always_market_price else self.par_price
+        return self.share_price if self.always_market_price else self._par_price
 
     def total_shares(self):
         return 100 / self.share_percent()
