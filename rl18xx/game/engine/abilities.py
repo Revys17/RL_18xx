@@ -5,12 +5,12 @@ __all__ = ['AbilityBase', 'AcquireCompany', 'AdditionalToken', 'AssignCorporatio
            'BlocksHexesConsent', 'BlocksPartition', 'BorrowTrain', 'ChooseAbility', 'Close', 'Description', 'Exchange',
            'Generic', 'HexBonus', 'ManualCloseCompany', 'NoBuy', 'PurchaseTrain', 'Reservation', 'ReturnToken',
            'RevenueChange', 'SellCompany', 'Shares', 'Teleport', 'TileDiscount', 'TileIncome', 'TileLay', 'Token',
-           'TrainBuy', 'TrainDiscount', 'TrainLimit', 'TrainScrapper', 'snake_to_pascal', 'Abilities']
+           'TrainBuy', 'TrainDiscount', 'TrainLimit', 'TrainScrapper', 'Abilities']
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 5
-from .core import Ownable
+# %% ../../../nbs/game/engine/02_abilities.ipynb 3
+from .core import Ownable, snake_to_pascal
 
-
+# %% ../../../nbs/game/engine/02_abilities.ipynb 6
 class AbilityBase(Ownable):
     def __init__(
         self,
@@ -67,23 +67,23 @@ class AbilityBase(Ownable):
     def when(self, *times):
         return bool(set(self.when) & set(times))
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 8
+# %% ../../../nbs/game/engine/02_abilities.ipynb 9
 class AcquireCompany(AbilityBase):
     def __init__(self, company, **kwargs):
         super().__init__(**kwargs)
         self.company = company
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 10
+# %% ../../../nbs/game/engine/02_abilities.ipynb 11
 class AdditionalToken(AbilityBase):
     pass
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 12
+# %% ../../../nbs/game/engine/02_abilities.ipynb 13
 class AssignCorporation(AbilityBase):
     def __init__(self, closed_when_used_up, **kwargs):
         super().__init__(**kwargs)
         self.closed_when_used_up = closed_when_used_up
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 14
+# %% ../../../nbs/game/engine/02_abilities.ipynb 15
 class AssignHexes(AbilityBase):
     def __init__(self, hexes, closed_when_used_up=None, cost=0, **kwargs):
         super().__init__(**kwargs)
@@ -91,21 +91,21 @@ class AssignHexes(AbilityBase):
         self.closed_when_used_up = closed_when_used_up
         self.cost = cost
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 16
+# %% ../../../nbs/game/engine/02_abilities.ipynb 17
 class BlocksHexes(AbilityBase):
     def __init__(self, hexes, hidden=False, **kwargs):
         super().__init__(**kwargs)
         self.hexes = hexes
         self.hidden = hidden
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 18
+# %% ../../../nbs/game/engine/02_abilities.ipynb 19
 class BlocksHexesConsent(AbilityBase):
     def __init__(self, hexes, hidden=False, **kwargs):
         super().__init__(**kwargs)
         self.hexes = hexes
         self.hidden = hidden
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 20
+# %% ../../../nbs/game/engine/02_abilities.ipynb 21
 class BlocksPartition(AbilityBase):
     def __init__(self, partition_type, **kwargs):
         super().__init__(**kwargs)
@@ -115,64 +115,64 @@ class BlocksPartition(AbilityBase):
     def blocks(self, partition_type):
         return self.partition_type == partition_type
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 22
+# %% ../../../nbs/game/engine/02_abilities.ipynb 23
 class BorrowTrain(AbilityBase):
     def __init__(self, train_types, **kwargs):
         super().__init__(**kwargs)
         self.train_types = train_types
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 24
+# %% ../../../nbs/game/engine/02_abilities.ipynb 25
 class ChooseAbility(AbilityBase):
     def __init__(self, choices=[], **kwargs):
         super().__init__(**kwargs)
         self.choices = choices
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 26
+# %% ../../../nbs/game/engine/02_abilities.ipynb 27
 class Close(AbilityBase):
     def __init__(self, corporation=None, silent=False, **kwargs):
         super().__init__(**kwargs)
         self.corporation = corporation
         self.silent = silent
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 28
+# %% ../../../nbs/game/engine/02_abilities.ipynb 29
 class Description(AbilityBase):
     pass
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 30
+# %% ../../../nbs/game/engine/02_abilities.ipynb 31
 class Exchange(AbilityBase):
     def __init__(self, corporations, from_, **kwargs):
         super().__init__(**kwargs)
         self.corporations = corporations
         self.from_ = from_
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 32
+# %% ../../../nbs/game/engine/02_abilities.ipynb 33
 class Generic(AbilityBase):
     def __init__(self, subtype, from_, **kwargs):
         super().__init__(**kwargs)
         self.type = subtype
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 34
+# %% ../../../nbs/game/engine/02_abilities.ipynb 35
 class HexBonus(AbilityBase):
     def __init__(self, hexes, amount, **kwargs):
         super().__init__(**kwargs)
         self.hexes = hexes
         self.amount = amount
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 36
+# %% ../../../nbs/game/engine/02_abilities.ipynb 37
 class ManualCloseCompany(AbilityBase):
     pass
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 38
+# %% ../../../nbs/game/engine/02_abilities.ipynb 39
 class NoBuy(AbilityBase):
     pass
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 40
+# %% ../../../nbs/game/engine/02_abilities.ipynb 41
 class PurchaseTrain(AbilityBase):
     def __init__(self, free=False, **kwargs):
         super().__init__(**kwargs)
         self.free = free
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 42
+# %% ../../../nbs/game/engine/02_abilities.ipynb 43
 class Reservation(AbilityBase):
     def __init__(self, hex, city=0, slot=0, tile=None, icon=None, **kwargs):
         super().__init__(**kwargs)
@@ -186,30 +186,30 @@ class Reservation(AbilityBase):
         if self.tile:
             self.tile.cities[self.city].remove_reservation(self.owner)
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 44
+# %% ../../../nbs/game/engine/02_abilities.ipynb 45
 class ReturnToken(AbilityBase):
     def __init__(self, reimburse=False, **kwargs):
         super().__init__(**kwargs)
         self.reimburse = reimburse
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 46
+# %% ../../../nbs/game/engine/02_abilities.ipynb 47
 class RevenueChange(AbilityBase):
     def __init__(self, revenue, **kwargs):
         super().__init__(**kwargs)
         self.revenue = revenue
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 48
+# %% ../../../nbs/game/engine/02_abilities.ipynb 49
 class SellCompany(AbilityBase):
     pass
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 50
+# %% ../../../nbs/game/engine/02_abilities.ipynb 51
 class Shares(AbilityBase):
     def __init__(self, shares, corporations=None, **kwargs):
         super().__init__(**kwargs)
         self.shares = list(shares) if isinstance(shares, (list, tuple)) else [shares]
         self.corporations = corporations
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 52
+# %% ../../../nbs/game/engine/02_abilities.ipynb 53
 class Teleport(AbilityBase):
     def __init__(
         self,
@@ -233,7 +233,7 @@ class Teleport(AbilityBase):
         self.from_owner = from_owner
         self.extra_action = extra_action
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 54
+# %% ../../../nbs/game/engine/02_abilities.ipynb 55
 class TileDiscount(AbilityBase):
     def __init__(self, discount, terrain=None, hexes=None, exact_match=True, **kwargs):
         super().__init__(**kwargs)
@@ -247,7 +247,7 @@ class TileDiscount(AbilityBase):
             return tile.terrain == [self.terrain]
         return self.terrain in tile.terrain
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 56
+# %% ../../../nbs/game/engine/02_abilities.ipynb 57
 class TileIncome(AbilityBase):
     def __init__(self, income, terrain=None, owner_only=False, **kwargs):
         super().__init__(**kwargs)
@@ -255,7 +255,7 @@ class TileIncome(AbilityBase):
         self.terrain = terrain
         self.owner_only = owner_only
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 58
+# %% ../../../nbs/game/engine/02_abilities.ipynb 59
 class TileLay(AbilityBase):
     def __init__(
         self,
@@ -325,7 +325,7 @@ class TileLay(AbilityBase):
                     self.owner.remove_ability(self)
                     self.count = 0
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 60
+# %% ../../../nbs/game/engine/02_abilities.ipynb 61
 class Token(AbilityBase):
     def __init__(
         self,
@@ -366,13 +366,13 @@ class Token(AbilityBase):
             return self.price
         return token.price - (token.price * self.discount)
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 62
+# %% ../../../nbs/game/engine/02_abilities.ipynb 63
 class TrainBuy(AbilityBase):
     def __init__(self, face_value=None, **kwargs):
         super().__init__(**kwargs)
         self.face_value = bool(face_value)
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 64
+# %% ../../../nbs/game/engine/02_abilities.ipynb 65
 class TrainDiscount(AbilityBase):
     def __init__(self, discount, trains, closed_when_used_up=None, **kwargs):
         super().__init__(**kwargs)
@@ -397,14 +397,14 @@ class TrainDiscount(AbilityBase):
             discount_value if discount_value > 1 else int(price * discount_value)
         )
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 66
+# %% ../../../nbs/game/engine/02_abilities.ipynb 67
 class TrainLimit(AbilityBase):
     def __init__(self, increase=None, constant=None, **kwargs):
         super().__init__(**kwargs)
         self.increase = increase
         self.constant = constant
 
-# %% ../../../nbs/game/engine/02_abilities.ipynb 68
+# %% ../../../nbs/game/engine/02_abilities.ipynb 69
 class TrainScrapper(AbilityBase):
     def __init__(self, scrap_values={}, **kwargs):
         super().__init__(**kwargs)
@@ -412,10 +412,6 @@ class TrainScrapper(AbilityBase):
 
     def scrap_value(self, train):
         return self.scrap_values.get(train.name, 0)
-
-# %% ../../../nbs/game/engine/02_abilities.ipynb 70
-def snake_to_pascal(snake_str):
-    return "".join(word.capitalize() for word in snake_str.split("_"))
 
 # %% ../../../nbs/game/engine/02_abilities.ipynb 71
 class Abilities:
