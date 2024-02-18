@@ -165,6 +165,12 @@ class ShareBundle:
     def common_percent(self):
         return sum(share.percent for share in self.shares if not share.preferred)
 
+    def __str__(self):
+        return f"<Share Bundle> - shares: {self.shares}, corporation: {self.shares[0].corporation}, percent: {self.percent}, price: {self.share_price}"
+
+    def __repr__(self):
+        return self.__str__()
+
 # %% ../../../nbs/game/engine/01_entities.ipynb 11
 import math
 
@@ -189,6 +195,12 @@ class Share(Ownable):
     @property
     def id(self):
         return f"{self._corporation.id}_{self.index}"
+
+    def __eq__(self, other):
+        return isinstance(other, Share) and self.percent == other.percent and self._corporation == other._corporation and self.owner == other.owner
+
+    def __hash__(self):
+        return hash((self.percent, self._corporation, self.owner))
 
     def num_shares(self, ceil=True):
         num = self.percent / self._corporation.share_percent()
@@ -221,6 +233,9 @@ class Share(Ownable):
 
     def __str__(self):
         return f"<Share: {self._corporation.id} {self.percent}%>"
+
+    def __repr__(self):
+        return self.__str__()
 
     def common_percent(self):
         return 0 if self.preferred else self.percent
@@ -1221,6 +1236,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
             if share.corporation() == self and not self.treasury_as_holding
         ]
 
+    @property
     def ipo_shares(self):
         return [share for share in self.ipo_owner.shares if share.corporation() == self]
 
@@ -1274,6 +1290,9 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
 
     def is_receivership(self):
         return self.owner().share_pool() if self.owner() else False
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__}: {self.id}>"
 
     def __str__(self):
         return f"<{self.__class__.__name__}: {self.id}>"

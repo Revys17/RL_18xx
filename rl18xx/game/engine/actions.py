@@ -110,6 +110,9 @@ class BaseAction:
 
     # Implementing the rest of the comparison methods if needed
     def __eq__(self, other):
+        if not isinstance(other, self.__class__):
+            return False
+        
         return (
             self.id == other.id
             if self.id and other.id
@@ -120,7 +123,7 @@ class BaseAction:
         return f"Type: {self.__class__.__name__}, id: {self.id}, entity: {self.entity}"
 
     def __repr__(self):
-        return f"Type: {self.__class__.__name__}, id: {self.id}, entity: {self.entity}"
+        return self.__str__()
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 8
 class AcquireCompany(BaseAction):
@@ -195,6 +198,16 @@ class Bid(BaseAction):
             "minor": self.minor.id if self.minor else None,
             "price": self.price,
         }
+
+    def __str__(self):
+        if self.company:
+            string = f", company: {self.company}, "
+        elif self.corporation:
+            string = f", corporation: {self.corporation}, "
+        elif self.minor:
+            string = f", minor: {self.minor}, "
+            
+        return super().__str__() + string +  f"price: {self.price}"
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 16
 class BlindBid(BaseAction):
@@ -331,6 +344,9 @@ class BuyShares(BaseAction):
             "borrow_from": self.borrow_from.id if self.borrow_from else None,
             "total_price": self.total_price,
         }
+
+    def __str__(self):
+        return super().__str__() + f", bundle: [{self.bundle}]"
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 28
 class SellShares(BaseAction):
@@ -837,6 +853,9 @@ class Par(BaseAction):
             else None,
             "borrow_from": self.borrow_from.id if self.borrow_from else None,
         }
+
+    def __str__(self):
+        return super().__str__() + f", corporation: [{self.corporation}], par price: [{self.share_price}]"
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 80
 class Pass(BaseAction):
