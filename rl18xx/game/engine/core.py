@@ -267,9 +267,6 @@ class SharePrice:
     def buy_multiple(self):
         return self.can_buy_multiple
 
-    def __str__(self):
-        return f"{self.__class__.__name__} - {self.price} {self.coordinates}"
-
     def can_par(self):
         return self.type in self.PAR_TYPES
 
@@ -291,6 +288,12 @@ class SharePrice:
     def remove_par(self):
         self.types = [t for t in self.types if t not in self.PAR_TYPES]
         self.type = self.types[0] if self.types else None
+
+    def __str__(self):
+        return f"Share Price - coordinates: {self.coordinates}, price: {self.price}, types: {self.types}, corporations: {self.corporations}"
+
+    def __repr__(self):
+        return self.__str__()
 
 # %% ../../../nbs/game/engine/00_core.ipynb 24
 class ShareHolder:
