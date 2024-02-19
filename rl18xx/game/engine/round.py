@@ -53,7 +53,6 @@ from rl18xx.game.engine.actions import (
 )
 from .graph import Hex, Tile, Token as TokenPiece
 
-import copy
 from collections import defaultdict
 
 from IPython.core.debugger import set_trace
@@ -110,6 +109,7 @@ class BaseStep(Passer):
 
     @property
     def current_actions(self):
+        #set_trace()
         entity = self.current_entity
         if not entity or entity.is_closed():
             return []
@@ -200,7 +200,6 @@ class Auctioner:
             self.resolve_bids()
 
     def pass_auction(self, entity):
-        print(f"{entity.name} passes on {self.auctioning.name}")
         self.log.append(f"{entity.name} passes on {self.auctioning.name}")
         self.remove_from_auction(entity)
 
@@ -684,6 +683,10 @@ class BuyTrain(BaseStep, Train):
         BaseStep.__init__(self, game, round, **kwargs)
         Train.__init__(self, game)
 
+    def setup(self):
+        BaseStep.setup(self)
+        Train.setup(self)
+    
     def actions(self, entity):
         # 1846 and a few others minors can't buy trains
         if not self.can_entity_buy_train(entity):
@@ -888,7 +891,7 @@ class Tokener:
 
     def available_tokens(self, entity):
         token_holder = entity.owner if entity.is_company() else entity
-        return token_holder.tokens_by_type()
+        return token_holder.tokens_by_type
 
     def can_replace_token(self, entity, token):
         return False
@@ -949,6 +952,8 @@ class Tokener:
             raise GameError("Token is already used")
 
         free = token.price == 0
+        cheater = None
+        extra_slot = None
         if ability and ability.type == "token":
             cheater = ability.cheater
             extra_slot = ability.extra_slot
@@ -992,7 +997,7 @@ class Tokener:
             prices.append(ability.price(token))
             prices.append(ability.teleport_price)
 
-        return min(filter(None, prices))
+        return min(price for price in prices if price is not None)
 
     def adjust_token_price_ability(
         self, entity, token, hex, city, special_ability=None
@@ -1545,7 +1550,6 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         }
 
     def can_buy(self, entity, bundle):
-        # print(entity, bundle)
         if not bundle or not bundle.buyable:
             return False
         if entity == bundle.owner:
@@ -2413,9 +2417,7 @@ class ConcessionAuction(BaseStep, Auctioner):
 
     def setup(self):
         self.setup_auction()
-        self.companies = [
-            copy.copy(company) for company in self.game.initial_auction_companies
-        ]
+        self.companies = self.game.initial_auction_companies
 
     @property
     def description(self):
@@ -3096,6 +3098,9 @@ class HomeToken(BaseStep, Tokener):
         BaseStep.__init__(self, game, round, **kwargs)
         Tokener.__init__(self)
 
+    def setup(self):
+        Tokener.setup(self)
+
     def actions(self, entity):
         if entity == self.pending_entity:
             return [PlaceToken]
@@ -3104,7 +3109,8 @@ class HomeToken(BaseStep, Tokener):
     @property
     def round_state(self):
         return {
-            **super().round_state,
+            **BaseStep.round_state.fget(self),
+            **Tokener.round_state.fget(self),
             "pending_tokens": [],
         }
 
@@ -3115,14 +3121,18 @@ class HomeToken(BaseStep, Tokener):
     def current_entity(self):
         return self.pending_entity
 
+    @property
     def pending_entity(self):
         return self.pending_token.get("entity", None)
 
     def token(self):
         return self.pending_token.get("token", None)
 
+    @property
     def pending_token(self):
-        return self._round.get("pending_tokens", [{}])[0]
+        if self.round.pending_tokens:
+            return self.round.pending_tokens[0]
+        return {}
 
     @property
     def description(self):
@@ -3153,7 +3163,7 @@ class HomeToken(BaseStep, Tokener):
             connected=False,
             extra_action=True,
         )
-        self._round["pending_tokens"].pop(0)
+        self.round["pending_tokens"].pop(0)
 
 # %% ../../../nbs/game/engine/06_round.ipynb 66
 class IssueShares(BaseStep):
@@ -3743,9 +3753,7 @@ class SelectionAuction(BaseStep, PassableAuction):
 
     def setup(self):
         self.setup_auction()
-        self.companies = [
-            copy.copy(company) for company in self.game.initial_auction_companies
-        ]
+        self.companies = self.game.initial_auction_companies
         self.cheapest = self.companies[0]
         self.auction_entity(self.companies[0])
         self.auction_triggerer = self.current_entity
@@ -4319,7 +4327,7 @@ class Tracker:
     def can_lay_tile(self, entity):
         if self.tile_lay_abilities_should_block(entity):
             return True
-        if self.can_buy_tile_laying_company(entity):
+        if self.can_buy_tile_laying_company(entity, self.__class__.__name__):
             return True
 
         action = self.get_tile_lay(entity)
@@ -4380,7 +4388,6 @@ class Tracker:
 
         extra_cost = self.extra_cost(tile, tile_lay, hex_)
 
-        # Assuming lay_tile is a method to perform the actual tile laying, including cost handling
         self.lay_tile(action, extra_cost=extra_cost, entity=entity, spender=spender)
         if self.track_upgrade(old_tile, tile, hex_):
             self.round.upgraded_track = True
@@ -4398,7 +4405,7 @@ class Tracker:
         times = [
             "current_step",
             "owning_player_track",
-        ]  # Assuming 'type' translates to 'current_step'
+        ]
         abilities = []
         for time in times:
             ability = self.abilities(entity, time=time, passive_ok=False)
@@ -4407,8 +4414,9 @@ class Tracker:
         return any(not a.consume_tile_lay for a in abilities)
 
     def abilities(self, entity, **kwargs):
-        time = kwargs.get("time", ["current_step"])
-        return self.game.abilities(entity, "tile_lay", time=time, **kwargs)
+        if not kwargs["time"]:
+            kwargs["time"] = ["current_step"]
+        return self.game.abilities(entity, "tile_lay", **kwargs)
 
     def lay_tile(self, action, extra_cost=0, entity=None, spender=None):
         entity = entity or action.entity
@@ -4598,6 +4606,7 @@ class Tracker:
         self.log.append(log_message)
 
     def update_token(self, action, entity, tile, old_tile):
+        #set_trace()
         cities = tile.cities
         if not old_tile.paths and tile.paths and len(cities) > 1:
             tokens = [token for city in cities for token in city.tokens if token]
@@ -5372,10 +5381,7 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
     def setup(self):
         self.setup_auction()
         self.auctioning = None
-        self.companies = sorted(
-            [copy.copy(company) for company in self.game.initial_auction_companies],
-            key=lambda x: x.value,
-        )
+        self.companies = sorted(self.game.initial_auction_companies, key=lambda x: x.value,)
         self.cheapest = self.companies[0]
         self.bidders = defaultdict(list)
 
@@ -5392,7 +5398,7 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         if self.auctioning_company():
             self.pass_auction(entity)
         else:
-            print(f"{entity.name} passes bidding")
+            self.log.append(f"{entity.name} passes bidding")
             entity.pass_()
             if all(e.passed for e in self.entities):
                 self.all_passed()
@@ -5455,7 +5461,6 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
 
     def resolve_bids(self):
         company = self.companies[0]
-        print("resolving bids")
         while company:
             if not self.resolve_bids_for_company(company):
                 break
@@ -5464,9 +5469,6 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
     def resolve_bids_for_company(self, company):
         resolved = False
         is_new_auction = company != self.auctioning
-        print(
-            f"company: {company}, auctioning: {self.auctioning}, is_new_auction: {is_new_auction}, bids: {self.bids[company]}"
-        )
         self.auctioning = None
         bids = self.bids[company]
 
@@ -5476,7 +5478,7 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         elif self.can_auction(company):
             self.auctioning = company
             if is_new_auction:
-                print(f"{self.auctioning.name} goes up for auction")
+                self.log.append(f"{self.auctioning.name} goes up for auction")
 
         return resolved
 
@@ -5504,7 +5506,7 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         value = company.min_bid
         company.discount += discount
         new_value = company.min_bid
-        print(
+        self.log.append(
             f"{company.name} minimum bid decreases from {self.game.format_currency(value)} to {self.game.format_currency(new_value)}"
         )
 
@@ -5529,6 +5531,7 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
                 f"{player.name} has {self.game.format_currency(available)} available and cannot spend {self.game.format_currency(price)}"
             )
 
+        #set_trace()
         company.owner = player
         player.companies.append(company)
         if price > 0:
@@ -5536,15 +5539,15 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         self.companies.remove(company)
         num_bidders = len(self.bidders[company])
         if num_bidders == 0:
-            print(
+            self.log.append(
                 f"{player.name} buys {company.name} for {self.game.format_currency(price)}"
             )
         elif num_bidders == 1:
-            print(
+            self.log.append(
                 f"{player.name} wins the auction for {company.name} with the only bid of {self.game.format_currency(price)}"
             )
         else:
-            print(
+            self.log.append(
                 f"{player.name} wins the auction for {company.name} with a bid of {self.game.format_currency(price)}"
             )
 
@@ -5568,7 +5571,7 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         price = bid.price
         entity = bid.entity
         self.bidders[company].append(entity)
-        print(
+        self.log.append(
             f"{entity.name} bids {self.game.format_currency(price)} for {bid.company.name}"
         )
 
@@ -5956,6 +5959,7 @@ class Operating(BaseRound):
                 self.next_entity()
 
     def start_operating(self):
+        #set_trace()
         entity = self.entities[self.entity_index]
         if self.skip_entity(entity):
             self.next_entity()
@@ -5965,7 +5969,8 @@ class Operating(BaseRound):
         for train in entity.trains:
             train.operated = False
         if not self.finished():
-            self.game.place_home_token(entity)
+            self.log.append(f"{self.game.acting_for_entity(entity).name} operates {entity.name}")
+        self.game.place_home_token(entity)
         self.skip_steps()
         if self.finished():
             self.after_end_of_turn(entity)

@@ -31,7 +31,10 @@ class AbilityBase(Ownable):
         self.description = description
         self.desc_detail = desc_detail
         self.owner_type = owner_type
-        self.when = [when for when in opts.get("when", [])]
+        when = opts.get("when", [])
+        if not isinstance(when, list):
+            when = [when]
+        self.when = when
         self.on_phase = on_phase
         self.after_phase = after_phase
         self.count = count
@@ -110,7 +113,6 @@ class BlocksPartition(AbilityBase):
     def __init__(self, partition_type, **kwargs):
         super().__init__(**kwargs)
         self.partition_type = partition_type
-        self.hidden = hidden
 
     def blocks(self, partition_type):
         return self.partition_type == partition_type

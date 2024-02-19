@@ -71,6 +71,7 @@ class Operator(Entity):
             None,
         )
 
+    @property
     def tokens_by_type(self):
         return list(
             {token.type: token for token in self.tokens if not token.used}.values()
@@ -198,7 +199,12 @@ class Share(Ownable):
         return f"{self._corporation.id}_{self.index}"
 
     def __eq__(self, other):
-        return isinstance(other, Share) and self.percent == other.percent and self._corporation == other._corporation and self.owner == other.owner
+        return (
+            isinstance(other, Share)
+            and self.percent == other.percent
+            and self._corporation == other._corporation
+            and self.owner == other.owner
+        )
 
     def __hash__(self):
         return hash((self.percent, self._corporation, self.owner))
@@ -365,7 +371,7 @@ class SharePool(Entity, ShareHolder):
                     f"for {self.game.format_currency(price)}{swap_text}{borrowed_text}"
                 )
 
-        #set_trace()
+        # set_trace()
         if price == 0:
             self.transfer_shares(
                 bundle, entity, allow_president_change=allow_president_change
@@ -379,7 +385,7 @@ class SharePool(Entity, ShareHolder):
                 )
                 or (bundle.owner.is_corporation() and not corporation.ipo_is_treasury())
                 or (bundle.owner.is_corporation() and bundle.owner != corporation)
-                or  bundle.owner.is_player()
+                or bundle.owner.is_player()
             ):
                 receiver = bundle.owner
             else:
@@ -514,6 +520,7 @@ class SharePool(Entity, ShareHolder):
                 self.handle_partial(bundle, self, owner)
             return
 
+        #set_trace()
         if self.allow_president_sale and owner == self and bundle.presidents_share:
             corporation.owner = to_entity
             self.log.append(
@@ -531,16 +538,27 @@ class SharePool(Entity, ShareHolder):
             for player, p in self.presidency_check_shares(corporation).items()
             if p == max_shares
         }
-        if previous_president not in majority_share_holders:
+        if previous_president in majority_share_holders:
             return
 
-        president_candidates = [p for p in majority_share_holders if p.percent_of(corporation) >= corporation.presidents_percent]
-        
-        president = min(president_candidates, key=lambda p: 0 if previous_president == self else (
-            self.game.player_distance_for_president(previous_president, p)
-            if hasattr(self.game, 'player_distance_for_president')
-            else self.distance(previous_president, p)
-        ))
+        president_candidates = [
+            p
+            for p in majority_share_holders
+            if p.percent_of(corporation) >= corporation.presidents_percent
+        ]
+
+        president = None
+        if president_candidates:
+            president = min(
+                president_candidates,
+                key=lambda p: 0
+                if previous_president == self
+                else (
+                    self.game.player_distance_for_president(previous_president, p)
+                    if hasattr(self.game, "player_distance_for_president")
+                    else self.distance(previous_president, p)
+                ),
+            )
 
         if president:
             corporation.owner = president
@@ -863,7 +881,7 @@ class Train(Ownable):
     def id(self):
         return f"{self.name}-{self.index}"
 
-    def get_min_price(self, ability=None):
+    def min_price(self, ability=None):
         if not self.from_depot():
             return 1
 
@@ -947,7 +965,7 @@ class Company(Entity, Ownable, Passer, Abilities):
             revenue=self.revenue,
             desc=self.desc,
             abilities=copied_abilities,
-            **self.opts
+            **self.opts,
         )
 
     def __lt__(self, other):
@@ -962,6 +980,7 @@ class Company(Entity, Ownable, Passer, Abilities):
         return self.value - self.discount
 
     def close(self):
+        set_trace()
         self.closed = True
         for ability in self.all_abilities:
             self.remove_ability(ability)
@@ -986,7 +1005,7 @@ class Company(Entity, Ownable, Passer, Abilities):
             raise Exception(f"{self.name} does not have a token")
         if token_ability.from_owner:
             return self.owner.find_token_by_type(token_type)
-        return Token(self.owner)  # Assuming a Token class exists
+        return Token(self.owner)
 
     def __repr__(self):
         return f"<{self.__class__.__name__}: {self.id}>"
@@ -1315,7 +1334,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
         if self.owner and hasattr(self.owner, "companies"):
             all_abilities += [
                 ability
-                for company in self.owner().companies()
+                for company in self.owner.companies
                 for ability in company.all_abilities
                 if "owning_player" in str(ability.when)
             ]
@@ -1338,6 +1357,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
             None,
         )
 
+    @property
     def presidents_percent(self):
         return self.presidents_share.percent
 
@@ -1368,6 +1388,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
         return self.closed
 
     def close(self):
+        set_trace()
         if self.share_price:
             self.share_price.corporations().remove(self)
         self.closed = True
