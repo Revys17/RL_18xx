@@ -8,13 +8,18 @@ __all__ = ['BasePart', 'Node', 'Path', 'Edge', 'Frame', 'FutureLabel', 'Icon', '
 # %% ../../../nbs/game/engine/05_graph.ipynb 4
 from .core import GameError, Ownable
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 6
+from IPython.core.debugger import set_trace
+
+# %% ../../../nbs/game/engine/05_graph.ipynb 7
 class BasePart:
     def __init__(self, tile=None, index=None, loc=None, **kwargs):
         self.tile = tile
         self.index = index
         self.loc = loc
-        self.id = f"{tile.__class__.__name__}-{index}"
+
+    @property
+    def id(self):
+        return f"{self.tile.id if self.tile else None}-{self.index}"
 
     @property
     def signature(self):
@@ -28,28 +33,29 @@ class BasePart:
     def hex(self):
         return self.tile.hex if self.tile else None
 
+    def __le__(self, other):
+        return isinstance(other, self.__class__)
+    
     def __lt__(self, other):
-        if self.is_edge and other.is_edge:
+        if self.is_edge() and other.is_edge():
             return self.num < other.num
-        elif self.is_edge:
+        elif self.is_edge():
             return True
-        elif other.is_edge:
-            return False
-        else:
-            return False
+        return False
 
     def __eq__(self, other):
-        return self.num == other.num and self.is_edge == other.is_edge
+        if self.is_edge() and other.is_edge():
+            return self.num == other.num
+        elif self.is_edge() or other.is_edge():
+            return False
+        return True
 
     def __gt__(self, other):
-        if self.is_edge and other.is_edge:
+        if self.is_edge() and other.is_edge():
             return self.num > other.num
-        elif self.is_edge:
-            return False
-        elif other.is_edge:
+        elif other.is_edge():
             return True
-        else:
-            return False
+        return False
 
     def __hash__(self):
         return hash((self.id, self.tile, self.loc, self.index))
@@ -66,58 +72,58 @@ class BasePart:
     def tokenable(self, corporation, *args):
         return False
 
-    def city(self):
+    def is_city(self):
         return False
 
-    def edge(self):
+    def is_edge(self):
         return False
 
-    def junction(self):
+    def is_junction(self):
         return False
 
-    def label(self):
+    def is_label(self):
         return False
 
-    def future_label(self):
+    def is_future_label(self):
         return False
 
-    def path(self):
+    def is_path(self):
         return False
 
-    def town(self):
+    def is_town(self):
         return False
 
-    def halt(self):
+    def is_halt(self):
         return False
 
-    def upgrade(self):
+    def is_upgrade(self):
         return False
 
-    def offboard(self):
+    def is_offboard(self):
         return False
 
-    def border(self):
+    def is_border(self):
         return False
 
-    def icon(self):
+    def is_icon(self):
         return False
 
     def blocks_lay(self):
         return False
 
-    def stub(self):
+    def is_stub(self):
         return False
 
-    def frame(self):
+    def is_frame(self):
         return False
 
-    def stripes(self):
+    def is_stripes(self):
         return False
 
-    def partition(self):
+    def is_partition(self):
         return False
 
-    def pass_method(self):
+    def is_pass(self):
         return False
 
     def visit_cost(self):
@@ -128,7 +134,7 @@ class BasePart:
             f"<{self.__class__.__name__}: hex: {self.hex.name if self.hex else None}>"
         )
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 8
+# %% ../../../nbs/game/engine/05_graph.ipynb 9
 class Node(BasePart):
     def __init__(self, lanes=None, paths=None, exits=None, **kwargs):
         super().__init__(**kwargs)
@@ -216,7 +222,7 @@ class Node(BasePart):
         if converging_path:
             visited.remove(self)
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 10
+# %% ../../../nbs/game/engine/05_graph.ipynb 11
 class Path(BasePart):
     LANES = [[1, 0], [1, 0]]
     MATCHES_BROAD = {"broad", "dual"}
@@ -248,7 +254,7 @@ class Path(BasePart):
         if lanes:
             for index in range(lanes):
                 a_lanes = [lanes, index]
-                b_lanes = [lanes, lanes - index - 1] if a.edge and b.edge else a_lanes
+                b_lanes = [lanes, lanes - index - 1] if a.is_edge() and b.is_edge() else a_lanes
                 paths.append(
                     Path(
                         a,
@@ -328,6 +334,12 @@ class Path(BasePart):
     def __lt__(self, other):
         return self.id < other.id
 
+    def __gt__(self, other):
+        pass
+
+    def __eq__(self, other):
+        pass
+
     def __le__(self, other):
         other_ends = other.ends()
         return all(t <= o for t in self.ends() for o in other_ends) and (
@@ -348,11 +360,11 @@ class Path(BasePart):
         if not hasattr(self, "_ends"):
             self._ends = []
             for part in [self.a, self.b]:
-                if part.junction:
+                if part.is_junction():
                     for path in part.paths:
                         if path != self:
                             self._ends.extend(
-                                [p for p in [path.a, path.b] if not p.junction]
+                                [p for p in [path.a, path.b] if not p.is_junction()]
                             )
                 else:
                     self._ends.append(part)
@@ -360,13 +372,13 @@ class Path(BasePart):
 
     def connects_to(self, other, corporation):
         for part in [self.a, self.b]:
-            if part.edge:
+            if part.is_edge():
                 edge = part.num
                 neighbor = self.hex.neighbors.get(edge)
                 np_edge = self.hex.invert(edge)
                 if neighbor == other.hex and any(e.num == np_edge for e in other.edges):
                     return True
-            elif part.junction:
+            elif part.is_junction():
                 if other.junction == part:
                     return True
             elif part in other.nodes and not part.blocks(corporation):
@@ -396,7 +408,7 @@ class Path(BasePart):
             self.LANE_INDEX
         ]
 
-    def path(self):
+    def is_path(self):
         return True
 
     @property
@@ -524,21 +536,24 @@ class Path(BasePart):
 
         if converging:
             visited.remove(self)
-        if self.junction:
+        if self.is_junction():
             counter[self.junction] -= 1
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 13
+# %% ../../../nbs/game/engine/05_graph.ipynb 14
 class Edge(BasePart):
     def __init__(self, num, lanes=None):
         super().__init__()
         self.num = int(num)
-        self.lanes = lanes if lanes is not None else [None, None]
-        self._id = f"{self.hex.id}_{self.num}_{self.lanes[1]}"
+        self.lanes = lanes if lanes else [None, None]
+
+    @property
+    def id(self):
+        return f"{self.hex.id if self.hex else None}_{self.num}_{self.lanes[1]}"
 
     def __le__(self, other):
         return isinstance(other, Edge) and (self.num == other.num)
 
-    def edge(self):
+    def is_edge(self):
         return True
 
     def rotate(self, ticks):
@@ -548,17 +563,17 @@ class Edge(BasePart):
         edge.lanes = self.lanes
         return edge
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 15
+# %% ../../../nbs/game/engine/05_graph.ipynb 16
 class Frame(BasePart):
     def __init__(self, color, color2=None):
         super().__init__()
         self.color = color
         self.color2 = color2
 
-    def frame(self):
+    def is_frame(self):
         return True
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 17
+# %% ../../../nbs/game/engine/05_graph.ipynb 18
 class FutureLabel(BasePart):
     def __init__(self, label=None, color=None):
         super().__init__()
@@ -566,10 +581,10 @@ class FutureLabel(BasePart):
         self.color = color
         self.sticker = None
 
-    def future_label(self):
+    def is_future_label(self):
         return True
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 19
+# %% ../../../nbs/game/engine/05_graph.ipynb 20
 class Icon(BasePart, Ownable):
     def __init__(
         self,
@@ -594,16 +609,16 @@ class Icon(BasePart, Ownable):
     def blocks_lay(self):
         return self.blocks_lay
 
-    def icon(self):
+    def is_icon(self):
         return True
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 21
+# %% ../../../nbs/game/engine/05_graph.ipynb 22
 class Junction(BasePart):
     def __init__(self, lanes=[], **kwargs):
         super().__init__(**kwargs)
         self.lanes = lanes
 
-    def junction(self):
+    def is_junction(self):
         return True
 
     def clear(self):
@@ -620,7 +635,7 @@ class Junction(BasePart):
             self._exits = [exit for path in self.paths for exit in path.exits]
         return self._exits
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 23
+# %% ../../../nbs/game/engine/05_graph.ipynb 24
 class Label(BasePart):
     def __init__(self, label=None, **kwargs):
         super().__init__(**kwargs)
@@ -632,10 +647,10 @@ class Label(BasePart):
     def __eq__(self, other):
         return isinstance(other, Label) and self._label == other._label
 
-    def label(self):
+    def is_label(self):
         return True
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 25
+# %% ../../../nbs/game/engine/05_graph.ipynb 26
 class Partition(BasePart):
     SIGN = {
         "-": -1,
@@ -662,32 +677,32 @@ class Partition(BasePart):
     def add_blocker(self, private_company):
         self.blockers.append(private_company)
 
-    def partition(self):
+    def is_partition(self):
         return True
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 27
+# %% ../../../nbs/game/engine/05_graph.ipynb 28
 class Stripes(BasePart):
     def __init__(self, color, **kwargs):
         super().__init__(**kwargs)
         self.color = color
 
-    def stripes(self):
+    def is_stripes(self):
         return True
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 29
+# %% ../../../nbs/game/engine/05_graph.ipynb 30
 class Stub(BasePart):
     def __init__(self, edge, track="broad", **kwargs):
         super().__init__(**kwargs)
         self.edge = edge
         self.track = track
 
-    def stub(self):
+    def is_stub(self):
         return True
 
     def __str__(self):
         return f"<{self.__class__.__name__} edge={self.edge}>"
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 31
+# %% ../../../nbs/game/engine/05_graph.ipynb 32
 class Upgrade(BasePart):
     def __init__(self, cost, terrains=[], size=0, loc=None, **kwargs):
         super().__init__(**kwargs)
@@ -696,7 +711,7 @@ class Upgrade(BasePart):
         self.size = size
         self.loc = loc
 
-    def upgrade(self):
+    def is_upgrade(self):
         return True
 
     def is_mountain(self):
@@ -709,7 +724,7 @@ class Upgrade(BasePart):
             self._water = "water" in self.terrains
         return self._water
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 34
+# %% ../../../nbs/game/engine/05_graph.ipynb 35
 class RevenueCenter(Node):
     PHASES = ["yellow", "green", "brown", "gray", "diesel"]
 
@@ -771,7 +786,7 @@ class RevenueCenter(Node):
     def uniq_revenues(self):
         return list(set(self.revenue.values()))
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 36
+# %% ../../../nbs/game/engine/05_graph.ipynb 37
 class Border(BasePart):
     def __init__(self, edge, type=None, cost=None, color=None):
         self.edge = int(edge)
@@ -783,10 +798,10 @@ class Border(BasePart):
             color and color.lower()
         )  # Converting to lowercase for symbol-like behavior
 
-    def border(self):
+    def is_border(self):
         return True
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 38
+# %% ../../../nbs/game/engine/05_graph.ipynb 39
 class City(RevenueCenter):
     def __init__(self, revenue, **opts):
         super().__init__(revenue, **opts)
@@ -854,7 +869,7 @@ class City(RevenueCenter):
     def remove_all_reservations(self):
         self.reservations.clear()
 
-    def city(self):
+    def is_city(self):
         return True
 
     def tokenable(
@@ -867,9 +882,9 @@ class City(RevenueCenter):
         spender=None,
         same_hex_allowed=False,
     ):
+        #set_trace()
         if tokens is None:
             tokens = corporation.tokens_by_type
-        tokens = list(tokens)
         self.error = "generic"
         if not extra_slot and not tokens:
             self.error = "no_tokens"
@@ -885,7 +900,8 @@ class City(RevenueCenter):
     def _is_tokenable(
         self, token, corporation, free, cheater, extra_slot, spender, same_hex_allowed
     ):
-        if not extra_slot and not self.get_slot(token.corporation, cheater):
+        #set_trace()
+        if not extra_slot and self.get_slot(token.corporation, cheater) is None:
             self.error = "no_slots"
             return False
         if not free and token.price > (spender or corporation).cash:
@@ -903,17 +919,24 @@ class City(RevenueCenter):
             return False
         return True
 
+    @property
+    def available_slots(self):
+        reservations = self.reservations + ([None] * (4 - len(self.reservations)))
+        return sum(1 for token, reservation in zip(self.tokens, reservations) if token is None and reservation is None)
+    
     def get_slot(self, corporation, cheater=False):
+        #set_trace()
         reservation = self.find_reservation(corporation)
-        open_slot = next(
-            (
-                i
-                for i, t in enumerate(self.tokens)
-                if t is None and self.reservations[i] is None
-            ),
-            None,
-        )
-        return open_slot if cheater or reservation is None else reservation
+        reservations = self.reservations + ([None] * (4 - len(self.reservations)))
+        open_slot = next((i for i, (token, reservation) in enumerate(zip(self.tokens, reservations)) if token is None and reservation is None), None)
+        if cheater:
+            if open_slot is not None:
+                return open_slot 
+            return len(self.tokens)
+
+        if reservation is not None:
+            return reservation
+        return open_slot
 
     def place_token(
         self,
@@ -926,12 +949,14 @@ class City(RevenueCenter):
         spender=None,
         same_hex_allowed=False,
     ):
+        #set_trace()
         if check_tokenable and not self.tokenable(
             corporation, free, [token], cheater, extra_slot, spender, same_hex_allowed
         ):
             self._raise_token_error(corporation)
         self.exchange_token(token, cheater, extra_slot)
-        self.tile.reservations.remove(corporation)
+        if corporation in self.tile.reservations:
+            self.tile.reservations.remove(corporation)
         self.remove_reservation(corporation)
 
     def exchange_token(self, token, cheater=False, extra_slot=False):
@@ -955,7 +980,7 @@ class City(RevenueCenter):
             f"{corporation.name} {error_msg} on {self.id} {self.tile.hex.id if self.tile.hex else 'N/A'}"
         )
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 40
+# %% ../../../nbs/game/engine/05_graph.ipynb 41
 class Town(RevenueCenter):
     def __init__(self, revenue, to_city=None, boom=None, style=None, **kwargs):
         super().__init__(revenue)
@@ -968,7 +993,7 @@ class Town(RevenueCenter):
             return True
         return super().__le__(other)
 
-    def town(self):
+    def is_town(self):
         return True
 
     def rect(self):
@@ -979,7 +1004,7 @@ class Town(RevenueCenter):
     def hidden(self):
         return self.style == "hidden"
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 42
+# %% ../../../nbs/game/engine/05_graph.ipynb 43
 class Halt(Town):
     def __init__(self, symbol, revenue="0", route="optional", **opts):
         super().__init__(revenue, **opts)
@@ -987,22 +1012,22 @@ class Halt(Town):
         self.route = route if route is None else route.to_sym()
 
     def __le__(self, other):
-        if other.town():
+        if other.is_town():
             return True
         return super().__le__(other)
 
-    def halt(self):
+    def is_halt(self):
         return True
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 44
+# %% ../../../nbs/game/engine/05_graph.ipynb 45
 class Offboard(RevenueCenter):
     def blocks(self, corporation):
         return True
 
-    def offboard(self):
+    def is_offboard(self):
         return True
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 46
+# %% ../../../nbs/game/engine/05_graph.ipynb 47
 class Pass(City):
     def __init__(self, revenue, **opts):
         super().__init__(revenue, **opts)
@@ -1010,10 +1035,10 @@ class Pass(City):
         self.size = int(opts.get("size", 1))
         self.route = opts.get("route", "never").lower()
 
-    def _pass(self):
+    def is_pass(self):
         return True
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 49
+# %% ../../../nbs/game/engine/05_graph.ipynb 50
 class Token:
     def __init__(
         self, corporation, price=0, logo=None, simple_logo=None, type="normal"
@@ -1033,6 +1058,13 @@ class Token:
         self.status = None
         self.location_type = None
 
+    def __str__(self):
+        location_string = f", hex: {self.hex}, city: {self.city}" if self.used else ""
+        return f"Token - corporation: {self.corporation}, used: {self.used}, type: {self.type}{location_string}"
+
+    def __repr__(self):
+        return self.__str__()
+    
     def destroy(self):
         if self.corporation:
             self.corporation.tokens.remove(self)
@@ -1104,7 +1136,7 @@ class Token:
         self.extra = extra
         self.cheater = cheater
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 51
+# %% ../../../nbs/game/engine/05_graph.ipynb 52
 class Graph:
     def __init__(self, game, **opts):
         self.game = game
@@ -1161,7 +1193,7 @@ class Graph:
         self, corporation, cheater=False, same_hex_allowed=False, tokens=None
     ):
         if tokens is None:
-            tokens = corporation.tokens_by_type()
+            tokens = corporation.tokens_by_type
         tokeners = self.cheater_tokens if cheater else self.tokens
         if corporation in tokeners:
             return tokeners[corporation]
@@ -1376,7 +1408,7 @@ class Graph:
             self.connected_paths[corporation] = paths
             self.reachable_hexes[corporation] = {path.hex: True for path in paths}
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 53
+# %% ../../../nbs/game/engine/05_graph.ipynb 54
 class DistanceGraph:
     def __init__(self, game, separate_node_types=False):
         self.game = game
@@ -1431,9 +1463,9 @@ class DistanceGraph:
         count = 1 if node.visit_cost > 0 else 0
         distance_key = "node"
         if self.separate_node_types:
-            if node.city():
+            if node.is_city():
                 distance_key = "city"
-            elif node.town() and not node.halt():
+            elif node.is_town() and not node.is_halt():
                 distance_key = "town"
         distance[distance_key] += count
 
@@ -1496,7 +1528,7 @@ class DistanceGraph:
         self.path_distances[corporation] = p_distances
         self.hex_distances[corporation] = h_distances
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 55
+# %% ../../../nbs/game/engine/05_graph.ipynb 56
 class Route:
     def __init__(self, game, phase, train, **opts):
         self.game = game
@@ -1698,7 +1730,7 @@ class Route:
             route.clear_cache(all=True)
 
     def disambiguate_node(self, nodes):
-        onodes = [node for node in nodes if node.offboard()]
+        onodes = [node for node in nodes if node.is_offboard()]
 
         # Determine the relevant nodes based on the current route's state
         list = (
@@ -2074,7 +2106,7 @@ class Route:
             and self.connection_data[0]["left"] == self.connection_data[0]["right"]
         )
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 57
+# %% ../../../nbs/game/engine/05_graph.ipynb 58
 class TileConfig:
     WHITE = {
         "blank": "",
@@ -2591,11 +2623,11 @@ class TileConfig:
         "salmon",
     ]
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 59
+# %% ../../../nbs/game/engine/05_graph.ipynb 60
 from collections import defaultdict
 
 
-class Tile:
+class Tile(TileConfig):
     ALL_EDGES = [0, 1, 2, 3, 4, 5]
 
     @classmethod
@@ -2603,28 +2635,28 @@ class Tile:
         color = None
         code = None
 
-        if name in TileConfig.WHITE:
-            color, code = "white", TileConfig.WHITE[name]
-        elif name in TileConfig.YELLOW:
-            color, code = "yellow", TileConfig.YELLOW[name]
-        elif name in TileConfig.GREEN:
-            color, code = "green", TileConfig.GREEN[name]
-        elif name in TileConfig.GREENBROWN:
-            color, code = "green", TileConfig.GREENBROWN[name]
+        if name in cls.WHITE:
+            color, code = "white", cls.WHITE[name]
+        elif name in cls.YELLOW:
+            color, code = "yellow", cls.YELLOW[name]
+        elif name in cls.GREEN:
+            color, code = "green", cls.GREEN[name]
+        elif name in cls.GREENBROWN:
+            color, code = "green", cls.GREENBROWN[name]
             code = "stripes=color:brown;" + code if code else "stripes=color:brown"
-        elif name in TileConfig.BROWN:
-            color, code = "brown", TileConfig.BROWN[name]
-        elif name in TileConfig.BROWNGRAY:
-            color, code = "brown", TileConfig.BROWNGRAY[name]
+        elif name in cls.BROWN:
+            color, code = "brown", cls.BROWN[name]
+        elif name in cls.BROWNGRAY:
+            color, code = "brown", cls.BROWNGRAY[name]
             code = "stripes=color:gray;" + code if code else "stripes=color:gray"
-        elif name in TileConfig.GRAY:
-            color, code = "gray", TileConfig.GRAY[name]
-        elif name in TileConfig.RED:
-            color, code = "red", TileConfig.RED[name]
-        elif name in TileConfig.BLUE:
-            color, code = "blue", TileConfig.BLUE[name]
-        elif name in TileConfig.BROWNSEPIA:
-            color, code = "brown", TileConfig.BROWNSEPIA[name]
+        elif name in cls.GRAY:
+            color, code = "gray", cls.GRAY[name]
+        elif name in cls.RED:
+            color, code = "red", cls.RED[name]
+        elif name in cls.BLUE:
+            color, code = "blue", cls.BLUE[name]
+        elif name in cls.BROWNSEPIA:
+            color, code = "brown", cls.BROWNSEPIA[name]
             code = "stripes=color:sepia;" + code if code else "stripes=color:sepia"
         else:
             raise GameError(f"Tile '{name}' not found")
@@ -2650,13 +2682,22 @@ class Tile:
 
     @classmethod
     def from_code(cls, name, color, code, **opts):
-        return cls(name=name, color=color, code=code, parts=cls.decode(code), **opts)
+        return Tile(name=name, color=color, code=code, parts=cls.decode(code), **opts)
 
     @staticmethod
     def part(type, params, cache):
+        #set_trace()
         if type == "path":
-            params = {k: (int(v) if k == "lanes" else v) for k, v in params.items()}
-            # Assuming Part.Path.make_lanes is a class method to be implemented
+            for k, v in params.items():
+                if k in ['terminal', 'a_lane', 'b_lane', 'ignore', 'track']:
+                    params[k] = v
+                elif k == 'lanes':
+                    params[k] = int(v)
+                else:
+                    if v[0] == '_':
+                        params[k] = cache[int(v[1:])]
+                    else:
+                        params[k] = Edge(v)
             return Path.make_lanes(**params)
 
         elif type == "city":
@@ -2665,7 +2706,7 @@ class Tile:
             return city
 
         elif type == "pass":
-            pass_ = Pass(**params)  # `pass` is a keyword in Python, using pass_ instead
+            pass_ = Pass(**params)
             cache.append(pass_)
             return pass_
 
@@ -2675,7 +2716,7 @@ class Tile:
             return town
 
         elif type == "halt":
-            halt = Halt(**params)
+            halt = Halt(params.get('symbol'), **params)
             cache.append(halt)
             return halt
 
@@ -2688,13 +2729,11 @@ class Tile:
             return Label(**params)
 
         elif type == "upgrade":
-            params["terrain"] = (
-                params.get("terrain", "").split("|") if "terrain" in params else None
-            )
-            return Upgrade(**params)
+            terrain = (params.get("terrain", "").split("|") if "terrain" in params else None)
+            return Upgrade(params.get('cost'), terrain, params.get('size'), loc=params.get('loc'))
 
         elif type == "border":
-            return Border(**params)
+            return Border(params.get('edge'), type, params.get('cost'), params.get('color'))
 
         elif type == "junction":
             junction = Junction()
@@ -2702,22 +2741,22 @@ class Tile:
             return junction
 
         elif type == "icon":
-            return Icon(**params)
+            return Icon(params.get('image'), params.get('name'), params.get('sticky'), params.get('blocks_lay'), **params)
 
         elif type == "stub":
-            return Stub(edge=int(params["edge"]))
+            return Stub(int(params.get("edge")))
 
         elif type == "partition":
-            return Partition(**params)
+            return Partition(params.get('a'), params.get('b'), type, params.get('restrict'))
 
         elif type == "frame":
-            return Frame(**params)
+            return Frame(params.get('color'), params.get('color2'))
 
         elif type == "stripes":
-            return Stripes(**params)
+            return Stripes(params.get('color'))
 
         elif type == "future_label":
-            return FutureLabel(**params)
+            return FutureLabel(params.get('label'), params.get('color'))
 
         return None
 
@@ -2744,6 +2783,8 @@ class Tile:
                 self.parts.append(part)
         self.rotation = rotation
         self.cities = []
+        self.paths_cache = None
+        self._exits = None
         self._paths = []
         self.future_paths = []
         self.stubs = []
@@ -2815,7 +2856,7 @@ class Tile:
             node.clear()
         if self.junction:
             self.junction.clear()
-        self._paths = None
+        self.paths_cache = None
         self._exits = None
         self._exit_count = None
         self.preferred_city_town_edges = None
@@ -2827,18 +2868,15 @@ class Tile:
 
     @property
     def paths(self):
-        """Get rotated paths."""
-        if not hasattr(self, "_paths"):
-            self._paths = [path.rotate(self.rotation) for path in self.paths]
-        return self._paths
+        if not self.paths_cache:
+            self.paths_cache = [path.rotate(self.rotation) for path in self._paths]
+        return self.paths_cache
 
     @property
     def exits(self):
         """Get unique rotated exits."""
-        if not hasattr(self, "_exits"):
-            self._exits = list(
-                set(self.rotate(e.num, self.rotation) for e in self.edges)
-            )
+        if not self._exits:
+            self._exits = list(set(self.rotate(e.num, self.rotation) for e in self.edges))
         return self._exits
 
     def converging_exit(self, num):
@@ -2864,13 +2902,13 @@ class Tile:
     def ignore_gauge_walk(self, val):
         """The setter for ignore_gauge_walk."""
         self._ignore_gauge_walk = val
-        for path in self.paths:
+        for path in self._paths:
             path.ignore_gauge_walk = val
         for node in self.nodes:
             node.clear()
         if self.junction:
             self.junction.clear()
-        self._paths = None
+        self.paths_cache = None
 
     @property
     def ignore_gauge_compare(self):
@@ -2881,13 +2919,13 @@ class Tile:
     def ignore_gauge_compare(self, val):
         """The setter for ignore_gauge_compare."""
         self._ignore_gauge_compare = val
-        for path in self.paths:
+        for path in self._paths:
             path.ignore_gauge_compare = val
         for node in self.nodes:
             node.clear()
         if self.junction:
             self.junction.clear()
-        self._paths = None
+        self.paths_cache = None
 
     @property
     def terrain(self):
@@ -2898,7 +2936,7 @@ class Tile:
 
     def ambiguous_connection(self):
         """Check if the tile has ambiguous intra-tile paths."""
-        return len([path for path in self.paths if len(path.nodes) > 1]) > 1
+        return len([path for path in self._paths if len(path.nodes) > 1]) > 1
 
     def paths_are_subset_of(self, other_paths):
         """Check if the tile's paths are a subset of another set of paths."""
@@ -2912,7 +2950,7 @@ class Tile:
             return all(
                 any(path.rotate(ticks) <= other for other in other_paths)
                 for ticks in Tile.ALL_EDGES
-                for path in self.paths
+                for path in self._paths
             )
 
     def add_blocker(self, private_company, hidden=False):
@@ -2993,14 +3031,14 @@ class Tile:
         edge_count = defaultdict(float)
 
         # Handling special cases for multiple city/town option tiles
-        if not self.paths and len(self.cities) == 2 and len(self.towns) == 2:
+        if not self._paths and len(self.cities) == 2 and len(self.towns) == 2:
             div = 3
             for index, x in enumerate(self.cities + self.towns):
                 edge_count[x] = index * div
             return edge_count
 
         # Avoid cities rendering on top of each other if the tile has no paths but multiple cities
-        if not self.paths and len(self.cities) >= 2:
+        if not self._paths and len(self.cities) >= 2:
             div = 6 / len(self.cities)
             for index, x in enumerate(self.cities):
                 edge_count[x] = index * div
@@ -3081,7 +3119,7 @@ class Tile:
         return self._crossover
 
     def compute_crossover(self):
-        if len(self.paths) <= 1:
+        if len(self._paths) <= 1:
             return False
 
         edge_paths = defaultdict(list)
@@ -3153,41 +3191,41 @@ class Tile:
                 part.blocks_lay() if hasattr(part, "blocks_lay") else False
             )
 
-            if hasattr(part, "city") and part.city():
+            if part.is_city():
                 self.cities.append(part)
                 self.city_towns.append(part)
-            elif hasattr(part, "label") and part.label():
+            elif part.is_label():
                 self.labels.append(part)
-            elif hasattr(part, "path") and part.path():
-                if getattr(part, "track", None) == "future":
+            elif part.is_path():
+                if part.track == "future":
                     self.future_paths.append(part)
                 else:
-                    self.paths.append(part)
-            elif hasattr(part, "town") and part.town():
+                    self._paths.append(part)
+            elif part.is_town():
                 self.towns.append(part)
                 self.city_towns.append(part)
-                if hasattr(part, "halt") and part.halt():
+                if part.is_halt():
                     self.halts.append(part)
-            elif hasattr(part, "upgrade") and part.upgrade():
+            elif part.is_upgrade():
                 self.upgrades.append(part)
-            elif hasattr(part, "offboard") and part.offboard():
+            elif part.is_offboard():
                 self.offboards.append(part)
-            elif hasattr(part, "border") and part.border():
+            elif part.is_border():
                 self.original_borders.append(part)
                 self.borders.append(part)
-            elif hasattr(part, "junction") and part.junction():
+            elif part.is_junction():
                 self.junction = part
-            elif hasattr(part, "icon") and part.icon():
+            elif part.is_icon():
                 self.icons.append(part)
-            elif hasattr(part, "stub") and part.stub():
+            elif part.is_stub():
                 self.stubs.append(part)
-            elif hasattr(part, "partition") and part.partition():
+            elif part.is_partition():
                 self.partitions.append(part)
-            elif hasattr(part, "frame") and part.frame():
+            elif part.is_frame():
                 self.frame = part
-            elif hasattr(part, "stripes") and part.stripes():
+            elif part.is_stripes():
                 self.stripes = part
-            elif hasattr(part, "future_label") and part.future_label():
+            elif part.is_future_label():
                 self.future_label = part
             else:
                 print(part)
@@ -3199,16 +3237,16 @@ class Tile:
             part.index = idx
             part.tile = self
 
-        self.nodes = list(set([node for path in self.paths for node in path.nodes]))
-        self.stops = list(set([stop for path in self.paths for stop in path.stops]))
-        self.edges = list(set([edge for path in self.paths for edge in path.edges]))
+        self.nodes = list(set([node for path in self._paths for node in path.nodes]))
+        self.stops = list(set([stop for path in self._paths for stop in path.stops]))
+        self.edges = list(set([edge for path in self._paths for edge in path.edges]))
 
         self.revenue_stops = list(set(self.stops + self.offboards))
 
         for edge in self.edges:
             edge.tile = self
 
-# %% ../../../nbs/game/engine/05_graph.ipynb 61
+# %% ../../../nbs/game/engine/05_graph.ipynb 62
 import re
 
 
@@ -3288,6 +3326,7 @@ class Hex:
         hide_location_name=False,
         empty=False,
     ):
+        #set_trace()
         self.coordinates = coordinates
         self.layout = layout
         self.axes = axes
@@ -3296,7 +3335,8 @@ class Hex:
         self.all_neighbors = {}
         self.location_name = location_name
         self.hide_location_name = hide_location_name
-        self.original_tile = self._tile = tile
+        self._tile = tile
+        self.original_tile = tile
         self.tile.hex = self
         self.empty = empty
         self.ignore_for_axes = False
@@ -3311,6 +3351,9 @@ class Hex:
 
     def __eq__(self, other):
         return self.coordinates == other.coordinates
+
+    def __hash__(self):
+        return hash((self.coordinates))
 
     @property
     def name(self):
@@ -3439,7 +3482,6 @@ class Hex:
         """Place a token on the hex, adding an icon for it."""
         token.place(self)
         self.tokens.append(token)
-        # Assuming Part.Icon is a defined class elsewhere, similar to Ruby's OpenStruct or Struct for simple data holding
         icon = Icon(
             "", token.corporation.id, True, blocks_lay, preprinted, loc=loc
         )

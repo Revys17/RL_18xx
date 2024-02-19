@@ -903,7 +903,7 @@ class PlaceToken(BaseAction):
         self.slot = slot
         self.cost = cost
         self.tokener = tokener
-        token_owner = tokener or (entity.owner if entity.company else entity)
+        token_owner = tokener or (entity.owner if entity.is_company() else entity)
         self.token = token_owner.find_token_by_type(token_type) if token_type else None
 
     @staticmethod
@@ -923,7 +923,7 @@ class PlaceToken(BaseAction):
             "slot": self.slot,
             "cost": self.cost,
             "tokener": self.tokener.id if self.tokener else None,
-            "token_type": None if self.token.type == "normal" else self.token.type,
+            "token_type": self.token.type if self.token and self.token.type != "normal" else None,
         }
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 92
