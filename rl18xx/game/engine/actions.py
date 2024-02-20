@@ -703,6 +703,9 @@ class LayTile(BaseAction):
             else None,
         }
 
+    def __str__(self):
+        return super().__str__() + f", hex: [{self.hex}], tile: [{self.tile}, rotation: [{self.rotation}]"
+
 # %% ../../../nbs/game/engine/03_actions.ipynb 66
 class Message(BaseAction):
     def __init__(self, entity, message):
@@ -904,7 +907,7 @@ class PlaceToken(BaseAction):
         self.cost = cost
         self.tokener = tokener
         token_owner = tokener or (entity.owner if entity.is_company() else entity)
-        self.token = token_owner.find_token_by_type(token_type) if token_type else None
+        self.token = token_owner.find_token_by_type(token_type)
 
     @staticmethod
     def dict_to_args(args, game):
@@ -925,6 +928,9 @@ class PlaceToken(BaseAction):
             "tokener": self.tokener.id if self.tokener else None,
             "token_type": self.token.type if self.token and self.token.type != "normal" else None,
         }
+
+    def __str__(self):
+        return super().__str__() + f", city: [{self.city}], slot: [{self.slot}, cost: [{self.cost}, tokener: [{self.tokener}]"
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 92
 class ProgramEnable(BaseAction):
