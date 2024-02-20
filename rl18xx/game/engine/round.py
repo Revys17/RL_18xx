@@ -2785,7 +2785,7 @@ class Dividend(BaseStep):
     ACTIONS = [DividendAction]
 
     def actions(self, entity):
-        if entity.is_company() or self.total_revenue == 0:
+        if entity.is_company() or self.total_revenue() == 0:
             return []
         return self.ACTIONS
 
@@ -2801,6 +2801,7 @@ class Dividend(BaseStep):
 
     DIVIDEND_TYPES = ["payout", "withhold"]
 
+    @property
     def dividend_types(self):
         return self.DIVIDEND_TYPES
 
@@ -2810,25 +2811,19 @@ class Dividend(BaseStep):
 
     def skip(self):
         action = DividendAction(self.current_entity, kind="withhold")
-        if self.game().actions:
-            action.id = self.game().actions[-1].id
+        if self.game.actions:
+            action.id = self.game.actions[-1].id
         self.process_dividend(action)
 
     def dividend_options(self, entity):
-        revenue = self.total_revenue
-        return {
-            kind: {
-                "corporation": self.send(kind, entity, revenue)["corporation"],
-                "per_share": self.send(kind, entity, revenue)["per_share"],
-                "divs_to_corporation": self.corporation_dividends(
-                    entity, self.send(kind, entity, revenue)["per_share"]
-                ),
-                **self.share_price_change(
-                    entity, revenue - self.send(kind, entity, revenue)["corporation"]
-                ),
-            }
-            for kind in self.dividend_types
-        }
+        revenue = self.total_revenue()
+        options = {}
+        for dividend_type in self.dividend_types:
+            payout = getattr(self, dividend_type)(entity, revenue)
+            payout["divs_to_corporation"] = self.corporation_dividends(entity, payout["per_share"])
+            payout.update(self.share_price_change(entity, revenue - payout["corporation"]))
+            options[dividend_type] = payout
+        return options
 
     def variable_share_multiplier(self, corporation):
         return 1
@@ -2841,7 +2836,7 @@ class Dividend(BaseStep):
 
     def process_dividend(self, action):
         entity = action.entity
-        revenue = self.total_revenue
+        revenue = self.total_revenue()
         kind = action.kind
         payout = self.dividend_options(entity)[kind]
 
@@ -2853,11 +2848,11 @@ class Dividend(BaseStep):
         )
 
         entity.operating_history[
-            (self.game().turn, self.round.round_num)
+            (self.game.turn, self.round.round_num)
         ] = operating_history
 
         if not isinstance(entity, str) and entity.is_company():
-            self.game().close_companies_on_event(entity, "ran_train", [])
+            self.game.close_companies_on_event(entity, "ran_train", [])
         for train in entity.trains:
             train.operated = True
 
@@ -2873,20 +2868,20 @@ class Dividend(BaseStep):
 
     def payout_corporation(self, amount, entity):
         if amount > 0:
-            self.game().bank.spend(amount, entity)
+            self.game.bank.spend(amount, entity)
 
     def log_run_payout(self, entity, kind, revenue, action, payout):
-        if kind not in DividendAction.DIVIDEND_TYPES:
-            self.log(
-                f"{entity.name} runs for {self.game().format_currency(revenue)} and pays {action.kind}"
+        if kind not in self.DIVIDEND_TYPES:
+            self.log.append(
+                f"{entity.name} runs for {self.game.format_currency(revenue)} and pays {action.kind}"
             )
 
         if payout["corporation"] > 0:
-            self.log(
-                f"{entity.name} withholds {self.game().format_currency(payout['corporation'])}"
+            self.log.append(
+                f"{entity.name} withholds {self.game.format_currency(payout['corporation'])}"
             )
         elif payout["per_share"] == 0:
-            self.log(f"{entity.name} does not run")
+            self.log.append(f"{entity.name} does not run")
 
     def share_price_change(self, entity, revenue):
         if revenue > 0:
@@ -2915,18 +2910,18 @@ class Dividend(BaseStep):
 
     def holder_for_corporation(self, entity):
         return (
-            entity if entity.capitalization == "incremental" else self.game().share_pool
+            entity if entity.capitalization == "incremental" else self.game.share_pool
         )
 
     def payout_shares(self, entity, revenue):
         per_share = self.payout_per_share(entity, revenue)
         payouts = {}
-        for payee in self.game().players + self.game().corporations:
+        for payee in self.game.players + self.game.corporations:
             self.payout_entity(entity, payee, per_share, payouts)
 
         receivers = ", ".join(
             [
-                f"{self.game().format_currency(cash)} to {receiver.name}"
+                f"{self.game.format_currency(cash)} to {receiver.name}"
                 for receiver, cash in payouts.items()
             ]
         )
@@ -2943,7 +2938,7 @@ class Dividend(BaseStep):
         if amount > 0:
             receiver = holder if holder else None
             payouts[receiver] = amount
-            self.game().bank.spend(amount, receiver, check_positive=False)
+            self.game.bank.spend(amount, receiver, check_positive=False)
 
     def change_share_price(self, entity, payout):
         if not payout["share_direction"]:
@@ -2960,17 +2955,18 @@ class Dividend(BaseStep):
         ):
             for _ in range(share_times):
                 if direction == "left":
-                    self.game().stock_market.move_left(entity)
+                    self.game.stock_market.move_left(entity)
                 elif direction == "right":
-                    self.game().stock_market.move_right(entity)
+                    self.game.stock_market.move_right(entity)
                     right_times += 1
                 elif direction == "up":
-                    self.game().stock_market.move_up(entity)
+                    self.game.stock_market.move_up(entity)
                 elif direction == "down":
-                    self.game().stock_market.move_down(entity)
+                    self.game.stock_market.move_down(entity)
 
-        self.game().log_share_price(entity, old_price, right_times)
+        self.game.log_share_price(entity, old_price, right_times)
 
+    @property
     def routes(self):
         return self.round.routes
 
@@ -2978,27 +2974,27 @@ class Dividend(BaseStep):
         return self.round.extra_revenue or 0
 
     def total_revenue(self):
-        return self.game().routes_revenue(self.routes()) + self.extra_revenue()
+        return self.game.routes_revenue(self.routes) + self.extra_revenue()
 
     def rust_obsolete_trains(self, entity):
         rusted_trains = [train for train in entity.trains if train.obsolete]
         if rusted_trains:
-            self.game().rust(rusted_trains)
-            self.log("-- Event: Obsolete trains rust --")
+            self.game.rust(rusted_trains)
+            self.log.append("-- Event: Obsolete trains rust --")
 
     def pass_(self):
         entity = self.current_entity
         if entity:
             if len(entity.operating_history) == 1:
-                self.game().close_companies_on_event(entity, "operated", [])
+                self.game.close_companies_on_event(entity, "operated")
             super().pass_()
 
     def log_payout_shares(self, entity, revenue, per_share, receivers):
-        msg = f"{entity.name} pays out {self.game().format_currency(revenue)} = "
-        msg += f"{self.game().format_currency(per_share)} per share"
+        msg = f"{entity.name} pays out {self.game.format_currency(revenue)} = "
+        msg += f"{self.game.format_currency(per_share)} per share"
         if receivers:
             msg += f" ({receivers})"
-        self.log(msg)
+        self.log.append(msg)
 
 # %% ../../../nbs/game/engine/06_round.ipynb 58
 class EndGame(BaseStep):
@@ -5774,6 +5770,7 @@ class BaseRound:
         return True
 
     def skip_steps(self):
+        #set_trace()
         for step in self.steps:
             if not step.active or not step.blocks or (self.entities[self.entity_index] is not None and self.entities[self.entity_index].is_closed()):
                 continue

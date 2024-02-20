@@ -12,6 +12,7 @@ from rl18xx.game.engine.core import (
     Phase,
     RouteTooLong,
     StockMarket,
+    pascal_to_snake
 )
 from rl18xx.game.engine.entities import (
     Bank,
@@ -1330,7 +1331,7 @@ class BaseGame:
         return sorted(all_bundles, key=lambda bundle: bundle.percent)
 
     def partial_bundles_for_presidents_share(self, corporation, bundle, percent):
-        normal_percent = corporation.share_percent()
+        normal_percent = corporation.share_percent
         difference = corporation.presidents_percent - normal_percent
         num_partial_bundles = difference / normal_percent
         return [
@@ -1907,7 +1908,7 @@ class BaseGame:
         self.log.append(f"{corporation.name} floats")
         if corporation.capitalization not in ["incremental", "none"]:
             self.bank.spend(
-                corporation.par_price().price * corporation.total_shares(), corporation
+                corporation.par_price().price * corporation.total_shares, corporation
             )
             self.log.append(
                 f"{corporation.name} receives {self.format_currency(corporation.cash)}"
@@ -3240,7 +3241,7 @@ class BaseGame:
             return True
 
         current_step = self.ability_blocking_step()
-        current_step_name = current_step.type if current_step else None
+        current_step_name = pascal_to_snake(current_step.__class__.__name__) if current_step else None
 
         if (
             ability.type == "tile_lay"
