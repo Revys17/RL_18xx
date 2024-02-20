@@ -55,6 +55,7 @@ class Operator(Entity):
     def is_operator(self):
         return True
 
+    @property
     def runnable_trains(self):
         return [train for train in self.trains if not train.operated]
 
@@ -105,7 +106,7 @@ class ShareBundle:
         self.share_price = None
 
     def num_shares(self, ceil=True):
-        num = self.percent / self.corporation.share_percent()
+        num = self.percent / self.corporation.share_percent
         return ceil(num) if ceil else num
 
     @property
@@ -210,7 +211,7 @@ class Share(Ownable):
         return hash((self.percent, self._corporation, self.owner))
 
     def num_shares(self, ceil=True):
-        num = self.percent / self._corporation.share_percent()
+        num = self.percent / self._corporation.share_percent
         return math.ceil(num) if ceil else num
 
     def price_per_share(self):
@@ -1172,8 +1173,9 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
             return None
         return self.share_price if self.always_market_price else self._par_price
 
+    @property
     def total_shares(self):
-        return 100 / self.share_percent()
+        return 100 / self.share_percent
 
     def num_ipo_shares(self):
         return self.ipo_owner.num_shares_of(self)
@@ -1188,7 +1190,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
     def num_ipo_reserved_shares(self):
         return (
             sum(share.percent for share in self.reserved_shares())
-            / self.share_percent()
+            / self.share_percent
         )
 
     def num_treasury_shares(self):
@@ -1200,7 +1202,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
                 holder_value
                 for holder, holder_value in self.player_share_holders().items()
             )
-            / self.share_percent()
+            / self.share_percent
         )
 
     def num_corporate_shares(self):
@@ -1209,7 +1211,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
                 holder_value
                 for holder, holder_value in self.corporate_share_holders().items()
             )
-            / self.share_percent()
+            / self.share_percent
         )
 
     def num_market_shares(self):
@@ -1219,7 +1221,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
                 for holder, holder_value in self.share_holders.items()
                 if holder.share_pool()
             )
-            / self.share_percent()
+            / self.share_percent
         )
 
     def player_share_holders(self, corporate=False):
@@ -1299,10 +1301,10 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
         )
 
     def percent_in_market(self):
-        return self.num_market_shares() * self.share_percent()
+        return self.num_market_shares() * self.share_percent
 
     def percent_in_reserved(self):
-        return self.num_ipo_reserved_shares() * self.share_percent()
+        return self.num_ipo_reserved_shares() * self.share_percent
 
     def unfloat(self):
         self._floated = False
@@ -1361,6 +1363,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
     def presidents_percent(self):
         return self.presidents_share.percent
 
+    @property
     def share_percent(self):
         return (
             self.forced_share_percent
@@ -1433,6 +1436,7 @@ class Minor(Abilities, Operator, Entity, Ownable, Passer, Spender):
     def is_minor(self):
         return True
 
+    @property
     def total_shares(self):
         return 1
 
