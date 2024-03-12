@@ -20,7 +20,7 @@ from rl18xx.game.engine.round import (
     Operating as OperatingRound
 )
 
-# %% ../../../../../nbs/game/engine/game/titles/00_g1830.ipynb 5
+# %% ../../../../../nbs/game/engine/game/titles/00_g1830.ipynb 6
 class Entities:
     COMPANIES = [
         {
@@ -221,7 +221,7 @@ class Entities:
         },
     ]
 
-# %% ../../../../../nbs/game/engine/game/titles/00_g1830.ipynb 6
+# %% ../../../../../nbs/game/engine/game/titles/00_g1830.ipynb 8
 class Map:
     TILES = {
         "1": 1,
@@ -423,7 +423,7 @@ class Map:
     }
     LAYOUT = "pointy"
 
-# %% ../../../../../nbs/game/engine/game/titles/00_g1830.ipynb 8
+# %% ../../../../../nbs/game/engine/game/titles/00_g1830.ipynb 10
 from ..base import Meta as BaseMeta
 
 
@@ -451,7 +451,7 @@ class Meta(BaseMeta):
         },
     ]
 
-# %% ../../../../../nbs/game/engine/game/titles/00_g1830.ipynb 10
+# %% ../../../../../nbs/game/engine/game/titles/00_g1830.ipynb 13
 from ..base import BaseGame
 
 

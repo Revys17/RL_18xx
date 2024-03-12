@@ -13,7 +13,7 @@ __all__ = ['BaseStep', 'Auctioner', 'Programmer', 'ShareBuying', 'EmergencyMoney
            'Operating', 'Stock']
 
 # %% ../../../nbs/game/engine/06_round.ipynb 4
-from .core import Assignable, GameError, Passer, pascal_to_snake
+from .core import Assignable, GameError, Passer, pascal_to_snake, ShareHolder
 from .entities import Corporation, Minor, Share
 from rl18xx.game.engine.actions import (
     BuyTrain as BuyTrainAction,
@@ -411,7 +411,7 @@ class ShareBuying:
         corporation = bundle.corporation
 
         return corporation.holding_ok(entity, bundle.common_percent) and (
-            not corporation.counts_for_limit
+            not corporation.counts_for_limit()
             or exchange
             or self.game.num_certs(entity) < self.game.cert_limit(entity)
         )
@@ -476,8 +476,8 @@ class EmergencyMoney:
     def causes_president_swap(self, corporation, bundle):
         seller = bundle.owner
         share_holders = corporation.player_share_holders(corporate=True)
-        remaining = share_holders[seller] - bundle.percent
-        next_highest = max(share_holders.values() - {seller}, default=0)
+        remaining = share_holders.get(seller, 0) - bundle.percent
+        next_highest = max((value for key, value in share_holders.items() if key != seller), default=0)
         return remaining < next_highest
 
     def issuable_shares(self, entity):
@@ -624,9 +624,19 @@ class Train(EmergencyMoney):
             return False
         return super().can_sell(entity, bundle)
 
+    def sellable_shares(self, entity):
+        shares = []
+        if entity.owner and entity.owner.is_player():
+            shares.extend([bundle for corporation in self.game.corporations for bundle in self.game.bundles_for_corporation(entity.owner, corporation) if self.can_sell(entity.owner, bundle)])
+        
+        if isinstance(entity, ShareHolder):
+            shares.extend([bundle for corporation in self.game.corporations for bundle in self.game.bundles_for_corporation(entity, corporation) if self.can_sell(entity, bundle)])
+        
+        return shares
+    
     def process_sell_shares(self, action):
         if action.entity != self.current_entity:
-            self.last_share_sold_price = action.bundle.price_per_share
+            self.last_share_sold_price = action.bundle.price_per_share()
         super().process_sell_shares(action)
         if action.entity != self.current_entity:
             self.corporations_sold.append(action.bundle.corporation)
@@ -648,6 +658,89 @@ class Train(EmergencyMoney):
     def ebuy_offer_only_cheapest_depot_train(self):
         return self.game.EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST
 
+    def buyable_trains(self, entity):
+        depot_trains = self.depot.depot_trains()
+        other_trains = self.game.can_buy_train_from_others() and self.other_trains(entity) or []
+    
+        if entity.cash < self.depot.min_depot_price:
+            if self.ebuy_offer_only_cheapest_depot_train():
+                depot_trains = [self.depot.min_depot_train]
+            
+            if self.game.EBUY_SELL_MORE_THAN_NEEDED_LIMITS_DEPOT_TRAIN:
+                depot_trains = depot_trains[:]
+                depot_trains = [t for t in depot_trains if t.price >= self.spend_minmax(entity, t)[0]]
+    
+            if self.last_share_sold_price is not None:
+                if self.game.EBUY_OTHER_VALUE:
+                    other_trains = [t for t in other_trains if t.price >= self.spend_minmax(entity, t)[0]]
+                else:
+                    other_trains = []
+    
+        if entity.cash == 0 and not self.game.EBUY_OTHER_VALUE:
+            other_trains = []
+    
+        other_trains = [t for t in other_trains if not (entity.cash < t.price and self.must_buy_at_face_value(t, entity))]
+    
+        return depot_trains + other_trains
+
+    def other_trains(self, entity):
+        return self.depot.other_trains(entity)
+    
+    def buyable_exchangeable_train_variants(self, train, entity, exchange):
+        if exchange:
+            return self.exchangeable_train_variants(train, entity)
+        else:
+            return self.buyable_train_variants(train, entity)
+    
+    def buyable_train_variants(self, train, entity):
+        if not any(bt.variants[bt.name] for bt in self.buyable_trains(entity)):
+            return []
+        return self.train_variant_helper(train, entity)
+    
+    def exchangeable_train_variants(self, train, entity):
+        discount_info = self.game.discountable_trains_for(entity)
+        if not any(discount_train.variants[discount_train.name] for _, discount_train, _, _ in discount_info):
+            return []
+        return self.train_variant_helper(train, entity)
+    
+    def train_variant_helper(self, train, entity):
+        variants = [v for v in train.variants.values()]
+        if train.owned_by_corporation:
+            return variants
+    
+        if self.must_issue_before_ebuy(entity):
+            variants = [v for v in variants if entity.cash >= v['price']]
+        return variants
+    
+    def must_issue_before_ebuy(self, corporation):
+        return (self.game.MUST_EMERGENCY_ISSUE_BEFORE_EBUY and
+                not self.last_share_issued_price and
+                any(self.game.emergency_issuable_bundles(corporation)))
+    
+    def ebuy_president_can_contribute(self, corporation):
+        if corporation.cash < self.game.depot.min_depot_price:
+            return not self.must_issue_before_ebuy(corporation)
+        return False
+
+    def must_pay_face_value(self, train, entity, price):
+        if train.from_depot() or not self.must_buy_at_face_value(train, entity):
+            return False
+        return train.price != price
+    
+    def must_buy_at_face_value(self, train, entity):
+        return self.face_value_ability(entity) or self.face_value_ability(train.owner)
+    
+    def spend_minmax(self, entity, train):
+        if self.game.EBUY_OTHER_VALUE and (self.buying_power(entity) < train.price):
+            min_price = 1
+            if self.last_share_sold_price is not None:
+                min_price = self.buying_power(entity) + entity.owner.cash - self.last_share_sold_price + 1
+            max_price = min(train.price, self.buying_power(entity) + entity.owner.cash)
+            return [min_price, max_price]
+        else:
+            return [1, self.buying_power(entity)]
+
+    
     def face_value_ability(self, entity):
         ability = self.game.abilities(entity, "train_buy", time="current")
         if ability:
@@ -709,6 +802,7 @@ class BuyTrain(BaseStep, Train):
 
         return []
 
+    @property
     def description(self):
         return "Buy Trains"
 
@@ -870,6 +964,8 @@ class Tokener:
         }
 
     def can_place_token(self, entity):
+        if self.game.debug:
+            set_trace()
         if self.current_entity != entity:
             return False
 
@@ -1410,7 +1506,7 @@ class BuyCompany(BaseStep):
             raise GameError(f"Cannot buy {company.name} from {owner.name}")
 
         min_price = company.min_price
-        max_price = company.max_price(entity)
+        max_price = company.get_max_price(entity)
         if not min_price <= price <= max_price:
             raise GameError(
                 f"Price must be between {self.game.format_currency(min_price)} and {self.game.format_currency(max_price)}"
@@ -1635,7 +1731,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
     def process_buy_shares(self, action):
         self.round.players_bought.setdefault(action.entity, {}).setdefault(action.bundle.corporation, 0)
         self.round.players_bought[action.entity][action.bundle.corporation] += action.bundle.percent
-        if action.bundle.owner.corporation:
+        if action.bundle.owner.is_corporation():
             self.round.bought_from_ipo = True
         self.buy_shares(
             action.purchase_for or action.entity,
@@ -1649,6 +1745,8 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         self.track_action(action, action.bundle.corporation)
 
     def process_sell_shares(self, action):
+        if self.game.debug:
+            set_trace()
         self.sell_shares(action.entity, action.bundle, swap=action.swap)
         self.track_action(action, action.bundle.corporation)
 
@@ -1723,7 +1821,14 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         return buyable_shares
 
     def sellable_shares(self, entity):
-        return [bundle for corporation in self.game.corporations for bundle in self.game.bundles_for_corporatino(entity, corporation) if self.can_sell(entity, bundle)]
+        if self.game.debug:
+            set_trace()
+        return [
+            bundle
+            for corporation in self.game.corporations
+            for bundle in self.game.bundles_for_corporation(entity, corporation)
+            if self.can_sell(entity, bundle)
+        ]
 
     def can_buy_shares(self, entity, shares):
         #set_trace()
@@ -3039,22 +3144,26 @@ class Exchange(BaseStep, ShareBuying):
         self.buy_shares(owner, bundle, exchange=company)
 
         if hasattr(self.round, "players_history"):
-            self.round.players_history[owner][bundle.corporation].append(action)
+            self.round.players_history.setdefault(owner, {}).setdefault(bundle.corporation, []).append(action)
 
         company.close()
 
     def can_buy(self, entity, bundle):
         return self.can_gain(entity, bundle, exchange=True)
 
-    def can_exchange(self, entity, bundle=None):
+    def exchangeable_shares(self, entity, bundle=None):
         if not entity.is_company():
-            return False
+            return []
 
         ability = self.game.abilities(entity, "exchange")
+        if not ability:
+            return []
+
+        ability = ability[0]
         owner = entity.owner
 
         if bundle:
-            return self.can_gain(owner, bundle, exchange=True)
+            return [bundle] if self.can_gain(owner, bundle, exchange=True) else []
 
         shares = []
         for corporation in self.game.exchange_corporations(ability):
@@ -3063,13 +3172,17 @@ class Exchange(BaseStep, ShareBuying):
             if "ipo" in ability.from_:
                 shares.append(corporation.available_share)
             if "market" in ability.from_:
-                shares.append(
-                    self.game.share_pool.shares_by_corporation[corporation][0]
-                )
+                if self.game.share_pool.shares_by_corporation[corporation]:
+                    shares.append(
+                        self.game.share_pool.shares_by_corporation[corporation][0]
+                    )
 
-        return any(
-            self.can_gain(owner, s.to_bundle(), exchange=True) for s in shares if s
-        )
+        #set_trace()
+        return [share for share in shares if share and self.can_gain(owner, share.to_bundle(), exchange=True)]
+
+    
+    def can_exchange(self, entity, bundle=None):
+        return any(self.exchangeable_shares(entity, bundle))
 
     def can_gain(self, entity, bundle, exchange=False):
         return super().can_gain(entity, bundle, exchange=exchange)
@@ -3159,7 +3272,7 @@ class HomeToken(BaseStep, Tokener):
             connected=False,
             extra_action=True,
         )
-        self.round["pending_tokens"].pop(0)
+        self.round.pending_tokens.pop(0)
 
 # %% ../../../nbs/game/engine/06_round.ipynb 66
 class IssueShares(BaseStep):
@@ -3693,6 +3806,8 @@ class Route(BaseStep):
             return super().help()
 
     def process_run_routes(self, action):
+        if self.game.debug:
+            set_trace()
         entity = action.entity
         self.round.routes = action.routes
         self.round.extra_revenue = action.extra_revenue
@@ -3709,7 +3824,7 @@ class Route(BaseStep):
                 raise Exception("Cannot run train that operated")
 
             trains[train] = True
-            revenue = self.game.format_revenue_currency(route.revenue)
+            revenue = self.game.format_revenue_currency(route.revenue())
             self.log.append(
                 f"{entity.name} runs a {train.name} train for {revenue}: {route.revenue_str}"
             )
@@ -4270,19 +4385,19 @@ class SpecialToken(BaseStep, Tokener):
             self.round.teleported.remove_ability(ability)
         self.round.teleported = None
 
-    def available_hex(self, entity, hex_):
+    def available_hex(self, entity, hex):
         ability = self.ability(entity)
-        if ability.hexes and not ability.hexes.include(hex_.id):
+        if ability.hexes and not (hex.id in ability.hexes):
             return None
 
         if ability.type == "token" and ability.connected:
             return (
                 self.game.token_graph_for_entity(entity.owner)
                 .reachable_hexes(entity.owner)
-                .get(hex_)
+                .get(hex)
             )
 
-        return self.game.hex_by_id(hex_.id).neighbors.keys
+        return self.game.hex_by_id(hex.id).neighbors.keys
 
     def available_tokens(self, entity):
         ability = self.ability(entity)
@@ -4298,23 +4413,26 @@ class SpecialToken(BaseStep, Tokener):
         return super().min_token_price(tokens)
 
     def ability(self, entity):
+        if self.game.debug:
+            set_trace()
         if not entity or not entity.is_company():
             return None
 
-        ability = self.game.abilities(entity, "token")
-        if ability:
-            return ability
+        abilities = self.game.abilities(entity, "token")
+        tp_abilities = self.game.abilities(entity, "teleport")
+        abilities.extend([a for a in tp_abilities if a.used])
 
-        ability = self.game.abilities(entity, "teleport")
-        if ability and ability.used:
-            return ability
-
+        if abilities:
+            return abilities[0]
         return None
 
 # %% ../../../nbs/game/engine/06_round.ipynb 100
 class Tracker:
     def __init__(self):
         # Assume anyone using this is also running the BaseStep constructor first
+        self.setup()
+
+    def setup(self):
         self.round.num_laid_track = 0
         self.round.upgraded_track = False
         self.round.num_upgraded_track = 0
@@ -4337,7 +4455,6 @@ class Tracker:
         )
 
     def get_tile_lay(self, entity):
-        #set_trace()
         corporation = self.get_tile_lay_corporation(entity)
         tile_lays = self.game.tile_lays(corporation)
         if self.tile_lay_index() >= len(tile_lays):
@@ -4365,11 +4482,11 @@ class Tracker:
 
     def lay_tile_action(self, action, entity=None, spender=None):
         tile = action.tile
-        hex_ = action.hex
+        hex = action.hex
 
-        old_tile = hex_.tile
+        old_tile = hex.tile
         tile_lay = self.get_tile_lay(action.entity)
-        if self.track_upgrade(old_tile, tile, hex_) and not (
+        if self.track_upgrade(old_tile, tile, hex) and not (
             tile_lay and tile_lay.get("upgrade", False)
         ):
             raise Exception("Cannot lay an upgrade now")
@@ -4377,25 +4494,25 @@ class Tracker:
             raise Exception("Cannot lay a yellow now")
         if (
             tile_lay.get("cannot_reuse_same_hex", False)
-            and hex_ in self.round.laid_hexes
+            and hex in self.round.laid_hexes
         ):
             raise Exception(
-                f"{hex_.id} cannot be laid as this hex was already laid on this turn"
+                f"{hex.id} cannot be laid as this hex was already laid on this turn"
             )
 
-        extra_cost = self.extra_cost(tile, tile_lay, hex_)
+        extra_cost = self.extra_cost(tile, tile_lay, hex)
 
         self.lay_tile(action, extra_cost=extra_cost, entity=entity, spender=spender)
-        if self.track_upgrade(old_tile, tile, hex_):
+        if self.track_upgrade(old_tile, tile, hex):
             self.round.upgraded_track = True
             self.round.num_upgraded_track += 1
         self.round.num_laid_track += 1
-        self.round.laid_hexes.append(hex_)
+        self.round.laid_hexes.append(hex)
 
-    def extra_cost(self, tile, tile_lay, hex_):
+    def extra_cost(self, tile, tile_lay, hex):
         return tile_lay["cost"] if tile.color == "yellow" else tile_lay["upgrade_cost"]
 
-    def track_upgrade(self, from_tile, to_tile, hex_):
+    def track_upgrade(self, from_tile, to_tile, hex):
         return from_tile.color != "white"
 
     def tile_lay_abilities_should_block(self, entity):
@@ -4416,7 +4533,8 @@ class Tracker:
         return self.game.abilities(entity, "tile_lay", **kwargs)
 
     def lay_tile(self, action, extra_cost=0, entity=None, spender=None):
-        #set_trace()
+        if self.game.debug:
+            set_trace()
         entity = entity or action.entity
         entities = [entity] + action.combo_entities
 
@@ -4600,7 +4718,8 @@ class Tracker:
         self.log.append(log_string)
 
     def update_token(self, action, entity, tile, old_tile):
-        #set_trace()
+        if self.game.debug:
+            set_trace()
         cities = tile.cities
         if not old_tile.paths and tile.paths and len(cities) > 1:
             tokens = [token for city in cities for token in city.tokens if token]
@@ -4673,14 +4792,13 @@ class Tracker:
 
         graph = self.game.graph_for_entity(entity)
 
-        #set_trace()
+        if self.game.debug:
+            set_trace()
         if not self.game.ALLOW_REMOVING_TOWNS:
             for old_city in old_tile.city_towns:
                 old_exits = set(old_city.exits if old_city.exits else [])
-                for new_city in new_tile.city_towns:
-                    new_exits = set(new_city.exits if new_city.exits else [])
-                    if (old_exits - new_exits) != set():
-                        raise GameError('New track must override old one')
+                if all(old_exits - set(new_city.exits if new_city.exits else []) for new_city in new_tile.city_towns):
+                    raise GameError('New track must override old one')
 
         old_paths = old_tile.paths
         changed_city = False
@@ -4738,7 +4856,6 @@ class Tracker:
         return list(tile_names.values())
 
     def upgradeable_tiles(self, entity_or_entities, ui_hex):
-        #set_trace()
         hex = self.game.hex_by_id(ui_hex.id)
         tiles = self.potential_tiles(entity_or_entities, hex)
         for tile in tiles:
@@ -4815,16 +4932,18 @@ class Tracker:
             return False
 
         valid_added_city_count = added_cities >= sum(
-            1
-            for newct in new_ctedges
-            if all((newct & oldct) == set() for oldct in old_ctedges)
+            1 for newct in new_ctedges if all(
+                len(set(newct) & set(oldct)) == 0 for oldct in old_ctedges
+            )
         )
         if not valid_added_city_count:
             return False
 
-        old_cities_map_to_new = not multi_city_upgrade or all(
-            any((oldct & newct) == oldct for newct in new_ctedges)
-            for oldct in old_ctedges
+        old_cities_map_to_new = not multi_city_upgrade or (
+            all(
+                sum(1 for newct in new_ctedges if set(oldct) <= set(newct)) == 1
+                for oldct in old_ctedges
+            )
         )
         if not old_cities_map_to_new:
             return False
@@ -4840,11 +4959,11 @@ class Tracker:
         return all(any(path <= p for p in new_paths) for path in old_paths)
 
     def city_sizes_maintained(self, hex, tile):
-        if len(set(city.normal_slots for city in hex.tile.cities)) <= 1:
+        if len(set(city.normal_slots() for city in hex.tile.cities)) <= 1:
             return True
-        hex_city_map = self.hex.city_map_for(tile)
+        hex_city_map = hex.city_map_for(tile)
         return all(
-            new_c.normal_slots >= old_c.normal_slots
+            new_c.normal_slots() >= old_c.normal_slots()
             for old_c, new_c in hex_city_map.items()
         )
 
@@ -4871,7 +4990,7 @@ class Tracker:
         return any(
             company.min_price <= self.buying_power(entity)
             and any(
-                a.type == "tile_lay" and a.when(time) for a in company.all_abilities()
+                a.type == "tile_lay" and a.matches_when(time) for a in company.all_abilities
             )
             for company in self.game.purchasable_companies(entity)
         )
@@ -4919,12 +5038,12 @@ class SpecialTrack(BaseStep, Tracker):
     ACTIONS_WITH_PASS = [LayTile, Pass]
 
     def actions(self, entity):
-        action = self.abilities(entity)
-        if not action:
+        actions = self.abilities(entity)
+        if not actions:
             return []
         return (
             self.ACTIONS
-            if action.type == "tile_lay" and action.blocks
+            if any(action.type == "tile_lay" and action.blocks for action in actions)
             else self.ACTIONS_WITH_PASS
         )
 
@@ -4954,13 +5073,14 @@ class SpecialTrack(BaseStep, Tracker):
         if (
             self.company
             and (self.company != action.entity)
-            and (ability := self.game.abilities(self.company, "tile_lay", time="track"))
-            and ability.must_lay_together
-            and ability.must_lay_all
+            and (abilities := self.game.abilities(self.company, "tile_lay", time="track"))
+            and abilities[0].must_lay_together
+            and abilities[0].must_lay_all
         ):
             raise GameError(f"Cannot interrupt {self.company.name}'s tile lays")
 
-        ability = self.abilities(action.entity)
+        ability = self.abilities(action.entity)[0]
+            
         owner = (
             action.entity.owner
             if action.entity.owner and action.entity.owner.corporation
@@ -4990,7 +5110,7 @@ class SpecialTrack(BaseStep, Tracker):
                 )
             )
         ):
-            operating_info["laid_hexes"] = self.round.laid_hexes
+            operating_info.laid_hexes = self.round.laid_hexes
 
         if ability.type == "tile_lay":
             if (
@@ -5034,15 +5154,19 @@ class SpecialTrack(BaseStep, Tracker):
         self.company = None
 
     def available_hex(self, entity, hex):
-        ability = self.abilities(entity)
-        if not ability:
+        abilities = self.abilities(entity)
+        if not abilities:
             return None
+        ability = abilities[0]
         if not ability.hexes or ability.consume_tile_lay:
             return self.tracker_available_hex(entity, hex)
         return self.hex_neighbors(entity, hex)
 
     def hex_neighbors(self, entity, hex):
-        ability = self.abilities(entity)
+        abilities = self.abilities(entity)
+        if not abilities:
+            return None
+        ability = abilities[0]
         if not ability or (ability.hexes and hex.id not in ability.hexes):
             return None
         operator = (
@@ -5063,17 +5187,15 @@ class SpecialTrack(BaseStep, Tracker):
             else entity_or_entities
         )
         entity = entities[0]
-        tile_ability = self.abilities(entity)
-        if not tile_ability:
+        tile_abilities = self.abilities(entity)
+        if not tile_abilities:
             return []
-        tiles = (
-            [
-                self.game.tiles.find(lambda t: t.name == name)
-                for name in tile_ability.tiles
-            ]
-            if tile_ability.tiles
-            else self.game.tiles.unique(lambda t: t.name)
-        )
+        tile_ability = tile_abilities[0]
+        
+        tiles = [next(t for t in self.game.tiles if t.name == name) for name in tile_ability.tiles]
+        if not tiles:
+            tiles = self.game.tiles.unique(lambda t: t.name)
+
         special = tile_ability.special if tile_ability.type == "tile_lay" else False
         return [
             t
@@ -5086,8 +5208,10 @@ class SpecialTrack(BaseStep, Tracker):
         ]
 
     def abilities(self, entity, **kwargs):
+        if self.game.debug:
+            set_trace()
         if not entity or not entity.is_company():
-            return None
+            return []
         if (
             hasattr(self.round, "just_sold_company")
             and entity == self.round.just_sold_company
@@ -5103,11 +5227,13 @@ class SpecialTrack(BaseStep, Tracker):
             "or_between_turns",
             "stock_round",
         ]
+        valid_abilities = []
         for type in ["tile_lay", "teleport"]:
-            ability = self.game.abilities(entity, type, time=possible_times, **kwargs)
-            if ability and (type != "teleport" or not ability.used):
-                return ability
-        return None
+            abilities = self.game.abilities(entity, type, time=possible_times, **kwargs)
+            for ability in abilities:
+                if ability and (type != "teleport" or not ability.used):
+                    valid_abilities.append(ability)
+        return valid_abilities
 
     def check_connect(self, action, ability):
         if (
@@ -5181,6 +5307,11 @@ class Track(BaseStep, Tracker):
     def __init__(self, game, round, **opts):
         BaseStep.__init__(self, game, round, **opts)
         Tracker.__init__(self)
+        self.setup()
+
+    def setup(self):
+        BaseStep.setup(self)
+        Tracker.setup(self)
 
     def actions(self, entity):
         if entity != self.current_entity:
@@ -5593,19 +5724,27 @@ class BaseRound:
                 step_opts = step_to_do[1]
                 step_to_do = step_to_do[0]
             step = step_to_do(game, self, **step_opts)
-            for key, value in step.round_state.items():
-                setattr(
-                    self.__class__,
-                    key,
-                    property(
-                        lambda self, v=value: v,
-                        lambda self, v: setattr(self, f"_{key}", v),
-                    ),
-                )
-                setattr(self, key, value)
+            self._set_dynamic_properties(step.round_state)
             game.next_turn()
             step.setup()
             self.steps.append(step)
+
+
+    def _set_dynamic_properties(self, round_state):
+        for key, value in round_state.items():
+            self._create_property(key, value)
+
+    def _create_property(self, key, initial_value):
+        private_key = f"_{key}"
+
+        def getter(instance):
+            return getattr(instance, private_key, initial_value)
+
+        def setter(instance, value):
+            setattr(instance, private_key, value)
+
+        setattr(self.__class__, key, property(getter, setter))
+        setattr(self, private_key, initial_value)
 
     def setup(self):
         pass
@@ -5676,7 +5815,7 @@ class BaseRound:
             return actions
 
         for step in self.steps:
-            if not step.active():
+            if not step.active:
                 continue
 
             available_actions = step.actions(entity)
@@ -5748,15 +5887,19 @@ class BaseRound:
     def clear_cache(self):
         self._active_step = None
 
+    @property
     def operating(self):
         return False
 
+    @property
     def stock(self):
         return False
 
+    @property
     def merger(self):
         return False
 
+    @property
     def auction(self):
         return False
 
@@ -5796,6 +5939,7 @@ class Auction(BaseRound):
     def short_name(cls):
         return "ISR"
 
+    @property
     def auction(self):
         return True
 
@@ -5872,6 +6016,7 @@ class Merger(BaseRound):
     def round_name(cls):
         raise NotImplementedError
 
+    @property
     def merger(self):
         return True
 
@@ -5939,23 +6084,25 @@ class Operating(BaseRound):
         return entity.is_closed()
 
     def next_entity(self):
+        if self.game.debug:
+            set_trace()
         if self.entity_index == len(self.entities) - 1:
-            self.next_entity_index()
-            if self.skip_entity(self.entities[self.entity_index]):
-                self.next_entity()
-            else:
-                for step in self.steps:
-                    step.unpass()
-                for step in self.steps:
-                    step.setup()
-                self.start_operating()
-        else:
-            self.next_entity_index()
-            if self.skip_entity(self.entities[self.entity_index]):
-                self.next_entity()
+            return
+        
+        self.next_entity_index()
+        
+        if self.skip_entity(self.entities[self.entity_index]):
+            return self.next_entity()
+        
+        for step in self.steps:
+            step.unpass()
+        for step in self.steps:
+            step.setup()
+        self.start_operating()
 
     def start_operating(self):
-        #set_trace()
+        if self.game.debug:
+            set_trace()
         entity = self.entities[self.entity_index]
         if self.skip_entity(entity):
             self.next_entity()
@@ -5978,6 +6125,7 @@ class Operating(BaseRound):
             e for e in self.game.operating_order if e in unsorted_corps
         ]
 
+    @property
     def operating(self):
         return True
 
@@ -6031,6 +6179,7 @@ class Stock(BaseRound):
     def finished(self):
         return self.game.finished or all(entity.passed for entity in self.entities)
 
+    @property
     def stock(self):
         return True
 

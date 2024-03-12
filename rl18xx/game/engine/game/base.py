@@ -528,7 +528,7 @@ class BaseGame:
     # Allow train buy from other corporations
     ALLOW_TRAIN_BUY_FROM_OTHERS = True
     # Allow train buy from other player's corporations
-    ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS = True
+    ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS = False
     # Allow obsolete trains to be bought from other corporations
     ALLOW_OBSOLETE_TRAIN_BUY = False
     # Default tile lay configuration
@@ -1108,7 +1108,7 @@ class BaseGame:
     def discarded_train_placement(self):
         return self.DISCARDED_TRAINS
 
-    def rust(self, train, purchased_train):
+    def should_rust(self, train, purchased_train):
         return train.rusts_on == purchased_train.sym or (
             train.obsolete_on == purchased_train.sym and train in self.depot.discarded
         )
@@ -1230,9 +1230,9 @@ class BaseGame:
         corporation = bundle.corporation
 
         if self.SELL_AFTER == "first":
-            return self.turn > 1 or (self.round and self.round.operating())
+            return self.turn > 1 or (self.round and self.round.operating)
         elif self.SELL_AFTER == "after_ipo":
-            return corporation.operated() or (self.round and self.round.operating())
+            return corporation.operated() or (self.round and self.round.operating)
         elif self.SELL_AFTER == "operate":
             return corporation.operated()
         elif self.SELL_AFTER == "p_any_operate":
@@ -1240,7 +1240,7 @@ class BaseGame:
         elif self.SELL_AFTER == "full_or_turn":
             if (
                 self.round
-                and self.round.operating()
+                and self.round.operating
                 and corporation == self.round.current_operator
             ):
                 return len(corporation.operating_history) > 1
@@ -1304,6 +1304,8 @@ class BaseGame:
             share_holder, corporation, shares=shares
         )
 
+    debug = False
+    
     def all_bundles_for_corporation(self, share_holder, corporation, shares=None):
         if not corporation.ipoed:
             return []
@@ -1362,6 +1364,7 @@ class BaseGame:
             self.turn > 1 or not (self.round and self.round.stock())
         )
 
+    @property
     def sell_movement(self):
         return self.SELL_MOVEMENT
 
@@ -1376,7 +1379,7 @@ class BaseGame:
         )
         movement = movement or self.sell_movement
         if movement == "down_share":
-            for _ in range(bundle.num_shares):
+            for _ in range(bundle.num_shares()):
                 self.stock_market.move_down(corporation)
         elif movement == "down_per_10":
             percent = bundle.percent
@@ -1387,10 +1390,10 @@ class BaseGame:
         elif movement == "down_block":
             self.stock_market.move_down(corporation)
         elif movement == "left_share":
-            for _ in range(bundle.num_shares):
+            for _ in range(bundle.num_shares()):
                 self.stock_market.move_left(corporation)
         elif movement == "left_share_pres":
-            for _ in range(bundle.num_shares):
+            for _ in range(bundle.num_shares()):
                 if was_president:
                     self.stock_market.move_left(corporation)
         elif movement == "left_block":
@@ -1500,7 +1503,7 @@ class BaseGame:
         return sum(stop.visit_cost for stop in route.visited_stops)
 
     def routes_revenue(self, routes):
-        return sum(route.revenue for route in routes)
+        return sum(route.revenue() for route in routes)
 
     def extra_revenue(self, entity, routes):
         return 0
@@ -1524,20 +1527,22 @@ class BaseGame:
             tracks[key] = True
 
         for route in routes:
+            if route is None:
+                continue
             for path in route.paths:
                 a = path.a
                 b = path.b
 
-                if a.edge:
+                if a.is_edge():
                     check((path.hex, a.num, path.lanes[0][1]))
-                if b.edge:
+                if b.is_edge():
                     check((path.hex, b.num, path.lanes[1][1]))
 
-                if b.edge and a.town:
+                if b.is_edge() and a.is_town():
                     nedge = a.tile.preferred_city_town_edges.get(a)
                     if nedge and nedge != b.num:
                         check((path.hex, a, path.lanes[0][1]))
-                if a.edge and b.town:
+                if a.is_edge() and b.is_town():
                     nedge = b.tile.preferred_city_town_edges.get(b)
                     if nedge and nedge != a.num:
                         check((path.hex, b, path.lanes[1][1]))
@@ -1546,6 +1551,8 @@ class BaseGame:
                     check((path.hex, path))
 
     def check_connected(self, route, corporation):
+        if self.debug:
+            set_trace()
         if not all(
             a.connects_to(b, corporation)
             for a, b in zip(route.ordered_paths, route.ordered_paths[1:])
@@ -1639,8 +1646,8 @@ class BaseGame:
     def visited_stops(self, route):
         return list(
             set(
-                [c["left"] for c in route.connection_data]
-                + [c["right"] for c in route.connection_data]
+                [c["left"] for c in route.connection_data if c["left"] is not None]
+                + [c["right"] for c in route.connection_data if c["right"] is not None]
             )
         )
 
@@ -1819,6 +1826,8 @@ class BaseGame:
         return self.TILE_LAYS
 
     def upgrades_to(self, from_tile, to_tile, special=False, selected_company=None):
+        #if self.debug:
+            #set_trace()
         if not self.upgrades_to_correct_color(
             from_tile, to_tile, selected_company=selected_company
         ):
@@ -2024,7 +2033,7 @@ class BaseGame:
     def emergency_issuable_cash(self, corporation):
         return max(
             (
-                bundle.num_shares * bundle.price
+                bundle.num_shares() * bundle.price
                 for bundle in self.emergency_issuable_bundles(corporation)
             ),
             default=0,
@@ -2079,7 +2088,7 @@ class BaseGame:
             for company, ability in self.all_companies_with_ability("shares"):
                 if corporation.name == ability.shares[0].corporation.name:
                     amount = sum(
-                        corporation.par_price().price * share.num_shares
+                        corporation.par_price().price * share.num_shares()
                         for share in ability.shares
                     )
                     self.bank.spend(amount, corporation)
@@ -2213,30 +2222,30 @@ class BaseGame:
 
     def discountable_trains_for(self, corporation):
         discountable_trains = [
-            train
-            for train in self.depot.depot_trains()
-            if train.discount
-            or any(v.get("discount") for _, v in train.variants.items())
+            train for train in self.depot.depot_trains()
+            if train.discount or any(v.get("discount") for v in train.variants.values())
         ]
-
-        return [
-            [train, discount_train, name, discounted_price]
-            for train in corporation.trains
-            for discount_train in discountable_trains
-            for name, discounted_price in [
-                (discount_train.name, discount_train.price(train))
-            ]
-            + [
-                (v["name"], discount_train.price(train, variant=v))
-                for v in discount_train.variants.values()
-                if v["name"] != name
-            ]
-            if discount_train.price > discounted_price
-        ]
+    
+        discount_info = []
+        for train in corporation.trains:
+            for discount_train in discountable_trains:
+                # Calculate discounted price for the base version
+                base_discounted_price = discount_train.get_price(train)
+                if discount_train.price > base_discounted_price:
+                    discount_info.append([train, discount_train, discount_train.name, base_discounted_price])
+    
+                # Add variants with discounts, excluding those with the same name as the base version
+                for variant in discount_train.variants.values():
+                    if variant["name"] != discount_train.name:
+                        variant_discounted_price = discount_train.price(train, variant=variant)
+                        if variant["price"] > variant_discounted_price:
+                            discount_info.append([train, discount_train, variant["name"], variant_discounted_price])
+    
+        return discount_info
 
     def remove_train(self, train):
         if train.owner:
-            if train.from_depot:
+            if train.from_depot():
                 self.depot.remove_train(train)
             else:
                 train.owner.trains.remove(train)
@@ -2325,7 +2334,7 @@ class BaseGame:
             t.obsolete = True
 
         for t in self.trains:
-            if t.rusted or not self.rust(t, train):
+            if t.rusted or not self.should_rust(t, train):
                 continue
             if t.obsolete and t.owner == self.depot:
                 removed_obsolete_trains.append(t.name)
@@ -2419,6 +2428,7 @@ class BaseGame:
     def corporations_can_ipo(self):
         return False
 
+    @property
     def possible_presidents(self):
         return [player for player in self.players if not player.bankrupt]
 
@@ -3210,9 +3220,9 @@ class BaseGame:
         correct_owner_type = True
 
         if ability.owner_type == "player":
-            correct_owner_type = not entity.owner or entity.owner.player
+            correct_owner_type = not entity.owner or entity.owner.is_player()
         elif ability.owner_type == "corporation":
-            correct_owner_type = entity.owner and entity.owner.corporation
+            correct_owner_type = entity.owner and entity.owner.is_corporation()
 
         return correct_owner_type
 
@@ -3253,6 +3263,7 @@ class BaseGame:
         if not isinstance(time, list):
             time = [time]
         times = [t if t != "%current_step%" else current_step_name for t in time]
+        times = [t for t in times if t is not None]
         if not times:
             times_to_check = ability.when
             default = False
@@ -3263,41 +3274,41 @@ class BaseGame:
                 return True
 
         return any(
-            self.ability_check_time(ability_when, ability, current_step, default)
+            self.ability_check_time(ability_when, ability, current_step, current_step_name, default)
             for ability_when in times_to_check
         )
 
-    def ability_check_time(self, ability_when, ability, current_step, default):
-        if ability_when == current_step:
+    def ability_check_time(self, ability_when, ability, current_step, current_step_name, default):
+        if ability_when == current_step_name:
             if self.round.operating:
                 return (
-                    self.round.current_operator == ability.corporation
-                    or self.round.current_entity == ability.player
+                    self.round.current_operator == ability.corporation()
+                    or self.round.current_entity == ability.player()
                 )
             elif self.round.stock:
-                return self.round.current_entity == ability.player
+                return self.round.current_entity == ability.player()
 
         if ability_when == "owning_corp_or_turn":
             return (
                 self.round.operating
-                and self.round.current_operator == ability.corporation
+                and self.round.current_operator == ability.corporation()
             )
 
         if ability_when == "owning_player_or_turn":
             return (
                 self.round.operating
-                and self.round.current_operator.player == ability.player
+                and self.round.current_operator.player == ability.player()
             )
 
         if ability_when == "owning_player_track":
             return (
                 self.round.operating
-                and self.round.current_operator.player == ability.player
-                and isinstance(current_step, Track)
+                and self.round.current_operator.player == ability.player()
+                and isinstance(current_step, TrackStep)
             )
 
         if ability_when == "owning_player_sr_turn":
-            return self.round.stock and self.round.current_entity == ability.player
+            return self.round.stock and self.round.current_entity == ability.player()
 
         if ability_when == "or_between_turns":
             return self.round.operating and not self.round.current_operator_acted

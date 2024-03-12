@@ -150,8 +150,8 @@ class Ownable:
         )
 
     def player(self):
-        if hasattr(self._owner, "player") and callable(getattr(self._owner, "player")):
-            return self._owner.player()
+        if hasattr(self._owner, "player"):
+            return self._owner.player
         return (
             self._owner
             if hasattr(self._owner, "player") and self._owner.player
