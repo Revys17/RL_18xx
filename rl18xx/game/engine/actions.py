@@ -253,6 +253,9 @@ class BuyCompany(BaseAction):
     def args_to_dict(self):
         return {"company": self.company.id, "price": self.price}
 
+    def __str__(self):
+        return super().__str__() + f", company: [{self.company}], price: [{self.price}]"
+
 # %% ../../../nbs/game/engine/03_actions.ipynb 22
 class BuyCorporation(BaseAction):
     def __init__(self, entity, price, corporation=None, minor=None):
@@ -352,9 +355,12 @@ class BuyShares(BaseAction):
 class SellShares(BaseAction):
     def __init__(self, entity, shares, share_price=None, percent=None, swap=None):
         super().__init__(entity)
-        self.bundle = ShareBundle(
-            shares if isinstance(shares, list) else [shares], percent
-        )
+        if isinstance(shares, ShareBundle):
+            self.bundle = shares
+        else:
+            self.bundle = ShareBundle(
+                shares if isinstance(shares, list) else [shares], percent
+            )
         self.bundle.share_price = share_price
         self.swap = swap
 
@@ -374,6 +380,9 @@ class SellShares(BaseAction):
             "percent": self.bundle.percent,
             "swap": self.swap.id if self.swap else None,
         }
+        
+    def __str__(self):
+        return super().__str__() + f", bundle: [{self.bundle}]"
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 30
 class BuyToken(BaseAction):
@@ -411,7 +420,7 @@ class BuyTrain(BaseAction):
         super().__init__(entity)
         self.train = train
         self.price = price
-        self.variant = variant
+        self.variant = variant or train.variant
         self.exchange = exchange
         self.shell = shell
         self.slots = slots if slots is not None else []
@@ -439,7 +448,7 @@ class BuyTrain(BaseAction):
             "exchange": game.train_by_id(args["exchange"])
             if args.get("exchange")
             else None,
-            "shell": shell_by_name(args.get("shell"), game),
+            "shell": BuyTrain.shell_by_name(args.get("shell"), game),
             "slots": args.get("slots", []),
             "extra_due": args.get("extra_due"),
             "warranties": args.get("warranties"),
@@ -456,6 +465,9 @@ class BuyTrain(BaseAction):
             "extra_due": self.extra_due,
             "warranties": self.warranties,
         }
+
+    def __str__(self):
+        return super().__str__() + f", train: [{self.train}], price: {self.price}"
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 34
 class Choose(BaseAction):
@@ -608,6 +620,9 @@ class Dividend(BaseAction):
             "kind": self.kind,
             "amount": self.amount,
         }
+        
+    def __str__(self):
+        return super().__str__() + f", kind: [{self.kind}], amount: {self.amount}"
 
 # %% ../../../nbs/game/engine/03_actions.ipynb 56
 class DoubleHeadTrains(BaseAction):
@@ -1384,12 +1399,10 @@ class RunRoutes(BaseAction):
                 "subsidy": route.subsidy,
                 "halts": route.halts,
                 "abilities": route.abilities,
-                "nodes": route.nodes,
+                "nodes": route.node_signatures,
             }
-            for route in self.routes
+            for route in self.routes if route is not None
         ]
-        # Filter out keys with None or empty values
-        routes = [{k: v for k, v in route.items() if v} for route in routes]
 
         return {
             "routes": routes,

@@ -4,18 +4,30 @@
 __all__ = ['AutoRouter']
 
 # %% ../../../nbs/game/engine/04_autorouter.ipynb 3
-from .core import GameError
+from rl18xx.game.engine.core import (
+    RouteTooLong,
+    ReusesCity,
+    NoToken,
+    RouteTooShort,
+    GameError,
+)
 from .graph import Route
-import time
+import time, itertools
+
+from IPython.core.debugger import set_trace
 
 # %% ../../../nbs/game/engine/04_autorouter.ipynb 4
 class AutoRouter:
-    def __init__(self, game, flash=None):
+    def __init__(self, game, flash=None, debug=False, verbose=False):
         self.game = game
         self.next_hexside_bit = 0
         self.flash = flash
+        self.debug = debug
+        self.verbose = verbose
 
     def compute(self, corporation, **opts):
+        # if self.debug:
+        #    set_trace()
         static = opts.get("routes", [])
         path_timeout = opts.get("path_timeout", 30)
         route_timeout = opts.get("route_timeout", 10)
@@ -23,9 +35,7 @@ class AutoRouter:
 
         connections = {}
         trains = sorted(
-            self.game.route_trains(corporation),
-            key=lambda train: train.price,
-            reverse=True,
+            self.game.route_trains(corporation), key=lambda x: x.price, reverse=True
         )
 
         graph = self.game.graph_for_entity(corporation)
@@ -33,7 +43,7 @@ class AutoRouter:
             graph.connected_nodes(corporation).keys(),
             key=lambda node: (
                 0 if node.tokened_by(corporation) else 1,
-                0 if node.offboard else 1,
+                0 if node.is_offboard() else 1,
                 -max(node.route_revenue(self.game.phase, train) for train in trains),
             ),
         )
@@ -41,128 +51,159 @@ class AutoRouter:
         path_walk_timed_out = False
         now = time.time()
 
-        skip_paths = {path for route in static for path in route.paths}
-        skip_trains = {route.train for route in static for route in route.train}
+        skip_paths = {path: True for route in static for path in route.paths}
+        skip_trains = {train for route in static for train in route.get("trains", [])}
         trains = [train for train in trains if train not in skip_trains]
 
-        train_routes = {train: [] for train in trains}
+        train_routes = {}
         hexside_bits = {}
         self.next_hexside_bit = 0
 
-        def set_bit(bitfield, bit):
-            entry = bit // 32
-            mask = 1 << (bit % 32)
-            add_count = entry + 1 - len(bitfield)
-            bitfield.extend([0] * add_count)
-            bitfield[entry] |= mask
-
-        def check_edge_and_set(bitfield, hexside_edge, hexside_bits):
-            if hexside_edge in hexside_bits:
-                set_bit(bitfield, hexside_bits[hexside_edge])
-            else:
-                hexside_bits[hexside_edge] = self.next_hexside_bit
-                set_bit(bitfield, self.next_hexside_bit)
-                self.next_hexside_bit += 1
-
-        def check_and_set(bitfield, hexside_left, hexside_right, hexside_bits):
-            check_edge_and_set(bitfield, hexside_left, hexside_bits)
-            check_edge_and_set(bitfield, hexside_right, hexside_bits)
-
-        def bitfield_from_connection(connection, hexside_bits):
-            bitfield = [0]
-            for conn in connection:
-                paths = conn["chain"]["paths"]
-                if (
-                    len(paths) == 1
-                ):  # special case for tiny intra-tile path like in 18NewEngland
-                    hexside_left = paths[0]["nodes"][0]["id"]
-                    check_edge_and_set(bitfield, hexside_left, hexside_bits)
-                    if len(paths[0]["nodes"]) > 1:
-                        hexside_right = paths[0]["nodes"][1]["id"]
-                        check_edge_and_set(bitfield, hexside_right, hexside_bits)
-                else:
-                    for index in range(len(paths) - 1):
-                        node1 = paths[index]
-                        node2 = paths[index + 1]
-                        if len(node1["edges"]) == 1:
-                            hexside_left = node1["edges"][0]["id"]
-                            hexside_right = node2["edges"][0]["id"]
-                            check_and_set(
-                                bitfield, hexside_left, hexside_right, hexside_bits
-                            )
-                        elif len(node1["edges"]) == 2:
-                            hexside_left = node1["edges"][0]["id"]
-                            hexside_right = node1["edges"][1]["id"]
-                            check_and_set(
-                                bitfield, hexside_left, hexside_right, hexside_bits
-                            )
-                            hexside_left = hexside_right
-                            hexside_right = node2["edges"][0]["id"]
-                            check_and_set(
-                                bitfield, hexside_left, hexside_right, hexside_bits
-                            )
-            return bitfield
-
         for node in nodes:
             if time.time() - now > path_timeout:
-                print("Path timeout reached")
+                if self.verbose:
+                    print("Path timeout reached")
                 path_walk_timed_out = True
                 break
             else:
-                print(
-                    f"Path search: {nodes.index(node) + 1} / {len(nodes)} - paths starting from {node.hex.name}"
-                )
+                if self.verbose:
+                    print(
+                        f"Path search: {nodes.index(node)} / {len(nodes)} - paths starting from {node.hex.name}"
+                    )
 
+            if self.debug and node.hex.name == "F2":
+                set_trace()
             walk_corporation = None if graph.no_blocking else corporation
-
-            def complete():
-                chains.append({"nodes": [left, right], "paths": chain})
-                nonlocal last_left, last_right
-                last_left, last_right = left, right
-                left, right = None, None
-                chain.clear()
-
-            def assign(a, b):
-                nonlocal left, right
-                if a and b:
-                    if a == last_left or b == last_right:
-                        left, right = b, a
-                    else:
-                        left, right = a, b
-                    complete()
-                elif not left:
-                    left = a or b
-                elif not right:
-                    right = a or b
-                    complete()
-
-            chain = []
-            chains = []
-            left = None
-            right = None
-            last_left = None
-            last_right = None
-
-            paths = node.walk(
+            path_history = {}
+            visited = {}
+            visited_paths = {}
+            counter = {}
+            for _, vp, _ in node.walk(
+                visited=visited,
+                visited_paths=visited_paths,
+                counter=counter,
                 corporation=walk_corporation,
                 skip_paths=skip_paths,
+            ):
+                self.process_path(
+                    vp, trains, connections, hexside_bits, train_routes, skip_paths
+                )
+                for path in vp.keys():
+                    path_history[path] = True
+            if self.debug and node.hex.name == "F2":
+                set_trace()
+                path_history.keys()
+
+        if self.verbose:
+            print(
+                f"Evaluated {len(connections)} paths, found {self.next_hexside_bit} unique hexsides, and found valid routes "
+                f"{', '.join(f'{train.name}:{len(routes)}' for train, routes in train_routes.items())} in: {time.time() - now}"
+            )
+            print(train_routes)
+
+        if self.debug:
+            set_trace()
+        for route in static:
+            route.bitfield = self.bitfield_from_connection(
+                route.connection_data, hexside_bits
+            )
+            train_routes[route.train] = [route]
+
+        for train, routes in train_routes.items():
+            train_routes[train] = sorted(
+                routes, key=lambda x: x.revenue(), reverse=True
+            )[:route_limit]
+
+        sorted_routes = list(train_routes.values())
+
+        limit = 1
+        for routes in sorted_routes:
+            limit *= len(routes)
+
+        if self.verbose:
+            print(
+                f"Finding route combos of best {' '.join(f'{train.name}:{len(routes)}' for train, routes in train_routes.items())} "
+                f"routes with depth {limit}"
             )
 
-            for path in paths:
-                chain.append(path)
-                a, b = path.nodes
-                assign(a, b)
+        now = time.time()
+        possibilities = self.js_evaluate_combos(sorted_routes, route_timeout)
 
+        if path_walk_timed_out:
+            if self.flash:
+                self.flash("Auto route path walk failed to complete (PATH TIMEOUT)")
+        elif time.time() - now > route_timeout:
+            if self.flash:
+                self.flash("Auto route selection failed to complete (ROUTE TIMEOUT)")
+
+        if self.debug:
+            set_trace()
+        max_routes = self.final_revenue_check(possibilities)
+
+        # for route in max_routes:
+        #    route.routes = max_routes
+
+        return max_routes
+
+    def process_path(
+        self, vp, trains, connections, hexside_bits, train_routes, skip_paths
+    ):
+        # if self.debug:
+        #    set_trace()
+        paths = vp.keys()
+        chains = []
+        chain = []
+        left = right = last_left = last_right = None
+
+        def complete():
+            nonlocal left, right, chain, last_left, last_right
+            chains.append({"nodes": [left, right], "paths": chain})
+            last_left, last_right = left, right
+            left = right = None
+            chain = []
+
+        def assign(a, b):
+            nonlocal left, right
+            if a and b:
+                if a == last_left or b == last_right:
+                    left, right = b, a
+                else:
+                    left, right = a, b
+                complete()
+            elif not left:
+                left = a if a else b
+            elif not right:
+                right = a if a else b
+                complete()
+
+        for path in paths:
+            chain.append(path)
+            if not path.nodes:
+                continue
+            elif len(path.nodes) == 1:
+                a, b = path.nodes[0], None
+            else:
+                a, b = path.nodes[0], path.nodes[1]
+
+            assign(a, b)
+
+        if chains or left:
             if not chains:
-                if left:
-                    chains.append({"nodes": [left, None], "paths": []})
-                continue
+                chains.append({"nodes": [left, None], "paths": []})
 
-            id = tuple(sorted(chain for chain in chains for path in chain["paths"]))
+            # if self.debug:
+            #    set_trace()
+            id = tuple(
+                sorted(list(itertools.chain.from_iterable(c["paths"] for c in chains)))
+            )
             if id in connections:
-                continue
+                return
 
-            connections[id] = chains
+            connections[id] = [
+                {"left": c["nodes"][0], "right": c["nodes"][1], "chain": c}
+                for c in chains
+            ]
+            connection = connections[id]
 
             path_abort = {train: True for train in trains}
 
@@ -172,216 +213,178 @@ class AutoRouter:
                         self.game,
                         self.game.phase,
                         train,
-                        connection_data=connections[id],
-                        bitfield=bitfield_from_connection(
-                            connections[id], hexside_bits
+                        connection_data=connection,
+                        bitfield=self.bitfield_from_connection(
+                            connection, hexside_bits
                         ),
                     )
                     route.routes = [route]
+                    # set_trace()
                     route.revenue(suppress_check_other=True)
-                    train_routes[train].append(route)
+                    train_routes.setdefault(train, []).append(route)
                 except RouteTooLong:
-                    path_abort.pop(train, None)
+                    path_abort[train] = False
                 except ReusesCity:
                     path_abort.clear()
-                except (NoToken, RouteTooShort, GameError):
-                    pass
+                except (GameError, NoToken, RouteTooShort) as e:
+                    if self.verbose:
+                        print(e)
 
-            if not path_abort:
-                break
+                if not path_abort[train]:
+                    return "abort"
 
-        print(
-            f"Evaluated {len(connections)} paths, found {self.next_hexside_bit} unique hexsides, and found valid routes "
-            f"{', '.join(f'{train.name}:{len(routes)}' for train, routes in train_routes.items())} in: {time.time() - now}"
-        )
+    def bitfield_from_connection(self, connection, hexside_bits):
+        bitfield = [0]
 
-        for route in static:
-            route.bitfield = bitfield_from_connection(
-                route.connection_data, hexside_bits
-            )
-            train_routes[route.train] = [route]
+        def check_and_set(bitfield, hexside_left, hexside_right, hexside_bits):
+            check_edge_and_set(bitfield, hexside_left, hexside_bits)
+            check_edge_and_set(bitfield, hexside_right, hexside_bits)
 
-        for train, routes in train_routes.items():
-            train_routes[train] = sorted(
-                routes, key=lambda route: route.revenue, reverse=True
-            )[:route_limit]
+        def check_edge_and_set(bitfield, hexside_edge, hexside_bits):
+            if hexside_edge in hexside_bits:
+                set_bit(bitfield, hexside_bits[hexside_edge])
+            else:
+                hexside_bits[hexside_edge] = self.next_hexside_bit
+                set_bit(bitfield, self.next_hexside_bit)
+                self.next_hexside_bit += 1
 
-        sorted_routes = list(train_routes.values())
+        def set_bit(bitfield, bit):
+            entry = bit // 32
+            mask = 1 << (bit % 32)
+            while len(bitfield) <= entry:
+                bitfield.append(0)
+            bitfield[entry] |= mask
 
-        limit = 1
-        for routes in sorted_routes:
-            limit *= len(routes)
-
-        print(
-            f"Finding route combos of best {', '.join(f'{train.name}:{len(routes)}' for train, routes in train_routes.items())} "
-            f"routes with depth {limit}"
-        )
-
-        now = time.time()
-        possibilities = self.evaluate_combos(sorted_routes, route_timeout)
-
-        if path_walk_timed_out:
-            self.flash("Auto route path walk failed to complete (PATH TIMEOUT)")
-        elif time.time() - now > route_timeout:
-            self.flash("Auto route selection failed to complete (ROUTE TIMEOUT)")
-
-        max_routes = max(
-            possibilities,
-            key=lambda routes: self.game.routes_revenue(routes),
-            default=[],
-        )
-
-        for route in max_routes:
-            route.routes = max_routes
-
-    def evaluate_combos(sorted_routes, route_timeout):
-        possibilities = []
-        possibilities_count = 0
-        conflicts = 0
-        now = time.time()
-
-        combos = []
-        counter = 0
-        max_revenue = 0
-
-        js_now = int(time.time() * 1000)
-        js_route_timeout = route_timeout * 1000
-
-        js_sorted_routes = []
-        limit = 1
-
-        for rb_routes in sorted_routes:
-            js_routes = []
-
-            limit *= len(rb_routes)
-
-            for rb_route in rb_routes:
-                js_routes.append(
-                    {
-                        "route": rb_route,
-                        "bitfield": rb_route.bitfield,
-                        "revenue": rb_route.revenue,
-                    }
-                )
-
-            js_sorted_routes.append(js_routes)
-
-        old_limit = limit
-
-        for r in range(len(js_sorted_routes[0])):
-            route = js_sorted_routes[0][r]
-            counter += 1
-            combo = {"revenue": route["revenue"], "routes": [route]}
-            combos.append(combo)
-
-            if is_valid_combo(combo):
-                possibilities_count += 1
-
-                if combo["revenue"] >= max_revenue:
-                    if combo["revenue"] > max_revenue:
-                        possibilities = []
-                        max_revenue = combo["revenue"]
-                    possibilities.append(combo)
-
-        continue_looking = True
-
-        for train in range(1, len(js_sorted_routes)):
-            limit = len(combos)
-
-            for remaining in range(train, len(js_sorted_routes)):
-                limit *= len(js_sorted_routes[remaining])
-
-            if limit != old_limit:
-                print(
-                    f"Adjusting depth to {limit} because first {train} trains only had {len(combos)} valid combos"
-                )
-                old_limit = limit
-
-            new_combos = []
-
-            for rt in range(len(js_sorted_routes[train])):
-                route = js_sorted_routes[train][rt]
-
-                for c in range(len(combos)):
-                    combo = combos[c]
-                    counter += 1
-
-                    if counter % 1_000_000 == 0:
-                        print(f"{counter} / {limit}")
-
-                        if int(time.time() * 1000) - js_now > js_route_timeout:
-                            print("Route timeout reached")
-                            continue_looking = False
-                            break
-
-                    if route_bitfield_conflicts(combo, route):
-                        conflicts += 1
+        for conn in connection:
+            paths = conn["chain"]["paths"]
+            if len(paths) == 1:
+                # special case for tiny intra-tile path
+                hexside_left = paths[0].nodes[0].id
+                check_edge_and_set(bitfield, hexside_left, hexside_bits)
+                if len(paths[0].nodes) > 1:
+                    hexside_right = paths[0].nodes[1].id
+                    check_edge_and_set(bitfield, hexside_right, hexside_bits)
+            else:
+                for index in range(len(paths) - 1):
+                    node1, node2 = paths[index], paths[index + 1]
+                    if len(node1.edges) == 1:
+                        hexside_left = node1.edges[0].id
+                        hexside_right = node2.edges[0].id
+                        check_and_set(
+                            bitfield, hexside_left, hexside_right, hexside_bits
+                        )
+                    elif len(node1.edges) == 2:
+                        hexside_left = node1.edges[0].id
+                        hexside_right = node1.edges[1].id
+                        check_and_set(
+                            bitfield, hexside_left, hexside_right, hexside_bits
+                        )
+                        hexside_left = hexside_right
+                        hexside_right = node2.edges[0].id
+                        check_and_set(
+                            bitfield, hexside_left, hexside_right, hexside_bits
+                        )
                     else:
-                        newcombo = {
-                            "revenue": combo["revenue"],
-                            "routes": combo["routes"][:] + [route],
-                        }
-                        newcombo["revenue"] += route["revenue"]
-                        new_combos.append(newcombo)
+                        if self.verbose:
+                            print(
+                                "ERROR: auto-router found unexpected number of path node edges. Route combos may be incorrect"
+                            )
+        return bitfield
 
-                        if is_valid_combo(newcombo):
-                            possibilities_count += 1
+    def js_evaluate_combos(self, sorted_routes, route_timeout):
+        start_time = time.time()
 
-                            if newcombo["revenue"] >= max_revenue:
-                                if newcombo["revenue"] > max_revenue:
-                                    possibilities = []
-                                    max_revenue = newcombo["revenue"]
-                                possibilities.append(newcombo)
+        # Adjusted to include an option to select 'None' from each set of routes, akin to including the empty set
+        sorted_routes_with_empty_option = [routes + [None] for routes in sorted_routes]
 
-            for combo in new_combos:
-                combos.append(combo)
-
-        for combo in possibilities:
-            rb_routes = []
-
-            for route in combo["routes"]:
-                rb_routes.append(route["route"])
-
-            possibilities_count.append(rb_routes)
-
-        print(
-            f"Found {possibilities_count} possible combos ({len(possibilities)} best) and rejected {conflicts} "
-            f"conflicting combos in: {time.time() - now}"
-        )
-
-        return possibilities_count
-
-    def is_valid_combo(cb):
-        # Implement your validation logic here.
-        # Return True if the combo is valid, otherwise return False.
-        pass
-
-    def route_bitfield_conflicts(combo, testroute):
-        # Implement your bitfield conflict checking logic here.
-        # Return True if there is a conflict, otherwise return False.
-        pass
-
-    def is_valid_combo(cb):
-        rb_rts = []
-
-        for rt in cb["routes"]:
-            rb_rts.append(rt["route"])
-            rt["route"].routes = rb_rts
-
-        try:
-            for rt in cb["routes"]:
-                rt["route"].check_other()
-            return True
-        except Exception as err:
+        def bitfield_conflicts(route_bitfields, test_bitfield):
+            for bitfield in route_bitfields:
+                if (
+                    bitfield
+                    and test_bitfield
+                    and any(b & t for b, t in zip(bitfield, test_bitfield))
+                ):
+                    return True
             return False
 
-    def route_bitfield_conflicts(combo, testroute):
-        for cr in combo["routes"]:
-            index = min(len(cr["bitfield"]), len(testroute["bitfield"])) - 1
+        def is_valid_combo(routes):
+            # Exclude 'None' values before checking
+            filtered_routes = [route for route in routes if route is not None]
+            try:
+                for route in filtered_routes:
+                    route.check_other()
+                return True
+            except GameError:
+                return False
 
-            while index >= 0:
-                if (cr["bitfield"][index] & testroute["bitfield"][index]) != 0:
-                    return True
-                index -= 1
+        def generate_bitfields(routes):
+            # Exclude 'None' values before generating bitfields
+            return [route.bitfield for route in routes if route is not None]
 
-        return False
+        def evaluate_route_combos(routes_combinations):
+            best_combos = []
+            highest_revenue = 0
+            for combo in routes_combinations:
+                if time.time() - start_time > route_timeout:
+                    if self.verbose:
+                        print("Route timeout reached")
+                    return best_combos, True
+
+                route_bitfields = generate_bitfields(combo)
+                if not any(
+                    bitfield_conflicts(route_bitfields[:i], route_bitfields[i])
+                    for i in range(1, len(route_bitfields))
+                ):
+                    if is_valid_combo(combo):
+                        # Calculate revenue excluding 'None' values
+                        combo_revenue = sum(
+                            route.revenue() for route in combo if route is not None
+                        )
+                        if combo_revenue > highest_revenue:
+                            best_combos = [combo]
+                            highest_revenue = combo_revenue
+                        elif combo_revenue == highest_revenue:
+                            best_combos.append(combo)
+            return best_combos, False
+
+        # Adjusted to use 'sorted_routes_with_empty_option'
+        possibilities, timeout_reached = evaluate_route_combos(
+            itertools.product(*sorted_routes_with_empty_option)
+        )
+        if timeout_reached and self.flash:
+            self.flash("Route selection timed out.")
+
+        if self.verbose:
+            print(
+                f"Found {len(possibilities)} best route combinations after evaluating with timeout of {route_timeout} seconds."
+            )
+        return possibilities
+
+    def final_revenue_check(self, possibilities):
+        def calculate_total_revenue(routes):
+            filtered_routes = [route for route in routes if route is not None]
+            try:
+                for route in filtered_routes:
+                    route.clear_cache(
+                        only_routes=True
+                    )  # Clear cache for accurate calculation
+                    route.routes = routes  # Ensure route is aware of the full combination for context
+                    route.revenue()  # Calculate revenue for this configuration
+                return self.game.routes_revenue(
+                    filtered_routes
+                )  # Calculate and return total revenue for the combination
+            except GameError as e:
+                if self.verbose:
+                    print(f"Sanity check error, likely an auto_router bug: {e}")
+                return None  # Return None to signify an error was encountered
+
+        # Evaluate each possibility to find the one with the maximum revenue
+        # Filter out any possibilities that resulted in an error (None return value)
+        # set_trace()
+        valid_possibilities = filter(
+            lambda x: calculate_total_revenue(x) is not None, possibilities
+        )
+        # Select the possibility with the highest total revenue, falling back to an empty list if none are valid
+        max_routes = max(valid_possibilities, key=calculate_total_revenue, default=[])
+
+        return max_routes

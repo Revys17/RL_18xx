@@ -67,7 +67,7 @@ class AbilityBase(Ownable):
     def teardown(self):
         pass
 
-    def when(self, *times):
+    def matches_when(self, *times):
         return bool(set(self.when) & set(times))
 
 # %% ../../../nbs/game/engine/02_abilities.ipynb 9
