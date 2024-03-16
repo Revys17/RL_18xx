@@ -1138,9 +1138,11 @@ class Tokener:
         return token, None
 
     def check_connected(self, entity, city, hex):
-        if self.game.loading or not self.game.token_graph_for_entity(
+        if self.game.loading or self.game.token_graph_for_entity(
             entity
         ).connected_nodes(entity).get(city):
+            return
+        else:
             city_string = (
                 " city {}".format(city.index) if len(hex.tile.cities) > 1 else ""
             )
@@ -1435,7 +1437,7 @@ class Bankrupt(BaseStep):
     def sell_bankrupt_shares(self, player, corp):
         self.log.append(f"-- {player.name} goes bankrupt and sells remaining shares --")
 
-        for corporation, _ in player.shares_by_corporation_sorted:
+        for corporation, _ in player.shares_by_corporation_sorted.items():
             if not corporation.share_price:
                 continue  # Skip corporations that have not parred
 
@@ -5586,7 +5588,7 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         )
 
     def resolve_bids(self):
-        company = self.companies[0]
+        company = self.companies[0] if self.companies else None
         while company:
             if not self.resolve_bids_for_company(company):
                 break

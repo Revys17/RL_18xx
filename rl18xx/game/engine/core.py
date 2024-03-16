@@ -739,6 +739,12 @@ class Phase:
         else:
             return str(train_limit)
 
+    def __str__(self):
+        return f"<Phase: {self.name}>"
+
+    def __repr__(self):
+        return self.__str__()
+
 # %% ../../../nbs/game/engine/00_core.ipynb 40
 PUBLISHER_INFO = {
     "all_aboard_games": {
