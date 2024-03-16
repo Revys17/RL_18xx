@@ -572,49 +572,55 @@ class SharePool(Entity, ShareHolder):
                 ),
             )
 
-        if president:
-            corporation.owner = president
-            self.log.append(
-                f"{president.name} becomes the president of {corporation.name}"
+        if not president:
+            return
+    
+        corporation.owner = president
+        self.log.append(
+            f"{president.name} becomes the president of {corporation.name}"
+        )
+
+        if (
+            owner == corporation
+            and not bundle.presidents_share
+            and self.game.can_swap_for_presidents_share_directly_from_corporation
+        ):
+            previous_president = (
+                previous_president if previous_president else corporation
+            )
+        if owner == president or not previous_president:
+            return
+        
+        presidents_share = bundle.presidents_share or next(
+            share for share in previous_president.shares_of(corporation) if share.president
+        )
+
+        if not presidents_share:
+            return
+
+        if owner.is_player() and to_entity.is_player():
+            transfer_to = to_entity
+            swap_to = to_entity
+        else:
+            transfer_to = (
+                corporation
+                if self.game.sold_shares_destination(corporation)
+                == "corporation"
+                else self
+            )
+            swap_to = (
+                previous_president
+                if previous_president.percent_of(corporation)
+                >= presidents_share.percent
+                else transfer_to
             )
 
-            if (
-                owner == corporation
-                and not bundle.presidents_share
-                and self.game.can_swap_for_presidents_share_directly_from_corporation
-            ):
-                previous_president = (
-                    previous_president if previous_president else corporation
-                )
-            if owner != president and previous_president:
-                presidents_share = bundle.presidents_share or next(
-                    share for share in owner.shares_of(corporation) if share.president
-                )
+        self.change_president(
+            presidents_share, swap_to, president, previous_president
+        )
 
-                if presidents_share:
-                    if owner.is_player() and to_entity.is_player():
-                        transfer_to = to_entity
-                        swap_to = to_entity
-                    else:
-                        transfer_to = (
-                            corporation
-                            if self.game.sold_shares_destination(corporation)
-                            == "corporation"
-                            else self
-                        )
-                        swap_to = (
-                            previous_president
-                            if previous_president.percent_of(corporation)
-                            >= presidents_share.percent
-                            else transfer_to
-                        )
-
-                    self.change_president(
-                        presidents_share, swap_to, president, previous_president
-                    )
-
-                    if bundle.partial:
-                        self.handle_partial(bundle, transfer_to, owner)
+        if bundle.partial:
+            self.handle_partial(bundle, transfer_to, owner)
 
     def handle_partial(self, bundle, from_entity, to_entity):
         corp = bundle.corporation
@@ -796,7 +802,7 @@ class Depot(Entity):
             for train in self.trains
             if train.buyable and train.owner not in [corporation, self, None]
         ]
-        if not self.game.ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS:
+        if not self.game.can_buy_train_from_others():
             all_others = [
                 train for train in all_others if train.owner.owner == corporation.owner
             ]
@@ -871,9 +877,27 @@ class Train(Ownable):
         self.ever_operated = value
         self.operated = value
 
+    @property
+    def variant(self):
+        return self._variant
+
+    @variant.setter
+    def variant(self, variant):
+        if not variant:
+            return
+
+        self._variant = self.variants[variant]
+
+        for key, value in self._variant.items():
+            setattr(self, key, value)
+
+        if hasattr(self, "local"):
+            delattr(self, "local")
+        
+    
     def init_variants(self, variants):
         variants = variants or []
-        self.variant = {
+        self._variant = {
             "name": self.name,
             "distance": self.distance,
             "multiplier": self.multiplier,
@@ -887,17 +911,6 @@ class Train(Ownable):
         variants.insert(0, self.variant)
         self.variants = {v["name"]: v for v in variants}
 
-    def set_variant(self, new_variant):
-        if not new_variant:
-            return
-
-        self.variant = self.variants[new_variant]
-
-        for key, value in self.variant.items():
-            setattr(self, key, value)
-
-        if hasattr(self, "local"):
-            delattr(self, "local")
 
     def remove_variants(self):
         self.variants = {
@@ -1558,6 +1571,7 @@ class Player(Entity, Passer, ShareHolder, Spender):
             + sum(c.value for c in self.companies)
         )
 
+    @property
     def owner(self):
         return self
 
