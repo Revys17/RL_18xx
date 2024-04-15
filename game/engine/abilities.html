@@ -1,0 +1,1506 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.4.553">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>rl18xx - Abilities</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../">
+<script src="../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+
+
+<link rel="stylesheet" href="../../styles.css">
+<meta property="og:title" content="rl18xx - Abilities">
+<meta property="og:description" content="RL agent for 18xx (currently 1830)">
+<meta property="og:site_name" content="rl18xx">
+<meta name="twitter:title" content="rl18xx - Abilities">
+<meta name="twitter:description" content="RL agent for 18xx (currently 1830)">
+<meta name="twitter:card" content="summary">
+</head>
+
+<body class="nav-sidebar floating nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="../../index.html">
+    <span class="navbar-title">rl18xx</span>
+    </a>
+  </div>
+        <div class="quarto-navbar-tools tools-end">
+</div>
+          <div id="quarto-search" class="" title="Search"></div>
+      </div> <!-- /container-fluid -->
+    </nav>
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../../game/engine.html">game</a></li><li class="breadcrumb-item"><a href="../../game/engine/core.html">engine</a></li><li class="breadcrumb-item"><a href="../../game/engine/abilities.html">Abilities</a></li></ol></nav>
+        <a class="flex-grow-1" role="button" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+        </a>
+    </div>
+  </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation floating overflow-auto">
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">18XX Reinforment Learning Agent (WIP)</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../core.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">core</span></a>
+  </div>
+</li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" aria-expanded="true">
+ <span class="menu-text">game</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Game Engine</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/action_finder.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Actions Helper</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/game_test.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Game Test</span></a>
+  </div>
+</li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" aria-expanded="true">
+ <span class="menu-text">engine</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth2 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/core.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Core</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/entities.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Game Entities</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/abilities.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">Abilities</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/actions.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Actions</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/autorouter.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Auto Router</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/graph.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Graph Parts</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/round.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Rounds and Steps</span></a>
+  </div>
+</li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" aria-expanded="false">
+ <span class="menu-text">game</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth3 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/game/base.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Base Game Implementation</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/game/shared_enhancements.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Shared Enhancements</span></a>
+  </div>
+</li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" aria-expanded="false">
+ <span class="menu-text">titles</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth4 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/game/titles/g1830.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">1830</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#generic-attributes" id="toc-generic-attributes" class="nav-link active" data-scroll-target="#generic-attributes">Generic attributes</a></li>
+  <li><a href="#base-ability-class" id="toc-base-ability-class" class="nav-link" data-scroll-target="#base-ability-class">Base Ability class</a>
+  <ul class="collapse">
+  <li><a href="#abilitybase" id="toc-abilitybase" class="nav-link" data-scroll-target="#abilitybase">AbilityBase</a></li>
+  </ul></li>
+  <li><a href="#ability-classes" id="toc-ability-classes" class="nav-link" data-scroll-target="#ability-classes">Ability Classes</a>
+  <ul class="collapse">
+  <li><a href="#acquire_company" id="toc-acquire_company" class="nav-link" data-scroll-target="#acquire_company">acquire_company</a>
+  <ul class="collapse">
+  <li><a href="#acquirecompany" id="toc-acquirecompany" class="nav-link" data-scroll-target="#acquirecompany">AcquireCompany</a></li>
+  </ul></li>
+  <li><a href="#additional_token" id="toc-additional_token" class="nav-link" data-scroll-target="#additional_token">additional_token</a>
+  <ul class="collapse">
+  <li><a href="#additionaltoken" id="toc-additionaltoken" class="nav-link" data-scroll-target="#additionaltoken">AdditionalToken</a></li>
+  </ul></li>
+  <li><a href="#assign_corporation" id="toc-assign_corporation" class="nav-link" data-scroll-target="#assign_corporation">assign_corporation</a>
+  <ul class="collapse">
+  <li><a href="#assigncorporation" id="toc-assigncorporation" class="nav-link" data-scroll-target="#assigncorporation">AssignCorporation</a></li>
+  </ul></li>
+  <li><a href="#assign_hexes" id="toc-assign_hexes" class="nav-link" data-scroll-target="#assign_hexes">assign_hexes</a>
+  <ul class="collapse">
+  <li><a href="#assignhexes" id="toc-assignhexes" class="nav-link" data-scroll-target="#assignhexes">AssignHexes</a></li>
+  </ul></li>
+  <li><a href="#blocks_hexes" id="toc-blocks_hexes" class="nav-link" data-scroll-target="#blocks_hexes">blocks_hexes</a>
+  <ul class="collapse">
+  <li><a href="#blockshexes" id="toc-blockshexes" class="nav-link" data-scroll-target="#blockshexes">BlocksHexes</a></li>
+  </ul></li>
+  <li><a href="#blocks_hexes_consent" id="toc-blocks_hexes_consent" class="nav-link" data-scroll-target="#blocks_hexes_consent">blocks_hexes_consent</a>
+  <ul class="collapse">
+  <li><a href="#blockshexesconsent" id="toc-blockshexesconsent" class="nav-link" data-scroll-target="#blockshexesconsent">BlocksHexesConsent</a></li>
+  </ul></li>
+  <li><a href="#blocks_partition" id="toc-blocks_partition" class="nav-link" data-scroll-target="#blocks_partition">blocks_partition</a>
+  <ul class="collapse">
+  <li><a href="#blockspartition" id="toc-blockspartition" class="nav-link" data-scroll-target="#blockspartition">BlocksPartition</a></li>
+  </ul></li>
+  <li><a href="#borrow_train" id="toc-borrow_train" class="nav-link" data-scroll-target="#borrow_train">borrow_train</a>
+  <ul class="collapse">
+  <li><a href="#borrowtrain" id="toc-borrowtrain" class="nav-link" data-scroll-target="#borrowtrain">BorrowTrain</a></li>
+  </ul></li>
+  <li><a href="#choose_ability" id="toc-choose_ability" class="nav-link" data-scroll-target="#choose_ability">choose_ability</a>
+  <ul class="collapse">
+  <li><a href="#chooseability" id="toc-chooseability" class="nav-link" data-scroll-target="#chooseability">ChooseAbility</a></li>
+  </ul></li>
+  <li><a href="#close" id="toc-close" class="nav-link" data-scroll-target="#close">close</a>
+  <ul class="collapse">
+  <li><a href="#close-1" id="toc-close-1" class="nav-link" data-scroll-target="#close-1">Close</a></li>
+  </ul></li>
+  <li><a href="#description" id="toc-description" class="nav-link" data-scroll-target="#description">description</a>
+  <ul class="collapse">
+  <li><a href="#description-1" id="toc-description-1" class="nav-link" data-scroll-target="#description-1">Description</a></li>
+  </ul></li>
+  <li><a href="#exchange" id="toc-exchange" class="nav-link" data-scroll-target="#exchange">exchange</a>
+  <ul class="collapse">
+  <li><a href="#exchange-1" id="toc-exchange-1" class="nav-link" data-scroll-target="#exchange-1">Exchange</a></li>
+  </ul></li>
+  <li><a href="#generic" id="toc-generic" class="nav-link" data-scroll-target="#generic">generic</a>
+  <ul class="collapse">
+  <li><a href="#generic-1" id="toc-generic-1" class="nav-link" data-scroll-target="#generic-1">Generic</a></li>
+  </ul></li>
+  <li><a href="#hex_bonus" id="toc-hex_bonus" class="nav-link" data-scroll-target="#hex_bonus">hex_bonus</a>
+  <ul class="collapse">
+  <li><a href="#hexbonus" id="toc-hexbonus" class="nav-link" data-scroll-target="#hexbonus">HexBonus</a></li>
+  </ul></li>
+  <li><a href="#manual_close_company" id="toc-manual_close_company" class="nav-link" data-scroll-target="#manual_close_company">manual_close_company</a>
+  <ul class="collapse">
+  <li><a href="#manualclosecompany" id="toc-manualclosecompany" class="nav-link" data-scroll-target="#manualclosecompany">ManualCloseCompany</a></li>
+  </ul></li>
+  <li><a href="#no_buy" id="toc-no_buy" class="nav-link" data-scroll-target="#no_buy">no_buy</a>
+  <ul class="collapse">
+  <li><a href="#nobuy" id="toc-nobuy" class="nav-link" data-scroll-target="#nobuy">NoBuy</a></li>
+  </ul></li>
+  <li><a href="#purchase_train" id="toc-purchase_train" class="nav-link" data-scroll-target="#purchase_train">purchase_train</a>
+  <ul class="collapse">
+  <li><a href="#purchasetrain" id="toc-purchasetrain" class="nav-link" data-scroll-target="#purchasetrain">PurchaseTrain</a></li>
+  </ul></li>
+  <li><a href="#reservation" id="toc-reservation" class="nav-link" data-scroll-target="#reservation">reservation</a>
+  <ul class="collapse">
+  <li><a href="#reservation-1" id="toc-reservation-1" class="nav-link" data-scroll-target="#reservation-1">Reservation</a></li>
+  </ul></li>
+  <li><a href="#return_token" id="toc-return_token" class="nav-link" data-scroll-target="#return_token">return_token</a>
+  <ul class="collapse">
+  <li><a href="#returntoken" id="toc-returntoken" class="nav-link" data-scroll-target="#returntoken">ReturnToken</a></li>
+  </ul></li>
+  <li><a href="#revenue_change" id="toc-revenue_change" class="nav-link" data-scroll-target="#revenue_change">revenue_change</a>
+  <ul class="collapse">
+  <li><a href="#revenuechange" id="toc-revenuechange" class="nav-link" data-scroll-target="#revenuechange">RevenueChange</a></li>
+  </ul></li>
+  <li><a href="#sell_company" id="toc-sell_company" class="nav-link" data-scroll-target="#sell_company">sell_company</a>
+  <ul class="collapse">
+  <li><a href="#sellcompany" id="toc-sellcompany" class="nav-link" data-scroll-target="#sellcompany">SellCompany</a></li>
+  </ul></li>
+  <li><a href="#shares" id="toc-shares" class="nav-link" data-scroll-target="#shares">shares</a>
+  <ul class="collapse">
+  <li><a href="#shares-1" id="toc-shares-1" class="nav-link" data-scroll-target="#shares-1">Shares</a></li>
+  </ul></li>
+  <li><a href="#teleport" id="toc-teleport" class="nav-link" data-scroll-target="#teleport">teleport</a>
+  <ul class="collapse">
+  <li><a href="#teleport-1" id="toc-teleport-1" class="nav-link" data-scroll-target="#teleport-1">Teleport</a></li>
+  </ul></li>
+  <li><a href="#tile_discount" id="toc-tile_discount" class="nav-link" data-scroll-target="#tile_discount">tile_discount</a>
+  <ul class="collapse">
+  <li><a href="#tilediscount" id="toc-tilediscount" class="nav-link" data-scroll-target="#tilediscount">TileDiscount</a></li>
+  </ul></li>
+  <li><a href="#tile_income" id="toc-tile_income" class="nav-link" data-scroll-target="#tile_income">tile_income</a>
+  <ul class="collapse">
+  <li><a href="#tileincome" id="toc-tileincome" class="nav-link" data-scroll-target="#tileincome">TileIncome</a></li>
+  </ul></li>
+  <li><a href="#tile_lay" id="toc-tile_lay" class="nav-link" data-scroll-target="#tile_lay">tile_lay</a>
+  <ul class="collapse">
+  <li><a href="#tilelay" id="toc-tilelay" class="nav-link" data-scroll-target="#tilelay">TileLay</a></li>
+  </ul></li>
+  <li><a href="#token" id="toc-token" class="nav-link" data-scroll-target="#token">token</a>
+  <ul class="collapse">
+  <li><a href="#token-1" id="toc-token-1" class="nav-link" data-scroll-target="#token-1">Token</a></li>
+  </ul></li>
+  <li><a href="#train_buy" id="toc-train_buy" class="nav-link" data-scroll-target="#train_buy">train_buy</a>
+  <ul class="collapse">
+  <li><a href="#trainbuy" id="toc-trainbuy" class="nav-link" data-scroll-target="#trainbuy">TrainBuy</a></li>
+  </ul></li>
+  <li><a href="#train_discount" id="toc-train_discount" class="nav-link" data-scroll-target="#train_discount">train_discount</a>
+  <ul class="collapse">
+  <li><a href="#traindiscount" id="toc-traindiscount" class="nav-link" data-scroll-target="#traindiscount">TrainDiscount</a></li>
+  </ul></li>
+  <li><a href="#train_limit" id="toc-train_limit" class="nav-link" data-scroll-target="#train_limit">train_limit</a>
+  <ul class="collapse">
+  <li><a href="#trainlimit" id="toc-trainlimit" class="nav-link" data-scroll-target="#trainlimit">TrainLimit</a></li>
+  </ul></li>
+  <li><a href="#train_scrapper" id="toc-train_scrapper" class="nav-link" data-scroll-target="#train_scrapper">train_scrapper</a>
+  <ul class="collapse">
+  <li><a href="#trainscrapper" id="toc-trainscrapper" class="nav-link" data-scroll-target="#trainscrapper">TrainScrapper</a></li>
+  </ul></li>
+  </ul></li>
+  <li><a href="#abilities-container" id="toc-abilities-container" class="nav-link" data-scroll-target="#abilities-container">Abilities Container</a>
+  <ul class="collapse">
+  <li><a href="#abilities" id="toc-abilities" class="nav-link" data-scroll-target="#abilities">Abilities</a></li>
+  </ul></li>
+  </ul>
+<div class="toc-actions"><ul><li><a href="https://github.com/Revys17/RL_18xx/issues/new" class="toc-action"><i class="bi bi-github"></i>Report an issue</a></li></ul></div></nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../../game/engine.html">game</a></li><li class="breadcrumb-item"><a href="../../game/engine/core.html">engine</a></li><li class="breadcrumb-item"><a href="../../game/engine/abilities.html">Abilities</a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title">Abilities</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<!-- WARNING: THIS FILE WAS AUTOGENERATED! DO NOT EDIT! -->
+<p>This page contains the different ability types and the attributes which may be set for each type.</p>
+<p>Abilities are mainly used to describe private company powers, but may also apply to other entities such as corporations. Examples of how their use can be seen in the <a href="../config/game">game configuration directory</a>.</p>
+<section id="generic-attributes" class="level2">
+<h2 class="anchored" data-anchor-id="generic-attributes">Generic attributes</h2>
+<p>These attributes may be set for all ability types</p>
+<ul>
+<li><code>type</code>: The name of the ability type</li>
+<li><code>owner_type</code>: The company must be owned by this type of entity in order for the ability to be active. Either “player” or “corporation”.</li>
+<li><code>remove</code>: Game phase when this ability is removed</li>
+<li><code>count</code>: The number of times the ability may be used</li>
+<li><code>count_per_or</code>: The number of times the ability may be used in each OR; the property <code>count_this_or</code> is reset to 0 at the start of each OR and increments each time the ability is used</li>
+<li><code>use_across_ors</code>: If <code>count</code> is more than 1 and this is <code>false</code>, then the ability may only be used within one OR; if an OR starts and the ability has been used at least once, but there is still <code>count</code> remaining, the ability gets used up and removed. Default <code>true</code>.</li>
+<li><code>on_phase</code>: The phase when this ability is active</li>
+<li><code>after_phase</code>: The ability is active for all phases after the specified phase</li>
+<li><code>when</code>: (string or array of strings) The game steps or special time descriptor when this ability is active. If no values are provided, this ability is considered to be “passive”, i.e., its effect applies without the user needinng to click on the abilities button to activate it. For an ability to be included in an <code>abilities()</code> call, either a <code>time</code> kwarg or the name of the current game phase class must match (one of) the ability’s <code>when</code> string(s). Examples:
+<ul>
+<li><code>any</code>: usable at any time during the game</li>
+<li><code>buying_train</code>: train buying step</li>
+<li><code>track</code>, <code>track_and_token</code>: track-laying step; if normal track lays are used up, but there is still a <code>Track</code> ability, then the active step will not pass on to the next step automatically</li>
+<li><code>special_track</code>: <code>SpecialTrack</code> step when it blocks for a private company that gets multiple lays</li>
+<li><code>token</code>: token-placing step</li>
+<li><code>route</code>: running routes step</li>
+<li><code>sold</code>: when the company is bought from a player by a corporation</li>
+<li><code>bought_train</code>: when the owning corporation has bought a train; generally used with <code>close</code> abilities</li>
+<li><code>owning_corp_or_turn</code>: usable at any point during the owning corporation’s OR turn</li>
+<li><code>owning_player_or_turn</code>: usable at any point during any of the owning player’s OR turns</li>
+<li><code>owning_player_track</code>: usable during track step during any of the owning player’s OR turns</li>
+<li><code>owning_player_sr_turn</code>: usable at any point during any of the owning player’s SR turns</li>
+<li><code>or_between_turns</code>: usable at the start of any corporation’s OR turn, before that corporation has acted</li>
+<li><code>stock_round</code>: usable any time during a Stock Round</li>
+<li><code>never</code>: use with <code>close</code> abilities to prevent a company from closing</li>
+<li><code>has_train</code>: when the owning corporation owns at least one train</li>
+<li><code>operated</code>: when the owning corporation has finished the dividend step on their first turn</li>
+</ul></li>
+</ul>
+</section>
+<section id="base-ability-class" class="level1">
+<h1>Base Ability class</h1>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L14" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="abilitybase" class="level3">
+<h3 class="anchored" data-anchor-id="abilitybase">AbilityBase</h3>
+<blockquote class="blockquote">
+<pre><code> AbilityBase (type=None, description=None, desc_detail=None,
+              owner_type=None, count=None, remove=None,
+              use_across_ors=None, count_per_or=None, passive=None,
+              on_phase=None, after_phase=None, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="ability-classes" class="level1">
+<h1>Ability Classes</h1>
+<section id="acquire_company" class="level2">
+<h2 class="anchored" data-anchor-id="acquire_company">acquire_company</h2>
+<p>This company comes with a company when acquired.</p>
+<ul>
+<li><code>company</code>: The sym of the additional company to be acquired</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L1228" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="acquirecompany" class="level3">
+<h3 class="anchored" data-anchor-id="acquirecompany">AcquireCompany</h3>
+<blockquote class="blockquote">
+<pre><code> AcquireCompany (company, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="additional_token" class="level2">
+<h2 class="anchored" data-anchor-id="additional_token">additional_token</h2>
+<p>Adds ‘count’ additional tokens to a purchasing company (1817)</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L80" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="additionaltoken" class="level3">
+<h3 class="anchored" data-anchor-id="additionaltoken">AdditionalToken</h3>
+<blockquote class="blockquote">
+<pre><code> AdditionalToken (type=None, description=None, desc_detail=None,
+                  owner_type=None, count=None, remove=None,
+                  use_across_ors=None, count_per_or=None, passive=None,
+                  on_phase=None, after_phase=None, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="assign_corporation" class="level2">
+<h2 class="anchored" data-anchor-id="assign_corporation">assign_corporation</h2>
+<p>Designate a specific corporation to be the beneficiary of the ability, for example Steamboat Company in 1846.</p>
+<p>When a company with this ability is sold to a corporation, the company is automatically assigned to the new owning corporation.</p>
+<ul>
+<li><code>count</code>: The number of times the ability may be used</li>
+<li><code>closed_when_used_up</code>: This ability has a count that is decreased each time it is used. If this attribute is true the private is closed when count reaches zero, if false the private remains open but the discount can no longer be used. Default false.</li>
+</ul>
+<p>With this configuration, the automatic assignment will happen and the company cannot be further reassigned:</p>
+<pre><code>{
+  "type": "assign_corporation",
+  "when": "sold",
+  "count": 1,
+  "owner_type": "corporation"
+}</code></pre>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L84" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="assigncorporation" class="level3">
+<h3 class="anchored" data-anchor-id="assigncorporation">AssignCorporation</h3>
+<blockquote class="blockquote">
+<pre><code> AssignCorporation (closed_when_used_up, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="assign_hexes" class="level2">
+<h2 class="anchored" data-anchor-id="assign_hexes">assign_hexes</h2>
+<p>Designate a hex to the ability. Usually simulates placement of a special power token.</p>
+<ul>
+<li><code>hexes</code>: An array of hex coordinates where this ability may be used.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L90" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="assignhexes" class="level3">
+<h3 class="anchored" data-anchor-id="assignhexes">AssignHexes</h3>
+<blockquote class="blockquote">
+<pre><code> AssignHexes (hexes, closed_when_used_up=None, cost=0, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="blocks_hexes" class="level2">
+<h2 class="anchored" data-anchor-id="blocks_hexes">blocks_hexes</h2>
+<p>Designate hexes which are blocked by this ability. Use the <code>owner_type: "player"</code> to specify that the blocking ends when the company is bought in by a corporation.</p>
+<ul>
+<li><code>hexes</code>: An array of hex coordinates that are blocked</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L98" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="blockshexes" class="level3">
+<h3 class="anchored" data-anchor-id="blockshexes">BlocksHexes</h3>
+<blockquote class="blockquote">
+<pre><code> BlocksHexes (hexes, hidden=False, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="blocks_hexes_consent" class="level2">
+<h2 class="anchored" data-anchor-id="blocks_hexes_consent">blocks_hexes_consent</h2>
+<p>Designate hexes which are blocked by this ability. Use the <code>owner_type: "player"</code> to specify that the blocking ends when the company is bought in by a corporation. However unlike <code>blocks_hexes</code> this doesn’t block the ability except through a front end confirmation, so players (if they click through) are allowed to lay a tile on this hex. This is just like when purchasing a train from another player.</p>
+<ul>
+<li><code>hexes</code>: An array of hex coordinates that are blocked</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L105" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="blockshexesconsent" class="level3">
+<h3 class="anchored" data-anchor-id="blockshexesconsent">BlocksHexesConsent</h3>
+<blockquote class="blockquote">
+<pre><code> BlocksHexesConsent (hexes, hidden=False, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="blocks_partition" class="level2">
+<h2 class="anchored" data-anchor-id="blocks_partition">blocks_partition</h2>
+<p>Designate a type of partition which this ability disallows crossing. A partition separates an hex in 2 halves. Use the <code>owner_type: "player"</code> to specify that the blocking ends when the company is bought in by a corporation.</p>
+<ul>
+<li><code>partition_type</code>: The name of the partition type that is to be blocked, akin to terrain and border types.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L112" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="blockspartition" class="level3">
+<h3 class="anchored" data-anchor-id="blockspartition">BlocksPartition</h3>
+<blockquote class="blockquote">
+<pre><code> BlocksPartition (partition_type, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="borrow_train" class="level2">
+<h2 class="anchored" data-anchor-id="borrow_train">borrow_train</h2>
+<p>May borrow a train from the Depot for running trains when trainless</p>
+<ul>
+<li><code>train_types</code>: Array of train types that are eligible for borrowing</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/actions.py#L227" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="borrowtrain" class="level3">
+<h3 class="anchored" data-anchor-id="borrowtrain">BorrowTrain</h3>
+<blockquote class="blockquote">
+<pre><code> BorrowTrain (train_types, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="choose_ability" class="level2">
+<h2 class="anchored" data-anchor-id="choose_ability">choose_ability</h2>
+<p>Allows you to choose another ability.</p>
+<ul>
+<li><code>choices</code>: The abilities to choose from.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/actions.py#L487" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="chooseability" class="level3">
+<h3 class="anchored" data-anchor-id="chooseability">ChooseAbility</h3>
+<blockquote class="blockquote">
+<pre><code> ChooseAbility (choices=[], **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="close" class="level2">
+<h2 class="anchored" data-anchor-id="close">close</h2>
+<p>Describe when the company closes, using the <code>when</code> attribute.</p>
+<ul>
+<li><code>corporation'</code>: If <code>when</code> is set to <code>"train"</code>, this value is the name of the corporation whose train purchase closes this company.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L133" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="close-1" class="level3">
+<h3 class="anchored" data-anchor-id="close-1">Close</h3>
+<blockquote class="blockquote">
+<pre><code> Close (corporation=None, silent=False, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="description" class="level2">
+<h2 class="anchored" data-anchor-id="description">description</h2>
+<p>Provide a description for an ability that is implemented outside of the ability framework.</p>
+<ul>
+<li><code>description</code>: Description of the ability.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L140" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="description-1" class="level3">
+<h3 class="anchored" data-anchor-id="description-1">Description</h3>
+<blockquote class="blockquote">
+<pre><code> Description (type=None, description=None, desc_detail=None,
+              owner_type=None, count=None, remove=None,
+              use_across_ors=None, count_per_or=None, passive=None,
+              on_phase=None, after_phase=None, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="exchange" class="level2">
+<h2 class="anchored" data-anchor-id="exchange">exchange</h2>
+<p>This company may be exchanged for a single share of a specified corporation during a step that allows exchange.</p>
+<ul>
+<li><code>corporations</code>: An array with corporation names, whose share may be exchanged. Use a simple <code>"any"</code> (no array) to allow for any corporation. Use a simple <code>"ipoed"</code> (no array) to allow from any company that has been ipoed.</li>
+<li><code>from</code>: Where the share may be take from, either <code>"ipo"</code>, <code>"market"</code>, or an array containing both.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3125" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="exchange-1" class="level3">
+<h3 class="anchored" data-anchor-id="exchange-1">Exchange</h3>
+<blockquote class="blockquote">
+<pre><code> Exchange (corporations, from_, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="generic" class="level2">
+<h2 class="anchored" data-anchor-id="generic">generic</h2>
+<p>Not sure what uses this</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L151" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="generic-1" class="level3">
+<h3 class="anchored" data-anchor-id="generic-1">Generic</h3>
+<blockquote class="blockquote">
+<pre><code> Generic (subtype, from_, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="hex_bonus" class="level2">
+<h2 class="anchored" data-anchor-id="hex_bonus">hex_bonus</h2>
+<p>Give a route bonus if at least one of the hexes are included in the route.</p>
+<ul>
+<li><code>hexes</code>: Name of hexes that gives a bonus.</li>
+<li><code>amount</code>: Revenue bonus.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L157" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="hexbonus" class="level3">
+<h3 class="anchored" data-anchor-id="hexbonus">HexBonus</h3>
+<blockquote class="blockquote">
+<pre><code> HexBonus (hexes, amount, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="manual_close_company" class="level2">
+<h2 class="anchored" data-anchor-id="manual_close_company">manual_close_company</h2>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/actions.py#L748" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="manualclosecompany" class="level3">
+<h3 class="anchored" data-anchor-id="manualclosecompany">ManualCloseCompany</h3>
+<blockquote class="blockquote">
+<pre><code> ManualCloseCompany (type=None, description=None, desc_detail=None,
+                     owner_type=None, count=None, remove=None,
+                     use_across_ors=None, count_per_or=None, passive=None,
+                     on_phase=None, after_phase=None, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="no_buy" class="level2">
+<h2 class="anchored" data-anchor-id="no_buy">no_buy</h2>
+<p>This company may not be bought in.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L168" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="nobuy" class="level3">
+<h3 class="anchored" data-anchor-id="nobuy">NoBuy</h3>
+<blockquote class="blockquote">
+<pre><code> NoBuy (type=None, description=None, desc_detail=None, owner_type=None,
+        count=None, remove=None, use_across_ors=None, count_per_or=None,
+        passive=None, on_phase=None, after_phase=None, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="purchase_train" class="level2">
+<h2 class="anchored" data-anchor-id="purchase_train">purchase_train</h2>
+<p>Immediately purchases the currently available depot train for the owning corporation. - <code>free</code>: If true, the train cost is free, otherwase at cost. Default false.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/actions.py#L1251" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="purchasetrain" class="level3">
+<h3 class="anchored" data-anchor-id="purchasetrain">PurchaseTrain</h3>
+<blockquote class="blockquote">
+<pre><code> PurchaseTrain (free=False, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="reservation" class="level2">
+<h2 class="anchored" data-anchor-id="reservation">reservation</h2>
+<p>Reserve a token slot</p>
+<ul>
+<li><code>hex</code>: Hex coordinate</li>
+<li><code>slot</code>: A specific token slot to designate</li>
+<li><code>city</code>: Which city to reserve, if multiple cities are on one hex</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L178" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="reservation-1" class="level3">
+<h3 class="anchored" data-anchor-id="reservation-1">Reservation</h3>
+<blockquote class="blockquote">
+<pre><code> Reservation (hex, city=0, slot=0, tile=None, icon=None, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="return_token" class="level2">
+<h2 class="anchored" data-anchor-id="return_token">return_token</h2>
+<p>Take a station token off the board and place back on the charter in the most expensive open location</p>
+<ul>
+<li><code>reimburse</code>: If true, the corporation is reimbursed the token cost of the location where the token is placed</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3685" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="returntoken" class="level3">
+<h3 class="anchored" data-anchor-id="returntoken">ReturnToken</h3>
+<blockquote class="blockquote">
+<pre><code> ReturnToken (reimburse=False, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="revenue_change" class="level2">
+<h2 class="anchored" data-anchor-id="revenue_change">revenue_change</h2>
+<p>The revenue for this company changes when the conditions set by <code>when</code> and <code>owner_type</code> are satisfied.</p>
+<ul>
+<li><code>revenue</code>: The new revenue value</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L198" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="revenuechange" class="level3">
+<h3 class="anchored" data-anchor-id="revenuechange">RevenueChange</h3>
+<blockquote class="blockquote">
+<pre><code> RevenueChange (revenue, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="sell_company" class="level2">
+<h2 class="anchored" data-anchor-id="sell_company">sell_company</h2>
+<p>This company can be sold to bank for face value. This closes the company.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/actions.py#L1429" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="sellcompany" class="level3">
+<h3 class="anchored" data-anchor-id="sellcompany">SellCompany</h3>
+<blockquote class="blockquote">
+<pre><code> SellCompany (type=None, description=None, desc_detail=None,
+              owner_type=None, count=None, remove=None,
+              use_across_ors=None, count_per_or=None, passive=None,
+              on_phase=None, after_phase=None, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="shares" class="level2">
+<h2 class="anchored" data-anchor-id="shares">shares</h2>
+<p>This company comes with a share of a corporation when acquired.</p>
+<ul>
+<li><code>share</code>: If a string in the form of <code>sym_x</code>, where <code>sym</code> is a corporation symbol, and <code>x</code> is a numeric index, gives the certificate of the corporation at index <code>x</code> (<code>x = 0</code> is the president’s certificate). If <code>"random_president"</code>, gives a president’s certificate randomly selected at game setup. Gives one ordinary share of one the corporations listed in <code>corporations</code>, randomly selected at game setup.</li>
+<li><code>corporations</code>: A list of corporations to be used with <code>"share": "random_share"</code></li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L208" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="shares-1" class="level3">
+<h3 class="anchored" data-anchor-id="shares-1">Shares</h3>
+<blockquote class="blockquote">
+<pre><code> Shares (shares, corporations=None, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="teleport" class="level2">
+<h2 class="anchored" data-anchor-id="teleport">teleport</h2>
+<p>Lay a tile and place a station token without connectivity</p>
+<ul>
+<li><code>hexes</code>: An array of hex coordinates that can be used as the teleport destination.</li>
+<li><code>tiles</code>: An array of tile numbers which may be placed at the teleport destination.</li>
+<li><code>cost</code>: Cost to use the teleport ability.</li>
+<li><code>free_tile_lay</code>: If true, the tile is laid with 0 cost. Default false.</li>
+<li><code>from_owner</code>: If true, this ability uses a token from the owning corporation’s charter; if false, an additional token is created. Default true.</li>
+<li><code>extra_action</code>: If true, this ability may be used in addition to the turn’s normal token placement step. Default false.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L215" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="teleport-1" class="level3">
+<h3 class="anchored" data-anchor-id="teleport-1">Teleport</h3>
+<blockquote class="blockquote">
+<pre><code> Teleport (hexes, tiles, cost=None, free_tile_lay=False, from_owner=True,
+           extra_action=False, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="tile_discount" class="level2">
+<h2 class="anchored" data-anchor-id="tile_discount">tile_discount</h2>
+<p>Discount the cost for laying tiles in the specified terrain type</p>
+<ul>
+<li><code>discount</code>: Discount amount</li>
+<li><code>terrain</code>: If set, type of terrain for which discount is provided, otherwise the discount is off the total cost</li>
+<li><code>hexes</code>: If not specified, all applicable hexes qualifies for the discount. If specified, only specified hexes qualify</li>
+<li><code>exact_match</code>: Tile may only contain specified terrain type. Default true.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L239" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="tilediscount" class="level3">
+<h3 class="anchored" data-anchor-id="tilediscount">TileDiscount</h3>
+<blockquote class="blockquote">
+<pre><code> TileDiscount (discount, terrain=None, hexes=None, exact_match=True,
+               **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="tile_income" class="level2">
+<h2 class="anchored" data-anchor-id="tile_income">tile_income</h2>
+<p>Generate extra revenue when tiles are laid on specified terrain types.</p>
+<ul>
+<li><code>terrain</code>: Terrain type for this ability</li>
+<li><code>income</code>: Extra income per tile lay</li>
+<li><code>owner_only</code>: Does this income apply to any tile lay (1882 Tresle Bridge) or just the owner (1817 Mountain Engineers)</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L253" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="tileincome" class="level3">
+<h3 class="anchored" data-anchor-id="tileincome">TileIncome</h3>
+<blockquote class="blockquote">
+<pre><code> TileIncome (income, terrain=None, owner_only=False, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="tile_lay" class="level2">
+<h2 class="anchored" data-anchor-id="tile_lay">tile_lay</h2>
+<p>Lay or upgrade one or more track tiles without connectivity, in addition to normal tile lay actions.</p>
+<ul>
+<li><code>hexes</code>: Array of hex coordinates where tiles may be laid.</li>
+<li><code>tiles</code>: Array of tile numbers which may be laid.</li>
+<li><code>cost</code>: Cost to use the ability.</li>
+<li><code>closed_when_used_up</code>: This ability has a count that is decreased each time it is used. If this attribute is true the private is closed when count reaches zero, if false the private remains open but the discount can no longer be used. Default false.</li>
+<li><code>free</code>: If true, the tiles are laid with 0 cost. Default false.</li>
+<li><code>discount</code>: Discount the cost of laying the tile by the given amount. Default 0.</li>
+<li><code>special</code>: If true, do not check that the tile upgrade preserves labels and city count. Default true.</li>
+<li><code>connect</code>: If true, and <code>count</code> is greater than 1, tiles laid must connect to each other. Default true.</li>
+<li><code>blocks</code>: If true and <code>when</code> is <code>sold</code>, then the step <a href="https://Revys17.github.io/RL_18xx/game/engine/round.html#tracklaywhencompanysold"><code>TrackLayWhenCompanySold</code></a> will require a tile lay. Default false.</li>
+<li><code>reachable</code>: If true, when tile laid, a check is done if one of the controlling corporation’s station tokens are reachable; if not a game error is triggered. Default false.</li>
+<li><code>must_lay_together</code>: If true and <code>count</code> is greater than 1, all the tile lays must happen at the same time. If this is <code>true</code>, you might want <code>when</code> to include <code>special_track</code>. Default false.</li>
+<li><code>must_lay_all</code>: If true and <code>count</code> is greater than 1 and <code>must_lay_together</code> is true, all the tile lays must be used; if false, then some tile lays may be forfeited. Default false.</li>
+<li><code>consume_tile_lay</code>: If true, using this private counts as a corporations tile lay and must follow lay/upgrade rules. Upgrade’s also count towards the corporations ‘upgrade’ lays. Default false.</li>
+<li><code>lay_count</code> and <code>upgrade_count</code> - Use as an alternative to <code>count</code>. <code>lay_count</code> is the number of yellow tile lays, and <code>upgrade_count</code> is the number of green or higher tile upgrades. When these are set, the ability cannot be used for both new tile lays and upgrades. With these set, you need to make sure the <code>ability.use!</code> call includes an <code>upgrade</code> kwarg.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L261" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="tilelay" class="level3">
+<h3 class="anchored" data-anchor-id="tilelay">TileLay</h3>
+<blockquote class="blockquote">
+<pre><code> TileLay (tiles, hexes=None, free=False, discount=0, special=True,
+          connect=True, blocks=False, reachable=False,
+          must_lay_together=False, cost=0, closed_when_used_up=False,
+          must_lay_all=False, consume_tile_lay=False, lay_count=None,
+          upgrade_count=None, combo_entities=[], **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="token" class="level2">
+<h2 class="anchored" data-anchor-id="token">token</h2>
+<p>Modified station token placement</p>
+<ul>
+<li><code>hexes</code>: Array of hex coordinates where this ability may be used</li>
+<li><code>city</code>: Index of the city on the hex where this ability may be used, if multiple cities are there</li>
+<li><code>price</code>: Price for placing token</li>
+<li><code>teleport_price</code>: If present, this ability may be used to place a token without connectivity, for the given price.</li>
+<li><code>discount</code>: ratio discount from the normal price, e.g., <code>0.25</code> takes 25% off the token price</li>
+<li><code>extra_action</code>: If true, this ability may be used in addition to the turn’s normal token placement step. Default false.</li>
+<li><code>from_owner</code>: If true, this ability uses a token from the owning corporation’s charter; if false, an additional token is created. Default false.</li>
+<li><code>cheater</code>: If an integer is given, this token will be placed into a city at whichever is the lowest unoccupied slot index of the following: a regular slot in the city; the <code>cheater</code> value; one slot higher than the city actually has, effectively increasing the city’s size by one. (See 18 Los Angeles’s optional company “Dewey, Cheatham, and Howe” or the corporations which get removed in 1846 2p Variant for examples). Default nil.</li>
+<li><code>extra_slot</code>: Simlar to <code>cheater</code> except this token does not take a slot - When <code>cheater</code> is used, when the city gets an extra city slot the ‘cheater’ token goes into the newly opened slot. If <code>extra_slot</code> is used, when the city gets an extra token slot, the new token slot is open - the extra token does not consume it. This also means that an <code>extra_slot</code> token lay in an city with an open slot does not use up the open slot.</li>
+<li><code>special_only</code>: If true, this ability may only be used by explicitly. activating the company to which it belongs (i.e., using the <a href="https://Revys17.github.io/RL_18xx/game/engine/round.html#specialtrack"><code>SpecialTrack</code></a> step); if unset or false, <code>Engine::Step::Tokener#adjust_token_price_ability!</code> infers that the special ability ought to be used whenever a token is being placed in a location that the ability is allowed to use. Default false.</li>
+<li><code>neutral</code>: If true, this ability uses a “neutral” token, which allows all corporations to pass through it</li>
+<li><code>check_tokenable</code>: If false, skip the <code>tokenable?</code> check before placing the token. Used in 18LA2 for the Angeles Public Dump, which places a special station token that does not actually belong to the owning corporation, and can therefore be placed in the same city as another token belonging to the owning corporation. Note that this property will bypass all tokenable checks, not just <code>:existing_token</code>. Default true.</li>
+<li><code>connected</code>: If true, when token placed, a check is done if the desired token slot is connected by track with another city that has a token of the corporation; if not a game error is triggered. Default false.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L5270" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="token-1" class="level3">
+<h3 class="anchored" data-anchor-id="token-1">Token</h3>
+<blockquote class="blockquote">
+<pre><code> Token (hexes, price=None, teleport_price=None, extra_action=False,
+        from_owner=False, discount=None, city=None, neutral=False,
+        cheater=False, extra_slot=False, special_only=False,
+        check_tokenable=True, closed_when_used_up=False, connected=False,
+        **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="train_buy" class="level2">
+<h2 class="anchored" data-anchor-id="train_buy">train_buy</h2>
+<p>Modify train buy in some way.</p>
+<ul>
+<li><code>face_value</code>: If true, any inter corporation train buy must be at face value. Default false.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L372" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="trainbuy" class="level3">
+<h3 class="anchored" data-anchor-id="trainbuy">TrainBuy</h3>
+<blockquote class="blockquote">
+<pre><code> TrainBuy (face_value=None, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="train_discount" class="level2">
+<h2 class="anchored" data-anchor-id="train_discount">train_discount</h2>
+<p>Discount the train buy cost. The <code>count</code> attribute specify how many times the discount can be used.</p>
+<ul>
+<li><code>discount</code>: Discount amount. If &gt; 1 this is an absolute amount. If 0 &lt; amount &lt; 1 it is the fraction, e.g.&nbsp;0.75 is a 75% discount.</li>
+<li><code>trains</code>: An array of all train names that the discount applies to.</li>
+<li><code>closed_when_used_up</code>: This ability has a count that is decreased each time it is used. If this attribute is true the private is closed when count reaches zero, if false the private remains open but the discount can no longer be used. Default false.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L378" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="traindiscount" class="level3">
+<h3 class="anchored" data-anchor-id="traindiscount">TrainDiscount</h3>
+<blockquote class="blockquote">
+<pre><code> TrainDiscount (discount, trains, closed_when_used_up=None, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="train_limit" class="level2">
+<h2 class="anchored" data-anchor-id="train_limit">train_limit</h2>
+<p>Modify train limit in some way. For performance reasons, the supporting code needs to be added directly to the game class. See G18MEX#train_limit for an example.</p>
+<ul>
+<li><code>increase</code>: If positive, this will increase the train limit with this amount in all faces. Default 0.</li>
+</ul>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L403" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="trainlimit" class="level3">
+<h3 class="anchored" data-anchor-id="trainlimit">TrainLimit</h3>
+<blockquote class="blockquote">
+<pre><code> TrainLimit (increase=None, constant=None, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="train_scrapper" class="level2">
+<h2 class="anchored" data-anchor-id="train_scrapper">train_scrapper</h2>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L410" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="trainscrapper" class="level3">
+<h3 class="anchored" data-anchor-id="trainscrapper">TrainScrapper</h3>
+<blockquote class="blockquote">
+<pre><code> TrainScrapper (scrap_values={}, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+</section>
+<section id="abilities-container" class="level1">
+<h1>Abilities Container</h1>
+<p>Contains a list of abilities and methods around creating and dealing with them.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/abilities.py#L419" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="abilities" class="level3">
+<h3 class="anchored" data-anchor-id="abilities">Abilities</h3>
+<blockquote class="blockquote">
+<pre><code> Abilities (abilities=[])</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+<p>Example usage:</p>
+<div id="4d126cb5-e9b4-4a77-af72-84a0a6fdbc7f" class="cell">
+<div class="sourceCode cell-code" id="cb35"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a>abilities <span class="op">=</span> Abilities(</span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a>    [</span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>        {</span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>            <span class="st">"type"</span>: <span class="st">"blocks_hexes"</span>,</span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a>            <span class="st">"owner_type"</span>: <span class="st">"player"</span>,</span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a>            <span class="st">"hexes"</span>: [<span class="st">"I13"</span>, <span class="st">"I15"</span>],</span>
+<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a>        },</span>
+<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"type"</span>: <span class="st">"close"</span>, <span class="st">"when"</span>: <span class="st">"bought_train"</span>, <span class="st">"corporation"</span>: <span class="st">"B&amp;O"</span>},</span>
+<span id="cb35-9"><a href="#cb35-9" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"type"</span>: <span class="st">"no_buy"</span>},</span>
+<span id="cb35-10"><a href="#cb35-10" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"type"</span>: <span class="st">"shares"</span>, <span class="st">"shares"</span>: <span class="st">"B&amp;O_0"</span>},</span>
+<span id="cb35-11"><a href="#cb35-11" aria-hidden="true" tabindex="-1"></a>    ]</span>
+<span id="cb35-12"><a href="#cb35-12" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb35-13"><a href="#cb35-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-14"><a href="#cb35-14" aria-hidden="true" tabindex="-1"></a>abilities.abilities[<span class="dv">3</span>].shares</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<pre><code>['B&amp;O_0']</code></pre>
+</div>
+</div>
+
+
+</section>
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    text: function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "Copied!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "Copied!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+    var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+    var mailtoRegex = new RegExp(/^mailto:/);
+      var filterRegex = new RegExp("https:\/\/Revys17\.github\.io\/RL_18xx");
+    var isInternal = (href) => {
+        return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+    }
+    // Inspect non-navigation links and adorn them if external
+ 	var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool)');
+    for (var i=0; i<links.length; i++) {
+      const link = links[i];
+      if (!isInternal(link.href)) {
+        // undo the damage that might have been done by quarto-nav.js in the case of
+        // links that we want to consider external
+        if (link.dataset.originalHref !== undefined) {
+          link.href = link.dataset.originalHref;
+        }
+      }
+    }
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      if (note) {
+        return note.innerHTML;
+      } else {
+        return "";
+      }
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+</div> <!-- /content -->
+
+
+
+
+<footer class="footer"><div class="nav-footer"><div class="nav-footer-center"><div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/Revys17/RL_18xx/issues/new" class="toc-action"><i class="bi bi-github"></i>Report an issue</a></li></ul></div></div></div></footer></body></html>

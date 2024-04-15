@@ -1,0 +1,1564 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.4.553">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>rl18xx - Rounds and Steps</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../">
+<script src="../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+
+
+<link rel="stylesheet" href="../../styles.css">
+<meta property="og:title" content="rl18xx - Rounds and Steps">
+<meta property="og:site_name" content="rl18xx">
+<meta name="twitter:title" content="rl18xx - Rounds and Steps">
+<meta name="twitter:card" content="summary">
+</head>
+
+<body class="nav-sidebar floating nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="../../index.html">
+    <span class="navbar-title">rl18xx</span>
+    </a>
+  </div>
+        <div class="quarto-navbar-tools tools-end">
+</div>
+          <div id="quarto-search" class="" title="Search"></div>
+      </div> <!-- /container-fluid -->
+    </nav>
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../../game/engine.html">game</a></li><li class="breadcrumb-item"><a href="../../game/engine/core.html">engine</a></li><li class="breadcrumb-item"><a href="../../game/engine/round.html">Rounds and Steps</a></li></ol></nav>
+        <a class="flex-grow-1" role="button" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+        </a>
+    </div>
+  </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation floating overflow-auto">
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">18XX Reinforment Learning Agent (WIP)</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../core.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">core</span></a>
+  </div>
+</li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" aria-expanded="true">
+ <span class="menu-text">game</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Game Engine</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/action_finder.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Actions Helper</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/game_test.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Game Test</span></a>
+  </div>
+</li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" aria-expanded="true">
+ <span class="menu-text">engine</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth2 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/core.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Core</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/entities.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Game Entities</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/abilities.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Abilities</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/actions.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Actions</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/autorouter.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Auto Router</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/graph.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Graph Parts</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/round.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">Rounds and Steps</span></a>
+  </div>
+</li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" aria-expanded="false">
+ <span class="menu-text">game</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth3 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/game/base.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Base Game Implementation</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/game/shared_enhancements.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Shared Enhancements</span></a>
+  </div>
+</li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" aria-expanded="false">
+ <span class="menu-text">titles</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth4 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/game/titles/g1830.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">1830</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#imports" id="toc-imports" class="nav-link active" data-scroll-target="#imports">Imports</a></li>
+  <li><a href="#steps" id="toc-steps" class="nav-link" data-scroll-target="#steps">Steps</a>
+  <ul class="collapse">
+  <li><a href="#basestep" id="toc-basestep" class="nav-link" data-scroll-target="#basestep">BaseStep</a>
+  <ul class="collapse">
+  <li><a href="#basestep-1" id="toc-basestep-1" class="nav-link" data-scroll-target="#basestep-1">BaseStep</a></li>
+  </ul></li>
+  <li><a href="#step-classes" id="toc-step-classes" class="nav-link" data-scroll-target="#step-classes">Step classes</a>
+  <ul class="collapse">
+  <li><a href="#auctioner" id="toc-auctioner" class="nav-link" data-scroll-target="#auctioner">Auctioner</a></li>
+  <li><a href="#auctioner-1" id="toc-auctioner-1" class="nav-link" data-scroll-target="#auctioner-1">Auctioner</a></li>
+  <li><a href="#programmer" id="toc-programmer" class="nav-link" data-scroll-target="#programmer">Programmer</a></li>
+  <li><a href="#programmer-1" id="toc-programmer-1" class="nav-link" data-scroll-target="#programmer-1">Programmer</a></li>
+  <li><a href="#share-buying" id="toc-share-buying" class="nav-link" data-scroll-target="#share-buying">Share Buying</a></li>
+  <li><a href="#sharebuying" id="toc-sharebuying" class="nav-link" data-scroll-target="#sharebuying">ShareBuying</a></li>
+  <li><a href="#emergency-money" id="toc-emergency-money" class="nav-link" data-scroll-target="#emergency-money">Emergency Money</a></li>
+  <li><a href="#emergencymoney" id="toc-emergencymoney" class="nav-link" data-scroll-target="#emergencymoney">EmergencyMoney</a></li>
+  <li><a href="#train" id="toc-train" class="nav-link" data-scroll-target="#train">Train</a></li>
+  <li><a href="#train-1" id="toc-train-1" class="nav-link" data-scroll-target="#train-1">Train</a></li>
+  <li><a href="#buy-train" id="toc-buy-train" class="nav-link" data-scroll-target="#buy-train">Buy Train</a></li>
+  <li><a href="#buytrain" id="toc-buytrain" class="nav-link" data-scroll-target="#buytrain">BuyTrain</a></li>
+  <li><a href="#passable-auction" id="toc-passable-auction" class="nav-link" data-scroll-target="#passable-auction">Passable Auction</a></li>
+  <li><a href="#passableauction" id="toc-passableauction" class="nav-link" data-scroll-target="#passableauction">PassableAuction</a></li>
+  <li><a href="#tokener" id="toc-tokener" class="nav-link" data-scroll-target="#tokener">Tokener</a></li>
+  <li><a href="#tokener-1" id="toc-tokener-1" class="nav-link" data-scroll-target="#tokener-1">Tokener</a></li>
+  <li><a href="#token-merger" id="toc-token-merger" class="nav-link" data-scroll-target="#token-merger">Token Merger</a></li>
+  <li><a href="#tokenmerger" id="toc-tokenmerger" class="nav-link" data-scroll-target="#tokenmerger">TokenMerger</a></li>
+  <li><a href="#acquire-company" id="toc-acquire-company" class="nav-link" data-scroll-target="#acquire-company">Acquire Company</a></li>
+  <li><a href="#acquirecompany" id="toc-acquirecompany" class="nav-link" data-scroll-target="#acquirecompany">AcquireCompany</a></li>
+  <li><a href="#assign" id="toc-assign" class="nav-link" data-scroll-target="#assign">Assign</a></li>
+  <li><a href="#assign-1" id="toc-assign-1" class="nav-link" data-scroll-target="#assign-1">Assign</a></li>
+  <li><a href="#automatic-loan" id="toc-automatic-loan" class="nav-link" data-scroll-target="#automatic-loan">Automatic Loan</a></li>
+  <li><a href="#automaticloan" id="toc-automaticloan" class="nav-link" data-scroll-target="#automaticloan">AutomaticLoan</a></li>
+  <li><a href="#bankrupt" id="toc-bankrupt" class="nav-link" data-scroll-target="#bankrupt">Bankrupt</a></li>
+  <li><a href="#bankrupt-1" id="toc-bankrupt-1" class="nav-link" data-scroll-target="#bankrupt-1">Bankrupt</a></li>
+  <li><a href="#buy-company" id="toc-buy-company" class="nav-link" data-scroll-target="#buy-company">Buy Company</a></li>
+  <li><a href="#buycompany" id="toc-buycompany" class="nav-link" data-scroll-target="#buycompany">BuyCompany</a></li>
+  <li><a href="#buysellpar-shares" id="toc-buysellpar-shares" class="nav-link" data-scroll-target="#buysellpar-shares">Buy/Sell/Par Shares</a></li>
+  <li><a href="#buysellparshares" id="toc-buysellparshares" class="nav-link" data-scroll-target="#buysellparshares">BuySellParShares</a></li>
+  <li><a href="#buysellpar-shares-companies" id="toc-buysellpar-shares-companies" class="nav-link" data-scroll-target="#buysellpar-shares-companies">Buy/Sell/Par Shares Companies</a></li>
+  <li><a href="#buysellparsharescompanies" id="toc-buysellparsharescompanies" class="nav-link" data-scroll-target="#buysellparsharescompanies">BuySellParSharesCompanies</a></li>
+  <li><a href="#buysellpar-shares-via-bid" id="toc-buysellpar-shares-via-bid" class="nav-link" data-scroll-target="#buysellpar-shares-via-bid">Buy/Sell/Par Shares via Bid</a></li>
+  <li><a href="#buysellparsharesviabid" id="toc-buysellparsharesviabid" class="nav-link" data-scroll-target="#buysellparsharesviabid">BuySellParSharesViaBid</a></li>
+  <li><a href="#buy-single-train-of-type" id="toc-buy-single-train-of-type" class="nav-link" data-scroll-target="#buy-single-train-of-type">Buy Single Train of Type</a></li>
+  <li><a href="#buysingletrainoftype" id="toc-buysingletrainoftype" class="nav-link" data-scroll-target="#buysingletrainoftype">BuySingleTrainOfType</a></li>
+  <li><a href="#company-pending-par" id="toc-company-pending-par" class="nav-link" data-scroll-target="#company-pending-par">Company Pending Par</a></li>
+  <li><a href="#companypendingpar" id="toc-companypendingpar" class="nav-link" data-scroll-target="#companypendingpar">CompanyPendingPar</a></li>
+  <li><a href="#concession-auction" id="toc-concession-auction" class="nav-link" data-scroll-target="#concession-auction">Concession Auction</a></li>
+  <li><a href="#concessionauction" id="toc-concessionauction" class="nav-link" data-scroll-target="#concessionauction">ConcessionAuction</a></li>
+  <li><a href="#corporate-buy-shares" id="toc-corporate-buy-shares" class="nav-link" data-scroll-target="#corporate-buy-shares">Corporate Buy Shares</a></li>
+  <li><a href="#corporatebuyshares" id="toc-corporatebuyshares" class="nav-link" data-scroll-target="#corporatebuyshares">CorporateBuyShares</a></li>
+  <li><a href="#corporate-sell-shares" id="toc-corporate-sell-shares" class="nav-link" data-scroll-target="#corporate-sell-shares">Corporate Sell Shares</a></li>
+  <li><a href="#corporatesellshares" id="toc-corporatesellshares" class="nav-link" data-scroll-target="#corporatesellshares">CorporateSellShares</a></li>
+  <li><a href="#discard-train" id="toc-discard-train" class="nav-link" data-scroll-target="#discard-train">Discard Train</a></li>
+  <li><a href="#discardtrain" id="toc-discardtrain" class="nav-link" data-scroll-target="#discardtrain">DiscardTrain</a></li>
+  <li><a href="#dividend" id="toc-dividend" class="nav-link" data-scroll-target="#dividend">Dividend</a></li>
+  <li><a href="#dividend-1" id="toc-dividend-1" class="nav-link" data-scroll-target="#dividend-1">Dividend</a></li>
+  <li><a href="#end-game" id="toc-end-game" class="nav-link" data-scroll-target="#end-game">End Game</a></li>
+  <li><a href="#endgame" id="toc-endgame" class="nav-link" data-scroll-target="#endgame">EndGame</a></li>
+  <li><a href="#exchange" id="toc-exchange" class="nav-link" data-scroll-target="#exchange">Exchange</a></li>
+  <li><a href="#exchange-1" id="toc-exchange-1" class="nav-link" data-scroll-target="#exchange-1">Exchange</a></li>
+  <li><a href="#half-pay" id="toc-half-pay" class="nav-link" data-scroll-target="#half-pay">Half Pay</a></li>
+  <li><a href="#halfpay" id="toc-halfpay" class="nav-link" data-scroll-target="#halfpay">HalfPay</a></li>
+  <li><a href="#home-token" id="toc-home-token" class="nav-link" data-scroll-target="#home-token">Home Token</a></li>
+  <li><a href="#hometoken" id="toc-hometoken" class="nav-link" data-scroll-target="#hometoken">HomeToken</a></li>
+  <li><a href="#issue-shares" id="toc-issue-shares" class="nav-link" data-scroll-target="#issue-shares">Issue Shares</a></li>
+  <li><a href="#issueshares" id="toc-issueshares" class="nav-link" data-scroll-target="#issueshares">IssueShares</a></li>
+  <li><a href="#message" id="toc-message" class="nav-link" data-scroll-target="#message">Message</a></li>
+  <li><a href="#message-1" id="toc-message-1" class="nav-link" data-scroll-target="#message-1">Message</a></li>
+  <li><a href="#minor-half-pay" id="toc-minor-half-pay" class="nav-link" data-scroll-target="#minor-half-pay">Minor Half Pay</a></li>
+  <li><a href="#minorhalfpay" id="toc-minorhalfpay" class="nav-link" data-scroll-target="#minorhalfpay">MinorHalfPay</a></li>
+  <li><a href="#minor-withold" id="toc-minor-withold" class="nav-link" data-scroll-target="#minor-withold">Minor Withold</a></li>
+  <li><a href="#minorwithhold" id="toc-minorwithhold" class="nav-link" data-scroll-target="#minorwithhold">MinorWithhold</a></li>
+  <li><a href="#program" id="toc-program" class="nav-link" data-scroll-target="#program">Program</a></li>
+  <li><a href="#program-1" id="toc-program-1" class="nav-link" data-scroll-target="#program-1">Program</a></li>
+  <li><a href="#programmer-auction-bid" id="toc-programmer-auction-bid" class="nav-link" data-scroll-target="#programmer-auction-bid">Programmer Auction Bid</a></li>
+  <li><a href="#programmerauctionbid" id="toc-programmerauctionbid" class="nav-link" data-scroll-target="#programmerauctionbid">ProgrammerAuctionBid</a></li>
+  <li><a href="#programmer-merger-pass" id="toc-programmer-merger-pass" class="nav-link" data-scroll-target="#programmer-merger-pass">Programmer Merger Pass</a></li>
+  <li><a href="#programmermergerpass" id="toc-programmermergerpass" class="nav-link" data-scroll-target="#programmermergerpass">ProgrammerMergerPass</a></li>
+  <li><a href="#reduce-tokens" id="toc-reduce-tokens" class="nav-link" data-scroll-target="#reduce-tokens">Reduce Tokens</a></li>
+  <li><a href="#reducetokens" id="toc-reducetokens" class="nav-link" data-scroll-target="#reducetokens">ReduceTokens</a></li>
+  <li><a href="#return-token" id="toc-return-token" class="nav-link" data-scroll-target="#return-token">Return Token</a></li>
+  <li><a href="#returntoken" id="toc-returntoken" class="nav-link" data-scroll-target="#returntoken">ReturnToken</a></li>
+  <li><a href="#route" id="toc-route" class="nav-link" data-scroll-target="#route">Route</a></li>
+  <li><a href="#route-1" id="toc-route-1" class="nav-link" data-scroll-target="#route-1">Route</a></li>
+  <li><a href="#selection-auction" id="toc-selection-auction" class="nav-link" data-scroll-target="#selection-auction">Selection Auction</a></li>
+  <li><a href="#selectionauction" id="toc-selectionauction" class="nav-link" data-scroll-target="#selectionauction">SelectionAuction</a></li>
+  <li><a href="#simple-draft" id="toc-simple-draft" class="nav-link" data-scroll-target="#simple-draft">Simple Draft</a></li>
+  <li><a href="#simpledraft" id="toc-simpledraft" class="nav-link" data-scroll-target="#simpledraft">SimpleDraft</a></li>
+  <li><a href="#single-depot-train-buy" id="toc-single-depot-train-buy" class="nav-link" data-scroll-target="#single-depot-train-buy">Single Depot Train Buy</a></li>
+  <li><a href="#singledepottrainbuy" id="toc-singledepottrainbuy" class="nav-link" data-scroll-target="#singledepottrainbuy">SingleDepotTrainBuy</a></li>
+  <li><a href="#special-buy-train" id="toc-special-buy-train" class="nav-link" data-scroll-target="#special-buy-train">Special Buy Train</a></li>
+  <li><a href="#specialbuytrain" id="toc-specialbuytrain" class="nav-link" data-scroll-target="#specialbuytrain">SpecialBuyTrain</a></li>
+  <li><a href="#special-buy" id="toc-special-buy" class="nav-link" data-scroll-target="#special-buy">Special Buy</a></li>
+  <li><a href="#specialbuy" id="toc-specialbuy" class="nav-link" data-scroll-target="#specialbuy">SpecialBuy</a></li>
+  <li><a href="#special-choose" id="toc-special-choose" class="nav-link" data-scroll-target="#special-choose">Special Choose</a></li>
+  <li><a href="#specialchoose" id="toc-specialchoose" class="nav-link" data-scroll-target="#specialchoose">SpecialChoose</a></li>
+  <li><a href="#special-token" id="toc-special-token" class="nav-link" data-scroll-target="#special-token">Special Token</a></li>
+  <li><a href="#specialtoken" id="toc-specialtoken" class="nav-link" data-scroll-target="#specialtoken">SpecialToken</a></li>
+  <li><a href="#tracker" id="toc-tracker" class="nav-link" data-scroll-target="#tracker">Tracker</a></li>
+  <li><a href="#tracker-1" id="toc-tracker-1" class="nav-link" data-scroll-target="#tracker-1">Tracker</a></li>
+  <li><a href="#special-track" id="toc-special-track" class="nav-link" data-scroll-target="#special-track">Special Track</a></li>
+  <li><a href="#specialtrack" id="toc-specialtrack" class="nav-link" data-scroll-target="#specialtrack">SpecialTrack</a></li>
+  <li><a href="#token" id="toc-token" class="nav-link" data-scroll-target="#token">Token</a></li>
+  <li><a href="#token-1" id="toc-token-1" class="nav-link" data-scroll-target="#token-1">Token</a></li>
+  <li><a href="#track" id="toc-track" class="nav-link" data-scroll-target="#track">Track</a></li>
+  <li><a href="#track-1" id="toc-track-1" class="nav-link" data-scroll-target="#track-1">Track</a></li>
+  <li><a href="#track-and-token" id="toc-track-and-token" class="nav-link" data-scroll-target="#track-and-token">Track and Token</a></li>
+  <li><a href="#trackandtoken" id="toc-trackandtoken" class="nav-link" data-scroll-target="#trackandtoken">TrackAndToken</a></li>
+  <li><a href="#track-lay-when-company-sold" id="toc-track-lay-when-company-sold" class="nav-link" data-scroll-target="#track-lay-when-company-sold">Track Lay When Company Sold</a></li>
+  <li><a href="#tracklaywhencompanysold" id="toc-tracklaywhencompanysold" class="nav-link" data-scroll-target="#tracklaywhencompanysold">TrackLayWhenCompanySold</a></li>
+  <li><a href="#waterfall-auction" id="toc-waterfall-auction" class="nav-link" data-scroll-target="#waterfall-auction">Waterfall Auction</a></li>
+  <li><a href="#waterfallauction" id="toc-waterfallauction" class="nav-link" data-scroll-target="#waterfallauction">WaterfallAuction</a></li>
+  </ul></li>
+  </ul></li>
+  <li><a href="#rounds" id="toc-rounds" class="nav-link" data-scroll-target="#rounds">Rounds</a>
+  <ul class="collapse">
+  <li><a href="#base-class" id="toc-base-class" class="nav-link" data-scroll-target="#base-class">Base Class</a></li>
+  <li><a href="#baseround" id="toc-baseround" class="nav-link" data-scroll-target="#baseround">BaseRound</a></li>
+  <li><a href="#auction" id="toc-auction" class="nav-link" data-scroll-target="#auction">Auction</a></li>
+  <li><a href="#auction-1" id="toc-auction-1" class="nav-link" data-scroll-target="#auction-1">Auction</a></li>
+  <li><a href="#choices" id="toc-choices" class="nav-link" data-scroll-target="#choices">Choices</a></li>
+  <li><a href="#choices-1" id="toc-choices-1" class="nav-link" data-scroll-target="#choices-1">Choices</a></li>
+  <li><a href="#draft" id="toc-draft" class="nav-link" data-scroll-target="#draft">Draft</a></li>
+  <li><a href="#draft-1" id="toc-draft-1" class="nav-link" data-scroll-target="#draft-1">Draft</a></li>
+  <li><a href="#merger" id="toc-merger" class="nav-link" data-scroll-target="#merger">Merger</a></li>
+  <li><a href="#merger-1" id="toc-merger-1" class="nav-link" data-scroll-target="#merger-1">Merger</a></li>
+  <li><a href="#operating" id="toc-operating" class="nav-link" data-scroll-target="#operating">Operating</a></li>
+  <li><a href="#operating-1" id="toc-operating-1" class="nav-link" data-scroll-target="#operating-1">Operating</a></li>
+  <li><a href="#stock" id="toc-stock" class="nav-link" data-scroll-target="#stock">Stock</a></li>
+  <li><a href="#stock-1" id="toc-stock-1" class="nav-link" data-scroll-target="#stock-1">Stock</a></li>
+  </ul></li>
+  </ul>
+<div class="toc-actions"><ul><li><a href="https://github.com/Revys17/RL_18xx/issues/new" class="toc-action"><i class="bi bi-github"></i>Report an issue</a></li></ul></div></nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../../game/engine.html">game</a></li><li class="breadcrumb-item"><a href="../../game/engine/core.html">engine</a></li><li class="breadcrumb-item"><a href="../../game/engine/round.html">Rounds and Steps</a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title">Rounds and Steps</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<!-- WARNING: THIS FILE WAS AUTOGENERATED! DO NOT EDIT! -->
+<section id="imports" class="level2">
+<h2 class="anchored" data-anchor-id="imports">Imports</h2>
+</section>
+<section id="steps" class="level1">
+<h1>Steps</h1>
+<section id="basestep" class="level2">
+<h2 class="anchored" data-anchor-id="basestep">BaseStep</h2>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L61" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="basestep-1" class="level3">
+<h3 class="anchored" data-anchor-id="basestep-1">BaseStep</h3>
+<blockquote class="blockquote">
+<pre><code> BaseStep (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="step-classes" class="level2">
+<h2 class="anchored" data-anchor-id="step-classes">Step classes</h2>
+<section id="auctioner" class="level3">
+<h3 class="anchored" data-anchor-id="auctioner">Auctioner</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L170" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="auctioner-1" class="level3">
+<h3 class="anchored" data-anchor-id="auctioner-1">Auctioner</h3>
+<blockquote class="blockquote">
+<pre><code> Auctioner ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="programmer" class="level3">
+<h3 class="anchored" data-anchor-id="programmer">Programmer</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L320" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="programmer-1" class="level3">
+<h3 class="anchored" data-anchor-id="programmer-1">Programmer</h3>
+<blockquote class="blockquote">
+<pre><code> Programmer ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="share-buying" class="level3">
+<h3 class="anchored" data-anchor-id="share-buying">Share Buying</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L351" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="sharebuying" class="level3">
+<h3 class="anchored" data-anchor-id="sharebuying">ShareBuying</h3>
+<blockquote class="blockquote">
+<pre><code> ShareBuying ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="emergency-money" class="level3">
+<h3 class="anchored" data-anchor-id="emergency-money">Emergency Money</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L426" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="emergencymoney" class="level3">
+<h3 class="anchored" data-anchor-id="emergencymoney">EmergencyMoney</h3>
+<blockquote class="blockquote">
+<pre><code> EmergencyMoney ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="train" class="level3">
+<h3 class="anchored" data-anchor-id="train">Train</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L490" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="train-1" class="level3">
+<h3 class="anchored" data-anchor-id="train-1">Train</h3>
+<blockquote class="blockquote">
+<pre><code> Train (game)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="buy-train" class="level3">
+<h3 class="anchored" data-anchor-id="buy-train">Buy Train</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L774" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="buytrain" class="level3">
+<h3 class="anchored" data-anchor-id="buytrain">BuyTrain</h3>
+<blockquote class="blockquote">
+<pre><code> BuyTrain (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="passable-auction" class="level3">
+<h3 class="anchored" data-anchor-id="passable-auction">Passable Auction</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L848" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="passableauction" class="level3">
+<h3 class="anchored" data-anchor-id="passableauction">PassableAuction</h3>
+<blockquote class="blockquote">
+<pre><code> PassableAuction ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="tokener" class="level3">
+<h3 class="anchored" data-anchor-id="tokener">Tokener</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L953" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="tokener-1" class="level3">
+<h3 class="anchored" data-anchor-id="tokener-1">Tokener</h3>
+<blockquote class="blockquote">
+<pre><code> Tokener ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="token-merger" class="level3">
+<h3 class="anchored" data-anchor-id="token-merger">Token Merger</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L1159" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="tokenmerger" class="level3">
+<h3 class="anchored" data-anchor-id="tokenmerger">TokenMerger</h3>
+<blockquote class="blockquote">
+<pre><code> TokenMerger ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="acquire-company" class="level3">
+<h3 class="anchored" data-anchor-id="acquire-company">Acquire Company</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L1228" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="acquirecompany" class="level3">
+<h3 class="anchored" data-anchor-id="acquirecompany">AcquireCompany</h3>
+<blockquote class="blockquote">
+<pre><code> AcquireCompany (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="assign" class="level3">
+<h3 class="anchored" data-anchor-id="assign">Assign</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L1275" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="assign-1" class="level3">
+<h3 class="anchored" data-anchor-id="assign-1">Assign</h3>
+<blockquote class="blockquote">
+<pre><code> Assign (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="automatic-loan" class="level3">
+<h3 class="anchored" data-anchor-id="automatic-loan">Automatic Loan</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L1383" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="automaticloan" class="level3">
+<h3 class="anchored" data-anchor-id="automaticloan">AutomaticLoan</h3>
+<blockquote class="blockquote">
+<pre><code> AutomaticLoan ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="bankrupt" class="level3">
+<h3 class="anchored" data-anchor-id="bankrupt">Bankrupt</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L1395" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="bankrupt-1" class="level3">
+<h3 class="anchored" data-anchor-id="bankrupt-1">Bankrupt</h3>
+<blockquote class="blockquote">
+<pre><code> Bankrupt (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="buy-company" class="level3">
+<h3 class="anchored" data-anchor-id="buy-company">Buy Company</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L1452" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="buycompany" class="level3">
+<h3 class="anchored" data-anchor-id="buycompany">BuyCompany</h3>
+<blockquote class="blockquote">
+<pre><code> BuyCompany (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="buysellpar-shares" class="level3">
+<h3 class="anchored" data-anchor-id="buysellpar-shares">Buy/Sell/Par Shares</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L1578" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="buysellparshares" class="level3">
+<h3 class="anchored" data-anchor-id="buysellparshares">BuySellParShares</h3>
+<blockquote class="blockquote">
+<pre><code> BuySellParShares (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="buysellpar-shares-companies" class="level3">
+<h3 class="anchored" data-anchor-id="buysellpar-shares-companies">Buy/Sell/Par Shares Companies</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L2166" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="buysellparsharescompanies" class="level3">
+<h3 class="anchored" data-anchor-id="buysellparsharescompanies">BuySellParSharesCompanies</h3>
+<blockquote class="blockquote">
+<pre><code> BuySellParSharesCompanies (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="buysellpar-shares-via-bid" class="level3">
+<h3 class="anchored" data-anchor-id="buysellpar-shares-via-bid">Buy/Sell/Par Shares via Bid</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L2344" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="buysellparsharesviabid" class="level3">
+<h3 class="anchored" data-anchor-id="buysellparsharesviabid">BuySellParSharesViaBid</h3>
+<blockquote class="blockquote">
+<pre><code> BuySellParSharesViaBid (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="buy-single-train-of-type" class="level3">
+<h3 class="anchored" data-anchor-id="buy-single-train-of-type">Buy Single Train of Type</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L2440" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="buysingletrainoftype" class="level3">
+<h3 class="anchored" data-anchor-id="buysingletrainoftype">BuySingleTrainOfType</h3>
+<blockquote class="blockquote">
+<pre><code> BuySingleTrainOfType (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="company-pending-par" class="level3">
+<h3 class="anchored" data-anchor-id="company-pending-par">Company Pending Par</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L2469" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="companypendingpar" class="level3">
+<h3 class="anchored" data-anchor-id="companypendingpar">CompanyPendingPar</h3>
+<blockquote class="blockquote">
+<pre><code> CompanyPendingPar (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="concession-auction" class="level3">
+<h3 class="anchored" data-anchor-id="concession-auction">Concession Auction</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L2517" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="concessionauction" class="level3">
+<h3 class="anchored" data-anchor-id="concessionauction">ConcessionAuction</h3>
+<blockquote class="blockquote">
+<pre><code> ConcessionAuction (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="corporate-buy-shares" class="level3">
+<h3 class="anchored" data-anchor-id="corporate-buy-shares">Corporate Buy Shares</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L2672" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="corporatebuyshares" class="level3">
+<h3 class="anchored" data-anchor-id="corporatebuyshares">CorporateBuyShares</h3>
+<blockquote class="blockquote">
+<pre><code> CorporateBuyShares (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="corporate-sell-shares" class="level3">
+<h3 class="anchored" data-anchor-id="corporate-sell-shares">Corporate Sell Shares</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L2790" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="corporatesellshares" class="level3">
+<h3 class="anchored" data-anchor-id="corporatesellshares">CorporateSellShares</h3>
+<blockquote class="blockquote">
+<pre><code> CorporateSellShares (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="discard-train" class="level3">
+<h3 class="anchored" data-anchor-id="discard-train">Discard Train</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L2861" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="discardtrain" class="level3">
+<h3 class="anchored" data-anchor-id="discardtrain">DiscardTrain</h3>
+<blockquote class="blockquote">
+<pre><code> DiscardTrain (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="dividend" class="level3">
+<h3 class="anchored" data-anchor-id="dividend">Dividend</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L2891" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="dividend-1" class="level3">
+<h3 class="anchored" data-anchor-id="dividend-1">Dividend</h3>
+<blockquote class="blockquote">
+<pre><code> Dividend (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="end-game" class="level3">
+<h3 class="anchored" data-anchor-id="end-game">End Game</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3107" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="endgame" class="level3">
+<h3 class="anchored" data-anchor-id="endgame">EndGame</h3>
+<blockquote class="blockquote">
+<pre><code> EndGame (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="exchange" class="level3">
+<h3 class="anchored" data-anchor-id="exchange">Exchange</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3125" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="exchange-1" class="level3">
+<h3 class="anchored" data-anchor-id="exchange-1">Exchange</h3>
+<blockquote class="blockquote">
+<pre><code> Exchange (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="half-pay" class="level3">
+<h3 class="anchored" data-anchor-id="half-pay">Half Pay</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3193" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="halfpay" class="level3">
+<h3 class="anchored" data-anchor-id="halfpay">HalfPay</h3>
+<blockquote class="blockquote">
+<pre><code> HalfPay ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="home-token" class="level3">
+<h3 class="anchored" data-anchor-id="home-token">Home Token</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3205" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="hometoken" class="level3">
+<h3 class="anchored" data-anchor-id="hometoken">HomeToken</h3>
+<blockquote class="blockquote">
+<pre><code> HomeToken (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="issue-shares" class="level3">
+<h3 class="anchored" data-anchor-id="issue-shares">Issue Shares</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3280" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="issueshares" class="level3">
+<h3 class="anchored" data-anchor-id="issueshares">IssueShares</h3>
+<blockquote class="blockquote">
+<pre><code> IssueShares (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="message" class="level3">
+<h3 class="anchored" data-anchor-id="message">Message</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3317" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="message-1" class="level3">
+<h3 class="anchored" data-anchor-id="message-1">Message</h3>
+<blockquote class="blockquote">
+<pre><code> Message (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="minor-half-pay" class="level3">
+<h3 class="anchored" data-anchor-id="minor-half-pay">Minor Half Pay</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3345" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="minorhalfpay" class="level3">
+<h3 class="anchored" data-anchor-id="minorhalfpay">MinorHalfPay</h3>
+<blockquote class="blockquote">
+<pre><code> MinorHalfPay ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="minor-withold" class="level3">
+<h3 class="anchored" data-anchor-id="minor-withold">Minor Withold</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3384" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="minorwithhold" class="level3">
+<h3 class="anchored" data-anchor-id="minorwithhold">MinorWithhold</h3>
+<blockquote class="blockquote">
+<pre><code> MinorWithhold ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="program" class="level3">
+<h3 class="anchored" data-anchor-id="program">Program</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3398" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="program-1" class="level3">
+<h3 class="anchored" data-anchor-id="program-1">Program</h3>
+<blockquote class="blockquote">
+<pre><code> Program (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="programmer-auction-bid" class="level3">
+<h3 class="anchored" data-anchor-id="programmer-auction-bid">Programmer Auction Bid</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3478" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="programmerauctionbid" class="level3">
+<h3 class="anchored" data-anchor-id="programmerauctionbid">ProgrammerAuctionBid</h3>
+<blockquote class="blockquote">
+<pre><code> ProgrammerAuctionBid ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="programmer-merger-pass" class="level3">
+<h3 class="anchored" data-anchor-id="programmer-merger-pass">Programmer Merger Pass</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3576" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="programmermergerpass" class="level3">
+<h3 class="anchored" data-anchor-id="programmermergerpass">ProgrammerMergerPass</h3>
+<blockquote class="blockquote">
+<pre><code> ProgrammerMergerPass ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="reduce-tokens" class="level3">
+<h3 class="anchored" data-anchor-id="reduce-tokens">Reduce Tokens</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3608" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="reducetokens" class="level3">
+<h3 class="anchored" data-anchor-id="reducetokens">ReduceTokens</h3>
+<blockquote class="blockquote">
+<pre><code> ReduceTokens (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="return-token" class="level3">
+<h3 class="anchored" data-anchor-id="return-token">Return Token</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3685" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="returntoken" class="level3">
+<h3 class="anchored" data-anchor-id="returntoken">ReturnToken</h3>
+<blockquote class="blockquote">
+<pre><code> ReturnToken (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="route" class="level3">
+<h3 class="anchored" data-anchor-id="route">Route</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3784" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="route-1" class="level3">
+<h3 class="anchored" data-anchor-id="route-1">Route</h3>
+<blockquote class="blockquote">
+<pre><code> Route (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="selection-auction" class="level3">
+<h3 class="anchored" data-anchor-id="selection-auction">Selection Auction</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L3859" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="selectionauction" class="level3">
+<h3 class="anchored" data-anchor-id="selectionauction">SelectionAuction</h3>
+<blockquote class="blockquote">
+<pre><code> SelectionAuction (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="simple-draft" class="level3">
+<h3 class="anchored" data-anchor-id="simple-draft">Simple Draft</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L4027" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="simpledraft" class="level3">
+<h3 class="anchored" data-anchor-id="simpledraft">SimpleDraft</h3>
+<blockquote class="blockquote">
+<pre><code> SimpleDraft (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="single-depot-train-buy" class="level3">
+<h3 class="anchored" data-anchor-id="single-depot-train-buy">Single Depot Train Buy</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L4110" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="singledepottrainbuy" class="level3">
+<h3 class="anchored" data-anchor-id="singledepottrainbuy">SingleDepotTrainBuy</h3>
+<blockquote class="blockquote">
+<pre><code> SingleDepotTrainBuy (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="special-buy-train" class="level3">
+<h3 class="anchored" data-anchor-id="special-buy-train">Special Buy Train</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L4145" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="specialbuytrain" class="level3">
+<h3 class="anchored" data-anchor-id="specialbuytrain">SpecialBuyTrain</h3>
+<blockquote class="blockquote">
+<pre><code> SpecialBuyTrain (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="special-buy" class="level3">
+<h3 class="anchored" data-anchor-id="special-buy">Special Buy</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L4215" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="specialbuy" class="level3">
+<h3 class="anchored" data-anchor-id="specialbuy">SpecialBuy</h3>
+<blockquote class="blockquote">
+<pre><code> SpecialBuy (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="special-choose" class="level3">
+<h3 class="anchored" data-anchor-id="special-choose">Special Choose</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L4259" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="specialchoose" class="level3">
+<h3 class="anchored" data-anchor-id="specialchoose">SpecialChoose</h3>
+<blockquote class="blockquote">
+<pre><code> SpecialChoose (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="special-token" class="level3">
+<h3 class="anchored" data-anchor-id="special-token">Special Token</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L4293" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="specialtoken" class="level3">
+<h3 class="anchored" data-anchor-id="specialtoken">SpecialToken</h3>
+<blockquote class="blockquote">
+<pre><code> SpecialToken (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="tracker" class="level3">
+<h3 class="anchored" data-anchor-id="tracker">Tracker</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L4432" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="tracker-1" class="level3">
+<h3 class="anchored" data-anchor-id="tracker-1">Tracker</h3>
+<blockquote class="blockquote">
+<pre><code> Tracker ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="special-track" class="level3">
+<h3 class="anchored" data-anchor-id="special-track">Special Track</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L5033" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="specialtrack" class="level3">
+<h3 class="anchored" data-anchor-id="specialtrack">SpecialTrack</h3>
+<blockquote class="blockquote">
+<pre><code> SpecialTrack (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="token" class="level3">
+<h3 class="anchored" data-anchor-id="token">Token</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L5270" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="token-1" class="level3">
+<h3 class="anchored" data-anchor-id="token-1">Token</h3>
+<blockquote class="blockquote">
+<pre><code> Token (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="track" class="level3">
+<h3 class="anchored" data-anchor-id="track">Track</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L5306" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="track-1" class="level3">
+<h3 class="anchored" data-anchor-id="track-1">Track</h3>
+<blockquote class="blockquote">
+<pre><code> Track (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="track-and-token" class="level3">
+<h3 class="anchored" data-anchor-id="track-and-token">Track and Token</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L5358" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="trackandtoken" class="level3">
+<h3 class="anchored" data-anchor-id="trackandtoken">TrackAndToken</h3>
+<blockquote class="blockquote">
+<pre><code> TrackAndToken (game, round, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="track-lay-when-company-sold" class="level3">
+<h3 class="anchored" data-anchor-id="track-lay-when-company-sold">Track Lay When Company Sold</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L5438" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="tracklaywhencompanysold" class="level3">
+<h3 class="anchored" data-anchor-id="tracklaywhencompanysold">TrackLayWhenCompanySold</h3>
+<blockquote class="blockquote">
+<pre><code> TrackLayWhenCompanySold ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="waterfall-auction" class="level3">
+<h3 class="anchored" data-anchor-id="waterfall-auction">Waterfall Auction</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L5501" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="waterfallauction" class="level3">
+<h3 class="anchored" data-anchor-id="waterfallauction">WaterfallAuction</h3>
+<blockquote class="blockquote">
+<pre><code> WaterfallAuction (game, round, **kwargs)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+</section>
+<section id="rounds" class="level1">
+<h1>Rounds</h1>
+<section id="base-class" class="level3">
+<h3 class="anchored" data-anchor-id="base-class">Base Class</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L5707" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="baseround" class="level3">
+<h3 class="anchored" data-anchor-id="baseround">BaseRound</h3>
+<blockquote class="blockquote">
+<pre><code> BaseRound (game, steps, round_num=1, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="auction" class="level3">
+<h3 class="anchored" data-anchor-id="auction">Auction</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L5936" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="auction-1" class="level3">
+<h3 class="anchored" data-anchor-id="auction-1">Auction</h3>
+<blockquote class="blockquote">
+<pre><code> Auction (game, steps, round_num=1, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="choices" class="level3">
+<h3 class="anchored" data-anchor-id="choices">Choices</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L5952" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="choices-1" class="level3">
+<h3 class="anchored" data-anchor-id="choices-1">Choices</h3>
+<blockquote class="blockquote">
+<pre><code> Choices (game, steps, round_num=1, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="draft" class="level3">
+<h3 class="anchored" data-anchor-id="draft">Draft</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L5964" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="draft-1" class="level3">
+<h3 class="anchored" data-anchor-id="draft-1">Draft</h3>
+<blockquote class="blockquote">
+<pre><code> Draft (game, steps, reverse_order=False, snake_order=False,
+        rotating_order=False, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="merger" class="level3">
+<h3 class="anchored" data-anchor-id="merger">Merger</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L6013" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="merger-1" class="level3">
+<h3 class="anchored" data-anchor-id="merger-1">Merger</h3>
+<blockquote class="blockquote">
+<pre><code> Merger (game, steps, round_num=1, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="operating" class="level3">
+<h3 class="anchored" data-anchor-id="operating">Operating</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L6026" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="operating-1" class="level3">
+<h3 class="anchored" data-anchor-id="operating-1">Operating</h3>
+<blockquote class="blockquote">
+<pre><code> Operating (game, steps, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+<section id="stock" class="level3">
+<h3 class="anchored" data-anchor-id="stock">Stock</h3>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/round.py#L6141" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="stock-1" class="level3">
+<h3 class="anchored" data-anchor-id="stock-1">Stock</h3>
+<blockquote class="blockquote">
+<pre><code> Stock (game, steps, round_num=1, **opts)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+
+
+</section>
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    text: function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "Copied!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "Copied!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+    var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+    var mailtoRegex = new RegExp(/^mailto:/);
+      var filterRegex = new RegExp("https:\/\/Revys17\.github\.io\/RL_18xx");
+    var isInternal = (href) => {
+        return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+    }
+    // Inspect non-navigation links and adorn them if external
+ 	var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool)');
+    for (var i=0; i<links.length; i++) {
+      const link = links[i];
+      if (!isInternal(link.href)) {
+        // undo the damage that might have been done by quarto-nav.js in the case of
+        // links that we want to consider external
+        if (link.dataset.originalHref !== undefined) {
+          link.href = link.dataset.originalHref;
+        }
+      }
+    }
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      if (note) {
+        return note.innerHTML;
+      } else {
+        return "";
+      }
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+</div> <!-- /content -->
+
+
+
+
+<footer class="footer"><div class="nav-footer"><div class="nav-footer-center"><div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/Revys17/RL_18xx/issues/new" class="toc-action"><i class="bi bi-github"></i>Report an issue</a></li></ul></div></div></div></footer></body></html>

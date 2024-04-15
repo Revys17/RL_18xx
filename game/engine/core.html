@@ -1,0 +1,1215 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.4.553">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>rl18xx - Core</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../">
+<script src="../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+
+
+<link rel="stylesheet" href="../../styles.css">
+<meta property="og:title" content="rl18xx - Core">
+<meta property="og:description" content="RL agent for 18xx (currently 1830)">
+<meta property="og:site_name" content="rl18xx">
+<meta name="twitter:title" content="rl18xx - Core">
+<meta name="twitter:description" content="RL agent for 18xx (currently 1830)">
+<meta name="twitter:card" content="summary">
+</head>
+
+<body class="nav-sidebar floating nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="../../index.html">
+    <span class="navbar-title">rl18xx</span>
+    </a>
+  </div>
+        <div class="quarto-navbar-tools tools-end">
+</div>
+          <div id="quarto-search" class="" title="Search"></div>
+      </div> <!-- /container-fluid -->
+    </nav>
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../../game/engine.html">game</a></li><li class="breadcrumb-item"><a href="../../game/engine/core.html">engine</a></li><li class="breadcrumb-item"><a href="../../game/engine/core.html">Core</a></li></ol></nav>
+        <a class="flex-grow-1" role="button" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+        </a>
+    </div>
+  </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation floating overflow-auto">
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">18XX Reinforment Learning Agent (WIP)</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../core.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">core</span></a>
+  </div>
+</li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" aria-expanded="true">
+ <span class="menu-text">game</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Game Engine</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/action_finder.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Actions Helper</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/game_test.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Game Test</span></a>
+  </div>
+</li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" aria-expanded="true">
+ <span class="menu-text">engine</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth2 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/core.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">Core</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/entities.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Game Entities</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/abilities.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Abilities</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/actions.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Actions</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/autorouter.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Auto Router</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/graph.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Graph Parts</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/round.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Rounds and Steps</span></a>
+  </div>
+</li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" aria-expanded="false">
+ <span class="menu-text">game</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth3 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/game/base.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Base Game Implementation</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/game/shared_enhancements.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Shared Enhancements</span></a>
+  </div>
+</li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" aria-expanded="false">
+ <span class="menu-text">titles</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth4 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../game/engine/game/titles/g1830.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">1830</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#helper-methods" id="toc-helper-methods" class="nav-link active" data-scroll-target="#helper-methods">Helper Methods</a>
+  <ul class="collapse">
+  <li><a href="#snake_to_pascal" id="toc-snake_to_pascal" class="nav-link" data-scroll-target="#snake_to_pascal">snake_to_pascal</a></li>
+  <li><a href="#pascal_to_snake" id="toc-pascal_to_snake" class="nav-link" data-scroll-target="#pascal_to_snake">pascal_to_snake</a></li>
+  </ul></li>
+  <li><a href="#errors" id="toc-errors" class="nav-link" data-scroll-target="#errors">Errors</a>
+  <ul class="collapse">
+  <li><a href="#reusescity" id="toc-reusescity" class="nav-link" data-scroll-target="#reusescity">ReusesCity</a></li>
+  <li><a href="#routetoolong" id="toc-routetoolong" class="nav-link" data-scroll-target="#routetoolong">RouteTooLong</a></li>
+  <li><a href="#routetooshort" id="toc-routetooshort" class="nav-link" data-scroll-target="#routetooshort">RouteTooShort</a></li>
+  <li><a href="#notoken" id="toc-notoken" class="nav-link" data-scroll-target="#notoken">NoToken</a></li>
+  <li><a href="#optionerror" id="toc-optionerror" class="nav-link" data-scroll-target="#optionerror">OptionError</a></li>
+  <li><a href="#gameerror" id="toc-gameerror" class="nav-link" data-scroll-target="#gameerror">GameError</a></li>
+  </ul></li>
+  <li><a href="#logging" id="toc-logging" class="nav-link" data-scroll-target="#logging">Logging</a>
+  <ul class="collapse">
+  <li><a href="#gamelog" id="toc-gamelog" class="nav-link" data-scroll-target="#gamelog">GameLog</a></li>
+  </ul></li>
+  <li><a href="#base-entities" id="toc-base-entities" class="nav-link" data-scroll-target="#base-entities">Base Entities</a>
+  <ul class="collapse">
+  <li><a href="#assignable" id="toc-assignable" class="nav-link" data-scroll-target="#assignable">Assignable</a>
+  <ul class="collapse">
+  <li><a href="#assignable-1" id="toc-assignable-1" class="nav-link" data-scroll-target="#assignable-1">Assignable</a></li>
+  </ul></li>
+  <li><a href="#entity" id="toc-entity" class="nav-link" data-scroll-target="#entity">Entity</a>
+  <ul class="collapse">
+  <li><a href="#entity-1" id="toc-entity-1" class="nav-link" data-scroll-target="#entity-1">Entity</a></li>
+  </ul></li>
+  <li><a href="#item" id="toc-item" class="nav-link" data-scroll-target="#item">Item</a>
+  <ul class="collapse">
+  <li><a href="#item-1" id="toc-item-1" class="nav-link" data-scroll-target="#item-1">Item</a></li>
+  </ul></li>
+  <li><a href="#ownable" id="toc-ownable" class="nav-link" data-scroll-target="#ownable">Ownable</a>
+  <ul class="collapse">
+  <li><a href="#ownable-1" id="toc-ownable-1" class="nav-link" data-scroll-target="#ownable-1">Ownable</a></li>
+  </ul></li>
+  <li><a href="#passer" id="toc-passer" class="nav-link" data-scroll-target="#passer">Passer</a>
+  <ul class="collapse">
+  <li><a href="#passer-1" id="toc-passer-1" class="nav-link" data-scroll-target="#passer-1">Passer</a></li>
+  </ul></li>
+  <li><a href="#share-price" id="toc-share-price" class="nav-link" data-scroll-target="#share-price">Share Price</a>
+  <ul class="collapse">
+  <li><a href="#shareprice" id="toc-shareprice" class="nav-link" data-scroll-target="#shareprice">SharePrice</a></li>
+  </ul></li>
+  <li><a href="#shareholder" id="toc-shareholder" class="nav-link" data-scroll-target="#shareholder">Shareholder</a>
+  <ul class="collapse">
+  <li><a href="#shareholder-1" id="toc-shareholder-1" class="nav-link" data-scroll-target="#shareholder-1">ShareHolder</a></li>
+  </ul></li>
+  <li><a href="#spender" id="toc-spender" class="nav-link" data-scroll-target="#spender">Spender</a>
+  <ul class="collapse">
+  <li><a href="#spender-1" id="toc-spender-1" class="nav-link" data-scroll-target="#spender-1">Spender</a></li>
+  </ul></li>
+  <li><a href="#stock-movement" id="toc-stock-movement" class="nav-link" data-scroll-target="#stock-movement">Stock Movement</a>
+  <ul class="collapse">
+  <li><a href="#zigzagmovement" id="toc-zigzagmovement" class="nav-link" data-scroll-target="#zigzagmovement">ZigZagMovement</a></li>
+  <li><a href="#onedimensionalmovement" id="toc-onedimensionalmovement" class="nav-link" data-scroll-target="#onedimensionalmovement">OneDimensionalMovement</a></li>
+  <li><a href="#twodimensionalmovement" id="toc-twodimensionalmovement" class="nav-link" data-scroll-target="#twodimensionalmovement">TwoDimensionalMovement</a></li>
+  <li><a href="#basemovement" id="toc-basemovement" class="nav-link" data-scroll-target="#basemovement">BaseMovement</a></li>
+  </ul></li>
+  <li><a href="#stock-market" id="toc-stock-market" class="nav-link" data-scroll-target="#stock-market">Stock Market</a>
+  <ul class="collapse">
+  <li><a href="#stockmarket" id="toc-stockmarket" class="nav-link" data-scroll-target="#stockmarket">StockMarket</a></li>
+  </ul></li>
+  </ul></li>
+  <li><a href="#game-flow" id="toc-game-flow" class="nav-link" data-scroll-target="#game-flow">Game Flow</a>
+  <ul class="collapse">
+  <li><a href="#phase" id="toc-phase" class="nav-link" data-scroll-target="#phase">Phase</a>
+  <ul class="collapse">
+  <li><a href="#phase-1" id="toc-phase-1" class="nav-link" data-scroll-target="#phase-1">Phase</a></li>
+  </ul></li>
+  </ul></li>
+  <li><a href="#testing" id="toc-testing" class="nav-link" data-scroll-target="#testing">Testing</a></li>
+  <li><a href="#publisher-info" id="toc-publisher-info" class="nav-link" data-scroll-target="#publisher-info">Publisher Info</a></li>
+  </ul>
+<div class="toc-actions"><ul><li><a href="https://github.com/Revys17/RL_18xx/issues/new" class="toc-action"><i class="bi bi-github"></i>Report an issue</a></li></ul></div></nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../../game/engine.html">game</a></li><li class="breadcrumb-item"><a href="../../game/engine/core.html">engine</a></li><li class="breadcrumb-item"><a href="../../game/engine/core.html">Core</a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title">Core</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<!-- WARNING: THIS FILE WAS AUTOGENERATED! DO NOT EDIT! -->
+<p>This notebook contains the basic high-level types and helper methods used by other parts of the engine.</p>
+<section id="helper-methods" class="level2">
+<h2 class="anchored" data-anchor-id="helper-methods">Helper Methods</h2>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L17" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="snake_to_pascal" class="level3">
+<h3 class="anchored" data-anchor-id="snake_to_pascal">snake_to_pascal</h3>
+<blockquote class="blockquote">
+<pre><code> snake_to_pascal (snake_str)</code></pre>
+</blockquote>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L14" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="pascal_to_snake" class="level3">
+<h3 class="anchored" data-anchor-id="pascal_to_snake">pascal_to_snake</h3>
+<blockquote class="blockquote">
+<pre><code> pascal_to_snake (pascal_str)</code></pre>
+</blockquote>
+</section>
+</section>
+<section id="errors" class="level2">
+<h2 class="anchored" data-anchor-id="errors">Errors</h2>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L41" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="reusescity" class="level3">
+<h3 class="anchored" data-anchor-id="reusescity">ReusesCity</h3>
+<p>Unspecified run-time error.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L37" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="routetoolong" class="level3">
+<h3 class="anchored" data-anchor-id="routetoolong">RouteTooLong</h3>
+<p>Unspecified run-time error.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L33" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="routetooshort" class="level3">
+<h3 class="anchored" data-anchor-id="routetooshort">RouteTooShort</h3>
+<p>Unspecified run-time error.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L29" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="notoken" class="level3">
+<h3 class="anchored" data-anchor-id="notoken">NoToken</h3>
+<p>Unspecified run-time error.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L25" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="optionerror" class="level3">
+<h3 class="anchored" data-anchor-id="optionerror">OptionError</h3>
+<p>Unspecified run-time error.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L21" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="gameerror" class="level3">
+<h3 class="anchored" data-anchor-id="gameerror">GameError</h3>
+<p>Unspecified run-time error.</p>
+</section>
+</section>
+<section id="logging" class="level2">
+<h2 class="anchored" data-anchor-id="logging">Logging</h2>
+<p>A game log that stores messages along with associated action IDs.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L45" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="gamelog" class="level3">
+<h3 class="anchored" data-anchor-id="gamelog">GameLog</h3>
+<blockquote class="blockquote">
+<pre><code> GameLog (game)</code></pre>
+</blockquote>
+<p>Built-in mutable sequence.</p>
+<p>If no argument is given, the constructor creates a new empty list. The argument must be an iterable if specified.</p>
+</section>
+</section>
+<section id="base-entities" class="level1">
+<h1>Base Entities</h1>
+<section id="assignable" class="level2">
+<h2 class="anchored" data-anchor-id="assignable">Assignable</h2>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L68" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="assignable-1" class="level3">
+<h3 class="anchored" data-anchor-id="assignable-1">Assignable</h3>
+<blockquote class="blockquote">
+<pre><code> Assignable ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="entity" class="level2">
+<h2 class="anchored" data-anchor-id="entity">Entity</h2>
+<p>Intended to be inherited by all Game Entities.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L93" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="entity-1" class="level3">
+<h3 class="anchored" data-anchor-id="entity-1">Entity</h3>
+<blockquote class="blockquote">
+<pre><code> Entity ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="item" class="level2">
+<h2 class="anchored" data-anchor-id="item">Item</h2>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L122" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="item-1" class="level3">
+<h3 class="anchored" data-anchor-id="item-1">Item</h3>
+<blockquote class="blockquote">
+<pre><code> Item (description='', cost=0)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="ownable" class="level2">
+<h2 class="anchored" data-anchor-id="ownable">Ownable</h2>
+<p>An interface inherited by all entities that can be owned. Contains an <code>owner</code> field and helper methods.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L131" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="ownable-1" class="level3">
+<h3 class="anchored" data-anchor-id="ownable-1">Ownable</h3>
+<blockquote class="blockquote">
+<pre><code> Ownable ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="passer" class="level2">
+<h2 class="anchored" data-anchor-id="passer">Passer</h2>
+<p>Contains methods around passing. Should be inherited by anything that can act in the stock round.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L178" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="passer-1" class="level3">
+<h3 class="anchored" data-anchor-id="passer-1">Passer</h3>
+<blockquote class="blockquote">
+<pre><code> Passer ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="share-price" class="level2">
+<h2 class="anchored" data-anchor-id="share-price">Share Price</h2>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L200" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="shareprice" class="level3">
+<h3 class="anchored" data-anchor-id="shareprice">SharePrice</h3>
+<blockquote class="blockquote">
+<pre><code> SharePrice (code, row, column, unlimited_types=None,
+             multiple_buy_types=None)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="shareholder" class="level2">
+<h2 class="anchored" data-anchor-id="shareholder">Shareholder</h2>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L308" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="shareholder-1" class="level3">
+<h3 class="anchored" data-anchor-id="shareholder-1">ShareHolder</h3>
+<blockquote class="blockquote">
+<pre><code> ShareHolder ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="spender" class="level2">
+<h2 class="anchored" data-anchor-id="spender">Spender</h2>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L360" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="spender-1" class="level3">
+<h3 class="anchored" data-anchor-id="spender-1">Spender</h3>
+<blockquote class="blockquote">
+<pre><code> Spender ()</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="stock-movement" class="level2">
+<h2 class="anchored" data-anchor-id="stock-movement">Stock Movement</h2>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L465" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="zigzagmovement" class="level3">
+<h3 class="anchored" data-anchor-id="zigzagmovement">ZigZagMovement</h3>
+<blockquote class="blockquote">
+<pre><code> ZigZagMovement (market, ledge_movement)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L445" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="onedimensionalmovement" class="level3">
+<h3 class="anchored" data-anchor-id="onedimensionalmovement">OneDimensionalMovement</h3>
+<blockquote class="blockquote">
+<pre><code> OneDimensionalMovement (market)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L417" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="twodimensionalmovement" class="level3">
+<h3 class="anchored" data-anchor-id="twodimensionalmovement">TwoDimensionalMovement</h3>
+<blockquote class="blockquote">
+<pre><code> TwoDimensionalMovement (market)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L392" target="_blank" style="float:right; font-size:smaller">source</a></p>
+</section>
+<section id="basemovement" class="level3">
+<h3 class="anchored" data-anchor-id="basemovement">BaseMovement</h3>
+<blockquote class="blockquote">
+<pre><code> BaseMovement (market)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+<section id="stock-market" class="level2">
+<h2 class="anchored" data-anchor-id="stock-market">Stock Market</h2>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L501" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="stockmarket" class="level3">
+<h3 class="anchored" data-anchor-id="stockmarket">StockMarket</h3>
+<blockquote class="blockquote">
+<pre><code> StockMarket (market, unlimited_types, multiple_buy_types=None,
+              zigzag=None, ledge_movement=None)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+</section>
+<section id="game-flow" class="level1">
+<h1>Game Flow</h1>
+<section id="phase" class="level2">
+<h2 class="anchored" data-anchor-id="phase">Phase</h2>
+<hr>
+<p><a href="https://github.com/Revys17/RL_18xx/blob/master/rl18xx/game/engine/core.py#L643" target="_blank" style="float:right; font-size:smaller">source</a></p>
+<section id="phase-1" class="level3">
+<h3 class="anchored" data-anchor-id="phase-1">Phase</h3>
+<blockquote class="blockquote">
+<pre><code> Phase (phases, game)</code></pre>
+</blockquote>
+<p>Initialize self. See help(type(self)) for accurate signature.</p>
+</section>
+</section>
+</section>
+<section id="testing" class="level1">
+<h1>Testing</h1>
+<div id="2accac1b-39dd-4da0-9861-eab974f0fa30" class="cell">
+<div class="sourceCode cell-code" id="cb18"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> TestTiles:</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>    TEST_TILES_HUMAN_READABLE <span class="op">=</span> [</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"45"</span>},</span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"H11"</span>, <span class="st">"title"</span>: <span class="st">"1822PNW"</span>},</span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"O8"</span>, <span class="st">"title"</span>: <span class="st">"1822PNW"</span>},</span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"I12"</span>, <span class="st">"title"</span>: <span class="st">"1822PNW"</span>},</span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>        <span class="co"># open: https://github.com/tobymao/18xx/issues/5981</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"H22"</span>, <span class="st">"title"</span>: <span class="st">"1828.Games"</span>},</span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>        <span class="co"># open: https://github.com/tobymao/18xx/issues/8178</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"H18"</span>, <span class="st">"title"</span>: <span class="st">"1830"</span>, <span class="st">"fixture"</span>: <span class="st">"26855"</span>, <span class="st">"action"</span>: <span class="dv">385</span>},</span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"C15"</span>, <span class="st">"title"</span>: <span class="st">"1846"</span>},</span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>        <span class="co"># open: https://github.com/tobymao/18xx/issues/5167</span></span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"N11"</span>, <span class="st">"title"</span>: <span class="st">"1856"</span>, <span class="st">"fixture"</span>: <span class="st">"hotseat005"</span>, <span class="st">"action"</span>: <span class="dv">113</span>},</span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"L0"</span>, <span class="st">"title"</span>: <span class="st">"1868 Wyoming"</span>},</span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"WRC"</span>, <span class="st">"title"</span>: <span class="st">"1868 Wyoming"</span>},</span>
+<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"F12"</span>, <span class="st">"title"</span>: <span class="st">"1868 Wyoming"</span>, <span class="st">"fixture"</span>: <span class="st">"1868WY_5"</span>, <span class="st">"action"</span>: <span class="dv">835</span>},</span>
+<span id="cb18-17"><a href="#cb18-17" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"L0"</span>, <span class="st">"title"</span>: <span class="st">"1868 Wyoming"</span>, <span class="st">"fixture"</span>: <span class="st">"1868WY_5"</span>, <span class="st">"action"</span>: <span class="dv">835</span>},</span>
+<span id="cb18-18"><a href="#cb18-18" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"J12"</span>, <span class="st">"title"</span>: <span class="st">"1868 Wyoming"</span>, <span class="st">"fixture"</span>: <span class="st">"1868WY_5"</span>, <span class="st">"action"</span>: <span class="dv">835</span>},</span>
+<span id="cb18-19"><a href="#cb18-19" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"J12"</span>, <span class="st">"title"</span>: <span class="st">"1868 Wyoming"</span>, <span class="st">"fixture"</span>: <span class="st">"1868WY_5"</span>},</span>
+<span id="cb18-20"><a href="#cb18-20" aria-hidden="true" tabindex="-1"></a>        <span class="co"># open: https://github.com/tobymao/18xx/issues/4992</span></span>
+<span id="cb18-21"><a href="#cb18-21" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"I11"</span>, <span class="st">"title"</span>: <span class="st">"1882"</span>, <span class="st">"fixture"</span>: <span class="st">"5236"</span>, <span class="st">"action"</span>: <span class="dv">303</span>},</span>
+<span id="cb18-22"><a href="#cb18-22" aria-hidden="true" tabindex="-1"></a>        <span class="co"># open: https://github.com/tobymao/18xx/issues/6604</span></span>
+<span id="cb18-23"><a href="#cb18-23" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"L41"</span>, <span class="st">"title"</span>: <span class="st">"1888"</span>},</span>
+<span id="cb18-24"><a href="#cb18-24" aria-hidden="true" tabindex="-1"></a>        <span class="co"># open: https://github.com/tobymao/18xx/issues/5153</span></span>
+<span id="cb18-25"><a href="#cb18-25" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"IR7"</span>, <span class="st">"title"</span>: <span class="st">"18Ireland"</span>},</span>
+<span id="cb18-26"><a href="#cb18-26" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"IR8"</span>, <span class="st">"title"</span>: <span class="st">"18Ireland"</span>},</span>
+<span id="cb18-27"><a href="#cb18-27" aria-hidden="true" tabindex="-1"></a>        <span class="co"># open: https://github.com/tobymao/18xx/issues/5673</span></span>
+<span id="cb18-28"><a href="#cb18-28" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"D19"</span>, <span class="st">"title"</span>: <span class="st">"18Mag"</span>, <span class="st">"fixture"</span>: <span class="st">"hs_tfagolvf_76622"</span>},</span>
+<span id="cb18-29"><a href="#cb18-29" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"I14"</span>, <span class="st">"title"</span>: <span class="st">"18Mag"</span>, <span class="st">"fixture"</span>: <span class="st">"hs_tfagolvf_76622"</span>},</span>
+<span id="cb18-30"><a href="#cb18-30" aria-hidden="true" tabindex="-1"></a>        <span class="co"># open: https://github.com/tobymao/18xx/issues/7765</span></span>
+<span id="cb18-31"><a href="#cb18-31" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"470"</span>, <span class="st">"title"</span>: <span class="st">"18MEX"</span>},</span>
+<span id="cb18-32"><a href="#cb18-32" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"475"</span>, <span class="st">"title"</span>: <span class="st">"18MEX"</span>},</span>
+<span id="cb18-33"><a href="#cb18-33" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"479P"</span>, <span class="st">"title"</span>: <span class="st">"18MEX"</span>},</span>
+<span id="cb18-34"><a href="#cb18-34" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"485P"</span>, <span class="st">"title"</span>: <span class="st">"18MEX"</span>},</span>
+<span id="cb18-35"><a href="#cb18-35" aria-hidden="true" tabindex="-1"></a>        {<span class="st">"tile"</span>: <span class="st">"486P"</span>, <span class="st">"title"</span>: <span class="st">"18MEX"</span>},</span>
+<span id="cb18-36"><a href="#cb18-36" aria-hidden="true" tabindex="-1"></a>    ]</span>
+<span id="cb18-37"><a href="#cb18-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-38"><a href="#cb18-38" aria-hidden="true" tabindex="-1"></a>    TEST_TILES <span class="op">=</span> {}</span>
+<span id="cb18-39"><a href="#cb18-39" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> opts <span class="kw">in</span> TEST_TILES_HUMAN_READABLE:</span>
+<span id="cb18-40"><a href="#cb18-40" aria-hidden="true" tabindex="-1"></a>        tile <span class="op">=</span> opts[<span class="st">"tile"</span>]</span>
+<span id="cb18-41"><a href="#cb18-41" aria-hidden="true" tabindex="-1"></a>        title <span class="op">=</span> opts.get(<span class="st">"title"</span>, <span class="st">"DefaultTitle"</span>)</span>
+<span id="cb18-42"><a href="#cb18-42" aria-hidden="true" tabindex="-1"></a>        fixture <span class="op">=</span> opts.get(<span class="st">"fixture"</span>, <span class="st">"DefaultFixture"</span>)</span>
+<span id="cb18-43"><a href="#cb18-43" aria-hidden="true" tabindex="-1"></a>        action <span class="op">=</span> opts.get(<span class="st">"action"</span>, <span class="st">"DefaultAction"</span>)</span>
+<span id="cb18-44"><a href="#cb18-44" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-45"><a href="#cb18-45" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> title <span class="kw">not</span> <span class="kw">in</span> TEST_TILES:</span>
+<span id="cb18-46"><a href="#cb18-46" aria-hidden="true" tabindex="-1"></a>            TEST_TILES[title] <span class="op">=</span> {}</span>
+<span id="cb18-47"><a href="#cb18-47" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-48"><a href="#cb18-48" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> fixture <span class="kw">not</span> <span class="kw">in</span> TEST_TILES[title]:</span>
+<span id="cb18-49"><a href="#cb18-49" aria-hidden="true" tabindex="-1"></a>            TEST_TILES[title][fixture] <span class="op">=</span> {}</span>
+<span id="cb18-50"><a href="#cb18-50" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-51"><a href="#cb18-51" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> action <span class="kw">not</span> <span class="kw">in</span> TEST_TILES[title][fixture]:</span>
+<span id="cb18-52"><a href="#cb18-52" aria-hidden="true" tabindex="-1"></a>            TEST_TILES[title][fixture][action] <span class="op">=</span> []</span>
+<span id="cb18-53"><a href="#cb18-53" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-54"><a href="#cb18-54" aria-hidden="true" tabindex="-1"></a>        TEST_TILES[title][fixture][action].append([tile, opts])</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div id="2d6ede99-07bb-4caa-beed-59c3f10e8f44" class="cell">
+<div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>TestTiles.TEST_TILES</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<pre><code>{'DefaultTitle': {'DefaultFixture': {'DefaultAction': [['45',
+     {'tile': '45'}]]}},
+ '1822PNW': {'DefaultFixture': {'DefaultAction': [['H11',
+     {'tile': 'H11', 'title': '1822PNW'}],
+    ['O8', {'tile': 'O8', 'title': '1822PNW'}],
+    ['I12', {'tile': 'I12', 'title': '1822PNW'}]]}},
+ '1828.Games': {'DefaultFixture': {'DefaultAction': [['H22',
+     {'tile': 'H22', 'title': '1828.Games'}]]}},
+ '1830': {'26855': {385: [['H18',
+     {'tile': 'H18', 'title': '1830', 'fixture': '26855', 'action': 385}]]}},
+ '1846': {'DefaultFixture': {'DefaultAction': [['C15',
+     {'tile': 'C15', 'title': '1846'}]]}},
+ '1856': {'hotseat005': {113: [['N11',
+     {'tile': 'N11',
+      'title': '1856',
+      'fixture': 'hotseat005',
+      'action': 113}]]}},
+ '1868 Wyoming': {'DefaultFixture': {'DefaultAction': [['L0',
+     {'tile': 'L0', 'title': '1868 Wyoming'}],
+    ['WRC', {'tile': 'WRC', 'title': '1868 Wyoming'}]]},
+  '1868WY_5': {835: [['F12',
+     {'tile': 'F12',
+      'title': '1868 Wyoming',
+      'fixture': '1868WY_5',
+      'action': 835}],
+    ['L0',
+     {'tile': 'L0',
+      'title': '1868 Wyoming',
+      'fixture': '1868WY_5',
+      'action': 835}],
+    ['J12',
+     {'tile': 'J12',
+      'title': '1868 Wyoming',
+      'fixture': '1868WY_5',
+      'action': 835}]],
+   'DefaultAction': [['J12',
+     {'tile': 'J12', 'title': '1868 Wyoming', 'fixture': '1868WY_5'}]]}},
+ '1882': {'5236': {303: [['I11',
+     {'tile': 'I11', 'title': '1882', 'fixture': '5236', 'action': 303}]]}},
+ '1888': {'DefaultFixture': {'DefaultAction': [['L41',
+     {'tile': 'L41', 'title': '1888'}]]}},
+ '18Ireland': {'DefaultFixture': {'DefaultAction': [['IR7',
+     {'tile': 'IR7', 'title': '18Ireland'}],
+    ['IR8', {'tile': 'IR8', 'title': '18Ireland'}]]}},
+ '18Mag': {'hs_tfagolvf_76622': {'DefaultAction': [['D19',
+     {'tile': 'D19', 'title': '18Mag', 'fixture': 'hs_tfagolvf_76622'}],
+    ['I14',
+     {'tile': 'I14', 'title': '18Mag', 'fixture': 'hs_tfagolvf_76622'}]]}},
+ '18MEX': {'DefaultFixture': {'DefaultAction': [['470',
+     {'tile': '470', 'title': '18MEX'}],
+    ['475', {'tile': '475', 'title': '18MEX'}],
+    ['479P', {'tile': '479P', 'title': '18MEX'}],
+    ['485P', {'tile': '485P', 'title': '18MEX'}],
+    ['486P', {'tile': '486P', 'title': '18MEX'}]]}}}</code></pre>
+</div>
+</div>
+</section>
+<section id="publisher-info" class="level1">
+<h1>Publisher Info</h1>
+<div id="3358f650-5b2f-4826-8de2-e75ca5fd3b11" class="cell">
+<div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>PUBLISHER_INFO</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<pre><code>{'all_aboard_games': {'name': 'All-Aboard Games',
+  'url': 'https://all-aboardgames.com/'},
+ 'deep_thought_games': {'name': 'Deep Thought Games',
+  'url': 'https://boardgamegeek.com/boardgamepublisher/4192/deep-thought-games-llc',
+  'hidden': True},
+ 'gmt_games': {'name': 'GMT Games', 'url': 'https://www.gmtgames.com/'},
+ 'golden_spike': {'name': 'Golden Spike Games',
+  'url': 'https://goldenspikegames.com/'},
+ 'grand_trunk_games': {'name': 'Grand Trunk Games',
+  'url': 'https://www.grandtrunkgames.com/'},
+ 'lonny_games': {'name': 'Lonny Games', 'url': 'https://www.lonnygames.com/'},
+ 'lookout': {'name': 'Lookout Games',
+  'url': 'https://lookout-spiele.de/',
+  'hidden': True},
+ 'loserdogs': {'name': 'Loserdogs',
+  'url': 'http://tanisan.com/ld/',
+  'hidden': True},
+ 'marflow_games': {'name': 'Marflow Games',
+  'url': 'https://18xx-marflow-games.de/'},
+ 'mayfair': {'name': 'Mayfair Games',
+  'url': 'https://boardgamegeek.com/boardgamepublisher/10/mayfair-games',
+  'hidden': True},
+ 'mercury': {'name': 'Mercury Games',
+  'url': 'https://www.mercurygames.com/',
+  'hidden': True},
+ 'oo_games': {'name': 'Double-O Games',
+  'url': 'http://ohley.de/english/',
+  'hidden': True},
+ 'seahorse': {'name': 'Seahorse Laser &amp; Design',
+  'url': 'https://www.etsy.com/shop/SeahorseLaserDesign?section_id=24360565',
+  'hidden': True},
+ 'self_published': {'name': 'Self-published',
+  'url': 'https://18xx.games',
+  'hidden': True},
+ 'traxx': {'name': 'TraXX', 'url': 'https://traxx-denver.com/games/'},
+ 'zman_games': {'name': 'Z-MAN Games',
+  'url': 'https://zmangames.com/',
+  'hidden': True}}</code></pre>
+</div>
+</div>
+
+
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    text: function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "Copied!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "Copied!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+    var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+    var mailtoRegex = new RegExp(/^mailto:/);
+      var filterRegex = new RegExp("https:\/\/Revys17\.github\.io\/RL_18xx");
+    var isInternal = (href) => {
+        return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+    }
+    // Inspect non-navigation links and adorn them if external
+ 	var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool)');
+    for (var i=0; i<links.length; i++) {
+      const link = links[i];
+      if (!isInternal(link.href)) {
+        // undo the damage that might have been done by quarto-nav.js in the case of
+        // links that we want to consider external
+        if (link.dataset.originalHref !== undefined) {
+          link.href = link.dataset.originalHref;
+        }
+      }
+    }
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      if (note) {
+        return note.innerHTML;
+      } else {
+        return "";
+      }
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+</div> <!-- /content -->
+
+
+
+
+<footer class="footer"><div class="nav-footer"><div class="nav-footer-center"><div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/Revys17/RL_18xx/issues/new" class="toc-action"><i class="bi bi-github"></i>Report an issue</a></li></ul></div></div></div></footer></body></html>
