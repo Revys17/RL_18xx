@@ -31,6 +31,17 @@ SPECIAL_ACTIONS = {
     'Pass': 12
 }
 
+'BaseAction', 'AcquireCompany', 'Assign', 'Bankrupt', 'Bid', 'BlindBid', 'BorrowTrain', 'BuyCompany', 'BuyCorporation',
+'BuyPower', 'BuyShares', 'SellShares', 'BuyToken', 'BuyTrain', 'Choose', 'ChooseAbility', 'ClaimHexToken',
+'CombinedTrains', 'Convert', 'CorporateBuyShares', 'CorporateSellShares', 'CreditMobilier',
+'DestinationConnection', 'DiscardTrain', 'Dividend', 'DoubleHeadTrains', 'EndGame', 'FailedMerge',
+'HexToken', 'LayTile', 'Message', 'Log', 'ManualCloseCompany', 'Merge', 'MoveBid', 'Offer', 'Par', 'Pass',
+'PayoffDebt', 'TakeLoan', 'PayoffPlayerDebt', 'PlaceToken', 'ProgramEnable', 'ProgramDisable',
+'ProgramAuctionBid', 'ProgramBuyShares', 'ProgramClosePass', 'ProgramHarzbahnDraftPass',
+'ProgramIndependentMines', 'ProgramMergerPass', 'ProgramSharePass', 'PurchaseTrain', 'ReassignTrains',
+'Redo', 'RemoveHexToken', 'RemoveToken', 'Respond', 'RunRoutes', 'ScrapTrain', 'SellCompany', 'Short',
+'SpecialBuy', 'Split', 'SwapTrain', 'SwitchTrains', 'Undo', 'UseGraph', 'ViewMergeOptions', 'OperatingInfo'
+
 # Parameters for different action types
 MAX_PRICE = 1000
 MAX_ROTATION = 6
