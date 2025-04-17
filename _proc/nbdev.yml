@@ -1,9 +1,0 @@
-project:
-  output-dir: _docs
-
-website:
-  title: "RL_18xx"
-  site-url: "https://Revys17.github.io/RL_18xx"
-  description: "RL agent for 18xx (currently 1830)"
-  repo-branch: master
-  repo-url: "https://github.com/Revys17/RL_18xx"
