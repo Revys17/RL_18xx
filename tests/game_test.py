@@ -1659,7 +1659,6 @@ def test_1830_from_import():
         "Player 4": 5855
     }, "Player results do not match expected results"
 
-
 def test_1830_manual_bankrupcy():
     game_map = GameMap()
     game = game_map.game_by_title("1830")
