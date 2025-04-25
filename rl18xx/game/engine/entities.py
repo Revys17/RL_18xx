@@ -37,26 +37,16 @@ class Operator(Entity):
         self.operating_history = {}
         self.logo_filename = f"{kwargs.get('logo', '')}.svg"
         self.logo = f"/logos/{self.logo_filename}"
-        self.simple_logo = (
-            f"/logos/{kwargs.get('simple_logo', '')}.svg"
-            if kwargs.get("simple_logo")
-            else self.logo
-        )
+        self.simple_logo = f"/logos/{kwargs.get('simple_logo', '')}.svg" if kwargs.get("simple_logo") else self.logo
         self.coordinates = kwargs.get("coordinates")
         self.city = kwargs.get("city")
-        self.tokens = [
-            Token(self, price=price) for price in (kwargs.get("tokens", []) or [])
-        ]
+        self.tokens = [Token(self, price=price) for price in (kwargs.get("tokens", []) or [])]
         self.loans = []
         self.color = kwargs.get("color")
         self.text_color = kwargs.get("text_color", "#ffffff") or "#ffffff"
         self.destination_coordinates = kwargs.get("destination_coordinates")
         self.destination_exits = kwargs.get("destination_exits")
-        self.destination_icon = (
-            f"/icons/{kwargs.get('destination_icon', '')}"
-            if kwargs.get("destination_icon")
-            else ""
-        )
+        self.destination_icon = f"/icons/{kwargs.get('destination_icon', '')}" if kwargs.get("destination_icon") else ""
         self.destination_loc = kwargs.get("destination_loc")
         self.destination_icon_in_city_slot = kwargs.get("destination_icon_in_city_slot")
 
@@ -112,11 +102,7 @@ class ShareBundle:
         if not len({share.owner for share in self.shares}) == 1:
             raise ValueError("All shares must be owned by the same owner")
 
-        self.percent = (
-            percent
-            if percent is not None
-            else sum(share.percent for share in self.shares)
-        )
+        self.percent = percent if percent is not None else sum(share.percent for share in self.shares)
         self.share_price = None
 
     def num_shares(self, ceil=True):
@@ -159,10 +145,7 @@ class ShareBundle:
             return True
 
         sh = self.corporation.player_share_holders(corporate=True)
-        return (
-            max((v for k, v in sh.items() if k != entity), default=0)
-            >= self.presidents_share.percent
-        )
+        return max((v for k, v in sh.items() if k != entity), default=0) >= self.presidents_share.percent
 
     def to_bundle(self):
         return self
@@ -172,11 +155,7 @@ class ShareBundle:
         return all(share.buyable for share in self.shares)
 
     def __eq__(self, other):
-        return (
-            self.shares == other.shares
-            and self.percent == other.percent
-            and self.share_price == other.share_price
-        )
+        return self.shares == other.shares and self.percent == other.percent and self.share_price == other.share_price
 
     @property
     def common_percent(self):
@@ -193,9 +172,7 @@ import math
 
 
 class Share(Ownable):
-    def __init__(
-        self, corporation, owner=None, president=False, percent=10, index=0, cert_size=1
-    ):
+    def __init__(self, corporation, owner=None, president=False, percent=10, index=0, cert_size=1):
         super().__init__()
         self.cert_size = cert_size
         self._corporation = corporation
@@ -234,11 +211,7 @@ class Share(Ownable):
             if self.owner == self._corporation.ipo_owner
             else self._corporation.share_price
         )
-        return (
-            share_price.price * self._corporation.price_multiplier
-            if share_price
-            else self._corporation.min_price
-        )
+        return share_price.price * self._corporation.price_multiplier if share_price else self._corporation.min_price
 
     def corporation(self):
         return self._corporation
@@ -271,9 +244,7 @@ class Share(Ownable):
 
 
 class SharePool(Entity, ShareHolder):
-    def __init__(
-        self, game, allow_president_sale=False, no_rebundle_president_buy=False
-    ):
+    def __init__(self, game, allow_president_sale=False, no_rebundle_president_buy=False):
         super().__init__()
         self.game = game
         self.bank = game.bank
@@ -320,10 +291,7 @@ class SharePool(Entity, ShareHolder):
         if (
             bundle.owner.is_player()
             and not self.game.BUY_SHARE_FROM_OTHER_PLAYER
-            and (
-                not self.game.CORPORATE_BUY_SHARE_ALLOW_BUY_FROM_PRESIDENT
-                or not entity.is_corporation()
-            )
+            and (not self.game.CORPORATE_BUY_SHARE_ALLOW_BUY_FROM_PRESIDENT or not entity.is_corporation())
         ):
             raise GameError("Cannot buy share from player")
 
@@ -370,9 +338,7 @@ class SharePool(Entity, ShareHolder):
                             f"{self.game.format_currency(price)} from {from_} for {share_str}"
                         )
                     else:
-                        self.log.append(
-                            f"{entity.name} exchanges {exchange.name} from {from_} for {share_str}"
-                        )
+                        self.log.append(f"{entity.name} exchanges {exchange.name} from {from_} for {share_str}")
         else:
             if swap:
                 price -= swap.price
@@ -380,9 +346,7 @@ class SharePool(Entity, ShareHolder):
             swap_text = f" + swap of a {swap.percent}% share" if swap else ""
             borrowed = price - entity.cash
             borrowed_text = (
-                f" by borrowing {self.game.format_currency(borrowed)} from {borrow_from.name}"
-                if borrowed > 0
-                else ""
+                f" by borrowing {self.game.format_currency(borrowed)} from {borrow_from.name}" if borrowed > 0 else ""
             )
 
             verb = "redeems" if entity == corporation else "buys"
@@ -394,16 +358,11 @@ class SharePool(Entity, ShareHolder):
 
         # set_trace()
         if price == 0:
-            self.transfer_shares(
-                bundle, entity, allow_president_change=allow_president_change
-            )
+            self.transfer_shares(bundle, entity, allow_president_change=allow_president_change)
         else:
             receiver = None
             if (
-                (
-                    corporation.capitalization in ("escrow", "incremental")
-                    and bundle.owner.is_corporation()
-                )
+                (corporation.capitalization in ("escrow", "incremental") and bundle.owner.is_corporation())
                 or (bundle.owner.is_corporation() and not corporation.ipo_is_treasury())
                 or (bundle.owner.is_corporation() and bundle.owner != corporation)
                 or bundle.owner.is_player()
@@ -430,11 +389,7 @@ class SharePool(Entity, ShareHolder):
     def sell_shares(self, bundle, allow_president_change=True, swap=None, silent=None):
         entity = bundle.owner
 
-        verb = (
-            "issues"
-            if entity.is_corporation() and entity == bundle.corporation
-            else "sells"
-        )
+        verb = "issues" if entity.is_corporation() and entity == bundle.corporation else "sells"
 
         price = bundle.price
         if swap:
@@ -447,9 +402,7 @@ class SharePool(Entity, ShareHolder):
             self.log_sell_shares(entity, verb, bundle, price, swap_text)
 
         transfer_to = (
-            bundle.corporation
-            if self.game.sold_shares_destination(bundle.corporation) == "corporation"
-            else self
+            bundle.corporation if self.game.sold_shares_destination(bundle.corporation) == "corporation" else self
         )
 
         self.transfer_shares(
@@ -473,14 +426,12 @@ class SharePool(Entity, ShareHolder):
         return 0
 
     def fit_in_bank(self, bundle):
-        return (
-            bundle.percent + self.percent_of(bundle.corporation)
-        ) <= self.game.market_share_limit(bundle.corporation)
+        return (bundle.percent + self.percent_of(bundle.corporation)) <= self.game.market_share_limit(
+            bundle.corporation
+        )
 
     def bank_at_limit(self, corporation):
-        return self.common_percent_of(corporation) >= self.game.market_share_limit(
-            corporation
-        )
+        return self.common_percent_of(corporation) >= self.game.market_share_limit(corporation)
 
     def transfer_shares(
         self,
@@ -534,9 +485,7 @@ class SharePool(Entity, ShareHolder):
             and to_entity == self
         ):
             corporation.owner = self
-            self.log.append(
-                f"President's share sold to pool. {corporation.name} enters receivership"
-            )
+            self.log.append(f"President's share sold to pool. {corporation.name} enters receivership")
             if bundle.partial:
                 self.handle_partial(bundle, self, owner)
             return
@@ -544,9 +493,7 @@ class SharePool(Entity, ShareHolder):
         # set_trace()
         if self.allow_president_sale and owner == self and bundle.presidents_share:
             corporation.owner = to_entity
-            self.log.append(
-                f"{to_entity.name} becomes the president of {corporation.name}"
-            )
+            self.log.append(f"{to_entity.name} becomes the president of {corporation.name}")
             self.log.append(f"{corporation.name} exits receivership")
             self.handle_partial(bundle, to_entity, self)
             return
@@ -555,17 +502,13 @@ class SharePool(Entity, ShareHolder):
             return
 
         majority_share_holders = {
-            player: p
-            for player, p in self.presidency_check_shares(corporation).items()
-            if p == max_shares
+            player: p for player, p in self.presidency_check_shares(corporation).items() if p == max_shares
         }
         if previous_president in majority_share_holders:
             return
 
         president_candidates = [
-            p
-            for p in majority_share_holders
-            if p.percent_of(corporation) >= corporation.presidents_percent
+            p for p in majority_share_holders if p.percent_of(corporation) >= corporation.presidents_percent
         ]
 
         president = None
@@ -592,16 +535,12 @@ class SharePool(Entity, ShareHolder):
             and not bundle.presidents_share
             and self.game.can_swap_for_presidents_share_directly_from_corporation
         ):
-            previous_president = (
-                previous_president if previous_president else corporation
-            )
+            previous_president = previous_president if previous_president else corporation
         if owner == president or not previous_president:
             return
 
         presidents_share = bundle.presidents_share or next(
-            share
-            for share in previous_president.shares_of(corporation)
-            if share.president
+            share for share in previous_president.shares_of(corporation) if share.president
         )
 
         if not presidents_share:
@@ -611,15 +550,10 @@ class SharePool(Entity, ShareHolder):
             transfer_to = to_entity
             swap_to = to_entity
         else:
-            transfer_to = (
-                corporation
-                if self.game.sold_shares_destination(corporation) == "corporation"
-                else self
-            )
+            transfer_to = corporation if self.game.sold_shares_destination(corporation) == "corporation" else self
             swap_to = (
                 previous_president
-                if previous_president.percent_of(corporation)
-                >= presidents_share.percent
+                if previous_president.percent_of(corporation) >= presidents_share.percent
                 else transfer_to
             )
 
@@ -635,9 +569,7 @@ class SharePool(Entity, ShareHolder):
         for _ in range(int(num_shares)):
             self.move_share(from_entity.shares_of(corp)[0], to_entity)
 
-    def change_president(
-        self, presidents_share, swap_to, president, _previous_president=None
-    ):
+    def change_president(self, presidents_share, swap_to, president, _previous_president=None):
         if self.game.debug:
             set_trace()
         corporation = presidents_share.corporation()
@@ -667,9 +599,7 @@ class SharePool(Entity, ShareHolder):
 
     def num_presentation(self, bundle):
         num_shares = bundle.num_shares()
-        return (
-            f"a {bundle.percent}% share" if num_shares == 1 else f"{num_shares} shares"
-        )
+        return f"a {bundle.percent}% share" if num_shares == 1 else f"{num_shares} shares"
 
     def move_share(self, share, to_entity):
         corporation = share.corporation()
@@ -706,9 +636,7 @@ class Depot(Entity):
             self.game.phase.buying_train(None, train, self)
 
     def reclaim_all(self, name):
-        self.game.log.append(
-            f"-- Event: All {name} trains are discarded to the Bank Pool --"
-        )
+        self.game.log.append(f"-- Event: All {name} trains are discarded to the Bank Pool --")
         while self.upcoming and self.upcoming[0].name == name:
             train = self.upcoming[0]
             self.reclaim_train(train)
@@ -724,9 +652,7 @@ class Depot(Entity):
         self.depot_trains_cache = None
 
     def min_price(self, corporation, ability=None):
-        return min(
-            train.min_price(ability=ability) for train in self.available(corporation)
-        )
+        return min(train.min_price(ability=ability) for train in self.available(corporation))
 
     @property
     def min_depot_train(self):
@@ -735,16 +661,12 @@ class Depot(Entity):
     @property
     def min_depot_price(self):
         train = self.min_depot_train
-        return (
-            min(variant["price"] for variant in train.variants.values()) if train else 0
-        )
+        return min(variant["price"] for variant in train.variants.values()) if train else 0
 
     @property
     def max_depot_price(self):
         train = max(self.depot_trains(), key=lambda train: train.price, default=None)
-        return (
-            max(variant["price"] for variant in train.variants.values()) if train else 0
-        )
+        return max(variant["price"] for variant in train.variants.values()) if train else 0
 
     def unshift_train(self, train):
         train.owner = self
@@ -794,24 +716,16 @@ class Depot(Entity):
             self.depot_trains_cache = [self.upcoming[0]] + [
                 t for t in self.upcoming if self.game.phase.available(t.available_on)
             ]
-            self.depot_trains_cache = list(
-                dict.fromkeys(self.depot_trains_cache + self.discarded).keys()
-            )
+            self.depot_trains_cache = list(dict.fromkeys(self.depot_trains_cache + self.discarded).keys())
         return self.depot_trains_cache
 
     def available(self, corporation):
         return self.depot_trains() + self.other_trains(corporation)
 
     def other_trains(self, corporation):
-        all_others = [
-            train
-            for train in self.trains
-            if train.buyable and train.owner not in [corporation, self, None]
-        ]
+        all_others = [train for train in self.trains if train.buyable and train.owner not in [corporation, self, None]]
         if not self.game.can_buy_train_from_others():
-            all_others = [
-                train for train in all_others if train.owner.owner == corporation.owner
-            ]
+            all_others = [train for train in all_others if train.owner.owner == corporation.owner]
         return all_others
 
     @property
@@ -870,11 +784,7 @@ class Train(Ownable):
         self.operated = False
         self.ever_operated = False
         self.track_type = opts.get("track_type", "broad")
-        self.events = [
-            e
-            for e in (opts.get("events", []) or [])
-            if self.index == (e.get("when", 1) - 1)
-        ]
+        self.events = [e for e in (opts.get("events", []) or []) if self.index == (e.get("when", 1) - 1)]
         self.reserved = opts.get("reserved", False)
         self.requires_token = opts.get("requires_token", True)
         self.init_variants(opts.get("variants", []))
@@ -917,11 +827,7 @@ class Train(Ownable):
         self.variants = {v["name"]: v for v in variants}
 
     def remove_variants(self):
-        self.variants = {
-            name: variant
-            for name, variant in self.variants.items()
-            if name == self.name
-        }
+        self.variants = {name: variant for name, variant in self.variants.items() if name == self.name}
 
     def names_to_prices(self):
         return {name: variant["price"] for name, variant in self.variants.items()}
@@ -929,9 +835,7 @@ class Train(Ownable):
     def get_price(self, exchange_train=None, variant=None):
         discount = variant["discount"] if variant else self.discount
         price = variant["price"] if variant else self.price
-        return price - (
-            discount.get(exchange_train.name, 0) if discount and exchange_train else 0
-        )
+        return price - (discount.get(exchange_train.name, 0) if discount and exchange_train else 0)
 
     @property
     def id(self):
@@ -945,10 +849,7 @@ class Train(Ownable):
             return self.price
 
         return min(
-            [
-                a.discounted_price(self, self.price)
-                for a in (ability if isinstance(ability, list) else [ability])
-            ]
+            [a.discounted_price(self, self.price) for a in (ability if isinstance(ability, list) else [ability])]
         )
 
     def from_depot(self):
@@ -966,11 +867,7 @@ class Train(Ownable):
         self.local = (
             self.distance == 1
             if isinstance(self.distance, int)
-            else any(
-                n["visit"] == 1
-                for n in self.distance
-                if n.get("nodes", []).count("city") > 0
-            )
+            else any(n["visit"] == 1 for n in self.distance if n.get("nodes", []).count("city") > 0)
         )
         return self.local
 
@@ -985,9 +882,7 @@ import copy
 
 
 class Company(Entity, Ownable, Passer, Abilities):
-    def __init__(
-        self, sym=None, name=None, value=None, revenue=0, desc="", abilities=[], **opts
-    ):
+    def __init__(self, sym=None, name=None, value=None, revenue=0, desc="", abilities=[], **opts):
         Entity.__init__(self)
         Ownable.__init__(self)
         Passer.__init__(self)
@@ -1002,9 +897,7 @@ class Company(Entity, Ownable, Passer, Abilities):
         self.discount = opts.get("discount", 0)
         self.min_auction_price = -self.discount
         self.closed = False
-        self.min_price = opts.get(
-            "min_price", None if value is None else (value // 2) + (value % 2)
-        )
+        self.min_price = opts.get("min_price", None if value is None else (value // 2) + (value % 2))
         self.max_price = opts.get("max_price", None if value is None else value * 2)
         self.interval = opts.get("interval", None)  # Array of prices or None
         self.color = opts.get("color", "yellow")
@@ -1029,6 +922,18 @@ class Company(Entity, Ownable, Passer, Abilities):
 
     def __lt__(self, other):
         return (self.min_bid, self.name) < (other.min_bid, other.name)
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, Company)
+            and self.sym == other.sym
+            and self.name == other.name
+            and self.value == other.value
+            and self.discount == other.discount
+        )
+
+    def __hash__(self):
+        return hash((self.sym, self.name, self.value, self.discount))
 
     @property
     def id(self):
@@ -1147,10 +1052,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
 
         self.fraction_shares = kwargs.get(
             "fraction_shares",
-            any(
-                percent not in list(map(lambda x: x.percent, corp_shares[0:2]))
-                for percent in corp_shares
-            ),
+            any(percent not in list(map(lambda x: x.percent, corp_shares[0:2])) for percent in corp_shares),
         )
         self.presidents_share = corp_shares[0]
         self.second_share = corp_shares[1] if len(corp_shares) > 1 else None
@@ -1178,14 +1080,10 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
         self.reservation_color = kwargs.get("reservation_color", None)
         self.price_percent = kwargs.get(
             "price_percent",
-            self.second_share.percent
-            if self.second_share
-            else self.presidents_share.percent / 2,
+            self.second_share.percent if self.second_share else self.presidents_share.percent / 2,
         )
         self.price_multiplier = (
-            self.second_share.percent
-            if self.second_share
-            else self.presidents_share.percent / 2
+            self.second_share.percent if self.second_share else self.presidents_share.percent / 2
         ) / self.price_percent
         self.treasury_as_holding = kwargs.get("treasury_as_holding", False)
         self.corporation_can_ipo = kwargs.get("corporation_can_ipo", None)
@@ -1209,9 +1107,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
             -self.share_price.price,
             -self.share_price.coordinates[-1],
             self.share_price.coordinates[0],
-            self.share_price.corporations.index(self)
-            if self in self.share_price.corporations
-            else 0,
+            self.share_price.corporations.index(self) if self in self.share_price.corporations else 0,
             self.name,
         ]
 
@@ -1241,45 +1137,23 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
         return self.ipo_owner.num_shares_of(self)
 
     def reserved_shares(self):
-        return [
-            share
-            for share in self.ipo_owner.shares_by_corporation[self]
-            if not share.buyable
-        ]
+        return [share for share in self.ipo_owner.shares_by_corporation[self] if not share.buyable]
 
     def num_ipo_reserved_shares(self):
-        return (
-            sum(share.percent for share in self.reserved_shares()) / self.share_percent
-        )
+        return sum(share.percent for share in self.reserved_shares()) / self.share_percent
 
     def num_treasury_shares(self):
         return 0 if self.treasury_as_holding else self.num_shares_of(self)
 
     def num_player_shares(self):
-        return (
-            sum(
-                holder_value
-                for holder, holder_value in self.player_share_holders().items()
-            )
-            / self.share_percent
-        )
+        return sum(holder_value for holder, holder_value in self.player_share_holders().items()) / self.share_percent
 
     def num_corporate_shares(self):
-        return (
-            sum(
-                holder_value
-                for holder, holder_value in self.corporate_share_holders().items()
-            )
-            / self.share_percent
-        )
+        return sum(holder_value for holder, holder_value in self.corporate_share_holders().items()) / self.share_percent
 
     def num_market_shares(self):
         return (
-            sum(
-                holder_value
-                for holder, holder_value in self.share_holders.items()
-                if holder.share_pool()
-            )
+            sum(holder_value for holder, holder_value in self.share_holders.items() if holder.is_share_pool())
             / self.share_percent
         )
 
@@ -1290,17 +1164,10 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
                 for holder, holder_value in self.share_holders.items()
                 if holder
                 and holder.is_player()
-                or (
-                    corporate
-                    and self.corporation_can_ipo
-                    and holder.corporation()
-                    and holder != self
-                )
+                or (corporate and self.corporation_can_ipo and holder.corporation() and holder != self)
             }
         return {
-            holder: holder_value
-            for holder, holder_value in self.share_holders.items()
-            if holder and holder.is_player()
+            holder: holder_value for holder, holder_value in self.share_holders.items() if holder and holder.is_player()
         }
 
     def ipo_is_treasury(self):
@@ -1314,22 +1181,14 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
         }
 
     def corporate_shares(self):
-        return [
-            share
-            for share in self.shares
-            if share.corporation() == self and not self.treasury_as_holding
-        ]
+        return [share for share in self.shares if share.corporation() == self and not self.treasury_as_holding]
 
     @property
     def ipo_shares(self):
         return [share for share in self.ipo_owner.shares if share.corporation() == self]
 
     def treasury_shares(self):
-        return [
-            share
-            for share in self.shares
-            if share.corporation() == self and not self.treasury_as_holding
-        ]
+        return [share for share in self.shares if share.corporation() == self and not self.treasury_as_holding]
 
     def president(self, player):
         if player is None:
@@ -1389,10 +1248,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
 
     @property
     def all_abilities(self):
-        all_abilities = (
-            sum((company.all_abilities for company in self.companies), [])
-            + self.abilities
-        )
+        all_abilities = sum((company.all_abilities for company in self.companies), []) + self.abilities
         if self.owner and hasattr(self.owner, "companies"):
             all_abilities += [
                 ability
@@ -1412,11 +1268,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
     @property
     def available_share(self):
         return next(
-            (
-                share
-                for share in self.shares_by_corporation[self]
-                if not share.president
-            ),
+            (share for share in self.shares_by_corporation[self] if not share.president),
             None,
         )
 
@@ -1429,11 +1281,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
         return (
             self.forced_share_percent
             if hasattr(self, "forced_share_percent")
-            else (
-                self.second_share.percent
-                if self.second_share
-                else self.presidents_share.percent / 2
-            )
+            else (self.second_share.percent if self.second_share else self.presidents_share.percent / 2)
         )
 
     def player(self):
@@ -1560,7 +1408,6 @@ class Player(Entity, Passer, ShareHolder, Spender):
         Spender.__init__(self)
         self.id = id
         self.name = name
-        self.cash = 0
         self.bankrupt = False
         self.companies = []
         self.history = []

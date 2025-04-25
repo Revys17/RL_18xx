@@ -7,7 +7,7 @@ rl18xx/__init__.py
 rl18xx/core.py
 rl18xx/game.py
 rl18xx/game/__init__.py
-rl18xx/game/actionfinder.py
+rl18xx/game/action_helper.py
 rl18xx/game/engine.py
 rl18xx/game/gamemap.py
 rl18xx/game/engine/__init__.py

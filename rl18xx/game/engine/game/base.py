@@ -62,7 +62,9 @@ import re
 from random import choice, randint
 from collections import defaultdict
 from itertools import combinations
+import logging
 
+LOGGER = logging.getLogger(__name__)
 
 from ..core import PUBLISHER_INFO
 
@@ -79,8 +81,12 @@ class Meta:
     GAME_TITLE = None  # canonical title stored in database, defaults to '18xx' part of 'G18xx' module name
     GAME_DISPLAY_TITLE = None  # defaults to GAME_TITLE; used in UI on game cards, new game dropdown, game page
     GAME_SUBTITLE = None
-    GAME_FULL_TITLE = None  # defaults to "GAME_DISPLAY_TITLE", then "GAME_TITLE: GAME_SUBTITLE"; used in "Game Info" section
-    GAME_DROPDOWN_TITLE = None  # new game dropdown, defaults to GAME_DISPLAY_TITLE + location and dev stage if applicable
+    GAME_FULL_TITLE = (
+        None  # defaults to "GAME_DISPLAY_TITLE", then "GAME_TITLE: GAME_SUBTITLE"; used in "Game Info" section
+    )
+    GAME_DROPDOWN_TITLE = (
+        None  # new game dropdown, defaults to GAME_DISPLAY_TITLE + location and dev stage if applicable
+    )
     GAME_ISSUE_LABEL = None  # the GitHub label used to organize issues for this title, defaults to GAME_TITLE
 
     # real game metadata
@@ -125,11 +131,7 @@ class Meta:
     @classmethod
     def full_title(cls):
         if not hasattr(cls, "_full_title"):
-            cls._full_title = (
-                cls.GAME_FULL_TITLE
-                or cls.GAME_DISPLAY_TITLE
-                or f"{cls.title()}:{cls.GAME_SUBTITLE}"
-            )
+            cls._full_title = cls.GAME_FULL_TITLE or cls.GAME_DISPLAY_TITLE or f"{cls.title()}:{cls.GAME_SUBTITLE}"
         return cls._full_title
 
     @classmethod
@@ -163,10 +165,7 @@ class Meta:
     @classmethod
     def game_variants(cls):
         if not hasattr(cls, "_game_variants"):
-            cls._game_variants = {
-                v["sym"]: {**v, "meta": meta_by_title(v["title"])}
-                for v in cls.GAME_VARIANTS
-            }
+            cls._game_variants = {v["sym"]: {**v, "meta": meta_by_title(v["title"])} for v in cls.GAME_VARIANTS}
         return cls._game_variants
 
     @classmethod
@@ -184,15 +183,10 @@ class Meta:
                     "PROTOTYPE" if cls.PROTOTYPE else None,
                     cls.GAME_DESIGNER,
                 ]
-                + [
-                    (PUBLISHER_INFO[pub]["name"] if pub in PUBLISHER_INFO else pub)
-                    for pub in [cls.GAME_PUBLISHER]
-                ]
+                + [(PUBLISHER_INFO[pub]["name"] if pub in PUBLISHER_INFO else pub) for pub in [cls.GAME_PUBLISHER]]
                 + [cls.GAME_IMPLEMENTER]
             )
-            cls._keywords = list(
-                set(keyword.upper() for keyword in cls._keywords if keyword)
-            )
+            cls._keywords = list(set(keyword.upper() for keyword in cls._keywords if keyword))
         return cls._keywords
 
     @classmethod
@@ -242,9 +236,7 @@ class BaseGame:
             actions = actions or data.get("actions", [])
             pin = pin or data.get("settings", {}).get("pin")
             seed = seed or data.get("settings", {}).get("seed")
-            optional_rules = optional_rules or data.get("settings", {}).get(
-                "optional_rules", []
-            )
+            optional_rules = optional_rules or data.get("settings", {}).get("optional_rules", [])
 
         elif isinstance(data, BaseGame):
             title = data.title
@@ -283,9 +275,9 @@ class BaseGame:
         user=None,
         seed=None,
     ):
-        self.metadata = metadata
-        self.entities = entities
-        self.map = map
+        self.metadata = metadata()
+        self.entities = entities()
+        self.map = map()
 
         self.title = metadata.title()
 
@@ -308,9 +300,7 @@ class BaseGame:
         else:
             self.names = dict((n, n) for n in names)
 
-        self.players = [
-            Player(player_id, name) for player_id, name in self.names.items()
-        ]
+        self.players = [Player(player_id, name) for player_id, name in self.names.items()]
 
         self.user = user
         self.programmed_actions = {}
@@ -323,9 +313,7 @@ class BaseGame:
 
         dev_stage = self.metadata.DEV_STAGE
         if dev_stage == "prealpha":
-            self.log.append(
-                f"{self.title} is in prealpha state, no support is provided at all"
-            )
+            self.log.append(f"{self.title} is in prealpha state, no support is provided at all")
         elif dev_stage == "alpha":
             self.log.append(
                 f"{self.title} is currently considered 'alpha',"
@@ -335,21 +323,16 @@ class BaseGame:
                 "As the implementation improves, games that are not compatible"
                 " with the latest version will be archived without notice."
             )
-            self.log.append(
-                "We suggest that any alpha quality game is concluded within 7 days."
-            )
+            self.log.append("We suggest that any alpha quality game is concluded within 7 days.")
         elif dev_stage == "beta":
             self.log.append(
-                f"{self.title} is currently considered 'beta',"
-                " the rules implementation may allow illegal moves."
+                f"{self.title} is currently considered 'beta'," " the rules implementation may allow illegal moves."
             )
             self.log.append(
                 "As the implementation improves, games that are not compatible"
                 " with the latest version will be pinned but may be archived after 7 days."
             )
-            self.log.append(
-                "Because of this, we suggest not playing games that may take months to complete."
-            )
+            self.log.append("Because of this, we suggest not playing games that may take months to complete.")
 
         if self.metadata.PROTOTYPE:
             self.log.append(
@@ -357,9 +340,7 @@ class BaseGame:
                 " the design is not final, and so may change at any time."
             )
             if dev_stage != "alpha":
-                self.log.append(
-                    "If the game is modified due to a design change, games will be pinned"
-                )
+                self.log.append("If the game is modified due to a design change, games will be pinned")
 
         self.companies = self.init_companies(self.players)
         self.stock_market = self.init_stock_market()
@@ -386,11 +367,7 @@ class BaseGame:
         self.hexes = self.init_hexes(self.companies, self.corporations)
         self.graph = self.init_graph()
 
-        self.cities = [
-            city
-            for tile in ([hex.tile for hex in self.hexes] + self.tiles)
-            for city in tile.cities
-        ]
+        self.cities = [city for tile in ([hex.tile for hex in self.hexes] + self.tiles) for city in tile.cities]
 
         self.phase = self.init_phase()
         self.operating_rounds = self.phase.operating_rounds if self.phase else None
@@ -415,17 +392,11 @@ class BaseGame:
 
         if pin:
             self.log.append("----")
-            self.log.append(
-                "Your game was unable to be upgraded to the latest version of 18xx.games."
-            )
+            self.log.append("Your game was unable to be upgraded to the latest version of 18xx.games.")
             self.log.append(f"It is pinned to version {pin}.")
-            self.log.append(
-                "Please do not submit bug reports for pinned games. Pinned games cannot be debugged."
-            )
+            self.log.append("Please do not submit bug reports for pinned games. Pinned games cannot be debugged.")
             if self.metadata.DEV_STAGE == "beta":
-                self.log.append(
-                    "Please note, pinned games may be deleted after 7 days."
-                )
+                self.log.append("Please note, pinned games may be deleted after 7 days.")
             self.log.append("----")
 
     # Game end check is described as a dictionary
@@ -718,9 +689,7 @@ class BaseGame:
     def check_optional_rules(self):
         min_players = len(self.players)
         max_players = len(self.players)
-        error = self.metadata.check_options(
-            self.optional_rules, min_players, max_players
-        )
+        error = self.metadata.check_options(self.optional_rules, min_players, max_players)
         if error:
             raise OptionError(error.get("error"))
 
@@ -734,9 +703,7 @@ class BaseGame:
         self.log.append("Optional rules used in this game:")
         for optional_rule in self.metadata.OPTIONAL_RULES:
             if optional_rule["sym"] in self.optional_rules:
-                self.log.append(
-                    f" * {optional_rule['short_name']}: {optional_rule['desc']}"
-                )
+                self.log.append(f" * {optional_rule['short_name']}: {optional_rule['desc']}")
 
     def optional_hexes(self):
         return self.game_hexes()
@@ -751,11 +718,7 @@ class BaseGame:
         letter = re.match(r"(\D+)(\d+)", hex.id).group(1)
         number = int(re.match(r"(\D+)(\d+)", hex.id).group(2))
 
-        flip_axes = (
-            True
-            if self.layout == "flat" and self.axes == {"x": "number", "y": "letter"}
-            else False
-        )
+        flip_axes = True if self.layout == "flat" and self.axes == {"x": "number", "y": "letter"} else False
 
         d_letter, d_number = 0, 0
         if (self.layout == "flat" and edge in [0, 1, 2, 3, 4, 5]) or (
@@ -820,9 +783,7 @@ class BaseGame:
         return self.players
 
     def result(self):
-        result_data = [
-            (player.id, self.player_value(player)) for player in self.result_players()
-        ]
+        result_data = [(player.id, self.player_value(player)) for player in self.result_players()]
         sorted_result = sorted(result_data, key=lambda x: x[1], reverse=True)
         return dict(sorted_result)
 
@@ -831,21 +792,13 @@ class BaseGame:
 
     @property
     def current_entity(self):
-        return (
-            self.round.active_step().current_entity
-            if self.round.active_step()
-            else self.actions[-1].entity
-        )
+        return self.round.active_step().current_entity if self.round.active_step() else self.actions[-1].entity
 
     def pass_entity(self, user):
         return self.current_entity
 
     def active_players(self):
-        players_ = [
-            self.acting_for_player(e.player)
-            for e in self.round.active_entities
-            if e and e.player
-        ]
+        players_ = [self.acting_for_player(e.player) for e in self.round.active_entities if e and e.player]
         players_ = [player for player in players_ if player]  # Remove None values
 
         if not players_:
@@ -860,9 +813,7 @@ class BaseGame:
         return [player.id for player in self.active_players()]
 
     def valid_actors(self, action):
-        player = (
-            action.entity.player if action.entity and action.entity.player else None
-        )
+        player = action.entity.player if action.entity and action.entity.player else None
         actor = self.acting_for_player(player)
         return [actor] if player and actor else self.active_players()
 
@@ -947,9 +898,7 @@ class BaseGame:
     def able_to_operate(self, entity, train, name):
         return True
 
-    def process_action(
-        self, action, add_auto_actions=False, validate_auto_actions=False
-    ):
+    def process_action(self, action, add_auto_actions=False, validate_auto_actions=False):
         if isinstance(action, dict):
             action = BaseAction.action_from_dict(action, self)
 
@@ -1047,8 +996,7 @@ class BaseGame:
         if len(actions_a) != len(actions_b):
             return False
         return all(
-            a.to_dict(exclude=["created_at"]) == b.to_dict(exclude=["created_at"])
-            for a, b in zip(actions_a, actions_b)
+            a.to_dict(exclude=["created_at"]) == b.to_dict(exclude=["created_at"]) for a, b in zip(actions_a, actions_b)
         )
 
     def store_player_info(self):
@@ -1082,45 +1030,29 @@ class BaseGame:
         )
 
     def operated_operators(self):
-        return [
-            entity for entity in (self.corporations + self.minors) if entity.operated
-        ]
+        return [entity for entity in (self.corporations + self.minors) if entity.operated]
 
     @property
     def current_action_id(self):
-        return (
-            self.raw_actions[-1]["id"]
-            if self.raw_actions and self.raw_actions[-1]
-            else 0
-        )
+        return self.raw_actions[-1]["id"] if self.raw_actions and self.raw_actions[-1] else 0
 
     def last_game_action_id(self):
         return self.last_game_action_id if hasattr(self, "last_game_action_id") else 0
 
     def previous_action_id_from(self, action_id):
-        filtered_actions_rev = (
-            reversed(self._filtered_actions)
-            if hasattr(self, "_filtered_actions")
-            else []
-        )
+        filtered_actions_rev = reversed(self._filtered_actions) if hasattr(self, "_filtered_actions") else []
         for action in filtered_actions_rev:
             if action and action["id"] < action_id and action["type"] != "message":
                 return action["id"]
         return 0
 
     def next_action_id_from(self, action_id):
-        for action in (
-            self._filtered_actions if hasattr(self, "_filtered_actions") else []
-        ):
+        for action in self._filtered_actions if hasattr(self, "_filtered_actions") else []:
             if action and action["id"] > action_id and action["type"] != "message":
                 return action["id"]
 
     def process_to_action(self, id):
-        last_processed_action_id = (
-            self.raw_actions[-1]["id"]
-            if self.raw_actions and self.raw_actions[-1]
-            else 0
-        )
+        last_processed_action_id = self.raw_actions[-1]["id"] if self.raw_actions and self.raw_actions[-1] else 0
         for index, action in enumerate(self.raw_all_actions):
             if self.exception:
                 continue
@@ -1146,7 +1078,7 @@ class BaseGame:
             id=self.id,
             pin=self.pin,
             seed=self.seed,
-            actions=actions,
+            actions=[action.copy() for action in actions] if actions else None,
             optional_rules=self.optional_rules,
         )
 
@@ -1214,11 +1146,7 @@ class BaseGame:
     def submit_revenue_str(self, routes, show_subsidy):
         revenue_str = self.format_revenue_currency(self.routes_revenue(routes))
         subsidy = self.routes_subsidy(routes)
-        subsidy_str = (
-            f" + {self.format_currency(subsidy)} (subsidy)"
-            if show_subsidy or subsidy > 0
-            else ""
-        )
+        subsidy_str = f" + {self.format_currency(subsidy)} (subsidy)" if show_subsidy or subsidy > 0 else ""
         return revenue_str + subsidy_str
 
     def purchasable_companies(self, entity=None):
@@ -1233,11 +1161,7 @@ class BaseGame:
 
     @property
     def buyable_bank_owned_companies(self):
-        return [
-            company
-            for company in self.companies
-            if not company.is_closed() and company.owner == self.bank
-        ]
+        return [company for company in self.companies if not company.is_closed() and company.owner == self.bank]
 
     def after_buy_company(self, player, company, price):
         for ability in self.abilities(company, "shares"):
@@ -1298,19 +1222,14 @@ class BaseGame:
         elif self.SELL_AFTER == "p_any_operate":
             return corporation.operated() or corporation.president(entity)
         elif self.SELL_AFTER == "full_or_turn":
-            if (
-                self.round
-                and self.round.operating
-                and corporation == self.round.current_operator
-            ):
+            if self.round and self.round.operating and corporation == self.round.current_operator:
                 return len(corporation.operating_history) > 1
             else:
                 return corporation.operated()
         elif self.SELL_AFTER == "round":
             if self.round and self.round.stock():
                 return (
-                    corporation.share_holders[entity]
-                    - self.round.players_bought[entity][corporation]
+                    corporation.share_holders[entity] - self.round.players_bought[entity][corporation]
                 ) >= bundle.percent
             else:
                 return corporation.operated()
@@ -1334,12 +1253,9 @@ class BaseGame:
         dumpable_bundles = [
             bundle
             for bundle in self.bundles_for_corporation(player, corporation)
-            if bundle.can_dump(player)
-            and (self.share_pool is None or self.share_pool.fit_in_bank(bundle))
+            if bundle.can_dump(player) and (self.share_pool is None or self.share_pool.fit_in_bank(bundle))
         ]
-        max_bundle = max(
-            dumpable_bundles, key=lambda bundle: bundle.price, default=None
-        )
+        max_bundle = max(dumpable_bundles, key=lambda bundle: bundle.price, default=None)
         return max_bundle.price if max_bundle else 0
 
     def issuable_shares(self, entity):
@@ -1353,16 +1269,10 @@ class BaseGame:
             return []
 
         bundles = self.bundles_for_corporation(player, corporation)
-        return [
-            bundle
-            for bundle in bundles
-            if self.round.active_step().can_sell(player, bundle)
-        ]
+        return [bundle for bundle in bundles if self.round.active_step().can_sell(player, bundle)]
 
     def bundles_for_corporation(self, share_holder, corporation, shares=None):
-        return self.all_bundles_for_corporation(
-            share_holder, corporation, shares=shares
-        )
+        return self.all_bundles_for_corporation(share_holder, corporation, shares=shares)
 
     debug = False
 
@@ -1386,9 +1296,7 @@ class BaseGame:
             all_bundles.append(ShareBundle(bundle[:], percent))
 
         if shares[-1].president:
-            all_bundles += self.partial_bundles_for_presidents_share(
-                corporation, bundle[:], percent
-            )
+            all_bundles += self.partial_bundles_for_presidents_share(corporation, bundle[:], percent)
 
         return sorted(all_bundles, key=lambda bundle: bundle.percent)
 
@@ -1396,10 +1304,7 @@ class BaseGame:
         normal_percent = corporation.share_percent
         difference = corporation.presidents_percent - normal_percent
         num_partial_bundles = difference / normal_percent
-        return [
-            ShareBundle(bundle[:], percent - (normal_percent * n))
-            for n in range(1, int(num_partial_bundles) + 1)
-        ]
+        return [ShareBundle(bundle[:], percent - (normal_percent * n)) for n in range(1, int(num_partial_bundles) + 1)]
 
     def can_buy_presidents_share_directly_from_market(self, corporation):
         return False
@@ -1412,33 +1317,24 @@ class BaseGame:
 
     def num_certs(self, entity):
         certs = sum(
-            s.cert_size
-            if s.corporation().counts_for_limit() and s.counts_for_limit
-            else 0
-            for s in entity.shares
+            s.cert_size if s.corporation().counts_for_limit() and s.counts_for_limit else 0 for s in entity.shares
         )
         if self.CERT_LIMIT_INCLUDES_PRIVATES:
             certs += len(entity.companies)
         return certs
 
     def sellable_turn(self):
-        return self.SELL_AFTER != "first" or (
-            self.turn > 1 or not (self.round and self.round.stock())
-        )
+        return self.SELL_AFTER != "first" or (self.turn > 1 or not (self.round and self.round.stock()))
 
     @property
     def sell_movement(self):
         return self.SELL_MOVEMENT
 
-    def sell_shares_and_change_price(
-        self, bundle, allow_president_change=True, swap=None, movement=None
-    ):
+    def sell_shares_and_change_price(self, bundle, allow_president_change=True, swap=None, movement=None):
         corporation = bundle.corporation
         old_price = corporation.share_price
         was_president = corporation.president(bundle.owner)
-        self.share_pool.sell_shares(
-            bundle, allow_president_change=allow_president_change, swap=swap
-        )
+        self.share_pool.sell_shares(bundle, allow_president_change=allow_president_change, swap=swap)
         movement = movement or self.sell_movement
         if movement == "down_share":
             for _ in range(bundle.num_shares()):
@@ -1519,10 +1415,7 @@ class BaseGame:
             and self.depot.depot_trains()
             and (
                 self.MUST_BUY_TRAIN == "always"
-                or (
-                    self.MUST_BUY_TRAIN == "route"
-                    and self.graph.route_info(entity).get("route_train_purchase")
-                )
+                or (self.MUST_BUY_TRAIN == "route" and self.graph.route_info(entity).get("route_train_purchase"))
             )
         )
 
@@ -1545,8 +1438,7 @@ class BaseGame:
         self.store_player_info()
         self.round_counter += 1
         scores = [
-            f"{self.player_by_id(id).name} ({self.format_currency(value)})"
-            for id, value in self.result().items()
+            f"{self.player_by_id(id).name} ({self.format_currency(value)})" for id, value in self.result().items()
         ]
         self.log.append(f"-- Game over: {', '.join(scores)} --")
 
@@ -1615,12 +1507,7 @@ class BaseGame:
                     check((path.hex, path))
 
     def check_connected(self, route, corporation):
-        if self.debug:
-            set_trace()
-        if not all(
-            a.connects_to(b, corporation)
-            for a, b in zip(route.ordered_paths, route.ordered_paths[1:])
-        ):
+        if not all(a.connects_to(b, corporation) for a, b in zip(route.ordered_paths, route.ordered_paths[1:])):
             raise GameError("Route is not connected")
 
     def check_distance(self, route, visits, train=None):
@@ -1629,9 +1516,7 @@ class BaseGame:
         if isinstance(distance, int):
             route_distance = sum(visit.visit_cost for visit in visits)
             if distance < route_distance:
-                raise RouteTooLong(
-                    f"{route_distance} is too many stops for {distance} train"
-                )
+                raise RouteTooLong(f"{route_distance} is too many stops for {distance} train")
             return
 
         type_info = defaultdict(list)
@@ -1680,19 +1565,14 @@ class BaseGame:
         max_num_stops = min(sum(h["pay"] for h in distance), len(visits))
         for num_stops in range(max_num_stops, 0, -1):
             for stops_combination in combinations(visits, num_stops):
-                if train.requires_token and not any(
-                    stop.tokened_by(route.corporation) for stop in stops_combination
-                ):
+                if train.requires_token and not any(stop.tokened_by(route.corporation) for stop in stops_combination):
                     continue
                 types_used = [0] * len(distance)
                 valid_stops = True
                 for stop in stops_combination:
                     found_row = None
                     for i, h in enumerate(distance):
-                        if (
-                            self.stop_type(stop, train) in h["nodes"]
-                            and types_used[i] < h["pay"]
-                        ):
+                        if self.stop_type(stop, train) in h["nodes"] and types_used[i] < h["pay"]:
                             found_row = i
                             break
                     if found_row is not None:
@@ -1729,11 +1609,7 @@ class BaseGame:
                 yield company, ability
 
     def payout_companies(self, ignore=[]):
-        companies = [
-            c
-            for c in self.companies
-            if c.owner and c.revenue > 0 and c.id not in ignore
-        ]
+        companies = [c for c in self.companies if c.owner and c.revenue > 0 and c.id not in ignore]
 
         companies.sort(
             key=lambda company: (0, self.players.index(company.owner))
@@ -1746,9 +1622,7 @@ class BaseGame:
             if owner != self.bank:
                 revenue = company.revenue
                 self.bank.spend(revenue, owner)
-                self.log.append(
-                    f"{owner.name} collects {self.format_currency(revenue)} from {company.name}"
-                )
+                self.log.append(f"{owner.name} collects {self.format_currency(revenue)} from {company.name}")
 
     def init_round_finished(self):
         pass
@@ -1833,11 +1707,7 @@ class BaseGame:
         if not entity.is_corporation() and entity.owner and entity.owner.corporation:
             entity = entity.owner
         ability = next(
-            (
-                a
-                for a in entity.all_abilities
-                if a.type == "tile_discount" and (not a.hexes or hex.name in a.hexes)
-            ),
+            (a for a in entity.all_abilities if a.type == "tile_discount" and (not a.hexes or hex.name in a.hexes)),
             None,
         )
 
@@ -1853,9 +1723,7 @@ class BaseGame:
             (
                 a
                 for a in entity.all_abilities
-                if a.type == "tile_discount"
-                and (not a.terrain)
-                and (not a.hexes or hex.name in a.hexes)
+                if a.type == "tile_discount" and (not a.terrain) and (not a.hexes or hex.name in a.hexes)
             ),
             None,
         )
@@ -1873,9 +1741,7 @@ class BaseGame:
             return
 
         owners = ", ".join([a.owner.name for a in abilities])
-        self.log.append(
-            f"{spender.name} receives a discount of {self.format_currency(discount)} from {owners}"
-        )
+        self.log.append(f"{spender.name} receives a discount of {self.format_currency(discount)} from {owners}")
 
     def declare_bankrupt(self, player):
         if player.bankrupt:
@@ -1892,9 +1758,7 @@ class BaseGame:
     def upgrades_to(self, from_tile, to_tile, special=False, selected_company=None):
         # if self.debug:
         # set_trace()
-        if not self.upgrades_to_correct_color(
-            from_tile, to_tile, selected_company=selected_company
-        ):
+        if not self.upgrades_to_correct_color(from_tile, to_tile, selected_company=selected_company):
             return False
 
         if not from_tile.paths_are_subset_of(to_tile.paths):
@@ -1915,17 +1779,11 @@ class BaseGame:
         return False
 
     def upgrades_to_correct_color(self, from_tile, to_tile, selected_company=None):
-        return Tile.COLORS.index(to_tile.color) == (
-            Tile.COLORS.index(from_tile.color) + 1
-        )
+        return Tile.COLORS.index(to_tile.color) == (Tile.COLORS.index(from_tile.color) + 1)
 
     def upgrades_to_correct_label(self, from_tile, to_tile):
         if from_tile.future_label and to_tile.color == from_tile.future_label.color:
-            return (
-                from_tile.future_label.label == str(to_tile.label)
-                if to_tile.label
-                else False
-            )
+            return from_tile.future_label.label == str(to_tile.label) if to_tile.label else False
         return from_tile.label == to_tile.label
 
     def upgrades_to_correct_city_town(self, from_tile, to_tile):
@@ -1945,11 +1803,7 @@ class BaseGame:
             return False
         if from_tile.label and not from_tile.cities and to_tile.cities:
             return False
-        if (
-            from_tile.color == "white"
-            and str(from_tile.label) == "OO"
-            and len(from_tile.cities) != len(to_tile.cities)
-        ):
+        if from_tile.color == "white" and str(from_tile.label) == "OO" and len(from_tile.cities) != len(to_tile.cities):
             return False
         return True
 
@@ -1957,10 +1811,7 @@ class BaseGame:
         return True
 
     def can_par(self, corporation, parrer):
-        if (
-            corporation.par_via_exchange
-            and corporation.par_via_exchange.owner != parrer
-        ):
+        if corporation.par_via_exchange and corporation.par_via_exchange.owner != parrer:
             return False
         if corporation.needs_token_to_par and not corporation.tokens:
             return False
@@ -1980,12 +1831,8 @@ class BaseGame:
     def float_corporation(self, corporation):
         self.log.append(f"{corporation.name} floats")
         if corporation.capitalization not in ["incremental", "none"]:
-            self.bank.spend(
-                corporation.par_price().price * corporation.total_shares, corporation
-            )
-            self.log.append(
-                f"{corporation.name} receives {self.format_currency(corporation.cash)}"
-            )
+            self.bank.spend(corporation.par_price().price * corporation.total_shares, corporation)
+            self.log.append(f"{corporation.name} receives {self.format_currency(corporation.cash)}")
 
     def total_shares_to_float(self, corporation, price):
         return corporation.percent_to_float / corporation.share_percent
@@ -2000,22 +1847,12 @@ class BaseGame:
                 for token in tokens:
                     token.remove()
                 if self.CLOSED_CORP_TOKENS_REMOVED:
-                    city.tokens = [
-                        t
-                        for t in city.tokens
-                        if not (t and t.corporation == corporation)
-                    ]
+                    city.tokens = [t for t in city.tokens if not (t and t.corporation == corporation)]
 
-                if (
-                    self.CLOSED_CORP_RESERVATIONS_REMOVED
-                    and corporation in city.reservations
-                ):
+                if self.CLOSED_CORP_RESERVATIONS_REMOVED and corporation in city.reservations:
                     city.reservations.remove(corporation)
 
-            if (
-                self.CLOSED_CORP_RESERVATIONS_REMOVED
-                and corporation in hex.tile.reservations
-            ):
+            if self.CLOSED_CORP_RESERVATIONS_REMOVED and corporation in hex.tile.reservations:
                 hex.tile.reservations.remove(corporation)
 
         if corporation.cash > 0:
@@ -2055,9 +1892,7 @@ class BaseGame:
         self.close_corporations_in_close_cell()
 
     def shares_for_corporation(self, corporation):
-        return [
-            share for share in self._shares.values() if share.corporation == corporation
-        ]
+        return [share for share in self._shares.values() if share.corporation == corporation]
 
     def reset_corporation(self, corporation):
         for share_id, share in list(self._shares.items()):
@@ -2072,19 +1907,12 @@ class BaseGame:
             corporation.share_price.corporations.discard(corporation)
 
         new_corporation = next(
-            (
-                c
-                for c in self.init_corporations(self.stock_market)
-                if c.id == corporation.id
-            ),
+            (c for c in self.init_corporations(self.stock_market) if c.id == corporation.id),
             None,
         )
 
         if new_corporation:
-            self.corporations = [
-                new_corporation if c.id == new_corporation.id else c
-                for c in self.corporations
-            ]
+            self.corporations = [new_corporation if c.id == new_corporation.id else c for c in self.corporations]
             self._corporations[new_corporation.id] = new_corporation
             for share in new_corporation.shares:
                 self._shares[share.id] = share
@@ -2096,10 +1924,7 @@ class BaseGame:
 
     def emergency_issuable_cash(self, corporation):
         return max(
-            (
-                bundle.num_shares() * bundle.price
-                for bundle in self.emergency_issuable_bundles(corporation)
-            ),
+            (bundle.num_shares() * bundle.price for bundle in self.emergency_issuable_bundles(corporation)),
             default=0,
         )
 
@@ -2107,10 +1932,7 @@ class BaseGame:
         if not self.BANKRUPTCY_ALLOWED:
             return False
 
-        return (
-            self.total_emr_buying_power(player, corporation)
-            < self.depot.min_depot_price
-        )
+        return self.total_emr_buying_power(player, corporation) < self.depot.min_depot_price
 
     def total_emr_buying_power(self, player, corporation):
         buying_power = self.liquidity(player, emergency=True)
@@ -2151,14 +1973,9 @@ class BaseGame:
         if corporation.capitalization == "incremental":
             for company, ability in self.all_companies_with_ability("shares"):
                 if corporation.name == ability.shares[0].corporation.name:
-                    amount = sum(
-                        corporation.par_price().price * share.num_shares()
-                        for share in ability.shares
-                    )
+                    amount = sum(corporation.par_price().price * share.num_shares() for share in ability.shares)
                     self.bank.spend(amount, corporation)
-                    self.log.append(
-                        f"{corporation.name} receives {self.format_currency(amount)} from {company.name}"
-                    )
+                    self.log.append(f"{corporation.name} receives {self.format_currency(amount)} from {company.name}")
 
         self.close_companies_on_event(corporation, "par")
         if self.HOME_TOKEN_TIMING == "par":
@@ -2248,11 +2065,7 @@ class BaseGame:
         for ability in self.abilities(entity, "tile_lay"):
             for company_id in ability.combo_entities:
                 company = self.company_by_id(company_id)
-                if (
-                    company
-                    and company.owner == entity.corporation
-                    and self.abilities(company, "tile_lay")
-                ):
+                if company and company.owner == entity.corporation and self.abilities(company, "tile_lay"):
                     combo_entities.append(company)
         return combo_entities
 
@@ -2260,15 +2073,10 @@ class BaseGame:
         if len(companies) < 2:
             return True
 
-        companies = [
-            self.company_by_id(c) if isinstance(c, str) else c for c in companies
-        ]
+        companies = [self.company_by_id(c) if isinstance(c, str) else c for c in companies]
 
         return all(
-            all(
-                c in self.ability_combo_entities(company)
-                for company in companies[index + 1 :]
-            )
+            all(c in self.ability_combo_entities(company) for company in companies[index + 1 :])
             for index, c in enumerate(companies)
         )
 
@@ -2309,9 +2117,7 @@ class BaseGame:
                 # Add variants with discounts, excluding those with the same name as the base version
                 for variant in discount_train.variants.values():
                     if variant["name"] != discount_train.name:
-                        variant_discounted_price = discount_train.price(
-                            train, variant=variant
-                        )
+                        variant_discounted_price = discount_train.price(train, variant=variant)
                         if variant["price"] > variant_discounted_price:
                             discount_info.append(
                                 [
@@ -2349,9 +2155,7 @@ class BaseGame:
         if self._crowded_corps:
             return self._crowded_corps
         self._crowded_corps = [
-            c
-            for c in self.minors + self.corporations
-            if self.num_corp_trains(c) > self.train_limit(c)
+            c for c in self.minors + self.corporations if self.num_corp_trains(c) > self.train_limit(c)
         ]
         return self._crowded_corps
 
@@ -2427,9 +2231,7 @@ class BaseGame:
         self._crowded_corps = None
 
         if obsolete_trains:
-            self.log.append(
-                f"-- Event: {', '.join(set(obsolete_trains))} trains are obsolete --"
-            )
+            self.log.append(f"-- Event: {', '.join(set(obsolete_trains))} trains are obsolete --")
         if removed_obsolete_trains:
             self.log.append(
                 f"-- Event: obsolete {', '.join(set(removed_obsolete_trains))} trains are removed from The Depot --"
@@ -2448,11 +2250,7 @@ class BaseGame:
 
     def assignment_tokens(self, assignment, simple_logos=False):
         if isinstance(assignment, Corporation):
-            return (
-                assignment.simple_logo
-                if simple_logos and assignment.simple_logo
-                else assignment.logo
-            )
+            return assignment.simple_logo if simple_logos and assignment.simple_logo else assignment.logo
         return self.ASSIGNMENT_TOKENS.get(assignment)
 
     def bankruptcy_limit_reached(self):
@@ -2466,9 +2264,7 @@ class BaseGame:
             self.add_extra_tile(tile)
 
         if tile.hex and tile.hex == self.hex_by_id(tile.hex.id):
-            raise GameError(
-                f"Cannot lay tile {tile.id}; it is already on hex {tile.hex.id}"
-            )
+            raise GameError(f"Cannot lay tile {tile.id}; it is already on hex {tile.hex.id}")
 
         self.tiles.remove(tile)
         if not old_tile.preprinted:
@@ -2514,9 +2310,7 @@ class BaseGame:
         return [player for player in self.players if not player.bankrupt]
 
     def receivership_corporations(self):
-        return [
-            corporation for corporation in self.corporations if corporation.receivership
-        ]
+        return [corporation for corporation in self.corporations if corporation.receivership]
 
     def bankruptcy_options(self, entity):
         return []
@@ -2543,15 +2337,13 @@ class BaseGame:
     def init_cert_limit(self):
         cert_limit = self.game_cert_limit
         if isinstance(cert_limit, dict):
-            player_count = len(
-                [player for player in self.players if not player.bankrupt]
-            )
+            player_count = len([player for player in self.players if not player.bankrupt])
             _, default = list(cert_limit.items())[0]
             cert_limit = cert_limit.get(player_count, default)
         if isinstance(cert_limit, dict):
-            cert_limit = min(
-                (k, v) for k, v in cert_limit.items() if k >= len(self.corporations)
-            )[1] or next(iter(cert_limit.values()))
+            cert_limit = min((k, v) for k, v in cert_limit.items() if k >= len(self.corporations))[1] or next(
+                iter(cert_limit.values())
+            )
         return cert_limit or self._cert_limit
 
     @property
@@ -2580,11 +2372,7 @@ class BaseGame:
         return self.MARKET
 
     def init_companies(self, players):
-        return [
-            Company(**company)
-            for company in self.game_companies
-            if len(players) >= company.get("min_players", 0)
-        ]
+        return [Company(**company) for company in self.game_companies if len(players) >= company.get("min_players", 0)]
 
     @property
     def game_companies(self):
@@ -2648,9 +2436,7 @@ class BaseGame:
     def init_hexes(self, companies, corporations):
         blockers = defaultdict(list)
         for company in companies + self.minors + corporations:
-            for ability in self.abilities(company, "blocks_hexes") + self.abilities(
-                company, "blocks_hexes_consent"
-            ):
+            for ability in self.abilities(company, "blocks_hexes") + self.abilities(company, "blocks_hexes_consent"):
                 for hex_id in ability.hexes:
                     blockers[hex_id].append([company, ability.hidden])
 
@@ -2688,17 +2474,13 @@ class BaseGame:
             for coords, tile_string in hex_list.items():
                 for idx, coord in enumerate(coords):
                     if color == "empty":
-                        hexes.append(
-                            Hex(coord, layout=self.layout, axes=self.axes, empty=True)
-                        )
+                        hexes.append(Hex(coord, layout=self.layout, axes=self.axes, empty=True))
                         continue
 
                     try:
                         tile = Tile.for_tile(tile_string, preprinted=True, index=idx)
                     except GameError:
-                        tile = Tile.from_code(
-                            coord, color, tile_string, preprinted=True, index=idx
-                        )
+                        tile = Tile.from_code(coord, color, tile_string, preprinted=True, index=idx)
 
                     for blocker, hidden in blockers[coord]:
                         tile.add_blocker(blocker, hidden=hidden)
@@ -2711,9 +2493,7 @@ class BaseGame:
                     for res in reservations[coord]:
                         if res.get("ability"):
                             res["ability"].tile = tile
-                        tile.add_reservation(
-                            res["entity"], res["city"], res.get("slot")
-                        )
+                        tile.add_reservation(res["entity"], res["city"], res.get("slot"))
 
                     location_name = self.location_name(coord)
 
@@ -2724,9 +2504,7 @@ class BaseGame:
                             axes=self.axes,
                             tile=tile,
                             location_name=location_name,
-                            hide_location_name=self.HEXES_HIDE_LOCATION_NAMES.get(
-                                coord
-                            ),
+                            hide_location_name=self.HEXES_HIDE_LOCATION_NAMES.get(coord),
                         )
                     )
 
@@ -2739,11 +2517,7 @@ class BaseGame:
         return self.corporations
 
     def init_tiles(self):
-        return [
-            item
-            for name, val in self.game_tiles.items()
-            for item in self.init_tile(name, val)
-        ]
+        return [item for name, val in self.game_tiles.items() for item in self.init_tile(name, val)]
 
     @property
     def game_tiles(self):
@@ -2797,19 +2571,13 @@ class BaseGame:
             real_shares = []
             for share in ability.shares:
                 if share in ["random_president", "first_president"]:
-                    idx = (
-                        0
-                        if share == "first_president"
-                        else randint(0, len(self.corporations) - 1)
-                    )
+                    idx = 0 if share == "first_president" else randint(0, len(self.corporations) - 1)
                     corporation = self.corporations[idx]
                     share = corporation.shares[0]
                     real_shares.append(share)
                     company.desc = f"Purchasing player takes a president's share (20%) of {corporation.name} \
                         and immediately sets its par value. {company.desc}"
-                    self.log.append(
-                        f"{company.name} comes with the president's share of {corporation.name}"
-                    )
+                    self.log.append(f"{company.name} comes with the president's share of {corporation.name}")
                 elif share == "random_share":
                     corporations = (
                         [self.corporation_by_id(id) for id in ability.corporations]
@@ -2817,19 +2585,13 @@ class BaseGame:
                         else self.corporations
                     )
                     corporation = choice(corporations)
-                    share = next(
-                        (s for s in corporation.shares if not s.president), None
-                    )
+                    share = next((s for s in corporation.shares if not s.president), None)
                     if share:
                         real_shares.append(share)
                         company.desc += f" The random corporation in this game is {corporation.name}."
-                        self.log.append(
-                            f"{company.name} comes with a {share.percent}% share of {corporation.name}"
-                        )
+                        self.log.append(f"{company.name} comes with a {share.percent}% share of {corporation.name}")
                 else:
-                    self.log.append(
-                        f"adding share {self.share_by_id(share)} for id {share} to ability {ability}"
-                    )
+                    self.log.append(f"adding share {self.share_by_id(share)} for id {share} to ability {ability}")
                     real_shares.append(self.share_by_id(share))
 
             self.log.append(f"setting {ability}'s shares to {real_shares}")
@@ -2851,12 +2613,8 @@ class BaseGame:
                 hex.all_neighbors[direction] = neighbor
 
                 # set_trace()
-                if (
-                    neighbor.tile.color in self.IMPASSABLE_HEX_COLORS
-                    and not neighbor.targeting(hex)
-                ) or any(
-                    border.edge == direction and border.type == "impassable"
-                    for border in hex.tile.borders
+                if (neighbor.tile.color in self.IMPASSABLE_HEX_COLORS and not neighbor.targeting(hex)) or any(
+                    border.edge == direction and border.type == "impassable" for border in hex.tile.borders
                 ):
                     continue
 
@@ -2890,9 +2648,7 @@ class BaseGame:
 
     def check_programmed_actions(self):
         for entity, action_list in list(self.programmed_actions.items()):
-            self.programmed_actions[entity] = [
-                action for action in action_list if not action.disable(self)
-            ]
+            self.programmed_actions[entity] = [action for action in action_list if not action.disable(self)]
             for action in action_list:
                 if action.disable(self):
                     self.player_log(
@@ -2913,9 +2669,7 @@ class BaseGame:
             "bank": self.bank.is_broken(),
             "stock_market": self.stock_market.max_reached,
             "final_train": self.depot.empty(),
-            "final_phase": self.phase.phases[-1] == self.phase.current
-            if self.phase and self.phase.phases
-            else False,
+            "final_phase": self.phase.phases[-1] == self.phase.current if self.phase and self.phase.phases else False,
             "custom": self.custom_end_game_reached(),
         }
 
@@ -2932,9 +2686,7 @@ class BaseGame:
             for reason in triggers:
                 if self.game_end_check_values.get(reason, "") == after:
                     if after == "one_more_full_or_set":
-                        self.final_turn = (
-                            getattr(self, "final_turn", None) or self.turn + 1
-                        )
+                        self.final_turn = getattr(self, "final_turn", None) or self.turn + 1
                     return reason, after
 
         return None
@@ -2983,9 +2735,7 @@ class BaseGame:
                 if isinstance(self.round, OperatingRound):
                     after_text = f" : Game Ends at conclusion of this OR ({self.turn}.{self.round.round_num})"
                 else:
-                    after_text = (
-                        f" : Game Ends at conclusion of this round ({self.turn})"
-                    )
+                    after_text = f" : Game Ends at conclusion of this round ({self.turn})"
             elif after == "current_or":
                 if isinstance(self.round, OperatingRound):
                     after_text = f" : Game Ends at conclusion of this OR ({self.turn}.{self.round.round_num})"
@@ -3012,11 +2762,7 @@ class BaseGame:
             return
 
         for corp in self.corporations:
-            if (
-                not corp.is_closed()
-                and corp.share_price
-                and corp.share_price.type == "close"
-            ):
+            if not corp.is_closed() and corp.share_price and corp.share_price.type == "close":
                 self.closing_queue[corp] = True
 
         if not self.corporations_are_closing:
@@ -3056,9 +2802,7 @@ class BaseGame:
                     reverse=True,
                 )
             elif next_sr_order == "least_cash":
-                player_order = sorted(
-                    self.players, key=lambda p: (p.cash, self.players.index(p))
-                )
+                player_order = sorted(self.players, key=lambda p: (p.cash, self.players.index(p)))
 
         return player_order.index(entity) if entity in player_order else None
 
@@ -3071,18 +2815,13 @@ class BaseGame:
         order = order or self.next_sr_player_order
 
         if order == "after_last_to_act":
-            self.players = (
-                self.players[self.round.entity_index :]
-                + self.players[: self.round.entity_index]
-            )
+            self.players = self.players[self.round.entity_index :] + self.players[: self.round.entity_index]
         elif order == "first_to_pass":
             self.players = round.pass_order if round.pass_order else self.players
         elif order == "most_cash":
             current_order = self.players[:]
             current_order.reverse()
-            self.players.sort(
-                key=lambda p: (p.cash, current_order.index(p)), reverse=True
-            )
+            self.players.sort(key=lambda p: (p.cash, current_order.index(p)), reverse=True)
         elif order == "least_cash":
             current_order = self.players[:]
             self.players.sort(key=lambda p: (p.cash, current_order.index(p)))
@@ -3121,9 +2860,7 @@ class BaseGame:
         )
 
     def new_operating_round(self, round_num=1):
-        self.log.append(
-            f"-- {self.round_description(self.OPERATING_ROUND_NAME, round_num)} --"
-        )
+        self.log.append(f"-- {self.round_description(self.OPERATING_ROUND_NAME, round_num)} --")
         self.round_counter += 1
         return self.operating_round(round_num)
 
@@ -3154,9 +2891,7 @@ class BaseGame:
             if (
                 ability
                 and ability.on_phase != "never"
-                and any(
-                    phase["name"] == ability.on_phase for phase in self.phase.phases
-                )
+                and any(phase["name"] == ability.on_phase for phase in self.phase.phases)
             ):
                 continue
             company.close()
@@ -3268,9 +3003,7 @@ class BaseGame:
         return sorted(
             entities,
             key=lambda entity: (
-                self.operating_order.index(entity)
-                if entity in self.operating_order
-                else float("inf"),
+                self.operating_order.index(entity) if entity in self.operating_order else float("inf"),
                 entity.name,
             ),
         )
@@ -3285,9 +3018,7 @@ class BaseGame:
         return train.sym == first_train.sym
 
     def info_train_price(self, train):
-        return ", ".join(
-            self.format_currency(price) for price in train.names_to_prices.values()
-        )
+        return ", ".join(self.format_currency(price) for price in train.names_to_prices.values())
 
     def info_on_trains(self, phase):
         return phase["on"][0] if phase.get("on") else None
@@ -3315,9 +3046,7 @@ class BaseGame:
         if ability.on_phase and on_phase not in ["any", ability.on_phase]:
             return False
 
-        if ability.after_phase and ability.after_phase not in [
-            phase["name"] for phase in self.phase.previous
-        ]:
+        if ability.after_phase and ability.after_phase not in [phase["name"] for phase in self.phase.previous]:
             return False
 
         if time == "any" or "any" in ability.when:
@@ -3330,15 +3059,9 @@ class BaseGame:
             return True
 
         current_step = self.ability_blocking_step()
-        current_step_name = (
-            pascal_to_snake(current_step.__class__.__name__) if current_step else None
-        )
+        current_step_name = pascal_to_snake(current_step.__class__.__name__) if current_step else None
 
-        if (
-            ability.type == "tile_lay"
-            and ability.must_lay_all
-            and isinstance(current_step, SpecialTrackStep)
-        ):
+        if ability.type == "tile_lay" and ability.must_lay_all and isinstance(current_step, SpecialTrackStep):
             return current_step.company == ability.owner
 
         if not isinstance(time, list):
@@ -3355,15 +3078,11 @@ class BaseGame:
                 return True
 
         return any(
-            self.ability_check_time(
-                ability_when, ability, current_step, current_step_name, default
-            )
+            self.ability_check_time(ability_when, ability, current_step, current_step_name, default)
             for ability_when in times_to_check
         )
 
-    def ability_check_time(
-        self, ability_when, ability, current_step, current_step_name, default
-    ):
+    def ability_check_time(self, ability_when, ability, current_step, current_step_name, default):
         if ability_when == current_step_name:
             if self.round.operating:
                 return (
@@ -3374,16 +3093,10 @@ class BaseGame:
                 return self.round.current_entity == ability.player()
 
         if ability_when == "owning_corp_or_turn":
-            return (
-                self.round.operating
-                and self.round.current_operator == ability.corporation()
-            )
+            return self.round.operating and self.round.current_operator == ability.corporation()
 
         if ability_when == "owning_player_or_turn":
-            return (
-                self.round.operating
-                and self.round.current_operator.player == ability.player()
-            )
+            return self.round.operating and self.round.current_operator.player == ability.player()
 
         if ability_when == "owning_player_track":
             return (
@@ -3415,10 +3128,7 @@ class BaseGame:
             (
                 step
                 for step in self.round.steps
-                if isinstance(step, supported_steps)
-                and not step.passed
-                and step.active
-                and step.blocks
+                if isinstance(step, supported_steps) and not step.passed and step.active and step.blocks
             ),
             None,
         )
@@ -3440,9 +3150,7 @@ class BaseGame:
             if not self.token_ability_from_owner_usable(ability, corporation):
                 return False
 
-            tokened_hexes = [
-                token.city.hex.id for token in corporation.tokens if token.used
-            ]
+            tokened_hexes = [token.city.hex.id for token in corporation.tokens if token.used]
 
             return bool(set(ability.hexes) - set(tokened_hexes))
 
@@ -3483,9 +3191,7 @@ class BaseGame:
             if not corp.trains:
                 result.append("None")
             else:
-                train_names = [
-                    f"({t.name})" if t.obsolete else t.name for t in corp.trains
-                ]
+                train_names = [f"({t.name})" if t.obsolete else t.name for t in corp.trains]
                 result.append(" ".join(train_names))
 
         return result

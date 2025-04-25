@@ -26,9 +26,7 @@ class Entities:
             "value": 20,
             "revenue": 5,
             "desc": "No special abilities. Blocks G15 while owned by a player.",
-            "abilities": [
-                {"type": "blocks_hexes", "owner_type": "player", "hexes": ["G15"]}
-            ],
+            "abilities": [{"type": "blocks_hexes", "owner_type": "player", "hexes": ["G15"]}],
             "color": None,
         },
         {
@@ -312,21 +310,11 @@ class Map:
 
     HEXES = {
         "red": {
-            (
-                "F2",
-            ): "offboard=revenue:yellow_40|brown_70;path=a:3,b:_0;path=a:4,b:_0;path=a:5,b:_0",
-            (
-                "I1",
-            ): "offboard=revenue:yellow_30|brown_60,hide:1,groups:Gulf;path=a:4,b:_0;border=edge:5",
-            (
-                "J2",
-            ): "offboard=revenue:yellow_30|brown_60;path=a:3,b:_0;path=a:4,b:_0;border=edge:2",
-            (
-                "A9",
-            ): "offboard=revenue:yellow_30|brown_50,hide:1,groups:Canada;path=a:5,b:_0;border=edge:4",
-            (
-                "A11",
-            ): "offboard=revenue:yellow_30|brown_50,groups:Canada;path=a:5,b:_0;path=a:0,b:_0;border=edge:1",
+            ("F2",): "offboard=revenue:yellow_40|brown_70;path=a:3,b:_0;path=a:4,b:_0;path=a:5,b:_0",
+            ("I1",): "offboard=revenue:yellow_30|brown_60,hide:1,groups:Gulf;path=a:4,b:_0;border=edge:5",
+            ("J2",): "offboard=revenue:yellow_30|brown_60;path=a:3,b:_0;path=a:4,b:_0;border=edge:2",
+            ("A9",): "offboard=revenue:yellow_30|brown_50,hide:1,groups:Canada;path=a:5,b:_0;border=edge:4",
+            ("A11",): "offboard=revenue:yellow_30|brown_50,groups:Canada;path=a:5,b:_0;path=a:0,b:_0;border=edge:1",
             ("K13",): "offboard=revenue:yellow_30|brown_40;path=a:2,b:_0;path=a:3,b:_0",
             ("B24",): "offboard=revenue:yellow_20|brown_30;path=a:1,b:_0;path=a:0,b:_0",
         },
@@ -334,9 +322,7 @@ class Map:
             ("D2",): "city=revenue:20;path=a:5,b:_0;path=a:4,b:_0",
             ("F6",): "city=revenue:30;path=a:5,b:_0;path=a:0,b:_0",
             ("E9",): "path=a:2,b:3",
-            (
-                "H12",
-            ): "city=revenue:10,loc:2.5;path=a:1,b:_0;path=a:4,b:_0;path=a:1,b:4",
+            ("H12",): "city=revenue:10,loc:2.5;path=a:1,b:_0;path=a:4,b:_0;path=a:1,b:4",
             ("D14",): "city=revenue:20;path=a:1,b:_0;path=a:4,b:_0;path=a:0,b:_0",
             ("C15",): "town=revenue:10;path=a:1,b:_0;path=a:3,b:_0",
             ("K15",): "city=revenue:20;path=a:2,b:_0",
@@ -430,9 +416,7 @@ class Meta(BaseMeta):
     GAME_DESIGNER = "Francis Tresham"
     GAME_LOCATION = "NE USA and SE Canada"
     GAME_PUBLISHER = "lookout"
-    GAME_RULES_URL = (
-        "https://lookout-spiele.de/upload/en_1830re.html_Rules_1830-RE_EN.pdf"
-    )
+    GAME_RULES_URL = "https://lookout-spiele.de/upload/en_1830re.html_Rules_1830-RE_EN.pdf"
     GAME_INFO_URL = "https://github.com/tobymao/18xx/wiki/1830"
     PLAYER_RANGE = [2, 6]
     OPTIONAL_RULES = [
@@ -453,6 +437,159 @@ from ..base import BaseGame
 
 
 class Game(BaseGame):
+    TRACK_RESTRICTION = "permissive"
+    SELL_BUY_ORDER = "sell_buy_sell"
+    TILE_RESERVATION_BLOCKS_OTHERS = "always"
+    BANK_CASH = 12000
+    CERT_LIMIT = {2: 28, 3: 20, 4: 16, 5: 13, 6: 11}
+    STARTING_CASH = {2: 1200, 3: 800, 4: 600, 5: 480, 6: 400}
+    CURRENCY_FORMAT_STR = "${}"
+    MARKET = [
+        [
+            "60y",
+            "67",
+            "71",
+            "76",
+            "82",
+            "90",
+            "100p",
+            "112",
+            "126",
+            "142",
+            "160",
+            "180",
+            "200",
+            "225",
+            "250",
+            "275",
+            "300",
+            "325",
+            "350",
+        ],
+        [
+            "53y",
+            "60y",
+            "66",
+            "70",
+            "76",
+            "82",
+            "90p",
+            "100",
+            "112",
+            "126",
+            "142",
+            "160",
+            "180",
+            "200",
+            "220",
+            "240",
+            "260",
+            "280",
+            "300",
+        ],
+        [
+            "46y",
+            "55y",
+            "60y",
+            "65",
+            "70",
+            "76",
+            "82p",
+            "90",
+            "100",
+            "111",
+            "125",
+            "140",
+            "155",
+            "170",
+            "185",
+            "200",
+        ],
+        [
+            "39o",
+            "48y",
+            "54y",
+            "60y",
+            "66",
+            "71",
+            "76p",
+            "82",
+            "90",
+            "100",
+            "110",
+            "120",
+            "130",
+        ],
+        ["32o", "41o", "48y", "55y", "62", "67", "71p", "76", "82", "90", "100"],
+        ["25b", "34o", "42o", "50y", "58y", "65", "67p", "71", "75", "80"],
+        ["18b", "27b", "36o", "45o", "54y", "63", "67", "69", "70"],
+        ["10b", "20b", "30b", "40o", "50y", "60y", "67", "68"],
+        ["", "10b", "20b", "30b", "40o", "50y", "60y"],
+        ["", "", "10b", "20b", "30b", "40o", "50y"],
+        ["", "", "", "10b", "20b", "30b", "40o"],
+    ]
+    PHASES = [
+        {"name": "2", "train_limit": 4, "tiles": ["yellow"], "operating_rounds": 1},
+        {
+            "name": "3",
+            "on": "3",
+            "train_limit": 4,
+            "tiles": ["yellow", "green"],
+            "operating_rounds": 2,
+            "status": ["can_buy_companies"],
+        },
+        {
+            "name": "4",
+            "on": "4",
+            "train_limit": 3,
+            "tiles": ["yellow", "green"],
+            "operating_rounds": 2,
+            "status": ["can_buy_companies"],
+        },
+        {
+            "name": "5",
+            "on": "5",
+            "train_limit": 2,
+            "tiles": ["yellow", "green", "brown"],
+            "operating_rounds": 3,
+        },
+        {
+            "name": "6",
+            "on": "6",
+            "train_limit": 2,
+            "tiles": ["yellow", "green", "brown"],
+            "operating_rounds": 3,
+        },
+        {
+            "name": "D",
+            "on": "D",
+            "train_limit": 2,
+            "tiles": ["yellow", "green", "brown"],
+            "operating_rounds": 3,
+        },
+    ]
+    TRAINS = [
+        {"name": "2", "distance": 2, "price": 80, "rusts_on": "4", "num": 6},
+        {"name": "3", "distance": 3, "price": 180, "rusts_on": "6", "num": 5},
+        {"name": "4", "distance": 4, "price": 300, "rusts_on": "D", "num": 4},
+        {
+            "name": "5",
+            "distance": 5,
+            "price": 450,
+            "num": 3,
+            "events": [{"type": "close_companies"}],
+        },
+        {"name": "6", "distance": 6, "price": 630, "num": 2},
+        {
+            "name": "D",
+            "distance": 999,
+            "price": 1100,
+            "num": 20,
+            "available_on": "6",
+            "discount": {"4": 300, "5": 300, "6": 300},
+        },
+    ]
+
     def __init__(self, names, **kwargs):
         self.register_colors(
             **{
@@ -467,168 +604,7 @@ class Game(BaseGame):
             }
         )
 
-        self.TRACK_RESTRICTION = "permissive"
-        self.SELL_BUY_ORDER = "sell_buy_sell"
-        self.TILE_RESERVATION_BLOCKS_OTHERS = "always"
-        self.CURRENCY_FORMAT_STR = "${}"
-
-        self.BANK_CASH = 12000
-
-        self.CERT_LIMIT = {2: 28, 3: 20, 4: 16, 5: 13, 6: 11}
-
-        self.STARTING_CASH = {2: 1200, 3: 800, 4: 600, 5: 480, 6: 400}
-
-        self.MARKET = [
-            [
-                "60y",
-                "67",
-                "71",
-                "76",
-                "82",
-                "90",
-                "100p",
-                "112",
-                "126",
-                "142",
-                "160",
-                "180",
-                "200",
-                "225",
-                "250",
-                "275",
-                "300",
-                "325",
-                "350",
-            ],
-            [
-                "53y",
-                "60y",
-                "66",
-                "70",
-                "76",
-                "82",
-                "90p",
-                "100",
-                "112",
-                "126",
-                "142",
-                "160",
-                "180",
-                "200",
-                "220",
-                "240",
-                "260",
-                "280",
-                "300",
-            ],
-            [
-                "46y",
-                "55y",
-                "60y",
-                "65",
-                "70",
-                "76",
-                "82p",
-                "90",
-                "100",
-                "111",
-                "125",
-                "140",
-                "155",
-                "170",
-                "185",
-                "200",
-            ],
-            [
-                "39o",
-                "48y",
-                "54y",
-                "60y",
-                "66",
-                "71",
-                "76p",
-                "82",
-                "90",
-                "100",
-                "110",
-                "120",
-                "130",
-            ],
-            ["32o", "41o", "48y", "55y", "62", "67", "71p", "76", "82", "90", "100"],
-            ["25b", "34o", "42o", "50y", "58y", "65", "67p", "71", "75", "80"],
-            ["18b", "27b", "36o", "45o", "54y", "63", "67", "69", "70"],
-            ["10b", "20b", "30b", "40o", "50y", "60y", "67", "68"],
-            ["", "10b", "20b", "30b", "40o", "50y", "60y"],
-            ["", "", "10b", "20b", "30b", "40o", "50y"],
-            ["", "", "", "10b", "20b", "30b", "40o"],
-        ]
-
-        self.PHASES = [
-            {"name": "2", "train_limit": 4, "tiles": ["yellow"], "operating_rounds": 1},
-            {
-                "name": "3",
-                "on": "3",
-                "train_limit": 4,
-                "tiles": ["yellow", "green"],
-                "operating_rounds": 2,
-                "status": ["can_buy_companies"],
-            },
-            {
-                "name": "4",
-                "on": "4",
-                "train_limit": 3,
-                "tiles": ["yellow", "green"],
-                "operating_rounds": 2,
-                "status": ["can_buy_companies"],
-            },
-            {
-                "name": "5",
-                "on": "5",
-                "train_limit": 2,
-                "tiles": ["yellow", "green", "brown"],
-                "operating_rounds": 3,
-            },
-            {
-                "name": "6",
-                "on": "6",
-                "train_limit": 2,
-                "tiles": ["yellow", "green", "brown"],
-                "operating_rounds": 3,
-            },
-            {
-                "name": "D",
-                "on": "D",
-                "train_limit": 2,
-                "tiles": ["yellow", "green", "brown"],
-                "operating_rounds": 3,
-            },
-        ]
-
-        self.TRAINS = [
-            {"name": "2", "distance": 2, "price": 80, "rusts_on": "4", "num": 6},
-            {"name": "3", "distance": 3, "price": 180, "rusts_on": "6", "num": 5},
-            {"name": "4", "distance": 4, "price": 300, "rusts_on": "D", "num": 4},
-            {
-                "name": "5",
-                "distance": 5,
-                "price": 450,
-                "num": 3,
-                "events": [{"type": "close_companies"}],
-            },
-            {"name": "6", "distance": 6, "price": 630},
-            {
-                "name": "D",
-                "distance": 999,
-                "price": 1100,
-                "num": 20,
-                "available_on": "6",
-                "discount": {"4": 300, "5": 300, "6": 300},
-            },
-        ]
-
-        super().__init__(
-            names=names, metadata=Meta, entities=Entities, map=Map, **kwargs
-        )
+        super().__init__(names=names, metadata=Meta, entities=Entities, map=Map, **kwargs)
 
     def operating_round(self, round_num):
         return OperatingRound(
