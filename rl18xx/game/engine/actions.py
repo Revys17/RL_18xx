@@ -107,15 +107,11 @@ class BaseAction:
         obj.id = data.get("id")
         obj.user = (
             data.get("user")
-            if hasattr(entity, "player")
-            and data.get("user") != getattr(entity, "player", None)
+            if hasattr(entity, "player") and data.get("user") != getattr(entity, "player", None)
             else None
         )
         obj.created_at = data.get("created_at", time.time())
-        obj.auto_actions = [
-            BaseAction.action_from_dict(auto_data, game)
-            for auto_data in data.get("auto_actions", [])
-        ]
+        obj.auto_actions = [BaseAction.action_from_dict(auto_data, game) for auto_data in data.get("auto_actions", [])]
 
         return obj
 
@@ -128,14 +124,10 @@ class BaseAction:
                 "id": self.id,
                 "user": self.user,
                 "created_at": int(self.created_at),
-                "auto_actions": [action.to_dict() for action in self.auto_actions]
-                if self.auto_actions
-                else None,
+                "auto_actions": [action.to_dict() for action in self.auto_actions] if self.auto_actions else None,
                 **self.args_to_dict(),
             }
-            self._dict_cache = {
-                k: v for k, v in self._dict_cache.items() if v is not None
-            }
+            self._dict_cache = {k: v for k, v in self._dict_cache.items() if v is not None}
         return self._dict_cache
 
     @staticmethod
@@ -159,22 +151,14 @@ class BaseAction:
 
     def __lt__(self, other):
         # Compare based on id if both have one, otherwise compare based on created_at timestamp
-        return (
-            (self.id < other.id)
-            if self.id and other.id
-            else (self.created_at < other.created_at)
-        )
+        return (self.id < other.id) if self.id and other.id else (self.created_at < other.created_at)
 
     # Implementing the rest of the comparison methods if needed
     def __eq__(self, other):
         if not isinstance(other, self.__class__):
             return False
 
-        return (
-            self.id == other.id
-            if self.id and other.id
-            else self.created_at == other.created_at
-        )
+        return self.id == other.id if self.id and other.id else self.created_at == other.created_at
 
     def __str__(self):
         return f"Type: {self.__class__.__name__}, id: {self.id}, entity: {self.entity}"
@@ -242,12 +226,8 @@ class Bid(BaseAction):
     @staticmethod
     def dict_to_args(args, game):
         return {
-            "company": game.company_by_id(args["company"])
-            if args.get("company")
-            else None,
-            "corporation": game.corporation_by_id(args["corporation"])
-            if args.get("corporation")
-            else None,
+            "company": game.company_by_id(args["company"]) if args.get("company") else None,
+            "corporation": game.corporation_by_id(args["corporation"]) if args.get("corporation") else None,
             "minor": game.minor_by_id(args["minor"]) if args.get("minor") else None,
             "price": args["price"],
         }
@@ -367,9 +347,7 @@ class BuyShares(BaseAction):
         total_price=None,
     ):
         super().__init__(entity)
-        self.bundle = ShareBundle(
-            shares if isinstance(shares, list) else [shares], percent
-        )
+        self.bundle = ShareBundle(shares if isinstance(shares, list) else [shares], percent)
         self.bundle.share_price = share_price
         self.swap = swap
         self.purchase_for = purchase_for
@@ -386,9 +364,7 @@ class BuyShares(BaseAction):
             "purchase_for": game.get(args["purchase_for_type"], args["purchase_for"])
             if args.get("purchase_for")
             else None,
-            "borrow_from": game.get(args["borrow_from_type"], args["borrow_from"])
-            if args.get("borrow_from")
-            else None,
+            "borrow_from": game.get(args["borrow_from_type"], args["borrow_from"]) if args.get("borrow_from") else None,
             "total_price": args.get("total_price"),
         }
 
@@ -398,13 +374,9 @@ class BuyShares(BaseAction):
             "percent": self.bundle.percent,
             "share_price": self.bundle.share_price,
             "swap": self.swap.id if self.swap else None,
-            "purchase_for_type": self.purchase_for.__class__.__name__
-            if self.purchase_for
-            else None,
+            "purchase_for_type": self.purchase_for.__class__.__name__ if self.purchase_for else None,
             "purchase_for": self.purchase_for.id if self.purchase_for else None,
-            "borrow_from_type": self.borrow_from.__class__.__name__
-            if self.borrow_from
-            else None,
+            "borrow_from_type": self.borrow_from.__class__.__name__ if self.borrow_from else None,
             "borrow_from": self.borrow_from.id if self.borrow_from else None,
             "total_price": self.total_price,
         }
@@ -419,9 +391,7 @@ class SellShares(BaseAction):
         if isinstance(shares, ShareBundle):
             self.bundle = shares
         else:
-            self.bundle = ShareBundle(
-                shares if isinstance(shares, list) else [shares], percent
-            )
+            self.bundle = ShareBundle(shares if isinstance(shares, list) else [shares], percent)
         self.bundle.share_price = share_price
         self.swap = swap
 
@@ -506,9 +476,7 @@ class BuyTrain(BaseAction):
             "train": game.train_by_id(args["train"]),
             "price": args["price"],
             "variant": args.get("variant"),
-            "exchange": game.train_by_id(args["exchange"])
-            if args.get("exchange")
-            else None,
+            "exchange": game.train_by_id(args["exchange"]) if args.get("exchange") else None,
             "shell": BuyTrain.shell_by_name(args.get("shell"), game),
             "slots": args.get("slots", []),
             "extra_due": args.get("extra_due"),
@@ -629,18 +597,14 @@ class DestinationConnection(BaseAction):
     @staticmethod
     def dict_to_args(args, game):
         return {
-            "corporations": [
-                game.corporation_by_id(c) for c in args.get("corporations", [])
-            ],
+            "corporations": [game.corporation_by_id(c) for c in args.get("corporations", [])],
             "minors": [game.minor_by_id(m) for m in args.get("minors", [])],
             "hexes": [game.hex_by_id(h) for h in args.get("hexes", [])],
         }
 
     def args_to_dict(self):
         return {
-            "corporations": [corp.id for corp in self.corporations]
-            if self.corporations
-            else [],
+            "corporations": [corp.id for corp in self.corporations] if self.corporations else [],
             "minors": [minor.id for minor in self.minors] if self.minors else [],
             "hexes": [hex.id for hex in self.hexes] if self.hexes else [],
         }
@@ -716,9 +680,7 @@ class FailedMerge(BaseAction):
     @staticmethod
     def dict_to_args(args, game):
         return {
-            "corporations": [
-                game.corporation_by_id(c_id) for c_id in args.get("corporations", [])
-            ],
+            "corporations": [game.corporation_by_id(c_id) for c_id in args.get("corporations", [])],
         }
 
     def args_to_dict(self):
@@ -764,9 +726,7 @@ class LayTile(BaseAction):
             "tile": game.tile_by_id(args["tile"]),
             "hex": game.hex_by_id(args["hex"]),
             "rotation": args["rotation"],
-            "combo_entities": [
-                game.company_by_id(id) for id in args.get("combo_entities", [])
-            ],
+            "combo_entities": [game.company_by_id(id) for id in args.get("combo_entities", [])],
         }
 
     def args_to_dict(self):
@@ -774,16 +734,11 @@ class LayTile(BaseAction):
             "hex": self.hex.id,
             "tile": self.tile.id,
             "rotation": self.rotation,
-            "combo_entities": [entity.id for entity in self.combo_entities]
-            if self.combo_entities
-            else None,
+            "combo_entities": [entity.id for entity in self.combo_entities] if self.combo_entities else None,
         }
 
     def __str__(self):
-        return (
-            super().__str__()
-            + f", hex: [{self.hex}], tile: [{self.tile}, rotation: [{self.rotation}]"
-        )
+        return super().__str__() + f", hex: [{self.hex}], tile: [{self.tile}, rotation: [{self.rotation}]"
 
 
 class Message(BaseAction):
@@ -835,9 +790,7 @@ class Merge(BaseAction):
 
 
 class MoveBid(BaseAction):
-    def __init__(
-        self, entity, price, from_company, from_price, company=None, corporation=None
-    ):
+    def __init__(self, entity, price, from_company, from_price, company=None, corporation=None):
         super().__init__(entity)
         self.company = company
         self.corporation = corporation
@@ -911,9 +864,7 @@ class Par(BaseAction):
             "corporation": game.corporation_by_id(args["corporation"]),
             "share_price": game.share_price_by_id(args["share_price"]),
             "slot": args.get("slot"),
-            "purchase_for": game.get(
-                args.get("purchase_for_type"), args["purchase_for"]
-            )
+            "purchase_for": game.get(args.get("purchase_for_type"), args["purchase_for"])
             if "purchase_for" in args
             else None,
             "borrow_from": game.get(args.get("borrow_from_type"), args["borrow_from"])
@@ -926,21 +877,14 @@ class Par(BaseAction):
             "corporation": self.corporation.id,
             "share_price": self.share_price.id,
             "slot": self.slot,
-            "purchase_for_type": self.purchase_for.__class__.__name__
-            if self.purchase_for
-            else None,
+            "purchase_for_type": self.purchase_for.__class__.__name__ if self.purchase_for else None,
             "purchase_for": self.purchase_for.id if self.purchase_for else None,
-            "borrow_from_type": self.borrow_from.__class__.__name__
-            if self.borrow_from
-            else None,
+            "borrow_from_type": self.borrow_from.__class__.__name__ if self.borrow_from else None,
             "borrow_from": self.borrow_from.id if self.borrow_from else None,
         }
 
     def __str__(self):
-        return (
-            super().__str__()
-            + f", corporation: [{self.corporation}], par price: [{self.share_price}]"
-        )
+        return super().__str__() + f", corporation: [{self.corporation}], par price: [{self.share_price}]"
 
 
 class Pass(BaseAction):
@@ -997,8 +941,7 @@ class PlaceToken(BaseAction):
             "city": game.city_by_id(args.get("city")),
             "slot": args.get("slot"),
             "cost": args.get("cost"),
-            "tokener": game.corporation_by_id(args.get("tokener"))
-            or game.minor_by_id(args.get("tokener")),
+            "tokener": game.corporation_by_id(args.get("tokener")) or game.minor_by_id(args.get("tokener")),
             "token_type": args.get("token_type"),
         }
 
@@ -1008,9 +951,7 @@ class PlaceToken(BaseAction):
             "slot": self.slot,
             "cost": self.cost,
             "tokener": self.tokener.id if self.tokener else None,
-            "token_type": self.token.type
-            if self.token and self.token.type != "normal"
-            else None,
+            "token_type": self.token.type if self.token and self.token.type != "normal" else None,
         }
 
     def __str__(self):
@@ -1095,11 +1036,7 @@ class ProgramAuctionBid(ProgramEnable):
 
     def __str__(self):
         buy = f"Buy if price at {self.buy_price}. " if self.enable_buy_price else ""
-        bid = (
-            f"Bid on {self.bid_target.name} up to {self.maximum_bid}. "
-            if self.enable_maximum_bid
-            else ""
-        )
+        bid = f"Bid on {self.bid_target.name} up to {self.maximum_bid}. " if self.enable_maximum_bid else ""
         suffix = "Otherwise auto pass." if self.auto_pass_after else ""
 
         return f"{buy}{bid}{suffix}"
@@ -1139,11 +1076,7 @@ class ProgramBuyShares(ProgramEnable):
 
     def __str__(self):
         source = "market" if self.from_market else "IPO"
-        condition = (
-            "floated"
-            if self.until_condition == "float"
-            else f"{self.until_condition} shares"
-        )
+        condition = "floated" if self.until_condition == "float" else f"{self.until_condition} shares"
         suffix = ", then auto pass" if self.auto_pass_after else ""
 
         return f"Buy {self.corporation.name} from {source} until {condition}{suffix}"
@@ -1196,9 +1129,7 @@ class ProgramHarzbahnDraftPass(ProgramEnable):
         }
 
     def __str__(self):
-        until_premium = (
-            f", until premium {self.until_premium}" if self.until_premium else ""
-        )
+        until_premium = f", until premium {self.until_premium}" if self.until_premium else ""
         unconditionally = ", unconditionally" if self.unconditional else ""
         return f"Pass in Draft{until_premium}{unconditionally}"
 
@@ -1278,15 +1209,11 @@ class ProgramMergerPass(ProgramEnable):
 
     def __str__(self):
         phases = [
-            f"{phase} ({', '.join(corp.name for corp in corps)})"
-            if corps
-            else f"{phase} (none)"
+            f"{phase} ({', '.join(corp.name for corp in corps)})" if corps else f"{phase} (none)"
             for phase, corps in self.corporations_by_round.items()
         ]
         phases_str = " and ".join(phases)
-        suffix = (
-            ", unless someone else acts" if "disable_others" in self.options else ""
-        )
+        suffix = ", unless someone else acts" if "disable_others" in self.options else ""
         return f"Pass on mergers in {phases_str}{suffix}"
 
     def disable(self, game):
@@ -1597,9 +1524,7 @@ class SwitchTrains(BaseAction):
     @staticmethod
     def dict_to_args(args, _game):
         return {
-            "slots": [int(m) for m in args.get("slots", [])]
-            if "slots" in args
-            else None,
+            "slots": [int(m) for m in args.get("slots", [])] if "slots" in args else None,
         }
 
     def args_to_dict(self):
@@ -1654,6 +1579,4 @@ class OperatingInfo:
         self.revenue = revenue
         self.dividend = dividend
         self.laid_hexes = laid_hexes
-        self.dividend_kind = dividend_kind or (
-            dividend.kind if isinstance(dividend, Dividend) else "withhold"
-        )
+        self.dividend_kind = dividend_kind or (dividend.kind if isinstance(dividend, Dividend) else "withhold")

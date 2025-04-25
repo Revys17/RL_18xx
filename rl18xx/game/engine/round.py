@@ -168,6 +168,8 @@ class BaseStep(Passer):
 
     @property
     def active_entities(self):
+        if not self.entities:
+            return []
         return [self.entities[self.entity_index]]
 
     @property
@@ -241,9 +243,7 @@ class Auctioner:
 
     def remove_from_auction(self, entity):
         if self.auctioning in self.bids:
-            self.bids[self.auctioning] = [
-                bid for bid in self.bids[self.auctioning] if bid.entity != entity
-            ]
+            self.bids[self.auctioning] = [bid for bid in self.bids[self.auctioning] if bid.entity != entity]
             self.resolve_bids()
 
     def pass_auction(self, entity):
@@ -301,20 +301,11 @@ class Auctioner:
         price = bid.price
         min_bid = self.min_bid(company)
         if price < min_bid:
-            raise GameError(
-                f"Minimum bid is {self.game.format_currency(min_bid)} for {company.name}"
-            )
-        if (
-            self.must_bid_increment_multiple()
-            and (price - min_bid) % self.game.MIN_BID_INCREMENT != 0
-        ):
-            raise GameError(
-                f"Must increase bid by a multiple of {self.game.MIN_BID_INCREMENT}"
-            )
+            raise GameError(f"Minimum bid is {self.game.format_currency(min_bid)} for {company.name}")
+        if self.must_bid_increment_multiple() and (price - min_bid) % self.game.MIN_BID_INCREMENT != 0:
+            raise GameError(f"Must increase bid by a multiple of {self.game.MIN_BID_INCREMENT}")
         if price > self.max_bid(entity, company):
-            raise GameError(
-                f"Cannot afford bid. Maximum possible bid is {self.max_bid(entity, company)}"
-            )
+            raise GameError(f"Cannot afford bid. Maximum possible bid is {self.max_bid(entity, company)}")
 
         bids = self.bids[company]
         self.bids[company] = [b for b in bids if b.entity != entity]
@@ -326,20 +317,11 @@ class Auctioner:
         price = bid.price
         min_bid = self.min_bid(company)
         if price < min_bid:
-            raise GameError(
-                f"Minimum bid is {self.game.format_currency(min_bid)} for {company.name}"
-            )
-        if (
-            self.must_bid_increment_multiple()
-            and (price - min_bid) % self.game.MIN_BID_INCREMENT != 0
-        ):
-            raise GameError(
-                f"Must increase bid by a multiple of {self.game.MIN_BID_INCREMENT}"
-            )
+            raise GameError(f"Minimum bid is {self.game.format_currency(min_bid)} for {company.name}")
+        if self.must_bid_increment_multiple() and (price - min_bid) % self.game.MIN_BID_INCREMENT != 0:
+            raise GameError(f"Must increase bid by a multiple of {self.game.MIN_BID_INCREMENT}")
         if price > self.max_bid(entity, company):
-            raise GameError(
-                f"Cannot afford bid. Maximum possible bid is {self.max_bid(entity, company)}"
-            )
+            raise GameError(f"Cannot afford bid. Maximum possible bid is {self.max_bid(entity, company)}")
 
         bids = self.bids[company]
         bids.clear()
@@ -428,9 +410,7 @@ class ShareBuying:
 
         self.maybe_place_home_token(shares.corporation)
 
-    def check_legal_buy(
-        self, entity, shares, exchange=None, swap=None, allow_president_change=True
-    ):
+    def check_legal_buy(self, entity, shares, exchange=None, swap=None, allow_president_change=True):
         if not self.can_buy(entity, shares.to_bundle()) and not swap:
             raise Exception(
                 f"Cannot buy a share of {shares.corporation.name if shares and shares.corporation else 'None'}"
@@ -448,19 +428,14 @@ class ShareBuying:
         if (
             bundle.owner.is_player()
             and not self.game.BUY_SHARE_FROM_OTHER_PLAYER
-            and (
-                not self.game.CORPORATE_BUY_SHARE_ALLOW_BUY_FROM_PRESIDENT
-                or not entity.corporation
-            )
+            and (not self.game.CORPORATE_BUY_SHARE_ALLOW_BUY_FROM_PRESIDENT or not entity.corporation)
         ):
             return False
 
         corporation = bundle.corporation
 
         return corporation.holding_ok(entity, bundle.common_percent) and (
-            not corporation.counts_for_limit()
-            or exchange
-            or self.game.num_certs(entity) < self.game.cert_limit(entity)
+            not corporation.counts_for_limit() or exchange or self.game.num_certs(entity) < self.game.cert_limit(entity)
         )
 
     def swap_buy(self, player, corporation, ipo_or_pool_share):
@@ -498,9 +473,7 @@ class EmergencyMoney:
     def selling_minimum_shares(self, bundle):
         seller = bundle.owner
         additional_cash_needed = self.needed_cash(seller) - self.available_cash(seller)
-        next_smaller_bundle_price = bundle.price - min(
-            share.price for share in bundle.shares
-        )
+        next_smaller_bundle_price = bundle.price - min(share.price for share in bundle.shares)
         return next_smaller_bundle_price < additional_cash_needed
 
     def sellable_bundle(self, bundle):
@@ -524,9 +497,7 @@ class EmergencyMoney:
         seller = bundle.owner
         share_holders = corporation.player_share_holders(corporate=True)
         remaining = share_holders.get(seller, 0) - bundle.percent
-        next_highest = max(
-            (value for key, value in share_holders.items() if key != seller), default=0
-        )
+        next_highest = max((value for key, value in share_holders.items() if key != seller), default=0)
         return remaining < next_highest
 
     def issuable_shares(self, entity):
@@ -549,18 +520,13 @@ class Train(EmergencyMoney):
 
     def can_buy_train(self, entity=None, shell=None):
         entity = entity or self.round.current_entity
-        can_buy_normal = self.room(entity) and self.buying_power(
-            entity
-        ) >= self.depot.min_price(
+        can_buy_normal = self.room(entity) and self.buying_power(entity) >= self.depot.min_price(
             entity,
-            ability=self.game.abilities(
-                entity, "train_discount", time=self.ability_timing()
-            ),
+            ability=self.game.abilities(entity, "train_discount", time=self.ability_timing()),
         )
 
         discountable_trains_allowed = self.discountable_trains_allowed(entity) and any(
-            self.buying_power(entity) >= price
-            for _, _, _, price in self.game.discountable_trains_for(entity)
+            self.buying_power(entity) >= price for _, _, _, price in self.game.discountable_trains_for(entity)
         )
 
         return can_buy_normal or discountable_trains_allowed
@@ -594,9 +560,7 @@ class Train(EmergencyMoney):
         exchange = action.exchange
 
         # Check if the train is actually buyable in the current situation
-        if train.variant not in self.buyable_exchangeable_train_variants(
-            train, entity, exchange
-        ):
+        if train.variant not in self.buyable_exchangeable_train_variants(train, entity, exchange):
             raise Exception("Not a buyable train")
         if self.must_pay_face_value(train, entity, price):
             raise Exception("Must pay face value")
@@ -620,18 +584,12 @@ class Train(EmergencyMoney):
                 current_cash = player.cash
                 extra_needed = remaining - current_cash
                 player.spend(current_cash, entity)
-                self.log.append(
-                    f"{player.name} contributes {self.game.format_currency(current_cash)}"
-                )
+                self.log.append(f"{player.name} contributes {self.game.format_currency(current_cash)}")
                 borrow_from.spend(extra_needed, entity)
-                self.log.append(
-                    f"{borrow_from.name} contributes {self.game.format_currency(extra_needed)}"
-                )
+                self.log.append(f"{borrow_from.name} contributes {self.game.format_currency(extra_needed)}")
             else:
                 player.spend(remaining, entity)
-                self.log.append(
-                    f"{player.name} contributes {self.game.format_currency(remaining)}"
-                )
+                self.log.append(f"{player.name} contributes {self.game.format_currency(remaining)}")
 
         self.try_take_loan(entity, price)
 
@@ -642,9 +600,7 @@ class Train(EmergencyMoney):
             verb = "buys"
 
         source = train.owner
-        source_name = (
-            "The Discard" if train in self.depot.discarded else train.owner.name
-        )
+        source_name = "The Discard" if train in self.depot.discarded else train.owner.name
 
         self.log.append(
             f"{entity.name} {verb} a {train.name} train for {self.game.format_currency(price)} from {source_name}"
@@ -662,14 +618,9 @@ class Train(EmergencyMoney):
         return self.game.EBUY_CAN_SELL_SHARES
 
     def can_sell(self, entity, bundle):
-        if (
-            self.game.MUST_SELL_IN_BLOCKS
-            and bundle.corporation in self.corporations_sold
-        ):
+        if self.game.MUST_SELL_IN_BLOCKS and bundle.corporation in self.corporations_sold:
             return False
-        if self.current_entity != entity and self.must_issue_before_ebuy(
-            self.current_entity
-        ):
+        if self.current_entity != entity and self.must_issue_before_ebuy(self.current_entity):
             return False
         return super().can_sell(entity, bundle)
 
@@ -680,9 +631,7 @@ class Train(EmergencyMoney):
                 [
                     bundle
                     for corporation in self.game.corporations
-                    for bundle in self.game.bundles_for_corporation(
-                        entity.owner, corporation
-                    )
+                    for bundle in self.game.bundles_for_corporation(entity.owner, corporation)
                     if self.can_sell(entity.owner, bundle)
                 ]
             )
@@ -707,27 +656,17 @@ class Train(EmergencyMoney):
             self.corporations_sold.append(action.bundle.corporation)
 
     def needed_cash(self, entity):
-        return (
-            self.depot.min_depot_price
-            if self.game.EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST
-            else self.depot.max_depot_price
-        )
+        return self.depot.min_depot_price if self.game.EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST else self.depot.max_depot_price
 
     def available_cash(self, entity):
-        return (
-            self.current_entity.cash
-            if entity == self.current_entity
-            else entity.cash + self.current_entity.cash
-        )
+        return self.current_entity.cash if entity == self.current_entity else entity.cash + self.current_entity.cash
 
     def ebuy_offer_only_cheapest_depot_train(self):
         return self.game.EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST
 
     def buyable_trains(self, entity):
         depot_trains = self.depot.depot_trains()
-        other_trains = (
-            self.game.can_buy_train_from_others() and self.other_trains(entity) or []
-        )
+        other_trains = self.game.can_buy_train_from_others() and self.other_trains(entity) or []
 
         if entity.cash < self.depot.min_depot_price:
             if self.ebuy_offer_only_cheapest_depot_train():
@@ -735,19 +674,11 @@ class Train(EmergencyMoney):
 
             if self.game.EBUY_SELL_MORE_THAN_NEEDED_LIMITS_DEPOT_TRAIN:
                 depot_trains = depot_trains[:]
-                depot_trains = [
-                    t
-                    for t in depot_trains
-                    if t.price >= self.spend_minmax(entity, t)[0]
-                ]
+                depot_trains = [t for t in depot_trains if t.price >= self.spend_minmax(entity, t)[0]]
 
             if self.last_share_sold_price is not None:
                 if self.game.EBUY_OTHER_VALUE:
-                    other_trains = [
-                        t
-                        for t in other_trains
-                        if t.price >= self.spend_minmax(entity, t)[0]
-                    ]
+                    other_trains = [t for t in other_trains if t.price >= self.spend_minmax(entity, t)[0]]
                 else:
                     other_trains = []
 
@@ -755,9 +686,7 @@ class Train(EmergencyMoney):
             other_trains = []
 
         other_trains = [
-            t
-            for t in other_trains
-            if not (entity.cash < t.price and self.must_buy_at_face_value(t, entity))
+            t for t in other_trains if not (entity.cash < t.price and self.must_buy_at_face_value(t, entity))
         ]
 
         return depot_trains + other_trains
@@ -778,10 +707,7 @@ class Train(EmergencyMoney):
 
     def exchangeable_train_variants(self, train, entity):
         discount_info = self.game.discountable_trains_for(entity)
-        if not any(
-            discount_train.variants[discount_train.name]
-            for _, discount_train, _, _ in discount_info
-        ):
+        if not any(discount_train.variants[discount_train.name] for _, discount_train, _, _ in discount_info):
             return []
         return self.train_variant_helper(train, entity)
 
@@ -818,12 +744,7 @@ class Train(EmergencyMoney):
         if self.game.EBUY_OTHER_VALUE and (self.buying_power(entity) < train.price):
             min_price = 1
             if self.last_share_sold_price is not None:
-                min_price = (
-                    self.buying_power(entity)
-                    + entity.owner.cash
-                    - self.last_share_sold_price
-                    + 1
-                )
+                min_price = self.buying_power(entity) + entity.owner.cash - self.last_share_sold_price + 1
             max_price = min(train.price, self.buying_power(entity) + entity.owner.cash)
             return [min_price, max_price]
         else:
@@ -843,19 +764,13 @@ class Train(EmergencyMoney):
             and self.game.EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST
             and (not self.game.EBUY_OTHER_VALUE or train.from_depot)
         ):
-            raise Exception(
-                f"Cannot purchase {train.name} train: cheaper train available ({cheapest_names[0]})"
-            )
+            raise Exception(f"Cannot purchase {train.name} train: cheaper train available ({cheapest_names[0]})")
 
     def names_of_cheapest_variants(self, train):
         variants = train.variants
         # Sorting variants by price and getting the names of the cheapest variants
         cheapest_price = min(variants.values(), key=lambda v: v["price"])["price"]
-        cheapest_variants = [
-            name
-            for name, variant in variants.items()
-            if variant["price"] == cheapest_price
-        ]
+        cheapest_variants = [name for name, variant in variants.items() if variant["price"] == cheapest_price]
         return cheapest_variants
 
 
@@ -874,9 +789,7 @@ class BuyTrain(BaseStep, Train):
             return []
 
         # TODO: This needs to check it actually needs to sell shares.
-        if entity == self.current_entity.owner and self.can_ebuy_sell_shares(
-            self.current_entity
-        ):
+        if entity == self.current_entity.owner and self.can_ebuy_sell_shares(self.current_entity):
             return [SellShares]
 
         if entity != self.current_entity:
@@ -911,9 +824,7 @@ class BuyTrain(BaseStep, Train):
             return
 
         if max_spend == 0 and not self.game.EBUY_OTHER_VALUE:
-            raise GameError(
-                f"{action.entity.name} may not buy a train from another corporation."
-            )
+            raise GameError(f"{action.entity.name} may not buy a train from another corporation.")
         else:
             raise GameError(
                 f"{action.entity.name} may not spend {self.game.format_currency(action.price)} on "
@@ -924,9 +835,7 @@ class BuyTrain(BaseStep, Train):
     def process_buy_train(self, action):
         self.check_spend(action)
         self.buy_train_action(action)
-        if not self.can_buy_train(action.entity) and self.pass_if_cannot_buy_train(
-            action.entity
-        ):
+        if not self.can_buy_train(action.entity) and self.pass_if_cannot_buy_train(action.entity):
             self.pass_()
 
     def swap_sell(self, player, corporation, bundle, pool_share):
@@ -967,16 +876,12 @@ class PassableAuction(Auctioner):
         self.active_bidders = [
             player
             for player in self.initial_auction_entities()
-            if player == self.auction_triggerer
-            or self.max_bid(player, self.auctioning) >= min_bid_amount
+            if player == self.auction_triggerer or self.max_bid(player, self.auctioning) >= min_bid_amount
         ]
         cannot_bid = [
             player
             for player in self.initial_auction_entities()
-            if not (
-                player == self.auction_triggerer
-                or self.max_bid(player, self.auctioning) >= min_bid_amount
-            )
+            if not (player == self.auction_triggerer or self.max_bid(player, self.auctioning) >= min_bid_amount)
         ]
         for player in cannot_bid:
             self.game.log.append(
@@ -997,8 +902,7 @@ class PassableAuction(Auctioner):
             passing = [
                 player
                 for player in self.active_bidders
-                if player != bid.entity
-                and self.max_bid(player, self.auctioning) < min_bid_amount
+                if player != bid.entity and self.max_bid(player, self.auctioning) < min_bid_amount
             ]
             for player in passing:
                 self.game.log.append(
@@ -1093,9 +997,7 @@ class Tokener:
         same_hex_allowed=False,
     ):
         hex = city.hex
-        extra_action = extra_action or (
-            special_ability and special_ability.type in ["teleport", "token"]
-        )
+        extra_action = extra_action or (special_ability and special_ability.type in ["teleport", "token"])
 
         if connected:
             self.check_connected(entity, city, hex)
@@ -1123,9 +1025,7 @@ class Tokener:
         if not extra_action and self.round.tokened:
             raise GameError("Token already placed this turn")
 
-        token, ability = self.adjust_token_price_ability(
-            entity, token, hex, city, special_ability=special_ability
-        )
+        token, ability = self.adjust_token_price_ability(entity, token, hex, city, special_ability=special_ability)
         tokener = entity.name
         if ability:
             if ability.owner != entity:
@@ -1161,9 +1061,7 @@ class Tokener:
 
         hex_description = hex.location_name if hex.location_name else ""
         hex_description = f" ({hex_description})" if hex_description else ""
-        self.log.append(
-            f"{tokener} places a token on {hex.name}{hex_description}{price_log}"
-        )
+        self.log.append(f"{tokener} places a token on {hex.name}{hex_description}{price_log}")
 
         if not extra_action:
             self.round.tokened = True
@@ -1183,9 +1081,7 @@ class Tokener:
 
         return min(price for price in prices if price is not None)
 
-    def adjust_token_price_ability(
-        self, entity, token, hex, city, special_ability=None
-    ):
+    def adjust_token_price_ability(self, entity, token, hex, city, special_ability=None):
         if special_ability and special_ability.type == "teleport":
             if not special_ability.from_owner:
                 token = TokenPiece(entity)
@@ -1215,30 +1111,18 @@ class Tokener:
 
             if ability.teleport_price:
                 token.price = ability.teleport_price
-            if (
-                self.game.token_graph_for_entity(entity)
-                .reachable_hexes(entity)
-                .get(hex)
-            ):
+            if self.game.token_graph_for_entity(entity).reachable_hexes(entity).get(hex):
                 token.price = ability.price(token)
             return token, ability
 
         return token, None
 
     def check_connected(self, entity, city, hex):
-        if self.game.loading or self.game.token_graph_for_entity(
-            entity
-        ).connected_nodes(entity).get(city):
+        if self.game.loading or self.game.token_graph_for_entity(entity).connected_nodes(entity).get(city):
             return
         else:
-            city_string = (
-                " city {}".format(city.index) if len(hex.tile.cities) > 1 else ""
-            )
-            raise GameError(
-                "Cannot place token on {}{} because it is not connected".format(
-                    hex.name, city_string
-                )
-            )
+            city_string = " city {}".format(city.index) if len(hex.tile.cities) > 1 else ""
+            raise GameError("Cannot place token on {}{} because it is not connected".format(hex.name, city_string))
 
     def tokener_available_hex(self, entity, hex):
         return self.game.token_graph_for_entity(entity).reachable_hexes(entity).get(hex)
@@ -1248,9 +1132,7 @@ class TokenMerger:
     def tokens_in_same_hex(self, surviving, others):
         # Are there tokens in the same hex?
         surviving_hexes = set(token.hex for token in surviving.tokens if token.hex)
-        others_hexes = set(
-            token.hex for token in self.others_tokens(others) if token.hex
-        )
+        others_hexes = set(token.hex for token in self.others_tokens(others) if token.hex)
         return bool(surviving_hexes & others_hexes)
 
     def tokens_above_limits(self, surviving, others):
@@ -1258,9 +1140,7 @@ class TokenMerger:
         return (
             len(set(tokens)) != len(tokens)
             or self.tokens_in_same_hex(surviving, others)
-            or sum(
-                token.used for token in surviving.tokens + self.others_tokens(others)
-            )
+            or sum(token.used for token in surviving.tokens + self.others_tokens(others))
             > self.game.LIMIT_TOKENS_AFTER_MERGER
         )
 
@@ -1269,9 +1149,7 @@ class TokenMerger:
         return [token for corp in others for token in corp.tokens]
 
     def remove_duplicate_tokens(self, surviving, others):
-        others_cities = set(
-            token.city for token in self.others_tokens(others) if token.city
-        )
+        others_cities = set(token.city for token in self.others_tokens(others) if token.city)
         for token in surviving.tokens:
             if token.city in others_cities:
                 token.remove()
@@ -1280,9 +1158,7 @@ class TokenMerger:
     def round_state(self):
         return {"corporations_removing_tokens": None}
 
-    def move_tokens_to_surviving(
-        self, surviving, others, price_for_new_token=0, check_tokenable=True
-    ):
+    def move_tokens_to_surviving(self, surviving, others, price_for_new_token=0, check_tokenable=True):
         used, unused = [], []
         for token in surviving.tokens:
             if token.used:
@@ -1385,29 +1261,19 @@ class Assign(BaseStep):
         if isinstance(target, Hex):
             ability = self.game.abilities(company, "assign_hexes")
             if not ability:
-                raise GameError(
-                    f"Could not assign {company.name} to {target.name}; :assign_hexes ability not found"
-                )
+                raise GameError(f"Could not assign {company.name} to {target.name}; :assign_hexes ability not found")
 
-            assignable_hexes = [
-                self.game.hex_by_id(h) for h in ability.hexes if h in self.game.hexes
-            ]
+            assignable_hexes = [self.game.hex_by_id(h) for h in ability.hexes if h in self.game.hexes]
             Assignable.remove_from_all(
                 assignable_hexes,
                 company.id,
-                lambda unassigned: self.log.append(
-                    f"{company.name} is unassigned from {unassigned.name}"
-                ),
+                lambda unassigned: self.log.append(f"{company.name} is unassigned from {unassigned.name}"),
             )
             target.assign(company.id)
             ability.use()
             self.log.append(f"{company.name} is assigned to {target.name}")
         elif isinstance(target, (Corporation, Minor)):
-            assignable_corporations = [
-                c
-                for c in self.assignable_corporations(company)
-                if not c.assigned(company.id)
-            ]
+            assignable_corporations = [c for c in self.assignable_corporations(company) if not c.assigned(company.id)]
             if target in assignable_corporations:
                 ability = self.game.abilities(company, "assign_corporation")
                 if not ability:
@@ -1418,37 +1284,23 @@ class Assign(BaseStep):
                 Assignable.remove_from_all(
                     assignable_corporations,
                     company.id,
-                    lambda unassigned: self.log.append(
-                        f"{company.name} is unassigned from {unassigned.name}"
-                    ),
+                    lambda unassigned: self.log.append(f"{company.name} is unassigned from {unassigned.name}"),
                 )
                 target.assign(company.id)
                 ability.use()
                 self.log.append(f"{company.name} is assigned to {target.name}")
             else:
-                raise GameError(
-                    f"Could not assign {company.name} to {target.name}; no assignable corporations found"
-                )
+                raise GameError(f"Could not assign {company.name} to {target.name}; no assignable corporations found")
         else:
-            raise GameError(
-                f"Invalid target {target} for assigning company {company.name}"
-            )
+            raise GameError(f"Invalid target {target} for assigning company {company.name}")
 
         ability_count = ability.count if ability and hasattr(ability, "count") else None
-        if (
-            ability_count is None
-            or ability_count == 0
-            or not ability.closed_when_used_up
-        ):
+        if ability_count is None or ability_count == 0 or not ability.closed_when_used_up:
             action.entity.close()
             self.log.append(f"{company.name} closes")
 
     def assignable_corporations(self, company=None):
-        return [
-            c
-            for c in self.game.corporations
-            if c.floated and not c.assigned(company.id if company else None)
-        ]
+        return [c for c in self.game.corporations if c.floated and not c.assigned(company.id if company else None)]
 
     def available_hex(self, entity, hex):
         if not entity.is_company():
@@ -1501,9 +1353,7 @@ class Bankrupt(BaseStep):
         player = self.game.acting_for_entity(corp.owner)
 
         if not self.game.can_go_bankrupt(player, corp):
-            buying_power = self.game.format_currency(
-                self.game.total_emr_buying_power(player, corp)
-            )
+            buying_power = self.game.format_currency(self.game.total_emr_buying_power(player, corp))
             price = self.game.format_currency(self.game.depot.min_depot_price)
 
             msg = (
@@ -1554,11 +1404,7 @@ class BuyCompany(BaseStep):
             return []
         if self.can_buy_company(entity):
             return self.ACTIONS if self.blocks else self.ACTIONS_NO_PASS
-        if (
-            self.blocks
-            and entity.corporation
-            and self.game.abilities(entity, passive_ok=False)
-        ):
+        if self.blocks and entity.corporation and self.game.abilities(entity, passive_ok=False):
             return self.PASS
         return []
 
@@ -1568,8 +1414,7 @@ class BuyCompany(BaseStep):
             entity == self.current_entity
             and "can_buy_companies" in self.game.phase.status
             and companies
-            and min(company.min_price for company in companies)
-            <= self.buying_power(entity)
+            and min(company.min_price for company in companies) <= self.buying_power(entity)
         )
 
     @property
@@ -1608,20 +1453,14 @@ class BuyCompany(BaseStep):
             owner.companies.remove(company)
 
         for ability in self.game.abilities(company, "assign_corporation", time="sold"):
-            for unassigned in Assignable.remove_from_all(
-                self.assignable_corporations, company.id
-            ):
+            for unassigned in Assignable.remove_from_all(self.assignable_corporations, company.id):
                 if unassigned.name != entity.name:
-                    log_later.append(
-                        f"{company.name} is unassigned from {unassigned.name}"
-                    )
+                    log_later.append(f"{company.name} is unassigned from {unassigned.name}")
             entity.assign(company.id)
             ability.use()
             log_later.append(f"{company.name} is assigned to {entity.name}")
 
-            assigned_hex = next(
-                (h for h in self.game.hexes if h.assigned(company.id)), None
-            )
+            assigned_hex = next((h for h in self.game.hexes if h.assigned(company.id)), None)
             log_later.append(
                 f"{company.name} is still assigned to {assigned_hex.name}"
                 if assigned_hex
@@ -1688,9 +1527,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
             actions.append(BuyShares)
         if self.can_ipo_any(entity):
             actions.append(Par)
-        if self.purchasable_companies(entity) or self.buyable_bank_owned_companies(
-            entity
-        ):
+        if self.purchasable_companies(entity) or self.buyable_bank_owned_companies(entity):
             actions.append(BuyCompanyAction)
         if self.can_sell_any(entity):
             actions.append(SellShares)
@@ -1768,13 +1605,11 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
             timing
             and not (
                 self.game.TURN_SELL_LIMIT
-                and (bundle.percent + self.sold_this_turn(corporation))
-                > self.game.TURN_SELL_LIMIT
+                and (bundle.percent + self.sold_this_turn(corporation)) > self.game.TURN_SELL_LIMIT
             )
             and not (
                 self.game.MUST_SELL_IN_BLOCKS
-                and self.round.players_sold.get(entity, {}).get(corporation, None)
-                == "now"
+                and self.round.players_sold.get(entity, {}).get(corporation, None) == "now"
             )
             and self.can_sell_order()
             and self.game.share_pool.fit_in_bank(bundle)
@@ -1789,9 +1624,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         if sell_buy_order == "sell_buy_or_buy_sell":
             return not (
                 len(set([type(a) for a in self.round.current_actions])) == 2
-                and isinstance(
-                    self.round.current_actions[-1], tuple(self.PURCHASE_ACTIONS)
-                )
+                and isinstance(self.round.current_actions[-1], tuple(self.PURCHASE_ACTIONS))
             )
         elif sell_buy_order == "sell_buy":
             return not self.bought()
@@ -1800,9 +1633,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
 
     def sold_this_turn(self, corporation):
         sell_actions = [
-            a
-            for a in self.round.current_actions
-            if isinstance(a, SellShares) and a.bundle.corporation == corporation
+            a for a in self.round.current_actions if isinstance(a, SellShares) and a.bundle.corporation == corporation
         ]
         return sum(a.bundle.percent for a in sell_actions)
 
@@ -1816,17 +1647,11 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         self.round.last_to_act = action.entity.player
         if player_action:
             self.round.current_actions.append(action)
-        self.round.players_history.setdefault(action.entity.player, {}).setdefault(
-            corporation, []
-        ).append(action)
+        self.round.players_history.setdefault(action.entity.player, {}).setdefault(corporation, []).append(action)
 
     def process_buy_shares(self, action):
-        self.round.players_bought.setdefault(action.entity, {}).setdefault(
-            action.bundle.corporation, 0
-        )
-        self.round.players_bought[action.entity][
-            action.bundle.corporation
-        ] += action.bundle.percent
+        self.round.players_bought.setdefault(action.entity, {}).setdefault(action.bundle.corporation, 0)
+        self.round.players_bought[action.entity][action.bundle.corporation] += action.bundle.percent
         if action.bundle.owner.is_corporation():
             self.round.bought_from_ipo = True
         self.buy_shares(
@@ -1834,9 +1659,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
             action.bundle,
             swap=action.swap,
             borrow_from=action.borrow_from,
-            allow_president_change=self.allow_president_change(
-                action.bundle.corporation
-            ),
+            allow_president_change=self.allow_president_change(action.bundle.corporation),
         )
         self.track_action(action, action.bundle.corporation)
 
@@ -1885,17 +1708,13 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
             corporation.buy_multiple()
             and not any(isinstance(x, Par) for x in self.round.current_actions)
             and not any(
-                isinstance(x, BuyShares) and x.bundle.corporation != corporation
-                for x in self.round.current_actions
+                isinstance(x, BuyShares) and x.bundle.corporation != corporation for x in self.round.current_actions
             )
         )
 
     def can_sell_any(self, entity):
         return any(
-            any(
-                self.can_sell(entity, bundle)
-                for bundle in self.game.bundles_for_corporation(entity, corporation)
-            )
+            any(self.can_sell(entity, bundle) for bundle in self.game.bundles_for_corporation(entity, corporation))
             for corporation in self.game.corporations
         )
 
@@ -1950,9 +1769,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         if not bundle:
             return False
 
-        return self.available_cash(entity) >= self.modify_purchase_price(
-            bundle
-        ) and self.can_gain(entity, bundle)
+        return self.available_cash(entity) >= self.modify_purchase_price(bundle) and self.can_gain(entity, bundle)
 
     def can_buy_any_from_market(self, entity):
         for corporation, shares in self.game.share_pool.shares_by_corporation.items():
@@ -1985,8 +1802,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         if self.bought():
             return False
         return any(
-            self.game.can_par(c, entity)
-            and self.can_buy(entity, c.shares[0].to_bundle())
+            self.game.can_par(c, entity) and self.can_buy(entity, c.shares[0].to_bundle())
             for c in self.game.corporations
         )
 
@@ -2008,24 +1824,13 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         if not entity.is_player() or self.bought():
             return []
 
-        return [
-            c
-            for c in self.game.buyable_bank_owned_companies
-            if self.can_buy_company(entity, c)
-        ]
+        return [c for c in self.game.buyable_bank_owned_companies if self.can_buy_company(entity, c)]
 
     def can_buy_company(self, player, company):
-        return (
-            company in self.game.buyable_bank_owned_companies
-            and self.available_cash(player) >= company.value
-        )
+        return company in self.game.buyable_bank_owned_companies and self.available_cash(player) >= company.value
 
     def get_par_prices(self, entity, corp):
-        return [
-            p
-            for p in self.game.stock_market.par_prices
-            if p.price * 2 <= self.available_cash(entity)
-        ]
+        return [p for p in self.game.stock_market.par_prices if p.price * 2 <= self.available_cash(entity)]
 
     def sell_shares(self, entity, shares, swap=None):
         if not self.can_sell(entity, shares) and not swap:
@@ -2035,9 +1840,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         self.game.sell_shares_and_change_price(shares, swap=swap)
 
     def bought(self):
-        return any(
-            x.__class__ in self.PURCHASE_ACTIONS for x in self.round.current_actions
-        )
+        return any(x.__class__ in self.PURCHASE_ACTIONS for x in self.round.current_actions)
 
     def sold(self):
         return any(isinstance(x, SellShares) for x in self.round.current_actions)
@@ -2074,19 +1877,13 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
 
     def corporation_secure(self, corporation):
         # Can any other player steal the corporation?
-        return (
-            corporation.owner.percent_of(corporation)
-        ) >= self.corporation_secure_percent()
+        return (corporation.owner.percent_of(corporation)) >= self.corporation_secure_percent()
 
-    def action_is_shenanigan(
-        self, entity, other_entity, action, corporation, share_to_buy
-    ):
+    def action_is_shenanigan(self, entity, other_entity, action, corporation, share_to_buy):
         corp_buying = share_to_buy.corporation if share_to_buy else None
 
         if isinstance(action, Par):
-            if not corp_buying or self.game.check_sale_timing(
-                entity, Share(corporation).to_bundle
-            ):
+            if not corp_buying or self.game.check_sale_timing(entity, Share(corporation).to_bundle):
                 return f"Corporation {corporation.name} parred"
 
         elif isinstance(action, BuyShares):
@@ -2100,9 +1897,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
                 if corporation != corp_buying:
                     return f"{other_entity.name} bought on corporation {corporation.name} and is unsecure"
 
-                percentage = (
-                    corporation.owner.percent_of(corporation) + share_to_buy.percent
-                )
+                percentage = corporation.owner.percent_of(corporation) + share_to_buy.percent
 
                 if percentage <= self.corporation_secure_percent():
                     return None
@@ -2111,16 +1906,13 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
                     [
                         s
                         for s in self.game.shares_for_corporation(corporation)
-                        if s.percent > share_to_buy.percent
-                        and (s.owner != entity or s.owner != corporation.owner)
+                        if s.percent > share_to_buy.percent and (s.owner != entity or s.owner != corporation.owner)
                     ],
                     key=lambda s: s.percent,
                 )
 
                 if bigger_share:
-                    other_percent = (
-                        action.entity.percent_of(corporation) + bigger_share.percent
-                    )
+                    other_percent = action.entity.percent_of(corporation) + bigger_share.percent
 
                     if percentage < other_percent:
                         return f"{action.entity.player.name} has bought, shares exist that could allow them to gain presidency"
@@ -2149,9 +1941,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
                     if action < program:
                         continue
 
-                    reason = self.action_is_shenanigan(
-                        entity, other_entity, action, corporation, share_to_buy
-                    )
+                    reason = self.action_is_shenanigan(entity, other_entity, action, corporation, share_to_buy)
                     if reason:
                         return reason
 
@@ -2169,11 +1959,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         if not self.normal_pass(entity):
             return None
 
-        reason = (
-            self.should_stop_applying_program(entity, program, None)
-            if not program.unconditional
-            else None
-        )
+        reason = self.should_stop_applying_program(entity, program, None) if not program.unconditional else None
 
         if reason:
             return [ProgramDisable(entity, reason=reason)]
@@ -2201,11 +1987,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         available_actions = self.actions(entity)
 
         if BuyShares in available_actions:
-            source = (
-                "market"
-                if self.from_market(program)
-                else self.game.ipo_name(corporation)
-            )
+            source = "market" if self.from_market(program) else self.game.ipo_name(corporation)
 
             shares_by_percent = [
                 share
@@ -2218,11 +2000,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
             ]
 
             if not shares_by_percent:
-                return [
-                    ProgramDisable(
-                        entity, reason=f"Cannot buy {corporation.name} from {source}"
-                    )
-                ]
+                return [ProgramDisable(entity, reason=f"Cannot buy {corporation.name} from {source}")]
 
             if len(set(share.percent for share in shares_by_percent)) != 1:
                 return [
@@ -2299,16 +2077,9 @@ class BuySellParSharesCompanies(BuySellParShares):
         return not self.did_sell(company, player)
 
     def can_buy_any_companies(self, entity):
-        if (
-            self.bought
-            or not entity.cash > 0
-            or self.game.num_certs(entity) >= self.game.cert_limit(entity)
-        ):
+        if self.bought or not entity.cash > 0 or self.game.num_certs(entity) >= self.game.cert_limit(entity):
             return False
-        return any(
-            c.owner == self.game.bank and not self.did_sell(c, entity)
-            for c in self.game.companies
-        )
+        return any(c.owner == self.game.bank and not self.did_sell(c, entity) for c in self.game.companies)
 
     def get_par_prices(self, entity, corp):
         return self.game.par_prices(corp)
@@ -2331,9 +2102,7 @@ class BuySellParSharesCompanies(BuySellParShares):
         player.companies.append(company)
         player.spend(price, owner)
         self.track_action(action, company)
-        self.log.append(
-            f"{player.name} buys {company.name} from {owner.name} for {self.game.format_currency(price)}"
-        )
+        self.log.append(f"{player.name} buys {company.name} from {owner.name} for {self.game.format_currency(price)}")
 
     def can_buy(self, entity, bundle):
         if not self.game.PRESIDENT_SALES_TO_MARKET:
@@ -2345,19 +2114,13 @@ class BuySellParSharesCompanies(BuySellParShares):
             not entity.cash >= bundle.price
             or not self.can_gain(entity, bundle)
             or self.round.players_sold.get(entity, {}).get(corporation, None)
-            or (
-                not self.can_buy_multiple(entity, corporation, bundle.owner)
-                and self.bought
-            )
+            or (not self.can_buy_multiple(entity, corporation, bundle.owner) and self.bought)
         ):
             return False
         return self.can_buy_presidents_share(entity, bundle, corporation)
 
     def can_buy_presidents_share(self, entity, share, corporation):
-        if (
-            share.percent != corporation.presidents_percent
-            or share.owner != self.game.share_pool
-        ):
+        if share.percent != corporation.presidents_percent or share.owner != self.game.share_pool:
             return True
         difference = share.percent - corporation.share_percent
         num_shares_needed = difference / corporation.share_percent
@@ -2375,8 +2138,7 @@ class BuySellParSharesCompanies(BuySellParShares):
             timing
             and (
                 not self.game.MUST_SELL_IN_BLOCKS
-                or self.round.players_sold.get(entity, {}).get(corporation, None)
-                != "now"
+                or self.round.players_sold.get(entity, {}).get(corporation, None) != "now"
             )
             and self.can_sell_order()
             and self.game.share_pool.fit_in_bank(bundle)
@@ -2428,9 +2190,7 @@ class BuySellParSharesCompanies(BuySellParShares):
         player.companies.remove(company)
         if price > 0:
             self.game.bank.spend(price, player)
-        self.log.append(
-            f"{player.name} sells {company.name} to bank for {self.game.format_currency(price)}"
-        )
+        self.log.append(f"{player.name} sells {company.name} to bank for {self.game.format_currency(price)}")
         self.round.players_sold.setdefault(player, {})[company] = "now"
 
 
@@ -2470,9 +2230,7 @@ class BuySellParSharesViaBid(BuySellParShares, PassableAuction):
     def active_entities(self):
         if not self.auctioning:
             return super().active_entities
-        index = (
-            self.active_bidders.index(self.highest_bid(self.auctioning).entity) + 1
-        ) % len(self.active_bidders)
+        index = (self.active_bidders.index(self.highest_bid(self.auctioning).entity) + 1) % len(self.active_bidders)
         return [self.active_bidders[index]]
 
     def log_pass(self, entity):
@@ -2498,13 +2256,9 @@ class BuySellParSharesViaBid(BuySellParShares, PassableAuction):
         price = action.price
 
         if self.auctioning:
-            self.log.append(
-                f"{player.name} bids {self.game.format_currency(price)} for {entity.name}"
-            )
+            self.log.append(f"{player.name} bids {self.game.format_currency(price)} for {entity.name}")
         else:
-            self.log.append(
-                f"{player.name} auctions {entity.name} for {self.game.format_currency(price)}"
-            )
+            self.log.append(f"{player.name} auctions {entity.name} for {self.game.format_currency(price)}")
             if self.game.HOME_TOKEN_TIMING == "par" and not entity.is_company():
                 self.game.place_home_token(entity)
         super().add_bid(action)
@@ -2540,11 +2294,7 @@ class BuySingleTrainOfType(BuyTrain):
         self.depot_trains_bought = []
 
     def buyable_trains(self, entity):
-        return [
-            x
-            for x in super().buyable_trains(entity)
-            if not (x.from_depot() and x.sym in self.depot_trains_bought)
-        ]
+        return [x for x in super().buyable_trains(entity) if not (x.from_depot() and x.sym in self.depot_trains_bought)]
 
     def process_buy_train(self, action):
         # Since the train won't be in the depot after being bought, store the state now.
@@ -2577,19 +2327,13 @@ class CompanyPendingPar(BaseStep, Auctioner):
 
     @property
     def active_entities(self):
-        return (
-            [self.round.companies_pending_par[0].owner]
-            if self.round.companies_pending_par
-            else []
-        )
+        return [self.round.companies_pending_par[0].owner] if self.round.companies_pending_par else []
 
     def process_par(self, action):
         share_price = action.share_price
         corporation = action.corporation
         self.game.stock_market.set_par(corporation, share_price)
-        self.game.share_pool.buy_shares(
-            action.entity, corporation.shares[0], exchange="free"
-        )
+        self.game.share_pool.buy_shares(action.entity, corporation.shares[0], exchange="free")
         self.game.after_par(corporation)
         self.round.companies_pending_par.pop(0)
 
@@ -2627,9 +2371,7 @@ class ConcessionAuction(BaseStep, Auctioner):
             return "Bid on Concession or Purchase Option"
 
     def available(self):
-        return (
-            [self.auctioning_company()] if self.auctioning_company() else self.companies
-        )
+        return [self.auctioning_company()] if self.auctioning_company() else self.companies
 
     def finished(self):
         return not self.companies or all(entity.passed for entity in self.entities)
@@ -2725,15 +2467,12 @@ class ConcessionAuction(BaseStep, Auctioner):
             player.spend(price, self.game.bank)
         self.companies.remove(company)
         self.log.append(
-            f"{player.name} wins the auction for {company.name} "
-            f"with a bid of {self.game.format_currency(price)}"
+            f"{player.name} wins the auction for {company.name} " f"with a bid of {self.game.format_currency(price)}"
         )
 
     def start_auction(self, bid):
         self.auctioning = bid.company
-        self.log.append(
-            f"-- {bid.entity.name} nominates {self.auctioning.name} for auction --"
-        )
+        self.log.append(f"-- {bid.entity.name} nominates {self.auctioning.name} for auction --")
         self.add_bid(bid)
         starter = bid.entity
         start_price = bid.price
@@ -2743,10 +2482,7 @@ class ConcessionAuction(BaseStep, Auctioner):
         entity_idx = self.entities.index(starter)
         entities_rotated = self.entities[entity_idx:] + self.entities[:entity_idx]
         for idx, player in enumerate(entities_rotated):
-            if (
-                player != starter
-                and self.max_bid(player, self.auctioning) > start_price
-            ):
+            if player != starter and self.max_bid(player, self.auctioning) > start_price:
                 bids.append(
                     Bid(
                         player,
@@ -2757,9 +2493,7 @@ class ConcessionAuction(BaseStep, Auctioner):
 
     def add_bid(self, bid):
         super().add_bid(bid)
-        self.log.append(
-            f"{bid.entity.name} bids {self.game.format_currency(bid.price)} for {bid.company.name}"
-        )
+        self.log.append(f"{bid.entity.name} bids {self.game.format_currency(bid.price)} for {bid.company.name}")
 
 
 class CorporateBuyShares(BaseStep, ShareBuying):
@@ -2793,14 +2527,10 @@ class CorporateBuyShares(BaseStep, ShareBuying):
         self.log.append(f"{entity.name} skips corporate share buy")
 
     def can_buy_any(self, entity):
-        return self.can_buy_any_from_market(entity) or self.can_buy_any_from_president(
-            entity
-        )
+        return self.can_buy_any_from_market(entity) or self.can_buy_any_from_president(entity)
 
     def can_buy_any_from_market(self, entity):
-        return any(
-            self.can_buy(entity, s.to_bundle()) for s in self.game.share_pool.shares
-        )
+        return any(self.can_buy(entity, s.to_bundle()) for s in self.game.share_pool.shares)
 
     def can_buy_corp_from_market(self, entity, corporation):
         shares = self.game.share_pool.shares_by_corporation.get(corporation, [])
@@ -2863,10 +2593,7 @@ class CorporateBuyShares(BaseStep, ShareBuying):
                 and self.can_buy_corp_from_market(entity, corp)
             ]
 
-        if (
-            self.game.CORPORATE_BUY_SHARE_ALLOW_BUY_FROM_PRESIDENT
-            and self.can_buy_any_from_president(entity)
-        ):
+        if self.game.CORPORATE_BUY_SHARE_ALLOW_BUY_FROM_PRESIDENT and self.can_buy_any_from_president(entity):
             source.append(entity.owner)
 
         return source
@@ -2908,10 +2635,7 @@ class CorporateSellShares(BaseStep, ShareBuying):
         self.log.append(f"{entity.name} skips corporate share sales")
 
     def can_sell_any(self, entity):
-        return any(
-            self.can_sell(entity, share.to_bundle())
-            for share in entity.corporate_shares
-        )
+        return any(self.can_sell(entity, share.to_bundle()) for share in entity.corporate_shares)
 
     def can_sell(self, entity, bundle):
         if not bundle:
@@ -2991,9 +2715,7 @@ class Dividend(BaseStep):
 
     @property
     def round_state(self):
-        super_round_state = (
-            super().round_state if hasattr(super(), "round_state") else {}
-        )
+        super_round_state = super().round_state if hasattr(super(), "round_state") else {}
         return {
             **super_round_state,
             "extra_revenue": 0,
@@ -3020,12 +2742,8 @@ class Dividend(BaseStep):
         options = {}
         for dividend_type in self.dividend_types:
             payout = getattr(self, dividend_type)(entity, revenue)
-            payout["divs_to_corporation"] = self.corporation_dividends(
-                entity, payout["per_share"]
-            )
-            payout.update(
-                self.share_price_change(entity, revenue - payout["corporation"])
-            )
+            payout["divs_to_corporation"] = self.corporation_dividends(entity, payout["per_share"])
+            payout.update(self.share_price_change(entity, revenue - payout["corporation"]))
             options[dividend_type] = payout
         return options
 
@@ -3051,9 +2769,7 @@ class Dividend(BaseStep):
             self.round.laid_hexes,
         )
 
-        entity.operating_history[
-            (self.game.turn, self.round.round_num)
-        ] = operating_history
+        entity.operating_history[(self.game.turn, self.round.round_num)] = operating_history
 
         if not isinstance(entity, str) and entity.is_company():
             self.game.close_companies_on_event(entity, "ran_train", [])
@@ -3076,14 +2792,10 @@ class Dividend(BaseStep):
 
     def log_run_payout(self, entity, kind, revenue, action, payout):
         if kind not in self.DIVIDEND_TYPES:
-            self.log.append(
-                f"{entity.name} runs for {self.game.format_currency(revenue)} and pays {action.kind}"
-            )
+            self.log.append(f"{entity.name} runs for {self.game.format_currency(revenue)} and pays {action.kind}")
 
         if payout["corporation"] > 0:
-            self.log.append(
-                f"{entity.name} withholds {self.game.format_currency(payout['corporation'])}"
-            )
+            self.log.append(f"{entity.name} withholds {self.game.format_currency(payout['corporation'])}")
         elif payout["per_share"] == 0:
             self.log.append(f"{entity.name} does not run")
 
@@ -3105,17 +2817,13 @@ class Dividend(BaseStep):
     def corporation_dividends(self, entity, per_share):
         if entity.is_minor():
             return 0
-        return self.dividends_for_entity(
-            entity, self.holder_for_corporation(entity), per_share
-        )
+        return self.dividends_for_entity(entity, self.holder_for_corporation(entity), per_share)
 
     def payout_per_share(self, entity, revenue):
         return revenue / entity.total_shares
 
     def holder_for_corporation(self, entity):
-        return (
-            entity if entity.capitalization == "incremental" else self.game.share_pool
-        )
+        return entity if entity.capitalization == "incremental" else self.game.share_pool
 
     def payout_shares(self, entity, revenue):
         per_share = self.payout_per_share(entity, revenue)
@@ -3124,10 +2832,7 @@ class Dividend(BaseStep):
             self.payout_entity(entity, payee, per_share, payouts)
 
         receivers = ", ".join(
-            [
-                f"{self.game.format_currency(cash)} to {receiver.name}"
-                for receiver, cash in payouts.items()
-            ]
+            [f"{self.game.format_currency(cash)} to {receiver.name}" for receiver, cash in payouts.items()]
         )
 
         self.log_payout_shares(entity, revenue, per_share, receivers)
@@ -3154,9 +2859,7 @@ class Dividend(BaseStep):
         old_price = entity.share_price
 
         right_times = 0
-        for share_times, direction in zip(
-            [payout["share_times"]], [payout["share_direction"]]
-        ):
+        for share_times, direction in zip([payout["share_times"]], [payout["share_direction"]]):
             for _ in range(share_times):
                 if direction == "left":
                     self.game.stock_market.move_left(entity)
@@ -3243,9 +2946,7 @@ class Exchange(BaseStep, ShareBuying):
         self.buy_shares(owner, bundle, exchange=company)
 
         if hasattr(self.round, "players_history"):
-            self.round.players_history.setdefault(owner, {}).setdefault(
-                bundle.corporation, []
-            ).append(action)
+            self.round.players_history.setdefault(owner, {}).setdefault(bundle.corporation, []).append(action)
 
         company.close()
 
@@ -3274,16 +2975,10 @@ class Exchange(BaseStep, ShareBuying):
                 shares.append(corporation.available_share)
             if "market" in ability.from_:
                 if self.game.share_pool.shares_by_corporation[corporation]:
-                    shares.append(
-                        self.game.share_pool.shares_by_corporation[corporation][0]
-                    )
+                    shares.append(self.game.share_pool.shares_by_corporation[corporation][0])
 
         # set_trace()
-        return [
-            share
-            for share in shares
-            if share and self.can_gain(owner, share.to_bundle(), exchange=True)
-        ]
+        return [share for share in shares if share and self.can_gain(owner, share.to_bundle(), exchange=True)]
 
     def can_exchange(self, entity, bundle=None):
         return any(self.exchangeable_shares(entity, bundle))
@@ -3365,9 +3060,7 @@ class HomeToken(BaseStep, Tokener):
     def process_place_token(self, action):
         hex = action.city.hex
         if not self.available_hex(action.entity, hex):
-            raise GameError(
-                f"Cannot place token on {hex.name} as the hex is not available"
-            )
+            raise GameError(f"Cannot place token on {hex.name} as the hex is not available")
 
         self.place_token(
             self.token().corporation,
@@ -3455,11 +3148,7 @@ class MinorHalfPay:
     def skip(self):
         if self.current_entity.is_corporation() and self.current_entity.type != "minor":
             revenue = self.game.routes_revenue(self.routes)
-            self.process_dividend(
-                Dividend(
-                    self.current_entity, kind="payout" if revenue > 0 else "withhold"
-                )
-            )
+            self.process_dividend(Dividend(self.current_entity, kind="payout" if revenue > 0 else "withhold"))
 
     def share_price_change(self, entity, revenue=0):
         if entity.is_corporation() and entity.type != "minor":
@@ -3477,9 +3166,7 @@ class MinorHalfPay:
         if entity.is_corporation() and entity.type != "minor":
             return super().payout_shares(entity, revenue)
 
-        self.log.append(
-            f"{entity.owner.name} receives {self.game.format_currency(revenue)}"
-        )
+        self.log.append(f"{entity.owner.name} receives {self.game.format_currency(revenue)}")
         self.game.bank.spend(revenue, entity.owner)
 
 
@@ -3549,9 +3236,7 @@ class Program(BaseStep):
         if not program:
             return
         reason = action.reason if action.reason else "unknown reason"
-        self.game.player_log(
-            action.entity, f"Disabled programmed action '{program}' due to '{reason}'"
-        )
+        self.game.player_log(action.entity, f"Disabled programmed action '{program}' due to '{reason}'")
 
     def remove_programmed_action(self, entity, type_):
         if type_ and self.game.ALLOW_MULTIPLE_PROGRAMS:
@@ -3560,11 +3245,7 @@ class Program(BaseStep):
                 None,
             )
         else:
-            existing = (
-                self.game.programmed_actions[entity][-1]
-                if self.game.programmed_actions[entity]
-                else None
-            )
+            existing = self.game.programmed_actions[entity][-1] if self.game.programmed_actions[entity] else None
         if existing:
             self.game.programmed_actions[entity].remove(existing)
         return existing
@@ -3585,11 +3266,7 @@ class ProgrammerAuctionBid(Programmer):
         target = program.bid_target
 
         if target and target.owner and target.owner.is_player():
-            return [
-                ProgramDisable(
-                    entity, reason=f"{target.name} is owned by {target.owner.name}"
-                )
-            ]
+            return [ProgramDisable(entity, reason=f"{target.name} is owned by {target.owner.name}")]
 
         if self.auto_requires_auctioning(entity, program):
             return [
@@ -3600,9 +3277,7 @@ class ProgrammerAuctionBid(Programmer):
             ]
 
         if target not in self.available:
-            return [
-                ProgramDisable(entity, reason=f"{target.name} is no longer available")
-            ]
+            return [ProgramDisable(entity, reason=f"{target.name} is no longer available")]
 
         high_bid = self.highest_bid(target)
         if high_bid and high_bid.entity == entity:
@@ -3630,11 +3305,7 @@ class ProgrammerAuctionBid(Programmer):
             return [ProgramDisable(entity, reason=f"Bids submitted for {target.name}")]
 
         if self.auto_disable_if_exceeded_price(entity, program):
-            return [
-                ProgramDisable(
-                    entity, reason=f"Price for {target.name} exceeded maximum bid"
-                )
-            ]
+            return [ProgramDisable(entity, reason=f"Price for {target.name} exceeded maximum bid")]
 
         return [Pass(entity)] if Pass in self.actions(entity) else []
 
@@ -3698,9 +3369,7 @@ class ProgrammerMergerPass(Programmer):
             return None
 
         # Check to see if the round and corps include the current one
-        if pass_entity not in program.corporations_by_round.get(
-            self.round.__class__.__name__, []
-        ):
+        if pass_entity not in program.corporations_by_round.get(self.round.__class__.__name__, []):
             return None
 
         # Corporation and round match, pass!
@@ -3747,11 +3416,7 @@ class ReduceTokens(BaseStep, TokenMerger):
         entity = action.entity
         slot = action.slot
         city_tokens = len(action.city.tokens)
-        token = (
-            action.city.tokens[slot]
-            if slot < city_tokens
-            else action.city.extra_tokens[slot - city_tokens]
-        )
+        token = action.city.tokens[slot] if slot < city_tokens else action.city.extra_tokens[slot - city_tokens]
         if not self.available_hex(entity, token.city.hex):
             raise Exception(f"Cannot remove {token.corporation.name} token")
 
@@ -3766,15 +3431,9 @@ class ReduceTokens(BaseStep, TokenMerger):
         if entity != self.surviving():
             return False
 
-        surviving_token = next(
-            (t for t in entity.tokens if t.used and t.city and t.hex == hex_), None
-        )
+        surviving_token = next((t for t in entity.tokens if t.used and t.city and t.hex == hex_), None)
         acquired_token = next(
-            (
-                t
-                for t in self.others_tokens(self.acquired_corps())
-                if t.used and t.city and t.hex == hex_
-            ),
+            (t for t in self.others_tokens(self.acquired_corps()) if t.used and t.city and t.hex == hex_),
             None,
         )
 
@@ -3811,13 +3470,9 @@ class ReturnToken(BaseStep):
         selected_city = action.city
         hex_ = selected_city.hex
 
-        city_string = (
-            " city {}".format(selected_city.index) if len(hex_.tile.cities) > 1 else ""
-        )
+        city_string = " city {}".format(selected_city.index) if len(hex_.tile.cities) > 1 else ""
         if not self.available_city(corporation, selected_city):
-            raise Exception(
-                f"Cannot return token from {hex_.name}{city_string} to {corporation.name}"
-            )
+            raise Exception(f"Cannot return token from {hex_.name}{city_string} to {corporation.name}")
 
         last_city = last_used_token.city
         return_ability = self.ability(company)
@@ -3837,9 +3492,7 @@ class ReturnToken(BaseStep):
 
         log_msg = f"{corporation.name} returns the token from {hex_.name}{city_string} using {company.name}"
         if return_ability.reimburse:
-            log_msg += (
-                f" and is reimbursed {self.game.format_currency(last_used_token.price)}"
-            )
+            log_msg += f" and is reimbursed {self.game.format_currency(last_used_token.price)}"
         self.log.append(log_msg)
 
     def can_replace_token(self, company, token):
@@ -3847,9 +3500,7 @@ class ReturnToken(BaseStep):
         if not corporation.is_corporation():
             return False
 
-        return any(self.available_tokens(corporation)) and any(
-            t for t in corporation.tokens if t.city == token.city
-        )
+        return any(self.available_tokens(corporation)) and any(t for t in corporation.tokens if t.city == token.city)
 
     def available_hex(self, company, hex_):
         corporation = company.owner
@@ -3887,11 +3538,7 @@ class Route(BaseStep):
     ACTIONS = [RunRoutes]
 
     def actions(self, entity):
-        if (
-            not entity.is_operator()
-            or not self.game.route_trains(entity)
-            or not self.game.can_run_route(entity)
-        ):
+        if not entity.is_operator() or not self.game.route_trains(entity) or not self.game.can_run_route(entity):
             return []
         return self.ACTIONS
 
@@ -3929,9 +3576,7 @@ class Route(BaseStep):
 
             trains[train] = True
             revenue = self.game.format_revenue_currency(route.revenue())
-            self.log.append(
-                f"{entity.name} runs a {train.name} train for {revenue}: {route.revenue_str}"
-            )
+            self.log.append(f"{entity.name} runs a {train.name} train for {revenue}: {route.revenue_str}")
             if route.abilities:
                 abilities.extend(route.abilities)
         self.log_extra_revenue(entity, action.extra_revenue)
@@ -3990,9 +3635,7 @@ class SelectionAuction(BaseStep, PassableAuction):
         if self.auctioning:
             winning_bid = self.highest_bid(self.auctioning)
             if winning_bid:
-                next_index = (self.active_bidders.index(winning_bid.entity) + 1) % len(
-                    self.active_bidders
-                )
+                next_index = (self.active_bidders.index(winning_bid.entity) + 1) % len(self.active_bidders)
                 return [self.active_bidders[next_index]]
         return super().active_entities
 
@@ -4015,9 +3658,7 @@ class SelectionAuction(BaseStep, PassableAuction):
     def next_entity(self):
         self.round.next_entity_index()
         entity = self.entities[self.entity_index]
-        if self.auctioning and self.max_bid(entity, self.auctioning) < self.min_bid(
-            self.auctioning
-        ):
+        if self.auctioning and self.max_bid(entity, self.auctioning) < self.min_bid(self.auctioning):
             entity.pass_action()
         if entity.passed:
             self.next_entity()
@@ -4068,9 +3709,7 @@ class SelectionAuction(BaseStep, PassableAuction):
         entity = bid.entity
         price = bid.price
 
-        self.log.append(
-            f"{entity.name} bids {self.game.format_currency(price)} for {company.name}"
-        )
+        self.log.append(f"{entity.name} bids {self.game.format_currency(price)} for {company.name}")
 
     def win_bid(self, winner, _company):
         player = winner.entity
@@ -4184,9 +3823,7 @@ class SimpleDraft(BaseStep):
 
         self.companies.remove(company)
 
-        self.log.append(
-            f"{player.name} buys {company.name} for {self.game.format_currency(price)}"
-        )
+        self.log.append(f"{player.name} buys {company.name} for {self.game.format_currency(price)}")
 
         self.round.next_entity_index()
         self.action_finalized()
@@ -4223,10 +3860,7 @@ class SingleDepotTrainBuy(BuyTrain):
 
     def buyable_trains(self, entity):
         trains = super().buyable_trains(entity)
-        if (
-            self.game.phase.status.include("limited_train_buy")
-            and entity in self.round.bought_trains
-        ):
+        if self.game.phase.status.include("limited_train_buy") and entity in self.round.bought_trains:
             trains = [train for train in trains if not train.from_depot]
         return trains
 
@@ -4270,18 +3904,12 @@ class SpecialBuyTrain(BaseStep, Train):
         if from_depot and hasattr(self.round, "bought_trains"):
             self.round.bought_trains.append(corporation)
 
-        closes_company = (
-            ability
-            and ability["count"]
-            and (ability["count"] - 1) == 0
-            and ability["closed_when_used_up"]
-        )
+        closes_company = ability and ability["count"] and (ability["count"] - 1) == 0 and ability["closed_when_used_up"]
 
         if (
             action.price < action.train.price
             and ability
-            and ability["discounted_price"](action.train, action.train.price)
-            == action.price
+            and ability["discounted_price"](action.train, action.train.price) == action.price
         ):
             ability["use"]()
         if closes_company and not action.entity.is_closed():
@@ -4303,12 +3931,8 @@ class SpecialBuyTrain(BaseStep, Train):
         if not entity or not entity.is_company():
             return None
 
-        ability = self.game.abilities(
-            entity, "train_discount", time=self.ability_timing()
-        )
-        if ability and (
-            not train or not ability["trains"] or train.name in ability["trains"]
-        ):
+        ability = self.game.abilities(entity, "train_discount", time=self.ability_timing())
+        if ability and (not train or not ability["trains"] or train.name in ability["trains"]):
             return ability
 
         return None
@@ -4348,9 +3972,7 @@ class SpecialBuy(BaseStep):
 
     def pass_description(self):
         return (
-            "Done ({})".format(self.short_description())
-            if self.acted
-            else "Skip ({})".format(self.short_description())
+            "Done ({})".format(self.short_description()) if self.acted else "Skip ({})".format(self.short_description())
         )
 
     def process_special_buy(self, action):
@@ -4425,15 +4047,9 @@ class SpecialToken(BaseStep, Tokener):
 
     @property
     def round_state(self):
-        super_round_state = (
-            super().round_state if hasattr(super(), "round_state") else {}
-        )
+        super_round_state = super().round_state if hasattr(super(), "round_state") else {}
 
-        state = (
-            {}
-            if hasattr(self.round, "teleported")
-            else {"teleported": None, "teleport_tokener": None}
-        )
+        state = {} if hasattr(self.round, "teleported") else {"teleported": None, "teleport_tokener": None}
 
         return {**super_round_state, **state}
 
@@ -4442,11 +4058,7 @@ class SpecialToken(BaseStep, Tokener):
 
     @property
     def active_entities(self):
-        return (
-            [self.round.teleported]
-            if self.round.teleported
-            else super().active_entities
-        )
+        return [self.round.teleported] if self.round.teleported else super().active_entities
 
     def process_place_token(self, action):
         entity = action.entity
@@ -4478,9 +4090,7 @@ class SpecialToken(BaseStep, Tokener):
             self.teleport_complete()
 
     def process_pass(self, action):
-        self.log.append(
-            f"{action.entity.owner.name} ({action.entity.id}) declines to place token"
-        )
+        self.log.append(f"{action.entity.owner.name} ({action.entity.id}) declines to place token")
         self.teleport_complete()
 
     def teleport_complete(self):
@@ -4495,11 +4105,7 @@ class SpecialToken(BaseStep, Tokener):
             return None
 
         if ability.type == "token" and ability.connected:
-            return (
-                self.game.token_graph_for_entity(entity.owner)
-                .reachable_hexes(entity.owner)
-                .get(hex)
-            )
+            return self.game.token_graph_for_entity(entity.owner).reachable_hexes(entity.owner).get(hex)
 
         return self.game.hex_by_id(hex.id).neighbors.keys
 
@@ -4590,19 +4196,12 @@ class Tracker:
 
         old_tile = hex.tile
         tile_lay = self.get_tile_lay(action.entity)
-        if self.track_upgrade(old_tile, tile, hex) and not (
-            tile_lay and tile_lay.get("upgrade", False)
-        ):
+        if self.track_upgrade(old_tile, tile, hex) and not (tile_lay and tile_lay.get("upgrade", False)):
             raise Exception("Cannot lay an upgrade now")
         if tile.color == "yellow" and not (tile_lay and tile_lay.get("lay", False)):
             raise Exception("Cannot lay a yellow now")
-        if (
-            tile_lay.get("cannot_reuse_same_hex", False)
-            and hex in self.round.laid_hexes
-        ):
-            raise Exception(
-                f"{hex.id} cannot be laid as this hex was already laid on this turn"
-            )
+        if tile_lay.get("cannot_reuse_same_hex", False) and hex in self.round.laid_hexes:
+            raise Exception(f"{hex.id} cannot be laid as this hex was already laid on this turn")
 
         extra_cost = self.extra_cost(tile, tile_lay, hex)
 
@@ -4651,9 +4250,7 @@ class Tracker:
         old_tile = hex.tile
         graph = self.game.graph_for_entity(spender)
 
-        if not self.game.loading and (
-            blocking_ability := self.ability_blocking_hex(entity, hex)
-        ):
+        if not self.game.loading and (blocking_ability := self.ability_blocking_hex(entity, hex)):
             raise GameError(f"{hex.id} is blocked by {blocking_ability.owner.name}")
 
         tile.rotate_absolute(rotation)
@@ -4665,9 +4262,7 @@ class Tracker:
             selected_company=(entity.is_company() and entity) or None,
         ):
             raise GameError(f"{old_tile.name} is not upgradeable to {tile.name}")
-        if not self.game.loading and not self.legal_tile_rotation(
-            entity_or_entities, hex, tile
-        ):
+        if not self.game.loading and not self.legal_tile_rotation(entity_or_entities, hex, tile):
             raise GameError(f"{old_tile.name} is not legally rotated for {tile.name}")
 
         self.update_tile_lists(tile, old_tile)
@@ -4676,10 +4271,7 @@ class Tracker:
 
         if old_tile.color in self.game.IMPASSABLE_HEX_COLORS:
             for direction, neighbor in hex.all_neighbors.items():
-                if any(
-                    border.edge == direction and border.type == "impassable"
-                    for border in hex.tile.borders
-                ):
+                if any(border.edge == direction and border.type == "impassable" for border in hex.tile.borders):
                     continue
                 if direction in tile.exits:
                     neighbor.neighbors[neighbor.neighbor_direction(hex)] = hex
@@ -4718,9 +4310,7 @@ class Tracker:
                         and not self.game.loading
                         and not graph.reachable_hexes(spender).get(hex, False)
                     ):
-                        raise GameError(
-                            f"Track laid must be connected to one of {spender.id}'s stations"
-                        )
+                        raise GameError(f"Track laid must be connected to one of {spender.id}'s stations")
 
                     free = free or ability.free
                     discount += ability.discount
@@ -4729,9 +4319,7 @@ class Tracker:
                     extra_cost += ability.cost
 
         if entity.is_company() and not ability_found:
-            raise GameError(
-                f"{entity.name} does not have an ability that allows them to lay this tile"
-            )
+            raise GameError(f"{entity.name} does not have an ability that allows them to lay this tile")
 
         if not teleport:
             self.check_track_restrictions(entity, old_tile, tile)
@@ -4741,29 +4329,19 @@ class Tracker:
             self.remove_border_calculate_cost(tile, entity_or_entities, spender)
             cost = extra_cost
         else:
-            border, border_types = self.remove_border_calculate_cost(
-                tile, entity_or_entities, spender
-            )
+            border, border_types = self.remove_border_calculate_cost(tile, entity_or_entities, spender)
             if border > 0:
                 terrain += border_types
 
-            base_cost = (
-                self.game.upgrade_cost(old_tile, hex, entity, spender)
-                + border
-                + extra_cost
-            )
+            base_cost = self.game.upgrade_cost(old_tile, hex, entity, spender) + border + extra_cost
 
             if discount_abilities:
                 discount = min(base_cost, discount)
                 self.game.log_cost_discount(spender, discount_abilities, discount)
 
-            cost = self.game.tile_cost_with_discount(
-                tile, hex, entity, spender, base_cost - discount
-            )
+            cost = self.game.tile_cost_with_discount(tile, hex, entity, spender, base_cost - discount)
 
-        self.pay_tile_cost(
-            entity_or_entities, tile, rotation, hex, spender, cost, extra_cost
-        )
+        self.pay_tile_cost(entity_or_entities, tile, rotation, hex, spender, cost, extra_cost)
 
         self.update_token(action, entity, tile, old_tile)
 
@@ -4777,8 +4355,7 @@ class Tracker:
         income = ability.income
         self.game.bank.spend(income, company.owner)
         self.log.append(
-            f"{company.owner.name} earns {self.game.format_currency(income)}"
-            f" for the tile built by {company.name}"
+            f"{company.owner.name} earns {self.game.format_currency(income)}" f" for the tile built by {company.name}"
         )
 
     def pay_terrain_tile_income(self, company, ability, terrain, entity, spender):
@@ -4797,14 +4374,8 @@ class Tracker:
     def update_tile_lists(self, tile, old_tile):
         self.game.update_tile_lists(tile, old_tile)
 
-    def pay_tile_cost(
-        self, entity_or_entities, tile, rotation, hex, spender, cost, extra_cost
-    ):
-        entities = (
-            [entity_or_entities]
-            if isinstance(entity_or_entities, (list, tuple))
-            else [entity_or_entities]
-        )
+    def pay_tile_cost(self, entity_or_entities, tile, rotation, hex, spender, cost, extra_cost):
+        entities = [entity_or_entities] if isinstance(entity_or_entities, (list, tuple)) else [entity_or_entities]
         entity, *_combo_entities = entities
 
         self.try_take_loan(spender, cost)
@@ -4841,11 +4412,7 @@ class Tracker:
                     token.remove()
 
     def remove_border_calculate_cost(self, tile, entity_or_entities, spender):
-        entities = (
-            [entity_or_entities]
-            if isinstance(entity_or_entities, (list, tuple))
-            else [entity_or_entities]
-        )
+        entities = [entity_or_entities] if isinstance(entity_or_entities, (list, tuple)) else [entity_or_entities]
         entity, *_combo_entities = entities
 
         hex = tile.hex
@@ -4853,8 +4420,7 @@ class Tracker:
 
         total_cost = sum(
             [
-                border.cost
-                - self.border_cost_discount(entity, spender, border, border.cost, hex)
+                border.cost - self.border_cost_discount(entity, spender, border, border.cost, hex)
                 for border in tile.borders
                 if border.cost
                 and hex.targeting(hex.neighbors[border.edge])
@@ -4864,9 +4430,7 @@ class Tracker:
         types = [
             border.type
             for border in tile.borders
-            if border.cost
-            and hex.targeting(hex.neighbors[border.edge])
-            and hex.neighbors[border.edge].targeting(hex)
+            if border.cost and hex.targeting(hex.neighbors[border.edge]) and hex.neighbors[border.edge].targeting(hex)
         ]
         # Assuming border removal and cost discount logic is handled in border_cost_discount
         return total_cost, types
@@ -4901,10 +4465,7 @@ class Tracker:
         if not self.game.ALLOW_REMOVING_TOWNS:
             for old_city in old_tile.city_towns:
                 old_exits = set(old_city.exits if old_city.exits else [])
-                if all(
-                    old_exits - set(new_city.exits if new_city.exits else [])
-                    for new_city in new_tile.city_towns
-                ):
+                if all(old_exits - set(new_city.exits if new_city.exits else []) for new_city in new_tile.city_towns):
                     raise GameError("New track must override old one")
 
         old_paths = old_tile.paths
@@ -4916,12 +4477,8 @@ class Tracker:
                 continue
             op = next((path for path in old_paths if np <= path), None)
             used_new_track |= op is None
-            old_revenues = (
-                sorted(node.max_revenue for node in op.nodes) if op and op.nodes else []
-            )
-            new_revenues = (
-                sorted(node.max_revenue for node in np.nodes) if np and np.nodes else []
-            )
+            old_revenues = sorted(node.max_revenue for node in op.nodes) if op and op.nodes else []
+            new_revenues = sorted(node.max_revenue for node in np.nodes) if np and np.nodes else []
             changed_city |= old_revenues != new_revenues
 
         track_restriction = self.game.TRACK_RESTRICTION
@@ -4946,11 +4503,7 @@ class Tracker:
         return self.game.phase.tiles.copy()
 
     def potential_tiles(self, entity_or_entities, hex):
-        entities = (
-            [entity_or_entities]
-            if not isinstance(entity_or_entities, list)
-            else entity_or_entities
-        )
+        entities = [entity_or_entities] if not isinstance(entity_or_entities, list) else entity_or_entities
         entity = entities[0]
 
         colors = self.potential_tile_colors(entity, hex)
@@ -4967,29 +4520,20 @@ class Tracker:
         tiles = self.potential_tiles(entity_or_entities, hex)
         for tile in tiles:
             tile.rotate_absolute(0)  # Reset tile to no rotation
-            tile.legal_rotations = self.legal_tile_rotations(
-                entity_or_entities, hex, tile
-            )
+            tile.legal_rotations = self.legal_tile_rotations(entity_or_entities, hex, tile)
             if tile.legal_rotations:
                 tile.rotate_absolute()  # Rotate to the first legal rotation
 
         tiles = [tile for tile in tiles if tile.legal_rotations]
 
         if (
-            (
-                hex.tile.cities
-                and self.game.TILE_UPGRADES_MUST_USE_MAX_EXITS in ["cities"]
-            )
+            (hex.tile.cities and self.game.TILE_UPGRADES_MUST_USE_MAX_EXITS in ["cities"])
             or (
                 hex.tile.cities
                 and not hex.tile.labels
                 and self.game.TILE_UPGRADES_MUST_USE_MAX_EXITS in ["unlabeled_cities"]
             )
-            or (
-                not hex.tile.cities
-                and not hex.tile.towns
-                and self.game.TILE_UPGRADES_MUST_USE_MAX_EXITS in ["track"]
-            )
+            or (not hex.tile.cities and not hex.tile.towns and self.game.TILE_UPGRADES_MUST_USE_MAX_EXITS in ["track"])
         ):
             return self.max_exits(tiles)
         else:
@@ -5002,17 +4546,11 @@ class Tracker:
         result = []
         for color_group in grouped_by_color.values():
             max_edges = max(tile.edges.size for tile in color_group)
-            result.extend(
-                [tile for tile in color_group if tile.edges.size == max_edges]
-            )
+            result.extend([tile for tile in color_group if tile.edges.size == max_edges])
         return result
 
     def legal_tile_rotation(self, entity_or_entities, hex, tile):
-        entities = (
-            [entity_or_entities]
-            if not isinstance(entity_or_entities, list)
-            else entity_or_entities
-        )
+        entities = [entity_or_entities] if not isinstance(entity_or_entities, list) else entity_or_entities
         entity = entities[0]
 
         if not self.game.legal_tile_rotation(entity, hex, tile):
@@ -5028,9 +4566,7 @@ class Tracker:
         if not all_new_exits_valid:
             return False
 
-        entity_reaches_a_new_exit = any(
-            exit in self.hex_neighbors(entity, hex) for exit in new_exits
-        )
+        entity_reaches_a_new_exit = any(exit in self.hex_neighbors(entity, hex) for exit in new_exits)
         if not entity_reaches_a_new_exit:
             return False
 
@@ -5038,18 +4574,13 @@ class Tracker:
             return False
 
         valid_added_city_count = added_cities >= sum(
-            1
-            for newct in new_ctedges
-            if all(len(set(newct) & set(oldct)) == 0 for oldct in old_ctedges)
+            1 for newct in new_ctedges if all(len(set(newct) & set(oldct)) == 0 for oldct in old_ctedges)
         )
         if not valid_added_city_count:
             return False
 
         old_cities_map_to_new = not multi_city_upgrade or (
-            all(
-                sum(1 for newct in new_ctedges if set(oldct) <= set(newct)) == 1
-                for oldct in old_ctedges
-            )
+            all(sum(1 for newct in new_ctedges if set(oldct) <= set(newct)) == 1 for oldct in old_ctedges)
         )
         if not old_cities_map_to_new:
             return False
@@ -5068,25 +4599,18 @@ class Tracker:
         if len(set(city.normal_slots() for city in hex.tile.cities)) <= 1:
             return True
         hex_city_map = hex.city_map_for(tile)
-        return all(
-            new_c.normal_slots() >= old_c.normal_slots()
-            for old_c, new_c in hex_city_map.items()
-        )
+        return all(new_c.normal_slots() >= old_c.normal_slots() for old_c, new_c in hex_city_map.items())
 
     def legal_tile_rotations(self, entity_or_entities, hex, tile):
         return [
             rotation
             for rotation in Tile.ALL_EDGES
-            if self.legal_tile_rotation(
-                entity_or_entities, hex, tile.rotate_absolute(rotation)
-            )
+            if self.legal_tile_rotation(entity_or_entities, hex, tile.rotate_absolute(rotation))
         ]
 
     def hex_neighbors(self, entity, hex):
         # set_trace()
-        return (
-            self.game.graph_for_entity(entity).connected_hexes(entity).get(hex, set())
-        )
+        return self.game.graph_for_entity(entity).connected_hexes(entity).get(hex, set())
 
     def can_buy_tile_laying_company(self, entity, time):
         if entity != self.current_entity:
@@ -5095,10 +4619,7 @@ class Tracker:
             return False
         return any(
             company.min_price <= self.buying_power(entity)
-            and any(
-                a.type == "tile_lay" and a.matches_when(time)
-                for a in company.all_abilities
-            )
+            and any(a.type == "tile_lay" and a.matches_when(time) for a in company.all_abilities)
             for company in self.game.purchasable_companies(entity)
         )
 
@@ -5124,11 +4645,7 @@ class Tracker:
             return None
         if color != "white" and not tile_lay["upgrade"]:
             return None
-        if (
-            color != "white"
-            and tile_lay["cannot_reuse_same_hex"]
-            and hex in self.round.laid_hexes
-        ):
+        if color != "white" and tile_lay["cannot_reuse_same_hex"] and hex in self.round.laid_hexes:
             return None
         if self.ability_blocking_hex(entity, hex):
             return None
@@ -5168,11 +4685,7 @@ class SpecialTrack(BaseStep, Tracker):
 
     @property
     def round_state(self):
-        state = (
-            {}
-            if hasattr(self.round, "teleported")
-            else {"teleported": None, "teleport_tokener": None}
-        )
+        state = {} if hasattr(self.round, "teleported") else {"teleported": None, "teleport_tokener": None}
         state.update(super().round_state)
         return state
 
@@ -5180,9 +4693,7 @@ class SpecialTrack(BaseStep, Tracker):
         if (
             self.company
             and (self.company != action.entity)
-            and (
-                abilities := self.game.abilities(self.company, "tile_lay", time="track")
-            )
+            and (abilities := self.game.abilities(self.company, "tile_lay", time="track"))
             and abilities[0].must_lay_together
             and abilities[0].must_lay_all
         ):
@@ -5191,13 +4702,9 @@ class SpecialTrack(BaseStep, Tracker):
         ability = self.abilities(action.entity)[0]
 
         owner = (
-            action.entity.owner
-            if action.entity.owner and action.entity.owner.corporation
-            else self.game.current_entity
+            action.entity.owner if action.entity.owner and action.entity.owner.corporation else self.game.current_entity
         )
-        if ability.type == "teleport" or (
-            ability.type == "tile_lay" and ability.consume_tile_lay
-        ):
+        if ability.type == "teleport" or (ability.type == "tile_lay" and ability.consume_tile_lay):
             self.lay_tile_action(action, spender=owner)
         else:
             self.lay_tile(action, spender=owner)
@@ -5213,34 +4720,20 @@ class SpecialTrack(BaseStep, Tracker):
         if (
             owner
             and owner.corporation
-            and (
-                operating_info := owner.operating_history.get(
-                    (self.game.turn, self.round.round_num)
-                )
-            )
+            and (operating_info := owner.operating_history.get((self.game.turn, self.round.round_num)))
         ):
             operating_info.laid_hexes = self.round.laid_hexes
 
         if ability.type == "tile_lay":
-            if (
-                ability.count is not None
-                and ability.count == 0
-                and ability.closed_when_used_up
-            ):
+            if ability.count is not None and ability.count == 0 and ability.closed_when_used_up:
                 company = ability.owner
                 self.log.append(f"{company.name} closes")
                 company.close()
-            self.company = (
-                action.entity
-                if ability.count > 0 and ability.must_lay_together
-                else None
-            )
+            self.company = action.entity if ability.count > 0 and ability.must_lay_together else None
 
         if ability.type == "teleport":
             company = ability.owner
-            tokener = (
-                company.owner if not company.owner.player else self.game.current_entity
-            )
+            tokener = company.owner if not company.owner.player else self.game.current_entity
             if not tokener.tokens_by_type:
                 company.remove_ability(ability)
             else:
@@ -5257,9 +4750,7 @@ class SpecialTrack(BaseStep, Tracker):
             raise GameError(f"{entity.name} must use all its tile lays")
 
         entity.remove_ability(ability)
-        self.log.append(
-            f"{entity.owner.name} passes laying additional track with {entity.name}"
-        )
+        self.log.append(f"{entity.owner.name} passes laying additional track with {entity.name}")
         self.company = None
 
     def available_hex(self, entity, hex):
@@ -5278,33 +4769,20 @@ class SpecialTrack(BaseStep, Tracker):
         ability = abilities[0]
         if not ability or (ability.hexes and hex.id not in ability.hexes):
             return None
-        operator = (
-            entity.owner if entity.owner.is_corporation() else self.game.current_entity
-        )
-        if (
-            ability.type == "tile_lay"
-            and ability.reachable
-            and hex not in self.game.graph.connected_hexes(operator)
-        ):
+        operator = entity.owner if entity.owner.is_corporation() else self.game.current_entity
+        if ability.type == "tile_lay" and ability.reachable and hex not in self.game.graph.connected_hexes(operator):
             return None
         return list(self.game.hex_by_id(hex.id).neighbors.keys())
 
     def potential_tiles(self, entity_or_entities, hex):
-        entities = (
-            [entity_or_entities]
-            if not isinstance(entity_or_entities, list)
-            else entity_or_entities
-        )
+        entities = [entity_or_entities] if not isinstance(entity_or_entities, list) else entity_or_entities
         entity = entities[0]
         tile_abilities = self.abilities(entity)
         if not tile_abilities:
             return []
         tile_ability = tile_abilities[0]
 
-        tiles = [
-            next(t for t in self.game.tiles if t.name == name)
-            for name in tile_ability.tiles
-        ]
+        tiles = [next(t for t in self.game.tiles if t.name == name) for name in tile_ability.tiles]
         if not tiles:
             tiles = self.game.tiles.unique(lambda t: t.name)
 
@@ -5313,9 +4791,7 @@ class SpecialTrack(BaseStep, Tracker):
             t
             for t in tiles
             if t
-            and self.game.tile_valid_for_phase(
-                t, hex=hex, phase_color_cache=self.potential_tile_colors(entity, hex)
-            )
+            and self.game.tile_valid_for_phase(t, hex=hex, phase_color_cache=self.potential_tile_colors(entity, hex))
             and self.game.upgrades_to(hex.tile, t, special, selected_company=entity)
         ]
 
@@ -5324,10 +4800,7 @@ class SpecialTrack(BaseStep, Tracker):
             set_trace()
         if not entity or not entity.is_company():
             return []
-        if (
-            hasattr(self.round, "just_sold_company")
-            and entity == self.round.just_sold_company
-        ):
+        if hasattr(self.round, "just_sold_company") and entity == self.round.just_sold_company:
             ability = self.game.abilities(entity, "tile_lay", time="sold", **kwargs)
             if ability:
                 return ability
@@ -5366,11 +4839,7 @@ class SpecialTrack(BaseStep, Tracker):
             for other in laid_hexes:
                 if hex == other:
                     continue
-                if any(
-                    a.connects_to(b, None)
-                    for a in hex.tile.paths
-                    for b in other.tile.paths
-                ):
+                if any(a.connects_to(b, None) for a in hex.tile.paths for b in other.tile.paths):
                     connected[hex] = True
                     connected[other] = True
         if len(connected.keys()) != len(laid_hexes):
@@ -5455,11 +4924,7 @@ class Track(BaseStep, Tracker):
             self.pass_()
 
     def available_hex(self, entity_or_entities, hex):
-        entities = (
-            [entity_or_entities]
-            if not isinstance(entity_or_entities, list)
-            else entity_or_entities
-        )
+        entities = [entity_or_entities] if not isinstance(entity_or_entities, list) else entity_or_entities
         entity = entities[0]
 
         return self.tracker_available_hex(entity, hex)
@@ -5506,22 +4971,16 @@ class TrackAndToken(Track, Tokener):
 
     def can_lay_tile(self, entity):
         free = False
-        tile_cost = (
-            self.game.TILE_COST
-        )  # Assuming TILE_COST is defined in the game class
+        tile_cost = self.game.TILE_COST  # Assuming TILE_COST is defined in the game class
 
         ability = self.game.abilities(entity, "tile_lay")
         if ability:
             for hex_id in ability.hexes:
                 hex_tile = self.game.hex_by_id(hex_id).tile
-                if (
-                    ability.free or ability.discount >= tile_cost
-                ) and hex_tile.preprinted:
+                if (ability.free or ability.discount >= tile_cost) and hex_tile.preprinted:
                     free = True
 
-        return (
-            free or self.buying_power(entity) >= tile_cost
-        ) and super().can_lay_tile(entity)
+        return (free or self.buying_power(entity) >= tile_cost) and super().can_lay_tile(entity)
 
     def process_place_token(self, action):
         entity = action.entity
@@ -5565,9 +5024,7 @@ class TrackLayWhenCompanySold:
             entity = action.entity
             ability = self.game.abilities(self.company, "tile_lay", time="sold")
             if entity != self.company:
-                raise Exception(
-                    f"Not {entity.name}'s turn: {action}"
-                )  # Adjusted exception type
+                raise Exception(f"Not {entity.name}'s turn: {action}")  # Adjusted exception type
 
             self.lay_tile(action, spender=entity.owner)
             self.round.laid_hexes.append(action.hex)
@@ -5583,9 +5040,7 @@ class TrackLayWhenCompanySold:
         entity = action.entity
         ability = self.game.abilities(self.company, "tile_lay", time="sold")
         if entity != self.company:
-            raise Exception(
-                f"Not {entity.name}'s turn: {action}"
-            )  # Adjusted exception type
+            raise Exception(f"Not {entity.name}'s turn: {action}")  # Adjusted exception type
 
         self.company.remove_ability(ability)
         self.log.append(f"{entity.name} passes lay track")
@@ -5595,11 +5050,7 @@ class TrackLayWhenCompanySold:
 
     def blocking_for_sold_company(self):
         self.company = None
-        just_sold_company = (
-            self.round.just_sold_company
-            if hasattr(self.round, "just_sold_company")
-            else None
-        )
+        just_sold_company = self.round.just_sold_company if hasattr(self.round, "just_sold_company") else None
 
         if self.game.abilities(just_sold_company, "tile_lay", time="sold"):
             self.company = just_sold_company
@@ -5686,19 +5137,13 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
 
     def may_purchase(self, company):
         is_active, _ = self.active_auction()
-        return (
-            is_active is None and company is not None and company == self.companies[0]
-        )
+        return is_active is None and company is not None and company == self.companies[0]
 
     def committed_cash(self, player):
         return sum(bid.price for bid in self.bids_for_player(player))
 
     def max_bid(self, player, company):
-        return (
-            player.cash
-            - self.committed_cash(player)
-            + self.current_bid_amount(player, company)
-        )
+        return player.cash - self.committed_cash(player) + self.current_bid_amount(player, company)
 
     def resolve_bids(self):
         company = self.companies[0] if self.companies else None
@@ -5780,9 +5225,7 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         self.companies.remove(company)
         num_bidders = len(self.bidders[company])
         if num_bidders == 0:
-            self.log.append(
-                f"{player.name} buys {company.name} for {self.game.format_currency(price)}"
-            )
+            self.log.append(f"{player.name} buys {company.name} for {self.game.format_currency(price)}")
         elif num_bidders == 1:
             self.log.append(
                 f"{player.name} wins the auction for {company.name} with the only bid of {self.game.format_currency(price)}"
@@ -5800,9 +5243,7 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         player = bid.entity
         min_bid = self.min_bid(company)
         if price < min_bid:
-            raise GameError(
-                f"Minimum bid is {self.game.format_currency(min_bid)} for {company.name}"
-            )
+            raise GameError(f"Minimum bid is {self.game.format_currency(min_bid)} for {company.name}")
         self.bids[company] = []
         self.buy_company(player, company, price)
 
@@ -5812,9 +5253,7 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         price = bid.price
         entity = bid.entity
         self.bidders[company].append(entity)
-        self.log.append(
-            f"{entity.name} bids {self.game.format_currency(price)} for {bid.company.name}"
-        )
+        self.log.append(f"{entity.name} bids {self.game.format_currency(price)} for {bid.company.name}")
 
 
 class BaseRound:
@@ -5882,9 +5321,7 @@ class BaseRound:
         return self.active_step().active_entities if self.active_step() else []
 
     def can_act(self, entity):
-        return (
-            self.active_step().current_entity == entity if self.active_step() else None
-        )
+        return self.active_step().current_entity == entity if self.active_step() else None
 
     def pass_description(self):
         return self.active_step().pass_description
@@ -5903,15 +5340,11 @@ class BaseRound:
             process = type in step.actions(action.entity)
             blocking = step.blocking
             if blocking and not process:
-                raise GameError(
-                    f"Blocking step {step.description} cannot process action {action.id}"
-                )
+                raise GameError(f"Blocking step {step.description} cannot process action {action.id}")
 
             if blocking or process:
                 step.acted = True
-                getattr(step, f"process_{pascal_to_snake(action.__class__.__name__)}")(
-                    action
-                )
+                getattr(step, f"process_{pascal_to_snake(action.__class__.__name__)}")(action)
 
                 self.at_start = False
 
@@ -5921,9 +5354,7 @@ class BaseRound:
                 self.after_process(action)
                 return
 
-        raise GameError(
-            f"No step found for action {type.__name__} at {action.id}: {action.to_dict()}"
-        )
+        raise GameError(f"No step found for action {type.__name__} at {action.id}: {action.to_dict()}")
 
     def actions_for(self, entity):
         actions = []
@@ -5957,9 +5388,7 @@ class BaseRound:
         return None
 
     def step_passed(self, action_klass):
-        return any(
-            step.passed and isinstance(step, action_klass) for step in self.steps
-        )
+        return any(step.passed and isinstance(step, action_klass) for step in self.steps)
 
     def active_step(self, entity=None):
         if entity:
@@ -5967,9 +5396,7 @@ class BaseRound:
                 (
                     step
                     for step in self.steps
-                    if step.active
-                    and (entity.is_company() or step.blocking)
-                    and step.actions(entity)
+                    if step.active and (entity.is_company() or step.blocking) and step.actions(entity)
                 ),
                 None,
             )
@@ -6034,10 +5461,7 @@ class BaseRound:
             if (
                 not step.active
                 or not step.blocks
-                or (
-                    self.entities[self.entity_index] is not None
-                    and self.entities[self.entity_index].is_closed()
-                )
+                or (self.entities[self.entity_index] is not None and self.entities[self.entity_index].is_closed())
             ):
                 continue
             if step.blocking:
@@ -6106,11 +5530,7 @@ class Draft(BaseRound):
         return "Draft Round"
 
     def select_entities(self):
-        return (
-            list(reversed(self.game.players))
-            if self.reverse_order
-            else self.game.players
-        )
+        return list(reversed(self.game.players)) if self.reverse_order else self.game.players
 
     def next_entity_index(self):
         if self.rotating_order and self.entity_index == (len(self.entities) - 1):
@@ -6124,9 +5544,7 @@ class Draft(BaseRound):
             else:
                 plus_or_minus = 1 if self.snaking_up else -1
                 self.game.next_turn()
-                self.entity_index = (self.entity_index + plus_or_minus) % len(
-                    self.entities
-                )
+                self.entity_index = (self.entity_index + plus_or_minus) % len(self.entities)
         else:
             super().next_entity_index()
 
@@ -6207,8 +5625,6 @@ class Operating(BaseRound):
         return entity.is_closed()
 
     def next_entity(self):
-        if self.game.debug:
-            set_trace()
         if self.entity_index == len(self.entities) - 1:
             return
 
@@ -6224,8 +5640,6 @@ class Operating(BaseRound):
         self.start_operating()
 
     def start_operating(self):
-        if self.game.debug:
-            set_trace()
         entity = self.entities[self.entity_index]
         if self.skip_entity(entity):
             self.next_entity()
@@ -6235,9 +5649,7 @@ class Operating(BaseRound):
         for train in entity.trains:
             train.operated = False
         if not self.finished():
-            self.log.append(
-                f"{self.game.acting_for_entity(entity).name} operates {entity.name}"
-            )
+            self.log.append(f"{self.game.acting_for_entity(entity).name} operates {entity.name}")
         self.game.place_home_token(entity)
         self.skip_steps()
         if self.finished():
@@ -6246,9 +5658,7 @@ class Operating(BaseRound):
 
     def recalculate_order(self):
         unsorted_corps = self.entities[self.entity_index + 1 :]
-        self.entities[self.entity_index + 1 :] = [
-            e for e in self.game.operating_order if e in unsorted_corps
-        ]
+        self.entities[self.entity_index + 1 :] = [e for e in self.game.operating_order if e in unsorted_corps]
 
     @property
     def operating(self):
@@ -6314,11 +5724,7 @@ class Stock(BaseRound):
     def finish_round(self):
         # set_trace()
         corporations_to_move_price = sorted(
-            [
-                corp
-                for corp in self.game.corporations
-                if corp.floated() and corp.type != "minor"
-            ]
+            [corp for corp in self.game.corporations if corp.floated() and corp.type != "minor"]
         )
 
         for corp in corporations_to_move_price:
@@ -6340,11 +5746,7 @@ class Stock(BaseRound):
                 self.game.log_share_price(corp, old_price)
 
     def corporations_to_move_price(self):
-        return [
-            corp
-            for corp in self.game.corporations
-            if corp.floated() and corp.type != "minor"
-        ]
+        return [corp for corp in self.game.corporations if corp.floated() and corp.type != "minor"]
 
     def sold_out_stock_movement(self, corp):
         self.game.stock_market.move_up(corp)

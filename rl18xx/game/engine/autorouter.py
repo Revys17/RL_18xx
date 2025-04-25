@@ -29,9 +29,7 @@ class AutoRouter:
         route_limit = opts.get("route_limit", 10000)
 
         connections = {}
-        trains = sorted(
-            self.game.route_trains(corporation), key=lambda x: x.price, reverse=True
-        )
+        trains = sorted(self.game.route_trains(corporation), key=lambda x: x.price, reverse=True)
 
         graph = self.game.graph_for_entity(corporation)
         nodes = sorted(
@@ -62,9 +60,7 @@ class AutoRouter:
                 break
             else:
                 if self.verbose:
-                    print(
-                        f"Path search: {nodes.index(node)} / {len(nodes)} - paths starting from {node.hex.name}"
-                    )
+                    print(f"Path search: {nodes.index(node)} / {len(nodes)} - paths starting from {node.hex.name}")
 
             # debug = False
             # if self.debug and node.hex.name == "F2":
@@ -84,9 +80,7 @@ class AutoRouter:
                 # all_paths=True,
                 # debug=debug
             ):
-                self.process_path(
-                    vp, trains, connections, hexside_bits, train_routes, skip_paths
-                )
+                self.process_path(vp, trains, connections, hexside_bits, train_routes, skip_paths)
                 # for path in vp.keys():
                 #    path_history[path] = True
             # if self.debug and node.hex.name == "F2":
@@ -103,15 +97,11 @@ class AutoRouter:
         if self.debug:
             set_trace()
         for route in static:
-            route.bitfield = self.bitfield_from_connection(
-                route.connection_data, hexside_bits
-            )
+            route.bitfield = self.bitfield_from_connection(route.connection_data, hexside_bits)
             train_routes[route.train] = [route]
 
         for train, routes in train_routes.items():
-            train_routes[train] = sorted(
-                routes, key=lambda x: x.revenue(), reverse=True
-            )[:route_limit]
+            train_routes[train] = sorted(routes, key=lambda x: x.revenue(), reverse=True)[:route_limit]
 
         sorted_routes = list(train_routes.values())
 
@@ -144,9 +134,7 @@ class AutoRouter:
 
         return max_routes
 
-    def process_path(
-        self, vp, trains, connections, hexside_bits, train_routes, skip_paths
-    ):
+    def process_path(self, vp, trains, connections, hexside_bits, train_routes, skip_paths):
         # if self.debug:
         #    set_trace()
         paths = vp.keys()
@@ -192,16 +180,11 @@ class AutoRouter:
 
             # if self.debug:
             #    set_trace()
-            id = tuple(
-                sorted(list(itertools.chain.from_iterable(c["paths"] for c in chains)))
-            )
+            id = tuple(sorted(list(itertools.chain.from_iterable(c["paths"] for c in chains))))
             if id in connections:
                 return
 
-            connections[id] = [
-                {"left": c["nodes"][0], "right": c["nodes"][1], "chain": c}
-                for c in chains
-            ]
+            connections[id] = [{"left": c["nodes"][0], "right": c["nodes"][1], "chain": c} for c in chains]
             connection = connections[id]
 
             path_abort = {train: True for train in trains}
@@ -213,9 +196,7 @@ class AutoRouter:
                         self.game.phase,
                         train,
                         connection_data=connection,
-                        bitfield=self.bitfield_from_connection(
-                            connection, hexside_bits
-                        ),
+                        bitfield=self.bitfield_from_connection(connection, hexside_bits),
                     )
                     route.routes = [route]
                     # set_trace()
@@ -269,20 +250,14 @@ class AutoRouter:
                     if len(node1.edges) == 1:
                         hexside_left = node1.edges[0].id
                         hexside_right = node2.edges[0].id
-                        check_and_set(
-                            bitfield, hexside_left, hexside_right, hexside_bits
-                        )
+                        check_and_set(bitfield, hexside_left, hexside_right, hexside_bits)
                     elif len(node1.edges) == 2:
                         hexside_left = node1.edges[0].id
                         hexside_right = node1.edges[1].id
-                        check_and_set(
-                            bitfield, hexside_left, hexside_right, hexside_bits
-                        )
+                        check_and_set(bitfield, hexside_left, hexside_right, hexside_bits)
                         hexside_left = hexside_right
                         hexside_right = node2.edges[0].id
-                        check_and_set(
-                            bitfield, hexside_left, hexside_right, hexside_bits
-                        )
+                        check_and_set(bitfield, hexside_left, hexside_right, hexside_bits)
                     else:
                         if self.verbose:
                             print(
@@ -298,11 +273,7 @@ class AutoRouter:
 
         def bitfield_conflicts(route_bitfields, test_bitfield):
             for bitfield in route_bitfields:
-                if (
-                    bitfield
-                    and test_bitfield
-                    and any(b & t for b, t in zip(bitfield, test_bitfield))
-                ):
+                if bitfield and test_bitfield and any(b & t for b, t in zip(bitfield, test_bitfield)):
                     return True
             return False
 
@@ -331,14 +302,11 @@ class AutoRouter:
 
                 route_bitfields = generate_bitfields(combo)
                 if not any(
-                    bitfield_conflicts(route_bitfields[:i], route_bitfields[i])
-                    for i in range(1, len(route_bitfields))
+                    bitfield_conflicts(route_bitfields[:i], route_bitfields[i]) for i in range(1, len(route_bitfields))
                 ):
                     if is_valid_combo(combo):
                         # Calculate revenue excluding 'None' values
-                        combo_revenue = sum(
-                            route.revenue() for route in combo if route is not None
-                        )
+                        combo_revenue = sum(route.revenue() for route in combo if route is not None)
                         if combo_revenue > highest_revenue:
                             best_combos = [combo]
                             highest_revenue = combo_revenue
@@ -347,9 +315,7 @@ class AutoRouter:
             return best_combos, False
 
         # Adjusted to use 'sorted_routes_with_empty_option'
-        possibilities, timeout_reached = evaluate_route_combos(
-            itertools.product(*sorted_routes_with_empty_option)
-        )
+        possibilities, timeout_reached = evaluate_route_combos(itertools.product(*sorted_routes_with_empty_option))
         if timeout_reached and self.flash:
             self.flash("Route selection timed out.")
 
@@ -364,9 +330,7 @@ class AutoRouter:
             filtered_routes = [route for route in routes if route is not None]
             try:
                 for route in filtered_routes:
-                    route.clear_cache(
-                        only_routes=True
-                    )  # Clear cache for accurate calculation
+                    route.clear_cache(only_routes=True)  # Clear cache for accurate calculation
                     route.routes = routes  # Ensure route is aware of the full combination for context
                     route.revenue()  # Calculate revenue for this configuration
                 return self.game.routes_revenue(
@@ -380,9 +344,7 @@ class AutoRouter:
         # Evaluate each possibility to find the one with the maximum revenue
         # Filter out any possibilities that resulted in an error (None return value)
         # set_trace()
-        valid_possibilities = filter(
-            lambda x: calculate_total_revenue(x) is not None, possibilities
-        )
+        valid_possibilities = filter(lambda x: calculate_total_revenue(x) is not None, possibilities)
         # Select the possibility with the highest total revenue, falling back to an empty list if none are valid
         max_routes = max(valid_possibilities, key=calculate_total_revenue, default=[])
 

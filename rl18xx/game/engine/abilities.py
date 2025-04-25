@@ -415,16 +415,10 @@ class TrainDiscount(AbilityBase):
             return price
 
         # Calculate discount value based on whether the discount is a flat value or a percentage
-        discount_value = (
-            self.discount[train.name]
-            if isinstance(self.discount, dict)
-            else self.discount
-        )
+        discount_value = self.discount[train.name] if isinstance(self.discount, dict) else self.discount
 
         # Apply the discount to the price
-        return price - (
-            discount_value if discount_value > 1 else int(price * discount_value)
-        )
+        return price - (discount_value if discount_value > 1 else int(price * discount_value))
 
 
 class TrainLimit(AbilityBase):
@@ -498,16 +492,10 @@ class Abilities:
         count = [0, self._start_count]
         for ability in self._abilities:
             if ability.start_count is not None:
-                count = max(
-                    count, [ability.count, ability.start_count], key=lambda x: x[1]
-                )
+                count = max(count, [ability.count, ability.start_count], key=lambda x: x[1])
 
         return count
 
     def _update_start_counter(self):
-        start_counts = [
-            ability.start_count
-            for ability in self._abilities
-            if ability.start_count is not None
-        ]
+        start_counts = [ability.start_count for ability in self._abilities if ability.start_count is not None]
         self._start_count = max(start_counts, default=None)

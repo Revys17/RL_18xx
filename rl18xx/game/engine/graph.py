@@ -50,11 +50,7 @@ class BasePart:
 
     @property
     def signature(self):
-        return (
-            f"{self.hex.id}-{self.index}"
-            if self.hex and self.index is not None
-            else None
-        )
+        return f"{self.hex.id}-{self.index}" if self.hex and self.index is not None else None
 
     @property
     def hex(self):
@@ -144,9 +140,7 @@ class BasePart:
         return 0
 
     def inspect(self):
-        return (
-            f"<{self.__class__.__name__}: hex: {self.hex.name if self.hex else None}>"
-        )
+        return f"<{self.__class__.__name__}: hex: {self.hex.name if self.hex else None}>"
 
     def __str__(self):
         return self.inspect()
@@ -223,11 +217,7 @@ class Node(BasePart):
         )
 
         for node_path in self.paths:
-            if (
-                node_path.track == skip_track
-                or node_path in skip_paths
-                or node_path.ignore
-            ):
+            if node_path.track == skip_track or node_path in skip_paths or node_path.ignore:
                 continue
 
             for path, vp, ct, converging in node_path.walk(
@@ -246,9 +236,7 @@ class Node(BasePart):
                 # set_trace()
                 if not path.terminal:
                     for next_node in path.nodes:
-                        if next_node == self or (
-                            corporation and next_node.blocks(corporation)
-                        ):
+                        if next_node == self or (corporation and next_node.blocks(corporation)):
                             continue
 
                         yield from next_node.walk(
@@ -267,10 +255,7 @@ class Node(BasePart):
             del visited[self]
 
     def __str__(self):
-        return (
-            super().__str__()
-            + f", paths: {self.paths}, exits: {self.exits}, lanes: {self.lanes}"
-        )
+        return super().__str__() + f", paths: {self.paths}, exits: {self.exits}, lanes: {self.lanes}"
 
     def __repr__(self):
         return self.__str__()
@@ -307,11 +292,7 @@ class Path(BasePart):
         if lanes:
             for index in range(lanes):
                 a_lanes = [lanes, index]
-                b_lanes = (
-                    [lanes, lanes - index - 1]
-                    if a.is_edge() and b.is_edge()
-                    else a_lanes
-                )
+                b_lanes = [lanes, lanes - index - 1] if a.is_edge() and b.is_edge() else a_lanes
                 paths.append(
                     Path(
                         a,
@@ -429,9 +410,7 @@ class Path(BasePart):
                 if part.is_junction():
                     for path in part.paths:
                         if path != self:
-                            self._ends.extend(
-                                [p for p in [path.a, path.b] if not p.is_junction()]
-                            )
+                            self._ends.extend([p for p in [path.a, path.b] if not p.is_junction()])
                 else:
                     self._ends.append(part)
         return self._ends
@@ -470,9 +449,7 @@ class Path(BasePart):
         larger_width = lanes_b[self.LANE_WIDTH]
         delta = (larger_width - lanes_a[self.LANE_WIDTH]) // 2
         new_index = lanes_a[self.LANE_INDEX] + delta
-        return [larger_width, new_index][self.LANE_INDEX] == self.lane_invert(lanes_b)[
-            self.LANE_INDEX
-        ]
+        return [larger_width, new_index][self.LANE_INDEX] == self.lane_invert(lanes_b)[self.LANE_INDEX]
 
     def is_path(self):
         return True
@@ -491,9 +468,7 @@ class Path(BasePart):
 
     @property
     def single(self):
-        return (
-            self.lanes[0][self.LANE_WIDTH] == 1 and self.lanes[1][self.LANE_WIDTH] == 1
-        )
+        return self.lanes[0][self.LANE_WIDTH] == 1 and self.lanes[1][self.LANE_WIDTH] == 1
 
     @property
     def exits(self):
@@ -589,13 +564,9 @@ class Path(BasePart):
             np_edge = self.hex.invert(edge_num)
 
             for np in neighbor.paths().get(np_edge, []):
-                if not self.lane_match(
-                    self.exit_lanes[edge_num], np.exit_lanes[np_edge]
-                ):
+                if not self.lane_match(self.exit_lanes[edge_num], np.exit_lanes[np_edge]):
                     continue
-                if not self.ignore_gauge_walk and not self.tracks_match(
-                    np, dual_ok=True
-                ):
+                if not self.ignore_gauge_walk and not self.tracks_match(np, dual_ok=True):
                     continue
 
                 yield from np.walk(
@@ -768,11 +739,7 @@ class Partition(BasePart):
         self.restrict = restrict
         self.blockers = []
         self.inner = [] if restrict == "outer" else list(range(self.a, self.b))
-        self.outer = (
-            []
-            if restrict == "inner"
-            else list(set(range(6)) - set(range(self.a, self.b)))
-        )
+        self.outer = [] if restrict == "inner" else list(set(range(6)) - set(range(self.a, self.b)))
 
     def add_blocker(self, private_company):
         self.blockers.append(private_company)
@@ -841,13 +808,8 @@ class RevenueCenter(Node):
     def parse_revenue(self, revenue, format=None):
         if "|" in revenue:
             parts = revenue.split("|")
-            revenue_dict = {
-                color: int(r) for color, r in (part.split("_") for part in parts)
-            }
-            self.revenue_to_render = {
-                phase: (format % rev if format else rev)
-                for phase, rev in revenue_dict.items()
-            }
+            revenue_dict = {color: int(r) for color, r in (part.split("_") for part in parts)}
+            self.revenue_to_render = {phase: (format % rev if format else rev) for phase, rev in revenue_dict.items()}
             return revenue_dict
         else:
             revenue_val = int(revenue)
@@ -887,10 +849,7 @@ class RevenueCenter(Node):
         return list(set(self.revenue.values()))
 
     def __str__(self):
-        return (
-            super().__str__()
-            + f", revenue: {self.revenue}, groups: {self.groups}, loc: {self.loc}"
-        )
+        return super().__str__() + f", revenue: {self.revenue}, groups: {self.groups}, loc: {self.loc}"
 
     def __repr__(self):
         return self.__str__()
@@ -899,13 +858,9 @@ class RevenueCenter(Node):
 class Border(BasePart):
     def __init__(self, edge, type=None, cost=None, color=None):
         self.edge = int(edge)
-        self.type = (
-            type and type.lower()
-        )  # Converting to lowercase for symbol-like behavior
+        self.type = type and type.lower()  # Converting to lowercase for symbol-like behavior
         self.cost = int(cost) if cost is not None else None
-        self.color = (
-            color and color.lower()
-        )  # Converting to lowercase for symbol-like behavior
+        self.color = color and color.lower()  # Converting to lowercase for symbol-like behavior
 
     def is_border(self):
         return True
@@ -947,16 +902,11 @@ class City(RevenueCenter):
 
     def tokened_by(self, corporation):
         # set_trace()
-        return any(
-            t is not None and t.corporation == corporation
-            for t in self.tokens + self.extra_tokens
-        )
+        return any(t is not None and t.corporation == corporation for t in self.tokens + self.extra_tokens)
 
     def find_reservation(self, corporation):
         for index, reservation in enumerate(self.reservations):
-            if reservation and (
-                reservation == corporation or reservation.owner == corporation
-            ):
+            if reservation and (reservation == corporation or reservation.owner == corporation):
                 return index
         return None
 
@@ -1001,15 +951,10 @@ class City(RevenueCenter):
             return False
 
         return any(
-            self._is_tokenable(
-                t, corporation, free, cheater, extra_slot, spender, same_hex_allowed
-            )
-            for t in tokens
+            self._is_tokenable(t, corporation, free, cheater, extra_slot, spender, same_hex_allowed) for t in tokens
         )
 
-    def _is_tokenable(
-        self, token, corporation, free, cheater, extra_slot, spender, same_hex_allowed
-    ):
+    def _is_tokenable(self, token, corporation, free, cheater, extra_slot, spender, same_hex_allowed):
         # set_trace()
         if not extra_slot and self.get_slot(token.corporation, cheater) is None:
             self.error = "no_slots"
@@ -1017,9 +962,7 @@ class City(RevenueCenter):
         if not free and token.price > (spender or corporation).cash:
             self.error = "no_money"
             return False
-        if not same_hex_allowed and any(
-            c.tokened_by(token.corporation) for c in self.tile.cities
-        ):
+        if not same_hex_allowed and any(c.tokened_by(token.corporation) for c in self.tile.cities):
             self.error = "existing_token"
             return False
         if self.reserved_by(corporation):
@@ -1032,11 +975,7 @@ class City(RevenueCenter):
     @property
     def available_slots(self):
         reservations = self.reservations + ([None] * (4 - len(self.reservations)))
-        return sum(
-            1
-            for token, reservation in zip(self.tokens, reservations)
-            if token is None and reservation is None
-        )
+        return sum(1 for token, reservation in zip(self.tokens, reservations) if token is None and reservation is None)
 
     def get_slot(self, corporation, cheater=False):
         # set_trace()
@@ -1097,9 +1036,7 @@ class City(RevenueCenter):
             "no_slots": "cannot lay token - no token slots available",
         }
         error_msg = error_messages.get(self.error, "cannot lay token")
-        raise GameError(
-            f"{corporation.name} {error_msg} on {self.id} {self.tile.hex.id if self.tile.hex else 'N/A'}"
-        )
+        raise GameError(f"{corporation.name} {error_msg} on {self.id} {self.tile.hex.id if self.tile.hex else 'N/A'}")
 
     def reset(self):
         self.remove_tokens()
@@ -1116,10 +1053,7 @@ class City(RevenueCenter):
             self.tokens = [None if t == token else t for t in self.tokens]
 
     def __str__(self):
-        return (
-            super().__str__()
-            + f", slots: {self.slots}, tokens: {self.tokens}, reservations: {self.reservations}"
-        )
+        return super().__str__() + f", slots: {self.slots}, tokens: {self.tokens}, reservations: {self.reservations}"
 
     def __repr__(self):
         return self.__str__()
@@ -1184,15 +1118,11 @@ class Pass(City):
 
 
 class Token:
-    def __init__(
-        self, corporation, price=0, logo=None, simple_logo=None, type="normal"
-    ):
+    def __init__(self, corporation, price=0, logo=None, simple_logo=None, type="normal"):
         self.corporation = corporation
         self.price = price
         self.logo = logo or corporation.logo
-        self.simple_logo = simple_logo or (
-            corporation.simple_logo if corporation else self.logo
-        )
+        self.simple_logo = simple_logo or (corporation.simple_logo if corporation else self.logo)
         self.used = False
         self.extra = None  # Is this in an extra slot? (bull token)
         self.cheater = None
@@ -1312,11 +1242,7 @@ class Graph:
         self._tokenable_cities.clear()
         self.tokens.clear()
         self.cheater_tokens.clear()
-        to_delete = [
-            key
-            for key, route in self.routes.items()
-            if not route.get("route_train_purchase")
-        ]
+        to_delete = [key for key, route in self.routes.items() if not route.get("route_train_purchase")]
         for key in to_delete:
             del self.routes[key]
 
@@ -1333,9 +1259,7 @@ class Graph:
             list(self.compute(corporation, routes_only=True))
         return self.routes.get(corporation)
 
-    def can_token(
-        self, corporation, cheater=False, same_hex_allowed=False, tokens=None
-    ):
+    def can_token(self, corporation, cheater=False, same_hex_allowed=False, tokens=None):
         if tokens is None:
             tokens = corporation.tokens_by_type
         tokeners = self.cheater_tokens if cheater else self.tokens
@@ -1436,11 +1360,7 @@ class Graph:
         for hex in hexes:
             if corporation.city is not None:
                 # If corporation.city is a single value, this makes it a list
-                city_indices = (
-                    [corporation.city]
-                    if not isinstance(corporation.city, list)
-                    else corporation.city
-                )
+                city_indices = [corporation.city] if not isinstance(corporation.city, list) else corporation.city
                 for c_idx in city_indices:
                     if 0 <= c_idx < len(hex.tile.cities):
                         city = hex.tile.cities[c_idx]
@@ -1500,9 +1420,7 @@ class Graph:
         routes = self.routes.get(corporation, {})
         walk_corporation = None if self.no_blocking else corporation
         skip_paths = (
-            self.game.graph_border_paths(corporation)
-            if self.check_regions
-            else self.game.graph_skip_paths(corporation)
+            self.game.graph_border_paths(corporation) if self.check_regions else self.game.graph_skip_paths(corporation)
         )
         if skip_paths is None:
             skip_paths = set()
@@ -1543,12 +1461,8 @@ class Graph:
                     if not self.check_regions or not self.game.region_border(hex, edge):
                         hexes[hex.neighbors[edge]][hex.invert(edge)] = True
 
-            mandatory_nodes = sum(
-                1 for p_node in local_nodes if p_node.route == "mandatory"
-            )
-            optional_nodes = sum(
-                1 for p_node in local_nodes if p_node.route == "optional"
-            )
+            mandatory_nodes = sum(1 for p_node in local_nodes if p_node.route == "mandatory")
+            optional_nodes = sum(1 for p_node in local_nodes if p_node.route == "optional")
 
             if mandatory_nodes > 1:
                 routes["route_available"] = True
@@ -1640,21 +1554,15 @@ class DistanceGraph:
                         if next_node == node:
                             continue
                         a_or_b = "a" if path.a == next_node else "b"
-                        next_distance = {
-                            **distance
-                        }  # Copy to avoid mutating the original distance
+                        next_distance = {**distance}  # Copy to avoid mutating the original distance
 
                         if a_or_b == "a":
-                            if not self.smaller_or_equal_distance(
-                                a_distances.get(path, {}), next_distance
-                            ):
+                            if not self.smaller_or_equal_distance(a_distances.get(path, {}), next_distance):
                                 self.merge_distance(a_distances, path, next_distance)
                             else:
                                 continue
                         else:
-                            if not self.smaller_or_equal_distance(
-                                b_distances.get(path, {}), next_distance
-                            ):
+                            if not self.smaller_or_equal_distance(b_distances.get(path, {}), next_distance):
                                 self.merge_distance(b_distances, path, next_distance)
                             else:
                                 continue
@@ -1677,12 +1585,8 @@ class DistanceGraph:
         n_distances, p_distances, h_distances = {}, {}, {}
 
         for node in tokens:
-            start_distance = (
-                {"city": 0, "town": 0} if self.separate_node_types else {"node": 0}
-            )
-            for path, dist in self.node_walk(
-                node, start_distance, n_distances, p_distances, {}, {}, corporation
-            ):
+            start_distance = {"city": 0, "town": 0} if self.separate_node_types else {"node": 0}
+            for path, dist in self.node_walk(node, start_distance, n_distances, p_distances, {}, {}, corporation):
                 self.merge_distance(h_distances, path.hex, dist)
 
         self.node_distances[corporation] = n_distances
@@ -1723,9 +1627,7 @@ class Route:
         self._check_connected = None
         self._check_distance = None
 
-        self.bitfield = opts.get(
-            "bitfield"
-        )  # array of ints used only by auto-routing algorithm
+        self.bitfield = opts.get("bitfield")  # array of ints used only by auto-routing algorithm
 
     def clear_cache(self, all=False, only_routes=False):
         if all:
@@ -1789,17 +1691,13 @@ class Route:
 
     @property
     def chains(self):
-        return (
-            [c["chain"] for c in self.connection_data] if self.connection_data else []
-        )
+        return [c["chain"] for c in self.connection_data] if self.connection_data else []
 
     @property
     def node_signatures(self):
         if not self._node_signatures:
             chains = self.chains
-            self._node_signatures = list(
-                {node.signature for chain in chains for node in chain["nodes"] if node}
-            )
+            self._node_signatures = list({node.signature for chain in chains for node in chain["nodes"] if node})
         return self._node_signatures
 
     def next_chain(self, node, chain, other):
@@ -1813,11 +1711,7 @@ class Route:
             if c["chain"] != keep:
                 other_paths.extend(c["chain"]["paths"])
 
-        return [
-            c
-            for c in self.get_node_chains(node, other)
-            if not set(c["paths"]).intersection(other_paths)
-        ]
+        return [c for c in self.get_node_chains(node, other) if not set(c["paths"]).intersection(other_paths)]
 
     def get_node_chains(self, start_node, end_node):
         skip_track = self.game.skip_route_track_type(self._train)
@@ -1852,17 +1746,13 @@ class Route:
             if node == self.head["left"]:
                 chain = self.next_chain(self.head["right"], self.head["chain"], node)
                 if chain:
-                    self._connection_data[0] = self.segment(
-                        chain, right=self.head["right"]
-                    )
+                    self._connection_data[0] = self.segment(chain, right=self.head["right"])
                 else:
                     self._connection_data.pop(0)
             elif node == self.tail["right"]:
                 chain = self.next_chain(self.tail["left"], self.tail["chain"], node)
                 if chain:
-                    self._connection_data[-1] = self.segment(
-                        chain, left=self.tail["left"]
-                    )
+                    self._connection_data[-1] = self.segment(chain, left=self.tail["left"])
                 else:
                     self._connection_data.pop()
             elif node == self.head["right"]:
@@ -1872,15 +1762,11 @@ class Route:
             else:
                 chain = self.select(self.head["left"], node)[0]
                 if chain:
-                    self._connection_data.insert(
-                        0, self.segment(chain, right=self.head["left"])
-                    )
+                    self._connection_data.insert(0, self.segment(chain, right=self.head["left"]))
                 else:
                     chain = self.select(self.tail["right"], node)[0]
                     if chain:
-                        self._connection_data.append(
-                            self.segment(chain, left=self.tail["right"])
-                        )
+                        self._connection_data.append(self.segment(chain, left=self.tail["right"]))
 
             if self._train.local and len(self._connection_data) == self.local_length:
                 self._connection_data.pop()
@@ -1908,11 +1794,7 @@ class Route:
         onodes = [node for node in nodes if node.is_offboard()]
 
         # Determine the relevant nodes based on the current route's state
-        list = (
-            [self.last_node]
-            if self.connection_data == []
-            else [self.head["left"], self.tail["right"]]
-        )
+        list = [self.last_node] if self.connection_data == [] else [self.head["left"], self.tail["right"]]
         list = [node for node in list if node]  # Remove None values
 
         if not list:
@@ -1926,14 +1808,8 @@ class Route:
             return
 
         # Select a candidate node that connects to the current route, excluding the most recently used one
-        candidates = [
-            node
-            for node in onodes
-            if any(select_node in list for select_node in self.select(node))
-        ]
-        candidates = [
-            candidate for candidate in candidates if candidate not in self.last_offboard
-        ]
+        candidates = [node for node in onodes if any(select_node in list for select_node in self.select(node))]
+        candidates = [candidate for candidate in candidates if candidate not in self.last_offboard]
 
         if len(candidates) > 1:
             self.touch_node(candidates[0])
@@ -1966,12 +1842,7 @@ class Route:
     @property
     def hexes(self):
         if not self._hexes:
-            self._hexes = {
-                node.hex
-                for c in self.connection_data
-                for node in [c["left"], c["right"]]
-                if node
-            }
+            self._hexes = {node.hex for c in self.connection_data for node in [c["left"], c["right"]] if node}
         return self._hexes
 
     @property
@@ -1995,9 +1866,7 @@ class Route:
 
     def check_connected(self):
         if not self._check_connected:
-            self._check_connected = (
-                self.game.check_connected(self, self.corporation) or True
-            )
+            self._check_connected = self.game.check_connected(self, self.corporation) or True
         return self._check_connected
 
     @property
@@ -2015,9 +1884,7 @@ class Route:
     @property
     def ordered_hexes(self):
         if not self._ordered_hexes:
-            self._ordered_hexes = list(
-                dict.fromkeys(path.hex for path in self.ordered_paths)
-            )
+            self._ordered_hexes = list(dict.fromkeys(path.hex for path in self.ordered_paths))
         return self._ordered_hexes
 
     def check_terminals(self):
@@ -2053,19 +1920,13 @@ class Route:
                 raise GameError("Route must have at least 2 stops")
 
             token = next(
-                (
-                    stop
-                    for stop in visited
-                    if self.game.city_tokened_by(stop, self.corporation)
-                ),
+                (stop for stop in visited if self.game.city_tokened_by(stop, self.corporation)),
                 None,
             )
             if not suppress_route_token_check:
                 self.game.check_route_token(self, token)
             # set_trace()
-            flattened_groups = [
-                group for stop in visited for group in stop.groups if group != ""
-            ] or []
+            flattened_groups = [group for stop in visited for group in stop.groups if group != ""] or []
             flattened_groups.sort()
             for key, group in itertools.groupby(flattened_groups, key=lambda x: x):
                 grouped_list = list(group)
@@ -2104,18 +1965,10 @@ class Route:
     @property
     def connection_hexes(self):
         if not self._connection_hexes:
-            if (
-                self._train.local
-                and len(self.connection_data) == 1
-                and not self.connection_data[0]["chain"]["paths"]
-            ):
-                self._connection_hexes = [
-                    ["local", self.connection_data[0]["left"].hex.id]
-                ]
+            if self._train.local and len(self.connection_data) == 1 and not self.connection_data[0]["chain"]["paths"]:
+                self._connection_hexes = [["local", self.connection_data[0]["left"].hex.id]]
             else:
-                self._connection_hexes = [
-                    self.chain_id(chain["paths"]) for chain in self.chains if chain
-                ]
+                self._connection_hexes = [self.chain_id(chain["paths"]) for chain in self.chains if chain]
         return self._connection_hexes
 
     @property
@@ -2132,9 +1985,7 @@ class Route:
                 city_node = next(
                     (
                         n
-                        for n in self.game.hex_by_id(
-                            self.connection_hexes[0][1]
-                        ).tile.nodes
+                        for n in self.game.hex_by_id(self.connection_hexes[0][1]).tile.nodes
                         if self.game.city_tokened_by(n, self.corporation)
                     ),
                     None,
@@ -2144,9 +1995,7 @@ class Route:
                     return self._connection_data
             self.connection_hexes.clear()
 
-        possibilities = [
-            self.find_matching_chains(hex_ids) for hex_ids in self.connection_hexes
-        ]
+        possibilities = [self.find_matching_chains(hex_ids) for hex_ids in self.connection_hexes]
         other_paths = self.compute_other_paths()
 
         if len(possibilities) == 1:
@@ -2154,11 +2003,7 @@ class Route:
                 (
                     ch
                     for ch in possibilities[0]
-                    if any(
-                        node
-                        for node in ch["nodes"]
-                        if self.game.city_tokened_by(node, self.corporation)
-                    )
+                    if any(node for node in ch["nodes"] if self.game.city_tokened_by(node, self.corporation))
                     and not set(ch["paths"]).intersection(other_paths)
                 ),
                 None,
@@ -2213,22 +2058,14 @@ class Route:
         )
 
     def find_pairwise_chain(self, chains_a, chains_b, other_paths):
-        chains_a = [
-            a for a in chains_a if not set(a["paths"]).intersection(other_paths)
-        ]
-        chains_b = [
-            b for b in chains_b if not set(b["paths"]).intersection(other_paths)
-        ]
+        chains_a = [a for a in chains_a if not set(a["paths"]).intersection(other_paths)]
+        chains_b = [b for b in chains_b if not set(b["paths"]).intersection(other_paths)]
         candidates = []
 
         for a in chains_a:
             for b in chains_b:
                 middle = set(a["nodes"]).intersection(set(b["nodes"]))
-                if (
-                    not middle
-                    or set(b["paths"]).intersection(a["paths"])
-                    or len(middle) != 1
-                ):
+                if not middle or set(b["paths"]).intersection(a["paths"]) or len(middle) != 1:
                     continue
                 left = (set(a["nodes"]) - middle).pop()
                 right = (set(b["nodes"]) - middle).pop()
@@ -2241,9 +2078,7 @@ class Route:
 
         if self._node_signatures:
             for a, b, left, right, middle in candidates:
-                if all(
-                    n.signature in self._node_signatures for n in [left, right, middle]
-                ):
+                if all(n.signature in self._node_signatures for n in [left, right, middle]):
                     return a, b, left, right, middle
 
         return candidates[0]
@@ -2843,9 +2678,7 @@ class Tile(TileConfig):
 
         for part_code in code.split(";"):
             type_param, _, params = part_code.partition("=")
-            params = dict(
-                param.split(":") for param in params.split(",") if ":" in params
-            )
+            params = dict(param.split(":") for param in params.split(",") if ":" in params)
 
             part = cls.part(type_param, params, cache)
             if part:
@@ -2904,17 +2737,11 @@ class Tile(TileConfig):
             return Label(**params)
 
         elif type == "upgrade":
-            terrain = (
-                params.get("terrain", "").split("|") if "terrain" in params else None
-            )
-            return Upgrade(
-                params.get("cost"), terrain, params.get("size"), loc=params.get("loc")
-            )
+            terrain = params.get("terrain", "").split("|") if "terrain" in params else None
+            return Upgrade(params.get("cost"), terrain, params.get("size"), loc=params.get("loc"))
 
         elif type == "border":
-            return Border(
-                params.get("edge"), type, params.get("cost"), params.get("color")
-            )
+            return Border(params.get("edge"), type, params.get("cost"), params.get("color"))
 
         elif type == "junction":
             junction = Junction()
@@ -2934,9 +2761,7 @@ class Tile(TileConfig):
             return Stub(int(params.get("edge")))
 
         elif type == "partition":
-            return Partition(
-                params.get("a"), params.get("b"), type, params.get("restrict")
-            )
+            return Partition(params.get("a"), params.get("b"), type, params.get("restrict"))
 
         elif type == "frame":
             return Frame(params.get("color"), params.get("color2"))
@@ -3075,9 +2900,7 @@ class Tile(TileConfig):
     def exits(self):
         """Get unique rotated exits."""
         if not self._exits:
-            self._exits = list(
-                set(self.rotate(e.num, self.rotation) for e in self.edges)
-            )
+            self._exits = list(set(self.rotate(e.num, self.rotation) for e in self.edges))
         return self._exits
 
     def converging_exit(self, num):
@@ -3131,9 +2954,7 @@ class Tile(TileConfig):
     @property
     def terrain(self):
         """Get unique terrains from upgrades."""
-        return list(
-            set(terrain for upgrade in self.upgrades for terrain in upgrade.terrains)
-        )
+        return list(set(terrain for upgrade in self.upgrades for terrain in upgrade.terrains))
 
     def ambiguous_connection(self):
         """Check if the tile has ambiguous intra-tile paths."""
@@ -3144,15 +2965,11 @@ class Tile(TileConfig):
         if self.junction and any(path.junction for path in other_paths):
             other_exits = set(path.exits for path in other_paths)
             return any(
-                (set(self.exits) - set((e + ticks) % 6 for e in other_exits)).empty()
-                for ticks in Tile.ALL_EDGES
+                (set(self.exits) - set((e + ticks) % 6 for e in other_exits)).empty() for ticks in Tile.ALL_EDGES
             )
         else:
             return any(
-                all(
-                    any(path.rotate(ticks) <= other for other in other_paths)
-                    for path in self._paths
-                )
+                all(any(path.rotate(ticks) <= other for other in other_paths) for path in self._paths)
                 for ticks in Tile.ALL_EDGES
             )
 
@@ -3178,11 +2995,7 @@ class Tile(TileConfig):
         return self._preferred_city_town_edges
 
     def reserved_by(self, corporation):
-        return any(
-            r
-            for r in self.reservations
-            if r == corporation or getattr(r, "owner", None) == corporation
-        )
+        return any(r for r in self.reservations if r == corporation or getattr(r, "owner", None) == corporation)
 
     def add_reservation(self, entity, city, slot=None, reserve_city=True):
         city_index = 0 if len(self.cities) == 1 and reserve_city else city
@@ -3207,8 +3020,7 @@ class Tile(TileConfig):
             return False
 
         if self.reservation_blocks == "always" or (
-            self.reservation_blocks == "single_slot_cities"
-            and any(city.slots == 1 for city in self.cities)
+            self.reservation_blocks == "single_slot_cities" and any(city.slots == 1 for city in self.cities)
         ):
             return corporation not in self.reservations
         else:
@@ -3230,10 +3042,7 @@ class Tile(TileConfig):
         cte = self.city_town_edges
         return any(
             all(
-                any(
-                    all(self.rotate(edge, rotation) in other_city for edge in city)
-                    for other_city in other_cte
-                )
+                any(all(self.rotate(edge, rotation) in other_city for edge in city) for other_city in other_cte)
                 for city in cte
             )
             for rotation in self.ALL_EDGES
@@ -3263,11 +3072,7 @@ class Tile(TileConfig):
             return edge_count
 
         # Place single city or town in the center if applicable
-        if (
-            len(self.cities) == 1
-            and not self.towns
-            and not self.compute_loc(self.cities[0].loc)
-        ):
+        if len(self.cities) == 1 and not self.towns and not self.compute_loc(self.cities[0].loc):
             ct_edges[self.cities[0]] = None
             return ct_edges
         if (
@@ -3293,14 +3098,8 @@ class Tile(TileConfig):
 
         # Sorting and final processing
         final_ct_edges = {}
-        for ct, edges in sorted(
-            ct_edges.items(), key=lambda item: min(edge_count[e] for e in item[1])
-        ):
-            edge = (
-                self.compute_loc(ct.loc)
-                if ct.loc
-                else min(edges, key=lambda e: edge_count[e])
-            )
+        for ct, edges in sorted(ct_edges.items(), key=lambda item: min(edge_count[e] for e in item[1])):
+            edge = self.compute_loc(ct.loc) if ct.loc else min(edges, key=lambda e: edge_count[e])
             if not ct.loc:
                 edge_count[edge] += 1
                 edge_count[(edge + 1) % 6] += 0.1
@@ -3314,11 +3113,7 @@ class Tile(TileConfig):
 
     def handle_special_cases(self, ct_edges, final_ct_edges):
         # Handling city/towns with no paths when there's only one other city/town
-        pathless_cts = [
-            ct
-            for ct in self.cities + self.towns
-            if not ct.paths and len(self.cities + self.towns) == 2
-        ]
+        pathless_cts = [ct for ct in self.cities + self.towns if not ct.paths and len(self.cities + self.towns) == 2]
         if len(pathless_cts) == 1:
             ct = pathless_cts[0]
             other_ct_edge = next(iter(final_ct_edges.values()), None)
@@ -3378,9 +3173,7 @@ class Tile(TileConfig):
     def label(self, label_name):
         self.labels.clear()
         if label_name:
-            self.labels.append(
-                Label(label_name)
-            )  # Assuming Label is a defined class or part
+            self.labels.append(Label(label_name))  # Assuming Label is a defined class or part
 
     def restore_borders(self, edges=None):
         if edges is None:
@@ -3404,14 +3197,10 @@ class Tile(TileConfig):
                     neighbor_tile.restore_borders([self.hex.invert(edge)])
 
     def reframe(self, color1, color2=None):
-        self.frame = (
-            Frame(color1, color2) if color1 else None
-        )  # Assuming Frame is a defined class
+        self.frame = Frame(color1, color2) if color1 else None  # Assuming Frame is a defined class
 
     def restripe(self, color):
-        self.stripes = (
-            Stripes(color) if color else None
-        )  # Assuming Stripes is a defined class
+        self.stripes = Stripes(color) if color else None  # Assuming Stripes is a defined class
 
     def available_slot(self):
         return any(city.available_slots > 0 for city in self.cities)
@@ -3421,9 +3210,7 @@ class Tile(TileConfig):
 
     def separate_parts(self):
         for part in self.parts:
-            self.blocks_lay = (
-                part.blocks_lay() if hasattr(part, "blocks_lay") else False
-            )
+            self.blocks_lay = part.blocks_lay() if hasattr(part, "blocks_lay") else False
 
             if part.is_city():
                 self.cities.append(part)
@@ -3505,9 +3292,7 @@ class Hex:
         },
     }
 
-    LETTERS = [chr(x) for x in range(ord("A"), ord("Z") + 1)] + [
-        f"A{chr(x)}" for x in range(ord("A"), ord("Z") + 1)
-    ]
+    LETTERS = [chr(x) for x in range(ord("A"), ord("Z") + 1)] + [f"A{chr(x)}" for x in range(ord("A"), ord("Z") + 1)]
     NEGATIVE_LETTERS = [0] + [chr(x) for x in range(ord("a"), ord("z") + 1)]
 
     COORD_LETTER = re.compile("([A-Za-z]+)")
@@ -3528,26 +3313,16 @@ class Hex:
         number = int(number_match.group(1)) if number_match else None
 
         if axes_config["x"] == "letter":
-            x = (
-                Hex.LETTERS.index(letter)
-                if letter in Hex.LETTERS
-                else -Hex.NEGATIVE_LETTERS.index(letter)
-            )
+            x = Hex.LETTERS.index(letter) if letter in Hex.LETTERS else -Hex.NEGATIVE_LETTERS.index(letter)
         else:
             x = number - 1
 
         if axes_config["y"] == "letter":
-            y = (
-                Hex.LETTERS.index(letter)
-                if letter in Hex.LETTERS
-                else -Hex.NEGATIVE_LETTERS.index(letter)
-            )
+            y = Hex.LETTERS.index(letter) if letter in Hex.LETTERS else -Hex.NEGATIVE_LETTERS.index(letter)
         else:
             y = number - 1
 
-        column, row = (
-            (letter, number) if axes_config["x"] == "letter" else (number, letter)
-        )
+        column, row = (letter, number) if axes_config["x"] == "letter" else (number, letter)
 
         return x, y, column, row
 
@@ -3618,10 +3393,7 @@ class Hex:
             if new_city:
                 for entity in filter(None, old_city.reservations):
                     for ability in entity.all_abilities:
-                        if (
-                            ability.type == "reservation"
-                            and ability.hex == self.coordinates
-                        ):
+                        if ability.type == "reservation" and ability.hex == self.coordinates:
                             ability.tile = new_city.tile
                             ability.city = new_city.tile.cities.index(new_city)
                 new_city.reservations.extend(old_city.reservations)
@@ -3725,16 +3497,12 @@ class Hex:
 
     def remove_token(self, token):
         """Remove a token from the hex."""
-        self._tile.icons = [
-            icon for icon in self._tile.icons if icon.name != token.corporation.id
-        ]
+        self._tile.icons = [icon for icon in self._tile.icons if icon.name != token.corporation.id]
         self.tokens.remove(token)
 
     def city_map_for(self, tile):
         """Map cities on the current tile to cities on a new tile based on connectivity."""
-        if not any(city.exits for city in self._tile.cities) and len(
-            self._tile.cities
-        ) == len(tile.cities):
+        if not any(city.exits for city in self._tile.cities) and len(self._tile.cities) == len(tile.cities):
             city_map = dict(zip(self._tile.cities, tile.cities))
         else:
             city_map = {
@@ -3742,8 +3510,7 @@ class Hex:
                     (
                         new_city
                         for new_city in tile.cities
-                        if not old_city.exits
-                        or set(old_city.exits).issubset(new_city.exits)
+                        if not old_city.exits or set(old_city.exits).issubset(new_city.exits)
                     ),
                     None,
                 )
@@ -3756,9 +3523,7 @@ class Hex:
                 new_city = (
                     tile.cities[index]
                     if index < len(tile.cities)
-                    else next(
-                        (city for city in tile.cities if city not in new_cities), None
-                    )
+                    else next((city for city in tile.cities if city not in new_cities), None)
                 )
                 city_map[old_city] = new_city
                 if new_city:

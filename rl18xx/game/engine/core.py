@@ -172,11 +172,7 @@ class Ownable:
     def player(self):
         if hasattr(self._owner, "player"):
             return self._owner.player
-        return (
-            self._owner
-            if hasattr(self._owner, "player") and self._owner.player
-            else None
-        )
+        return self._owner if hasattr(self._owner, "player") and self._owner.player else None
 
     def corporation(self):
         if self.is_corporation():
@@ -284,7 +280,7 @@ class SharePrice:
         self.limited = self.type not in (unlimited_types or [])
 
     def __eq__(self, other):
-        return self.coordinates == other.coordinates
+        return isinstance(other, SharePrice) and self.price == other.price and self.coordinates == other.coordinates
 
     @property
     def id(self):
@@ -331,9 +327,7 @@ class ShareHolder:
 
     @property
     def shares(self):
-        return [
-            share for shares in self._shares_by_corporation.values() for share in shares
-        ]
+        return [share for shares in self._shares_by_corporation.values() for share in shares]
 
     @property
     def shares_by_corporation(self):
@@ -357,11 +351,7 @@ class ShareHolder:
         return sum(share.percent for share in shares)
 
     def common_percent_of(self, corporation):
-        shares = [
-            share
-            for share in self._shares_by_corporation.get(corporation, [])
-            if not share.preferred
-        ]
+        shares = [share for share in self._shares_by_corporation.get(corporation, []) if not share.preferred]
         return sum(share.percent for share in shares)
 
     def presidencies(self):
@@ -390,9 +380,7 @@ class Spender:
         if amount <= 0:
             raise GameError(f"{amount} is not valid to spend")
 
-    def spend(
-        self, cash, receiver, check_cash=True, check_positive=True, borrow_from=None
-    ):
+    def spend(self, cash, receiver, check_cash=True, check_positive=True, borrow_from=None):
         if check_cash:
             self.check_cash(cash, borrow_from=borrow_from)
         if check_positive:
@@ -533,9 +521,7 @@ class StockMarket:
         self.zigzag = zigzag
         self.market = [
             [
-                SharePrice(code, r_index, c_index, unlimited_types, multiple_buy_types)
-                if code != ""
-                else None
+                SharePrice(code, r_index, c_index, unlimited_types, multiple_buy_types) if code != "" else None
                 for c_index, code in enumerate(row)
             ]
             for r_index, row in enumerate(market)
@@ -548,9 +534,7 @@ class StockMarket:
                 if price and price.type == "close":
                     self.has_close_cell = True
 
-        self.par_prices.sort(
-            key=lambda p: (p.price, p.coordinates[1], p.coordinates[0]), reverse=True
-        )
+        self.par_prices.sort(key=lambda p: (p.price, p.coordinates[1], p.coordinates[0]), reverse=True)
 
         if self.zigzag:
             self.movement = ZigZagMovement(self, ledge_movement)
@@ -601,9 +585,7 @@ class StockMarket:
         return self.movement.left(corporation, coordinates)
 
     def find_share_price(self, corporation, directions):
-        return self.find_relative_share_price(
-            corporation.share_price, corporation, directions
-        )
+        return self.find_relative_share_price(corporation.share_price, corporation, directions)
 
     def find_relative_share_price(self, share, corporation, directions):
         coordinates = share.coordinates
@@ -639,12 +621,7 @@ class StockMarket:
 
     def share_prices_with_types(self, types):
         return sorted(
-            [
-                price
-                for row in self.market
-                for price in row
-                if price and any(t in types for t in price.types)
-            ],
+            [price for row in self.market for price in row if price and any(t in types for t in price.types)],
             key=lambda p: p.price,
             reverse=True,
         )
@@ -691,9 +668,7 @@ class Phase:
 
     @property
     def upcoming(self):
-        return (
-            self.phases[self.index + 1] if self.index + 1 < len(self.phases) else None
-        )
+        return self.phases[self.index + 1] if self.index + 1 < len(self.phases) else None
 
     def train_limit(self, entity):
         if isinstance(self._train_limit, dict):
@@ -720,11 +695,7 @@ class Phase:
         self.events = phase.get("events", [])
         self.status = phase.get("status", [])
         self.corporation_sizes = phase.get("corporation_sizes")
-        self.next_on = (
-            list(self.phases[self.index + 1]["on"])
-            if self.index + 1 < len(self.phases)
-            else []
-        )
+        self.next_on = list(self.phases[self.index + 1]["on"]) if self.index + 1 < len(self.phases) else []
 
         log_msg = f"-- Phase {self.name} ("
         if self.operating_rounds:
@@ -737,9 +708,7 @@ class Phase:
     def trigger_events(self):
         for company in self.game.companies:
             if company.owner:
-                for ability in self.game.abilities(
-                    company, "revenue_change", on_phase=self.name
-                ):
+                for ability in self.game.abilities(company, "revenue_change", on_phase=self.name):
                     company.revenue = ability.revenue
 
                 for _ in self.game.abilities(company, "close", on_phase=self.name):

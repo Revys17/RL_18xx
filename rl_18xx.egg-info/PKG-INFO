@@ -45,7 +45,7 @@ There is also an ActionHelper class that can be used to find all valid
 actions at each point in the game using the following method:
 
 ``` python
-from rl18xx.game.actionfinder import ActionHelper
+from rl18xx.game.action_helper import ActionHelper
 action_helper = ActionHelper(g)
 
 action_helper.get_all_choices()[:10]
