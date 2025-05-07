@@ -3,6 +3,22 @@ from rl18xx.game.action_helper import ActionHelper
 from rl18xx.game.engine.game.base import BaseGame
 
 
+def get_index_in_correct_sorted_list(action_helper, original_index):
+    action = action_helper.get_all_choices()[original_index]
+    correct_sorted_action_list = action_helper.get_all_choices()
+    for i, correct_action in enumerate(correct_sorted_action_list):
+        if correct_action.__class__ != action.__class__:
+            continue
+        if correct_action.hex.id != action.hex.id:
+            continue
+        if correct_action.tile.name != action.tile.name:
+            continue
+        if correct_action.rotation != action.rotation:
+            continue
+        print(f"Action moved from index {original_index} to index {i} in correct sorted list")
+        return i
+    raise ValueError(f"Action not found in correct sorted list: {action}")
+
 def test_1830_manual_actions():
     game_map = GameMap()
     game = game_map.game_by_title("1830")
@@ -100,7 +116,7 @@ def test_1830_manual_actions():
     g.process_action(action_helper.get_all_choices()[-1])  # passes trains
 
     # C&O
-    g.process_action(action_helper.get_all_choices()[-5])
+    g.process_action(action_helper.get_all_choices()[2])
     g.process_action(action_helper.get_all_choices()[0])
     g.process_action(action_helper.get_all_choices()[-1])
     action_helper.print_summary(json_format=True)
@@ -177,14 +193,14 @@ def test_1830_manual_actions():
     g.process_action(action_helper.get_all_choices()[-1])  # pass trains
 
     # PRR
-    g.process_action(action_helper.get_all_choices()[4])  # lay tile #9 with rotation 1 on H8
+    g.process_action(action_helper.get_all_choices()[10])  # lay tile #9 with rotation 1 on H8
     g.process_action(action_helper.get_all_choices()[-1])  # pass token
     g.process_action(action_helper.get_all_choices()[0])  # auto trains & run
     g.process_action(action_helper.get_all_choices()[0])  # pay out
     g.process_action(action_helper.get_all_choices()[-1])  # pass trains
 
     # C&O
-    g.process_action(action_helper.get_all_choices()[-3])  # lay tile #8 with rotation 2 on G3
+    g.process_action(action_helper.get_all_choices()[2])  # lay tile #8 with rotation 2 on G3
     g.process_action(action_helper.get_all_choices()[0])  # auto trains & run
     g.process_action(action_helper.get_all_choices()[1])  # withhold
     g.process_action(action_helper.get_all_choices()[0])  # buy a 2 train
@@ -194,7 +210,7 @@ def test_1830_manual_actions():
     g.process_action(action_helper.get_all_choices()[0])  # pass buy companies
 
     # NYC
-    g.process_action(action_helper.get_all_choices()[-10])  # lay tile #8 with rotation 3 on F18
+    g.process_action(action_helper.get_all_choices()[46])  # lay tile #8 with rotation 3 on F18
     g.process_action(action_helper.get_all_choices()[31])  # buy 3 train
     g.process_action(action_helper.get_all_choices()[-1])  # pass trains
     g.process_action(action_helper.get_all_choices()[-2])  # buys Schuylkill Valley from Player 1 for $40
@@ -275,7 +291,7 @@ def test_1830_manual_actions():
 
     # Operating Round 3
     # PRR
-    g.process_action(action_helper.get_all_choices()[-11])  # lay tile 8 with rotation 2 on H6
+    g.process_action(action_helper.get_all_choices()[14])  # lay tile 8 with rotation 2 on H6
     g.process_action(action_helper.get_all_choices()[0])  # Token Pittsburgh
     g.process_action(action_helper.get_all_choices()[0])  # Run 2 train for 30
     g.process_action(action_helper.get_all_choices()[0])  # pay out
@@ -284,7 +300,7 @@ def test_1830_manual_actions():
 
     # NYNH
     g.process_action(action_helper.get_all_choices()[-5])  # Buy C&S
-    g.process_action(action_helper.get_all_choices()[0])  # lay tile 54 with rotation 0 on G19
+    g.process_action(action_helper.get_all_choices()[2])  # lay tile 54 with rotation 0 on G19
     g.process_action(action_helper.get_all_choices()[-1])  # run routes
     g.process_action(action_helper.get_all_choices()[0])  # pay out
     g.process_action(action_helper.get_all_choices()[0])  # buy 3 train
@@ -293,21 +309,21 @@ def test_1830_manual_actions():
     g.process_action(action_helper.get_all_choices()[-1])  # pass companies
 
     # C&O
-    g.process_action(action_helper.get_all_choices()[-6])  # Lay tile 57 with rotation 1 on F16
+    g.process_action(action_helper.get_all_choices()[33])  # Lay tile 57 with rotation 1 on F16
     g.process_action(action_helper.get_all_choices()[0])  # Token teleport
     g.process_action(action_helper.get_all_choices()[0])  # run routes
     g.process_action(action_helper.get_all_choices()[0])  # pay out
     g.process_action(action_helper.get_all_choices()[-1])  # pass companies
 
     # NYC
-    g.process_action(action_helper.get_all_choices()[8])  # lay tile 19 with rotation 1 on F18
+    g.process_action(action_helper.get_all_choices()[14])  # lay tile 19 with rotation 1 on F18
     g.process_action(action_helper.get_all_choices()[0])  # run trains
     g.process_action(action_helper.get_all_choices()[0])  # pay out
     g.process_action(action_helper.get_all_choices()[-1])  # pass trains
     g.process_action(action_helper.get_all_choices()[-1])  # pass companies
 
     # PRR
-    g.process_action(action_helper.get_all_choices()[-3])  # lay tile 25 with rotation 1 on g5
+    g.process_action(action_helper.get_all_choices()[0])  # lay tile 25 with rotation 1 on g5
     g.process_action(action_helper.get_all_choices()[0])  # run routes
     g.process_action(action_helper.get_all_choices()[0])  # pay out
     g.process_action(action_helper.get_all_choices()[-1])  # pass trains
@@ -322,13 +338,13 @@ def test_1830_manual_actions():
     g.process_action(action_helper.get_all_choices()[-1])  # pass companies
 
     # C&O
-    g.process_action(action_helper.get_all_choices()[5])  # lay tile 15 with rotation 4 on F16
+    g.process_action(action_helper.get_all_choices()[17])  # lay tile 15 with rotation 4 on F16
     g.process_action(action_helper.get_all_choices()[0])  # run trains
     g.process_action(action_helper.get_all_choices()[0])  # pay out
     g.process_action(action_helper.get_all_choices()[-1])  # pass companies
 
     # NYC
-    g.process_action(action_helper.get_all_choices()[-7])  # lay tile #7 with rotation 0 on E21
+    g.process_action(action_helper.get_all_choices()[12])  # lay tile #7 with rotation 0 on E21
     g.process_action(action_helper.get_all_choices()[0])  # place token on F16
     g.process_action(action_helper.get_all_choices()[0])  # run trains
     g.process_action(action_helper.get_all_choices()[0])  # pay out
@@ -426,7 +442,7 @@ def test_1830_manual_actions():
 
     # Operating Round 4
     # PRR
-    g.process_action(action_helper.get_all_choices()[9])  # lay tile #8 with rotation 5 on H14
+    g.process_action(action_helper.get_all_choices()[13])  # lay tile #8 with rotation 5 on H14
     g.process_action(action_helper.get_all_choices()[0])  # Run trains
     g.process_action(action_helper.get_all_choices()[0])  # pay out
     g.process_action(action_helper.get_all_choices()[0])  # buy 3 train
@@ -434,18 +450,18 @@ def test_1830_manual_actions():
     g.process_action(action_helper.get_all_choices()[-1])  # pass companies
 
     # B&O
-    g.process_action(action_helper.get_all_choices()[-12])  # buy C&A for max
-    g.process_action(action_helper.get_all_choices()[5])  # lay tile #8 with rotation 1 on I17
+    g.process_action(action_helper.get_all_choices()[-8])  # buy C&A for max
+    g.process_action(action_helper.get_all_choices()[1])  # lay tile #8 with rotation 1 on I17
     g.process_action(action_helper.get_all_choices()[0])  # buy 3 train
     g.process_action(action_helper.get_all_choices()[0])  # buy 4 train
 
     # NYNH
-    g.process_action(action_helper.get_all_choices()[-3])  # lay tile #57 with rotation 1 on F22
+    g.process_action(action_helper.get_all_choices()[17])  # lay tile #57 with rotation 1 on F22
     g.process_action(action_helper.get_all_choices()[0])  # run trains
     g.process_action(action_helper.get_all_choices()[0])  # pay out
 
     # C&O
-    g.process_action(action_helper.get_all_choices()[-20])  # lay tile #56 with rotation 1 on G17
+    g.process_action(action_helper.get_all_choices()[26])  # lay tile #56 with rotation 1 on G17
     g.process_action(action_helper.get_all_choices()[0])  # place token on G19
     g.process_action(action_helper.get_all_choices()[0])  # run trains
     g.process_action(action_helper.get_all_choices()[0])  # pay out
@@ -457,29 +473,29 @@ def test_1830_manual_actions():
     g.process_action(action_helper.get_all_choices()[109])  # buy a 3 train for $110 from PRR
 
     # PRR
-    g.process_action(action_helper.get_all_choices()[12])  # lay tile #53 with rotation 0 on I15
+    g.process_action(action_helper.get_all_choices()[34])  # lay tile #53 with rotation 0 on I15
     g.process_action(action_helper.get_all_choices()[0])  # buy 4 train
     g.process_action(action_helper.get_all_choices()[-1])  # pass trains
 
     # NYNH
-    g.process_action(action_helper.get_all_choices()[12])  # tile #53 with rotation 1 on E23
+    g.process_action(action_helper.get_all_choices()[18])  # tile #53 with rotation 1 on E23
     g.process_action(action_helper.get_all_choices()[0])  # runs a 3 train for $140: G19-E19-E23
     g.process_action(action_helper.get_all_choices()[1])  # withholds $140
     g.process_action(action_helper.get_all_choices()[0])  # buys a 4 train for $300 from The Depot
 
     # B&O
-    g.process_action(action_helper.get_all_choices()[-2])  # lay tile #59 with rotation 0 on H18
+    g.process_action(action_helper.get_all_choices()[12])  # lay tile #59 with rotation 0 on H18
     g.process_action(action_helper.get_all_choices()[-1])  # skip token
     g.process_action(action_helper.get_all_choices()[0])  # run trains
     g.process_action(action_helper.get_all_choices()[0])  # pay out
 
     # C&O
-    g.process_action(action_helper.get_all_choices()[8])  # lay tile #69 with rotation 0 on G7
+    g.process_action(action_helper.get_all_choices()[18])  # lay tile #69 with rotation 0 on G7
     g.process_action(action_helper.get_all_choices()[0])  # run trains
     g.process_action(action_helper.get_all_choices()[0])  # pay out
 
     # NYC
-    g.process_action(action_helper.get_all_choices()[-3])  # lay tile 9 with rotation 1 on F14
+    g.process_action(action_helper.get_all_choices()[22])  # lay tile 9 with rotation 1 on F14
     g.process_action(action_helper.get_all_choices()[-1])  # skip token
     g.process_action(action_helper.get_all_choices()[0])  # run trains
     g.process_action(action_helper.get_all_choices()[0])  # pay out
@@ -615,7 +631,7 @@ def test_1830_manual_actions():
 
     # [18:06] Player 1 operates PRR
     g.process_action(
-        action_helper.get_all_choices()[4]
+        action_helper.get_all_choices()[8]
     )  # [18:12] PRR lays tile #15 with rotation 1 on H10 (Pittsburgh)
     # [18:12] PRR skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [18:12] PRR runs a 4 train for $130: F2-H10-H12-I15
@@ -626,7 +642,7 @@ def test_1830_manual_actions():
 
     # [18:12] Player 4 operates B&O
     g.process_action(
-        action_helper.get_all_choices()[0]
+        action_helper.get_all_choices()[43]
     )  # [18:13] B&O spends $80 and lays tile #57 with rotation 0 on J14 (Washington)
     g.process_action(action_helper.get_all_choices()[1])  # [18:13] B&O places a token on H10 (Pittsburgh) for $40
     g.process_action(action_helper.get_all_choices()[0])  # [18:13] B&O runs a 4 train for $140: K13-J14-I15-H18
@@ -657,7 +673,7 @@ def test_1830_manual_actions():
 
     # [18:13] Player 2 operates C&O
     g.process_action(
-        action_helper.get_all_choices()[-4]
+        action_helper.get_all_choices()[53]
     )  # [18:16] C&O lays tile #66 with rotation 0 on H18 (Philadelphia & Trenton)
     # [18:16] C&O skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [18:16] C&O runs a 3 train for $160: G19-H18-I15
@@ -667,7 +683,7 @@ def test_1830_manual_actions():
     # [18:17] C&O skips buy companies
 
     # [18:17] Player 3 operates NYNH
-    g.process_action(action_helper.get_all_choices()[0])  # [18:19] NYNH lays tile #63 with rotation 0 on E19 (Albany)
+    g.process_action(action_helper.get_all_choices()[6])  # [18:19] NYNH lays tile #63 with rotation 0 on E19 (Albany)
     # [18:19] NYNH skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [18:19] NYNH runs a 4 train for $100: G19-F20-F22-F24
     # [18:19] NYNH runs a 3 train for $150: G19-E19-E23
@@ -678,7 +694,7 @@ def test_1830_manual_actions():
 
     # [18:21] Player 1 operates NYC
     g.process_action(
-        action_helper.get_all_choices()[8]
+        action_helper.get_all_choices()[68]
     )  # [18:21] NYC lays tile #62 with rotation 0 on G19 (New York & Newark)
     g.process_action(
         action_helper.get_all_choices()[3]
@@ -692,7 +708,7 @@ def test_1830_manual_actions():
 
     # [18:21] -- Operating Round 5.2 (of 2) --
     # [18:21] Player 1 operates PRR
-    g.process_action(action_helper.get_all_choices()[-3])  # [18:21] PRR lays tile #9 with rotation 0 on G11
+    g.process_action(action_helper.get_all_choices()[3])  # [18:21] PRR lays tile #9 with rotation 0 on G11
     # [18:21] PRR skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [18:21] PRR runs a 4 train for $160: F2-H10-H12-I15
     g.process_action(action_helper.get_all_choices()[1])  # [18:21] PRR withholds $160
@@ -701,7 +717,7 @@ def test_1830_manual_actions():
     # [18:21] PRR skips buy companies
 
     # [18:21] Player 4 operates B&O
-    g.process_action(action_helper.get_all_choices()[6])  # [18:22] B&O lays tile #61 with rotation 0 on I15 (Baltimore)
+    g.process_action(action_helper.get_all_choices()[59])  # [18:22] B&O lays tile #61 with rotation 0 on I15 (Baltimore)
     # [18:22] B&O skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [18:22] B&O runs a 4 train for $170: K13-J14-I15-H18
     # [18:22] B&O runs a 3 train for $160: I15-H10-F2
@@ -711,7 +727,7 @@ def test_1830_manual_actions():
     # [18:22] B&O skips buy companies
 
     # [18:22] Player 3 operates NYNH
-    g.process_action(action_helper.get_all_choices()[5])  # [18:22] NYNH lays tile #8 with rotation 5 on D18
+    g.process_action(action_helper.get_all_choices()[3])  # [18:22] NYNH lays tile #8 with rotation 5 on D18
     # [18:22] NYNH skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [18:22] NYNH runs a 4 train for $120: G19-F20-F22-F24
     # [18:22] NYNH runs a 3 train for $170: G19-E19-E23
@@ -733,7 +749,7 @@ def test_1830_manual_actions():
 
     # [18:23] Player 2 operates C&O
     g.process_action(
-        action_helper.get_all_choices()[-3]
+        action_helper.get_all_choices()[0]
     )  # [18:23] C&O lays tile #68 with rotation 2 on E11 (Dunkirk & Buffalo)
     # [18:23] C&O skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [18:23] C&O runs a 5 train for $220: E11-F16-G17-G19-H18
@@ -746,7 +762,7 @@ def test_1830_manual_actions():
     # [18:23] C&O skips buy companies
 
     # [18:23] Player 1 operates NYC
-    g.process_action(action_helper.get_all_choices()[41])  # [18:23] NYC lays tile #9 with rotation 1 on D16
+    g.process_action(action_helper.get_all_choices()[3])  # [18:23] NYC lays tile #9 with rotation 1 on D16
     g.process_action(action_helper.get_all_choices()[-1])  # [18:23] NYC passes place a token
     g.process_action(action_helper.get_all_choices()[0])  # [18:23] NYC runs a 3 train for $170: G19-E19-E23
     # [18:23] NYC runs a 3 train for $190: G19-H18-I15
@@ -915,7 +931,7 @@ def test_1830_manual_actions():
 
     # Operating Round 6
     # [19:19] Player 2 operates C&O
-    g.process_action(action_helper.get_all_choices()[10])  # [19:21] C&O lays tile #9 with rotation 1 on G9
+    g.process_action(action_helper.get_all_choices()[43])  # [19:21] C&O lays tile #9 with rotation 1 on G9
     # [19:21] C&O skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [19:21] C&O runs a 5 train for $220: E11-F16-G17-G19-H18
     # [19:21] C&O runs a 3 train for $110: F2-F6-G7
@@ -927,7 +943,7 @@ def test_1830_manual_actions():
     # [19:21] C&O skips buy companies
 
     # [19:21] Player 4 operates B&O
-    g.process_action(action_helper.get_all_choices()[28])  # [19:22] B&O lays tile #46 with rotation 5 on G5
+    g.process_action(action_helper.get_all_choices()[16])  # [19:22] B&O lays tile #46 with rotation 5 on G5
     g.process_action(action_helper.get_all_choices()[-1])  # [19:22] B&O passes place a token
     g.process_action(action_helper.get_all_choices()[0])  # [19:22] B&O runs a 4 train for $170: K13-J14-I15-H18
     # [19:22] B&O runs a 3 train for $160: I15-H10-F2
@@ -938,7 +954,7 @@ def test_1830_manual_actions():
 
     # [19:22] Player 1 operates B&M
     # [19:22] B&M places a token on E23
-    g.process_action(action_helper.get_all_choices()[11])  # [19:24] B&M lays tile #45 with rotation 4 on E21
+    g.process_action(action_helper.get_all_choices()[9])  # [19:24] B&M lays tile #45 with rotation 4 on E21
     g.process_action(action_helper.get_all_choices()[-1])  # [19:24] B&M passes place a token
     # [19:24] B&M skips run routes
     # [19:24] B&M does not run
@@ -950,7 +966,7 @@ def test_1830_manual_actions():
     # [19:24] Player 2 operates CPR
     # [19:24] CPR places a token on A19
     g.process_action(
-        action_helper.get_all_choices()[-3]
+        action_helper.get_all_choices()[4]
     )  # [19:24] CPR spends $80 and lays tile #9 with rotation 0 on B18
     # [19:24] CPR skips place a token
     # [19:24] CPR skips run routes
@@ -963,7 +979,7 @@ def test_1830_manual_actions():
     # [19:25] CPR skips buy companies
 
     # [19:25] Player 2 operates ERIE
-    g.process_action(action_helper.get_all_choices()[6])  # [19:25] ERIE lays tile #25 with rotation 2 on F12
+    g.process_action(action_helper.get_all_choices()[4])  # [19:25] ERIE lays tile #25 with rotation 2 on F12
     # [19:25] ERIE skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [19:25] ERIE runs a 5 train for $80: E11-H10
     g.process_action(action_helper.get_all_choices()[1])  # [19:25] ERIE withholds $80
@@ -972,7 +988,7 @@ def test_1830_manual_actions():
     # [19:25] ERIE skips buy companies
 
     # [19:25] Player 4 operates PRR
-    g.process_action(action_helper.get_all_choices()[8])  # [19:26] PRR lays tile #23 with rotation 1 on H14
+    g.process_action(action_helper.get_all_choices()[33])  # [19:26] PRR lays tile #23 with rotation 1 on H14
     # [19:26] PRR skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [19:26] PRR runs a 4 train for $170: F2-H10-H12-I15
     g.process_action(action_helper.get_all_choices()[1])  # [19:27] PRR withholds $170
@@ -981,7 +997,7 @@ def test_1830_manual_actions():
     # [19:27] PRR skips buy companies
 
     # [19:27] Player 3 operates NYNH
-    g.process_action(action_helper.get_all_choices()[20])  # [19:27] NYNH lays tile #8 with rotation 4 on D12
+    g.process_action(action_helper.get_all_choices()[3])  # [19:27] NYNH lays tile #8 with rotation 4 on D12
     # [19:27] NYNH skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [19:27] NYNH runs a 4 train for $190: G19-E19-D14-E11
     g.process_action(action_helper.get_all_choices()[1])  # [19:27] NYNH withholds $190
@@ -990,7 +1006,7 @@ def test_1830_manual_actions():
     # [19:27] NYNH skips buy companies
 
     # [19:27] Player 1 operates NYC
-    g.process_action(action_helper.get_all_choices()[-10])  # [19:27] NYC lays tile #40 with rotation 0 on F12
+    g.process_action(action_helper.get_all_choices()[57])  # [19:27] NYC lays tile #40 with rotation 0 on F12
     g.process_action(action_helper.get_all_choices()[-1])  # [19:27] NYC passes place a token
     # [19:27] NYC skips run routes
     # [19:27] NYC does not run
@@ -1000,7 +1016,7 @@ def test_1830_manual_actions():
 
     # [19:28] NYC skips buy companies
     # [19:28] Player 2 operates C&O
-    g.process_action(action_helper.get_all_choices()[24])  # [20:27] C&O lays tile #23 with rotation 3 on G11
+    g.process_action(action_helper.get_all_choices()[32])  # [20:27] C&O lays tile #23 with rotation 3 on G11
     # [20:27] C&O skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [20:27] C&O runs a 5 train for $220: E11-F16-G17-G19-H18
     g.process_action(
@@ -1011,7 +1027,7 @@ def test_1830_manual_actions():
     # [20:27] C&O skips buy companies
 
     # [20:27] Player 4 operates B&O
-    g.process_action(action_helper.get_all_choices()[42])  # [20:27] B&O lays tile #43 with rotation 0 on G11
+    g.process_action(action_helper.get_all_choices()[23])  # [20:27] B&O lays tile #43 with rotation 0 on G11
     g.process_action(action_helper.get_all_choices()[-1])  # [20:28] B&O passes place a token
     g.process_action(action_helper.get_all_choices()[0])  # [20:28] B&O runs a 4 train for $210: F2-H10-I15-H18
     g.process_action(action_helper.get_all_choices()[1])  # [20:28] B&O withholds $210
@@ -1025,7 +1041,7 @@ def test_1830_manual_actions():
     # [20:28] B&O skips buy companies
 
     # [20:28] Player 1 operates B&M
-    g.process_action(action_helper.get_all_choices()[11])  # [20:28] B&M lays tile #8 with rotation 5 on D20
+    g.process_action(action_helper.get_all_choices()[3])  # [20:28] B&M lays tile #8 with rotation 5 on D20
     g.process_action(action_helper.get_all_choices()[-1])  # [20:28] B&M passes place a token
     g.process_action(action_helper.get_all_choices()[0])  # [20:28] B&M runs a 5 train for $170: E23-F24-F22-F20-G19
     g.process_action(action_helper.get_all_choices()[0])  # [20:28] B&M pays out 17 per share ($102 to Player 1)
@@ -1035,7 +1051,7 @@ def test_1830_manual_actions():
 
     # [20:28] Player 2 operates CPR
     g.process_action(
-        action_helper.get_all_choices()[-3]
+        action_helper.get_all_choices()[21]
     )  # [20:28] CPR spends $120 and lays tile #9 with rotation 0 on C17
     # [20:28] CPR skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [20:29] CPR runs a 6 train for $50: A19-B20
@@ -1048,7 +1064,7 @@ def test_1830_manual_actions():
 
     # [20:29] Player 2 operates ERIE
     g.process_action(
-        action_helper.get_all_choices()[0]
+        action_helper.get_all_choices()[7]
     )  # [20:29] ERIE spends $80 and lays tile #59 with rotation 3 on D10 (Hamilton & Toronto)
     # [20:29] ERIE skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [20:29] ERIE runs a 5 train for $130: D10-E11-G7-F6
@@ -1061,7 +1077,7 @@ def test_1830_manual_actions():
 
     # [20:29] Player 4 operates PRR
     g.process_action(
-        action_helper.get_all_choices()[11]
+        action_helper.get_all_choices()[48]
     )  # [20:29] PRR lays tile #57 with rotation 1 on H16 (Lancaster)
     g.process_action(action_helper.get_all_choices()[-1])  # [20:29] PRR passes place a token
     # [20:29] PRR skips run routes
@@ -1078,7 +1094,7 @@ def test_1830_manual_actions():
     # [20:30] PRR skips buy companies
 
     # [20:30] Player 3 operates NYNH
-    g.process_action(action_helper.get_all_choices()[37])  # [20:30] NYNH lays tile #58 with rotation 3 on F10 (Erie)
+    g.process_action(action_helper.get_all_choices()[53])  # [20:30] NYNH lays tile #58 with rotation 3 on F10 (Erie)
     # [20:30] NYNH skips place a token
     # [20:30] NYNH skips run routes
     # [20:30] NYNH does not run
@@ -1099,7 +1115,7 @@ def test_1830_manual_actions():
     # [20:31] NYNH skips buy companies
 
     # [20:31] Player 1 operates NYC
-    g.process_action(action_helper.get_all_choices()[56])  # [20:31] NYC lays tile #24 with rotation 4 on G9
+    g.process_action(action_helper.get_all_choices()[78])  # [20:31] NYC lays tile #24 with rotation 4 on G9
     g.process_action(
         action_helper.get_all_choices()[3]
     )  # [20:32] NYC places a token on E11 (Dunkirk & Buffalo) for $100
@@ -1125,7 +1141,7 @@ def test_1830_manual_actions():
     # [21:36] C&O skips buy companies
 
     # [21:36] Player 1 operates B&M
-    g.process_action(action_helper.get_all_choices()[17])  # [21:36] B&M lays tile #23 with rotation 1 on D18
+    g.process_action(action_helper.get_all_choices()[1])  # [21:36] B&M lays tile #23 with rotation 1 on D18
     g.process_action(action_helper.get_all_choices()[0])  # [21:36] B&M places a token on D14 (Rochester) for $40
     g.process_action(action_helper.get_all_choices()[0])  # [21:36] B&M runs a 5 train for $170: E23-F24-F22-F20-G19
     g.process_action(action_helper.get_all_choices()[0])  # [21:36] B&M pays out 17 per share ($102 to Player 1)
@@ -1143,7 +1159,7 @@ def test_1830_manual_actions():
     # [21:36] CPR skips buy companies
 
     # [21:36] Player 3 operates NYNH
-    g.process_action(action_helper.get_all_choices()[9])  # [21:37] NYNH lays tile #47 with rotation 0 on D16
+    g.process_action(action_helper.get_all_choices()[2])  # [21:37] NYNH lays tile #47 with rotation 0 on D16
     # [21:37] NYNH skips place a token
     g.process_action(
         action_helper.get_all_choices()[0]
@@ -1156,7 +1172,7 @@ def test_1830_manual_actions():
     # [21:37] NYNH skips buy companies
 
     # [21:37] Player 4 operates PRR
-    g.process_action(action_helper.get_all_choices()[35])  # [21:37] PRR lays tile #24 with rotation 1 on F14
+    g.process_action(action_helper.get_all_choices()[8])  # [21:37] PRR lays tile #24 with rotation 1 on F14
     # [21:37] PRR skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [21:37] PRR runs a D train for $180: F2-H10-H12-H16-H18
     g.process_action(
@@ -1178,7 +1194,7 @@ def test_1830_manual_actions():
     # [21:38] ERIE skips buy companies
 
     # [21:38] Player 4 operates B&O
-    g.process_action(action_helper.get_all_choices()[36])  # [21:38] B&O lays tile #9 with rotation 0 on E15
+    g.process_action(action_helper.get_all_choices()[3])  # [21:38] B&O lays tile #9 with rotation 0 on E15
     g.process_action(action_helper.get_all_choices()[-1])  # [21:39] B&O passes place a token
     g.process_action(action_helper.get_all_choices()[0])  # [21:39] B&O runs a D train for $220: F2-H10-I15-J14-K13
     g.process_action(
@@ -1189,7 +1205,7 @@ def test_1830_manual_actions():
     # [21:39] B&O skips buy companies
 
     # [21:39] Player 1 operates NYC
-    g.process_action(action_helper.get_all_choices()[20])  # [21:39] NYC lays tile #28 with rotation 0 on D12
+    g.process_action(action_helper.get_all_choices()[23])  # [21:39] NYC lays tile #28 with rotation 0 on D12
     # [21:39] NYC skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [21:39] NYC runs a 6 train for $300: F2-F16-G17-G19-H18-I15
     g.process_action(
@@ -1561,7 +1577,7 @@ def test_1830_manual_bankrupcy():
     # [21:17] Player 4 operates B&O
     # [21:17] B&O places a token on I15
     g.process_action(
-        action_helper.get_all_choices()[-3]
+        action_helper.get_all_choices()[4]
     )  # [21:17] B&O spends $80 and lays tile #57 with rotation 0 on J14 (Washington)
     g.process_action(action_helper.get_all_choices()[-1])  # [21:17] B&O passes place a token
     # [21:17] B&O skips run routes

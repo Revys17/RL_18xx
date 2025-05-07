@@ -170,9 +170,9 @@ class Ownable:
         )
 
     def player(self):
-        if hasattr(self._owner, "player"):
-            return self._owner.player
-        return self._owner if hasattr(self._owner, "player") and self._owner.player else None
+        if self._owner.is_player():
+            return self._owner
+        return self._owner.player()
 
     def corporation(self):
         if self.is_corporation():

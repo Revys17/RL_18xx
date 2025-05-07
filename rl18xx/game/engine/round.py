@@ -101,9 +101,10 @@ from rl18xx.game.engine.actions import (
     TakeLoan,
 )
 from .graph import Hex, Tile, Token as TokenPiece
-
+import logging
 from collections import defaultdict
 
+LOGGER = logging.getLogger(__name__)
 
 class BaseStep(Passer):
     def __init__(self, game, round, **opts):
@@ -156,7 +157,6 @@ class BaseStep(Passer):
 
     @property
     def current_actions(self):
-        # set_trace()
         entity = self.current_entity
         if not entity or entity.is_closed():
             return []
@@ -800,6 +800,9 @@ class BuyTrain(BaseStep, Train):
             return [SellShares, BuyTrainAction]
         elif self.can_buy_train(entity):
             return [BuyTrainAction, Pass]
+
+        if not self.must_buy_train(entity):
+            return [Pass]
 
         return []
 
@@ -1644,7 +1647,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         return self.round.players_history[entity][corporation]
 
     def track_action(self, action, corporation, player_action=True):
-        self.round.last_to_act = action.entity.player
+        self.round.last_to_act = action.entity.player()
         if player_action:
             self.round.current_actions.append(action)
         self.round.players_history.setdefault(action.entity.player, {}).setdefault(corporation, []).append(action)
@@ -2695,6 +2698,9 @@ class DiscardTrain(BaseStep):
     def process_discard_train(self, action):
         train = action.train
         self.game.depot.reclaim_train(train)
+        for step in self.round.steps:
+            if isinstance(step, BuyTrain):
+                step.unpass()
         self.log.append(f"{action.entity.name} discards {train.name}")
 
     @property
@@ -2981,6 +2987,8 @@ class Exchange(BaseStep, ShareBuying):
         return [share for share in shares if share and self.can_gain(owner, share.to_bundle(), exchange=True)]
 
     def can_exchange(self, entity, bundle=None):
+        if bundle and bundle.presidents_share:
+            return False
         return any(self.exchangeable_shares(entity, bundle))
 
     def can_gain(self, entity, bundle, exchange=False):
@@ -4236,8 +4244,6 @@ class Tracker:
         return self.game.abilities(entity, "tile_lay", **kwargs)
 
     def lay_tile(self, action, extra_cost=0, entity=None, spender=None):
-        if self.game.debug:
-            set_trace()
         entity = entity or action.entity
         entities = [entity] + action.combo_entities
 
@@ -4509,7 +4515,7 @@ class Tracker:
         colors = self.potential_tile_colors(entity, hex)
         tile_names = {
             tile.name: tile
-            for tile in self.game.tiles
+            for tile in sorted(self.game.tiles, key=lambda x: x.index, reverse=True)
             if self.game.tile_valid_for_phase(tile, hex=hex, phase_color_cache=colors)
             and self.game.upgrades_to(hex.tile, tile)
         }
@@ -4796,8 +4802,6 @@ class SpecialTrack(BaseStep, Tracker):
         ]
 
     def abilities(self, entity, **kwargs):
-        if self.game.debug:
-            set_trace()
         if not entity or not entity.is_company():
             return []
         if hasattr(self.round, "just_sold_company") and entity == self.round.just_sold_company:
@@ -5101,6 +5105,10 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         entity.unpass()
 
         if self.auctioning_company():
+            if action.company != self.auctioning_company():
+                raise GameError(
+                    f"{entity.name} cannot bid on {action.company.name} because {self.auctioning_company().name} is up for auction"
+                )
             self.add_bid(action)
         else:
             self.placement_bid(action)
@@ -5327,7 +5335,6 @@ class BaseRound:
         return self.active_step().pass_description
 
     def process_action(self, action):
-        # set_trace()
         type = action.__class__
         self.clear_cache()
 
@@ -5354,7 +5361,9 @@ class BaseRound:
                 self.after_process(action)
                 return
 
-        raise GameError(f"No step found for action {type.__name__} at {action.id}: {action.to_dict()}")
+        e = GameError(f"No step found for action {type.__name__} at {action.id}: {action.to_dict()}. Game Actions: {self.game.raw_actions}")
+        LOGGER.exception(e)
+        raise e
 
     def actions_for(self, entity):
         actions = []
@@ -5456,7 +5465,6 @@ class BaseRound:
         return True
 
     def skip_steps(self):
-        # set_trace()
         for step in self.steps:
             if (
                 not step.active
@@ -5604,7 +5612,7 @@ class Operating(BaseRound):
 
         if self.active_step():
             entity = self.entities[self.entity_index]
-            if entity.owner and entity.owner.player or entity.receivership:
+            if entity.owner and entity.owner.is_player() or entity.receivership:
                 return
 
         self.after_end_of_turn(self.current_operator)

@@ -94,8 +94,6 @@ class ShareBundle:
         else:
             self.shares = [shares]
 
-        if any([isinstance(share.corporation, Corporation) for share in self.shares]):
-            set_trace()
         if not len({share.corporation() for share in self.shares}) == 1:
             raise ValueError("All shares must be from the same corporation")
 
@@ -196,10 +194,11 @@ class Share(Ownable):
             and self.percent == other.percent
             and self._corporation == other._corporation
             and self.owner == other.owner
+            and self.index == other.index
         )
 
     def __hash__(self):
-        return hash((self.percent, self._corporation, self.owner))
+        return hash((self.percent, self._corporation, self.owner, self.index))
 
     def num_shares(self, ceil=True):
         num = self.percent / self._corporation.share_percent
@@ -253,11 +252,12 @@ class SharePool(Entity, ShareHolder):
         self.no_rebundle_president_buy = no_rebundle_president_buy
 
     def __str__(self):
-        return self.name()
+        return self.name
 
     def __repr__(self):
         return self.__str__()
 
+    @property
     def name(self):
         return "Market"
 
@@ -266,6 +266,9 @@ class SharePool(Entity, ShareHolder):
 
     def owner(self):
         return None
+    
+    def is_share_pool(self):
+        return True
 
     def buy_shares(
         self,
@@ -356,7 +359,6 @@ class SharePool(Entity, ShareHolder):
                     f"for {self.game.format_currency(price)}{swap_text}{borrowed_text}"
                 )
 
-        # set_trace()
         if price == 0:
             self.transfer_shares(bundle, entity, allow_president_change=allow_president_change)
         else:
@@ -570,8 +572,6 @@ class SharePool(Entity, ShareHolder):
             self.move_share(from_entity.shares_of(corp)[0], to_entity)
 
     def change_president(self, presidents_share, swap_to, president, _previous_president=None):
-        if self.game.debug:
-            set_trace()
         corporation = presidents_share.corporation()
         num_shares = int(presidents_share.percent / corporation.share_percent)
 
@@ -647,7 +647,7 @@ class Depot(Entity):
             return
         self.game.remove_train(train)
         train.owner = self
-        if self.game.discarded_train_placement == "discard" and not train.obsolete:
+        if self.game.discarded_train_placement() == "discard" and not train.obsolete:
             self.discarded.append(train)
         self.depot_trains_cache = None
 
@@ -1006,7 +1006,6 @@ class Bank(Entity, Spender, ShareHolder):
     def is_broken(self):
         return self.broken
 
-    @property
     def player(self):
         return None
 
@@ -1045,6 +1044,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
             )
             for index, percent in enumerate(kwargs.get("shares", self.SHARES))
         ]
+        self.corp_shares = corp_shares
         for share in corp_shares:
             self.ipo_owner.shares_by_corporation.setdefault(self, []).append(share)
         self.share_holders = defaultdict(int)
@@ -1152,7 +1152,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
         return sum(holder_value for holder, holder_value in self.corporate_share_holders().items()) / self.share_percent
 
     def num_market_shares(self):
-        return (
+        return int(
             sum(holder_value for holder, holder_value in self.share_holders.items() if holder.is_share_pool())
             / self.share_percent
         )
@@ -1186,6 +1186,10 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
     @property
     def ipo_shares(self):
         return [share for share in self.ipo_owner.shares if share.corporation() == self]
+
+    @property
+    def market_shares(self):
+        return [share for share in self.corp_shares if share.owner.is_share_pool()]
 
     def treasury_shares(self):
         return [share for share in self.shares if share.corporation() == self and not self.treasury_as_holding]
@@ -1285,16 +1289,16 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
         )
 
     def player(self):
-        chain = {self.owner(): True}
-        current = self.owner()
-        while current and current.corporation():
-            if not current.owner():
+        chain = {self.owner: True}
+        current = self.owner
+        while current and current.is_corporation():
+            if not current.owner:
                 return None
-            current = current.owner()
+            current = current.owner
             if current in chain:
                 return None
             chain[current] = True
-        return current.player() if current and current.player() else None
+        return current.player() if current and current.is_player() else None
 
     def is_closed(self):
         return self.closed
@@ -1425,7 +1429,6 @@ class Player(Entity, Passer, ShareHolder, Spender):
     def owner(self):
         return self
 
-    @property
     def player(self):
         return self
 

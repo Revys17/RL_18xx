@@ -201,7 +201,7 @@ class Entities:
             "simple_logo": "1830/NYNH.alt",
             "tokens": [0, 40],
             "coordinates": "G19",
-            "city": 0,
+            "city": 1,
             "color": "#d88e39",
         },
         {
@@ -400,7 +400,7 @@ class Map:
             ("I15",): "city=revenue:30;path=a:4,b:_0;path=a:0,b:_0;label=B",
             (
                 "G19",
-            ): "city=revenue:40;city=revenue:40;path=a:3,b:_0;path=a:0,b:_1;label=NY;upgrade=cost:80,terrain:water",
+            ): "city=revenue:40;city=revenue:40;path=a:3,b:_1;path=a:0,b:_0;label=NY;upgrade=cost:80,terrain:water",
             ("E23",): "city=revenue:30;path=a:3,b:_0;path=a:5,b:_0;label=B",
         },
     }

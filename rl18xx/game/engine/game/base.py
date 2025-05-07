@@ -798,7 +798,7 @@ class BaseGame:
         return self.current_entity
 
     def active_players(self):
-        players_ = [self.acting_for_player(e.player) for e in self.round.active_entities if e and e.player]
+        players_ = [self.acting_for_player(e.player()) for e in self.round.active_entities if e and e.player()]
         players_ = [player for player in players_ if player]  # Remove None values
 
         if not players_:
@@ -899,6 +899,7 @@ class BaseGame:
         return True
 
     def process_action(self, action, add_auto_actions=False, validate_auto_actions=False):
+        LOGGER.debug(f"Processing action: {action}")
         if isinstance(action, dict):
             action = BaseAction.action_from_dict(action, self)
 
@@ -2522,6 +2523,15 @@ class BaseGame:
     @property
     def game_tiles(self):
         return self.map.TILES
+
+    def unique_tile_types(self):
+        return list(set([tile.name for tile in self.all_tiles]))
+
+    def get_available_tile_with_name(self, name):
+        possible_tiles = sorted([tile for tile in self.tiles if tile.name == name], key=lambda x: x.index)
+        if len(possible_tiles) == 0:
+            return None
+        return possible_tiles[0]
 
     def init_tile(self, name, val):
         if isinstance(val, int) or val == "unlimited":

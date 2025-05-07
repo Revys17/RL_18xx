@@ -512,8 +512,6 @@ class Path(BasePart):
         converging=True,
         debug=False,
     ):
-        if debug and self.hex.name == "F12":
-            set_trace()
         if visited is None:
             visited = {}
         if skip_paths is None:
@@ -901,7 +899,6 @@ class City(RevenueCenter):
         return any(t is not None for t in self.tokens)
 
     def tokened_by(self, corporation):
-        # set_trace()
         return any(t is not None and t.corporation == corporation for t in self.tokens + self.extra_tokens)
 
     def find_reservation(self, corporation):
@@ -1295,7 +1292,6 @@ class Graph:
         return cities
 
     def connected_hexes(self, corporation):
-        # set_trace()
         if corporation not in self._connected_hexes:
             list(self.compute(corporation))
         return self._connected_hexes[corporation]
@@ -1331,8 +1327,7 @@ class Graph:
         return self._reachable_hexes[corporation]
 
     def compute_by_token(self, corporation):
-        # Assuming compute also updates the connected_*_by_token dictionaries
-        list(self.compute(corporation))  # Consume the generator for the side effects
+        list(self.compute(corporation))
         for hex in self.game.hexes():
             for city in hex.tile.cities:
                 if self.game.city_tokened_by(city, corporation) and not (
@@ -1372,8 +1367,6 @@ class Graph:
         return nodes
 
     def compute(self, corporation, routes_only=False, one_token=None):
-        if self.game.debug:
-            set_trace()
         hexes = defaultdict(dict)
         nodes = {}
         paths = {}
@@ -1392,8 +1385,6 @@ class Graph:
                     hexes[hex][e] = True
                 nodes[city] = True
 
-        if self.game.debug:
-            set_trace()
         if self.home_as_token and corporation.coordinates:
             hexes.update(self.home_hexes(corporation))
             nodes.update(self.home_hex_nodes(corporation))
@@ -1415,8 +1406,6 @@ class Graph:
                         if ability_type == "teleport" and ability.used:
                             yield node
 
-        if self.game.debug:
-            set_trace()
         routes = self.routes.get(corporation, {})
         walk_corporation = None if self.no_blocking else corporation
         skip_paths = (
@@ -1443,7 +1432,6 @@ class Graph:
                 converging_path=False,
                 counter=counter,
             ):
-                # set_trace()
                 if path in paths:
                     continue
 
@@ -1470,8 +1458,6 @@ class Graph:
             elif mandatory_nodes == 1 and optional_nodes > 0:
                 routes["route_available"] = True
 
-        if self.game.debug:
-            set_trace()
         if one_token:
             self._connected_hexes_by_token[corporation][one_token] = hexes
             self._connected_nodes_by_token[corporation][one_token] = nodes
@@ -3038,7 +3024,6 @@ class Tile(TileConfig):
         return ct_edges.values()
 
     def city_town_edges_are_subset_of(self, other_cte):
-        # set_trace()
         cte = self.city_town_edges
         return any(
             all(
@@ -3336,7 +3321,6 @@ class Hex:
         hide_location_name=False,
         empty=False,
     ):
-        # set_trace()
         self.coordinates = coordinates
         self.layout = layout
         self.axes = axes

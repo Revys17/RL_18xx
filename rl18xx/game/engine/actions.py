@@ -150,10 +150,8 @@ class BaseAction:
         return False
 
     def __lt__(self, other):
-        # Compare based on id if both have one, otherwise compare based on created_at timestamp
         return (self.id < other.id) if self.id and other.id else (self.created_at < other.created_at)
 
-    # Implementing the rest of the comparison methods if needed
     def __eq__(self, other):
         if not isinstance(other, self.__class__):
             return False
@@ -625,6 +623,9 @@ class DiscardTrain(BaseAction):
         return {
             "train": self.train.id,
         }
+
+    def __str__(self):
+        return super().__str__() + f", train: [{self.train}]"
 
 
 class Dividend(BaseAction):
@@ -1393,7 +1394,7 @@ class RunRoutes(BaseAction):
                 "train": route.train.id,
                 "connections": route.connection_hexes,
                 "hexes": [hex.id for hex in route.hexes],
-                "revenue": route.revenue,
+                "revenue": route.revenue(),
                 "revenue_str": route.revenue_str,
                 "subsidy": route.subsidy,
                 "halts": route.halts,
