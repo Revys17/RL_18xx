@@ -7,17 +7,18 @@ import torch
 from datetime import datetime
 from typing import List, Tuple, Dict
 
+from rl18xx.game.gamemap import GameMap
 from rl18xx.game.engine.game.base import BaseGame
 from rl18xx.agent.alphazero.model import Model
 from rl18xx.agent.alphazero.encoder import Encoder_1830
-from rl18xx.agent.alphazero.action_mapper import ActionMapper, ACTION_ENCODING_SIZE
+from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.alphazero.mcts import MCTS
 
 LOGGER = logging.getLogger(__name__)
 
 # Define the structure for a training example
-# (state_encoding_tensor, mcts_policy_vector, final_value_vector)
-TrainingExample = Tuple[torch.Tensor, np.ndarray, np.ndarray]
+# ( (game_state_tensor, map_nodes_tensor, raw_edge_input_tensor), mcts_policy_vector, final_value_vector )
+TrainingExample = Tuple[Tuple[torch.Tensor, torch.Tensor, torch.Tensor], np.ndarray, np.ndarray]
 
 
 def run_self_play_game(
@@ -68,7 +69,7 @@ def run_self_play_game(
         LOGGER.exception("Failed to initialize game.")
         return []
 
-    game_history: List[Tuple[torch.Tensor, np.ndarray]] = []  # Stores (state_encoding, mcts_policy)
+    game_history: List[Tuple[Tuple[torch.Tensor, torch.Tensor, torch.Tensor], np.ndarray]] = []  # Stores (encoded_state_tuple, mcts_policy)
     game_steps = 0
 
     while not game.finished:
@@ -95,41 +96,52 @@ def run_self_play_game(
             mcts.search()
 
             # Determine temperature for action selection
-            temperature = initial_temperature if game_steps < temperature_decay_steps else 0.0
-            LOGGER.debug(f"Using temperature {temperature} for action selection.")
+            temperature_for_action_selection = initial_temperature if game_steps < temperature_decay_steps else 0.0
+            LOGGER.debug(f"Using temperature {temperature_for_action_selection} for action selection.")
 
-            # Get the MCTS policy (target for the policy head)
-            policy_dict, policy_vector = mcts.get_policy(
-                temperature=temperature
-            )  # Use temp=1 for storing policy target
-
-            # Store state and policy *before* making the move
-            # Ensure encoding is done *before* the MCTS search modified the root state potentially?
-            # MCTS search *shouldn't* modify the root state it's given, but good practice.
-            # The encoder adds the batch dim, keep it for consistency? Or store flat tensors? Let's keep batch dim.
-            current_encoding = encoder.encode(game)  # Encode the state MCTS searched from
-            game_history.append((current_encoding.cpu(), policy_vector))  # Store on CPU
-            LOGGER.debug(
-                f"Stored state encoding shape: {current_encoding.shape}, Policy vector shape: {policy_vector.shape}"
+            # Get the MCTS policy (target for the policy head) - ALWAYS use temp=1 for this
+            _, policy_vector_target = mcts.get_policy(
+                temperature=1.0
+            )
+            # Get the policy dict for action selection using the potentially decayed temperature
+            policy_dict_for_action, _ = mcts.get_policy(
+                temperature=temperature_for_action_selection
             )
 
+            # Store state and policy *before* making the move
+            # The encoder returns a tuple of tensors.
+            current_game_state_tensor, (current_map_nodes_tensor, current_raw_edge_tensor) = encoder.encode(game)
+            
+            # Store on CPU
+            encoded_state_tuple_cpu = (
+                current_game_state_tensor.cpu(),
+                current_map_nodes_tensor.cpu(),
+                current_raw_edge_tensor.cpu()
+            )
+            game_history.append((encoded_state_tuple_cpu, policy_vector_target))
+            LOGGER.debug(
+                f"Stored state encoding shapes: game_state={encoded_state_tuple_cpu[0].shape}, map_nodes={encoded_state_tuple_cpu[1].shape}, raw_edge={encoded_state_tuple_cpu[2].shape}"
+            )
+            LOGGER.debug(f"Policy vector target shape: {policy_vector_target.shape}")
+
             # --- Select and Play Action ---
-            if temperature == 0:
+            if temperature_for_action_selection == 0:
                 # Greedy selection: choose action with max visits (break ties randomly)
-                action_index = max(policy_dict, key=policy_dict.get)
+                # Use policy_dict_for_action which was derived with temp=0
+                action_index = max(policy_dict_for_action, key=policy_dict_for_action.get)
                 LOGGER.debug(
-                    f"Greedy action selection: Chose index {action_index} (Prob: {policy_dict[action_index]:.4f})"
+                    f"Greedy action selection: Chose index {action_index} (Prob: {policy_dict_for_action[action_index]:.4f})"
                 )
             else:
-                # Sample action based on policy probabilities
-                action_indices = list(policy_dict.keys())
-                probabilities = list(policy_dict.values())
+                # Sample action based on policy probabilities from policy_dict_for_action
+                action_indices = list(policy_dict_for_action.keys())
+                probabilities = list(policy_dict_for_action.values())
                 # Ensure probabilities sum to 1 (might be slightly off due to floats)
                 probabilities = np.array(probabilities, dtype=np.float64)
                 probabilities /= np.sum(probabilities)
                 action_index = np.random.choice(action_indices, p=probabilities)
                 LOGGER.debug(
-                    f"Sampled action selection: Chose index {action_index} (Prob: {policy_dict[action_index]:.4f})"
+                    f"Sampled action selection: Chose index {action_index} (Prob: {policy_dict_for_action[action_index]:.4f})"
                 )
 
             # Map index to game action object
@@ -156,19 +168,35 @@ def run_self_play_game(
     try:
         final_scores = game.scores()  # Assumes scores() returns dict {player_id: score}
         LOGGER.info(f"Final Scores: {final_scores}")
+        
+        # Determine winners and losers for value assignment
+        # This assumes higher score is better.
+        if not final_scores: # Handle empty scores if game ends abnormally
+            raise ValueError("Game ended with no scores available. Cannot calculate value vector.")
+        
         max_score = max(final_scores.values())
         winners = {pid for pid, score in final_scores.items() if score == max_score}
         num_winners = len(winners)
 
         value_vector = np.zeros(num_players, dtype=np.float32)
-        player_id_to_idx = encoder.player_id_to_idx  # Use the map from the encoder
+        
+        # Create player_id_to_idx based on the game's player list order
+        # This ensures consistency if the model's value head expects a fixed player order.
+        player_id_to_idx = {player.id: i for i, player in enumerate(game.players)}
 
-        for player_id, idx in player_id_to_idx.items():
+        for player_obj in game.players:
+            player_id = player_obj.id
+            player_idx = player_id_to_idx.get(player_id)
+
+            if player_idx is None:
+                raise ValueError(f"Player ID {player_id} from game.players not found in final_scores keys. Skipping value assignment for this player.")
+
             if player_id in winners:
-                value_vector[idx] = 1.0 / num_winners if num_winners > 0 else 0  # Normalized win/draw
+                value_vector[player_idx] = 1.0
             else:
-                num_losers = num_players - num_winners
-                value_vector[idx] = -1.0 / num_losers if num_losers > 0 else 0  # Normalized loss
+                # For losers, assign -1.0. If there are ties for non-win, they all get -1.
+                # Alternative: 0 for loss. -1 is also common.
+                value_vector[player_idx] = -1.0 
 
         LOGGER.info(f"Calculated final value vector: {value_vector}")
 
@@ -200,27 +228,60 @@ if __name__ == "__main__":
 
     # Configure root logger
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.ERROR)
+    root_logger.setLevel(logging.INFO)
     root_logger.addHandler(console_handler)
     root_logger.addHandler(file_handler)
 
     # --- Setup ---
-    from rl18xx.game.gamemap import GameMap
 
+    # --- Game Setup ---
+    game_title = "1830" # Example
     game_map = GameMap()
-    game_1830 = game_map.game_by_title("1830")
-    player_options = {"1": "Alice", "2": "Bob", "3": "Charlie", "4": "David"}
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    game_class_from_map = game_map.game_by_title(game_title)
+    if not game_class_from_map:
+        raise ValueError(f"Game class for '{game_title}' not found.")
+    
+    player_options = {"1": "Alice", "2": "Bob", "3": "Charlie", "4": "Dave"}
+    temp_game_for_config = game_class_from_map(player_options)
+    num_players_for_config = len(temp_game_for_config.players)
+    
+    # --- Encoder and ActionMapper ---
     encoder = Encoder_1830()
-    dummy_model = Model()
-    action_mapper = ActionMapper()
+    action_mapper = ActionMapper(temp_game_for_config)
+
+    # --- Model Setup ---
+    dummy_game_state_encoded, (dummy_map_nodes_encoded, dummy_raw_edges_encoded) = encoder.encode(temp_game_for_config)
+    
+    # game_state_tensor has shape (batch, features)
+    game_state_size = dummy_game_state_encoded.shape[1] 
+    
+    # map_nodes_tensor has shape (num_nodes, features) - unbatched
+    num_map_nodes = dummy_map_nodes_encoded.shape[0]
+    map_node_features = dummy_map_nodes_encoded.shape[1]
+
+    policy_output_size = action_mapper.action_encoding_size
+    value_output_size = num_players_for_config
+
+    model = Model(
+        game_state_size=game_state_size,
+        num_map_nodes=num_map_nodes,
+        map_node_features=map_node_features,
+        policy_size=policy_output_size,
+        value_size=value_output_size,
+        # Add other necessary model parameters here if they are not defaults:
+        # mlp_hidden_dim=...,
+        # gnn_node_proj_dim=...,
+        # ... etc.
+    )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
 
     # --- Run ---
     training_examples = run_self_play_game(
-        game_class=game_1830,
+        game_class=game_class_from_map,
         game_options=player_options,
-        model=dummy_model,
+        model=model,
         encoder=encoder,
         action_mapper=action_mapper,
         mcts_simulations=10,
@@ -232,7 +293,7 @@ if __name__ == "__main__":
     if training_examples:
         LOGGER.info(f"\n--- Example Training Data ---")
         state_ex, policy_ex, value_ex = training_examples[0]
-        LOGGER.info(f"State Encoding Shape: {state_ex.shape}")
+        LOGGER.info(f"State Encoding Shape: {state_ex[0].shape}, {state_ex[1].shape}, {state_ex[2].shape}")
         LOGGER.info(f"Policy Vector Shape: {policy_ex.shape}, Sum: {np.sum(policy_ex):.4f}")
         LOGGER.info(f"Value Vector: {value_ex}")
     else:

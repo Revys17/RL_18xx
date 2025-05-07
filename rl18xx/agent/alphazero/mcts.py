@@ -4,7 +4,7 @@ from typing import Dict, Optional, Tuple
 from rl18xx.game.engine.game import BaseGame
 from rl18xx.agent.alphazero.model import Model
 from rl18xx.agent.alphazero.encoder import Encoder_1830
-from rl18xx.agent.alphazero.action_mapper import ActionMapper, ACTION_ENCODING_SIZE
+from rl18xx.agent.alphazero.action_mapper import ActionMapper
 import torch
 import logging
 import time
@@ -113,8 +113,10 @@ class MCTS:
 
         self.players = root_state.players
         self.num_players = len(root_state.players)
-        self.player_id_to_idx = {p.id: i for i, p in enumerate(self.players)}
-        self.player_idx_to_id = {i: p.id for i, p in enumerate(self.players)}
+        # Sort players by ID for consistent indexing
+        sorted_players = sorted(self.players, key=lambda p: p.id)
+        self.player_id_to_idx = {p.id: i for i, p in enumerate(sorted_players)}
+        self.player_idx_to_id = {i: p.id for i, p in enumerate(sorted_players)}
         LOGGER.info(f"  Num Players: {self.num_players}, Player Map: {self.player_id_to_idx}")
 
         self.root = Node(parent=None, prior_prob=0.0, state=root_state, num_players=self.num_players)
@@ -308,20 +310,25 @@ class MCTS:
         LOGGER.debug("Encoding state for network evaluation.")
         try:
             # Assuming encoder returns tensor with batch dim [1, ...] on CPU
-            encoded_state_cpu = self.encoder.encode(leaf.state)
+            game_state, (map_nodes, raw_edge_input_tensor) = self.encoder.encode(leaf.state)
             # Move the encoded state to the correct device
-            encoded_state = encoded_state_cpu.to(self.device)
-            LOGGER.debug(f"Moved encoded state to device: {encoded_state.device}")
+            game_state = game_state.to(self.device)
+            map_nodes = map_nodes.to(self.device)
+            raw_edge_input_tensor = raw_edge_input_tensor.to(self.device)
+            LOGGER.debug(f"Moved encoded state to device: {game_state.device}")
         except Exception as e:
             LOGGER.exception(f"Error during state encoding or moving for node {id(leaf)}.")
             raise e
 
-        LOGGER.debug(f"Encoded state shape: {encoded_state.shape}")
+        LOGGER.debug(f"Encoded state shape: {game_state.shape}")
         network_start_time = time.perf_counter()
         with torch.no_grad():
             # Model returns (policy_logits, value_vector) on self.device
             try:
-                policy_logits, value_vector_tensor = self.model(encoded_state)
+                edge_index = raw_edge_input_tensor[0:2, :]
+                edge_attr_categorical = raw_edge_input_tensor[2, :].long()
+                policy_logits, value_vector_tensor = self.model(game_state, map_nodes, edge_index, edge_attr_categorical)
+
                 # Move results back to CPU for numpy conversion and masking
                 value_vector = value_vector_tensor.squeeze(0).cpu().numpy()
                 policy_vector_tensor = torch.softmax(policy_logits, dim=1).squeeze(0).cpu()
@@ -339,6 +346,7 @@ class MCTS:
             # Mask is created on CPU
             legal_mask_tensor = self.action_mapper.get_legal_action_mask(leaf.state)
         except Exception as e:
+            LOGGER.info(f"State actions: {leaf.state.raw_actions}")
             LOGGER.exception(f"Error getting legal action mask for node {id(leaf)}.")
             raise e
 
@@ -383,9 +391,8 @@ class MCTS:
                 )
             except Exception as e:
                 LOGGER.exception(f"Error expanding child for action index {action_index} from node {id(leaf)}.")
-                LOGGER.info(f"Raw actions: {leaf.state.raw_actions}, attempted action: {action}")
-                # Decide whether to continue expanding other children or re-raise
-                # continue # Or raise e
+                LOGGER.info(f"Raw actions: {leaf.state.raw_actions}, attempted action: {action_index}")
+                raise e
 
         LOGGER.debug(f"Successfully expanded {num_expanded} children for node {id(leaf)}.")
         expand_end_time = time.perf_counter()
@@ -453,7 +460,7 @@ class MCTS:
 
         # Create policy dictionary and full vector
         policy_dict = {idx: prob for idx, prob in zip(action_indices, probs)}
-        full_policy_vector = np.zeros(ACTION_ENCODING_SIZE, dtype=np.float32)
+        full_policy_vector = np.zeros(self.action_mapper.action_encoding_size, dtype=np.float32)
         for idx, prob in policy_dict.items():
             full_policy_vector[idx] = prob
 
