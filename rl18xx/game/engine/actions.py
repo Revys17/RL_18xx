@@ -144,7 +144,7 @@ class BaseAction:
         return False
 
     def copy(self, game):
-        return self.from_dict(self.to_h(), game)
+        return self.action_from_dict(self.to_dict(), game)
 
     def free(self):
         return False
@@ -205,7 +205,7 @@ class Bankrupt(BaseAction):
 
     @staticmethod
     def dict_to_args(args, game):
-        return {"option": args["option"]}
+        return {"option": args.get("option")}
 
     def args_to_dict(self):
         return {

@@ -28,6 +28,7 @@ from rl18xx.game.engine.round import (
     Exchange as ExchangeStep,
     SpecialTrack as SpecialTrackStep,
     SpecialToken as SpecialTokenStep,
+    WaterfallAuction as WaterfallAuctionStep,
 )
 
 from collections import defaultdict
@@ -147,6 +148,30 @@ class ActionHelper:
                 return ability.shares[0].corporation()
         return None
 
+    def get_pass_actions(self, reduced_actions=False):
+        # If reduced_actions AND
+        # Is a waterfall auction AND
+        # There is no active auction AND
+        # The last 3 players passed
+        # THEN don't allow a pass
+        if not reduced_actions:
+            return [Pass(self.g.current_entity)]
+        
+        if not isinstance(self.g.active_step(), WaterfallAuctionStep):
+            return [Pass(self.g.current_entity)]
+        
+        if self.g.active_step().auctioning_company():
+            return [Pass(self.g.current_entity)]
+
+        # Force the player to not pass if the last 3 players passed
+        last_3_actions = self.g.raw_actions[-3:]
+        all_passes = all(action["type"] == "pass" for action in last_3_actions)
+        if all_passes:
+            return []
+
+        return [Pass(self.g.current_entity)]
+
+
     def get_bid_actions(self, min_bid_only=False):
         if self.g.active_step().auctioning_company():
             company = self.g.active_step().auctioning_company()
@@ -225,10 +250,10 @@ class ActionHelper:
         buyable_shares = self.g.active_step().buyable_shares(self.g.current_entity)
         # buyable_shares is a list of lists. Each list represents a group of shares for a company:owner pair
         # we want to get the share with the lowest index for each group and combine the lists
-        unique_buyable_shares = sorted([
-            min(share_list, key=lambda share: share.index)
-            for share_list in buyable_shares
-        ], key=lambda share: (share.corporation(), share.owner.__class__.__name__))
+        unique_buyable_shares = sorted(
+            [min(share_list, key=lambda share: share.index) for share_list in buyable_shares],
+            key=lambda share: (share.corporation(), share.owner.__class__.__name__),
+        )
         return sorted([BuyShares(self.g.current_entity, share, share.price) for share in unique_buyable_shares])
 
     def get_company_buy_shares_actions(self, company):
@@ -237,25 +262,12 @@ class ActionHelper:
         return sorted([BuyShares(company, share, share.price) for share in shares])
 
     def get_sell_shares_actions(self):
+        sellable_shares = self.g.active_step().sellable_shares(self.g.current_entity)
         if isinstance(self.g.active_step(), BuyTrainStep):
-            if (
-                self.g.current_entity.is_corporation()
-                and not self.g.current_entity.trains
-                and self.g.current_entity.cash < self.g.active_step().needed_cash(self.g.current_entity)
-            ):
-                return [
-                    SellShares(bundle.owner, bundle)
-                    for bundle in self.g.active_step().sellable_shares(self.g.current_entity)
-                ]
-            else:
-                return []
+            sellable_shares = [share for share in sellable_shares if self.g.active_step().sellable_bundle(share)]
+            return [SellShares(bundle.owner, bundle) for bundle in sellable_shares]
         else:
-            return sorted(
-                [
-                    SellShares(self.g.current_entity, bundle)
-                    for bundle in self.g.active_step().sellable_shares(self.g.current_entity)
-                ]
-            )
+            return sorted([SellShares(self.g.current_entity, bundle) for bundle in sellable_shares])
 
     def get_place_token_actions(self):
         if hasattr(self.g.active_step(), "pending_token") and self.g.active_step().pending_token:
@@ -318,7 +330,7 @@ class ActionHelper:
                 for tile in moves[hex]
                 for rotation in moves[hex][tile]
             ],
-            key=lambda x: (x.hex.id, x.tile.name, x.rotation)
+            key=lambda x: (x.hex.id, x.tile.name, x.rotation),
         )
 
     def get_company_lay_tile_actions(self, company):
@@ -332,7 +344,14 @@ class ActionHelper:
                 tiles = special_track_step.potential_tiles(company, hex)
                 for tile in tiles:
                     rotations = special_track_step.legal_tile_rotations(company, hex, tile)
-                    actions.extend([LayTile(company, tile, hex, rotation) for rotation in rotations])
+                    actions.extend(
+                        [
+                            LayTile(company, tile, hex, rotation)
+                            for rotation in rotations
+                            if self.g.upgrade_cost(hex.tile, hex, company.owner, company.owner)
+                            <= self.g.buying_power(company.owner)
+                        ]
+                    )
 
         return actions
 
@@ -345,10 +364,15 @@ class ActionHelper:
         return unique_trains.values()
 
     def get_buy_train_actions(self, limited_price_options=False):
+        if not self.g.active_step().room(self.g.current_entity):
+            return []
+
         trains = self.get_unique_trains(self.g.depot.available(self.g.current_entity))
         # print(trains)
         actions = []
         for train in trains:
+            min_spend, max_spend = self.g.active_step().spend_minmax(self.g.current_entity, train)
+            # print(min_spend, max_spend)
             min_price = train.min_price()
             if min_price > self.g.buying_power(self.g.current_entity):
                 if self.g.active_step().must_buy_train(self.g.current_entity):
@@ -362,23 +386,29 @@ class ActionHelper:
             if limited_price_options:
                 price_values = [
                     price
-                    for price in sorted(list(set([
-                        1,
-                        20,
-                        50,
-                        100,
-                        200,
-                        300,
-                        400,
-                        500,
-                        600,
-                        700,
-                        800,
-                        900,
-                        self.g.current_entity.cash - 1,
-                        max_price,
-                    ])))
-                    if price >= min_price and price <= max_price
+                    for price in sorted(
+                        list(
+                            set(
+                                [
+                                    1,
+                                    20,
+                                    50,
+                                    100,
+                                    200,
+                                    300,
+                                    400,
+                                    500,
+                                    600,
+                                    700,
+                                    800,
+                                    900,
+                                    self.g.current_entity.cash - 1,
+                                    max_price,
+                                ]
+                            )
+                        )
+                    )
+                    if price >= min_price and price <= max_price and price <= self.g.buying_power(self.g.current_entity)
                 ]
             else:
                 price_values = list(range(min_price, int(max_price) + 1))
@@ -448,11 +478,13 @@ class ActionHelper:
                             for price in range(company.min_price, company.max_price + 1)
                         ]
                     )
+        # Remove prices above buying power
+        actions = [action for action in actions if action.price <= self.g.buying_power(self.g.current_entity)]
         return actions
 
     def get_choices_for_action(self, action, reduced_actions=False):
         if action == Pass:
-            return [Pass(self.g.current_entity)]
+            return self.get_pass_actions()
         elif action == Bid:
             return self.get_bid_actions(min_bid_only=reduced_actions)
         elif action == Par:
@@ -495,6 +527,8 @@ class ActionHelper:
         return choices
 
     def get_all_choices(self):
+        if self.g.finished:
+            return []
         choices = [choices for action in self.get_current_actions() for choices in self.get_choices_for_action(action)]
         choices.extend(self.get_company_choices())
         return self.sort_actions(choices, instances=True)
@@ -505,6 +539,8 @@ class ActionHelper:
         return {index: value for index, value in enumerate(self.get_all_choices())}
 
     def get_all_choices_limited(self):
+        if self.g.finished:
+            return []
         choices = [
             choices
             for action in self.get_current_actions()

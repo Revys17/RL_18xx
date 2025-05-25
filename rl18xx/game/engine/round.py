@@ -106,6 +106,7 @@ from collections import defaultdict
 
 LOGGER = logging.getLogger(__name__)
 
+
 class BaseStep(Passer):
     def __init__(self, game, round, **opts):
         Passer.__init__(self)
@@ -507,6 +508,9 @@ class EmergencyMoney:
         return self.game.emergency_issuable_bundles(entity)
 
 
+from pdb import set_trace
+
+
 class Train(EmergencyMoney):
     def __init__(self, game):
         self.game = game
@@ -801,9 +805,6 @@ class BuyTrain(BaseStep, Train):
         elif self.can_buy_train(entity):
             return [BuyTrainAction, Pass]
 
-        if not self.must_buy_train(entity):
-            return [Pass]
-
         return []
 
     @property
@@ -959,8 +960,6 @@ class Tokener:
         }
 
     def can_place_token(self, entity):
-        if self.game.debug:
-            set_trace()
         if self.current_entity != entity:
             return False
 
@@ -1667,8 +1666,6 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         self.track_action(action, action.bundle.corporation)
 
     def process_sell_shares(self, action):
-        if self.game.debug:
-            set_trace()
         self.sell_shares(action.entity, action.bundle, swap=action.swap)
         self.track_action(action, action.bundle.corporation)
 
@@ -1739,8 +1736,6 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         return buyable_shares
 
     def sellable_shares(self, entity):
-        if self.game.debug:
-            set_trace()
         return [
             bundle
             for corporation in self.game.corporations
@@ -2700,6 +2695,7 @@ class DiscardTrain(BaseStep):
         self.game.depot.reclaim_train(train)
         for step in self.round.steps:
             if isinstance(step, BuyTrain):
+                LOGGER.debug(f"Unpassing BuyTrain step: {step}")
                 step.unpass()
         self.log.append(f"{action.entity.name} discards {train.name}")
 
@@ -3565,8 +3561,6 @@ class Route(BaseStep):
             return super().help()
 
     def process_run_routes(self, action):
-        if self.game.debug:
-            set_trace()
         entity = action.entity
         self.round.routes = action.routes
         self.round.extra_revenue = action.extra_revenue
@@ -4131,8 +4125,6 @@ class SpecialToken(BaseStep, Tokener):
         return super().min_token_price(tokens)
 
     def ability(self, entity):
-        if self.game.debug:
-            set_trace()
         if not entity or not entity.is_company():
             return None
 
@@ -4399,8 +4391,6 @@ class Tracker:
         self.log.append(log_string)
 
     def update_token(self, action, entity, tile, old_tile):
-        if self.game.debug:
-            set_trace()
         cities = tile.cities
         if not old_tile.paths and tile.paths and len(cities) > 1:
             tokens = [token for city in cities for token in city.tokens if token]
@@ -4466,8 +4456,6 @@ class Tracker:
 
         graph = self.game.graph_for_entity(entity)
 
-        if self.game.debug:
-            set_trace()
         if not self.game.ALLOW_REMOVING_TOWNS:
             for old_city in old_tile.city_towns:
                 old_exits = set(old_city.exits if old_city.exits else [])
@@ -5347,7 +5335,7 @@ class BaseRound:
             process = type in step.actions(action.entity)
             blocking = step.blocking
             if blocking and not process:
-                raise GameError(f"Blocking step {step.description} cannot process action {action.id}")
+                raise GameError(f"Blocking step {step.description} cannot process action {action}")
 
             if blocking or process:
                 step.acted = True
@@ -5361,7 +5349,9 @@ class BaseRound:
                 self.after_process(action)
                 return
 
-        e = GameError(f"No step found for action {type.__name__} at {action.id}: {action.to_dict()}. Game Actions: {self.game.raw_actions}")
+        e = GameError(
+            f"No step found for action {type.__name__} at {action.id}: {action.to_dict()}. Game Actions: {self.game.raw_actions}"
+        )
         LOGGER.exception(e)
         raise e
 

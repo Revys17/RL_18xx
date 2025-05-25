@@ -1144,7 +1144,7 @@ class Token:
     def remove(self):
         if self.location_type == "city":
             if self.city:
-                self.city.tokens = [t for t in self.city.tokens if t != self]
+                self.city.tokens = [None if t == self else t for t in self.city.tokens]
                 if self.city.extra_tokens and self in self.city.extra_tokens:
                     self.city.extra_tokens.remove(self)
         elif self.location_type == "hex":
@@ -2664,7 +2664,10 @@ class Tile(TileConfig):
 
         for part_code in code.split(";"):
             type_param, _, params = part_code.partition("=")
-            params = dict(param.split(":") for param in params.split(",") if ":" in params)
+            if ":" in params:
+                params = dict(param.split(":") for param in params.split(","))
+            else:
+                params = {type_param: params}
 
             part = cls.part(type_param, params, cache)
             if part:

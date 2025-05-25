@@ -32,6 +32,7 @@ from rl18xx.game.engine.actions import (
     Undo,
     Redo,
     Message,
+    Pass,
 )
 from rl18xx.game.engine.graph import (
     Hex,
@@ -289,7 +290,7 @@ class BaseGame:
         self.finished = False
         self.log = GameLog(self)
         self.queued_log = []
-        self.actions = actions if actions else []
+        self.actions = [action.copy() for action in actions] if actions else []
         self.raw_actions = []
         self.turn_start_action_id = 0
         self.last_turn_start_action_id = 0
@@ -386,7 +387,7 @@ class BaseGame:
         self.setup_optional_rules()
         self.setup()
         self.round.setup()
-        self.temp_allow_cross_company_purchase = True
+        self.temp_allow_cross_company_purchase = False
         self.initialize_actions(actions, at_action=at_action)
         self.temp_allow_cross_company_purchase = False
 
@@ -524,7 +525,7 @@ class BaseGame:
     # Allow presidential swaps of other corporations when ebuying
     EBUY_PRES_SWAP = True
     # Allow ebuying other corp trains for up to face value
-    EBUY_OTHER_VALUE = True
+    EBUY_OTHER_VALUE = False
     # If ebuying from depot, must buy cheapest train
     EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST = True
     # Corporation must issue shares before ebuy (if possible)
@@ -753,6 +754,21 @@ class BaseGame:
     def optional_tiles(self):
         pass
 
+    @property
+    def move_number(self):
+        return len(self.raw_actions)
+
+    def to_dict(self):
+        return {
+            "title": self.title,
+            "players": [{"id": u.id, "name": u.name} for u in sorted(self.players, key=lambda x: x.id)],
+            "actions": [action if isinstance(action, dict) else action.to_dict() for action in self.raw_actions],
+            "id": self.id,
+            "finished": self.finished,
+            "move_number": self.move_number,
+            "result": self.result(),
+        }
+
     @classmethod
     def register_colors(cls, **colors):
         cls.COLORS = colors
@@ -899,7 +915,7 @@ class BaseGame:
         return True
 
     def process_action(self, action, add_auto_actions=False, validate_auto_actions=False):
-        LOGGER.debug(f"Processing action: {action}")
+        # LOGGER.debug(f"Processing action: {action}")
         if isinstance(action, dict):
             action = BaseAction.action_from_dict(action, self)
 
@@ -911,7 +927,12 @@ class BaseGame:
 
         self.actions.append(action)
 
-        self.process_single_action(action)
+        try:
+            self.process_single_action(action)
+        except Exception as e:
+            # if the action is a pass, let's try skipping it.
+            if not isinstance(action, Pass):
+                raise e
 
         if not isinstance(action, Message):
             self.redo_possible = False
@@ -1275,8 +1296,6 @@ class BaseGame:
     def bundles_for_corporation(self, share_holder, corporation, shares=None):
         return self.all_bundles_for_corporation(share_holder, corporation, shares=shares)
 
-    debug = False
-
     def all_bundles_for_corporation(self, share_holder, corporation, shares=None):
         if not corporation.ipoed:
             return []
@@ -1408,7 +1427,11 @@ class BaseGame:
         return None
 
     def can_run_route(self, entity):
-        return self.graph_for_entity(entity).route_info(entity).get("route_available")
+        return (
+            self.graph_for_entity(entity) is not None
+            and self.graph_for_entity(entity).route_info(entity) is not None
+            and self.graph_for_entity(entity).route_info(entity).get("route_available")
+        )
 
     def must_buy_train(self, entity):
         return (
@@ -1757,8 +1780,6 @@ class BaseGame:
         return self.TILE_LAYS
 
     def upgrades_to(self, from_tile, to_tile, special=False, selected_company=None):
-        # if self.debug:
-        # set_trace()
         if not self.upgrades_to_correct_color(from_tile, to_tile, selected_company=selected_company):
             return False
 

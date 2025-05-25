@@ -1,8 +1,6 @@
 import pytest
-import torch
-from unittest.mock import MagicMock, patch
 from pdb import set_trace
-
+import numpy as np
 # --- Imports from rl18xx library ---
 # Adjust paths as necessary based on your project structure
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
@@ -505,16 +503,16 @@ def check_action_in_all_actions(action, all_actions):
 
 
 def test_auction(initial_game_state):
-    action_mapper = ActionMapper(initial_game_state)
+    action_mapper = ActionMapper()
     action_helper = ActionHelper(initial_game_state)
 
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     assert mask[0] == 1.0
     assert mask[1] == 1.0
     assert mask[2] == 1.0
@@ -539,11 +537,11 @@ def test_auction(initial_game_state):
 
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     assert mask[0] == 1.0
     assert mask[1] == 0.0
     assert mask[2] == 1.0
@@ -565,11 +563,11 @@ def test_auction(initial_game_state):
 
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     assert mask[0] == 1.0
     assert mask[5] == 1.0
     assert mask[6] == 1.0
@@ -579,11 +577,11 @@ def test_auction(initial_game_state):
 
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     assert mask[25] == 1.0
     assert mask[26] == 1.0
     assert mask[27] == 1.0
@@ -600,17 +598,17 @@ def test_auction(initial_game_state):
 
 
 def test_stock_round_1_game_state(stock_round_1_game_state):
-    action_mapper = ActionMapper(stock_round_1_game_state)
+    action_mapper = ActionMapper()
     action_helper = ActionHelper(stock_round_1_game_state)
 
     # Test initial stock round 1 state
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(stock_round_1_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     assert mask[0] == 1.0
     # Par PRR
     assert mask[7] == 1.0
@@ -727,11 +725,11 @@ def test_stock_round_1_game_state(stock_round_1_game_state):
     all_actions = action_helper.get_all_choices_limited()
     print("\n".join([str(action) for action in all_actions]))
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(stock_round_1_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     assert mask[0] == 1.0
     # Buy NYC (ipo only)
     assert mask[57] == 1.0
@@ -750,17 +748,17 @@ def test_stock_round_1_game_state(stock_round_1_game_state):
 
 
 def test_operating_round_1_game_state(operating_round_1_game_state):
-    action_mapper = ActionMapper(operating_round_1_game_state)
+    action_mapper = ActionMapper()
     action_helper = ActionHelper(operating_round_1_game_state)
 
     # Test initial operating round 1 state
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     assert mask[0] == 1.0
 
     h10_city_lay_idx =  action_mapper.action_offsets["LayTile"] + action_mapper.hex_offsets["H10"] * 6 * len(action_mapper.tile_offsets) + action_mapper.tile_offsets["57"] * 6 + 1
@@ -793,11 +791,11 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
     # Test token options
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     assert mask[0] == 1.0
     token_idx = action_mapper.action_offsets["PlaceToken"] + action_mapper.city_offsets[("H10", 0)]
     assert mask[token_idx] == 1.0
@@ -815,11 +813,11 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
     # Test train options
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     assert mask[0] == 0.0
     train_idx = action_mapper.action_offsets["BuyTrain"] + action_mapper.train_type_offsets["2"]
     assert mask[train_idx] == 1.0
@@ -836,11 +834,11 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
     # Check again
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     assert mask[0] == 1.0
     train_idx = action_mapper.action_offsets["BuyTrain"] + action_mapper.train_type_offsets["2"]
     assert mask[train_idx] == 1.0
@@ -859,11 +857,11 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
     # NYC
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     assert mask[0] == 1.0
 
     # Check the other direction
@@ -892,17 +890,17 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
 
 
 def test_stock_round_2_game_state(stock_round_2_game_state):
-    action_mapper = ActionMapper(stock_round_2_game_state)
+    action_mapper = ActionMapper()
     action_helper = ActionHelper(stock_round_2_game_state)
 
     # Test initial stock round 2 state
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(stock_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions: Pass, Sell NYC (1-5), Buy C%O IPO
     assert mask[0] == 1.0
     
@@ -931,11 +929,11 @@ def test_stock_round_2_game_state(stock_round_2_game_state):
     # Test MH exchange
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(stock_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions: Pass, Sell NYC (1-3), Buy C&O IPO
     assert mask[0] == 1.0
     
@@ -998,11 +996,11 @@ def test_stock_round_2_game_state(stock_round_2_game_state):
 
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(stock_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions: Pass, Sell NYC (1-3), Buy C&O IPO
     assert mask[0] == 1.0
     
@@ -1059,17 +1057,17 @@ def test_stock_round_2_game_state(stock_round_2_game_state):
 
 
 def test_operating_round_2_game_state(operating_round_2_game_state):
-    action_mapper = ActionMapper(operating_round_2_game_state)
+    action_mapper = ActionMapper()
     action_helper = ActionHelper(operating_round_2_game_state)
 
     # Test initial operating round 2 state
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions: Pass, Lay tile on F20
     assert mask[0] == 1.0
     
@@ -1110,11 +1108,11 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test dividend
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions: Pay out or withhold
     
     dividend_idx = action_mapper.action_offsets["Dividend"]
@@ -1142,11 +1140,11 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test 3 train purchase
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions: Pass, Buy 3 train
     assert mask[0] == 1.0
     buy_train_idx = action_mapper.action_offsets["BuyTrain"]
@@ -1166,11 +1164,11 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test buy company
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions: Buy
     assert mask[0] == 1.0
     buy_company_idx = action_mapper.action_offsets["BuyCompany"]
@@ -1208,11 +1206,11 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Check cross-company BuyTrain
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions:
     # Buy SV min/max,
     # Buy NYC 2 at all prices up to 500 (and all-but-one and all), 
@@ -1271,11 +1269,11 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Check company tile lay
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions:
     # Buy MH min/max,
     # Buy 3 train from depot,
@@ -1321,11 +1319,11 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Check company tile lay again
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions:
     # Lay tile 16, 19, 23, 25, 28, 29 on G3
     # Lay tile 16, 19, 23, 24, 25, 28, 29 on G5
@@ -1396,11 +1394,11 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Check company token placement
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions:
     # DH Place token F16
     # Pass
@@ -1419,11 +1417,11 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test tile upgrade
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions:
     # Buy SV min/max,
     # On D20, lay 7, 8, or 9
@@ -1504,11 +1502,11 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test discard train
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions:
     # Discard a 3 train
 
@@ -1521,11 +1519,11 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test purchase discarded train
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     # Legal actions:
     # CS Lay tile 3, 4, 58 on B20 with various rotations
     # Buy 3 train from open market
@@ -1557,17 +1555,17 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
 
 
 def test_bankruptcy_game_state(bankruptcy_game_state):
-    action_mapper = ActionMapper(bankruptcy_game_state)
+    action_mapper = ActionMapper()
     action_helper = ActionHelper(bankruptcy_game_state)
 
     # Test bankrupcy action availability
     all_actions = action_helper.get_all_choices_limited()
     for action in all_actions:
-        assert action_mapper._get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(bankruptcy_game_state)
     assert mask.shape == (26535,)
-    assert mask.dtype == torch.float32
+    assert mask.dtype == np.float32
     assert mask[action_mapper.action_offsets["Bankrupt"]] == 1.0
     assert sum(mask) == 1.0
 
