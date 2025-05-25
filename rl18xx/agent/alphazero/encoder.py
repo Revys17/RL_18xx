@@ -54,8 +54,14 @@ ROUND_TYPE_MAP = {
 }
 MAX_ROUND_TYPE_IDX = max(ROUND_TYPE_MAP.values())
 
+class Singleton(type):
+    _instances = {}
+    def __call__(cls, *args, **kwargs):
+        if cls not in cls._instances:
+            cls._instances[cls] = super().__call__(*args, **kwargs)
+        return cls._instances[cls]
 
-class Encoder_1830:
+class Encoder_1830(metaclass=Singleton):
     # --- Dynamically set in __init__ based on player count ---
     # These will be filled based on the actual game instance
     num_players: int = 0
@@ -165,7 +171,7 @@ class Encoder_1830:
 
         edge_np = np.unique(np.array(edges), axis=0).T
         self.edge_index = from_numpy(edge_np).long()
-        LOGGER.debug(f"Precomputed edge_index with shape: {self.edge_index.shape}")
+        # LOGGER.debug(f"Precomputed edge_index with shape: {self.edge_index.shape}")
 
     def _calculate_encoding_size(self, num_players: int) -> int:
         """Calculates the total encoding size for the flat game state vector."""
@@ -227,14 +233,10 @@ class Encoder_1830:
             )
             raise ValueError(f"Offset mismatch for section '{section_name}'")
 
-        LOGGER.debug(f"Section '{section_name}' OK (Size: {actual_size}, Offset: {offset})")
+        # LOGGER.debug(f"Section '{section_name}' OK (Size: {actual_size}, Offset: {offset})")
         return offset
-
-    def encode(self, game: BaseGame) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
-        start_time = time.perf_counter()
-        LOGGER.debug("Starting encoding.")
-
-        # --- Initialization ---
+    
+    def initialize(self, game: BaseGame):
         if not self.initialized:
             try:
                 self._initialize_game_specifics(game)
@@ -243,64 +245,85 @@ class Encoder_1830:
             except Exception as e:
                 LOGGER.exception("Failed during encoder initialization.")
                 raise e
+            
+            if self.ENCODING_SIZE <= 0:
+                raise ValueError("ENCODING_SIZE not calculated correctly.")
+            
             self.initialized = True
 
-        if self.ENCODING_SIZE <= 0:
-            raise ValueError("ENCODING_SIZE not calculated correctly.")
+    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor]:
+        start_time = time.perf_counter()
+        # LOGGER.debug("Starting encoding.")
 
-        game_state_tensor, (node_features_tensor, edge_index_tensor) = self._encode_game_state(game), self._encode_map(
-            game
-        )
+        self.initialize(game)
+
+        game_state_tensor = self.encode_game_state(game)
+        node_features_tensor = self.get_node_features(game)
+        edge_index_tensor = self.get_edge_index(game)
+
         end_time = time.perf_counter()
         duration_ms = (end_time - start_time) * 1000
         LOGGER.debug(f"Encoding finished in {duration_ms:.3f} ms.")
-        LOGGER.debug(f"  Flat state shape: {game_state_tensor.shape}")
-        LOGGER.debug(f"  Node features shape: {node_features_tensor.shape}")
-        LOGGER.debug(f"  Edge index shape: {edge_index_tensor.shape}")
-        return game_state_tensor, (node_features_tensor, edge_index_tensor)
+        # LOGGER.debug(f"  Flat state shape: {game_state_tensor.shape}")
+        # LOGGER.debug(f"  Node features shape: {node_features_tensor.shape}")
+        # LOGGER.debug(f"  Edge index shape: {edge_index_tensor.shape}")
+        return game_state_tensor, node_features_tensor, edge_index_tensor
 
-    def _encode_game_state(self, game: BaseGame) -> Tensor:
+    def encode_game_state(self, game: BaseGame) -> Tensor:
         start_time = time.perf_counter()
-        LOGGER.debug("Starting game state encoding.")
+        # LOGGER.debug("Starting game state encoding.")
         state_encoding = np.zeros(self.ENCODING_SIZE, dtype=np.float32)
         offset = 0
         section_start_offset = 0
 
         # --- Section 1: Active Entity Indicator (Player or Corporation) ---
         section_name = "active_entity"
-        active_entities = game.round.active_entities
-        if not active_entities:
-            raise ValueError("No active entity found in game round.")
+        if not game.finished:
+            active_entities = game.round.active_entities
+            if not active_entities:
+                raise ValueError("No active entity found in unfinished game.")
 
-        active_entity = active_entities[0]
-        if isinstance(active_entity, Player) and active_entity.id in self.player_id_to_idx:
-            active_idx = self.player_id_to_idx[active_entity.id]
-            state_encoding[offset + active_idx] = 1.0
-        elif isinstance(active_entity, Corporation) and active_entity.id in self.corp_id_to_idx:
-            active_idx = self.num_players + self.corp_id_to_idx[active_entity.id]
-            state_encoding[offset + active_idx] = 1.0
-        else:
-            raise ValueError(f"Active entity '{active_entity.id}' ({type(active_entity)}) not found in expected maps.")
+            active_entity = active_entities[0]
+            if isinstance(active_entity, Player) and active_entity.id in self.player_id_to_idx:
+                active_idx = self.player_id_to_idx[active_entity.id]
+                state_encoding[offset + active_idx] = 1.0
+            elif isinstance(active_entity, Corporation) and active_entity.id in self.corp_id_to_idx:
+                active_idx = self.num_players + self.corp_id_to_idx[active_entity.id]
+                state_encoding[offset + active_idx] = 1.0
+            elif isinstance(active_entity, Company):
+                owner_id = game.company_by_id(active_entity.id).owner.id
+                if owner_id in self.player_id_to_idx:
+                    active_idx = self.player_id_to_idx[owner_id]
+                    state_encoding[offset + active_idx] = 1.0
+                elif owner_id in self.corp_id_to_idx:
+                    active_idx = self.num_players + self.corp_id_to_idx[owner_id]
+                    state_encoding[offset + active_idx] = 1.0
+            else:
+                # TODO: Double check this new logic
+                raise ValueError(
+                    f"Active entity '{active_entity.id}' ({active_entity.__class__.__name__}) not found in expected maps."
+                )
         offset += self._get_section_size(section_name)
         section_start_offset = self.check_offset(section_name, offset, section_start_offset)
 
         # --- Section 2: Active President (if Corp active) ---
         section_name = "active_president"
-        president = None
-        if isinstance(active_entities[0], Corporation):
-            active_players = game.active_players()
-            if not active_players:
-                raise ValueError("No active players found in game.")
-            president = active_players[0]
+        if not game.finished:
+            president = None
+            if isinstance(active_entities[0], Corporation):
+                active_players = game.active_players()
+                if not active_players:
+                    raise ValueError("No active players found in game.")
+                president = active_players[0]
 
-            if president.id not in self.player_id_to_idx:
-                raise ValueError(f"Active president '{president.id}' not found in player_id_to_idx.")
+                if president.id not in self.player_id_to_idx:
+                    raise ValueError(f"Active president '{president.id}' not found in player_id_to_idx.")
 
-            president_idx = self.player_id_to_idx[president.id]
-            state_encoding[offset + president_idx] = 1.0
-            LOGGER.debug(
-                f"Encoded active president: Player {president.id} (Index {president_idx}) for active corp {active_entities[0].id}"
-            )
+                president_idx = self.player_id_to_idx[president.id]
+                state_encoding[offset + president_idx] = 1.0
+                # LOGGER.debug(
+                #    f"Encoded active president: Player {president.id} (Index {president_idx}) for active corp {active_entities[0].id}"
+                # )
         offset += self._get_section_size(section_name)
         section_start_offset = self.check_offset(section_name, offset, section_start_offset)
 
@@ -329,7 +352,7 @@ class Encoder_1830:
             raise ValueError(f"Priority deal player '{priority_player.id}' not found in player_id_to_idx.")
         priority_player_idx = self.player_id_to_idx[priority_player.id]
         state_encoding[offset + priority_player_idx] = 1.0
-        LOGGER.debug(f"Encoded priority deal player: ID={priority_player.id}, Index={priority_player_idx}")
+        # LOGGER.debug(f"Encoded priority deal player: ID={priority_player.id}, Index={priority_player_idx}")
         offset += self._get_section_size(section_name)
         section_start_offset = self.check_offset(section_name, offset, section_start_offset)
 
@@ -350,9 +373,9 @@ class Encoder_1830:
             player_idx = self.player_id_to_idx[player.id]
             remaining = initial_limit - game.num_certs(player)
             state_encoding[offset + player_idx] = float(remaining) / initial_limit
-            LOGGER.debug(
-                f"Encoded certs remaining for Player {player.id}: {remaining}/{initial_limit} (Normalized: {state_encoding[offset + player_idx]:.3f})"
-            )
+            # LOGGER.debug(
+            #    f"Encoded certs remaining for Player {player.id}: {remaining}/{initial_limit} (Normalized: {state_encoding[offset + player_idx]:.3f})"
+            # )
         offset += self._get_section_size(section_name)
         section_start_offset = self.check_offset(section_name, offset, section_start_offset)
 
@@ -573,7 +596,7 @@ class Encoder_1830:
         is_auction = isinstance(game.round.active_step(), WaterfallAuction)
         if is_auction:
             auction_step = game.round.active_step()
-            LOGGER.debug("Encoding WaterfallAuction details.")
+            # LOGGER.debug("Encoding WaterfallAuction details.")
 
             # A1: Bids
             section_name = "auction_bids"
@@ -621,7 +644,7 @@ class Encoder_1830:
             offset += self._get_section_size(section_name)
             section_start_offset = self.check_offset(section_name, offset, section_start_offset)
         else:
-            LOGGER.debug("Not an Auction round/step, skipping auction-specific encoding sections.")
+            # LOGGER.debug("Not an Auction round/step, skipping auction-specific encoding sections.")
             # Advance offset by the size of all auction sections
             offset += self._get_section_size("auction_bids")
             section_start_offset = self.check_offset("auction_bids", offset, section_start_offset)
@@ -642,27 +665,33 @@ class Encoder_1830:
         section_start_offset = self.check_offset(section_name, offset, section_start_offset)
 
         # --- Final Offset Check ---
-        LOGGER.debug(f"Final offset after encoding: {offset}")
+        # LOGGER.debug(f"Final offset after encoding: {offset}")
         if offset != self.ENCODING_SIZE:
             LOGGER.error("CRITICAL: Final offset %d != calculated ENCODING_SIZE %d", offset, self.ENCODING_SIZE)
             raise AssertionError(f"Encoding size mismatch: Final offset {offset} != expected size {self.ENCODING_SIZE}")
 
-        LOGGER.debug(f"Encoding size check PASSED (Offset: {offset}, Expected: {self.ENCODING_SIZE})")
+        # LOGGER.debug(f"Encoding size check PASSED (Offset: {offset}, Expected: {self.ENCODING_SIZE})")
 
         state_encoding = np.nan_to_num(state_encoding, nan=0.0, posinf=0.0, neginf=0.0)
         tensor_encoding = from_numpy(state_encoding).unsqueeze(0)
 
         end_time = time.perf_counter()
         duration_ms = (end_time - start_time) * 1000
-        LOGGER.debug(f"Game State Encoding finished in {duration_ms:.3f} ms. Output shape: {tensor_encoding.shape}")
+        LOGGER.debug(f"Game State Encoding finished in {duration_ms:.3f} ms.")
         return tensor_encoding
+    
+    def get_edge_index(self, game: BaseGame) -> Tensor:
+        self.initialize(game)
+        return self.edge_index
 
-    def _encode_map(self, game: BaseGame) -> Tuple[Tensor, Tensor]:
+    def get_node_features(self, game: BaseGame) -> Tensor:
+        start_time = time.perf_counter()
+
+        self.initialize(game)
+
         """Encodes the map into node features and an adjacency list."""
         if self.num_map_node_features <= 0:
             raise ValueError("num_map_node_features not calculated correctly.")
-        if self.edge_index is None:
-            raise ValueError("edge_index has not been precomputed.")
 
         node_features = np.zeros((self.NUM_HEXES, self.num_map_node_features), dtype=np.float32)
 
@@ -742,7 +771,11 @@ class Encoder_1830:
 
                 ## OO cities
                 if len(tile.cities) > 1 or len(tile.towns) > 1:
-                    idx = tile.cities.index(revenue_location) if isinstance(revenue_location, City) else tile.towns.index(revenue_location)
+                    idx = (
+                        tile.cities.index(revenue_location)
+                        if isinstance(revenue_location, City)
+                        else tile.towns.index(revenue_location)
+                    )
                     revenue_connections[edge.num][idx] = 1.0
                     continue
 
@@ -765,5 +798,7 @@ class Encoder_1830:
                     f"Feature count mismatch for hex {hex_coord}: Expected {self.num_map_node_features}, Actual {feature_offset}"
                 )
 
-        LOGGER.debug(f"Map encoding finished. Node features shape: {node_features.shape}")
-        return from_numpy(node_features), self.edge_index
+        end_time = time.perf_counter()
+        duration_ms = (end_time - start_time) * 1000
+        LOGGER.debug(f"Map encoding finished in {duration_ms:.3f} ms.")
+        return from_numpy(node_features)

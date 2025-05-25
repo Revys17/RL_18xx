@@ -134,4 +134,6 @@ dmypy.json
 .pyre/
 
 # User-specific
-logs/*
+logs/
+training_data/
+model_checkpoints/

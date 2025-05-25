@@ -266,7 +266,7 @@ class SharePool(Entity, ShareHolder):
 
     def owner(self):
         return None
-    
+
     def is_share_pool(self):
         return True
 

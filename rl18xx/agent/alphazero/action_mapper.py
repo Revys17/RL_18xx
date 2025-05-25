@@ -1,7 +1,7 @@
 from rl18xx.game.engine.game import BaseGame
 from rl18xx.game import ActionHelper
 from rl18xx.game.engine.actions import BaseAction
-import torch
+import numpy as np
 from typing import List, Tuple, Any
 from rl18xx.game.engine.actions import (
     Bankrupt,
@@ -18,7 +18,7 @@ from rl18xx.game.engine.actions import (
     DiscardTrain,
     RunRoutes,
 )
-from rl18xx.game.engine.round import Exchange as ExchangeStep
+from rl18xx.game.engine.round import Exchange as ExchangeStep, BuyTrain as BuyTrainStep
 
 import logging
 
@@ -26,12 +26,12 @@ LOGGER = logging.getLogger(__name__)
 
 
 class ActionMapper:
-    def __init__(self, initial_game_state: BaseGame):
-        self.init_actions(initial_game_state)
+    def __init__(self):
+        self.init_actions()
         self.action_encoding_size = len(self.actions)
-        self.mask_size = torch.tensor(len(self.actions), dtype=torch.float32)
+        self.mask_size = np.array(len(self.actions), dtype=np.float32)
 
-    def init_actions(self, initial_game_state: BaseGame):
+    def init_actions(self):
         self.company_offsets = {
             "SV": 0,
             "CS": 1,
@@ -95,6 +95,205 @@ class ActionMapper:
             "D": 5,
         }
 
+        self.hex_offsets = {
+            "F2": 0,
+            "I1": 1,
+            "J2": 2,
+            "A9": 3,
+            "A11": 4,
+            "K13": 5,
+            "B24": 6,
+            "D2": 7,
+            "F6": 8,
+            "E9": 9,
+            "H12": 10,
+            "D14": 11,
+            "C15": 12,
+            "K15": 13,
+            "A17": 14,
+            "A19": 15,
+            "I19": 16,
+            "F24": 17,
+            "D24": 18,
+            "F4": 19,
+            "J14": 20,
+            "F22": 21,
+            "E7": 22,
+            "F8": 23,
+            "C11": 24,
+            "C13": 25,
+            "D12": 26,
+            "B16": 27,
+            "C17": 28,
+            "B20": 29,
+            "D4": 30,
+            "F10": 31,
+            "I13": 32,
+            "D18": 33,
+            "B12": 34,
+            "B14": 35,
+            "B22": 36,
+            "C7": 37,
+            "C9": 38,
+            "C23": 39,
+            "D8": 40,
+            "D16": 41,
+            "D20": 42,
+            "E3": 43,
+            "E13": 44,
+            "E15": 45,
+            "F12": 46,
+            "F14": 47,
+            "F18": 48,
+            "G3": 49,
+            "G5": 50,
+            "G9": 51,
+            "G11": 52,
+            "H2": 53,
+            "H6": 54,
+            "H8": 55,
+            "H14": 56,
+            "I3": 57,
+            "I5": 58,
+            "I7": 59,
+            "I9": 60,
+            "J4": 61,
+            "J6": 62,
+            "J8": 63,
+            "G15": 64,
+            "C21": 65,
+            "D22": 66,
+            "E17": 67,
+            "E21": 68,
+            "G13": 69,
+            "I11": 70,
+            "J10": 71,
+            "J12": 72,
+            "E19": 73,
+            "H4": 74,
+            "B10": 75,
+            "H10": 76,
+            "H16": 77,
+            "F16": 78,
+            "G7": 79,
+            "G17": 80,
+            "F20": 81,
+            "D6": 82,
+            "I17": 83,
+            "B18": 84,
+            "C19": 85,
+            "E5": 86,
+            "D10": 87,
+            "E11": 88,
+            "H18": 89,
+            "I15": 90,
+            "G19": 91,
+            "E23": 92,
+        }
+        self.tile_offsets = {
+            "42": 0,
+            "4": 1,
+            "16": 2,
+            "70": 3,
+            "23": 4,
+            "7": 5,
+            "18": 6,
+            "24": 7,
+            "3": 8,
+            "55": 9,
+            "61": 10,
+            "54": 11,
+            "9": 12,
+            "41": 13,
+            "26": 14,
+            "68": 15,
+            "57": 16,
+            "45": 17,
+            "1": 18,
+            "56": 19,
+            "44": 20,
+            "62": 21,
+            "63": 22,
+            "64": 23,
+            "40": 24,
+            "66": 25,
+            "20": 26,
+            "27": 27,
+            "39": 28,
+            "19": 29,
+            "59": 30,
+            "25": 31,
+            "46": 32,
+            "28": 33,
+            "65": 34,
+            "43": 35,
+            "2": 36,
+            "53": 37,
+            "58": 38,
+            "14": 39,
+            "47": 40,
+            "8": 41,
+            "29": 42,
+            "69": 43,
+            "15": 44,
+            "67": 45,
+        }
+        self.city_count = {
+            "D2": 1,
+            "F6": 1,
+            "H12": 1,
+            "D14": 1,
+            "K15": 1,
+            "A19": 1,
+            "F4": 1,
+            "J14": 1,
+            "F22": 1,
+            "B16": 1,
+            "E19": 1,
+            "H4": 1,
+            "B10": 1,
+            "H10": 1,
+            "H16": 1,
+            "F16": 1,
+            "E5": 2,
+            "D10": 2,
+            "E11": 2,
+            "H18": 2,
+            "I15": 1,
+            "G19": 2,
+            "E23": 1,
+        }
+        self.city_offsets = {
+            ("D2", 0): 0,
+            ("F6", 0): 1,
+            ("H12", 0): 2,
+            ("D14", 0): 3,
+            ("K15", 0): 4,
+            ("A19", 0): 5,
+            ("F4", 0): 6,
+            ("J14", 0): 7,
+            ("F22", 0): 8,
+            ("B16", 0): 9,
+            ("E19", 0): 10,
+            ("H4", 0): 11,
+            ("B10", 0): 12,
+            ("H10", 0): 13,
+            ("H16", 0): 14,
+            ("F16", 0): 15,
+            ("E5", 0): 16,
+            ("E5", 1): 17,
+            ("D10", 0): 18,
+            ("D10", 1): 19,
+            ("E11", 0): 20,
+            ("E11", 1): 21,
+            ("H18", 0): 22,
+            ("H18", 1): 23,
+            ("I15", 0): 24,
+            ("G19", 0): 25,
+            ("G19", 1): 26,
+            ("E23", 0): 27,
+        }
+
         # Action Encoding
         self.actions: List[Tuple[BaseAction, List[Any]]] = []
         self.action_offsets = {}
@@ -126,25 +325,18 @@ class ActionMapper:
                 self.actions.append((SellShares, [corp, num_shares]))
 
         # PlaceToken
-        self.city_offsets = {}
         self.action_offsets["PlaceToken"] = len(self.actions)
-        city_count = 0
-        for hex in initial_game_state.hexes:
-            for i, city in enumerate(hex.tile.cities):
-                self.city_offsets[(hex.id, i)] = city_count
-                city_count += 1
-                self.actions.append((PlaceToken, [hex.id, i]))
+        for hex_id in self.hex_offsets.keys():
+            if hex_id in self.city_count:
+                for num_cities in range(self.city_count[hex_id]):
+                    self.actions.append((PlaceToken, [hex_id, num_cities]))
 
         # LayTile
-        self.hex_offsets = {}
-        self.tile_offsets = {}
         self.action_offsets["LayTile"] = len(self.actions)
-        for i, hex in enumerate(initial_game_state.hexes):
-            self.hex_offsets[hex.id] = i
-            for j, tile_name in enumerate(initial_game_state.unique_tile_types()):
-                self.tile_offsets[tile_name] = j
+        for hex_id in self.hex_offsets.keys():
+            for tile_name in self.tile_offsets.keys():
                 for rotation in range(6):
-                    self.actions.append((LayTile, [tile_name, hex.id, rotation]))
+                    self.actions.append((LayTile, [tile_name, hex_id, rotation]))
 
         # BuyTrain
         self.action_offsets["BuyTrain"] = len(self.actions)
@@ -161,7 +353,6 @@ class ActionMapper:
         for train in self.train_type_offsets.keys():
             self.actions.append((DiscardTrain, [train]))
 
-        # RunRoutes is handled automatically
         # Dividend
         self.action_offsets["Dividend"] = len(self.actions)
         for type in self.dividend_offsets.keys():
@@ -207,18 +398,18 @@ class ActionMapper:
         # Only DH places a token (on F16)
         self.actions.append((PlaceToken, ["DH", "F16", 0]))
 
-        LOGGER.debug(f"Action section sizes:")
-        for item1, item2 in zip(self.action_offsets.items(), list(self.action_offsets.items())[1:]):
-            if item2:
-                key1, value1 = item1
-                key2, value2 = item2
-                LOGGER.debug(f"{key1}: {value2 - value1}")
-            else:
-                LOGGER.debug(f"{key1}: {len(self.actions) - value1}")
+        # LOGGER.debug(f"Action section sizes:")
+        # for item1, item2 in zip(self.action_offsets.items(), list(self.action_offsets.items())[1:]):
+        #     if item2:
+        #         key1, value1 = item1
+        #         key2, value2 = item2
+        #         LOGGER.debug(f"{key1}: {value2 - value1}")
+        #     else:
+        #         LOGGER.debug(f"{key1}: {len(self.actions) - value1}")
 
-        LOGGER.debug(f"Action encoding size: {len(self.actions)}")
+        # LOGGER.debug(f"Action encoding size: {len(self.actions)}")
 
-    def _get_index_for_action(self, action: BaseAction) -> int:
+    def get_index_for_action(self, action: BaseAction) -> int:
         action_type = action.__class__.__name__
         if action.entity.__class__.__name__ == "Company":
             action_type = f"Company{action_type}"
@@ -269,7 +460,8 @@ class ActionMapper:
             return (
                 action_offset
                 + self.corporation_offsets[action.bundle.corporation.id] * 5
-                + action.bundle.num_shares() - 1
+                + action.bundle.num_shares()
+                - 1
             )
 
         if action_type == "PlaceToken":
@@ -329,7 +521,6 @@ class ActionMapper:
                 raise ValueError(f"Train is None for discard train action: {action}")
             return action_offset + self.train_type_offsets[action.train.name]
 
-        # RunRoutes is handled automatically
         if action_type == "Dividend":
             if not action.kind:
                 raise ValueError(f"Kind is None for dividend action: {action}")
@@ -385,13 +576,23 @@ class ActionMapper:
 
         if action_type == "Bankrupt":
             return action_offset
-        
+
         if action_type == "RunRoutes":
             return action_offset
 
         raise ValueError(f"Unknown action type: {type(action)}")
 
-    def get_legal_action_mask(self, state: BaseGame) -> torch.Tensor:
+    def get_legal_action_mask(self, state: BaseGame) -> np.ndarray:
+        indices = self.get_legal_action_indices(state)
+
+        mask = np.zeros(self.action_encoding_size, dtype=np.float32)
+        if not indices:
+            LOGGER.warning("No legal actions found")
+            return mask
+        mask[indices] = 1.0
+        return mask
+    
+    def get_legal_action_indices(self, state: BaseGame) -> List[int]:
         if state is None:
             raise ValueError("State is None")
         helper = ActionHelper(state)
@@ -402,19 +603,13 @@ class ActionMapper:
         indices = []
         for action in legal_actions:
             try:
-                indices.append(self._get_index_for_action(action))
+                indices.append(self.get_index_for_action(action))
             except ValueError as e:
                 LOGGER.warning(f"Warning: Unmappable action from ActionHelper: {action} ({e})")
                 raise e
 
         LOGGER.debug(f"Indices: {indices}")
-
-        mask = torch.zeros(self.action_encoding_size, dtype=torch.float32)
-        if not indices:
-            raise ValueError("No legal actions found")
-        indices_tensor = torch.tensor(indices, dtype=torch.long)
-        mask.scatter_(0, indices_tensor, 1.0)
-        return mask
+        return indices
 
     def map_index_to_action(self, index: int, state: BaseGame) -> BaseAction:
         if not (0 <= index < self.action_encoding_size):
@@ -461,7 +656,7 @@ class ActionMapper:
                 location = args[2]
                 exchange_step = [step for step in state.round.steps if isinstance(step, ExchangeStep)][0]
                 shares = exchange_step.exchangeable_shares(entity)
-                
+
                 if location == "ipo":
                     owner = corp
                 elif location == "market":
@@ -482,15 +677,19 @@ class ActionMapper:
 
         if action_type is SellShares:
             corp_id, num_shares = args
-            corp = state.corporation_by_id(corp_id)
-            if corp is None:
-                raise ValueError(f"Corporation '{corp_id}' not found in state for SellShares action")
-            bundle = [
+            sellable_shares = state.active_step().sellable_shares(entity)
+            if isinstance(state.active_step(), BuyTrainStep):
+                sellable_shares = [share for share in sellable_shares if state.active_step().sellable_bundle(share)]
+
+            possible_bundle = [
                 bundle
-                for bundle in state.bundles_for_corporation(entity, corp)
-                if bundle.num_shares() == num_shares
-            ][0]
-            return SellShares(entity, bundle)
+                for bundle in sellable_shares
+                if bundle.corporation.id == corp_id and bundle.num_shares() == num_shares
+            ]
+            if not possible_bundle:
+                raise ValueError(f"No sellable shares found for SellShares action: {args}")
+            bundle = possible_bundle[0]
+            return SellShares(bundle.owner, bundle)
 
         if action_type is PlaceToken:
             if is_company_action:
@@ -518,7 +717,7 @@ class ActionMapper:
                 trains = state.depot.depot_trains(entity)
                 if len(trains) == 0:
                     raise ValueError("No trains available in depot for BuyTrain action")
-                
+
                 train = None
                 i = 0
                 while not train:
@@ -533,7 +732,7 @@ class ActionMapper:
             if len(args) == 2:
                 train_type = args[0]
                 # Buy discarded train from the market
-                trains = [train for train in state.depot.discarded(entity) if train.name == train_type]
+                trains = [train for train in state.depot.discarded if train.name == train_type]
                 if len(trains) == 0:
                     raise ValueError("No discarded trains available in depot for BuyTrain action")
                 train = trains[0]
@@ -584,7 +783,7 @@ class ActionMapper:
 
         if action_type is Bankrupt:
             return Bankrupt(entity)
-        
+
         if action_type is RunRoutes:
             return action_helper.auto_route_action()[0]
 
