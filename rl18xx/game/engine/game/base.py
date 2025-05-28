@@ -64,6 +64,7 @@ from random import choice, randint
 from collections import defaultdict
 from itertools import combinations
 import logging
+import copy
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1103,6 +1104,206 @@ class BaseGame:
             actions=[action.copy() for action in actions] if actions else None,
             optional_rules=self.optional_rules,
         )
+
+    def deep_copy_clone(self) -> 'BaseGame':
+        try:
+            return copy.deepcopy(self)
+        except Exception as e:
+            logging.error(f"Error during deepcopy of {self.__class__.__name__}: {e}", exc_info=True)
+            raise
+    
+    def manual_big_clone(self) -> 'BaseGame':
+        memo = {}
+        new_game = self.__class__.__new__(self.__class__)
+        memo[id(self)] = new_game
+
+        # Copy all of the immutable objects and unused properties
+        new_game.metadata = self.metadata
+        new_game.entities = self.entities
+        new_game.map = self.map
+        new_game.id = self.id
+        new_game.turn = self.turn
+        new_game.final_turn = self.final_turn
+        new_game.strict = self.strict
+        new_game.finished = self.finished
+        new_game.log = self.log
+        new_game.queued_log = self.queued_log
+        new_game.turn_start_action_id = self.turn_start_action_id
+        new_game.last_turn_start_action_id = self.last_turn_start_action_id
+        new_game.exception = self.exception
+        new_game.names = self.names
+        new_game.user = self.user
+        new_game.programmed_actions = self.programmed_actions
+        new_game.round_counter = self.round_counter
+        new_game.optional_rules = self.optional_rules
+        new_game.seed = self.seed
+        new_game.rand = copy.deepcopy(self.rand, memo)
+        new_game.corporations_are_closing = self.corporations_are_closing
+        new_game._axes = self._axes
+        new_game.tile_groups = self.tile_groups
+        new_game._cert_limit = self._cert_limit
+        new_game.removals = self.removals
+        new_game.initial_round_type = self.initial_round_type
+        new_game.loans = self.loans
+        new_game.total_loans = self.total_loans
+
+        # Copy the mutable collections
+        new_game.actions = [action.copy() for action in self.raw_all_actions]
+        new_game.raw_actions = [action.copy() for action in self.raw_all_actions]
+        new_game.raw_all_actions = [action.copy() for action in self.raw_all_actions]
+        new_game._filtered_actions = [action.copy() for action in self.raw_all_actions]
+        new_game.round_history = [copy.deepcopy(rh, memo) for rh in self.round_history]
+
+        # Now, let's copy all the stuff that has state.
+        new_game.players = [copy.deepcopy(player, memo) for player in self.players]
+        new_game.corporations = [copy.deepcopy(corp, memo) for corp in self.corporations]
+        new_game.companies = [copy.deepcopy(comp, memo) for comp in self.companies]
+        new_game.minors = [copy.deepcopy(minor, memo) for minor in self.minors]
+        new_game.bank = copy.deepcopy(self.bank, memo)
+        new_game.share_pool = copy.deepcopy(self.share_pool, memo)
+        new_game.stock_market = copy.deepcopy(self.stock_market, memo)
+        new_game.depot = copy.deepcopy(self.depot, memo)
+        new_game.phase = copy.deepcopy(self.phase, memo)
+        new_game.round = copy.deepcopy(self.round, memo)
+        new_game.closing_queue = [copy.deepcopy(item, memo) for item in self.closing_queue]
+        if self._crowded_corps is not None:
+            new_game._crowded_corps = [copy.deepcopy(corp, memo) for corp in self._crowded_corps]
+        else:
+            new_game._crowded_corps = None
+        new_game.tiles = [copy.deepcopy(tile, memo) for tile in self.tiles]
+        new_game.all_tiles = [copy.deepcopy(tile, memo) for tile in self.all_tiles] # May overlap with new_game.tiles
+        new_game.cities = [copy.deepcopy(city, memo) for city in self.cities]
+        new_game.hexes = [copy.deepcopy(hex_obj, memo) for hex_obj in self.hexes]
+        new_game.graph = copy.deepcopy(self.graph, memo)
+        new_game.operating_rounds = copy.deepcopy(self.operating_rounds, memo)
+        new_game.cache_objects()
+        return new_game
+
+
+    def load_from_dict_wip(self) -> 'BaseGame':
+        # Let's write a method to save all of the relevant game data to a dict.
+        game_dict = {}
+        # First, let's copy all the stuff that has no state or links to other objects.
+        game_dict["class"] = self.__class__
+        game_dict["metadata"] = self.metadata
+        game_dict["entities"] = self.entities
+        game_dict["map"] = self.map
+        game_dict["id"] = self.id
+        game_dict["turn"] = self.turn
+        game_dict["final_turn"] = self.final_turn
+        game_dict["strict"] = self.strict
+        game_dict["finished"] = self.finished
+        game_dict["log"] = self.log
+        game_dict["queued_log"] = self.queued_log
+        game_dict["turn_start_action_id"] = self.turn_start_action_id
+        game_dict["last_turn_start_action_id"] = self.last_turn_start_action_id
+        game_dict["exception"] = self.exception
+        game_dict["names"] = self.names
+        game_dict["user"] = self.user
+        game_dict["programmed_actions"] = self.programmed_actions
+        game_dict["round_counter"] = self.round_counter
+        game_dict["optional_rules"] = self.optional_rules
+        game_dict["seed"] = self.seed
+        game_dict["rand"] = self.rand
+        game_dict["corporations_are_closing"] = self.corporations_are_closing
+        game_dict["axes"] = self._axes
+        game_dict["tile_groups"] = self.tile_groups
+        game_dict["_cert_limit"] = self._cert_limit
+        game_dict["removals"] = self.removals
+        game_dict["round_history"] = self.round_history
+        game_dict["initial_round_type"] = self.initial_round_type
+        game_dict["actions"] = self.raw_all_actions
+        game_dict["loans"] = self.loans
+        game_dict["total_loans"] = self.total_loans
+
+        # Then, let's copy all the stuff that has state. This is gonna be complicated lol.
+        # I think the best approach is to define a to_dict method for each class that needs it.
+        # Then, we can define a from_dict method that will take a game and a dict and create
+        # the object. From_dict will need to enforce the order of operations such that we can
+        # load the game in the correct order.
+
+        # Let's start with the players.
+        game_dict["players"] = [player.to_dict() for player in self.players]
+
+        # All of the things requiring a deep copy:
+        game_dict["players"] = self.players
+        game_dict["round"] = self.round
+        game_dict["companies"] = self.companies
+        game_dict["stock_market"] = self.stock_market
+        game_dict["minors"] = self.minors
+        game_dict["corporations"] = self.corporations
+        game_dict["closing_queue"] = self.closing_queue
+        game_dict["crowded_corps"] = self._crowded_corps
+        game_dict["bank"] = self.bank
+        game_dict["tiles"] = self.tiles
+        game_dict["all_tiles"] = self.all_tiles
+        game_dict["cities"] = self.cities
+        game_dict["depot"] = self.depot
+        game_dict["share_pool"] = self.share_pool
+        game_dict["hexes"] = self.hexes
+        game_dict["graph"] = self.graph
+        game_dict["phase"] = self.phase
+        game_dict["operating_rounds"] = self.operating_rounds
+
+        new_game = game_dict["class"].__new__(game_dict["class"])
+        # We now have a fresh game object.
+        # Let's load the rest of the game from the dict.
+        new_game.metadata = game_dict["metadata"]
+        new_game.entities = game_dict["entities"]
+        new_game.map = game_dict["map"]
+        new_game.title = new_game.metadata.title()
+        new_game.id = game_dict["id"]
+        new_game.turn = game_dict["turn"]
+        new_game.final_turn = game_dict["final_turn"]
+        new_game.loading = False
+        new_game.strict = game_dict["strict"]
+        new_game.finished = game_dict["finished"]
+        new_game.log = game_dict["log"]
+        new_game.queued_log = game_dict["queued_log"]
+        new_game.turn_start_action_id = game_dict["turn_start_action_id"]
+        new_game.last_turn_start_action_id = game_dict["last_turn_start_action_id"]
+        new_game.exception = game_dict["exception"]
+        new_game.names = game_dict["names"]
+        new_game.players = game_dict["players"]
+        new_game.user = game_dict["user"]
+        new_game.programmed_actions = game_dict["programmed_actions"]
+        new_game.round = game_dict["round"]
+        new_game.round_counter = game_dict["round_counter"]
+        new_game.optional_rules = game_dict["optional_rules"]
+        new_game.seed = game_dict["seed"]
+        new_game.rand = game_dict["rand"]
+        new_game.companies = game_dict["companies"]
+        new_game.stock_market = game_dict["stock_market"]
+        new_game.minors = game_dict["minors"]
+        new_game.loans = game_dict["loans"]
+        new_game.total_loans = game_dict["total_loans"]
+        new_game.corporations = game_dict["corporations"]
+        new_game.closing_queue = game_dict["closing_queue"]
+        new_game.corporations_are_closing = game_dict["corporations_are_closing"]
+        new_game._axes = game_dict["axes"]
+        new_game._crowded_corps = game_dict["crowded_corps"]
+        new_game.bank = game_dict["bank"]
+        new_game.tiles = game_dict["tiles"]
+        new_game.all_tiles = game_dict["all_tiles"]
+        new_game.tile_groups = game_dict["tile_groups"]
+        new_game._cert_limit = game_dict["_cert_limit"]
+        new_game.removals = game_dict["removals"]
+        new_game.depot = game_dict["depot"]
+        new_game.share_pool = game_dict["share_pool"]
+        new_game.hexes = game_dict["hexes"]
+        new_game.graph = game_dict["graph"]
+        new_game.cities = game_dict["cities"]
+        new_game.phase = game_dict["phase"]
+        new_game.operating_rounds = game_dict["operating_rounds"]
+        new_game.round_history = game_dict["round_history"]
+        new_game.cache_objects()
+        new_game.initial_round_type = game_dict["initial_round_type"]
+        new_game.actions = game_dict["actions"]
+        new_game.raw_actions = game_dict["actions"]
+        new_game._filtered_actions = game_dict["actions"]
+        new_game.raw_all_actions = game_dict["actions"]
+
+        return new_game
 
     @property
     def trains(self):

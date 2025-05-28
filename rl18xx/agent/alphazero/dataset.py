@@ -10,7 +10,9 @@ import logging
 import io
 from pathlib import Path
 from typing import Union, List, Tuple
+
 LOGGER = logging.getLogger(__name__)
+
 
 class MCTSDataset(Dataset):
     def __init__(self, lmdb_path: Union[Path, str]):
@@ -19,10 +21,10 @@ class MCTSDataset(Dataset):
 
         self.env = lmdb.open(lmdb_path, readonly=True, lock=False, readahead=False, meminit=False)
         with self.env.begin() as txn:
-            self.length = txn.stat()['entries']
+            self.length = txn.stat()["entries"]
 
     def __getitem__(self, index):
-        key = f'{index:08}'.encode('ascii')
+        key = f"{index:08}".encode("ascii")
         with self.env.begin() as txn:
             data = txn.get(key)
         buffer = io.BytesIO(data)
@@ -36,11 +38,7 @@ class MCTSDataset(Dataset):
         # state, pi, value = torch.load(buffer)
         # game_state_data, node_data, edge_index = state
 
-        data = Data(
-            x=node_data,
-            edge_index=edge_index[0:2, :],
-            edge_attr=edge_index[2, :]
-        )
+        data = Data(x=node_data, edge_index=edge_index[0:2, :], edge_attr=edge_index[2, :])
         return game_state_data, data, pi, value
 
     def __len__(self):
@@ -63,15 +61,13 @@ class TrainingExampleProcessor:
                 buffer = io.BytesIO()
                 torch.save((state, pi, value), buffer)
                 serialized_data = buffer.getvalue()
-                
-                key = f'{i:08}'.encode('ascii')
+
+                key = f"{i:08}".encode("ascii")
                 txn.put(key, serialized_data)
         LOGGER.info(f"Wrote {len(samples)} samples to {lmdb_path}")
 
-
     def make_dataset_from_selfplay(
-        self,
-        data_extracts: List[Tuple[BaseGame, torch.Tensor, torch.Tensor]]
+        self, data_extracts: List[Tuple[BaseGame, torch.Tensor, torch.Tensor]]
     ) -> List[Tuple[Tuple[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor, torch.Tensor]]:
         examples = []
         for game_state, searches_pi, result in data_extracts:
@@ -80,5 +76,3 @@ class TrainingExampleProcessor:
             value = result
             examples.append((encoded_state, pi, value))
         return examples
-
-

@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AlphaZero Control Panel</title>
+    <style>
+        body { 
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"; 
+            margin: 0; 
+            padding: 0; 
+            background-color: #f8f9fa; /* Lighter gray background */
+            color: #343a40; /* Darker base text color */
+            line-height: 1.6; /* Improved readability */
+        }
+        .container { 
+            max-width: 900px; 
+            margin: 30px auto; /* Increased top/bottom margin */
+            padding: 25px; /* Increased padding */
+            background-color: #fff; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08); /* Softer, more pronounced shadow */
+            border-radius: 8px; 
+        }
+        h1 { 
+            color: #212529; 
+            margin-bottom: 1.5rem; 
+            font-size: 2.2rem; /* Slightly larger h1 */
+            font-weight: 600;
+        }
+        h2 { /* General h2 styling */
+            color: #212529;
+            font-size: 1.6rem; /* Slightly larger h2 */
+            margin-top: 1.5rem;
+            margin-bottom: 1rem;
+            font-weight: 500;
+        }
+        h3 { /* For sub-headings like "Training Parameters" */
+            font-size: 1.25rem;
+            color: #495057;
+            margin-top: 2rem; /* More space above */
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid #e9ecef; /* Lighter border */
+            font-weight: 500;
+        }
+
+        /* Section Styling (Status, Config, Links) */
+        .status, .config, .links { 
+            margin-bottom: 30px; 
+            padding: 25px; 
+            border: 1px solid #e0e0e0; /* Slightly softer border */
+            border-radius: 8px; 
+            background-color: #fff; 
+            box-shadow: 0 2px 6px rgba(0,0,0,0.06); 
+        }
+        .status h2, .config h2, .links h2 { 
+            margin-top: 0; 
+            border-bottom: 1px solid #dee2e6; 
+            padding-bottom: 15px; 
+            font-size: 1.4rem; 
+            font-weight: 500; 
+            color: #343a40;
+            margin-bottom: 20px; 
+        }
+
+        /* Card styling for Self-Play Games */
+        .card {
+            margin-bottom: 30px; 
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            background-color: #fff;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+        }
+        .card-header {
+            padding: 15px 25px;
+            margin-bottom: 0;
+            background-color: #f8f9fa; /* Light background for header */
+            border-bottom: 1px solid #dee2e6;
+            font-size: 1.4rem;
+            font-weight: 500;
+            color: #343a40;
+            border-top-left-radius: calc(8px - 1px); /* Adjust for border */
+            border-top-right-radius: calc(8px - 1px);
+        }
+        .card-body {
+            padding: 20px 25px; /* Consistent padding */
+        }
+
+        /* Progress Bar */
+        .progress-bar-container { 
+            width: 100%; 
+            background-color: #e9ecef; 
+            border-radius: .3rem; /* Slightly larger radius */
+            margin: 15px 0; 
+            overflow: hidden; /* Ensures progress bar stays within rounded corners */
+        }
+        .progress-bar { 
+            height: 24px; 
+            background-color: #007bff; /* Primary blue */
+            text-align: center; 
+            color: white; 
+            line-height: 24px; 
+            border-radius: .3rem; /* Match container, or 0 if you want sharp edges filling container */
+            transition: width 0.4s ease; 
+            font-weight: 500;
+        }
+
+        /* Form Elements */
+        label { 
+            display: block; 
+            margin-top: 1rem; 
+            margin-bottom: .5rem; 
+            font-weight: 600; 
+            color: #495057;
+        }
+        input[type="number"], input[type="text"] { 
+            width: 100%; 
+            padding: 10px 12px; 
+            margin-top: 5px; 
+            border: 1px solid #ced4da; 
+            border-radius: .25rem; 
+            box-sizing: border-box; 
+            font-size: 0.95rem;
+            line-height: 1.5;
+            color: #495057;
+            background-color: #fff;
+            transition: border-color .15s ease-in-out, box-shadow .15s ease-in-out;
+        }
+        input[type="number"]:focus, input[type="text"]:focus {
+            border-color: #80bdff;
+            outline: 0;
+            box-shadow: 0 0 0 .2rem rgba(0,123,255,.25);
+        }
+        input[type="submit"] { 
+            background-color: #007bff; 
+            color: white; 
+            padding: 12px 20px; 
+            border: none; 
+            border-radius: .25rem; 
+            cursor: pointer; 
+            margin-top: 25px; 
+            font-size: 1rem; 
+            font-weight: 500;
+            transition: background-color .15s ease-in-out;
+        }
+        input[type="submit"]:hover { 
+            background-color: #0056b3; 
+        }
+        .param-group { 
+            margin-bottom: 1.5rem; /* Increased space */
+        }
+
+        /* Flash Messages */
+        .flash { 
+            padding: 1rem 1.25rem; 
+            margin-bottom: 1.5rem; 
+            border-radius: .3rem; /* Consistent radius */
+            font-size: 0.95rem;
+            border: 1px solid transparent;
+        }
+        .flash.success { background-color: #d4edda; color: #155724; border-color: #c3e6cb; }
+        .flash.error { background-color: #f8d7da; color: #721c24; border-color: #f5c6cb; }
+        .flash.warning { background-color: #fff3cd; color: #856404; border-color: #ffeeba; }
+
+        /* Links and Paragraphs */
+        a { color: #007bff; text-decoration: none; }
+        a:hover { color: #0056b3; text-decoration: underline; }
+        p { 
+            line-height: 1.6; 
+            margin-bottom: 1rem; 
+        }
+        .status p, .config p, .links p, .card-body p { margin-bottom: 0.8rem; }
+        .status p:last-child, .config p:last-child, .links p:last-child, .card-body p:last-child { margin-bottom: 0; }
+
+        /* Error Message specific styling */
+        .error-message { 
+            color: #721c24; /* Consistent with flash error */
+            font-weight: normal; /* Bold is often too much, color is enough */
+            background-color: #f8d7da; 
+            padding: 10px 15px;
+            border-radius: .25rem;
+            border: 1px solid #f5c6cb;
+            margin-bottom: 15px;
+        }
+        p.error-message strong { font-weight: 600; } /* If you use strong inside */
+
+        /* List Group for dynamically loaded games */
+        .list-group {
+            display: flex;
+            flex-direction: column;
+            padding-left: 0;
+            margin-bottom: 0;
+        }
+        .list-group-flush {
+            border-radius: 0;
+        }
+        .list-group-item {
+            position: relative;
+            display: block;
+            padding: .85rem 1.25rem; /* Slightly more padding */
+            background-color: #fff;
+            border-bottom: 1px solid #e9ecef; /* Lighter border */
+            font-size: 0.9rem; 
+            line-height: 1.5;
+        }
+        .list-group-item strong {
+            color: #343a40; /* Darker color for strong tags */
+        }
+        .list-group-flush .list-group-item {
+            border-right-width: 0;
+            border-left-width: 0;
+            border-radius: 0;
+        }
+        .list-group-flush .list-group-item:first-child {
+            border-top-width: 0; 
+        }
+        .list-group-flush .list-group-item:last-child {
+            border-bottom-width: 0; 
+        }
+
+        /* Text utility classes (ensure they are defined if used by JS) */
+        .text-danger { color: #dc3545 !important; }
+        .text-warning { color: #856404 !important; } /* Darker yellow for text readability */
+
+        /* Code tag styling */
+        code {
+            padding: .2em .4em;
+            margin: 0 .2em;
+            font-size: 87.5%; /* Slightly larger than default 85% */
+            background-color: #e9ecef; /* Light gray background */
+            border-radius: 3px;
+            font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+            color: #333;
+        }
+        p code { /* Ensure code within paragraphs aligns well */
+            line-height: 1;
+        }
+
+        /* Basic Bootstrap utility if used in HTML (like mt-3) */
+        .mt-3 { margin-top: 1rem !important; }
+    </style>
+    <meta http-equiv="refresh" content="30">
+</head>
+<body>
+    <div class="container">
+        <h1>AlphaZero Training Status & Control</h1>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="status">
+            <h2>Current Status</h2>
+            {% if status.error %}
+                <p class="error-message">{{ status.error }}</p>
+            {% elif status.status_message %}
+                <p><strong>Loop:</strong> {{ status.current_loop|default('N/A') }} / {{ status.total_loops|default('N/A') }}</p>
+                <p><strong>Self-Play Progress (Current Iteration):</strong> {{ status.games_completed_this_iteration|default(0) }} / {{ status.total_games_this_iteration|default('N/A') }} games</p>
+                {% if status.total_games_this_iteration and status.total_games_this_iteration > 0 %}
+                <div class="progress-bar-container">
+                    <div class="progress-bar" style="width: {{ (status.games_completed_this_iteration / status.total_games_this_iteration * 100) if status.total_games_this_iteration > 0 else 0 }}%;">
+                        {{ "%.0f" % (status.games_completed_this_iteration / status.total_games_this_iteration * 100) if status.total_games_this_iteration > 0 else 0 }}%
+                    </div>
+                </div>
+                {% endif %}
+                <p><strong>Message:</strong> {{ status.status_message|default('Waiting for status...') }}</p>
+                {% if status.tensorboard_log_dir %}
+                <p><strong>TensorBoard Log Directory:</strong> <code>{{ status.tensorboard_log_dir }}</code></p>
+                {% endif %}
+            {% else %}
+                <p>Waiting for status updates...</p>
+            {% endif %}
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                Self-Play Games In Progress
+            </div>
+            <div class="card-body" id="self-play-games-dynamic-area">
+                {# Initial content rendered by Flask/Jinja2 will go here #}
+                {% if games_in_progress and not games_in_progress.error %}
+                    <ul class="list-group list-group-flush">
+                        {% for game_data in games_in_progress %}
+                            <li class="list-group-item">
+                                <strong>Game Id:</strong> {{ game_data.game_id }}<br>
+                                {% if game_data.status and game_data.status == 'Error' and game_data.error %}
+                                    <strong>Status:</strong> <span class="text-danger">{{ game_data.status }} ({{ game_data.error }})</span><br>
+                                {% else %}
+                                    <strong>Status:</strong> {{ game_data.status | default('N/A') }}<br>
+                                {% endif %}
+                                <strong>Moves:</strong> {{ game_data.moves_played | default('N/A') }}<br>
+                                <strong>Started:</strong> {{ game_data.start_time_str | default('N/A') }}<br>
+                                <strong>Last Update:</strong> {{ game_data.last_update_str | default('N/A') }}
+                            </li>
+                        {% endfor %}
+                    </ul>
+                {% elif games_in_progress.error %}
+                    <p class="text-danger">Could not load self-play games: {{ games_in_progress.error }}</p>
+                {% else %}
+                    <p>No self-play games currently in progress or status files found.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="config">
+            <h2>Configuration (takes effect on next loop iteration)</h2>
+            <form method="POST">
+                <div class="param-group">
+                    <label for="num_games_per_iteration">Number of Self-Play Games per Iteration:</label>
+                    <input type="number" id="num_games_per_iteration" name="num_games_per_iteration" 
+                           value="{{ config_form.num_games_per_iteration if config_form.num_games_per_iteration is not none else '' }}" 
+                           placeholder="e.g., 25 (Required)" required>
+                </div>
+                
+                <h3>Training Parameters</h3>
+                {% for param_name in editable_training_params %}
+                <div class="param-group">
+                    <label for="{{ param_name }}">{{ param_name.replace('_', ' ')|title }}:</label>
+                    <input type="number" step="any" id="{{ param_name }}" name="{{ param_name }}" 
+                           value="{{ config_form.training_params[param_name] if config_form.training_params[param_name] is not none else '' }}" 
+                           placeholder="Default: {{ config_form.training_params[param_name] if config_form.training_params[param_name] is not none else '(see code)' }}">
+                </div>
+                {% endfor %}
+                
+                <input type="submit" value="Update Configuration">
+            </form>
+        </div>
+
+        <div class="links">
+            <h2>Monitoring Links</h2>
+            <p><a href="{{ tensorboard_url }}" target="_blank">Open TensorBoard</a></p>
+            <p><em>(Ensure TensorBoard is running and accessible, possibly via a reverse proxy at the link above.)</em></p>
+        </div>
+    </div>
+
+    <script>
+        function updateGamesInProgress() {
+            fetch('/api/games_status')
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(errData => {
+                            throw new Error(errData.error || `HTTP error! Status: ${response.status}`);
+                        }).catch(() => { // Fallback if response isn't JSON or error key missing
+                            throw new Error(`HTTP error! Status: ${response.status}`);
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    const container = document.getElementById('self-play-games-dynamic-area'); // Ensure this ID matches your HTML
+                    if (!container) {
+                        console.error('Error: Target container #self-play-games-dynamic-area not found.');
+                        return;
+                    }
+    
+                    let htmlContent = '';
+    
+                    if (data.error) {
+                        htmlContent = `<p class="text-danger">Error updating games: ${data.error}</p>`;
+                    } else {
+                        if (data.length === 0) {
+                            htmlContent = '<p>No self-play games currently in progress or status files found.</p>';
+                        } else {
+                            htmlContent += '<ul class="list-group list-group-flush">';
+                            data.forEach(game => {
+                                if (typeof game === 'object' && game !== null) {
+                                    const status = game.status || 'N/A';
+                                    const moves = game.moves_played !== undefined ? game.moves_played : 'N/A';
+                                    const startTime = game.start_time_str || 'N/A';
+                                    const lastUpdate = game.last_update_str || 'N/A';
+                                    let statusDisplay = `<strong>Status:</strong> ${status}<br>`;
+                                    if (status === 'Error' && game.error) {
+                                        statusDisplay = `<strong>Status:</strong> <span class="text-danger">${status} (${game.error})</span><br>`;
+                                    }
+
+                                    htmlContent += `
+                                        <li class="list-group-item">
+                                            <strong>Game Id:</strong> ${game.game_id}<br>
+                                            ${statusDisplay}
+                                            <strong>Moves:</strong> ${moves}<br>
+                                            <strong>Started:</strong> ${startTime}<br>
+                                            <strong>Last Update:</strong> ${lastUpdate}
+                                        </li>`;
+                                }
+                            });
+                            htmlContent += '</ul>';
+                        }
+                    }
+                    container.innerHTML = htmlContent;
+                })
+                .catch(error => {
+                    console.error('Error fetching games in progress:', error);
+                    const container = document.getElementById('self-play-games-dynamic-area');
+                    if (container) {
+                        container.innerHTML = `<p class="text-danger">Failed to load game updates: ${error.message}.</p>`;
+                    }
+                });
+        }
+    
+        document.addEventListener('DOMContentLoaded', function() {
+            // The initial content is rendered by Flask.
+            // Start polling after the page is loaded.
+            // You might call updateGamesInProgress() once immediately if you want the JS to take over rendering right away,
+            // but it's generally fine to let Flask render the first view and then JS updates it.
+            setInterval(updateGamesInProgress, 1000); // Poll every 1 second
+        });
+    </script>
+</body>
+</html>

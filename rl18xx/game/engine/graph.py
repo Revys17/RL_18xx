@@ -29,9 +29,10 @@ __all__ = [
     "Hex",
 ]
 
-
+import copy
 from .core import GameError, Ownable
 import itertools
+from collections import defaultdict
 
 
 def copy_dict(dict):
@@ -2618,9 +2619,6 @@ class TileConfig:
     ]
 
 
-from collections import defaultdict
-
-
 class Tile(TileConfig):
     ALL_EDGES = [0, 1, 2, 3, 4, 5]
 
@@ -2973,6 +2971,23 @@ class Tile(TileConfig):
 
     def __repr__(self):
         return self.__str__()
+
+    def __deepcopy__(self, memo):
+        cls = self.__class__
+        result = memo.get(id(self))
+        if result:
+            return result
+
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+
+        # Copy the attributes used in __hash__ first
+        setattr(result, "id", copy.deepcopy(self.id, memo))
+
+        # Copy the rest of the attributes
+        for k, v in self.__dict__.items():
+            setattr(result, k, copy.deepcopy(v, memo))
+        return result
 
     def __hash__(self):
         return hash((self.id))

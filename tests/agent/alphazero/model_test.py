@@ -1,4 +1,3 @@
-
 import os
 import tempfile
 from rl18xx.game.gamemap import GameMap
@@ -25,6 +24,7 @@ GNN_OUTPUT_EMBED_DIM = 128
 SHARED_TRUNK_HIDDEN_DIM = 256
 NUM_RES_BLOCKS = 2
 
+
 def get_fresh_game_state():
     game_map = GameMap()
     game_class = game_map.game_by_title("1830")
@@ -32,8 +32,10 @@ def get_fresh_game_state():
     game_instance = game_class(players)
     return game_instance
 
+
 def get_model():
     return AlphaZeroModel(ModelConfig())
+
 
 def test_run_single():
     model = get_model()
@@ -43,6 +45,7 @@ def test_run_single():
     assert probs.shape == (POLICY_OUTPUT_SIZE,)
     assert log_probs.shape == (POLICY_OUTPUT_SIZE,)
     assert value.shape == (VALUE_OUTPUT_SIZE,)
+
 
 def test_run_single_encoded():
     model = get_model()
@@ -54,6 +57,7 @@ def test_run_single_encoded():
     assert log_probs.shape == (POLICY_OUTPUT_SIZE,)
     assert value.shape == (VALUE_OUTPUT_SIZE,)
 
+
 def test_run_batch():
     model = get_model()
     model.eval()
@@ -62,6 +66,7 @@ def test_run_batch():
     assert probs.shape == (4, POLICY_OUTPUT_SIZE)
     assert log_probs.shape == (4, POLICY_OUTPUT_SIZE)
     assert values.shape == (4, VALUE_OUTPUT_SIZE)
+
 
 def test_run_batch_encoded():
     model = get_model()

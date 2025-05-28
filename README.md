@@ -37,9 +37,9 @@ actions at each point in the game using the following method:
 
 ``` python
 from rl18xx.game.action_helper import ActionHelper
-action_helper = ActionHelper(g)
+action_helper = ActionHelper()
 
-action_helper.get_all_choices()[:10]
+action_helper.get_all_choices(g)[:10]
 ```
 
     [Type: Bid, id: None, entity: Player - Player 1, company: <Company: SV>, price: 20,
@@ -57,8 +57,8 @@ You can then perform that any action from that list by giving it to the
 game’s `process_action` method:
 
 ``` python
-g.process_action(action_helper.get_all_choices()[0])
-action_helper.get_all_choices()[:10]
+g.process_action(action_helper.get_all_choices(g)[0])
+action_helper.get_all_choices(g)[:10]
 ```
 
     [Type: Bid, id: None, entity: Player - Player 2, company: <Company: CS>, price: 40,

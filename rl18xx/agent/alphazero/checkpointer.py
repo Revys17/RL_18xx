@@ -7,6 +7,7 @@ import logging
 
 LOGGER = logging.getLogger(__name__)
 
+
 def get_latest_model(model_checkpoint_dir: str) -> AlphaZeroModel:
     # Get the directory within model_checkpoint_dir with the latest timestamp in its name
     p = Path(model_checkpoint_dir)
@@ -32,11 +33,12 @@ def get_latest_model(model_checkpoint_dir: str) -> AlphaZeroModel:
     with open(config_path, "r") as f:
         config_data = json.load(f)
         config = ModelConfig.from_json(config_data)
-    
+
     config.model_checkpoint_file = str(checkpoint_path)
     model = AlphaZeroModel(config)
     # The model's __init__ method already loads weights if model_checkpoint_file is set
     return model
+
 
 def save_model(model: AlphaZeroModel, model_checkpoint_dir: str, new=True):
     if new:
@@ -45,11 +47,11 @@ def save_model(model: AlphaZeroModel, model_checkpoint_dir: str, new=True):
     # Create a directory name with a timestamp for easy sorting
     full_directory_path = Path(model_checkpoint_dir) / model.get_name()
     full_directory_path.mkdir(parents=True, exist_ok=True)
-    
+
     checkpoint_filename = full_directory_path / "checkpoint.pth"
     config_filename = full_directory_path / "config.json"
-    
+
     model.save_weights(str(checkpoint_filename))
-    
+
     with open(config_filename, "w") as f:
         json.dump(model.config.to_json(), f, indent=4)
