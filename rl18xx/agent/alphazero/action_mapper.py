@@ -19,13 +19,14 @@ from rl18xx.game.engine.actions import (
     RunRoutes,
 )
 from rl18xx.game.engine.round import Exchange as ExchangeStep, BuyTrain as BuyTrainStep
+from rl18xx.shared.singleton import Singleton
 
 import logging
 
 LOGGER = logging.getLogger(__name__)
 
 
-class ActionMapper:
+class ActionMapper(metaclass=Singleton):
     def __init__(self):
         self.init_actions()
         self.action_encoding_size = len(self.actions)
@@ -591,12 +592,12 @@ class ActionMapper:
             return mask
         mask[indices] = 1.0
         return mask
-    
+
     def get_legal_action_indices(self, state: BaseGame) -> List[int]:
         if state is None:
             raise ValueError("State is None")
         helper = ActionHelper(state)
-        legal_actions = helper.get_all_choices_limited()
+        legal_actions = helper.get_all_choices_limited(state)
 
         LOGGER.debug(f"Legal actions: {legal_actions}")
 
@@ -618,7 +619,6 @@ class ActionMapper:
         if state is None:
             raise ValueError("State is None")
 
-        action_helper = ActionHelper(state)
         action_type, args = self.actions[index]
         entity = state.current_entity
         is_company_action = index >= self.action_offsets["CompanyBuyShares"]
@@ -785,9 +785,7 @@ class ActionMapper:
             return Bankrupt(entity)
 
         if action_type is RunRoutes:
-            return action_helper.auto_route_action()[0]
-
-        # TODO:
-        # 3. Add tests for all of this
+            action_helper = ActionHelper()
+            return action_helper.auto_route_action(state)[0]
 
         raise TypeError(f"Cannot create action for type: {action_type}")

@@ -21,8 +21,6 @@ class AutoRouter:
         self.verbose = verbose
 
     def compute(self, corporation, **opts):
-        # if self.debug:
-        #    set_trace()
         static = opts.get("routes", [])
         path_timeout = opts.get("path_timeout", 30)
         route_timeout = opts.get("route_timeout", 10)
@@ -94,8 +92,6 @@ class AutoRouter:
             )
             print(train_routes)
 
-        if self.debug:
-            set_trace()
         for route in static:
             route.bitfield = self.bitfield_from_connection(route.connection_data, hexside_bits)
             train_routes[route.train] = [route]
@@ -125,8 +121,6 @@ class AutoRouter:
             if self.flash:
                 self.flash("Auto route selection failed to complete (ROUTE TIMEOUT)")
 
-        if self.debug:
-            set_trace()
         max_routes = self.final_revenue_check(possibilities)
 
         # for route in max_routes:

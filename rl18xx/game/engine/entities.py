@@ -188,6 +188,26 @@ class Share(Ownable):
     def id(self):
         return f"{self._corporation.id}_{self.index}"
 
+    # def to_dict(self):
+    #     return {
+    #         "corporation_id": self._corporation.id,
+    #         "id": self.id,
+    #         "percent": self.percent,
+    #         "owner": self.owner.id,
+    #         "index": self.index,
+    #     }
+    
+    # @classmethod
+    # def from_dict(cls, game, data):
+    #     if not game.corporations:
+    #         raise ValueError("Corporations must be loaded before shares")
+
+    #     return cls(
+    #         game.corporations_by_id[data["corporation_id"]],
+    #         game.players_by_id[data["owner"]],
+    #         data["index"]
+    #     )
+
     def __eq__(self, other):
         return (
             isinstance(other, Share)
@@ -260,6 +280,11 @@ class SharePool(Entity, ShareHolder):
     @property
     def name(self):
         return "Market"
+    
+    @name.setter
+    # WARNING: This is only present for pickling.
+    def name(self, value):
+        return
 
     def player(self):
         return None
@@ -745,6 +770,11 @@ class Depot(Entity):
     @property
     def name(self):
         return "The Depot"
+    
+    @name.setter
+    # WARNING: This is only present for pickling.
+    def name(self, value):
+        return
 
     def empty(self):
         return not self.depot_trains()
@@ -938,6 +968,11 @@ class Company(Entity, Ownable, Passer, Abilities):
     @property
     def id(self):
         return self.sym
+    
+    @id.setter
+    # WARNING: This is only present for pickling.
+    def id(self, value):
+        self.sym = value
 
     @property
     def min_bid(self):
@@ -1012,6 +1047,11 @@ class Bank(Entity, Spender, ShareHolder):
     @property
     def name(self):
         return "The Bank"
+    
+    @name.setter
+    # WARNING: This is only present for pickling.
+    def name(self, value):
+        return
 
     def __str__(self):
         return f"<{self.__class__.__name__}>"
@@ -1114,6 +1154,11 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
     @property
     def id(self):
         return self.name
+    
+    @id.setter
+    # WARNING: This is only present for pickling.
+    def id(self, value):
+        self.name = value
 
     def counts_for_limit(self):
         return True if self.share_price is None else self.share_price.counts_for_limit()
@@ -1448,4 +1493,19 @@ class Player(Entity, Passer, ShareHolder, Spender):
         return f"<{self.__class__.__name__} - {self.name}>"
 
     def __hash__(self):
-        return hash(self.name)
+        return hash((self.id, self.name))
+    
+    # def to_dict(self):
+    #     return {
+    #         "id": self.id,
+    #         "name": self.name,
+    #         "cash": self.cash,
+    #         "shares": [share.to_dict() for share in self.shares],
+    #     }
+
+    # @classmethod
+    # def from_dict(cls, game, data):
+    #     player = cls(data["id"], data["name"])
+    #     player.cash = data["cash"]
+    #     player.shares = [Share.from_dict(game, share) for share in data["shares"]]
+    #     return player

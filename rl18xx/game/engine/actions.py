@@ -158,6 +158,9 @@ class BaseAction:
 
         return self.id == other.id if self.id and other.id else self.created_at == other.created_at
 
+    def description(self):
+        return f"{self.entity.__class__.__name__}: {self.__class__.__name__}"
+
     def __str__(self):
         return f"Type: {self.__class__.__name__}, id: {self.id}, entity: {self.entity}"
 

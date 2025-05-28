@@ -5304,6 +5304,9 @@ class BaseRound:
     def select_entities(self):
         raise NotImplementedError
 
+    def round_description(self):
+        return f"{self.name()} {self.round_num}"
+
     @property
     def current_entity(self):
         return self.active_entities[0] if self.active_entities else None
