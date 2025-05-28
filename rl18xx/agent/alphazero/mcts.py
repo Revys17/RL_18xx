@@ -234,7 +234,8 @@ class MCTSNode:
             except Exception as e:
                 LOGGER.error(f"Error loading game state: {e}")
                 raise e
-            load_end_time = time.time()
+            load_duration = time.time() - start_time
+            play_start_time = time.time()
             try:
                 action_to_take = self.action_mapper.map_index_to_action(action_index, new_position)
                 new_position.process_action(action_to_take)
@@ -242,10 +243,11 @@ class MCTSNode:
                 LOGGER.error(f"Error taking action {action_to_take} in game state: {self.game_dict}")
                 raise e
             self.children[action_index] = MCTSNode(new_position, fmove=action_index, parent=self, config=self.config)
+            play_duration = time.time() - play_start_time
+            self.add_metric("MCTS/Maybe_Add_Child_Load_Time", load_duration)
+            self.add_metric("MCTS/Maybe_Add_Child_Process_Time", play_duration)
         end_time = time.time()
         self.add_metric("MCTS/Maybe_Add_Child_Time", end_time - start_time)
-        self.add_metric("MCTS/Maybe_Add_Child_Load_Time", load_end_time - start_time)
-        self.add_metric("MCTS/Maybe_Add_Child_Process_Time", end_time - load_end_time)
         return self.children[action_index]
 
     def add_virtual_loss(self, up_to):

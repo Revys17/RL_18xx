@@ -3,7 +3,7 @@ from rl18xx.game.engine.round import WaterfallAuction
 from rl18xx.game.engine.entities import Player, Corporation, Company, Bank, Depot, Train
 from rl18xx.game.engine.game.title.g1830 import Game as Game_1830, Entities as Entities_1830, Map as Map_1830
 from rl18xx.game.engine.graph import Hex, Tile, Edge, City
-from rl18xx.agent.alphazero.singleton import Singleton
+from rl18xx.shared.singleton import Singleton
 from torch import Tensor, from_numpy
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Set
