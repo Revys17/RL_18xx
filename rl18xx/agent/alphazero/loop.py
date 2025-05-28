@@ -12,6 +12,8 @@ from rl18xx.agent.alphazero.checkpointer import get_latest_model
 from rl18xx.agent.alphazero.config import SelfPlayConfig, TrainingConfig
 from rl18xx.agent.alphazero.self_play import SelfPlay, log_memory_usage
 from rl18xx.agent.alphazero.train import train_latest_model
+from pathlib import Path
+
 
 LOGGER = logging.getLogger(__name__)
 RUNTIME_CONFIG_PATH = "runtime_config.json"
@@ -46,29 +48,16 @@ def load_runtime_config(
 ):
     """Loads runtime configuration, starting with program defaults and overriding from JSON file."""
     effective_num_games = cli_default_num_games
-    effective_training_params = program_default_training_params.copy()
+    effective_training_params = {}
     effective_num_threads = cli_default_num_threads
 
-    if os.path.exists(RUNTIME_CONFIG_PATH):
-        try:
-            with open(RUNTIME_CONFIG_PATH, 'r') as f:
-                overrides = json.load(f)
-            
-            effective_num_games = overrides.get("num_games_per_iteration", effective_num_games)
-            effective_num_threads = overrides.get("num_threads", effective_num_threads)
+    for param_name, param_val in program_default_training_params.items():
+        if isinstance(param_val, Path):
+            effective_training_params[param_name] = str(param_val)
+        else:
+            effective_training_params[param_name] = param_val
 
-            if "training_params" in overrides:
-                for key, value in overrides["training_params"].items():
-                    if key in effective_training_params: # Only override known params
-                        effective_training_params[key] = value
-                    else:
-                        LOGGER.warning(f"Unknown training parameter '{key}' in runtime_config.json will be ignored.")
-            LOGGER.info(f"Loaded runtime configuration from {RUNTIME_CONFIG_PATH}")
-        except json.JSONDecodeError as e:
-            LOGGER.error(f"Error decoding {RUNTIME_CONFIG_PATH}: {e}. Using defaults.")
-        except Exception as e:
-            LOGGER.error(f"Error loading {RUNTIME_CONFIG_PATH}: {e}. Using defaults.")
-    else:
+    if not os.path.exists(RUNTIME_CONFIG_PATH):
         LOGGER.warn(f"{RUNTIME_CONFIG_PATH} not found. Using default/CLI parameters.")
         default_save_config = {
             "num_games_per_iteration": effective_num_games,
@@ -78,6 +67,26 @@ def load_runtime_config(
         with open(RUNTIME_CONFIG_PATH, 'w') as f:
             json.dump(default_save_config, f, indent=4)
         LOGGER.info(f"Created default {RUNTIME_CONFIG_PATH}")
+        return effective_num_games, effective_training_params, effective_num_threads
+    
+    try:
+        with open(RUNTIME_CONFIG_PATH, 'r') as f:
+            overrides = json.load(f)
+        
+        effective_num_games = overrides.get("num_games_per_iteration", effective_num_games)
+        effective_num_threads = overrides.get("num_threads", effective_num_threads)
+
+        if "training_params" in overrides:
+            for key, value in overrides["training_params"].items():
+                if key in effective_training_params: # Only override known params
+                    effective_training_params[key] = value
+                else:
+                    LOGGER.warning(f"Unknown training parameter '{key}' in runtime_config.json will be ignored.")
+        LOGGER.info(f"Loaded runtime configuration from {RUNTIME_CONFIG_PATH}")
+    except json.JSONDecodeError as e:
+        LOGGER.error(f"Error decoding {RUNTIME_CONFIG_PATH}: {e}. Using defaults.")
+    except Exception as e:
+        LOGGER.error(f"Error loading {RUNTIME_CONFIG_PATH}: {e}. Using defaults.")
     return effective_num_games, effective_training_params, effective_num_threads
 
 
@@ -136,15 +145,15 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
 
         model = get_latest_model("model_checkpoints")
 
-        def run_self_play():
-            self_play_config = SelfPlayConfig(network=model, writer=writer, global_step=loop)
+        def run_self_play(game_idx_in_iteration: int):
+            self_play_config = SelfPlayConfig(network=model, writer=writer, global_step=loop, game_idx_in_iteration=game_idx_in_iteration)
             selfplay = SelfPlay(self_play_config)
             selfplay.run_game()
             # run_game saves selfplay data to LMDB
 
         games_completed_count = 0
         with ThreadPoolExecutor(max_workers=num_threads) as executor:
-            futures = [executor.submit(run_self_play) for _ in range(num_games_per_iteration)]
+            futures = [executor.submit(run_self_play, i) for i in range(num_games_per_iteration)]
             for i, future in enumerate(as_completed(futures)):
                 try:
                     future.result() # Wait for game to complete and raise exceptions if any
@@ -162,7 +171,7 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
                     update_loop_status(status)
 
         writer.add_scalar("SelfPlay/Completed_Games_Total_for_Iteration", games_completed_count, loop)
-        log_memory_usage(LOGGER, "After self-play")
+        log_memory_usage(writer, "After self-play")
 
         status["status_message"] = "Self-play phase completed. Starting training."
         update_loop_status(status)
@@ -181,7 +190,7 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
         training_config_instance.writer = writer
         training_config_instance.global_step = loop
         train_latest_model(training_config_instance)
-        log_memory_usage(LOGGER, "After training")
+        log_memory_usage(writer, "After training")
         LOGGER.info(f"--- Finished training on self-play data ---")
 
         status["status_message"] = f"Loop {loop+1} training complete. Preparing for next loop."

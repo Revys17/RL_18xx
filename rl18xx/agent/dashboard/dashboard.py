@@ -3,14 +3,16 @@ import json
 import os
 from dataclasses import fields
 from rl18xx.agent.alphazero.config import TrainingConfig
+import datetime
+import time
 EDITABLE_TRAINING_PARAMS = [field.name for field in fields(TrainingConfig)]
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev_secret_key_change_me") # Use env var for production
 
-# These paths should match those in loop.py
-RUNTIME_CONFIG_PATH = "runtime_config.json"
-LOOP_STATUS_PATH = "loop_status.json"
+RUNTIME_CONFIG_PATH = "../../../runtime_config.json"
+LOOP_STATUS_PATH = "../../../loop_status.json"
+SELF_PLAY_GAMES_STATUS_PATH = "../../../self_play_games_status.json"
 TENSORBOARD_URL_PATH = "/tensorboard/"
 
 def get_current_status():
@@ -56,6 +58,29 @@ def save_runtime_config(config_data):
         flash("Configuration updated. Changes will apply on the next loop iteration.", "success")
     except Exception as e:
         flash(f"Error saving runtime config: {e}", "error")
+
+def get_games_in_progress():
+    games_data = {}
+    if not os.path.exists(SELF_PLAY_GAMES_STATUS_PATH):
+        flash("Self-play games status file not found.", "warning")
+        return {"error": "Self-play games status file not found."}
+    
+    try:
+        with open(SELF_PLAY_GAMES_STATUS_PATH, 'r') as f:
+            content = f.read()
+            if content: # Ensure file is not empty
+                games_data = json.loads(content)
+            # Format timestamps for display
+            for game_id, details in games_data.items():
+                details['start_time_str'] = datetime.datetime.fromtimestamp(details.get('start_time_unix', 0)).strftime('%Y-%m-%d %H:%M:%S')
+                details['last_update_str'] = datetime.datetime.fromtimestamp(details.get('last_update_unix', time.time())).strftime('%Y-%m-%d %H:%M:%S') # Default to now if missing
+    except json.JSONDecodeError as e:
+        flash(f"Error decoding self-play games status file ({e}).", "warning")
+        return {"error": f"Error reading self-play games status file ({e})."}
+    except Exception as e:
+        flash(f"Error reading self-play games status: {e}", "warning")
+        return {"error": f"Status file for self-play games unreadable: {e}"}
+    return games_data
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -107,10 +132,12 @@ def index():
 
     status_data = get_current_status()
     current_config_for_form = get_current_runtime_config()
+    games_in_progress_data = get_games_in_progress()
     
     return render_template('index.html', status=status_data, config_form=current_config_for_form, 
                            tensorboard_url=TENSORBOARD_URL_PATH, 
-                           editable_training_params=EDITABLE_TRAINING_PARAMS)
+                           editable_training_params=EDITABLE_TRAINING_PARAMS,
+                           games_in_progress=games_in_progress_data)
 
 if __name__ == '__main__':
     # For development: flask run --debug (Flask CLI) or python dashboard.py

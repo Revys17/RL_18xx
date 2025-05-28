@@ -4,6 +4,7 @@ import random
 import os
 import socket
 import time
+from torch.utils.tensorboard import SummaryWriter
 import rl18xx.agent.alphazero.mcts as mcts
 from rl18xx.agent.alphazero.model import AlphaZeroModel
 from rl18xx.agent.alphazero.config import SelfPlayConfig, ModelConfig
@@ -70,31 +71,31 @@ def remove_self_play_game_from_status(game_id: str):
             except Exception as e: # Catch any other unexpected error during file write
                 LOGGER.error(f"Unexpected error removing from {SELF_PLAY_GAMES_STATUS_PATH}: {e}", exc_info=True)
 
-# Helper function to log memory usage
-def log_memory_usage(summary_writer=None, stage_name=""):
-    process = psutil.Process(os.getpid())
-    mem_info = process.memory_info()
-    if summary_writer is not None:
-        summary_writer.add_scalar(f"{stage_name}/Memory/RSS", mem_info.rss / 1024**2, global_step=summary_writer.global_step)
-        summary_writer.add_scalar(f"{stage_name}/Memory/VMS", mem_info.vms / 1024**2, global_step=summary_writer.global_step)
-    else:
-        LOGGER.info(f"Memory usage {stage_name}: RSS={mem_info.rss / 1024**2:.2f} MB, VMS={mem_info.vms / 1024**2:.2f} MB")
-
 class MCTSPlayer:
     def __init__(self, config: SelfPlayConfig):
         self.config = config
         self.network = config.network
         self.initialize_game()
 
-    def add_metric(self, name, value):
+    def add_metric(self, name, value, step=None):
         if self.config.writer is None:
             return
-        self.config.writer.add_scalar(name, value, self.config.global_step)
+        if step is None:
+            step = self.config.global_step
+        self.config.writer.add_scalar(f"Loop{self.config.global_step}/Game{self.config.game_idx_in_iteration}/{name}", value, step)
 
-    def add_histogram(self, name, values):
+    def log_memory_usage(self, stage_name: str, step: int):
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        self.add_metric(f"{stage_name}/Memory/RSS", mem_info.rss / 1024**2, step=step)
+        self.add_metric(f"{stage_name}/Memory/VMS", mem_info.vms / 1024**2, step=step)
+
+    def add_histogram(self, name, values, step=None):
         if self.config.writer is None:
             return
-        self.config.writer.add_histogram(name, values, self.config.global_step)
+        if step is None:
+            step = self.config.global_step
+        self.config.writer.add_histogram(f"Loop{self.config.global_step}/Game{self.config.game_idx_in_iteration}/{name}", values, step)
 
     def get_game_state(self):
         return BaseGame.load(self.root.game_dict) if self.root else None
@@ -111,8 +112,8 @@ class MCTSPlayer:
         players = {"1": "Player 1", "2": "Player 2", "3": "Player 3", "4": "Player 4"}
         return game_class(players)
 
-    def initialize_game(self, game_state=None):
-        log_memory_usage(self.config.writer, stage_name="Before MCTSPlayer.initialize_game")
+    def initialize_game(self, game_state: Optional[BaseGame] = None):
+        self.log_memory_usage(stage_name="Before MCTSPlayer.initialize_game", step=self.config.game_idx_in_iteration)
         if game_state is None:
             game_state = self.get_new_game_state()
 
@@ -121,7 +122,7 @@ class MCTSPlayer:
         self.result_string = None
         self.searches_pi = []
         LOGGER.info(f"Initialized game. Root node N: {self.root.N}")
-        log_memory_usage(self.config.writer, stage_name="After MCTSPlayer.initialize_game")
+        self.log_memory_usage(stage_name="After MCTSPlayer.initialize_game", step=self.config.game_idx_in_iteration)
 
     def play_move(self, action_index):
         """Notable side effects:
@@ -130,7 +131,7 @@ class MCTSPlayer:
         - Makes the node associated with this move the root, for future
           `inject_noise` calls.
         """
-        log_memory_usage(self.config.writer, stage_name="Before MCTSPlayer.play_move")
+        self.log_memory_usage(stage_name="Before MCTSPlayer.play_move", step=self.root.game_dict["move_number"])
         self.searches_pi.append(
             self.root.children_as_pi(self.root.game_dict["move_number"] < self.config.softpick_move_cutoff)
         )
@@ -140,7 +141,7 @@ class MCTSPlayer:
         self.prune_mcts_tree_retain_parent(self.root)
 
         LOGGER.debug(f"Played move. New root N: {self.root.N}, Searches_pi length: {len(self.searches_pi)}")
-        log_memory_usage(self.config.writer, stage_name="After MCTSPlayer.play_move")
+        self.log_memory_usage(stage_name="After MCTSPlayer.play_move", step=self.root.game_dict["move_number"])
 
         self.game_state = self.root.game_dict  # for showboard
         return True
@@ -166,11 +167,11 @@ class MCTSPlayer:
         return action_index
 
     def tree_search(self, parallel_readouts=None):
-        log_memory_usage(self.config.writer, stage_name="Before MCTSPlayer.tree_search")
         if parallel_readouts is None:
             parallel_readouts = min(self.config.parallel_readouts, self.config.num_readouts)
 
         # metrics
+        move_number = self.root.game_dict["move_number"]
         leaf_depths_collected = []
         leaf_initial_qs_collected = []
         leaf_prior_entropies_collected = []
@@ -196,16 +197,16 @@ class MCTSPlayer:
             leaves.append(leaf)
         select_leaves_end = time.time()
 
-        self.add_metric("MCTS/Select_Leaf_Time", select_leaves_end - select_leaves_start)
-        self.add_metric("MCTS/Select_Leaf_Attempts", select_leaf_attempts)
-        self.add_metric("MCTS/Max_Select_Leaf_Attempts", max_select_leaf_attempts)
-        self.add_metric("MCTS/Leaves_Found", len(leaves))
+        self.add_metric("MCTS/Select_Leaf_Time", select_leaves_end - select_leaves_start, step=move_number)
+        self.add_metric("MCTS/Select_Leaf_Attempts", select_leaf_attempts, step=move_number)
+        self.add_metric("MCTS/Max_Select_Leaf_Attempts", max_select_leaf_attempts, step=move_number)
+        self.add_metric("MCTS/Leaves_Found", len(leaves), step=move_number)
 
         if select_leaf_attempts >= max_select_leaf_attempts and len(leaves) < parallel_readouts:
             LOGGER.warning(
                 f"tree_search: Failsafe triggered while selecting leaves. Found {len(leaves)}/{parallel_readouts} leaves after {select_leaf_attempts}/{max_select_leaf_attempts} attempts."
             )
-            self.add_metric("MCTS/Failsafe_Triggered", 1)
+            self.add_metric("MCTS/Failsafe_Triggered", 1, step=move_number)
 
         if leaves:
             run_network_start = time.time()
@@ -225,16 +226,16 @@ class MCTSPlayer:
                     normalized_prior_compressed = leaf.child_prior_compressed / np.sum(leaf.child_prior_compressed)
                     leaf_prior_entropies_collected.append(mcts.calculate_entropy(normalized_prior_compressed))
             revert_and_incorporate_duration = time.time() - revert_and_incorporate_start
-            self.add_histogram("MCTS_Player/TreeSearch_Leaf_Depths", np.array(leaf_depths_collected))
-            self.add_histogram("MCTS_Player/TreeSearch_Leaf_Initial_Network_Q", np.array(leaf_initial_qs_collected))
-            self.add_histogram("MCTS_Player/TreeSearch_Leaf_Prior_Entropies", np.array(leaf_prior_entropies_collected))
+            self.add_histogram("MCTS_Player/TreeSearch_Leaf_Depths", np.array(leaf_depths_collected), step=move_number)
+            self.add_histogram("MCTS_Player/TreeSearch_Leaf_Initial_Network_Q", np.array(leaf_initial_qs_collected), step=move_number)
+            self.add_histogram("MCTS_Player/TreeSearch_Leaf_Prior_Entropies", np.array(leaf_prior_entropies_collected), step=move_number)
         else:
             run_network_duration = 0
             revert_and_incorporate_duration = 0
 
-        self.add_metric("MCTS/Run_Network_Time", run_network_duration)
-        self.add_metric("MCTS/Revert_And_Incorporate_Time", revert_and_incorporate_duration)
-        log_memory_usage(self.config.writer, stage_name="After MCTSPlayer.tree_search")
+        self.add_metric("MCTS/Run_Network_Time", run_network_duration, step=move_number)
+        self.add_metric("MCTS/Revert_And_Incorporate_Time", revert_and_incorporate_duration, step=move_number)
+        self.log_memory_usage(stage_name="After MCTSPlayer.tree_search", step=move_number)
         return leaves
 
     def is_done(self):
@@ -246,7 +247,7 @@ class MCTSPlayer:
         self.result_string = string
 
     def extract_data(self) -> Generator[Tuple[BaseGame, torch.Tensor, torch.Tensor], None, None]:
-        log_memory_usage(self.config.writer, stage_name="Start MCTSPlayer.extract_data")
+        self.log_memory_usage(stage_name="Start MCTSPlayer.extract_data", step=self.config.game_idx_in_iteration)
         assert (
             len(self.searches_pi) == self.root.game_dict["move_number"]
         ), f"searches_pi length {len(self.searches_pi)} != move_number {self.root.game_dict['move_number']}"
@@ -264,7 +265,7 @@ class MCTSPlayer:
             )
             game_state = game_state.clone(game_state.raw_actions)
             game_state.process_action(action)
-        log_memory_usage(self.config.writer, stage_name="After MCTSPlayer.extract_data")
+        self.log_memory_usage(stage_name="After MCTSPlayer.extract_data", step=self.config.game_idx_in_iteration)
 
     def get_num_readouts(self):
         return self.num_readouts
@@ -339,12 +340,19 @@ class SelfPlay:
         if model_config is not None:
             self.config.network = AlphaZeroModel(model_config)
         self.config.network.eval()
-        log_memory_usage(self.config.writer, stage_name="SelfPlay initialized")
 
-    def add_metric(self, name, value):
+    def add_metric(self, name, value, step=None):
         if self.config.writer is None:
             return
-        self.config.writer.add_scalar(name, value, self.config.global_step)
+        if step is None:
+            step = self.config.global_step
+        self.config.writer.add_scalar(f"Loop{self.config.global_step}/Game{self.config.game_idx_in_iteration}/{name}", value, step)
+
+    def log_memory_usage(self, stage_name: str, step: int):
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        self.add_metric(f"{stage_name}/Memory/RSS", mem_info.rss / 1024**2, step=step)
+        self.add_metric(f"{stage_name}/Memory/VMS", mem_info.vms / 1024**2, step=step)
 
     def play(self):
         """Plays out a self-play match, returning a MCTSPlayer object containing:
@@ -354,7 +362,6 @@ class SelfPlay:
         where n is the number of moves in the game
         """
         player = MCTSPlayer(self.config)
-        log_memory_usage(self.config.writer, stage_name="After MCTSPlayer created in SelfPlay.play")
 
         game_start_time = time.time()
         update_self_play_game_progress(
@@ -378,13 +385,11 @@ class SelfPlay:
             probs, _, val = self.config.network.run_encoded(first_node.encoded_game_state)
         first_node.incorporate_results(probs, val, first_node)
         del first_node
-        log_memory_usage(self.config.writer, stage_name="After first node expansion in SelfPlay.play")
-
         move_counter = 0
         game_ended_by_max_length = 0
         try:
             while True:
-                log_memory_usage(self.config.writer, stage_name=f"SelfPlay.play loop start, move {move_counter}", debug=False)
+                self.log_memory_usage(stage_name=f"SelfPlay.play loop start, move {move_counter}", step=move_counter)
                 start_time_for_move_processing = time.time()
                 player.root.inject_noise()
 
@@ -402,7 +407,7 @@ class SelfPlay:
                     while player.root.N < target_readouts_for_move:
                         player.tree_search()
                         sim_count_this_move += self.config.parallel_readouts
-                    log_memory_usage(self.config.writer, stage_name=f"SelfPlay.play after MCTS simulations for move {move_counter}")
+                    self.log_memory_usage(stage_name=f"SelfPlay.play after MCTS simulations for move {move_counter}", step=move_counter)
                     total_sims_for_mcts_moves += (player.root.N - current_readouts)
 
                 tree_search_end_time_this_move = time.time() - tree_search_duration_this_move
@@ -428,12 +433,12 @@ class SelfPlay:
                 move_time_this_move = time.time() - start_time_for_move_processing
                 total_move_time_for_game += move_time_this_move
 
-                self.add_metric("SelfPlay/Tree_Search_Time_ms", tree_search_duration_this_move * 1000)
-                self.add_metric("SelfPlay/Pick_Move_Time_ms", pick_move_duration_this_move * 1000)
-                self.add_metric("SelfPlay/Play_Move_Time_ms", play_move_duration_this_move * 1000)
-                self.add_metric("SelfPlay/Move_Time_ms", move_time_this_move * 1000)
-                self.add_metric("SelfPlay/Num_MCTS_Moves", sim_count_this_move)
-                self.add_metric("SelfPlay/Total_Sims_For_MCTS_Moves", total_sims_for_mcts_moves)
+                self.add_metric("SelfPlay/Tree_Search_Time_ms", tree_search_duration_this_move * 1000, step=move_counter)
+                self.add_metric("SelfPlay/Pick_Move_Time_ms", pick_move_duration_this_move * 1000, step=move_counter)
+                self.add_metric("SelfPlay/Play_Move_Time_ms", play_move_duration_this_move * 1000, step=move_counter)
+                self.add_metric("SelfPlay/Move_Time_ms", move_time_this_move * 1000, step=move_counter)
+                self.add_metric("SelfPlay/Num_MCTS_Moves", sim_count_this_move, step=move_counter)
+                self.add_metric("SelfPlay/Total_Sims_For_MCTS_Moves", total_sims_for_mcts_moves, step=move_counter)
 
                 if player.root.is_done():
                     player.set_result(player.root.game_result())
@@ -450,40 +455,40 @@ class SelfPlay:
         finally:
             remove_self_play_game_from_status(self.config.game_id)
 
-        self.add_metric("SelfPlay/Game_Length_Moves", move_counter)
-        self.add_metric("SelfPlay/Game_Total_Time_Seconds", total_move_time_for_game)
-        self.add_metric("SelfPlay/Game_Num_Forced_Moves", num_forced_moves_in_game)
-        self.add_metric("SelfPlay/Game_Ended_By_Max_Length", game_ended_by_max_length)
+        self.add_metric("SelfPlay/Game_Length_Moves", move_counter, step=self.config.game_idx_in_iteration)
+        self.add_metric("SelfPlay/Game_Total_Time_Seconds", total_move_time_for_game, step=self.config.game_idx_in_iteration)
+        self.add_metric("SelfPlay/Game_Num_Forced_Moves", num_forced_moves_in_game, step=self.config.game_idx_in_iteration)
+        self.add_metric("SelfPlay/Game_Ended_By_Max_Length", game_ended_by_max_length, step=self.config.game_idx_in_iteration)
 
         if player.result is not None and len(player.result) > 0:
-            self.add_metric("SelfPlay/Game_Result_Player0", player.result[0])
-            self.add_metric("SelfPlay/Game_Result_Player1", player.result[1])
-            self.add_metric("SelfPlay/Game_Result_Player2", player.result[2])
-            self.add_metric("SelfPlay/Game_Result_Player3", player.result[3])
+            self.add_metric("SelfPlay/Game_Result_Player0", player.result[0], step=self.config.game_idx_in_iteration)
+            self.add_metric("SelfPlay/Game_Result_Player1", player.result[1], step=self.config.game_idx_in_iteration)
+            self.add_metric("SelfPlay/Game_Result_Player2", player.result[2], step=self.config.game_idx_in_iteration)
+            self.add_metric("SelfPlay/Game_Result_Player3", player.result[3], step=self.config.game_idx_in_iteration)
 
         if num_mcts_moves_in_game > 0:
             avg_sims_per_mcts_move = total_sims_for_mcts_moves / num_mcts_moves_in_game
             avg_tree_search_time_per_mcts_move_ms = (total_tree_search_time_for_game / num_mcts_moves_in_game) * 1000
-            self.add_metric("SelfPlay/Avg_Sims_Per_MCTS_Move", avg_sims_per_mcts_move)
-            self.add_metric("SelfPlay/Avg_Tree_Search_Time_Per_MCTS_Move_ms", avg_tree_search_time_per_mcts_move_ms)
+            self.add_metric("SelfPlay/Avg_Sims_Per_MCTS_Move", avg_sims_per_mcts_move, step=self.config.game_idx_in_iteration)
+            self.add_metric("SelfPlay/Avg_Tree_Search_Time_Per_MCTS_Move_ms", avg_tree_search_time_per_mcts_move_ms, step=self.config.game_idx_in_iteration)
         
         avg_pick_move_time_ms = (total_pick_move_time_for_game / move_counter if move_counter > 0 else 0) * 1000
         avg_play_move_time_ms = (total_play_move_time_for_game / move_counter if move_counter > 0 else 0) * 1000
-        self.add_metric("SelfPlay/Avg_Pick_Move_Time_ms", avg_pick_move_time_ms)
-        self.add_metric("SelfPlay/Avg_Play_Move_Time_ms", avg_play_move_time_ms)
+        self.add_metric("SelfPlay/Avg_Pick_Move_Time_ms", avg_pick_move_time_ms, step=self.config.game_idx_in_iteration)
+        self.add_metric("SelfPlay/Avg_Play_Move_Time_ms", avg_play_move_time_ms, step=self.config.game_idx_in_iteration)
 
-        log_memory_usage(self.config.writer, stage_name="SelfPlay.play finished")
+        self.log_memory_usage(stage_name="SelfPlay.play finished", step=self.config.game_idx_in_iteration)
         return player
 
     def run_game(self):
         """Takes a played game and record results and game data."""
-        log_memory_usage(self.config.writer, stage_name="Start SelfPlay.run_game")
+        self.log_memory_usage(stage_name="Start SelfPlay.run_game", step=self.config.game_idx_in_iteration)
         if self.config.selfplay_dir is not None:
             os.makedirs(self.config.selfplay_dir, exist_ok=True)
             os.makedirs(self.config.holdout_dir, exist_ok=True)
 
         player = self.play()
-        log_memory_usage(self.config.writer, stage_name="After SelfPlay.play in run_game")
+        self.log_memory_usage(stage_name="After SelfPlay.play in run_game", step=self.config.game_idx_in_iteration)
 
         if player.result is None or np.all(np.array(player.result) == 0.0):
             LOGGER.warning(
@@ -493,7 +498,7 @@ class SelfPlay:
             return
 
         game_data = player.extract_data()
-        log_memory_usage(self.config.writer, stage_name="After player.extract_data in run_game")
+        self.log_memory_usage(stage_name="After player.extract_data in run_game", step=self.config.game_idx_in_iteration)
 
         if self.config.selfplay_dir is not None:
             # Hold out 5% of games for validation.
@@ -504,15 +509,14 @@ class SelfPlay:
 
             processor = TrainingExampleProcessor()
             processor.write_lmdb(game_data, save_path)
-            log_memory_usage(self.config.writer, stage_name="After write_lmdb in run_game")
+            self.log_memory_usage(stage_name="After write_lmdb in run_game", step=self.config.game_idx_in_iteration)
 
         # Explicitly delete large objects and collect garbage
         del player
         del game_data
-        del game_examples
         gc.collect()
         LOGGER.info("Explicitly deleted player, game_data, game_examples and ran gc.collect()")
-        log_memory_usage(self.config.writer, stage_name="End SelfPlay.run_game after GC")
+        self.log_memory_usage(stage_name="End SelfPlay.run_game after GC", step=self.config.game_idx_in_iteration)
 
 
 def setup_logging(level: int, log_file: str) -> logging.Logger:

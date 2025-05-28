@@ -80,7 +80,6 @@ class TrainingConfig:
     batch_size: int = 256
     writer: Optional[SummaryWriter] = None
     global_step: int = 0
-
     def __post_init__(self):
         self.root_dir = Path(self.root_dir)
         self.model_checkpoint_dir = self.model_checkpoint_dir
@@ -114,6 +113,7 @@ class SelfPlayConfig:
     network: Any = None
     writer: Optional[SummaryWriter] = None
     global_step: int = 0
+    game_idx_in_iteration: int = 0
     game_id: Optional[str] = None
     selfplay_dir: str = "selfplay"
     holdout_dir: str = "holdout"

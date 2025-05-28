@@ -63,6 +63,46 @@
             {% endif %}
         </div>
 
+        <div class="self-play-details" style="margin-bottom: 30px; padding: 20px; border: 1px solid #ddd; border-radius: 5px; background-color: #f9f9f9;">
+            <h2>Ongoing Self-Play Games (<a href="javascript:void(0);" onclick="toggleGamesDetails(this)" style="font-size: 0.8em; text-decoration: underline;">Show Details</a>)</h2>
+            <div id="games-details-content" style="display: none; margin-top: 10px;">
+                {% if games_in_progress and not games_in_progress.error and games_in_progress|length > 0 %}
+                    <ul style="list-style-type: none; padding-left: 0;">
+                    {% for game_id, details in games_in_progress.items()|sort %} {# Sort by game_id for consistent order #}
+                        <li style="margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #eee;">
+                            <strong>Game ID:</strong> <code style="font-size: 0.9em;">{{ game_id }}</code> <br>
+                            <strong>Moves:</strong> {{ details.moves_played }} / {{ details.max_moves }}
+                            <div class="progress-bar-container" style="height: 12px; margin-top: 5px; background-color: #e0e0e0; border-radius: 3px;">
+                                <div class="progress-bar" style="width: {{ (details.moves_played / details.max_moves * 100) if details.max_moves > 0 else 0 }}%; height: 100%; background-color: #28a745; border-radius: 3px; text-align: right; padding-right: 5px; color: white; font-size: 0.8em; line-height: 12px;">
+                                    {% if details.max_moves > 0 %}{{ "%.0f" % (details.moves_played / details.max_moves * 100) }}%{% else %}0%{% endif %}
+                                </div>
+                            </div>
+                            <small style="font-size: 0.8em; color: #555;">
+                                Started: {{ details.start_time_str }} | Last Update: {{ details.last_update_str }}
+                            </small>
+                        </li>
+                    {% endfor %}
+                    </ul>
+                {% elif games_in_progress.error %}
+                    <p style="color: #721c24;">{{ games_in_progress.error }}</p>
+                {% else %}
+                    <p>No self-play games currently in progress.</p>
+                {% endif %}
+            </div>
+        </div>
+        <script>
+        function toggleGamesDetails(linkElement) {
+            var content = document.getElementById('games-details-content');
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                linkElement.textContent = 'Hide Details';
+            } else {
+                content.style.display = 'none';
+                linkElement.textContent = 'Show Details';
+            }
+        }
+        </script>
+
         <div class="config">
             <h2>Configuration (takes effect on next loop iteration)</h2>
             <form method="POST">
