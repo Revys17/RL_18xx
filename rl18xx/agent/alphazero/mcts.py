@@ -3,6 +3,7 @@ import collections
 import math
 import numpy as np
 from typing import Optional
+import scipy
 import torch
 import logging
 from rl18xx.game.engine.game.base import BaseGame
@@ -16,6 +17,19 @@ VALUE_SIZE = 4  # We always want to play a 4-player game.
 
 LOGGER = logging.getLogger(__name__)
 
+# TODO: See if we really need this.
+def calculate_entropy(probabilities: np.ndarray) -> float:
+    """Calculates the entropy of a probability distribution."""
+    probabilities = probabilities[probabilities > 0]  # Avoid log(0)
+    if len(probabilities) == 0 or not np.isclose(np.sum(probabilities), 1.0, atol=1e-5):
+        # If not a valid distribution (e.g. all zeros, or doesn't sum to 1)
+        # Or if sum is not 1, scipy.stats.entropy might give misleading results or errors
+        # For non-normalized positive arrays, it calculates sum(p_i * log(p_i)), which isn't Shannon entropy.
+        # We expect normalized probabilities here.
+        if not np.isclose(np.sum(probabilities), 1.0, atol=1e-5) and len(probabilities) > 0:
+            LOGGER.debug(f"Probabilities do not sum to 1 for entropy calculation: sum={np.sum(probabilities)}")
+        return 0.0
+    return scipy.stats.entropy(probabilities)
 
 class DummyNode:
     """A fake node of a MCTS search tree.
@@ -47,6 +61,10 @@ class MCTSNode:
         self.is_expanded = False
         self.losses_applied = 0  # number of virtual losses on this node
 
+        self.depth = 0
+        if isinstance(parent, MCTSNode):
+            self.depth = parent.depth + 1
+
         self.game_dict = game_state.to_dict()
         self.encoded_game_state = Encoder_1830().encode(game_state)
         self.action_mapper = ActionMapper()
@@ -70,6 +88,12 @@ class MCTSNode:
 
         self.children = {}  # map of flattened moves to resulting MCTSNode
         self.config = config or SelfPlayConfig()
+        self.add_metric("MCTS/Depth", self.depth)
+
+    def add_metric(self, name, value):
+        if self.config.writer is None:
+            return
+        self.config.writer.add_scalar(name, value, self.config.global_step)
 
     def __repr__(self):
         return f"<MCTSNode move_number={len(self.game_dict['actions'])}, move=[{self.fmove}], N={self.N if self.parent else 'N/A'}, to_play={self.active_player_index}>"
@@ -197,17 +221,20 @@ class MCTSNode:
             current = current.maybe_add_child(best_move)
             num_added += 1
         end_time = time.time()
-        LOGGER.debug(f"Select leaf time: {end_time - start_time:.3f} seconds, added {num_added} children")
+        self.add_metric("MCTS/Select_Leaf_Time", end_time - start_time)
+        self.add_metric("MCTS/Select_Leaf_Num_Added", num_added)
         return current
 
     def maybe_add_child(self, action_index: int):
         """Adds child node for action_index if it doesn't already exist, and returns it."""
+        start_time = time.time()
         if action_index not in self.children:
             try:
                 new_position = BaseGame.load(self.game_dict)
             except Exception as e:
                 LOGGER.error(f"Error loading game state: {e}")
                 raise e
+            load_end_time = time.time()
             try:
                 action_to_take = self.action_mapper.map_index_to_action(action_index, new_position)
                 new_position.process_action(action_to_take)
@@ -215,6 +242,10 @@ class MCTSNode:
                 LOGGER.error(f"Error taking action {action_to_take} in game state: {self.game_dict}")
                 raise e
             self.children[action_index] = MCTSNode(new_position, fmove=action_index, parent=self, config=self.config)
+        end_time = time.time()
+        self.add_metric("MCTS/Maybe_Add_Child_Time", end_time - start_time)
+        self.add_metric("MCTS/Maybe_Add_Child_Load_Time", load_end_time - start_time)
+        self.add_metric("MCTS/Maybe_Add_Child_Process_Time", end_time - load_end_time)
         return self.children[action_index]
 
     def add_virtual_loss(self, up_to):
@@ -268,7 +299,7 @@ class MCTSNode:
         scale = sum(move_probs)
         if scale > 0:
             # Re-normalize move_probabilities.
-            move_probs *= 1 / scale
+            move_probs /= scale
 
         self.original_prior = self.child_prior = move_probs
         # initialize child Q as current node's value, to prevent dynamics where
