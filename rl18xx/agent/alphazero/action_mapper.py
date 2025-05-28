@@ -609,7 +609,7 @@ class ActionMapper:
                 raise e
 
         LOGGER.debug(f"Indices: {indices}")
-        return indices
+        return sorted(indices)
 
     def map_index_to_action(self, index: int, state: BaseGame) -> BaseAction:
         if not (0 <= index < self.action_encoding_size):

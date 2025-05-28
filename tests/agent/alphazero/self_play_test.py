@@ -2,29 +2,38 @@ import torch
 
 from unittest import mock
 import numpy as np
-from rl18xx.agent.alphazero.v2.self_play import MCTSPlayer
-from rl18xx.agent.alphazero.v2.config import MegaConfig
+from rl18xx.agent.alphazero.self_play import MCTSPlayer
+from rl18xx.agent.alphazero.config import SelfPlayConfig
 from rl18xx.game.gamemap import GameMap
 from rl18xx.game.action_helper import ActionHelper
 
 # Fixtures
 
 class DummyNet():
-    def __init__(self, fake_priors=None, fake_value=None):
+    def __init__(self, fake_priors=None, fake_log_priors=None, fake_value=None):
         if fake_priors is None:
             fake_priors = torch.ones(26535, dtype=torch.float32) / 26535
+        if fake_log_priors is None:
+            fake_log_priors = torch.log(fake_priors)
         if fake_value is None:
             fake_value = torch.tensor([0.0, 0.0, 0.0, 0.0], dtype=torch.float32)
         self.fake_priors = fake_priors
+        self.fake_log_priors = fake_log_priors
         self.fake_value = fake_value
 
     def run(self, game_state):
-        return self.fake_priors, self.fake_value
+        return self.fake_priors, self.fake_log_priors, self.fake_value
 
     def run_many(self, game_states):
         if not game_states:
             raise ValueError("No positions passed!")
-        return [self.fake_priors] * len(game_states), [self.fake_value] * len(game_states)
+        return [self.fake_priors] * len(game_states), [self.fake_log_priors] * len(game_states), [self.fake_value] * len(game_states)
+    
+    def run_encoded(self, encoded_game_state):
+        return self.fake_priors, self.fake_log_priors, self.fake_value
+    
+    def run_many_encoded(self, encoded_game_states):
+        return [self.fake_priors] * len(encoded_game_states), [self.fake_log_priors] * len(encoded_game_states), [self.fake_value] * len(encoded_game_states)
     
 def get_fresh_game_state():
     game_map = GameMap()
@@ -276,11 +285,12 @@ def terminal_game_state():
     return game_state
 
 def initialize_basic_player(game_state=None):
-    player = MCTSPlayer(MegaConfig(network=DummyNet()))
+    player = MCTSPlayer(SelfPlayConfig(network=DummyNet()))
     player.initialize_game(game_state)
     first_node = player.root.select_leaf()
-    first_node.incorporate_results(
-        *player.config.network.run(player.root.game_state), up_to=player.root)
+    with torch.no_grad():
+        priors, _, values = player.config.network.run_encoded(player.root.encoded_game_state)
+    first_node.incorporate_results(priors, values, up_to=player.root)
     return player
 
 def initialize_almost_done_player():
@@ -288,7 +298,7 @@ def initialize_almost_done_player():
     probs[2:5] = 0.2  # some legal moves along the top.
     probs[-1] = 0.2  # passing is also ok
     net = DummyNet(fake_priors=probs)
-    player = MCTSPlayer(MegaConfig(network=net))
+    player = MCTSPlayer(SelfPlayConfig(network=net))
     # root position is white to play with no history == white passed.
     player.initialize_game(get_almost_done_game_state())
     return player
@@ -324,20 +334,20 @@ def test_inject_noise():
 def test_pick_moves():
     player = initialize_basic_player()
     root = player.root
-    root.child_N[0] = 10
-    root.child_N[1] = 5
-    root.child_N[2] = 1
+    root.child_N_compressed[0] = 10
+    root.child_N_compressed[1] = 5
+    root.child_N_compressed[2] = 1
 
-    root.game_state.raw_actions = ["a"] * 600
+    root.game_dict["move_number"] = 600
 
     # Assert we're picking deterministically
-    assert root.game_state.move_number > player.config.softpick_move_cutoff
+    assert root.game_dict["move_number"] > player.config.softpick_move_cutoff
     move = player.pick_move()
     assert move == 0
 
+    root.game_dict["move_number"] = 10
     # But if we're in the early part of the game, pick randomly
-    root.game_state.raw_actions = ["a"] * 10
-    assert root.game_state.move_number < player.config.softpick_move_cutoff
+    assert root.game_dict["move_number"] < player.config.softpick_move_cutoff
 
     with mock.patch('random.random', lambda: .5):
         move = player.pick_move()
@@ -374,7 +384,7 @@ def test_ridiculously_parallel_tree_search():
 
 def test_cold_start_parallel_tree_search():
     # Test that parallel tree search doesn't trip on an empty tree
-    player = MCTSPlayer(MegaConfig(network=DummyNet(fake_value=torch.tensor([0.17, 0.0, 0.0, 0.0]))))
+    player = MCTSPlayer(SelfPlayConfig(network=DummyNet(fake_value=torch.tensor([0.17, 0.0, 0.0, 0.0]))))
     player.initialize_game()
     assert player.root.N == 0
     assert not player.root.is_expanded
@@ -393,7 +403,7 @@ def test_cold_start_parallel_tree_search():
 def test_extract_data_normal_end():
     player = initialize_basic_player(terminal_game_state())
 
-    player.searches_pi = [None] * 87
+    player.searches_pi = [np.zeros(26535)] * 87
     player.tree_search()
     player.play_move(player.pick_move()) # only one legal move
     assert player.root.is_done()
