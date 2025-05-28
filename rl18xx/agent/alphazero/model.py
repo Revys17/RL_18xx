@@ -13,6 +13,7 @@ from rl18xx.agent.alphazero.config import ModelConfig
 
 LOGGER = logging.getLogger(__name__)
 
+
 class ResBlock(nn.Module):
     """
     A simple residual block with two linear layers.
@@ -42,6 +43,7 @@ class AlphaZeroModel(nn.Module):
     """
     Neural Network model for an 18xx AlphaZero agent, incorporating a GNN for map data.
     """
+
     def __init__(self, config: ModelConfig):
         super(AlphaZeroModel, self).__init__()
         self.config = config
@@ -55,7 +57,9 @@ class AlphaZeroModel(nn.Module):
         self.fc_game_state1 = nn.Linear(self.config.game_state_size, self.config.mlp_hidden_dim)
         self.bn_game_state1 = nn.BatchNorm1d(self.config.mlp_hidden_dim)
         self.dropout_gs1 = nn.Dropout(self.config.dropout_rate)
-        self.fc_game_state2 = nn.Linear(self.config.mlp_hidden_dim, self.config.mlp_hidden_dim)  # Output embedding for game state
+        self.fc_game_state2 = nn.Linear(
+            self.config.mlp_hidden_dim, self.config.mlp_hidden_dim
+        )  # Output embedding for game state
         self.bn_game_state2 = nn.BatchNorm1d(self.config.mlp_hidden_dim)
         self.dropout_gs2 = nn.Dropout(self.config.dropout_rate)
         self.map_node_features = self.config.map_node_features  # Keep for clarity if needed, though also implicit
@@ -73,7 +77,7 @@ class AlphaZeroModel(nn.Module):
         else:
             self.edge_embedding = None
             self.gnn_edge_dim_for_gat = None  # GAT will not use edge features
-        
+
         self.gnn_layers_modulelist = nn.ModuleList()
         current_gnn_input_dim = self.config.gnn_node_proj_dim
         for i in range(self.config.gnn_layers):
@@ -162,7 +166,9 @@ class AlphaZeroModel(nn.Module):
         encoded_game_states = [self.encoder.encode(game_state) for game_state in game_states]
         return self.run_many_encoded(encoded_game_states)
 
-    def run_many_encoded(self, game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]]) -> Tuple[Tensor, Tensor, Tensor]:
+    def run_many_encoded(
+        self, game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]]
+    ) -> Tuple[Tensor, Tensor, Tensor]:
         batch_size = len(game_states)
 
         if batch_size == 0:
@@ -179,11 +185,7 @@ class AlphaZeroModel(nn.Module):
             game_state_tensor, node_data, _, _ = game_states[i]
             game_state_tensors.append(game_state_tensor.to(self.device))
             graph_data_list.append(
-                Data(
-                    x=node_data,
-                    edge_index=base_edge_index,
-                    edge_attr=base_edge_attributes
-                ).to(self.device)
+                Data(x=node_data, edge_index=base_edge_index, edge_attr=base_edge_attributes).to(self.device)
             )
 
         # Create a Batch object from the list of graph data
@@ -194,20 +196,13 @@ class AlphaZeroModel(nn.Module):
         graph_batch.validate(raise_on_error=True)
 
         # Run the model
-        outputs = self.forward(
-            batched_game_state_tensor,
-            graph_batch
-        )
+        outputs = self.forward(batched_game_state_tensor, graph_batch)
 
         # Extract outputs
         probabilities, log_probs, value = outputs[0], outputs[1], outputs[2]
         return probabilities, log_probs, value
 
-    def forward(
-        self,
-        game_state_data: Tensor,
-        map_data: Batch
-    ) -> tuple[Tensor, Tensor, Tensor]:
+    def forward(self, game_state_data: Tensor, map_data: Batch) -> tuple[Tensor, Tensor, Tensor]:
         """
         Performs the forward pass of the network.
         Assumes graph inputs are already batched in PyTorch Geometric style.

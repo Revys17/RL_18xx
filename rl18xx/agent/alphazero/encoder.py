@@ -3,7 +3,7 @@ from rl18xx.game.engine.round import WaterfallAuction
 from rl18xx.game.engine.entities import Player, Corporation, Company, Bank, Depot, Train
 from rl18xx.game.engine.game.title.g1830 import Game as Game_1830, Entities as Entities_1830, Map as Map_1830
 from rl18xx.game.engine.graph import Hex, Tile, Edge, City
-
+from rl18xx.agent.alphazero.singleton import Singleton
 from torch import Tensor, from_numpy
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Set
@@ -54,12 +54,6 @@ ROUND_TYPE_MAP = {
 }
 MAX_ROUND_TYPE_IDX = max(ROUND_TYPE_MAP.values())
 
-class Singleton(type):
-    _instances = {}
-    def __call__(cls, *args, **kwargs):
-        if cls not in cls._instances:
-            cls._instances[cls] = super().__call__(*args, **kwargs)
-        return cls._instances[cls]
 
 class Encoder_1830(metaclass=Singleton):
     # --- Dynamically set in __init__ based on player count ---
@@ -237,7 +231,7 @@ class Encoder_1830(metaclass=Singleton):
 
         # LOGGER.debug(f"Section '{section_name}' OK (Size: {actual_size}, Offset: {offset})")
         return offset
-    
+
     def initialize(self, game: BaseGame):
         if not self.initialized:
             try:
@@ -247,10 +241,10 @@ class Encoder_1830(metaclass=Singleton):
             except Exception as e:
                 LOGGER.exception("Failed during encoder initialization.")
                 raise e
-            
+
             if self.ENCODING_SIZE <= 0:
                 raise ValueError("ENCODING_SIZE not calculated correctly.")
-            
+
             self.initialized = True
 
     def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
@@ -681,7 +675,7 @@ class Encoder_1830(metaclass=Singleton):
         duration_ms = (end_time - start_time) * 1000
         LOGGER.debug(f"Game State Encoding finished in {duration_ms:.3f} ms.")
         return tensor_encoding
-    
+
     def get_edge_index(self, game: BaseGame) -> Tuple[Tensor, Tensor]:
         self.initialize(game)
         return self.base_edge_index, self.base_edge_attributes

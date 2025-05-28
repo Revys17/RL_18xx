@@ -11,10 +11,11 @@ from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.alphazero.config import SelfPlayConfig
 import time
 
-POLICY_SIZE = 26535 # This is calculated dynamically but shouldn't be.
-VALUE_SIZE = 4 # We always want to play a 4-player game.
+POLICY_SIZE = 26535  # This is calculated dynamically but shouldn't be.
+VALUE_SIZE = 4  # We always want to play a 4-player game.
 
 LOGGER = logging.getLogger(__name__)
+
 
 class DummyNode:
     """A fake node of a MCTS search tree.
@@ -32,7 +33,13 @@ class DummyNode:
 
 
 class MCTSNode:
-    def __init__(self, game_state: BaseGame, fmove: Optional[int]=None, parent: Optional[MCTSNode]=None, config: Optional[SelfPlayConfig]=None):
+    def __init__(
+        self,
+        game_state: BaseGame,
+        fmove: Optional[int] = None,
+        parent: Optional[MCTSNode] = None,
+        config: Optional[SelfPlayConfig] = None,
+    ):
         if parent is None:
             parent = DummyNode()
         self.parent = parent
@@ -67,7 +74,7 @@ class MCTSNode:
     def __repr__(self):
         return f"<MCTSNode move_number={len(self.game_dict['actions'])}, move=[{self.fmove}], N={self.N if self.parent else 'N/A'}, to_play={self.active_player_index}>"
 
-    def _expand_to_full_policy_size(self, compressed_array: np.ndarray, default_value: float=0.0):
+    def _expand_to_full_policy_size(self, compressed_array: np.ndarray, default_value: float = 0.0):
         """Expand compressed array back to full policy size for vectorized operations"""
         if compressed_array.ndim == 1:
             full_array = np.full(POLICY_SIZE, default_value, dtype=np.float32)
@@ -94,7 +101,7 @@ class MCTSNode:
     @property
     def original_prior(self):
         return self._expand_to_full_policy_size(self.original_prior_compressed)
-    
+
     @original_prior.setter
     def original_prior(self, probs):
         self.original_prior_compressed = probs[self.legal_action_indices]
@@ -109,7 +116,9 @@ class MCTSNode:
 
     @property
     def child_action_score(self):
-        expanded_child_action_score = self._expand_to_full_policy_size(self.child_action_score_compressed, default_value=-1000.0)
+        expanded_child_action_score = self._expand_to_full_policy_size(
+            self.child_action_score_compressed, default_value=-1000.0
+        )
         return expanded_child_action_score
 
     @property
@@ -142,7 +151,9 @@ class MCTSNode:
         # P(s, a) = child_prior
         # N(s) = self.N
         # N(s, a) = child_N
-        c_puct = 2.0 * (math.log((1.0 + self.N + self.config.c_puct_base) / self.config.c_puct_base) + self.config.c_puct_init)
+        c_puct = 2.0 * (
+            math.log((1.0 + self.N + self.config.c_puct_base) / self.config.c_puct_base) + self.config.c_puct_init
+        )
         p_s_a = self.child_prior_compressed
         n_s = max(1, self.N - 1)
         n_s_a = self.child_N_compressed
@@ -186,7 +197,7 @@ class MCTSNode:
             current = current.maybe_add_child(best_move)
             num_added += 1
         end_time = time.time()
-        LOGGER.info(f"Select leaf time: {end_time - start_time:.3f} seconds, added {num_added} children")
+        LOGGER.debug(f"Select leaf time: {end_time - start_time:.3f} seconds, added {num_added} children")
         return current
 
     def maybe_add_child(self, action_index: int):
@@ -232,11 +243,13 @@ class MCTSNode:
         self.parent.revert_virtual_loss(up_to)
 
     def incorporate_results(self, move_probabilities, value, up_to):
-        assert move_probabilities.shape == (POLICY_SIZE,), f"move_probabilities.shape: {move_probabilities.shape} must be ({POLICY_SIZE},)"
+        assert move_probabilities.shape == (
+            POLICY_SIZE,
+        ), f"move_probabilities.shape: {move_probabilities.shape} must be ({POLICY_SIZE},)"
         assert value.shape == (VALUE_SIZE,), f"value.shape: {value.shape} must be ({VALUE_SIZE},)"
         # A finished game should not be going through this code path - should
         # directly call backup_value() on the result of the game.
-        assert not self.game_dict['finished']
+        assert not self.game_dict["finished"]
 
         # If a node was picked multiple times (despite vlosses), we shouldn't
         # expand it more than once.
@@ -283,13 +296,13 @@ class MCTSNode:
         self.parent.backup_value(value, up_to)
 
     def is_done(self):
-        return self.game_dict['finished'] or self.game_dict['move_number'] >= self.config.max_game_length
+        return self.game_dict["finished"] or self.game_dict["move_number"] >= self.config.max_game_length
 
     def game_result(self) -> Optional[np.ndarray]:
-        if not self.game_dict['finished']:
+        if not self.game_dict["finished"]:
             LOGGER.warning(f"Getting game result for unfinished game.")
 
-        result = self.game_dict['result']
+        result = self.game_dict["result"]
         winning_score = max(result.values())
 
         value = np.full(VALUE_SIZE, -1.0, dtype=np.float32)
@@ -297,13 +310,13 @@ class MCTSNode:
         value[winners] = 1.0
 
         return value
-    
+
     def game_result_string(self) -> Optional[str]:
-        if not self.game_dict['finished']:
+        if not self.game_dict["finished"]:
             LOGGER.warning(f"game_result_string: Game is not finished. Returning empty string.")
             return ""
 
-        result = self.game_dict['result']
+        result = self.game_dict["result"]
         winning_score = max(result.values())
 
         winners = []
@@ -321,14 +334,14 @@ class MCTSNode:
         alpha = np.full(self.num_legal_actions, self.config.dirichlet_noise_alpha)
         dirichlet = np.random.dirichlet(alpha)
         self.child_prior_compressed = (
-            self.child_prior_compressed * (1 - self.config.dirichlet_noise_weight) +
-            dirichlet * self.config.dirichlet_noise_weight
+            self.child_prior_compressed * (1 - self.config.dirichlet_noise_weight)
+            + dirichlet * self.config.dirichlet_noise_weight
         )
 
     def children_as_pi(self, squash=False) -> np.ndarray:
         probs = self.child_N
         if squash:
-            probs = probs ** .98
+            probs = probs**0.98
         sum_probs = np.sum(probs)
         if sum_probs == 0:
             return probs
@@ -354,12 +367,13 @@ class MCTSNode:
             output.append(f"{self.game_dict['move_number']}: {node.fmove} ({node.N}) ==> ")
 
         output.append(f"Q: {node.Q}\n")
-        return ''.join(output)
+        return "".join(output)
 
     def rank_children(self):
         ranked_children = list(range(self.num_legal_actions))
-        ranked_children.sort(key=lambda i: (
-            self.child_N_compressed[i], self.child_action_score_compressed[i]), reverse=True)
+        ranked_children.sort(
+            key=lambda i: (self.child_N_compressed[i], self.child_action_score_compressed[i]), reverse=True
+        )
         return ranked_children
 
     def describe(self):
@@ -367,26 +381,27 @@ class MCTSNode:
         soft_n = self.child_N_compressed / max(1, sum(self.child_N_compressed))
         prior = self.child_prior_compressed
         p_delta = soft_n - prior
-        p_rel = np.divide(p_delta, prior, out=np.zeros_like(
-            p_delta), where=prior != 0)
+        p_rel = np.divide(p_delta, prior, out=np.zeros_like(p_delta), where=prior != 0)
         # Dump out some statistics
         output = []
         output.append("Q (player {}): {:.4f}\n".format(self.active_player_index, self.Q[self.active_player_index]))
         output.append(self.most_visited_path())
-        output.append(
-            "move : action    Q (curr)     U     P   P-Dir    N  soft-N  p-delta  p-rel")
+        output.append("move : action    Q (curr)     U     P   P-Dir    N  soft-N  p-delta  p-rel")
         for i in ranked_children[:15]:
             if self.child_N_compressed[i] == 0:
                 break
-            output.append("\n{!s:4} : {: .3f} {: .3f} {:.3f} {:.3f} {:.3f} {:5d} {:.4f} {: .5f} {: .2f}".format(
-                f"{self.game_dict['move_number']}: {self.fmove}",
-                self.child_action_score_compressed[i],
-                self.child_Q_compressed[i][self.active_player_index],
-                self.child_U_compressed[i],
-                self.child_prior_compressed[i],
-                self.original_prior[i],
-                int(self.child_N_compressed[i]),
-                soft_n[i],
-                p_delta[i],
-                p_rel[i]))
-        return ''.join(output)
+            output.append(
+                "\n{!s:4} : {: .3f} {: .3f} {:.3f} {:.3f} {:.3f} {:5d} {:.4f} {: .5f} {: .2f}".format(
+                    f"{self.game_dict['move_number']}: {self.fmove}",
+                    self.child_action_score_compressed[i],
+                    self.child_Q_compressed[i][self.active_player_index],
+                    self.child_U_compressed[i],
+                    self.child_prior_compressed[i],
+                    self.original_prior[i],
+                    int(self.child_N_compressed[i]),
+                    soft_n[i],
+                    p_delta[i],
+                    p_rel[i],
+                )
+            )
+        return "".join(output)

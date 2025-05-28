@@ -156,10 +156,10 @@ class ActionHelper:
         # THEN don't allow a pass
         if not reduced_actions:
             return [Pass(self.g.current_entity)]
-        
+
         if not isinstance(self.g.active_step(), WaterfallAuctionStep):
             return [Pass(self.g.current_entity)]
-        
+
         if self.g.active_step().auctioning_company():
             return [Pass(self.g.current_entity)]
 
@@ -170,7 +170,6 @@ class ActionHelper:
             return []
 
         return [Pass(self.g.current_entity)]
-
 
     def get_bid_actions(self, min_bid_only=False):
         if self.g.active_step().auctioning_company():

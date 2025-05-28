@@ -19,13 +19,14 @@ from rl18xx.game.engine.actions import (
     RunRoutes,
 )
 from rl18xx.game.engine.round import Exchange as ExchangeStep, BuyTrain as BuyTrainStep
+from rl18xx.agent.alphazero.singleton import Singleton
 
 import logging
 
 LOGGER = logging.getLogger(__name__)
 
 
-class ActionMapper:
+class ActionMapper(metaclass=Singleton):
     def __init__(self):
         self.init_actions()
         self.action_encoding_size = len(self.actions)
@@ -591,7 +592,7 @@ class ActionMapper:
             return mask
         mask[indices] = 1.0
         return mask
-    
+
     def get_legal_action_indices(self, state: BaseGame) -> List[int]:
         if state is None:
             raise ValueError("State is None")

@@ -9,7 +9,8 @@ from rl18xx.game.action_helper import ActionHelper
 
 # Fixtures
 
-class DummyNet():
+
+class DummyNet:
     def __init__(self, fake_priors=None, fake_log_priors=None, fake_value=None):
         if fake_priors is None:
             fake_priors = torch.ones(26535, dtype=torch.float32) / 26535
@@ -27,20 +28,30 @@ class DummyNet():
     def run_many(self, game_states):
         if not game_states:
             raise ValueError("No positions passed!")
-        return [self.fake_priors] * len(game_states), [self.fake_log_priors] * len(game_states), [self.fake_value] * len(game_states)
-    
+        return (
+            [self.fake_priors] * len(game_states),
+            [self.fake_log_priors] * len(game_states),
+            [self.fake_value] * len(game_states),
+        )
+
     def run_encoded(self, encoded_game_state):
         return self.fake_priors, self.fake_log_priors, self.fake_value
-    
+
     def run_many_encoded(self, encoded_game_states):
-        return [self.fake_priors] * len(encoded_game_states), [self.fake_log_priors] * len(encoded_game_states), [self.fake_value] * len(encoded_game_states)
-    
+        return (
+            [self.fake_priors] * len(encoded_game_states),
+            [self.fake_log_priors] * len(encoded_game_states),
+            [self.fake_value] * len(encoded_game_states),
+        )
+
+
 def get_fresh_game_state():
     game_map = GameMap()
     game_class = game_map.game_by_title("1830")
     players = {"1": "Player 1", "2": "Player 2", "3": "Player 3", "4": "Player 4"}
     game_instance = game_class(players)
     return game_instance
+
 
 def get_almost_done_game_state():
     game_state = get_fresh_game_state()
@@ -51,7 +62,9 @@ def get_almost_done_game_state():
     )  # [20:39] -- Phase 2 (Operating Rounds: 1 | Train Limit: 4 | Available Tiles: Yellow) --
     # [20:39] Player 1 bids $600 for Baltimore & Ohio
     game_state.process_action(action_helper.get_all_choices()[0])  # [20:39] Player 2 buys Schuylkill Valley for $20
-    game_state.process_action(action_helper.get_all_choices()[0])  # [20:39] Player 3 buys Champlain & St.Lawrence for $40
+    game_state.process_action(
+        action_helper.get_all_choices()[0]
+    )  # [20:39] Player 3 buys Champlain & St.Lawrence for $40
     game_state.process_action(action_helper.get_all_choices()[0])  # [20:39] Player 4 buys Delaware & Hudson for $70
     game_state.process_action(action_helper.get_all_choices()[0])  # [20:39] Player 1 passes bidding
     game_state.process_action(action_helper.get_all_choices()[0])  # [20:39] Player 2 buys Mohawk & Hudson for $110
@@ -173,7 +186,9 @@ def get_almost_done_game_state():
     # [23:26] Player 3 buys a 20% share of C&O from the IPO for $134
     # [23:26] Player 3 becomes the president of C&O
     game_state.process_action(action_helper.get_all_choices()[-1])  # [23:26] Player 3 declines to sell shares
-    game_state.process_action(action_helper.get_all_choices()[-2])  # [23:26] Player 4 sells 3 shares of B&O and receives $195
+    game_state.process_action(
+        action_helper.get_all_choices()[-2]
+    )  # [23:26] Player 4 sells 3 shares of B&O and receives $195
     # [23:26] Player 1 becomes the president of B&O
     # [23:26] B&O's share price moves down from 50
     game_state.process_action(
@@ -196,13 +211,17 @@ def get_almost_done_game_state():
     # [23:27] NYC receives $670
     game_state.process_action(action_helper.get_all_choices()[-1])  # [23:27] Player 4 declines to sell shares
     # [23:27] Player 1 has no valid actions and passes
-    game_state.process_action(action_helper.get_all_choices()[2])  # [23:27] Player 2 sells 3 shares of PRR and receives $201
+    game_state.process_action(
+        action_helper.get_all_choices()[2]
+    )  # [23:27] Player 2 sells 3 shares of PRR and receives $201
     # [23:27] PRR's share price moves down from 60
     game_state.process_action(
         action_helper.get_all_choices()[1]
     )  # [23:27] Player 2 buys a 10% share of C&O from the IPO for $67
     game_state.process_action(action_helper.get_all_choices()[-1])
-    game_state.process_action(action_helper.get_all_choices()[1])  # [23:27] Player 3 sells 2 shares of PRR and receives $120
+    game_state.process_action(
+        action_helper.get_all_choices()[1]
+    )  # [23:27] Player 3 sells 2 shares of PRR and receives $120
     # [23:27] PRR's share price moves down from 40
     game_state.process_action(
         action_helper.get_all_choices()[1]
@@ -215,10 +234,14 @@ def get_almost_done_game_state():
     # [23:27] C&O receives $670
     game_state.process_action(action_helper.get_all_choices()[-1])  # [23:35] Player 4 declines to sell shares
     # [23:35] Player 1 has no valid actions and passes
-    game_state.process_action(action_helper.get_all_choices()[20])  # [23:35] Player 2 sells a 10% share of B&O and receives $50
+    game_state.process_action(
+        action_helper.get_all_choices()[20]
+    )  # [23:35] Player 2 sells a 10% share of B&O and receives $50
     # [23:35] B&O's share price moves down from 40
     game_state.process_action(action_helper.get_all_choices()[-1])  # [23:35] Player 2 declines to buy shares
-    game_state.process_action(action_helper.get_all_choices()[4])  # [23:35] Player 3 sells a 10% share of B&O and receives $40
+    game_state.process_action(
+        action_helper.get_all_choices()[4]
+    )  # [23:35] Player 3 sells a 10% share of B&O and receives $40
     # [23:35] B&O's share price moves down from 30
     game_state.process_action(action_helper.get_all_choices()[-1])  # [23:35] Player 3 declines to buy shares
     game_state.process_action(action_helper.get_all_choices()[-1])  # [23:35] Player 4 passes
@@ -226,6 +249,7 @@ def get_almost_done_game_state():
     game_state.process_action(action_helper.get_all_choices()[-1])  # [23:35] Player 2 passes
     game_state.process_action(action_helper.get_all_choices()[-1])  # [23:35] Player 3 passes
     return game_state
+
 
 def terminal_game_state():
     game_state = get_almost_done_game_state()
@@ -281,8 +305,9 @@ def terminal_game_state():
     # [23:36] B&O skips run routes
     # [23:36] B&O does not run
     # [23:36] B&O's share price moves left from 20
-    #game_state.process_action(action_helper.get_all_choices()[0])  # [23:36] Player bankrupts
+    # game_state.process_action(action_helper.get_all_choices()[0])  # [23:36] Player bankrupts
     return game_state
+
 
 def initialize_basic_player(game_state=None):
     player = MCTSPlayer(SelfPlayConfig(network=DummyNet()))
@@ -293,8 +318,9 @@ def initialize_basic_player(game_state=None):
     first_node.incorporate_results(priors, values, up_to=player.root)
     return player
 
+
 def initialize_almost_done_player():
-    probs = torch.tensor([.001] * 26535)
+    probs = torch.tensor([0.001] * 26535)
     probs[2:5] = 0.2  # some legal moves along the top.
     probs[-1] = 0.2  # passing is also ok
     net = DummyNet(fake_priors=probs)
@@ -302,6 +328,7 @@ def initialize_almost_done_player():
     # root position is white to play with no history == white passed.
     player.initialize_game(get_almost_done_game_state())
     return player
+
 
 def assert_no_pending_virtual_losses(root):
     """Raise an error if any node in this subtree has vlosses pending."""
@@ -311,7 +338,9 @@ def assert_no_pending_virtual_losses(root):
         assert current.losses_applied == 0
         queue.extend(current.children.values())
 
+
 # TESTS
+
 
 def test_inject_noise():
     player = initialize_basic_player()
@@ -349,13 +378,14 @@ def test_pick_moves():
     # But if we're in the early part of the game, pick randomly
     assert root.game_dict["move_number"] < player.config.softpick_move_cutoff
 
-    with mock.patch('random.random', lambda: .5):
+    with mock.patch("random.random", lambda: 0.5):
         move = player.pick_move()
         assert move == 0
 
-    with mock.patch('random.random', lambda: .99):
+    with mock.patch("random.random", lambda: 0.99):
         move = player.pick_move()
         assert move == 2
+
 
 def test_parallel_tree_search():
     player = initialize_almost_done_player()
@@ -405,7 +435,7 @@ def test_extract_data_normal_end():
 
     player.searches_pi = [np.zeros(26535)] * 87
     player.tree_search()
-    player.play_move(player.pick_move()) # only one legal move
+    player.play_move(player.pick_move())  # only one legal move
     assert player.root.is_done()
     player.set_result(player.root.game_result())
 

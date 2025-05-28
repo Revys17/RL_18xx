@@ -19,6 +19,7 @@ import logging
 
 LOGGER = logging.getLogger(__name__)
 
+
 # Helper function to log memory usage
 def log_memory_usage(stage_name="", debug=True):
     process = psutil.Process(os.getpid())
@@ -35,7 +36,7 @@ class MCTSPlayer:
         self.config = config
         self.network = config.network
         self.root = None
-        self.result = np.zeros(getattr(config, 'num_distinct_players', 4))
+        self.result = np.zeros(getattr(config, "num_distinct_players", 4))
         super().__init__()
         self.initialize_game()
 
@@ -66,32 +67,18 @@ class MCTSPlayer:
         LOGGER.info(f"Initialized game. Root node N: {self.root.N}")
         log_memory_usage(stage_name="After MCTSPlayer.initialize_game")
 
-    # def suggest_move(self, game_state):
-    #     start_time = time.time()
-    #     log_memory_usage(stage_name="Start MCTSPlayer.suggest_move")
-
-    #     current_readouts = self.root.N
-    #     while self.root.N < current_readouts + self.config.num_readouts:
-    #         self.tree_search()
-    #     LOGGER.info(f"{game_state['move_number']}: Searched {self.config.num_readouts} times in {time.time() - start_time} seconds. Root N: {self.root.N}, Children: {len(self.root.children if self.root.children else [])}")
-
-    #     # print some stats on moves considered.
-    #     LOGGER.debug(f"Root description: {self.root.describe()}")
-    #     LOGGER.debug(f"Game State: {self.root.game_dict}")
-
-    #     log_memory_usage(stage_name="End MCTSPlayer.suggest_move")
-    #     return self.pick_move()
-
     def play_move(self, action_index):
         """Notable side effects:
-          - finalizes the probability distribution according to
-          this roots visit counts into the class' running tally, `searches_pi`
-          - Makes the node associated with this move the root, for future
-            `inject_noise` calls.
+        - finalizes the probability distribution according to
+        this roots visit counts into the class' running tally, `searches_pi`
+        - Makes the node associated with this move the root, for future
+          `inject_noise` calls.
         """
         log_memory_usage(stage_name="Before MCTSPlayer.play_move")
-        self.searches_pi.append(self.root.children_as_pi(self.root.game_dict["move_number"] < self.config.softpick_move_cutoff))
-        
+        self.searches_pi.append(
+            self.root.children_as_pi(self.root.game_dict["move_number"] < self.config.softpick_move_cutoff)
+        )
+
         self.root = self.root.maybe_add_child(action_index)
         # Prune the tree
         self.prune_mcts_tree_retain_parent(self.root)
@@ -109,15 +96,18 @@ class MCTSPlayer:
         a move weighted by visit count; later on, pick the absolute max."""
         if self.root.game_dict["move_number"] >= self.config.softpick_move_cutoff:
             return self.root.best_child()
-        
+
         cdf = self.root.children_as_pi(squash=True).cumsum()
         selection = random.random()
         action_index = cdf.searchsorted(selection)
         if self.root.child_N[action_index] == 0:
-            LOGGER.error(f"Action index {action_index} has no visits. Root children_as_pi: {self.root.children_as_pi(squash=True)}")
-            raise ValueError(f"Action index {action_index} has no visits. Root children_as_pi: {self.root.children_as_pi(squash=True)}")
+            LOGGER.error(
+                f"Action index {action_index} has no visits. Root children_as_pi: {self.root.children_as_pi(squash=True)}"
+            )
+            raise ValueError(
+                f"Action index {action_index} has no visits. Root children_as_pi: {self.root.children_as_pi(squash=True)}"
+            )
         return action_index
-
 
     def tree_search(self, parallel_readouts=None):
         if parallel_readouts is None:
@@ -126,7 +116,7 @@ class MCTSPlayer:
         failsafe = 0
         # Add a loop counter for debugging the selection of leaves
         select_leaf_attempts = 0
-        max_select_leaf_attempts = parallel_readouts * 2 # This is the existing failsafe limit
+        max_select_leaf_attempts = parallel_readouts * 2  # This is the existing failsafe limit
 
         select_leaves_start = time.time()
         while len(leaves) < parallel_readouts and failsafe < max_select_leaf_attempts:
@@ -134,7 +124,9 @@ class MCTSPlayer:
             failsafe += 1
             leaf = self.root.select_leaf()
             if leaf.is_done():
-                LOGGER.info(f"tree_search: Found finished game for leaf {leaf.game_dict}. Result: {leaf.game_result_string()}")
+                LOGGER.info(
+                    f"tree_search: Found finished game for leaf {leaf.game_dict}. Result: {leaf.game_result_string()}"
+                )
                 value = leaf.game_result()
                 leaf.backup_value(value, up_to=self.root)
                 continue
@@ -146,7 +138,9 @@ class MCTSPlayer:
         LOGGER.debug(f"tree_search: Found {len(leaves)} leaves after {select_leaf_attempts} attempts.")
 
         if select_leaf_attempts >= max_select_leaf_attempts and len(leaves) < parallel_readouts:
-            LOGGER.warning(f"tree_search: Failsafe triggered while selecting leaves. Found {len(leaves)}/{parallel_readouts} leaves after {select_leaf_attempts}/{max_select_leaf_attempts} attempts.")
+            LOGGER.warning(
+                f"tree_search: Failsafe triggered while selecting leaves. Found {len(leaves)}/{parallel_readouts} leaves after {select_leaf_attempts}/{max_select_leaf_attempts} attempts."
+            )
 
         run_network_start = 0
         run_network_end = 0
@@ -157,17 +151,19 @@ class MCTSPlayer:
             with torch.no_grad():
                 move_probs, _, values = self.network.run_many_encoded([leaf.encoded_game_state for leaf in leaves])
             run_network_end = time.time()
-            
+
             revert_and_incorporate_start = time.time()
             for i, (leaf, move_prob, value) in enumerate(zip(leaves, move_probs, values)):
                 # LOGGER.debug(f"tree_search: Processing leaf {i+1}/{len(leaves)}")
                 leaf.revert_virtual_loss(up_to=self.root)
                 leaf.incorporate_results(move_prob, value, up_to=self.root)
             revert_and_incorporate_end = time.time()
-        
-        LOGGER.info(f"Tree search timing: Select leaves: {select_leaves_end - select_leaves_start:.3f} seconds," +
-                    f"Run network: {run_network_end - run_network_start:.3f} seconds, Revert and incorporate: " +
-                    f"{revert_and_incorporate_end - revert_and_incorporate_start:.3f} seconds")
+
+        LOGGER.debug(
+            f"Tree search timing: Select leaves: {select_leaves_end - select_leaves_start:.3f} seconds,"
+            + f"Run network: {run_network_end - run_network_start:.3f} seconds, Revert and incorporate: "
+            + f"{revert_and_incorporate_end - revert_and_incorporate_start:.3f} seconds"
+        )
         return leaves
 
     def show_path_to_root(self, node: mcts.MCTSNode):
@@ -193,7 +189,9 @@ class MCTSPlayer:
 
     def extract_data(self) -> Generator[Tuple[BaseGame, torch.Tensor, torch.Tensor], None, None]:
         log_memory_usage(stage_name="Start MCTSPlayer.extract_data")
-        assert len(self.searches_pi) == self.root.game_dict["move_number"], f"searches_pi length {len(self.searches_pi)} != move_number {self.root.game_dict['move_number']}"
+        assert (
+            len(self.searches_pi) == self.root.game_dict["move_number"]
+        ), f"searches_pi length {len(self.searches_pi)} != move_number {self.root.game_dict['move_number']}"
         assert not np.array_equal(self.result, [0.0, 0.0, 0.0, 0.0]), f"result {self.result} is 0"
 
         result = torch.tensor(self.result)
@@ -201,8 +199,10 @@ class MCTSPlayer:
         for i, action in enumerate(self.root.game_dict["actions"]):
             yield (
                 game_state,
-                torch.tensor(self.searches_pi[i]) if isinstance(self.searches_pi[i], np.ndarray) else self.searches_pi[i],
-                result
+                torch.tensor(self.searches_pi[i])
+                if isinstance(self.searches_pi[i], np.ndarray)
+                else self.searches_pi[i],
+                result,
             )
             game_state = game_state.clone(game_state.raw_actions)
             game_state.process_action(action)
@@ -212,7 +212,7 @@ class MCTSPlayer:
 
     def set_num_readouts(self, readouts):
         self.num_readouts = readouts
-    
+
     def _recursive_clear_references(self, node: mcts.MCTSNode, stats: Optional[dict] = None):
         """
         Recursively clears parent and children references to help with garbage collection.
@@ -221,22 +221,21 @@ class MCTSPlayer:
         This is called on subtrees that are being pruned.
         """
         if stats is not None:
-            stats['cleared_nodes'] = stats.get('cleared_nodes', 0) + 1
+            stats["cleared_nodes"] = stats.get("cleared_nodes", 0) + 1
 
-        node.parent = None # Break link to its parent
-        
+        node.parent = None  # Break link to its parent
+
         # Explicitly clear large attributes to help GC
         node.game_dict = None
         node.encoded_game_state = None
         # If there are other large numpy arrays specific to the node that are safe to clear,
         # they could be added here too. For now, game_dict and encoded_game_state are primary.
-                                    
+
         children_to_visit = list(node.children.values())
-        node.children.clear() # Clear this node's children dict
+        node.children.clear()  # Clear this node's children dict
 
         for child in children_to_visit:
-            self._recursive_clear_references(child, stats) # Recurse
-
+            self._recursive_clear_references(child, stats)  # Recurse
 
     def prune_mcts_tree_retain_parent(self, new_search_root: mcts.MCTSNode):
         parent_of_new_root = new_search_root.parent
@@ -259,13 +258,15 @@ class MCTSPlayer:
         LOGGER.debug(f"Pruning: {parent_of_new_root} now only has child {new_search_root}.")
 
         # Recursively clear references in the pruned sibling subtrees.
-        pruning_stats = {'cleared_nodes': 0, 'sibling_subtrees_pruned': 0}
+        pruning_stats = {"cleared_nodes": 0, "sibling_subtrees_pruned": 0}
         for sibling_root in siblings_to_prune_roots:
             LOGGER.debug(f"Pruning: Clearing references for subtree rooted at {sibling_root}.")
-            pruning_stats['sibling_subtrees_pruned'] += 1
+            pruning_stats["sibling_subtrees_pruned"] += 1
             self._recursive_clear_references(sibling_root, stats=pruning_stats)
-        
-        LOGGER.debug(f"Pruning stats: Sibling subtrees pruned: {pruning_stats['sibling_subtrees_pruned']}, Total nodes cleared in subtrees: {pruning_stats['cleared_nodes']}")
+
+        LOGGER.debug(
+            f"Pruning stats: Sibling subtrees pruned: {pruning_stats['sibling_subtrees_pruned']}, Total nodes cleared in subtrees: {pruning_stats['cleared_nodes']}"
+        )
 
         # Detach parent_of_new_root from its original parent (pruning ancestors).
         # Its new parent becomes a DummyNode.
@@ -284,10 +285,10 @@ class SelfPlay:
 
     def play(self):
         """Plays out a self-play match, returning a MCTSPlayer object containing:
-            - the final position
-            - the n x 26535 tensor of floats representing the mcts search probabilities
-            - the n x 4 tensor of floats representing the original value-net estimate
-            where n is the number of moves in the game
+        - the final position
+        - the n x 26535 tensor of floats representing the mcts search probabilities
+        - the n x 4 tensor of floats representing the original value-net estimate
+        where n is the number of moves in the game
         """
         player = MCTSPlayer(self.config)
         log_memory_usage(stage_name="After MCTSPlayer created in SelfPlay.play")
@@ -312,22 +313,28 @@ class SelfPlay:
                 else:
                     current_readouts = player.root.N
                     target_readouts_for_move = current_readouts + self.config.num_readouts
-                    
+
                     # MCTS simulation loop
                     sim_count_this_move = 0
-                    max_sims_display_interval = max(1, self.config.num_readouts // 10) # Log progress roughly 10 times per move
+                    max_sims_display_interval = max(
+                        1, self.config.num_readouts // 10
+                    )  # Log progress roughly 10 times per move
 
                     tree_search_start_time = time.time()
                     while player.root.N < target_readouts_for_move:
                         if sim_count_this_move > 0 and sim_count_this_move % max_sims_display_interval == 0:
-                            LOGGER.debug(f"Move {move_counter}: MCTS sim progress: {player.root.N}/{target_readouts_for_move} (sim_batch {sim_count_this_move})")
+                            LOGGER.debug(
+                                f"Move {move_counter}: MCTS sim progress: {player.root.N}/{target_readouts_for_move} (sim_batch {sim_count_this_move})"
+                            )
                             log_memory_usage(stage_name=f"SelfPlay.play move {move_counter}, MCTS sim {player.root.N}")
-                        
+
                         player.tree_search()
                         sim_count_this_move += self.config.parallel_readouts
                     tree_search_end_time = time.time()
 
-                    LOGGER.info(f"Move {move_counter}: MCTS simulations complete. Root N: {player.root.N}, Target: {target_readouts_for_move}")
+                    LOGGER.info(
+                        f"Move {move_counter}: MCTS simulations complete. Root N: {player.root.N}, Target: {target_readouts_for_move}"
+                    )
                     log_memory_usage(stage_name=f"SelfPlay.play after MCTS simulations for move {move_counter}")
 
                 pick_move_start_time = time.time()
@@ -340,7 +347,9 @@ class SelfPlay:
                 move_counter += 1
 
                 end_time = time.time()
-                LOGGER.info(f"Timing Info: Total: {end_time - start_time:.3f}, Tree Search: {tree_search_end_time - tree_search_start_time:.3f}, Pick Move: {pick_move_end_time - pick_move_start_time:.3f}, Play Move: {play_move_end_time - play_move_start_time:.3f}")
+                LOGGER.info(
+                    f"Timing Info: Total: {end_time - start_time:.3f}, Tree Search: {tree_search_end_time - tree_search_start_time:.3f}, Pick Move: {pick_move_end_time - pick_move_start_time:.3f}, Play Move: {play_move_end_time - play_move_start_time:.3f}"
+                )
                 if move_counter % 20 == 0:
                     log_memory_usage(stage_name=f"SelfPlay.play during game, after move {move_counter}")
                     LOGGER.info(f"GC counts: {gc.get_count()}")
@@ -350,16 +359,14 @@ class SelfPlay:
                     LOGGER.info(f"Game finished after {move_counter} moves. Result: {player.get_result_string()}")
                     break
 
-
         except Exception as e:
             LOGGER.error(f"Error in self-play after {move_counter} moves: {e}", exc_info=True)
             LOGGER.error(f"Game state: {player.root.game_dict}")
             # It might be useful to still try and get data from the player if an error occurs mid-game
             # For now, just re-raise or handle as per existing logic.
-        
+
         log_memory_usage(stage_name="SelfPlay.play finished")
         return player
-
 
     def run_game(self):
         """Takes a played game and record results and game data."""
@@ -371,11 +378,13 @@ class SelfPlay:
         player = self.play()
         log_memory_usage(stage_name="After SelfPlay.play in run_game")
 
-        output_name = '{}-{}'.format(int(time.time()), socket.gethostname())
-        
+        output_name = "{}-{}".format(int(time.time()), socket.gethostname())
+
         if player.result is None or np.all(np.array(player.result) == 0.0):
-             LOGGER.warning(f"Game {output_name} finished with no conclusive result or result not set. Skipping data extraction.")
-             return
+            LOGGER.warning(
+                f"Game {output_name} finished with no conclusive result or result not set. Skipping data extraction."
+            )
+            return
 
         game_data = player.extract_data()
         log_memory_usage(stage_name="After player.extract_data in run_game")
@@ -418,6 +427,7 @@ def setup_logging(level: int, log_file: str) -> logging.Logger:
     # root_logger.addHandler(console_handler)
     root_logger.addHandler(file_handler)
 
+
 def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     setup_logging(logging.INFO, f"logs/self_play/self_play_{timestamp}.log")
@@ -427,7 +437,7 @@ def main():
     config = SelfPlayConfig(network=model)
     selfplay = SelfPlay(config)
 
-    num_games_to_run = getattr(config, 'num_games_to_run', 1)
+    num_games_to_run = getattr(config, "num_games_to_run", 1)
     for i in range(num_games_to_run):
         LOGGER.info(f"--- Starting game {i+1}/{num_games_to_run} ---")
         selfplay.run_game()
@@ -435,6 +445,5 @@ def main():
         LOGGER.info(f"GC counts after game {i+1}: {gc.get_count()}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-

@@ -4,6 +4,7 @@ import torch
 from datetime import datetime
 from pathlib import Path
 
+
 class ModelConfig:
     def __init__(
         self,
@@ -49,8 +50,8 @@ class ModelConfig:
         self.num_res_blocks = num_res_blocks
         self.dropout_rate = dropout_rate
         self.model_checkpoint_file = model_checkpoint_file
-        self.timestamp = timestamp if timestamp is not None else datetime.now().strftime('%Y%m%d_%H%M%S')
-            
+        self.timestamp = timestamp if timestamp is not None else datetime.now().strftime("%Y%m%d_%H%M%S")
+
     def to_json(self):
         return {
             "game_state_size": self.game_state_size,
@@ -70,10 +71,11 @@ class ModelConfig:
             "dropout_rate": self.dropout_rate,
             "timestamp": self.timestamp,
         }
-    
+
     @classmethod
     def from_json(cls, json_data):
         return cls(**json_data)
+
 
 class TrainingConfig:
     def __init__(
@@ -112,11 +114,11 @@ class SelfPlayConfig:
     def __init__(
         self,
         # MCTS
-        max_game_length: int=1000,
-        c_puct_base: float=19652,
-        c_puct_init: float=1.25,
-        dirichlet_noise_alpha: float=0.03,
-        dirichlet_noise_weight: float=0.25,
+        max_game_length: int = 1000,
+        c_puct_base: float = 19652,
+        c_puct_init: float = 1.25,
+        dirichlet_noise_alpha: float = 0.03,
+        dirichlet_noise_weight: float = 0.25,
         # Self Play
         softpick_move_cutoff: int = 500,
         num_readouts: int = 200,
@@ -135,7 +137,7 @@ class SelfPlayConfig:
         self.c_puct_init = c_puct_init
         self.dirichlet_noise_alpha = dirichlet_noise_alpha
         self.dirichlet_noise_weight = dirichlet_noise_weight
-    
+
         # MCTS Player
         self.softpick_move_cutoff = softpick_move_cutoff
         self.num_readouts = num_readouts

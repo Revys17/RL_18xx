@@ -19,6 +19,7 @@ def get_index_in_correct_sorted_list(action_helper, original_index):
         return i
     raise ValueError(f"Action not found in correct sorted list: {action}")
 
+
 def test_1830_manual_actions():
     game_map = GameMap()
     game = game_map.game_by_title("1830")
@@ -717,7 +718,9 @@ def test_1830_manual_actions():
     # [18:21] PRR skips buy companies
 
     # [18:21] Player 4 operates B&O
-    g.process_action(action_helper.get_all_choices()[59])  # [18:22] B&O lays tile #61 with rotation 0 on I15 (Baltimore)
+    g.process_action(
+        action_helper.get_all_choices()[59]
+    )  # [18:22] B&O lays tile #61 with rotation 0 on I15 (Baltimore)
     # [18:22] B&O skips place a token
     g.process_action(action_helper.get_all_choices()[0])  # [18:22] B&O runs a 4 train for $170: K13-J14-I15-H18
     # [18:22] B&O runs a 3 train for $160: I15-H10-F2
@@ -748,7 +751,7 @@ def test_1830_manual_actions():
     # [18:23] ERIE skips buy companies
 
     # [18:23] Player 2 operates C&O
-    #print("\n".join(str(message) for message in g.log))
+    # print("\n".join(str(message) for message in g.log))
     g.process_action(
         action_helper.get_all_choices()[0]
     )  # [18:23] C&O lays tile #68 with rotation 2 on E11 (Dunkirk & Buffalo)
@@ -1090,7 +1093,7 @@ def test_1830_manual_actions():
         action_helper.get_all_choices()[433]
     )  # [20:30] Player 4 sells a 10% share of CPR and receives $100
     # [20:30] CPR's share price moves down from 90
-    #print("\n".join(f"{i}: {c}" for i, c in enumerate(action_helper.get_all_choices())))
+    # print("\n".join(f"{i}: {c}" for i, c in enumerate(action_helper.get_all_choices())))
     g.process_action(action_helper.get_all_choices()[0])  # [20:30] Player 4 contributes $670
     # [20:30] PRR buys a D train for $1100 from The Depot
     # [20:30] PRR skips buy companies
@@ -1203,7 +1206,7 @@ def test_1830_manual_actions():
         action_helper.get_all_choices()[0]
     )  # [21:39] B&O pays out 22 per share (88 to B&O, $22 to Player 1)
     # [21:39] B&O's share price moves right from 67
-    g.process_action(action_helper.get_all_choices()[-1]) # [21:39] B&O passes buy trains
+    g.process_action(action_helper.get_all_choices()[-1])  # [21:39] B&O passes buy trains
     # [21:39] B&O skips buy companies
 
     # [21:39] Player 1 operates NYC
