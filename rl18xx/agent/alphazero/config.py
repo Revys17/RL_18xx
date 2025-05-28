@@ -1,6 +1,8 @@
-from typing import Optional, Any
+from typing import Optional, Any, Union
 from torch import device
 import torch
+from datetime import datetime
+from pathlib import Path
 
 class ModelConfig:
     def __init__(
@@ -22,6 +24,7 @@ class ModelConfig:
         num_res_blocks: int = 5,
         dropout_rate: float = 0.1,
         model_checkpoint_file: Optional[str] = None,
+        timestamp: Optional[str] = None,
     ):
         if device is None:
             if torch.cuda.is_available():
@@ -46,8 +49,66 @@ class ModelConfig:
         self.num_res_blocks = num_res_blocks
         self.dropout_rate = dropout_rate
         self.model_checkpoint_file = model_checkpoint_file
+        self.timestamp = timestamp if timestamp is not None else datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+    def to_json(self):
+        return {
+            "game_state_size": self.game_state_size,
+            "map_node_features": self.map_node_features,
+            "policy_size": self.policy_size,
+            "value_size": self.value_size,
+            "mlp_hidden_dim": self.mlp_hidden_dim,
+            "gnn_node_proj_dim": self.gnn_node_proj_dim,
+            "gnn_hidden_dim_per_head": self.gnn_hidden_dim_per_head,
+            "gnn_layers": self.gnn_layers,
+            "gnn_heads": self.gnn_heads,
+            "gnn_output_embed_dim": self.gnn_output_embed_dim,
+            "gnn_edge_categories": self.gnn_edge_categories,
+            "gnn_edge_embedding_dim": self.gnn_edge_embedding_dim,
+            "shared_trunk_hidden_dim": self.shared_trunk_hidden_dim,
+            "num_res_blocks": self.num_res_blocks,
+            "dropout_rate": self.dropout_rate,
+            "timestamp": self.timestamp,
+        }
+    
+    @classmethod
+    def from_json(cls, json_data):
+        return cls(**json_data)
 
-class MegaConfig:
+class TrainingConfig:
+    def __init__(
+        self,
+        root_dir: str = "training_examples",
+        train_dir: Optional[str] = None,
+        val_dir: Optional[str] = None,
+        model_checkpoint_dir: str = "model_checkpoints",
+        train_batch_size: int = 256,
+        lr: float = 1e-3,
+        num_epochs: int = 1,
+        weight_decay: float = 1e-4,
+        shuffle_examples: bool = True,
+        value_loss_weight: float = 1.0,
+    ):
+        self.root_dir = Path(root_dir)
+        self.model_checkpoint_dir = model_checkpoint_dir
+        self.train_batch_size = train_batch_size
+        self.lr = lr
+        self.num_epochs = num_epochs
+        self.weight_decay = weight_decay
+        self.shuffle_examples = shuffle_examples
+        self.value_loss_weight = value_loss_weight
+
+        if train_dir is None and val_dir is None:
+            return
+
+        if train_dir is None or val_dir is None:
+            raise ValueError("train_dir and val_dir must both be provided or both be None")
+
+        self.train_dir = self.root_dir / train_dir
+        self.val_dir = self.root_dir / val_dir
+
+
+class SelfPlayConfig:
     def __init__(
         self,
         # MCTS
@@ -58,33 +119,15 @@ class MegaConfig:
         dirichlet_noise_weight: float=0.25,
         # Self Play
         softpick_move_cutoff: int = 500,
-        num_readouts: int = 32,
+        num_readouts: int = 200,
         parallel_readouts: int = 8,
         network: Any = None,
-        selfplay_dir: str = None,
-        holdout_dir: str = None,
+        selfplay_dir: str = "selfplay",
+        holdout_dir: str = "holdout",
         holdout_pct: float = 0.05,
-        # Training
-        train_batch_size: int = 1024,
-        lr: float = 0.001,
-        weight_decay: float = 0.0,
-        shuffle_buffer_size: int = 2000,
-        shuffle_examples: bool = True,
-        steps_to_train: int = None,
-        num_examples: int = None,
-        window_size: int = 500000,
-        filter_amount: float = 1.0,
-        export_path: str = None,
-        freeze: bool = False,
-        use_trt: bool = False,
-        trt_max_batch_size: int = None,
-        trt_precision: str = 'fp32',
-        value_loss_weight: float = 1.0,
     ):
         assert softpick_move_cutoff % 2 == 0
         assert num_readouts > 0
-        assert not use_trt or trt_max_batch_size, 'trt_max_batch_size must be set if use_trt is true'
-        assert not num_examples or steps_to_train == 0 and filter_amount == 1.0, '`num_examples` requires `steps_to_train==0` and `filter_amount==1.0`'
 
         # MCTS
         self.max_game_length = max_game_length
@@ -100,23 +143,7 @@ class MegaConfig:
         self.network = network
 
         # Self Play
-        self.selfplay_dir = selfplay_dir
-        self.holdout_dir = holdout_dir
+        root_dir = Path("training_examples")
+        self.selfplay_dir = root_dir / selfplay_dir
+        self.holdout_dir = root_dir / holdout_dir
         self.holdout_pct = holdout_pct
-
-        # Training
-        self.train_batch_size = train_batch_size
-        self.shuffle_buffer_size = shuffle_buffer_size
-        self.shuffle_examples = shuffle_examples
-        self.steps_to_train = steps_to_train
-        self.num_examples = num_examples
-        self.window_size = window_size
-        self.filter_amount = filter_amount
-        self.export_path = export_path
-        self.freeze = freeze
-        self.use_trt = use_trt
-        self.trt_max_batch_size = trt_max_batch_size
-        self.trt_precision = trt_precision
-        self.lr = lr
-        self.weight_decay = weight_decay
-        self.value_loss_weight = value_loss_weight

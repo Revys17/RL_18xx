@@ -143,8 +143,6 @@ def operating_round_2_game_state(test_game_1830_4p):
 # --- Helper function for specific edge checks (optional, for the USER ACTION section) ---
 def check_edge_exists_in_tensor(idx1: int, idx2: int, edge_index_tensor: torch.Tensor) -> bool:
     """Checks if an undirected edge between idx1 and idx2 exists in the edge_index tensor."""
-    if edge_index_tensor.numel() == 0:
-        return False
     for i in range(edge_index_tensor.shape[1]):
         col = edge_index_tensor[:, i]
         u, v = col[0].item(), col[1].item()
@@ -157,11 +155,6 @@ def test_edge_index(encoder_1830: Encoder_1830, test_game_1830_4p):
     test_game_1830_4p, action_helper = test_game_1830_4p
 
     # Get and check the edge_index created on the initial game state:
-    
-    # Ensure hex_coord_to_idx is populated in the encoder_instance.
-    if not hasattr(encoder_1830, 'hex_coord_to_idx') or not encoder_1830.hex_coord_to_idx:
-        pytest.skip("encoder_instance.hex_coord_to_idx is not populated or missing. Skipping test.")
-
     # Call the method to be tested
     # If this method is part of __init__, this test might need refactoring
     # to check the state after encoder initialization.
@@ -169,13 +162,19 @@ def test_edge_index(encoder_1830: Encoder_1830, test_game_1830_4p):
     encoder_1830._precompute_adjacency(test_game_1830_4p)
 
     # Basic assertions about the output
-    assert hasattr(encoder_1830, 'edge_index'), "edge_index attribute was not set on encoder_instance"
-    assert encoder_1830.edge_index is not None, "edge_index was not set (is None)"
-    assert isinstance(encoder_1830.edge_index, torch.Tensor), "edge_index is not a torch.Tensor"
-    assert encoder_1830.edge_index.dtype == torch.long, "edge_index dtype is not torch.long"
-    assert encoder_1830.edge_index.ndim == 2, "edge_index should be 2-dimensional"
-    if encoder_1830.edge_index.numel() > 0: # Only check shape[0] if not empty
-         assert encoder_1830.edge_index.shape[0] == 3, "edge_index should have 3 rows (source, target, direction)"
+    assert hasattr(encoder_1830, 'base_edge_index'), "edge_index attribute was not set on encoder_instance"
+    assert hasattr(encoder_1830, 'base_edge_attributes'), "edge_index attribute was not set on encoder_instance"
+    assert encoder_1830.base_edge_index is not None, "base_edge_index was not set (is None)"
+    assert encoder_1830.base_edge_attributes is not None, "base_edge_attributes was not set (is None)"
+    assert isinstance(encoder_1830.base_edge_index, torch.Tensor), "base_edge_index is not a torch.Tensor"
+    assert isinstance(encoder_1830.base_edge_attributes, torch.Tensor), "base_edge_attributes is not a torch.Tensor"
+    assert encoder_1830.base_edge_index.dtype == torch.long, "base_edge_index dtype is not torch.long"
+    assert encoder_1830.base_edge_attributes.dtype == torch.long, "base_edge_attributes dtype is not torch.long"
+    assert encoder_1830.base_edge_index.ndim == 2, "base_edge_index should be 2-dimensional"
+    assert encoder_1830.base_edge_attributes.ndim == 1, "base_edge_attributes should be 1-dimensional"
+    assert encoder_1830.base_edge_index.shape[0] == 2, "base_edge_index should have 3 rows (source, target, direction)"
+    assert encoder_1830.base_edge_index.shape[1] == 470, "base_edge_index should have 470 columns"
+    assert encoder_1830.base_edge_attributes.shape[0] == 470, "base_edge_attributes should have 470 elements"
 
     # Spot check adjacencies
     adjacency_list = {
@@ -192,7 +191,7 @@ def test_edge_index(encoder_1830: Encoder_1830, test_game_1830_4p):
         for hex_id2 in encoder_1830.hex_coord_to_idx.keys():
             idx1 = encoder_1830.hex_coord_to_idx[hex_id1]
             idx2 = encoder_1830.hex_coord_to_idx[hex_id2]
-            are_neighbors = check_edge_exists_in_tensor(idx1, idx2, encoder_1830.edge_index)
+            are_neighbors = check_edge_exists_in_tensor(idx1, idx2, encoder_1830.base_edge_index)
 
             if are_neighbors and hex_id2 not in neighbor_list:
                 raise ValueError(f"Edge exists between {hex_id1} and {hex_id2}, but {hex_id2} is not in {neighbor_list}")
@@ -206,7 +205,7 @@ def test_initial_encoding_structure(encoder_1830: Encoder_1830, test_game_1830_4
     num_players = len(g.players)
     assert num_players == 4, "Test requires a 4-player game"
 
-    game_state_tensor, node_features_tensor, edge_index_tensor = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
 
     expected_size = encoder_1830.GAME_STATE_ENCODING_SIZE
     assert game_state_tensor.shape == (
@@ -221,16 +220,22 @@ def test_initial_encoding_structure(encoder_1830: Encoder_1830, test_game_1830_4
     ), f"Expected shape {expected_node_features_size}, got {node_features_tensor.shape}"
     assert node_features_tensor.dtype == float32, "Expected dtype float32"
 
-    expected_edge_index_size = (3, 470)
+    expected_edge_index_size = (2, 470)
     assert (
-        edge_index_tensor.shape == expected_edge_index_size
-    ), f"Expected shape {expected_edge_index_size}, got {edge_index_tensor.shape}"
-    assert edge_index_tensor.dtype == long, "Expected dtype long"
+        edge_index.shape == expected_edge_index_size
+    ), f"Expected shape {expected_edge_index_size}, got {edge_index.shape}"
+    assert edge_index.dtype == long, "Expected dtype long"
+
+    expected_edge_attributes_size = (470,)
+    assert (
+        edge_attributes.shape == expected_edge_attributes_size
+    ), f"Expected shape {expected_edge_attributes_size}, got {edge_attributes.shape}"
+    assert edge_attributes.dtype == long, "Expected dtype long"
 
 def test_initial_game_state_encoding(encoder_1830: Encoder_1830, test_game_1830_4p):
     """Verify the encoding of general game state at the start."""
     g, action_helper = test_game_1830_4p
-    game_state_tensor, node_features_tensor, edge_index_tensor = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
     encoding = game_state_tensor.squeeze(0).numpy()  # Work with numpy array
 
     offset = 0
@@ -441,7 +446,7 @@ def test_encoding_after_bid(encoder_1830: Encoder_1830, test_game_1830_4p):
 
     g.process_action(bid_action)
 
-    game_state_tensor, node_features_tensor, edge_index_tensor = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     player_map = encoder_1830.player_id_to_idx
@@ -550,7 +555,7 @@ def test_encoding_after_purchase(encoder_1830: Encoder_1830, test_game_1830_4p):
     assert buy_action_p2 is not None, "Could not find buy action for P2 on SV"
     g.process_action(buy_action_p2)
 
-    game_state_tensor, node_features_tensor, edge_index_tensor = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     player_map = encoder_1830.player_id_to_idx
@@ -651,7 +656,7 @@ def test_encoding_after_purchase(encoder_1830: Encoder_1830, test_game_1830_4p):
 def test_initial_map_node_features(encoder_1830: Encoder_1830, test_game_1830_4p):
     """Verify the node features encoding for specific hexes at the start."""
     g, _ = test_game_1830_4p
-    _, node_features_tensor, edge_index_tensor = encoder_1830.encode(g)
+    _, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
     node_features = node_features_tensor.numpy()
 
     # --- Check G19 (New York - City) ---
@@ -915,7 +920,7 @@ def test_encoding_after_par(encoder_1830: Encoder_1830, test_game_1830_4p):
     g.process_action(par_action)
 
     # Encode the new state
-    game_state_tensor, node_features_tensor, edge_index_tensor = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     player_map = encoder_1830.player_id_to_idx
@@ -1147,7 +1152,7 @@ def test_encoding_after_par(encoder_1830: Encoder_1830, test_game_1830_4p):
     g.process_action(action_helper.get_all_choices_limited()[-1])
     g.process_action(action_helper.get_all_choices_limited()[-1])
 
-    game_state_tensor, node_features_tensor, edge_index_tensor = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
 
@@ -1350,7 +1355,7 @@ def test_encoding_after_par(encoder_1830: Encoder_1830, test_game_1830_4p):
     g.process_action(action_helper.get_all_choices_limited()[0])
     g.process_action(action_helper.get_all_choices_limited()[-1])
 
-    game_state_tensor, node_features_tensor, edge_index_tensor = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
 
@@ -1589,7 +1594,7 @@ def test_operating_round_2_encoding(encoder_1830: Encoder_1830, operating_round_
     operating_round_2_game_state, action_helper = operating_round_2_game_state
 
     # Test initial encoding
-    game_state_tensor, node_features_tensor, edge_index_tensor = encoder_1830.encode(operating_round_2_game_state)
+    game_state_tensor, node_features_tensor, edge_index_tensor, edge_attributes_tensor = encoder_1830.encode(operating_round_2_game_state)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     # --------------------- Check game_state ---------------------
@@ -1962,7 +1967,7 @@ def test_operating_round_2_encoding(encoder_1830: Encoder_1830, operating_round_
     operating_round_2_game_state.process_action(action_helper.get_all_choices()[0])  # buy a 3 train
 
     # Test that a 3 has been purchased
-    game_state_tensor, node_features_tensor, edge_index_tensor = encoder_1830.encode(operating_round_2_game_state)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(operating_round_2_game_state)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     # --------------------- Check game_state ---------------------
@@ -2186,7 +2191,7 @@ def test_operating_round_2_encoding(encoder_1830: Encoder_1830, operating_round_
     operating_round_2_game_state.process_action(action_helper.get_all_choices()[0])  # [17:13] C&O (DH) places a token on F16 (Scranton)
 
     # Check post-company action encoding
-    game_state_tensor, node_features_tensor, edge_index_tensor = encoder_1830.encode(operating_round_2_game_state)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(operating_round_2_game_state)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     # --------------------- Check game_state ---------------------
@@ -2398,7 +2403,7 @@ def test_operating_round_2_encoding(encoder_1830: Encoder_1830, operating_round_
     operating_round_2_game_state.process_action(action_helper.get_all_choices_limited()[0])  # NYC discard train
 
     # Check upgraded tile and discarded train encodings
-    game_state_tensor, node_features_tensor, edge_index_tensor = encoder_1830.encode(operating_round_2_game_state)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(operating_round_2_game_state)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     # --------------------- Check game_state ---------------------
@@ -2652,7 +2657,7 @@ def test_operating_round_2_encoding(encoder_1830: Encoder_1830, operating_round_
     operating_round_2_game_state.process_action(action_helper.get_all_choices_limited()[-2])  # Buy discarded train
 
     # Check final state
-    game_state_tensor, node_features_tensor, edge_index_tensor = encoder_1830.encode(operating_round_2_game_state)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(operating_round_2_game_state)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     # --------------------- Check game_state ---------------------

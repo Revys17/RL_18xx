@@ -1410,7 +1410,6 @@ def test_1830_manual_actions():
     expected_results = {"Player 1": 1658, "Player 2": 1967, "Player 3": 345, "Player 4": 720}
     assert player_results == expected_results, "Player results do not match expected results"
     assert next(iter(g.result().items()))[0] == "2", "Player 2 should be the winner"
-    return g
 
 
 def test_1830_from_import():

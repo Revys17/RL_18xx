@@ -135,5 +135,5 @@ dmypy.json
 
 # User-specific
 logs/
-training_data/
+training_examples/
 model_checkpoints/

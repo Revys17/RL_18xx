@@ -170,7 +170,9 @@ class Encoder_1830(metaclass=Singleton):
             raise ValueError("Adjacency calculation resulted in no edges. Check neighbor logic.")
 
         edge_np = np.unique(np.array(edges), axis=0).T
-        self.edge_index = from_numpy(edge_np).long()
+        edge_index = from_numpy(edge_np)
+        self.base_edge_index = edge_index[0:2, :].long()
+        self.base_edge_attributes = edge_index[2, :].long()
         # LOGGER.debug(f"Precomputed edge_index with shape: {self.edge_index.shape}")
 
     def _calculate_encoding_size(self, num_players: int) -> int:
@@ -251,7 +253,7 @@ class Encoder_1830(metaclass=Singleton):
             
             self.initialized = True
 
-    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor]:
+    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         start_time = time.perf_counter()
         # LOGGER.debug("Starting encoding.")
 
@@ -259,7 +261,7 @@ class Encoder_1830(metaclass=Singleton):
 
         game_state_tensor = self.encode_game_state(game)
         node_features_tensor = self.get_node_features(game)
-        edge_index_tensor = self.get_edge_index(game)
+        base_edge_index_tensor, base_edge_attributes_tensor = self.get_edge_index(game)
 
         end_time = time.perf_counter()
         duration_ms = (end_time - start_time) * 1000
@@ -267,7 +269,7 @@ class Encoder_1830(metaclass=Singleton):
         # LOGGER.debug(f"  Flat state shape: {game_state_tensor.shape}")
         # LOGGER.debug(f"  Node features shape: {node_features_tensor.shape}")
         # LOGGER.debug(f"  Edge index shape: {edge_index_tensor.shape}")
-        return game_state_tensor, node_features_tensor, edge_index_tensor
+        return game_state_tensor, node_features_tensor, base_edge_index_tensor, base_edge_attributes_tensor
 
     def encode_game_state(self, game: BaseGame) -> Tensor:
         start_time = time.perf_counter()
@@ -680,9 +682,9 @@ class Encoder_1830(metaclass=Singleton):
         LOGGER.debug(f"Game State Encoding finished in {duration_ms:.3f} ms.")
         return tensor_encoding
     
-    def get_edge_index(self, game: BaseGame) -> Tensor:
+    def get_edge_index(self, game: BaseGame) -> Tuple[Tensor, Tensor]:
         self.initialize(game)
-        return self.edge_index
+        return self.base_edge_index, self.base_edge_attributes
 
     def get_node_features(self, game: BaseGame) -> Tensor:
         start_time = time.perf_counter()
@@ -801,4 +803,4 @@ class Encoder_1830(metaclass=Singleton):
         end_time = time.perf_counter()
         duration_ms = (end_time - start_time) * 1000
         LOGGER.debug(f"Map encoding finished in {duration_ms:.3f} ms.")
-        return from_numpy(node_features)
+        return from_numpy(node_features).float()
