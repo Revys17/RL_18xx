@@ -39,7 +39,8 @@ def get_current_loop_config():
         "num_loop_iterations": 5,
         "num_games_per_iteration": 25,
         "num_threads": 2,
-        "training_params": TrainingConfig().to_json()
+        "training_params": TrainingConfig().to_json(),
+        "num_readouts": 32
     }
 
     if not LOOP_CONFIG_FILE_PATH.exists():
@@ -55,6 +56,7 @@ def get_current_loop_config():
         config_for_form["num_loop_iterations"] = loaded_config_json.get("num_loop_iterations", default_config["num_loop_iterations"])
         config_for_form["num_games_per_iteration"] = loaded_config_json.get("num_games_per_iteration", default_config["num_games_per_iteration"])
         config_for_form["num_threads"] = loaded_config_json.get("num_threads", default_config["num_threads"])
+        config_for_form["num_readouts"] = loaded_config_json.get("num_readouts", default_config["num_readouts"])
 
         loaded_training_config = loaded_config_json.get("training_config", {})
         current_training_params = default_config["training_params"].copy() # Start with defaults
@@ -138,7 +140,7 @@ def api_loop_config_handler():
             return jsonify({"error": "Invalid JSON payload"}), 400
 
         # Basic validation (can be expanded)
-        required_keys = ["num_loop_iterations", "num_games_per_iteration", "num_threads", "training_config"]
+        required_keys = ["num_loop_iterations", "num_games_per_iteration", "num_threads", "training_config", "num_readouts"]
         if not all(key in data for key in required_keys):
             return jsonify({"error": "Missing required keys in configuration data.", "required_keys": required_keys}), 400
         
@@ -146,7 +148,8 @@ def api_loop_config_handler():
         if not isinstance(data.get("num_loop_iterations"), int) or \
            not isinstance(data.get("num_games_per_iteration"), int) or \
            not isinstance(data.get("num_threads"), int) or \
-           not isinstance(data.get("training_config"), dict):
+           not isinstance(data.get("training_config"), dict) or \
+           not isinstance(data.get("num_readouts"), int):
             return jsonify({"error": "Invalid data types in configuration."}), 400
 
         try:
@@ -193,16 +196,18 @@ def index():
             num_loop_iterations_str = request.form.get('num_loop_iterations')
             num_games_str = request.form.get('num_games_per_iteration')
             num_threads_str = request.form.get('num_threads')
+            num_readouts_str = request.form.get('num_readouts')
 
-            if not num_loop_iterations_str or not num_games_str or not num_threads_str:
+            if not num_loop_iterations_str or not num_games_str or not num_threads_str or not num_readouts_str:
                 flash("Number of loop iterations, self-play games, and threads are required.", "error")
                 return redirect(url_for('index'))
             
             num_loop_iterations = int(num_loop_iterations_str)
             num_games = int(num_games_str)
             num_threads = int(num_threads_str)
+            num_readouts = int(num_readouts_str)
 
-            if num_loop_iterations <= 0 or num_games <= 0 or num_threads <= 0:
+            if num_loop_iterations <= 0 or num_games <= 0 or num_threads <= 0 or num_readouts <= 0:
                 flash("Loop iterations, number of games, and threads must be positive integers.", "error")
                 return redirect(url_for('index'))
 
@@ -232,7 +237,8 @@ def index():
                 "num_loop_iterations": num_loop_iterations,
                 "num_games_per_iteration": num_games,
                 "num_threads": num_threads,
-                "training_config": final_training_config  # Use "training_config" as key for the file
+                "training_config": final_training_config,  # Use "training_config" as key for the file
+                "num_readouts": num_readouts
             }
             
             save_loop_config(loop_config_to_save)

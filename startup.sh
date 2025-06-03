@@ -26,15 +26,9 @@ DASHBOARD_PID=$!
 # Give services time to start
 sleep 3
 
-# Start Training Loop
-echo "Starting AlphaZero training loop..."
-uv run python -m rl18xx.agent.alphazero.loop --num-loop-iterations 1 --num-games-per-iteration 100 --num-threads 10 &
-LOOP_PID=$!
-
 echo "All processes started:"
 echo "  - TensorBoard: http://localhost:6006 (PID: $TENSORBOARD_PID)"
 echo "  - Dashboard: http://localhost:5001 (PID: $DASHBOARD_PID)"
-echo "  - Training Loop: PID $LOOP_PID"
 echo ""
 echo "Press Ctrl+C to stop all processes."
 

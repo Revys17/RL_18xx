@@ -131,7 +131,7 @@ class SelfPlayConfig:
     dirichlet_noise_alpha: float = 0.03
     dirichlet_noise_weight: float = 0.25
     softpick_move_cutoff: int = 500
-    num_readouts: int = 32
+    num_readouts: int = 200
     parallel_readouts: int = 8
     network: Any = None
     metrics: Optional[Metrics] = None

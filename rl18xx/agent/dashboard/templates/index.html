@@ -523,6 +523,13 @@
                                value="{{ config_form.num_threads if config_form.num_threads is not none else '' }}"
                                placeholder="e.g., 2" required>
                     </div>
+
+                    <div class="form-group">
+                        <label for="num_readouts">Number of Readouts</label>
+                        <input type="number" id="num_readouts" name="num_readouts"
+                               value="{{ config_form.num_readouts if config_form.num_readouts is not none else '' }}"
+                               placeholder="e.g., 32" required>
+                    </div>
                     
                     <div style="margin: 15px 0;">
                         <button type="button" class="toggle-btn" onclick="endAfterCurrentLoop()" style="background-color: #dc3545;">
@@ -598,7 +605,7 @@
                             {% for game_data in games_in_progress %}
                                 <div class="game-item" data-loop="{{ game_data.loop_number|default('') }}">
                                     <span class="game-id">{{ game_data.game_id }}</span>
-                                    <span class="game-time start-time" data-datetime="{{ game_data.start_time_str|default('') }}">
+                                    <span class="game-time start-time" data-timestamp="{{ game_data.start_time_unix|default(0) }}">
                                         {{ game_data.start_time_str|default('N/A') }}
                                     </span>
                                     <div class="game-progress">
@@ -615,7 +622,7 @@
                                             {{ moves_played }}/{{ max_steps }}
                                         </div>
                                     </div>
-                                    <span class="game-time last-update-time" data-datetime="{{ game_data.last_update_str|default('') }}">
+                                    <span class="game-time last-update-time" data-timestamp="{{ game_data.last_update_unix|default(0) }}">
                                         {{ game_data.last_update_str|default('N/A') }}
                                     </span>
                                     <span class="game-status">
@@ -646,10 +653,12 @@
         let allGamesData = [];
         let totalGamesThisIteration = {{ status.total_games_this_iteration|default(0) }};
 
-        function formatTimeAgo(dateString) {
-            if (!dateString || dateString === 'N/A') return 'N/A';
-            const date = new Date(dateString);
-            if (isNaN(date.getTime())) return 'Invalid';
+        function formatTimeAgo(unixTimestampSeconds) {
+            if (unixTimestampSeconds === undefined || unixTimestampSeconds === null || unixTimestampSeconds <= 0) {
+                return 'N/A';
+            }
+            const date = new Date(unixTimestampSeconds * 1000);
+            if (isNaN(date.getTime())) return 'Invalid Date';
 
             const now = new Date();
             const seconds = Math.round((now - date) / 1000);
@@ -744,8 +753,8 @@
                 games.forEach(game => {
                     const status = game.status || 'N/A';
                     const moves = game.moves_played !== undefined ? parseInt(game.moves_played, 10) : 0;
-                    const startTime = formatTimeAgo(game.start_time_str);
-                    const lastUpdate = formatTimeAgo(game.last_update_str);
+                    const startTime = formatTimeAgo(game.start_time_unix);
+                    const lastUpdate = formatTimeAgo(game.last_update_unix);
                     
                     let badgeClass = 'badge-primary';
                     if (status === 'Error') badgeClass = 'badge-danger';
@@ -812,16 +821,22 @@
         }
 
         function initialRenderRelativeTimes() {
-            document.querySelectorAll('.start-time[data-datetime]').forEach(el => {
-                const datetimeStr = el.getAttribute('data-datetime');
-                if (datetimeStr) {
-                    el.textContent = formatTimeAgo(datetimeStr);
+            document.querySelectorAll('.start-time[data-timestamp]').forEach(el => {
+                const timestampStr = el.getAttribute('data-timestamp');
+                if (timestampStr) {
+                    const timestamp = parseFloat(timestampStr);
+                    if (!isNaN(timestamp)) {
+                        el.textContent = formatTimeAgo(timestamp);
+                    }
                 }
             });
-            document.querySelectorAll('.last-update-time[data-datetime]').forEach(el => {
-                const datetimeStr = el.getAttribute('data-datetime');
-                if (datetimeStr) {
-                    el.textContent = formatTimeAgo(datetimeStr);
+            document.querySelectorAll('.last-update-time[data-timestamp]').forEach(el => {
+                const timestampStr = el.getAttribute('data-timestamp');
+                if (timestampStr) {
+                    const timestamp = parseFloat(timestampStr);
+                    if (!isNaN(timestamp)) {
+                        el.textContent = formatTimeAgo(timestamp);
+                    }
                 }
             });
         }
