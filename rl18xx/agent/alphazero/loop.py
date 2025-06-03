@@ -3,21 +3,23 @@ import os
 import json
 import logging
 import gc
-import shutil # Added for cleanup
+import shutil
 from datetime import datetime
-from torch.utils.tensorboard import SummaryWriter
-from dataclasses import fields
+from dataclasses import dataclass, asdict
 from rl18xx.agent.alphazero.checkpointer import get_latest_model
 from rl18xx.agent.alphazero.config import SelfPlayConfig, TrainingConfig
 from rl18xx.agent.alphazero.metrics import Metrics
 from rl18xx.agent.alphazero.self_play import SelfPlay, SELF_PLAY_GAMES_STATUS_PATH
-from rl18xx.agent.alphazero.train import train_latest_model
+from rl18xx.agent.alphazero.train import train_latest_model, train, TrainingMetrics
 from pathlib import Path
-from rl18xx.agent.alphazero.model import AlphaZeroModel
+import signal
+import sys
+import psutil
+import atexit
 
 LOGGER = logging.getLogger(__name__)
 LOOP_LOCK_FILE = Path("loop.lock")
-RUNTIME_CONFIG_PATH = Path("runtime_config.json")
+LOOP_CONFIG_PATH = Path("loop_config.json")
 LOOP_STATUS_PATH = Path("loop_status.json")
 TENSORBOARD_LOG_DIR_BASE = Path("runs/alphazero_runs")
 SELF_PLAY_LOGS_PATH = Path("logs/self_play")
@@ -31,6 +33,7 @@ def setup_logging(level: int, log_file: str, console: bool = False) -> logging.L
     console_handler.setFormatter(log_formatter)
 
     # File handler
+    Path(log_file).parent.mkdir(parents=True, exist_ok=True)
     file_handler = logging.FileHandler(log_file)
     file_handler.setFormatter(log_formatter)
 
@@ -41,68 +44,121 @@ def setup_logging(level: int, log_file: str, console: bool = False) -> logging.L
         root_logger.addHandler(console_handler)
     root_logger.addHandler(file_handler)
 
+@dataclass
+class LoopConfig:
+    num_loop_iterations: int
+    num_games_per_iteration: int
+    num_threads: int
+    training_config: TrainingConfig
 
-def load_runtime_config(
-    cli_default_num_games: int,
-    program_default_training_params: dict,
-    cli_default_num_threads: int
-):
-    """Loads runtime configuration, starting with program defaults and overriding from JSON file."""
-    effective_num_games = cli_default_num_games
-    effective_training_params = {}
-    effective_num_threads = cli_default_num_threads
-
-    for param_name, param_val in program_default_training_params.items():
-        if isinstance(param_val, Path):
-            effective_training_params[param_name] = str(param_val)
-        else:
-            effective_training_params[param_name] = param_val
-
-    if not RUNTIME_CONFIG_PATH.exists():
-        default_save_config = {
-            "num_games_per_iteration": effective_num_games,
-            "training_params": effective_training_params,
-            "num_threads": effective_num_threads
-        }
-        with open(RUNTIME_CONFIG_PATH, 'w') as f:
-            json.dump(default_save_config, f, indent=4)
-        LOGGER.info(f"Created default {RUNTIME_CONFIG_PATH}")
-        return effective_num_games, effective_training_params, effective_num_threads
+@dataclass
+class LoopMetrics:
+    """Tracks metrics across the entire training loop"""
+    loop_iteration: int = 0
+    games_played_total: int = 0
+    training_examples_total: int = 0
+    training_losses: list = None
+    policy_losses: list = None
+    value_losses: list = None
+    validation_losses: list = None
+    validation_policy_losses: list = None
+    validation_value_losses: list = None
+    game_lengths: list = None
+    win_rates_by_player: dict = None
     
+    def __post_init__(self):
+        if self.training_losses is None:
+            self.training_losses = []
+        if self.policy_losses is None:
+            self.policy_losses = []
+        if self.value_losses is None:
+            self.value_losses = []
+        if self.validation_losses is None:
+            self.validation_losses = []
+        if self.validation_policy_losses is None:
+            self.validation_policy_losses = []
+        if self.validation_value_losses is None:
+            self.validation_value_losses = []
+        if self.game_lengths is None:
+            self.game_lengths = []
+        if self.win_rates_by_player is None:
+            self.win_rates_by_player = {0: [], 1: [], 2: [], 3: []}
+
+def load_loop_config(
+    num_loop_iterations: int,
+    num_games_per_iteration: int,
+    num_threads: int,
+    default_training_config: TrainingConfig
+) -> LoopConfig:
     try:
-        with open(RUNTIME_CONFIG_PATH, 'r') as f:
-            overrides = json.load(f)
-        
-        effective_num_games = overrides.get("num_games_per_iteration", effective_num_games)
-        effective_num_threads = overrides.get("num_threads", effective_num_threads)
+        if not LOOP_CONFIG_PATH.exists():
+            loop_config = LoopConfig(
+                num_loop_iterations=num_loop_iterations,
+                num_games_per_iteration=num_games_per_iteration,
+                num_threads=num_threads,
+                training_config=default_training_config.to_json()
+            )
 
-        if "training_params" in overrides:
-            for key, value in overrides["training_params"].items():
-                if key in effective_training_params: # Only override known params
-                    effective_training_params[key] = value
-                else:
-                    LOGGER.warning(f"Unknown training parameter '{key}' in runtime_config.json will be ignored.")
-        LOGGER.info(f"Loaded runtime configuration from {RUNTIME_CONFIG_PATH}")
-    except json.JSONDecodeError as e:
-        LOGGER.error(f"Error decoding {RUNTIME_CONFIG_PATH}: {e}. Using defaults.")
+            with open(LOOP_CONFIG_PATH, 'w') as f:
+                json.dump(asdict(loop_config), f, indent=4)
+
+            loop_config.training_config = default_training_config
+            return loop_config
+
+        with open(LOOP_CONFIG_PATH, 'r') as f:
+            loop_config_json = json.load(f)
+        training_config = TrainingConfig.from_json(loop_config_json["training_config"])
+        loop_config = LoopConfig(
+            num_loop_iterations=loop_config_json["num_loop_iterations"],
+            num_games_per_iteration=loop_config_json["num_games_per_iteration"],
+            num_threads=loop_config_json["num_threads"],
+            training_config=training_config
+        )
+        return loop_config
     except Exception as e:
-        LOGGER.error(f"Error loading {RUNTIME_CONFIG_PATH}: {e}. Using defaults.")
-    return effective_num_games, effective_training_params, effective_num_threads
-
+        LOGGER.error(f"Error loading loop config: {e}. Using default config.")
+        return LoopConfig(
+            num_loop_iterations=num_loop_iterations,
+            num_games_per_iteration=num_games_per_iteration,
+            num_threads=num_threads,
+            training_config=default_training_config
+        )
 
 def update_loop_status(status_data: dict):
     """Writes the current loop status to a JSON file."""
     try:
         with open(LOOP_STATUS_PATH, 'w') as f:
-            json.dump(status_data, f, indent=4)
+            json.dump(status_data, f, indent=4, default=str)
     except Exception as e:
         LOGGER.error(f"Error writing to {LOOP_STATUS_PATH}: {e}")
 
+def save_loop_metrics(metrics: LoopMetrics, filepath: Path):
+    """Saves the loop metrics to a JSON file."""
+    try:
+        metrics_dict = asdict(metrics)
+        with open(filepath, 'w') as f:
+            json.dump(metrics_dict, f, indent=4)
+    except Exception as e:
+        LOGGER.error(f"Error saving loop metrics: {e}")
+
+def load_loop_metrics(filepath: Path) -> LoopMetrics:
+    """Loads loop metrics from a JSON file."""
+    try:
+        if filepath.exists():
+            with open(filepath, 'r') as f:
+                metrics_dict = json.load(f)
+            return LoopMetrics(**metrics_dict)
+    except Exception as e:
+        LOGGER.error(f"Error loading loop metrics: {e}")
+    return LoopMetrics()
+
 def cleanup_files():
-    if RUNTIME_CONFIG_PATH.exists():
-        RUNTIME_CONFIG_PATH.unlink()
+    if LOOP_CONFIG_PATH.exists():
+        LOOP_CONFIG_PATH.unlink()
     if LOOP_STATUS_PATH.exists():
         LOOP_STATUS_PATH.unlink()
+    if LOOP_LOCK_FILE.exists():
+        LOOP_LOCK_FILE.unlink()
     for item in TENSORBOARD_LOG_DIR_BASE.iterdir():
         if item.is_dir():
             shutil.rmtree(item)
@@ -113,8 +169,6 @@ def cleanup_files():
             shutil.rmtree(item)
         else:
             item.unlink()
-    if LOOP_LOCK_FILE.exists():
-        LOOP_LOCK_FILE.unlink()
 
 def run_self_play(game_idx_in_iteration: int, tb_log_dir: str, timestamp: str, loop: int):
     process_root_logger = logging.getLogger()
@@ -135,7 +189,8 @@ def run_self_play(game_idx_in_iteration: int, tb_log_dir: str, timestamp: str, l
             network=model, 
             metrics=Metrics(os.path.join(tb_log_dir, f"game_L{loop}_G{game_idx_in_iteration}")),
             global_step=loop, 
-            game_idx_in_iteration=game_idx_in_iteration
+            game_idx_in_iteration=game_idx_in_iteration,
+            game_id=f"L{loop}_G{game_idx_in_iteration}"
         )
         selfplay = SelfPlay(self_play_config)
         selfplay.run_game()
@@ -149,6 +204,31 @@ def run_self_play(game_idx_in_iteration: int, tb_log_dir: str, timestamp: str, l
             handler.close()
             process_root_logger.removeHandler(handler)
 
+def cleanup_and_exit(signum=None, frame=None):
+    LOGGER.info("--- Received interrupt signal, cleaning up ---")
+    parent = psutil.Process(os.getpid())
+    children = parent.children(recursive=True)
+    
+    for child in children:
+        try:
+            LOGGER.info(f"Terminating child process {child.pid}")
+            child.terminate()
+        except psutil.NoSuchProcess:
+            pass
+    
+    # Give them a moment to terminate gracefully
+    gone, alive = psutil.wait_procs(children, timeout=3)
+    
+    # Force kill any remaining processes
+    for child in alive:
+        try:
+            LOGGER.warning(f"Force killing child process {child.pid}")
+            child.kill()
+        except psutil.NoSuchProcess:
+            pass
+    if LOOP_LOCK_FILE.exists():
+        LOOP_LOCK_FILE.unlink()
+
 def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: int, cleanup: bool):
     if cleanup:
         cleanup_files()
@@ -160,104 +240,196 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     setup_logging(logging.INFO, f"logs/loop/loop_{timestamp}.log")
+
     tb_log_dir = os.path.join(TENSORBOARD_LOG_DIR_BASE, f"experiment_{timestamp}")
     metrics = Metrics(tb_log_dir)
-    _base_tc_defaults = TrainingConfig() # Instance to get defaults
-    PROGRAM_DEFAULT_TRAINING_PARAMS = {
-        field.name: getattr(_base_tc_defaults, field.name)
-        for field in fields(TrainingConfig)
-    }
-    del _base_tc_defaults
+    self_play_logs_path = Path("logs/self_play")
+    self_play_logs_path.mkdir(parents=True, exist_ok=True)
+    default_training_config = TrainingConfig()
+    
+    # Initialize loop metrics
+    loop_metrics_path = Path(f"logs/loop/loop_metrics_{timestamp}.json")
+    loop_metrics = LoopMetrics()
+
+    # Register signal handlers
+    signal.signal(signal.SIGINT, cleanup_and_exit)
+    signal.signal(signal.SIGTERM, cleanup_and_exit)
+    atexit.register(cleanup_and_exit)
 
     try:
         for loop in range(num_loop_iterations):
             LOGGER.info(f"--- Starting loop {loop+1}/{num_loop_iterations} ---")
-            (
-                current_num_games_per_iteration,
-                current_training_params_dict,
-                current_num_threads
-            ) = load_runtime_config(
+            loop_config = load_loop_config(
+                num_loop_iterations,
                 num_games_per_iteration,
-                PROGRAM_DEFAULT_TRAINING_PARAMS,
-                num_threads
+                num_threads,
+                default_training_config
             )
-            LOGGER.info(f"Loop {loop+1}: Using {current_num_games_per_iteration} games per iteration.")
-            LOGGER.info(f"Loop {loop+1}: Using training params: {current_training_params_dict}")
-            LOGGER.info(f"Loop {loop+1}: Using {current_num_threads} processes for self-play.")
 
-            metrics.add_scalar("Config/Num_Games_per_Iteration", current_num_games_per_iteration, loop)
-            for param_name, param_val in current_training_params_dict.items():
-                if isinstance(param_val, (int, float)): # Tensorboard only scalars
-                    metrics.add_scalar(f"Config/Training_{param_name}", param_val, loop)
-            metrics.add_scalar("Config/Num_Threads", current_num_threads, loop)
+            # See if the run config has been updated and we should end early
+            if loop >= loop_config.num_loop_iterations:
+                LOGGER.info(f"Desired number of loops was updated - Exiting early.")
+                break
+
+            LOGGER.info(f"Loop {loop+1}: Using {loop_config.num_games_per_iteration} games per iteration.")
+            LOGGER.info(f"Loop {loop+1}: Using training params: {loop_config.training_config}")
+            LOGGER.info(f"Loop {loop+1}: Using {loop_config.num_threads} processes for self-play.")      
+            loop_metrics.loop_iteration = loop
+            
             status = {
                 "current_loop": loop + 1,
-                "total_loops": num_loop_iterations,
+                "target_loop_count": loop_config.num_loop_iterations,
                 "games_completed_this_iteration": 0,
-                "total_games_this_iteration": current_num_games_per_iteration,
+                "total_games_this_iteration": loop_config.num_games_per_iteration,
                 "status_message": "Running self-play games",
-                "tensorboard_log_dir": tb_log_dir
-            }
+                "tensorboard_log_dir": tb_log_dir,
+                "loop_metrics": {
+                    "total_games_played": loop_metrics.games_played_total,
+                    "total_training_examples": loop_metrics.training_examples_total,
+                    "avg_training_loss": sum(loop_metrics.training_losses[-10:]) / len(loop_metrics.training_losses[-10:]) if loop_metrics.training_losses else 0,
+                    "avg_policy_loss": sum(loop_metrics.policy_losses[-10:]) / len(loop_metrics.policy_losses[-10:]) if loop_metrics.policy_losses else 0,
+                    "avg_value_loss": sum(loop_metrics.value_losses[-10:]) / len(loop_metrics.value_losses[-10:]) if loop_metrics.value_losses else 0
+                }
+            }      
             update_loop_status(status)
             
             # Create the directory for self-play logs once per run, if not already handled by cleanup
-            self_play_logs_path = Path("logs/self_play")
-            self_play_logs_path.mkdir(parents=True, exist_ok=True)
 
             games_completed_count = 0
-            with ProcessPoolExecutor(max_workers=current_num_threads) as executor:
-                futures = [executor.submit(run_self_play, i, tb_log_dir, timestamp, loop) for i in range(current_num_games_per_iteration)]
+            game_results = []  # Track results for win rate calculation
+            game_lengths_this_iteration = []
+            executor = ProcessPoolExecutor(max_workers=loop_config.num_threads)
+            
+            try:
+                futures = [executor.submit(run_self_play, i, tb_log_dir, timestamp, loop) for i in range(loop_config.num_games_per_iteration)]
                 for i, future in enumerate(as_completed(futures)):
                     try:
                         future.result() # Wait for game to complete and raise exceptions if any
                         games_completed_count += 1
                         status["games_completed_this_iteration"] = games_completed_count
-                        status["status_message"] = f"Self-play: {games_completed_count}/{current_num_games_per_iteration} games completed."
+                        status["status_message"] = f"Self-play: {games_completed_count}/{loop_config.num_games_per_iteration} games completed."
                         update_loop_status(status)
-                        # Log to TensorBoard - global step for games can be loop * total_games + current_game
-                        # Or simply games completed per iteration at loop step
-                        metrics.add_scalar("SelfPlay/Progress_in_Iteration", (games_completed_count / current_num_games_per_iteration) * 100, loop)
-
+                        metrics.add_scalar("SelfPlay/Progress_in_Iteration", (games_completed_count / loop_config.num_games_per_iteration) * 100, loop)
                     except Exception as e:
                         LOGGER.error(f"Error in self-play game {i+1}: {e}", exc_info=True)
                         status["status_message"] = f"Error in self-play game {i+1}. Check logs."
                         update_loop_status(status)
+            finally:
+                executor.shutdown(wait=True)
 
             metrics.add_scalar("SelfPlay/Completed_Games_Total_for_Iteration", games_completed_count, loop)
+            loop_metrics.games_played_total += games_completed_count
+            
+            # Collect game statistics from status files
+            try:
+                for game_file in SELF_PLAY_GAMES_STATUS_PATH.glob(f"L{loop}_G*.json"):
+                    with open(game_file, 'r') as f:
+                        game_data = json.load(f)
+                    if game_data.get("status") == "Completed":
+                        game_lengths_this_iteration.append(game_data.get("moves_played", 0))
+                        loop_metrics.game_lengths.append(game_data.get("moves_played", 0))
+                
+                # Calculate average game length for this iteration
+                if game_lengths_this_iteration:
+                    avg_game_length = sum(game_lengths_this_iteration) / len(game_lengths_this_iteration)
+                    metrics.add_scalar("SelfPlay/Avg_Game_Length", avg_game_length, loop)
+                    LOGGER.info(f"Loop {loop+1}: Average game length: {avg_game_length:.1f} moves")
+            except Exception as e:
+                LOGGER.error(f"Error collecting game statistics: {e}")
 
             status["status_message"] = "Self-play phase completed. Starting training."
             update_loop_status(status)
             LOGGER.info(f"--- Starting training on self-play data ({games_completed_count} games) ---")
-            try:
-                # Filter params for TrainingConfig constructor to avoid unexpected keyword arguments
-                valid_tc_keys = {f.name for f in fields(TrainingConfig)}
-                filtered_training_params_for_constructor = {
-                    k: v for k, v in current_training_params_dict.items() if k in valid_tc_keys
-                }
-                training_config_instance = TrainingConfig(**filtered_training_params_for_constructor)
-            except TypeError as e:
-                LOGGER.error(f"Error creating TrainingConfig with params {current_training_params_dict}: {e}. Using default TrainingConfig.")
-                training_config_instance = TrainingConfig()
+            training_config = loop_config.training_config
 
-            training_config_instance.metrics = metrics
-            training_config_instance.global_step = loop
-            train_latest_model(training_config_instance)
+            if not isinstance(training_config, TrainingConfig):
+                LOGGER.error(f"FIX THIS: Training config is not a TrainingConfig: {training_config}")
+                training_config = TrainingConfig.from_json(training_config)
+
+            training_config.metrics = metrics
+            training_config.global_step = loop
+            
+            # Get the model and train it, capturing metrics
+            model = get_latest_model("model_checkpoints")
+            training_config.train_dir = training_config.root_dir / f"selfplay/{model.get_name()}"
+            training_config.val_dir = training_config.root_dir / f"holdout/{model.get_name()}"
+            
+            # Train the model and capture metrics
+            train_metrics = train(training_config, model)
+            
+            # Update loop metrics with training results
+            if train_metrics and train_metrics.epochs_trained > 0:
+                loop_metrics.training_losses.append(train_metrics.avg_total_loss)
+                metrics.add_scalar("Training/Total_Loss", train_metrics.avg_total_loss, loop)
+                
+                loop_metrics.policy_losses.append(train_metrics.avg_policy_loss)
+                metrics.add_scalar("Training/Policy_Loss", train_metrics.avg_policy_loss, loop)
+                
+                loop_metrics.value_losses.append(train_metrics.avg_value_loss)
+                metrics.add_scalar("Training/Value_Loss", train_metrics.avg_value_loss, loop)
+                
+                # Log per-epoch metrics
+                for epoch_idx, epoch_loss in enumerate(train_metrics.epoch_losses):
+                    metrics.add_scalar(f"Training/Epoch_Loss/Loop{loop}", epoch_loss, epoch_idx)
+                    
+                if train_metrics.val_total_loss > 0:
+                    loop_metrics.validation_losses.append(train_metrics.val_total_loss)
+                    metrics.add_scalar("Training/Val_Total_Loss", train_metrics.val_total_loss, loop)
+                    
+                    loop_metrics.validation_policy_losses.append(train_metrics.val_policy_loss)
+                    metrics.add_scalar("Training/Val_Policy_Loss", train_metrics.val_policy_loss, loop)
+                    
+                    loop_metrics.validation_value_losses.append(train_metrics.val_value_loss)
+                    metrics.add_scalar("Training/Val_Value_Loss", train_metrics.val_value_loss, loop)
+                    
+                loop_metrics.training_examples_total += train_metrics.training_examples
+                metrics.add_scalar("Training/Examples_This_Iteration", train_metrics.training_examples, loop)
+                metrics.add_scalar("Training/Examples_Total", loop_metrics.training_examples_total, loop)
+                    
+                LOGGER.info(f"Loop {loop+1} training metrics - Total Loss: {train_metrics.avg_total_loss:.4f}, "
+                           f"Policy Loss: {train_metrics.avg_policy_loss:.4f}, Value Loss: {train_metrics.avg_value_loss:.4f}, "
+                           f"Examples: {train_metrics.training_examples}")
+            
             LOGGER.info(f"--- Finished training on self-play data ---")
 
             status["status_message"] = f"Loop {loop+1} training complete. Preparing for next loop."
+            status["loop_metrics"].update({
+                "total_games_played": loop_metrics.games_played_total,
+                "total_training_examples": loop_metrics.training_examples_total,
+                "latest_training_loss": loop_metrics.training_losses[-1] if loop_metrics.training_losses else None,
+                "latest_policy_loss": loop_metrics.policy_losses[-1] if loop_metrics.policy_losses else None,
+                "latest_value_loss": loop_metrics.value_losses[-1] if loop_metrics.value_losses else None
+            })
             update_loop_status(status)
             metrics.add_scalar("Loop/Progress", (loop + 1) / num_loop_iterations * 100, loop)
             
-            gc.collect() # Explicit garbage collection at end of loop
+            # Save loop metrics after each iteration
+            save_loop_metrics(loop_metrics, loop_metrics_path)
+            
+            gc.collect()
     except Exception as e:
-        LOGGER.error(f"Error in loop {loop+1}: {e}", exc_info=True)
-    except KeyboardInterrupt as e:
-        LOGGER.info("--- Keyboard interrupt received ---")
+        LOGGER.error(f"Error in loop: {e}", exc_info=True)
+        status["status_message"] = f"Error in loop: {e}"
+        update_loop_status(status)
+        raise
     finally:
         if LOOP_LOCK_FILE.exists():
             LOOP_LOCK_FILE.unlink()
 
     LOGGER.info("--- Finished all loops ---")
+    
+    # Final save of loop metrics
+    save_loop_metrics(loop_metrics, loop_metrics_path)
+    LOGGER.info(f"Loop metrics saved to {loop_metrics_path}")
+    
+    # Log summary statistics
+    if loop_metrics.training_losses:
+        LOGGER.info(f"Final average training loss: {sum(loop_metrics.training_losses) / len(loop_metrics.training_losses):.4f}")
+    if loop_metrics.game_lengths:
+        LOGGER.info(f"Average game length across all loops: {sum(loop_metrics.game_lengths) / len(loop_metrics.game_lengths):.1f} moves")
+    LOGGER.info(f"Total games played: {loop_metrics.games_played_total}")
+    LOGGER.info(f"Total training examples: {loop_metrics.training_examples_total}")
+    
     metrics.close()
     exit(0)
 
@@ -268,7 +440,7 @@ if __name__ == "__main__":
     multiprocessing.set_start_method('spawn', force=True)
     parser = argparse.ArgumentParser(description="Run AlphaZero training loop")
     parser.add_argument(
-        "--num_loop_iterations", type=int, default=100, help="Number of iterations of the full training loop"
+        "--num_loop_iterations", type=int, default=5, help="Number of iterations of the full training loop"
     )
     parser.add_argument(
         "--num_games_per_iteration", type=int, default=25, help="Number of self-play games to run per iteration"

@@ -111,24 +111,21 @@ class BaseAction:
             else None
         )
         obj.created_at = data.get("created_at", time.time())
-        obj.auto_actions = [BaseAction.action_from_dict(auto_data, game) for auto_data in data.get("auto_actions", [])]
+        obj.auto_actions = [BaseAction.action_from_dict(auto_data, game) for auto_data in data.get("auto_actions", None) or []]
 
         return obj
 
     def to_dict(self) -> Dict[str, Any]:
-        if not hasattr(self, "_dict_cache"):
-            self._dict_cache = {
-                "type": pascal_to_snake(self.__class__.__name__),
-                "entity": self.entity.id,
-                "entity_type": pascal_to_snake(self.entity.__class__.__name__),
-                "id": self.id,
-                "user": self.user,
-                "created_at": int(self.created_at),
-                "auto_actions": [action.to_dict() for action in self.auto_actions] if self.auto_actions else None,
-                **self.args_to_dict(),
-            }
-            self._dict_cache = {k: v for k, v in self._dict_cache.items() if v is not None}
-        return self._dict_cache
+        return {
+            "type": pascal_to_snake(self.__class__.__name__),
+            "entity": self.entity.id,
+            "entity_type": pascal_to_snake(self.entity.__class__.__name__),
+            "id": self.id,
+            "user": self.user,
+            "created_at": int(self.created_at),
+            "auto_actions": [action.to_dict() for action in self.auto_actions] if self.auto_actions else None,
+            **self.args_to_dict(),
+        }
 
     @staticmethod
     def dict_to_args(data: Dict[str, Any], game) -> Dict[str, Any]:
@@ -159,7 +156,13 @@ class BaseAction:
         return self.id == other.id if self.id and other.id else self.created_at == other.created_at
 
     def description(self):
-        return f"{self.entity.__class__.__name__}: {self.__class__.__name__}"
+        if hasattr(self.entity, "id"):
+            name = self.entity.id
+        elif hasattr(self.entity, "sym"):
+            name = self.entity.sym
+        else:
+            name = "doesn't have id or sym"
+        return f"{self.entity.__class__.__name__} {name}: {self.__class__.__name__}"
 
     def __str__(self):
         return f"Type: {self.__class__.__name__}, id: {self.id}, entity: {self.entity}"
@@ -598,9 +601,9 @@ class DestinationConnection(BaseAction):
     @staticmethod
     def dict_to_args(args, game):
         return {
-            "corporations": [game.corporation_by_id(c) for c in args.get("corporations", [])],
-            "minors": [game.minor_by_id(m) for m in args.get("minors", [])],
-            "hexes": [game.hex_by_id(h) for h in args.get("hexes", [])],
+            "corporations": [game.corporation_by_id(c) for c in args.get("corporations", None) or []],
+            "minors": [game.minor_by_id(m) for m in args.get("minors", None) or []],
+            "hexes": [game.hex_by_id(h) for h in args.get("hexes", None) or []],
         }
 
     def args_to_dict(self):
@@ -662,7 +665,7 @@ class DoubleHeadTrains(BaseAction):
     @staticmethod
     def dict_to_args(args, game):
         return {
-            "trains": [game.train_by_id(t) for t in args.get("trains", [])],
+            "trains": [game.train_by_id(t) for t in args.get("trains", None) or []],
         }
 
     def args_to_dict(self):
@@ -684,7 +687,7 @@ class FailedMerge(BaseAction):
     @staticmethod
     def dict_to_args(args, game):
         return {
-            "corporations": [game.corporation_by_id(c_id) for c_id in args.get("corporations", [])],
+            "corporations": [game.corporation_by_id(c_id) for c_id in args.get("corporations", None) or []],
         }
 
     def args_to_dict(self):
@@ -730,7 +733,7 @@ class LayTile(BaseAction):
             "tile": game.tile_by_id(args["tile"]),
             "hex": game.hex_by_id(args["hex"]),
             "rotation": args["rotation"],
-            "combo_entities": [game.company_by_id(id) for id in args.get("combo_entities", [])],
+            "combo_entities": [game.company_by_id(id) for id in args.get("combo_entities", None) or []],
         }
 
     def args_to_dict(self):
@@ -1268,7 +1271,7 @@ class ReassignTrains(BaseAction):
                 "train": game.train_by_id(assignment["train"]),
                 "corporation": game.corporation_by_id(assignment["corporation"]),
             }
-            for assignment in args.get("assignments", [])
+            for assignment in args.get("assignments", None) or []
         ]
         return {
             "assignments": assignments,
@@ -1362,10 +1365,10 @@ class RunRoutes(BaseAction):
     @staticmethod
     def dict_to_args(args, game):
         routes = []
-        for route in args.get("routes", []):
+        for route in args.get("routes", None) or []:
             opts = {
                 "connection_hexes": route["connections"],
-                "hexes": [game.hex_by_id(id) for id in route.get("hexes", []) if id],
+                "hexes": [game.hex_by_id(id) for id in route.get("hexes", None) or []],
                 "revenue": route.get("revenue"),
                 "revenue_str": route.get("revenue_str"),
                 "subsidy": route.get("subsidy"),
@@ -1528,7 +1531,7 @@ class SwitchTrains(BaseAction):
     @staticmethod
     def dict_to_args(args, _game):
         return {
-            "slots": [int(m) for m in args.get("slots", [])] if "slots" in args else None,
+            "slots": [int(m) for m in args.get("slots", None) or []],
         }
 
     def args_to_dict(self):

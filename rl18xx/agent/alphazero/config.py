@@ -101,6 +101,27 @@ class TrainingConfig:
         self.train_dir = self.root_dir / self.train_dir
         self.val_dir = self.root_dir / self.val_dir
 
+    def to_json(self):
+        return {
+            "root_dir": str(self.root_dir) if self.root_dir else None,
+            "train_dir": str(self.train_dir) if self.train_dir else None,
+            "val_dir": str(self.val_dir) if self.val_dir else None,
+            "model_checkpoint_dir": str(self.model_checkpoint_dir) if self.model_checkpoint_dir else None,
+            "train_batch_size": self.train_batch_size,
+            "lr": self.lr,
+            "num_epochs": self.num_epochs,
+            "weight_decay": self.weight_decay,
+            "shuffle_examples": self.shuffle_examples,
+            "value_loss_weight": self.value_loss_weight,
+            "learning_rate": self.learning_rate,
+            "batch_size": self.batch_size,
+            "global_step": self.global_step,
+        }
+    
+    @classmethod
+    def from_json(cls, json_data):
+        return cls(**json_data)
+
 
 @dataclass
 class SelfPlayConfig:
@@ -119,7 +140,7 @@ class SelfPlayConfig:
     game_id: Optional[str] = None
     selfplay_dir: str = "selfplay"
     holdout_dir: str = "holdout"
-    holdout_pct: float = 0.05
+    holdout_pct: float = 0.15
 
     def __post_init__(self):
         assert self.softpick_move_cutoff % 2 == 0

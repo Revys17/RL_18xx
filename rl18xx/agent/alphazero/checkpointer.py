@@ -37,6 +37,7 @@ def get_latest_model(model_checkpoint_dir: str) -> AlphaZeroModel:
     config.model_checkpoint_file = str(checkpoint_path)
     model = AlphaZeroModel(config)
     # The model's __init__ method already loads weights if model_checkpoint_file is set
+    LOGGER.info(f"Loaded most recent model: {model.get_name()}")
     return model
 
 

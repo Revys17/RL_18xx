@@ -9,7 +9,7 @@ Initialize a new game using the following code:
 from rl18xx.game.gamemap import GameMap
 game_map = GameMap()
 game_class = game_map.game_by_title("1830")
-players = {"1": "Player 1", "2": "Player 2", "3": "Player 3", "4": "Player 4"}
+players = {1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"}
 game = game_class(players)
 ```
 

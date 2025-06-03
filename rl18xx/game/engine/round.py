@@ -4776,11 +4776,12 @@ class SpecialTrack(BaseStep, Tracker):
             return []
         tile_ability = tile_abilities[0]
 
-        tiles = [next(t for t in self.game.tiles if t.name == name) for name in tile_ability.tiles]
-        if not tiles:
+        if not tile_ability.tiles:
             tiles = self.game.tiles.unique(lambda t: t.name)
+        else:
+            tiles = [next((t for t in self.game.tiles if t.name == name), None) for name in tile_ability.tiles]
 
-        special = tile_ability.special if tile_ability.type == "tile_lay" else False
+        special = tile_ability.special if tile_ability.type == "tile_lay" else None
         return [
             t
             for t in tiles

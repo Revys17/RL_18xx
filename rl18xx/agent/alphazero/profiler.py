@@ -179,7 +179,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
     
     game_class = GameMap().game_by_title("1830")
-    players = {"1": "Player 1", "2": "Player 2", "3": "Player 3", "4": "Player 4"}
+    players = {1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"}
     initial_game = game_class(players)
     action_helper = ActionHelper()
     for _ in range(100):

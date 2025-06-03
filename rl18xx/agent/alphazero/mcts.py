@@ -83,6 +83,9 @@ class MCTSNode:
         self.config = config or SelfPlayConfig()
         self.add_metric("MCTS/Depth", self.depth)
 
+        if self.is_done():
+            self.game_object.end_game()
+
     def add_metric(self, name, value):
         if self.config.metrics is None:
             return
@@ -341,7 +344,7 @@ class MCTSNode:
         return self.game_object.finished or self.game_object.move_number >= self.config.max_game_length
 
     def game_result(self) -> Optional[np.ndarray]:
-        if not self.game_object.finished:
+        if not self.is_done():
             LOGGER.warning(f"Getting game result for unfinished game (node fmove: {self.fmove}).")
 
         result = self.game_object.result()
@@ -349,12 +352,15 @@ class MCTSNode:
 
         value = np.full(VALUE_SIZE, -1.0, dtype=np.float32)
         winners = [self.player_mapping[pid] for pid, score in result.items() if score == winning_score]
-        value[winners] = 1.0
+        if len(winners) > 1:
+            value[winners] = 0.0
+        else:
+            value[winners] = 1.0
 
         return value
 
     def game_result_string(self) -> Optional[str]:
-        if not self.game_object.finished:
+        if not self.is_done():
             LOGGER.warning(f"game_result_string: Game is not finished (node fmove: {self.fmove}). Returning empty string.")
             return ""
 
@@ -362,9 +368,9 @@ class MCTSNode:
         winning_score = max(result.values())
 
         winners = []
-        for player, score in result.items():
+        for player_id, score in result.items():
             if score == winning_score:
-                winners.append(player)
+                winners.append(str(player_id))
         result_string = f"{', '.join(winners)} ({winning_score})"
 
         return result_string

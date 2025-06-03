@@ -29,7 +29,7 @@ from rl18xx.game.gamemap import GameMap
 
 game_map = GameMap()
 game = game_map.game_by_title("1830")
-g = game({"1": "Player 1", "2": "Player 2", "3": "Player 3", "4": "Player 4"})
+g = game({1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"})
 ```
 
 There is also an ActionHelper class that can be used to find all valid
