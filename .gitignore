@@ -140,5 +140,5 @@ model_checkpoints/
 runs/
 .claude/
 loop_status.json
-runtime_config.json
+loop_config.json
 self_play_games_status/

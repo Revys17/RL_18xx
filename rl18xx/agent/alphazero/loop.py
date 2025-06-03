@@ -24,6 +24,7 @@ LOOP_STATUS_PATH = Path("loop_status.json")
 TENSORBOARD_LOG_DIR_BASE = Path("runs/alphazero_runs")
 SELF_PLAY_LOGS_PATH = Path("logs/self_play")
 
+
 def setup_logging(level: int, log_file: str, console: bool = False) -> logging.Logger:
     # Set up logging to both console and file
     log_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -50,6 +51,7 @@ class LoopConfig:
     num_games_per_iteration: int
     num_threads: int
     training_config: TrainingConfig
+    num_readouts: int
 
 @dataclass
 class LoopMetrics:
@@ -88,7 +90,8 @@ def load_loop_config(
     num_loop_iterations: int,
     num_games_per_iteration: int,
     num_threads: int,
-    default_training_config: TrainingConfig
+    default_training_config: TrainingConfig,
+    num_readouts: int
 ) -> LoopConfig:
     try:
         if not LOOP_CONFIG_PATH.exists():
@@ -96,7 +99,8 @@ def load_loop_config(
                 num_loop_iterations=num_loop_iterations,
                 num_games_per_iteration=num_games_per_iteration,
                 num_threads=num_threads,
-                training_config=default_training_config.to_json()
+                training_config=default_training_config.to_json(),
+                num_readouts=num_readouts
             )
 
             with open(LOOP_CONFIG_PATH, 'w') as f:
@@ -112,7 +116,8 @@ def load_loop_config(
             num_loop_iterations=loop_config_json["num_loop_iterations"],
             num_games_per_iteration=loop_config_json["num_games_per_iteration"],
             num_threads=loop_config_json["num_threads"],
-            training_config=training_config
+            training_config=training_config,
+            num_readouts=loop_config_json["num_readouts"]
         )
         return loop_config
     except Exception as e:
@@ -121,7 +126,8 @@ def load_loop_config(
             num_loop_iterations=num_loop_iterations,
             num_games_per_iteration=num_games_per_iteration,
             num_threads=num_threads,
-            training_config=default_training_config
+            training_config=default_training_config,
+            num_readouts=num_readouts
         )
 
 def update_loop_status(status_data: dict):
@@ -170,7 +176,7 @@ def cleanup_files():
         else:
             item.unlink()
 
-def run_self_play(game_idx_in_iteration: int, tb_log_dir: str, timestamp: str, loop: int):
+def run_self_play(game_idx_in_iteration: int, tb_log_dir: str, timestamp: str, loop: int, num_readouts: int = 32):
     process_root_logger = logging.getLogger()
     for handler in process_root_logger.handlers[:]:
         process_root_logger.removeHandler(handler)
@@ -190,7 +196,8 @@ def run_self_play(game_idx_in_iteration: int, tb_log_dir: str, timestamp: str, l
             metrics=Metrics(os.path.join(tb_log_dir, f"game_L{loop}_G{game_idx_in_iteration}")),
             global_step=loop, 
             game_idx_in_iteration=game_idx_in_iteration,
-            game_id=f"L{loop}_G{game_idx_in_iteration}"
+            game_id=f"L{loop}_G{game_idx_in_iteration}",
+            num_readouts=num_readouts
         )
         selfplay = SelfPlay(self_play_config)
         selfplay.run_game()
@@ -246,6 +253,7 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
     self_play_logs_path = Path("logs/self_play")
     self_play_logs_path.mkdir(parents=True, exist_ok=True)
     default_training_config = TrainingConfig()
+    num_readouts = SelfPlayConfig().num_readouts
     
     # Initialize loop metrics
     loop_metrics_path = Path(f"logs/loop/loop_metrics_{timestamp}.json")
@@ -263,7 +271,8 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
                 num_loop_iterations,
                 num_games_per_iteration,
                 num_threads,
-                default_training_config
+                default_training_config,
+                num_readouts
             )
 
             # See if the run config has been updated and we should end early
@@ -301,7 +310,7 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
             executor = ProcessPoolExecutor(max_workers=loop_config.num_threads)
             
             try:
-                futures = [executor.submit(run_self_play, i, tb_log_dir, timestamp, loop) for i in range(loop_config.num_games_per_iteration)]
+                futures = [executor.submit(run_self_play, i, tb_log_dir, timestamp, loop, loop_config.num_readouts) for i in range(loop_config.num_games_per_iteration)]
                 for i, future in enumerate(as_completed(futures)):
                     try:
                         future.result() # Wait for game to complete and raise exceptions if any
