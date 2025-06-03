@@ -749,7 +749,7 @@ class Depot(Entity):
 
     def other_trains(self, corporation):
         all_others = [train for train in self.trains if train.buyable and train.owner not in [corporation, self, None]]
-        if not self.game.can_buy_train_from_others():
+        if not self.game.ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS:
             all_others = [train for train in all_others if train.owner.owner == corporation.owner]
         return all_others
 

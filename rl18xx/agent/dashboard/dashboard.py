@@ -7,13 +7,16 @@ import datetime
 import time
 from pathlib import Path
 from datetime import datetime
+import psutil
 
-EDITABLE_TRAINING_PARAMS = [field.name for field in fields(TrainingConfig)]
+# Fields to exclude from the training parameters display
+EXCLUDED_FIELDS = {'root_dir', 'train_dir', 'val_dir', 'model_checkpoint_dir', 'metrics', 'global_step'}
+EDITABLE_TRAINING_PARAMS = [field.name for field in fields(TrainingConfig) if field.name not in EXCLUDED_FIELDS]
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev_secret_key_change_me") # Use env var for production
 
-RUNTIME_CONFIG_PATH = Path("../../../runtime_config.json")
+LOOP_CONFIG_FILE_PATH = Path("../../../loop_config.json")
 LOOP_STATUS_PATH = Path("../../../loop_status.json")
 SELF_PLAY_GAMES_STATUS_PATH = Path("../../../self_play_games_status")
 TENSORBOARD_URL_PATH = "/tensorboard/"
@@ -30,38 +33,52 @@ def get_current_status():
     except Exception as e:
         return {"error": f"Status file unreadable: {e}"}
 
-def get_current_runtime_config():
-    config_for_form = {
-        "num_games_per_iteration": None, # Placeholder
-        "training_params": {param: None for param in EDITABLE_TRAINING_PARAMS}
+def get_current_loop_config():
+    """Reads the loop_config.json file and provides defaults."""
+    default_config = {
+        "num_loop_iterations": 5,
+        "num_games_per_iteration": 25,
+        "num_threads": 2,
+        "training_params": TrainingConfig().to_json()
     }
-    
-    tc_defaults = TrainingConfig()
-    for param_name in EDITABLE_TRAINING_PARAMS:
-        if hasattr(tc_defaults, param_name):
-            config_for_form["training_params"][param_name] = getattr(tc_defaults, param_name)
+
+    if not LOOP_CONFIG_FILE_PATH.exists():
+        flash("Loop configuration file not found. Displaying default values. Save to create one.", "info")
+        return default_config
 
     try:
-        with open(RUNTIME_CONFIG_PATH, 'r') as f:
-            runtime_conf = json.load(f)
-        config_for_form["num_games_per_iteration"] = runtime_conf.get("num_games_per_iteration", config_for_form["num_games_per_iteration"])
-        
-        loaded_training_params = runtime_conf.get("training_params", {})
+        with open(LOOP_CONFIG_FILE_PATH, 'r') as f:
+            loaded_config_json = json.load(f)
+
+        # Start with defaults and override with loaded values
+        config_for_form = default_config.copy()
+        config_for_form["num_loop_iterations"] = loaded_config_json.get("num_loop_iterations", default_config["num_loop_iterations"])
+        config_for_form["num_games_per_iteration"] = loaded_config_json.get("num_games_per_iteration", default_config["num_games_per_iteration"])
+        config_for_form["num_threads"] = loaded_config_json.get("num_threads", default_config["num_threads"])
+
+        loaded_training_config = loaded_config_json.get("training_config", {})
+        current_training_params = default_config["training_params"].copy() # Start with defaults
         for param in EDITABLE_TRAINING_PARAMS:
-            if param in loaded_training_params: # Override default if present in file
-                config_for_form["training_params"][param] = loaded_training_params[param]
+            if param in loaded_training_config:
+                current_training_params[param] = loaded_training_config[param]
+        config_for_form["training_params"] = current_training_params
+        
+        return config_for_form
+    except json.JSONDecodeError:
+        flash(f"Error reading loop config file (invalid JSON). Displaying defaults.", "warning")
+        return default_config
     except Exception as e:
-        flash(f"Error loading runtime config: {e}. Displaying defaults/placeholders.", "warning")
+        flash(f"Error loading loop config: {e}. Displaying defaults.", "warning")
+        return default_config
 
-    return config_for_form
-
-def save_runtime_config(config_data):
+def save_loop_config(config_data_to_save):
+    """Saves the provided configuration data to loop_config.json."""
     try:
-        with open(RUNTIME_CONFIG_PATH, 'w') as f:
-            json.dump(config_data, f, indent=4)
-        flash("Configuration updated. Changes will apply on the next loop iteration.", "success")
+        with open(LOOP_CONFIG_FILE_PATH, 'w') as f:
+            json.dump(config_data_to_save, f, indent=4)
+        flash("Loop configuration updated. Changes will apply on the next loop iteration.", "success")
     except Exception as e:
-        flash(f"Error saving runtime config: {e}", "error")
+        flash(f"Error saving loop config: {e}", "error")
 
 def get_games_in_progress():
     if not SELF_PLAY_GAMES_STATUS_PATH.exists():
@@ -82,13 +99,62 @@ def get_games_in_progress():
                     continue
 
                 game_data['game_id'] = game_file.name[:-5]
+                
+                # Extract loop number from filename (format: L{loop}_G{game}.json)
+                if game_file.name.startswith('L') and '_G' in game_file.name:
+                    try:
+                        loop_num = int(game_file.name.split('_')[0][1:])
+                        game_data['loop_number'] = loop_num
+                    except (ValueError, IndexError):
+                        game_data['loop_number'] = None
+                else:
+                    game_data['loop_number'] = None
+                
                 games_data.append(game_data)
 
     except json.JSONDecodeError as e:
         return {"error": f"Error reading self-play games status file: {e} (JSONDecodeError)."}
     except Exception as e:
         return {"error": f"Error reading self-play games status: {e}"}
-    return sorted(games_data, key=lambda x: x['start_time_unix'], reverse=True)
+    return sorted(games_data, key=lambda x: x['start_time_unix'], reverse=False)
+
+@app.route('/api/loop_config', methods=['GET', 'POST'])
+def api_loop_config_handler():
+    if request.method == 'GET':
+        if not LOOP_CONFIG_FILE_PATH.exists():
+            return jsonify({"error": "Loop configuration file not found."}), 404
+        try:
+            with open(LOOP_CONFIG_FILE_PATH, 'r') as f:
+                data = json.load(f)
+            return jsonify(data), 200
+        except json.JSONDecodeError:
+            return jsonify({"error": "Invalid JSON in loop configuration file."}), 500
+        except Exception as e:
+            return jsonify({"error": f"Failed to read loop configuration file: {e}"}), 500
+
+    if request.method == 'POST':
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Invalid JSON payload"}), 400
+
+        # Basic validation (can be expanded)
+        required_keys = ["num_loop_iterations", "num_games_per_iteration", "num_threads", "training_config"]
+        if not all(key in data for key in required_keys):
+            return jsonify({"error": "Missing required keys in configuration data.", "required_keys": required_keys}), 400
+        
+        # Type checks (example)
+        if not isinstance(data.get("num_loop_iterations"), int) or \
+           not isinstance(data.get("num_games_per_iteration"), int) or \
+           not isinstance(data.get("num_threads"), int) or \
+           not isinstance(data.get("training_config"), dict):
+            return jsonify({"error": "Invalid data types in configuration."}), 400
+
+        try:
+            with open(LOOP_CONFIG_FILE_PATH, 'w') as f:
+                json.dump(data, f, indent=4)
+            return jsonify({"message": "Loop configuration updated successfully."}), 200
+        except Exception as e:
+            return jsonify({"error": f"Failed to write loop configuration: {e}"}), 500
 
 @app.route('/api/games_status')
 def api_games_status():
@@ -97,56 +163,88 @@ def api_games_status():
         return jsonify(games_data), 500
     return jsonify(games_data)
 
+@app.route('/api/current_status')
+def api_current_status():
+    status = get_current_status()
+    return jsonify(status)
+
+@app.route('/api/system_metrics')
+def api_system_metrics():
+    try:
+        # Get CPU percentage (average across all cores)
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        
+        # Get memory usage
+        memory = psutil.virtual_memory()
+        memory_percent = memory.percent
+        
+        return jsonify({
+            "cpu_percent": round(cpu_percent, 1),
+            "memory_percent": round(memory_percent, 1)
+        })
+    except Exception as e:
+        return jsonify({"error": f"Failed to get system metrics: {e}"}), 500
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
         try:
+            # --- General Loop Parameters ---
+            num_loop_iterations_str = request.form.get('num_loop_iterations')
             num_games_str = request.form.get('num_games_per_iteration')
-            if not num_games_str:
-                flash("Number of self-play games is required.", "error")
+            num_threads_str = request.form.get('num_threads')
+
+            if not num_loop_iterations_str or not num_games_str or not num_threads_str:
+                flash("Number of loop iterations, self-play games, and threads are required.", "error")
                 return redirect(url_for('index'))
             
+            num_loop_iterations = int(num_loop_iterations_str)
             num_games = int(num_games_str)
-            if num_games <= 0:
-                flash("Number of self-play games must be positive.", "error")
+            num_threads = int(num_threads_str)
+
+            if num_loop_iterations <= 0 or num_games <= 0 or num_threads <= 0:
+                flash("Loop iterations, number of games, and threads must be positive integers.", "error")
                 return redirect(url_for('index'))
 
-            new_config_data = {
-                "num_games_per_iteration": num_games,
-                "training_params": {}
-            }
-            
+            # --- Training Parameters ---
+            training_config_data = {}
             has_training_param_errors = False
             for param_name in EDITABLE_TRAINING_PARAMS:
                 value_str = request.form.get(param_name)
                 if value_str is not None and value_str.strip() != "":
                     try:
-                        # Attempt to convert to float, then int if it's a whole number float
                         val = float(value_str)
-                        if val.is_integer():
+                        if val.is_integer(): # Store as int if it's a whole number
                             val = int(val)
-                        new_config_data["training_params"][param_name] = val
+                        training_config_data[param_name] = val
                     except ValueError:
-                        flash(f"Invalid numeric value for '{param_name}': '{value_str}'. This parameter will not be saved.", "warning")
+                        flash(f"Invalid numeric value for training parameter '{param_name}': '{value_str}'. This parameter will use its current or default value.", "warning")
                         has_training_param_errors = True
             
-            # Only include training_params if there are any valid ones
-            if not new_config_data["training_params"]:
-                del new_config_data["training_params"]
+            # --- Construct the full config to save ---
+            # Get current config to fill in any training params not successfully parsed from form
+            current_config = get_current_loop_config()
+            final_training_config = current_config["training_params"].copy() 
+            # Override with successfully parsed form values
+            final_training_config.update(training_config_data)
+
+            loop_config_to_save = {
+                "num_loop_iterations": num_loop_iterations,
+                "num_games_per_iteration": num_games,
+                "num_threads": num_threads,
+                "training_config": final_training_config  # Use "training_config" as key for the file
+            }
             
-            if not has_training_param_errors or new_config_data.get("training_params"): # Save if no errors or some params are valid
-                 save_runtime_config(new_config_data)
-            else:
-                flash("No valid training parameters were provided to save.", "warning")
+            save_loop_config(loop_config_to_save)
 
         except ValueError:
-            flash("Invalid input for number of games. Please enter a valid integer.", "error")
+            flash("Invalid input for numeric fields. Please enter valid integers.", "error")
         except Exception as e:
             flash(f"An unexpected error occurred: {e}", "error")
         return redirect(url_for('index'))
 
     status_data = get_current_status()
-    current_config_for_form = get_current_runtime_config()
+    current_config_for_form = get_current_loop_config()
     
     # Initial load of games in progress
     games_in_progress_result = get_games_in_progress()

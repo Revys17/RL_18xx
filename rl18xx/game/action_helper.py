@@ -32,7 +32,9 @@ from rl18xx.game.engine.round import (
 )
 
 from collections import defaultdict
+import logging
 
+LOGGER = logging.getLogger(__name__)
 
 class ActionHelper(metaclass=Singleton):
     def __init__(self, print_enabled=False):
@@ -347,6 +349,8 @@ class ActionHelper(metaclass=Singleton):
             hexes = [game.hex_by_id(hex) for hex in ability.hexes]
             for hex in hexes:
                 tiles = special_track_step.potential_tiles(company, hex)
+                if not tiles:
+                    LOGGER.info(f"No tiles found for {company.name}'s special track lay on {hex.id}")
                 for tile in tiles:
                     rotations = special_track_step.legal_tile_rotations(company, hex, tile)
                     actions.extend(
@@ -368,60 +372,47 @@ class ActionHelper(metaclass=Singleton):
                 unique_trains[key] = train
         return unique_trains.values()
 
+    def get_valid_cross_company_train_prices(self, entity, limited_price_options=False):
+        if limited_price_options:
+            return sorted(list(set([1, 20, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, entity.cash - 1, entity.cash])))
+        else:
+            return range(1, entity.cash + 1)
+
     def get_buy_train_actions(self, game, limited_price_options=False):
         if not game.active_step().room(game.current_entity):
             return []
 
-        trains = self.get_unique_trains(game.depot.available(game.current_entity))
         actions = []
-        for train in trains:
-            min_price = train.min_price()
-            if min_price > game.buying_power(game.current_entity):
-                if game.active_step().must_buy_train(game.current_entity):
-                    if min_price > game.buying_power(game.current_entity) + game.buying_power(
-                        game.current_entity.owner
-                    ):
-                        continue
-                else:
-                    continue
-            max_price = train.price if train.from_depot() else game.current_entity.cash
-            if limited_price_options:
-                price_values = [
-                    price
-                    for price in sorted(
-                        list(
-                            set(
-                                [
-                                    1,
-                                    20,
-                                    50,
-                                    100,
-                                    200,
-                                    300,
-                                    400,
-                                    500,
-                                    600,
-                                    700,
-                                    800,
-                                    900,
-                                    game.current_entity.cash - 1,
-                                    max_price,
-                                ]
-                            )
-                        )
-                    )
-                    if price >= min_price and price <= max_price and price <= game.buying_power(game.current_entity)
-                ]
-            else:
-                price_values = list(range(min_price, int(max_price) + 1))
-            actions.append([BuyTrain(game.current_entity, train, price) for price in price_values])
+
+        # Add e-buy action
+        # Only allow e-buy of the cheapest depot train if forced to purchase
+        if (
+            game.current_entity.cash < game.depot.min_depot_price and
+            game.active_step().must_buy_train(game.current_entity)
+        ):
+            train = game.depot.min_depot_train
+            price = train.min_price()
+            if price <= game.buying_power(game.current_entity) + game.buying_power(game.current_entity.owner):
+                actions.append(BuyTrain(game.current_entity, train, price))
+        else:
+            depot_trains = self.get_unique_trains(game.active_step().buyable_trains(game.current_entity))
+            for train in depot_trains:
+                price = train.min_price()
+                if price <= game.buying_power(game.current_entity):
+                    actions.append(BuyTrain(game.current_entity, train, price))
+
+        corp_trains = self.get_unique_trains(game.depot.other_trains(game.current_entity))
+        for train in corp_trains:
+            valid_prices = self.get_valid_cross_company_train_prices(game.current_entity, limited_price_options)
+            for price in valid_prices:
+                if price > 0 and price <= game.buying_power(game.current_entity):
+                    actions.append(BuyTrain(game.current_entity, train, price))
 
         if not limited_price_options:
             actions.append(self.get_exchange_train_actions(game))
 
-        all_actions = sorted([item for sublist in actions for item in sublist])
-        if all_actions:
-            return all_actions
+        if actions:
+            return actions
 
         if game.can_go_bankrupt(game.current_entity.owner, game.current_entity):
             return [Bankrupt(game.current_entity)]
@@ -556,5 +547,7 @@ class ActionHelper(metaclass=Singleton):
         choices.extend(self.get_company_choices(game))
 
         if not choices:
-            return [Bankrupt(game.current_entity)]
+            if game.can_go_bankrupt(game.current_entity.owner, game.current_entity):
+                return [Bankrupt(game.current_entity)]
+            return []
         return self.sort_actions(choices, instances=True)

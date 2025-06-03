@@ -6,7 +6,7 @@ from rl18xx.game.engine.game.base import BaseGame
 def test_1830_manual_actions():
     game_map = GameMap()
     game = game_map.game_by_title("1830")
-    g = game({"1": "Player 1", "2": "Player 2", "3": "Player 3", "4": "Player 4"})
+    g = game({1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"})
     action_helper = ActionHelper()
     # action_helper.print_enabled = True
 
@@ -1416,7 +1416,7 @@ def test_1830_from_import():
 def test_1830_manual_bankrupcy():
     game_map = GameMap()
     game = game_map.game_by_title("1830")
-    g = game({"1": "Player 1", "2": "Player 2", "3": "Player 3", "4": "Player 4"})
+    g = game({1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"})
     action_helper = ActionHelper()
     # action_helper.print_enabled = True
 

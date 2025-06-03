@@ -10,6 +10,8 @@ from rl18xx.agent.alphazero.model import AlphaZeroModel
 from rl18xx.agent.alphazero.config import SelfPlayConfig, ModelConfig
 from rl18xx.agent.alphazero.checkpointer import get_latest_model
 from rl18xx.agent.alphazero.dataset import TrainingExampleProcessor
+from rl18xx.agent.alphazero.action_mapper import ActionMapper
+from rl18xx.agent.agent import Agent
 import numpy as np
 from typing import Optional, List, Tuple, Generator
 import torch
@@ -24,11 +26,17 @@ LOGGER = logging.getLogger(__name__)
 SELF_PLAY_GAMES_STATUS_PATH = Path("self_play_games_status")
 SELF_PLAY_GAMES_STATUS_PATH.mkdir(parents=True, exist_ok=True)
 
-class MCTSPlayer:
+class MCTSPlayer(Agent):
     def __init__(self, config: SelfPlayConfig):
         self.config = config
         self.network = config.network
         self.initialize_game()
+
+    def __str__(self):
+        return f"MCTSPlayer"
+    
+    def __repr__(self):
+        return self.__str__()
 
     def add_metric(self, name, value):
         if self.config.metrics is None:
@@ -58,7 +66,7 @@ class MCTSPlayer:
     def get_new_game_state(self):
         game_map = GameMap()
         game_class = game_map.game_by_title("1830")
-        players = {"1": "Player 1", "2": "Player 2", "3": "Player 3", "4": "Player 4"}
+        players = {1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"}
         return game_class(players)
 
     def initialize_game(self, game_state: Optional[BaseGame] = None):
@@ -144,7 +152,7 @@ class MCTSPlayer:
             failsafe += 1
             leaf = self.root.select_leaf()
             if leaf.is_done():
-                LOGGER.info(f"tree_search: Found finished game for leaf {leaf.game_object.to_dict()}. Result: {leaf.game_result_string()}")
+                LOGGER.info(f"tree_search: Found finished game for leaf. Result: {leaf.game_result_string()}")
                 self.add_metric("MCTS/Finished_Games", 1)
                 value = leaf.game_result()
                 leaf.backup_value(value, up_to=self.root)
@@ -194,6 +202,20 @@ class MCTSPlayer:
         self.add_metric("MCTS/Revert_And_Incorporate_Time", revert_and_incorporate_duration)
         return leaves
 
+    def suggest_move(self):
+        if self.root.num_legal_actions == 1:
+            return self.pick_move()
+
+        current_readouts = self.root.N
+        target_readouts_for_move = current_readouts + self.config.num_readouts
+
+        # MCTS simulation loop
+        while self.root.N < target_readouts_for_move:
+            self.tree_search()
+
+        move = self.pick_move()
+        return move
+
     def is_done(self):
         return self.result != [0.0, 0.0, 0.0, 0.0] or self.root.is_done()
 
@@ -203,7 +225,6 @@ class MCTSPlayer:
         self.result_string = string
 
     def extract_data(self) -> Generator[Tuple[BaseGame, torch.Tensor, torch.Tensor], None, None]:
-        self.log_memory_usage(stage_name="Start MCTSPlayer.extract_data")
         assert (
             len(self.searches_pi) == self.root.game_object.move_number
         ), f"searches_pi length {len(self.searches_pi)} != move_number {self.root.game_object.move_number}"
@@ -211,9 +232,11 @@ class MCTSPlayer:
 
         result = torch.tensor(self.result)
         game_state = self.get_new_game_state()
+        action_mapper = ActionMapper()
         for i, action in enumerate(self.root.game_object.raw_actions):
             yield (
                 game_state,
+                torch.tensor(action_mapper.get_legal_action_indices(game_state)),
                 torch.tensor(self.searches_pi[i])
                 if isinstance(self.searches_pi[i], np.ndarray)
                 else self.searches_pi[i],
@@ -310,15 +333,19 @@ class SelfPlay:
     def update_self_play_game_progress(
         self,
         game_id: str,
+        loop_number: int,
+        game_number: int,
         moves_played: int,
         max_moves: int,
         current_round: str,
         last_action: str,
         game_start_time_unix: float,
-        status: str
+        status: str,
     ):
         file = SELF_PLAY_GAMES_STATUS_PATH / f"{game_id}.json"
         status_data = {
+            "loop_number": loop_number,
+            "game_number": game_number,
             "status": status,
             "moves_played": moves_played,
             "max_moves": max_moves,
@@ -347,6 +374,8 @@ class SelfPlay:
         game_start_time = time.time()
         self.update_self_play_game_progress(
             game_id=self.config.game_id,
+            loop_number=self.config.global_step,
+            game_number=self.config.game_idx_in_iteration,
             moves_played=0,
             max_moves=self.config.max_game_length,
             current_round="N/A",
@@ -409,6 +438,8 @@ class SelfPlay:
                 move_counter += 1
                 self.update_self_play_game_progress(
                     game_id=self.config.game_id,
+                    loop_number=self.config.global_step,
+                    game_number=self.config.game_idx_in_iteration,
                     moves_played=move_counter,
                     max_moves=self.config.max_game_length,
                     current_round=player.root.game_object.round.round_description(),
@@ -428,35 +459,42 @@ class SelfPlay:
                 self.add_metric("SelfPlay/Total_Sims_For_MCTS_Moves", total_sims_for_mcts_moves)
 
                 if player.root.is_done():
-                    player.set_result(player.root.game_result())
-                    LOGGER.info(f"Game finished after {move_counter} moves. Result: {player.get_result_string()}")
                     if player.root.game_object.move_number == self.config.max_game_length:
+                        LOGGER.info(f"Game ended by max length. Ending game.")
+                        player.root.game_object.end_game()
                         game_ended_by_max_length = 1
+
+                    player.set_result(player.root.game_result())
+                    LOGGER.info(f"Game finished after {move_counter} moves. Result: {player.root.game_object.result()}, mapped to: {player.result} via {player.root.player_mapping}")
                     
                     self.update_self_play_game_progress(
                         game_id=self.config.game_id,
+                        loop_number=self.config.global_step,
+                        game_number=self.config.game_idx_in_iteration,
                         moves_played=move_counter,
                         max_moves=self.config.max_game_length,
                         current_round="Finished",
                         last_action=player.root.game_object.actions[-1].description(),
                         game_start_time_unix=game_start_time,
-                        status="COMPLETE"
+                        status="Completed"
                     )
                     break
 
         except Exception as e:
             LOGGER.error(f"Error in self-play after {move_counter} moves: {e}", exc_info=True)
-            LOGGER.error(f"Game state: {player.root.game_object.to_dict()}")
+            LOGGER.error(f"Game actions: {player.root.game_object.raw_actions}")
             # It might be useful to still try and get data from the player if an error occurs mid-game
             # For now, just re-raise or handle as per existing logic.
             self.update_self_play_game_progress(
                 game_id=self.config.game_id,
+                loop_number=self.config.global_step,
+                game_number=self.config.game_idx_in_iteration,
                 moves_played=move_counter,
                 max_moves=self.config.max_game_length,
                 current_round=player.root.game_object.round.round_description(),
                 last_action=player.root.game_object.actions[-1].description(),
                 game_start_time_unix=game_start_time,
-                status="ERROR"
+                status="Error"
             )
 
         self.add_metric("SelfPlay/Game_Length_Moves", move_counter)
@@ -481,7 +519,6 @@ class SelfPlay:
         self.add_metric("SelfPlay/Avg_Pick_Move_Time_ms", avg_pick_move_time_ms)
         self.add_metric("SelfPlay/Avg_Play_Move_Time_ms", avg_play_move_time_ms)
 
-        self.log_memory_usage(stage_name="SelfPlay.play finished")
         return player
 
     def run_game(self):
@@ -492,6 +529,8 @@ class SelfPlay:
 
         player = self.play()
 
+        LOGGER.info(f"Player result: {player.result}")
+        LOGGER.info(f"Game actions: {player.root.game_object.raw_actions}")
         if player.result is None or np.all(np.array(player.result) == 0.0):
             LOGGER.warning(
                 f"Game {self.config.game_id} finished with no conclusive result or result not set. Skipping data extraction."
@@ -516,7 +555,6 @@ class SelfPlay:
         del game_data
         gc.collect()
         LOGGER.info("Explicitly deleted player, game_data, game_examples and ran gc.collect()")
-        self.log_memory_usage(stage_name="SelfPlay.end")
 
 
 def setup_logging(level: int, log_file: str) -> logging.Logger:

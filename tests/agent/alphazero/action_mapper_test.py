@@ -32,7 +32,7 @@ from rl18xx.game import ActionHelper
 def initial_game_state():
     game_map = GameMap()
     game = game_map.game_by_title("1830")
-    return game({"1": "Player 1", "2": "Player 2", "3": "Player 3", "4": "Player 4"})
+    return game({1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"})
 
 
 @pytest.fixture

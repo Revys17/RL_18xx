@@ -388,7 +388,7 @@ class BaseGame:
         self.setup_optional_rules()
         self.setup()
         self.round.setup()
-        self.temp_allow_cross_company_purchase = False
+        self.temp_allow_cross_company_purchase = True
         self.initialize_actions(actions, at_action=at_action)
         self.temp_allow_cross_company_purchase = False
 
@@ -562,9 +562,9 @@ class BaseGame:
     # route, never, always
     MUST_BUY_TRAIN = "route"
     # Allow train buy from other corporations
-    ALLOW_TRAIN_BUY_FROM_OTHERS = False
+    ALLOW_TRAIN_BUY_FROM_OTHERS = True
     # Allow train buy from other player's corporations
-    ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS = True
+    ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS = False
     # Allow obsolete trains to be bought from other corporations
     ALLOW_OBSOLETE_TRAIN_BUY = False
     # Default tile lay configuration
@@ -1057,7 +1057,7 @@ class BaseGame:
 
     @property
     def current_action_id(self):
-        return self.raw_actions[-1]["id"] if self.raw_actions and self.raw_actions[-1] else 0
+        return self.raw_actions[-1].get("id", 0) if self.raw_actions and self.raw_actions[-1] else 0
 
     def last_game_action_id(self):
         return self.last_game_action_id if hasattr(self, "last_game_action_id") else 0

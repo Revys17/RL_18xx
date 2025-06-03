@@ -2728,7 +2728,7 @@ class Tile(TileConfig):
             return Upgrade(params.get("cost"), terrain, params.get("size"), loc=params.get("loc"))
 
         elif type == "border":
-            return Border(params.get("edge"), type, params.get("cost"), params.get("color"))
+            return Border(params.get("edge"), params.get("type"), params.get("cost"), params.get("color"))
 
         elif type == "junction":
             junction = Junction()
@@ -2748,7 +2748,7 @@ class Tile(TileConfig):
             return Stub(int(params.get("edge")))
 
         elif type == "partition":
-            return Partition(params.get("a"), params.get("b"), type, params.get("restrict"))
+            return Partition(params.get("a"), params.get("b"), params.get("type"), params.get("restrict"))
 
         elif type == "frame":
             return Frame(params.get("color"), params.get("color2"))

@@ -583,15 +583,14 @@ class ActionMapper(metaclass=Singleton):
 
         raise ValueError(f"Unknown action type: {type(action)}")
 
-    def get_legal_action_mask(self, state: BaseGame) -> np.ndarray:
-        indices = self.get_legal_action_indices(state)
-
+    def convert_indices_to_mask(self, indices: List[int]) -> np.ndarray:
         mask = np.zeros(self.action_encoding_size, dtype=np.float32)
-        if not indices:
-            LOGGER.warning("No legal actions found")
-            return mask
         mask[indices] = 1.0
         return mask
+
+    def get_legal_action_mask(self, state: BaseGame) -> np.ndarray:
+        indices = self.get_legal_action_indices(state)
+        return self.convert_indices_to_mask(indices)
 
     def get_legal_action_indices(self, state: BaseGame) -> List[int]:
         if state is None:
