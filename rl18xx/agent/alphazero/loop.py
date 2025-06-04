@@ -16,6 +16,7 @@ import signal
 import sys
 import psutil
 import atexit
+import random
 
 LOGGER = logging.getLogger(__name__)
 LOOP_LOCK_FILE = Path("loop.lock")
@@ -178,6 +179,7 @@ def cleanup_files():
 
 def run_self_play(game_idx_in_iteration: int, tb_log_dir: str, timestamp: str, loop: int, num_readouts: int = 32):
     process_root_logger = logging.getLogger()
+    random.seed(os.getpid())
     for handler in process_root_logger.handlers[:]:
         process_root_logger.removeHandler(handler)
         handler.close()
