@@ -33,7 +33,7 @@ class MCTSDataset(Dataset):
         data = lz4.frame.decompress(compressed_data)
         buffer = io.BytesIO(data)
 
-        state, legal_actions, pi, value = torch.load(buffer)
+        state, legal_actions, pi, value = torch.load(buffer, map_location=torch.device('cpu'))
         legal_action_mask = torch.from_numpy(self.action_mapper.convert_indices_to_mask(legal_actions))
         game_state_data, node_data, edge_index, edge_attr = state
 
