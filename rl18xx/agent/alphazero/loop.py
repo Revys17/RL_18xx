@@ -238,7 +238,7 @@ def cleanup_and_exit(signum=None, frame=None):
     if LOOP_LOCK_FILE.exists():
         LOOP_LOCK_FILE.unlink()
 
-def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: int, cleanup: bool):
+def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: int, cleanup: bool, num_readouts: int):
     if cleanup:
         cleanup_files()
 
@@ -255,7 +255,6 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
     self_play_logs_path = Path("logs/self_play")
     self_play_logs_path.mkdir(parents=True, exist_ok=True)
     default_training_config = TrainingConfig()
-    num_readouts = SelfPlayConfig().num_readouts
     
     # Initialize loop metrics
     loop_metrics_path = Path(f"logs/loop/loop_metrics_{timestamp}.json")
@@ -462,10 +461,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--keep-old-files", action="store_true", help="Keep old files from previous runs. By default, old files are deleted."
     )
+    parser.add_argument(
+        "--num_readouts", type=int, default=64, help="Number of readouts to use for self-play"
+    )
     args = parser.parse_args()
 
     num_loop_iterations = args.num_loop_iterations
     num_games_per_iteration = args.num_games_per_iteration
     num_threads = args.num_threads
     cleanup = not args.keep_old_files
-    main(num_loop_iterations, num_games_per_iteration, num_threads, cleanup)
+    main(num_loop_iterations, num_games_per_iteration, num_threads, cleanup, args.num_readouts)
