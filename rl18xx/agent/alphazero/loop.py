@@ -193,9 +193,10 @@ def run_self_play(game_idx_in_iteration: int, tb_log_dir: str, timestamp: str, l
 
     model = get_latest_model("model_checkpoints")
     try:
+        # Tensorboard logging is disabled for now because it's using up too much space on disk
         self_play_config = SelfPlayConfig(
             network=model, 
-            metrics=Metrics(os.path.join(tb_log_dir, f"game_L{loop}_G{game_idx_in_iteration}")),
+            metrics=None, # Metrics(os.path.join(tb_log_dir, f"game_L{loop}_G{game_idx_in_iteration}")),
             global_step=loop, 
             game_idx_in_iteration=game_idx_in_iteration,
             game_id=f"L{loop}_G{game_idx_in_iteration}",
@@ -265,8 +266,9 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
     signal.signal(signal.SIGTERM, cleanup_and_exit)
     atexit.register(cleanup_and_exit)
 
+    loop = 0
     try:
-        for loop in range(num_loop_iterations):
+        while True:
             LOGGER.info(f"--- Starting loop {loop+1}/{num_loop_iterations} ---")
             loop_config = load_loop_config(
                 num_loop_iterations,
@@ -276,9 +278,7 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
                 num_readouts
             )
 
-            # See if the run config has been updated and we should end early
             if loop >= loop_config.num_loop_iterations:
-                LOGGER.info(f"Desired number of loops was updated - Exiting early.")
                 break
 
             LOGGER.info(f"Loop {loop+1}: Using {loop_config.num_games_per_iteration} games per iteration.")
@@ -417,6 +417,7 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
             save_loop_metrics(loop_metrics, loop_metrics_path)
             
             gc.collect()
+            loop += 1
     except Exception as e:
         LOGGER.error(f"Error in loop: {e}", exc_info=True)
         status["status_message"] = f"Error in loop: {e}"
