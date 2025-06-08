@@ -140,7 +140,7 @@ class SelfPlayConfig:
     game_id: Optional[str] = None
     selfplay_dir: str = "selfplay"
     holdout_dir: str = "holdout"
-    holdout_pct: float = 0.15
+    holdout_pct: float = 0.05
 
     def __post_init__(self):
         assert self.softpick_move_cutoff % 2 == 0
