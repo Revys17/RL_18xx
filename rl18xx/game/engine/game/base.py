@@ -1640,7 +1640,7 @@ class BaseGame:
             and self.depot.depot_trains()
             and (
                 self.MUST_BUY_TRAIN == "always"
-                or (self.MUST_BUY_TRAIN == "route" and self.graph.route_info(entity).get("route_train_purchase"))
+                or (self.MUST_BUY_TRAIN == "route" and self.graph.route_info(entity) and self.graph.route_info(entity).get("route_train_purchase"))
             )
         )
 
