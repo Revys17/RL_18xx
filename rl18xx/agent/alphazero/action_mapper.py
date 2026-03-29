@@ -410,7 +410,7 @@ class ActionMapper(metaclass=Singleton):
 
         # LOGGER.debug(f"Action encoding size: {len(self.actions)}")
 
-    def get_index_for_action(self, action: BaseAction) -> int:
+    def get_index_for_action(self, action: BaseAction, state: BaseGame) -> int:
         action_type = action.__class__.__name__
         if action.entity.__class__.__name__ == "Company":
             action_type = f"Company{action_type}"
@@ -440,7 +440,7 @@ class ActionMapper(metaclass=Singleton):
                 raise ValueError(f"Bundle is None for buy shares action: {action}")
             if not action.bundle.corporation:
                 raise ValueError(f"Corporation is None for buy shares action: {action}")
-            if action.bundle.owner == action.bundle.corporation:
+            if action.bundle.owner.name == "The Bank":
                 location = "ipo"
             elif action.bundle.owner.name == "Market":
                 location = "market"
@@ -497,9 +497,15 @@ class ActionMapper(metaclass=Singleton):
 
             corporation_id = action.train.owner.id
             price = action.price
-            if price == action.entity.cash - 1:
+
+            if action.entity.cash == 0 and state.round.active_step().president_may_contribute(action.entity):
+                max = action.entity.cash + action.entity.owner.cash
+            else:
+                max = action.entity.cash
+
+            if price == max - 1:
                 price = "all-but-one"
-            elif price == action.entity.cash:
+            elif price == max:
                 price = "all"
             # Only allow prices defined in train_price_offsets
             if str(price) not in self.train_price_offsets.keys():
@@ -535,7 +541,7 @@ class ActionMapper(metaclass=Singleton):
             # Only allow prices defined in buy_company_price_offsets
             if action.price == action.company.min_price:
                 price = "min"
-            elif action.price == action.company.max_price:
+            elif action.price == action.company.max_price or action.price == action.entity.cash:
                 price = "max"
             else:
                 raise ValueError(f"Disallowed price for buy company action: {action.price}")
@@ -550,7 +556,7 @@ class ActionMapper(metaclass=Singleton):
                 raise ValueError(f"Company is not MH for company buy shares action: {action}")
 
             # Either exchange MH for NYC from IPO or market
-            if action.bundle.owner == action.bundle.corporation:
+            if action.bundle.owner.name == "The Bank":
                 location = "ipo"
             elif action.bundle.owner.name == "Market":
                 location = "market"
@@ -603,7 +609,7 @@ class ActionMapper(metaclass=Singleton):
         indices = []
         for action in legal_actions:
             try:
-                indices.append(self.get_index_for_action(action))
+                indices.append(self.get_index_for_action(action, state))
             except ValueError as e:
                 LOGGER.warning(f"Warning: Unmappable action from ActionHelper: {action} ({e})")
                 raise e

@@ -66,7 +66,7 @@ class MCTSNode:
             self.depth = parent.depth + 1
 
         self.game_object: BaseGame = game_state
-        self.encoded_game_state = Encoder_1830().encode(self.game_object) # Use game_object
+        self.encoded_game_state = Encoder_1830.get_encoder_for_model(self.config.network).encode(self.game_object)
         self.action_mapper = ActionMapper()
 
         self.player_mapping = {p.id: i for i, p in enumerate(sorted(self.game_object.players, key=lambda x: x.id))}

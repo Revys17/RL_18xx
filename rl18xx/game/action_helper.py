@@ -134,13 +134,17 @@ class ActionHelper(metaclass=Singleton):
             return []
         return self.sort_actions(game.round.actions_for(game.current_entity))
 
-    def get_company_actions(self, game):
+    def get_company_actions(self, game, reduced_actions=False):
         company_actions = {}
         if isinstance(game.current_entity, Company):
             company_actions[game.current_entity] = self.sort_actions(game.round.actions_for(game.current_entity))
         elif hasattr(game.current_entity, "companies"):
             for company in game.current_entity.companies:
                 company_actions[company] = self.sort_actions(game.round.actions_for(company))
+        
+        if game.company_by_id("MH").owner and game.company_by_id("MH").owner.is_player():
+            if not reduced_actions or game.company_by_id("MH").player() == game.current_entity.player():
+                company_actions[game.company_by_id("MH")] = self.sort_actions(game.round.actions_for(game.company_by_id("MH")))
 
         return company_actions
 
@@ -182,6 +186,11 @@ class ActionHelper(metaclass=Singleton):
     def get_bid_actions(self, game, min_bid_only=False):
         if game.active_step().auctioning_company():
             company = game.active_step().auctioning_company()
+            min_bid = game.active_step().min_bid(company)
+            if min_bid % 5 != 0:
+                # Round up to the nearest multiple of 5
+                min_bid = min_bid + (5 - (min_bid % 5)) % 5
+
             if min_bid_only:
                 bid_values = [game.active_step().min_bid(company)]
             else:
@@ -218,7 +227,10 @@ class ActionHelper(metaclass=Singleton):
             else:
                 min_bid = game.active_step().min_bid(company)
                 max_bid = game.active_step().max_bid(game.current_entity, company)
-                bid_values = list(range(min_bid - (min_bid % 5), (max_bid + 5) - ((max_bid + 5) % 5), 5))
+                # Make this round up to the nearest multiple of 5
+                min_bid = min_bid + (5 - (min_bid % 5))
+                max_bid = max_bid + (5 - (max_bid % 5))
+                bid_values = list(range(min_bid, max_bid + 1, 5))
 
             bids.append(
                 [
@@ -261,12 +273,14 @@ class ActionHelper(metaclass=Singleton):
             [min(share_list, key=lambda share: share.index) for share_list in buyable_shares],
             key=lambda share: (share.corporation(), share.owner.__class__.__name__),
         )
-        return sorted([BuyShares(game.current_entity, share, share.price) for share in unique_buyable_shares])
+        #return sorted([BuyShares(game.current_entity, share, share.price) for share in unique_buyable_shares])
+        return sorted([BuyShares(game.current_entity, share) for share in unique_buyable_shares])
 
     def get_company_buy_shares_actions(self, game, company):
         exchange_step = [step for step in game.round.steps if isinstance(step, ExchangeStep)][0]
         shares = exchange_step.exchangeable_shares(company)
-        return sorted([BuyShares(company, share, share.price) for share in shares])
+        #return sorted([BuyShares(company, share, share.price) for share in shares])
+        return sorted([BuyShares(company, share) for share in shares])
 
     def get_sell_shares_actions(self, game):
         sellable_shares = game.active_step().sellable_shares(game.current_entity)
@@ -284,7 +298,7 @@ class ActionHelper(metaclass=Singleton):
                     PlaceToken(
                         game.current_entity,
                         city,
-                        city.get_slot(game.current_entity),
+                        city.get_slot(game.current_entity)
                     )
                     for hex in hexes
                     for city in hex._tile.cities
@@ -350,7 +364,7 @@ class ActionHelper(metaclass=Singleton):
             for hex in hexes:
                 tiles = special_track_step.potential_tiles(company, hex)
                 if not tiles:
-                    LOGGER.info(f"No tiles found for {company.name}'s special track lay on {hex.id}")
+                    LOGGER.debug(f"No tiles found for {company.name}'s special track lay on {hex.id}")
                 for tile in tiles:
                     rotations = special_track_step.legal_tile_rotations(company, hex, tile)
                     actions.extend(
@@ -372,44 +386,57 @@ class ActionHelper(metaclass=Singleton):
                 unique_trains[key] = train
         return unique_trains.values()
 
-    def get_valid_cross_company_train_prices(self, entity, limited_price_options=False):
+    def get_valid_cross_company_train_prices(self, min_cash_spend, max_cash_spend, limited_price_options=False):
         if limited_price_options:
-            return sorted(list(set([1, 20, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, entity.cash - 1, entity.cash])))
+            options = sorted(list(set([min_cash_spend, 20, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, max_cash_spend - 1, max_cash_spend])))
+            return [price for price in options if price >= min_cash_spend and price <= max_cash_spend]
         else:
-            return range(1, entity.cash + 1)
+            return range(min_cash_spend, max_cash_spend + 1)
 
     def get_buy_train_actions(self, game, limited_price_options=False):
-        if not game.active_step().room(game.current_entity):
-            return []
+        buyable_trains = game.round.active_step().buyable_trains(game.current_entity)
+        LOGGER.debug(f"Buyable trains: {[train for train in buyable_trains]}")
+        unique_trains = set()
+        unique_train_list = []
+        for train in buyable_trains:
+            if (train.name, train.owner) not in unique_trains:
+                unique_trains.add((train.name, train.owner))
+                unique_train_list.append(train)
 
-        actions = []
+        options = []
+        for train in unique_train_list:
+            if train.from_depot():
+                LOGGER.debug(f"Train {train.name} from depot")
+                if train.min_price() <= game.buying_power(game.current_entity) or (
+                    game.round.active_step().president_may_contribute(game.current_entity) and
+                    train.min_price() <= game.buying_power(game.current_entity.owner) + game.buying_power(game.current_entity)
+                ):
+                    LOGGER.debug(f"Adding train {train.name} with price {train.min_price()}")
+                    options.append((train, train.min_price()))
+            else:
+                LOGGER.debug(f"Train {train.name} not from depot")
+                if limited_price_options:
+                    min = 1
+                    if game.current_entity.cash == 0 and game.round.active_step().president_may_contribute(game.current_entity):
+                        max = game.current_entity.cash + game.current_entity.owner.cash
+                    else:
+                        max = game.current_entity.cash
+                else:
+                    min, max = game.round.active_step().spend_minmax(game.current_entity, train)
+                LOGGER.debug(f"Min: {min}, Max: {max}")
+                valid_prices = self.get_valid_cross_company_train_prices(min, max, limited_price_options)
+                for price in valid_prices:
+                    LOGGER.debug(f"Adding train {train.name} with price {price}")
+                    options.append((train, price))
+        
+        LOGGER.debug(f"Options: {[train for train in options]}")
+        actions = [
+            BuyTrain(game.current_entity, train, price)
+            for train, price in options
+        ]
 
-        # Add e-buy action
-        # Only allow e-buy of the cheapest depot train if forced to purchase
-        if (
-            game.current_entity.cash < game.depot.min_depot_price and
-            game.active_step().must_buy_train(game.current_entity)
-        ):
-            train = game.depot.min_depot_train
-            price = train.min_price()
-            if price <= game.buying_power(game.current_entity) + game.buying_power(game.current_entity.owner):
-                actions.append(BuyTrain(game.current_entity, train, price))
-        else:
-            depot_trains = self.get_unique_trains(game.active_step().buyable_trains(game.current_entity))
-            for train in depot_trains:
-                price = train.min_price()
-                if price <= game.buying_power(game.current_entity):
-                    actions.append(BuyTrain(game.current_entity, train, price))
-
-        corp_trains = self.get_unique_trains(game.depot.other_trains(game.current_entity))
-        for train in corp_trains:
-            valid_prices = self.get_valid_cross_company_train_prices(game.current_entity, limited_price_options)
-            for price in valid_prices:
-                if price > 0 and price <= game.buying_power(game.current_entity):
-                    actions.append(BuyTrain(game.current_entity, train, price))
-
-        if not limited_price_options:
-            actions.append(self.get_exchange_train_actions(game))
+        # We allow the $800 D purchase for the first player with a 4
+        actions.extend(self.get_exchange_train_actions(game))
 
         if actions:
             return actions
@@ -504,8 +531,8 @@ class ActionHelper(metaclass=Singleton):
         else:
             return []
 
-    def get_company_choices(self, game):
-        company_actions = self.get_company_actions(game)
+    def get_company_choices(self, game, reduced_actions=False):
+        company_actions = self.get_company_actions(game, reduced_actions=reduced_actions)
         if not company_actions.values():
             return []
 
@@ -520,7 +547,7 @@ class ActionHelper(metaclass=Singleton):
                     choices.extend(self.get_company_place_token_actions(game, company))
         return choices
 
-    def get_all_choices(self, game):
+    def get_all_choices(self, game, dict=False):
         if game.finished:
             return []
         choices = [
@@ -529,14 +556,17 @@ class ActionHelper(metaclass=Singleton):
             for choices in self.get_choices_for_action(game, action)
         ]
         choices.extend(self.get_company_choices(game))
-        return self.sort_actions(choices, instances=True)
+        sorted_actions = self.sort_actions(choices, instances=True)
+        if dict:
+            return [action.to_dict() for action in sorted_actions]
+        return sorted_actions
 
-    def get_all_choices_with_index(self, game):
+    def get_all_choices_with_index(self, game, dict=False):
         if game.finished:
             return {}
-        return {index: value for index, value in enumerate(self.get_all_choices(game))}
+        return {index: value for index, value in enumerate(self.get_all_choices(game, dict=dict))}
 
-    def get_all_choices_limited(self, game):
+    def get_all_choices_limited(self, game, dict=False):
         if game.finished:
             return []
         choices = [
@@ -544,10 +574,13 @@ class ActionHelper(metaclass=Singleton):
             for action in self.get_current_actions(game)
             for choices in self.get_choices_for_action(game, action, reduced_actions=True)
         ]
-        choices.extend(self.get_company_choices(game))
+        choices.extend(self.get_company_choices(game, reduced_actions=True))
 
         if not choices:
             if game.can_go_bankrupt(game.current_entity.owner, game.current_entity):
                 return [Bankrupt(game.current_entity)]
             return []
-        return self.sort_actions(choices, instances=True)
+        sorted_actions = self.sort_actions(choices, instances=True)
+        if dict:
+            return [action.to_dict() for action in sorted_actions]
+        return sorted_actions

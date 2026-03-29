@@ -6,11 +6,11 @@ import gc
 import shutil
 from datetime import datetime
 from dataclasses import dataclass, asdict
-from rl18xx.agent.alphazero.checkpointer import get_latest_model
+from rl18xx.agent.alphazero.checkpointer import get_latest_model, save_model
 from rl18xx.agent.alphazero.config import SelfPlayConfig, TrainingConfig
 from rl18xx.agent.alphazero.metrics import Metrics
 from rl18xx.agent.alphazero.self_play import SelfPlay, SELF_PLAY_GAMES_STATUS_PATH
-from rl18xx.agent.alphazero.train import train_latest_model, train, TrainingMetrics
+from rl18xx.agent.alphazero.train import train
 from pathlib import Path
 import signal
 import sys
@@ -361,12 +361,12 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
             
             # Get the model and train it, capturing metrics
             model = get_latest_model("model_checkpoints")
-            training_config.train_dir = training_config.root_dir / f"selfplay/{model.get_name()}"
-            training_config.val_dir = training_config.root_dir / f"holdout/{model.get_name()}"
+            training_config.train_dir = f"training_examples/selfplay/{model.get_name()}"
+            training_config.val_dir = f"training_examples/holdout/{model.get_name()}"
             
             # Train the model and capture metrics
-            train_metrics = train(training_config, model)
-            
+            _, train_metrics = train(training_config, model)
+            save_model(model, training_config.model_checkpoint_dir)
             # Update loop metrics with training results
             if train_metrics and train_metrics.epochs_trained > 0:
                 loop_metrics.training_losses.append(train_metrics.avg_total_loss)

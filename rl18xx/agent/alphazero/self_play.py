@@ -6,7 +6,7 @@ import socket
 import time
 from torch.utils.tensorboard import SummaryWriter
 import rl18xx.agent.alphazero.mcts as mcts
-from rl18xx.agent.alphazero.model import AlphaZeroModel
+from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
 from rl18xx.agent.alphazero.config import SelfPlayConfig, ModelConfig
 from rl18xx.agent.alphazero.checkpointer import get_latest_model
 from rl18xx.agent.alphazero.dataset import TrainingExampleProcessor
@@ -316,7 +316,7 @@ class SelfPlay:
         self.config = config
         assert config.network is not None or model_config is not None, "Network must be provided"
         if model_config is not None:
-            self.config.network = AlphaZeroModel(model_config)
+            self.config.network = AlphaZeroGNNModel(model_config)
         self.config.network.eval()
 
     def add_metric(self, name, value):
@@ -547,7 +547,7 @@ class SelfPlay:
             else:
                 save_path = self.config.selfplay_dir / self.config.network.get_name()
 
-            processor = TrainingExampleProcessor()
+            processor = TrainingExampleProcessor(self.config.network.encoder)
             processor.write_lmdb(game_data, save_path)
 
         # Explicitly delete large objects and collect garbage

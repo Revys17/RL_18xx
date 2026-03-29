@@ -117,7 +117,7 @@ class BaseAction:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "type": pascal_to_snake(self.__class__.__name__),
+            "type": self.type,
             "entity": self.entity.id,
             "entity_type": pascal_to_snake(self.entity.__class__.__name__),
             "id": self.id,
@@ -126,6 +126,10 @@ class BaseAction:
             "auto_actions": [action.to_dict() for action in self.auto_actions] if self.auto_actions else None,
             **self.args_to_dict(),
         }
+
+    @property
+    def type(self):
+        return pascal_to_snake(self.__class__.__name__)
 
     @staticmethod
     def dict_to_args(data: Dict[str, Any], game) -> Dict[str, Any]:

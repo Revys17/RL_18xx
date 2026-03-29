@@ -488,6 +488,9 @@ class EmergencyMoney:
         corporation = bundle.corporation
         if not corporation.president(seller):
             return True
+        
+        if not self.president_swap_concern(corporation):
+            return True
 
         return not self.causes_president_swap(corporation, bundle)
 
@@ -506,9 +509,6 @@ class EmergencyMoney:
             return []
 
         return self.game.emergency_issuable_bundles(entity)
-
-
-from pdb import set_trace
 
 
 class Train(EmergencyMoney):
@@ -564,7 +564,9 @@ class Train(EmergencyMoney):
         exchange = action.exchange
 
         # Check if the train is actually buyable in the current situation
-        if train.variant not in self.buyable_exchangeable_train_variants(train, entity, exchange):
+        if (train.variant not in self.buyable_exchangeable_train_variants(train, entity, exchange) or
+            train not in (self.game.depot.available(entity) + self.buyable_trains(entity))
+        ):
             raise Exception("Not a buyable train")
         if self.must_pay_face_value(train, entity, price):
             raise Exception("Must pay face value")
@@ -654,7 +656,7 @@ class Train(EmergencyMoney):
 
     def process_sell_shares(self, action):
         if action.entity != self.current_entity:
-            self.last_share_sold_price = action.bundle.price_per_share()
+            self.last_share_sold_price = int(action.bundle.price_per_share())
         super().process_sell_shares(action)
         if action.entity != self.current_entity:
             self.corporations_sold.append(action.bundle.corporation)
@@ -750,9 +752,9 @@ class Train(EmergencyMoney):
             if self.last_share_sold_price is not None:
                 min_price = self.buying_power(entity) + entity.owner.cash - self.last_share_sold_price + 1
             max_price = min(train.price, self.buying_power(entity) + entity.owner.cash)
-            return [min_price, max_price]
+            return [int(min_price), int(max_price)]
         else:
-            return [1, self.buying_power(entity)]
+            return [1, int(self.buying_power(entity))]
 
     def face_value_ability(self, entity):
         ability = self.game.abilities(entity, "train_buy", time="current")
@@ -766,7 +768,7 @@ class Train(EmergencyMoney):
         if (
             train.name not in cheapest_names
             and self.game.EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST
-            and (not self.game.EBUY_OTHER_VALUE or train.from_depot)
+            and (not self.game.EBUY_OTHER_VALUE or train.from_depot())
         ):
             raise Exception(f"Cannot purchase {train.name} train: cheaper train available ({cheapest_names[0]})")
 
@@ -999,7 +1001,7 @@ class Tokener:
         same_hex_allowed=False,
     ):
         hex = city.hex
-        extra_action = extra_action or (special_ability and special_ability.type in ["teleport", "token"])
+        extra_action = extra_action or (special_ability and special_ability.type in ["teleport", "token"] and special_ability.extra_action)
 
         if connected:
             self.check_connected(entity, city, hex)
@@ -1699,7 +1701,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         return entity.cash
 
     def can_buy_multiple(self, entity, corporation, owner):
-        if self.game.multiple_buy_only_from_market:
+        if self.game.multiple_buy_only_from_market():
             if not owner.is_share_pool():
                 return False
             if self.round.bought_from_ipo:
@@ -1721,6 +1723,10 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
     def buyable_shares(self, entity):
         buyable_shares = []
         for corporation, shares in self.game.share_pool.shares_by_corporation.items():
+            if self.can_buy_shares(entity, shares):
+                buyable_shares.append(shares)
+
+        for corporation, shares in self.game.bank.shares_by_corporation.items():
             if self.can_buy_shares(entity, shares):
                 buyable_shares.append(shares)
 
@@ -1777,7 +1783,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
 
     def can_buy_any_from_ipo(self, entity):
         for corporation in self.game.corporations:
-            if corporation.ipoed and self.can_buy_shares(entity, corporation.shares):
+            if corporation.ipoed and self.can_buy_shares(entity, corporation.ipo_owner.shares_of(corporation)):
                 return True
         return False
 
@@ -1800,7 +1806,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         if self.bought():
             return False
         return any(
-            self.game.can_par(c, entity) and self.can_buy(entity, c.shares[0].to_bundle())
+            self.game.can_par(c, entity) and self.can_buy(entity, c.corp_shares[0].to_bundle())
             for c in self.game.corporations
         )
 
@@ -2270,7 +2276,7 @@ class BuySellParSharesViaBid(BuySellParShares, PassableAuction):
     def max_bid(self, player, corporation=None):
         if not corporation:
             return player.cash
-        if not self.can_gain(player, corporation.shares[0].to_bundle()):
+        if not self.can_gain(player, corporation.ipo_owner.shares_of(corporation)[0].to_bundle()):
             return 0
         return player.cash
 
@@ -2331,7 +2337,7 @@ class CompanyPendingPar(BaseStep, Auctioner):
         share_price = action.share_price
         corporation = action.corporation
         self.game.stock_market.set_par(corporation, share_price)
-        self.game.share_pool.buy_shares(action.entity, corporation.shares[0], exchange="free")
+        self.game.share_pool.buy_shares(action.entity, corporation.corp_shares[0], exchange="free")
         self.game.after_par(corporation)
         self.round.companies_pending_par.pop(0)
 

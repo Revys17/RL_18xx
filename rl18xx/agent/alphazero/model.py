@@ -38,19 +38,61 @@ class ResBlock(nn.Module):
         out = self.dropout2(out)
         return out
 
-
 class AlphaZeroModel(nn.Module):
+    def encoder_type(self):
+        raise NotImplementedError("Subclasses must implement this method")
+    
+    def load_weights(self, save_file: str):
+        try:
+            with open(save_file, "rb") as f:
+                state_dict = torch.load(f, map_location=self.device)
+            self.load_state_dict(state_dict)
+        except FileNotFoundError:
+            LOGGER.error(f"Error: Weight file not found at {save_file}. Model weights remain as initialized.")
+        except Exception as e:
+            LOGGER.error(f"Error loading weights from {save_file}: {e}")
+
+    def save_weights(self, save_file: str):
+        try:
+            with open(save_file, "wb") as f:
+                torch.save(self.state_dict(), f)
+            LOGGER.info(f"Successfully saved weights to {save_file}")
+        except Exception as e:
+            LOGGER.error(f"Error saving weights to {save_file}: {e}")
+
+    def get_name(self):
+        raise NotImplementedError("Subclasses must implement this method")
+
+    def run(self, game_state: BaseGame) -> Tuple[Tensor, Tensor, Tensor]:
+        raise NotImplementedError("Subclasses must implement this method")
+
+    def run_encoded(self, encoded_game_state: Tuple[Tensor, Tensor, Tensor, Tensor]) -> Tuple[Tensor, Tensor, Tensor]:
+        raise NotImplementedError("Subclasses must implement this method")
+
+    def run_many(self, game_states: List[BaseGame]) -> Tuple[Tensor, Tensor, Tensor]:
+        raise NotImplementedError("Subclasses must implement this method")
+
+    def run_many_encoded(
+        self, game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]]
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        raise NotImplementedError("Subclasses must implement this method")
+
+
+class AlphaZeroGNNModel(AlphaZeroModel):
     """
     Neural Network model for an 18xx AlphaZero agent, incorporating a GNN for map data.
     """
 
     def __init__(self, config: ModelConfig):
-        super(AlphaZeroModel, self).__init__()
+        super(AlphaZeroGNNModel, self).__init__()
         self.config = config
         self.device = config.device
-        self.encoder = Encoder_1830()
+        self.encoder = Encoder_1830.get_encoder_for_model(self)
         self.init_model()
         self.to(self.device)
+
+    def encoder_type(self):
+        return "GNN"
 
     def init_model(self):
         # --- 1. Game State MLP Branch ---
@@ -132,24 +174,6 @@ class AlphaZeroModel(nn.Module):
             elif isinstance(m, nn.BatchNorm1d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
-
-    def load_weights(self, save_file: str):
-        try:
-            with open(save_file, "rb") as f:
-                state_dict = torch.load(f, map_location=self.device)
-            self.load_state_dict(state_dict)
-        except FileNotFoundError:
-            LOGGER.error(f"Error: Weight file not found at {save_file}. Model weights remain as initialized.")
-        except Exception as e:
-            LOGGER.error(f"Error loading weights from {save_file}: {e}")
-
-    def save_weights(self, save_file: str):
-        try:
-            with open(save_file, "wb") as f:
-                torch.save(self.state_dict(), f)
-            LOGGER.info(f"Successfully saved weights to {save_file}")
-        except Exception as e:
-            LOGGER.error(f"Error saving weights to {save_file}: {e}")
 
     def get_name(self):
         return f"AlphaZeroModel_{self.config.timestamp}"
@@ -259,5 +283,77 @@ class AlphaZeroModel(nn.Module):
         policy_log_probs = F.log_softmax(policy_logits, dim=1)
 
         value_estimates = torch.tanh(self.value_head(current_features))  # tanh to keep values in [-1, 1]
+
+        return probabilities, policy_log_probs, value_estimates
+
+
+class AlphaZeroSSMEModel(AlphaZeroModel):
+    """
+    Neural Network model for an 18xx AlphaZero agent, incorporating a SSME for map data.
+    """
+    def __init__(self, config: ModelConfig):
+        super(AlphaZeroSSMEModel, self).__init__()
+        self.config = config
+        self.device = config.device
+        self.encoder = Encoder_1830.get_encoder_for_model(self)
+        self.init_model()
+        self.to(self.device)
+
+    def encoder_type(self):
+        return "SSME"
+
+    def init_model(self):
+        pass
+
+        if self.config.model_checkpoint_file:
+            self.load_weights(self.config.model_checkpoint_file)
+        else:
+            self.initialize_weights()
+
+    def initialize_weights(self):
+        """Initializes weights using Kaiming He initialization for ReLU-activated layers."""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def get_name(self):
+        return f"AlphaZeroSSMEModel_{self.config.timestamp}"
+
+    def run(self, game_state: BaseGame) -> Tuple[Tensor, Tensor, Tensor]:
+        probs, log_probs, values = self.run_many([game_state])
+        return probs[0], log_probs[0], values[0]
+
+    def run_encoded(self, encoded_game_state: Tuple[Tensor, Tensor, Tensor, Tensor]) -> Tuple[Tensor, Tensor, Tensor]:
+        probs, log_probs, values = self.run_many_encoded([encoded_game_state])
+        return probs[0], log_probs[0], values[0]
+
+    def run_many(self, game_states: List[BaseGame]) -> Tuple[Tensor, Tensor, Tensor]:
+        encoded_game_states = [self.encoder.encode(game_state) for game_state in game_states]
+        return self.run_many_encoded(encoded_game_states)
+
+    def run_many_encoded(
+        self, game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]]
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        batch_size = len(game_states)
+
+        if batch_size == 0:
+            raise ValueError("Received no game states to run.")
+
+        pass
+
+        # Run the model
+        outputs = self.forward(batched_game_state_tensor, graph_batch)
+
+        # Extract outputs
+        probabilities, log_probs, value = outputs[0], outputs[1], outputs[2]
+        return probabilities, log_probs, value
+
+    def forward(self, game_state_data: Tensor, map_data: Batch) -> tuple[Tensor, Tensor, Tensor]:
+        pass
 
         return probabilities, policy_log_probs, value_estimates

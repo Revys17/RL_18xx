@@ -1,4 +1,5 @@
 from rl18xx.agent.alphazero.encoder import Encoder_1830
+from rl18xx.agent.alphazero.model import AlphaZeroGNNModel, AlphaZeroModel
 from rl18xx.game.engine.game import BaseGame
 import lmdb
 import torch
@@ -9,14 +10,17 @@ from torch.utils.data import Dataset
 import logging
 import io
 from pathlib import Path
-from typing import Union, List, Tuple
+from typing import Any, Union, List, Tuple
 import lz4.frame
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
 
 LOGGER = logging.getLogger(__name__)
 
 
-class MCTSDataset(Dataset):
+class Dataset_1830(Dataset):
+    pass
+
+class SelfPlayDataset(Dataset_1830):
     def __init__(self, lmdb_path: Union[Path, str]):
         self.action_mapper = ActionMapper()
         if isinstance(lmdb_path, Path):
@@ -43,17 +47,41 @@ class MCTSDataset(Dataset):
     def __len__(self):
         return self.length
 
+class HumanPlayDataset(Dataset_1830):
+    def __init__(self, examples: List[Any]):
+        self.examples = examples
+        self.action_mapper = ActionMapper()
+    
+    def __getitem__(self, index):
+        game_state, legal_actions, pi, value = self.examples[index]
+        legal_action_mask = torch.from_numpy(self.action_mapper.convert_indices_to_mask(legal_actions))
+        game_state_data, node_data, edge_index, edge_attr = game_state
+        data = Data(x=node_data, edge_index=edge_index, edge_attr=edge_attr)
+        return game_state_data, data, legal_action_mask, pi, value
+
 
 class TrainingExampleProcessor:
-    def __init__(self):
-        self.encoder = Encoder_1830()
+    def __init__(self, encoder: Encoder_1830):
+        self.encoder = encoder
 
     def write_lmdb(self, game_data, lmdb_path: Union[Path, str], map_size=1e12):
+        samples = self.make_dataset_from_selfplay(game_data)
+        self.write_samples(samples, lmdb_path, map_size)
+
+    def make_dataset_from_selfplay(
+        self, data_extracts: List[Tuple[BaseGame, torch.Tensor, torch.Tensor, torch.Tensor]]
+    ) -> List[Tuple[Tuple[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]]:
+        examples = []
+        for game_state, legal_actions, searches_pi, result in data_extracts:
+            encoded_state = self.encoder.encode(game_state)
+            pi = searches_pi
+            value = result
+            examples.append((encoded_state, legal_actions, pi, value))
+        return examples
+
+    def write_samples(self, samples, lmdb_path: Union[Path, str], map_size=1e12):
         if isinstance(lmdb_path, Path):
             lmdb_path = lmdb_path.as_posix()
-
-        samples = self.make_dataset_from_selfplay(game_data)
-
         env = lmdb.open(lmdb_path, map_size=int(map_size))
         
         start_index = 0
@@ -71,13 +99,3 @@ class TrainingExampleProcessor:
                 txn.put(key, compressed_data)
         LOGGER.info(f"Wrote {len(samples)} samples to {lmdb_path}")
 
-    def make_dataset_from_selfplay(
-        self, data_extracts: List[Tuple[BaseGame, torch.Tensor, torch.Tensor, torch.Tensor]]
-    ) -> List[Tuple[Tuple[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]]:
-        examples = []
-        for game_state, legal_actions, searches_pi, result in data_extracts:
-            encoded_state = self.encoder.encode(game_state)
-            pi = searches_pi
-            value = result
-            examples.append((encoded_state, legal_actions, pi, value))
-        return examples

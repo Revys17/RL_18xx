@@ -132,11 +132,16 @@ class GameSync:
     def take_online_action(self, action_dict: dict):
         online_player_id = self.map_action_player_to_online_player(action_dict)
         mapped_action_dict = self.update_local_action_to_work_online(action_dict, online_player_id)
+        LOGGER.info(f"Taking online action: {mapped_action_dict}")
         auth_token = self.auth_token_map[online_player_id]
 
         try:
             self.api_client.take_action(self.game_id, mapped_action_dict, auth_token)
         except Exception as e:
+            # Try skipping the action if it's a pass
+            if action_dict.get("type") == "pass":
+                LOGGER.info(f"Skipping pass action")
+                return
             LOGGER.error(e)
             LOGGER.error(f"Game actions at this point: {self.local_game.raw_actions}")
             raise e
