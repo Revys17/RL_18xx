@@ -344,6 +344,7 @@ class BaseGame:
             if dev_stage != "alpha":
                 self.log.append("If the game is modified due to a design change, games will be pinned")
 
+        self.bank = self.init_bank()
         self.companies = self.init_companies(self.players)
         self.stock_market = self.init_stock_market()
         self.minors = self.init_minors()
@@ -354,7 +355,6 @@ class BaseGame:
         self.corporations_are_closing = False
         self._axes = None
         self._crowded_corps = None
-        self.bank = self.init_bank()
         self.tiles = self.init_tiles()
         self.all_tiles = self.init_tiles()
         self.optional_tiles()
@@ -526,7 +526,7 @@ class BaseGame:
     # Allow presidential swaps of other corporations when ebuying
     EBUY_PRES_SWAP = True
     # Allow ebuying other corp trains for up to face value
-    EBUY_OTHER_VALUE = False
+    EBUY_OTHER_VALUE = True
     # If ebuying from depot, must buy cheapest train
     EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST = True
     # Corporation must issue shares before ebuy (if possible)
@@ -933,7 +933,13 @@ class BaseGame:
         except Exception as e:
             # if the action is a pass, let's try skipping it.
             if not isinstance(action, Pass):
+                LOGGER.error(f"Error processing action: {action}")
+                LOGGER.error(f"Last 5 actions: {self.raw_actions[-5:]}")
                 raise e
+            else:
+                LOGGER.debug(f"Skipping pass action: {action}")
+                self.actions.pop()
+                self.raw_actions.pop()
 
         if not isinstance(action, Message):
             self.redo_possible = False
@@ -943,7 +949,7 @@ class BaseGame:
         if add_auto_actions or validate_auto_actions:
             auto_actions = []
             while True:
-                actions = self.round.auto_actions or []
+                actions = self.round.auto_actions() or []
                 if not actions:
                     break
                 for a in actions:
@@ -967,11 +973,12 @@ class BaseGame:
     def process_single_action(self, action):
         if (
             action.user
-            and action.user != self.acting_for_player(action.entity.player).id
-            and not action.instance_of(Message)
+            and action.user != self.acting_for_player(action.entity.player()).id
+            and not isinstance(action, Message)
         ):
+            action_type = action["type"] if isinstance(action, dict) else action.type
             self.log.append(
-                f'• Action({action.type}) via Master Mode by: {self.player_by_id(action.user).name if self.player_by_id(action.user) else "Owner"}'
+                f'• Action({action_type}) via Master Mode by: {self.player_by_id(action.user).name if self.player_by_id(action.user) else "Owner"}'
             )
 
         self.preprocess_action(action)
@@ -1336,6 +1343,7 @@ class BaseGame:
         return (
             [share for corp in self.corporations for share in corp.shares]
             + [share for player in self.players for share in player.shares]
+            + self.bank.shares
             + self.share_pool.shares
         )
 
@@ -2115,13 +2123,13 @@ class BaseGame:
         self.close_corporations_in_close_cell()
 
     def shares_for_corporation(self, corporation):
-        return [share for share in self._shares.values() if share.corporation == corporation]
+        return [share for share in self.shares.values() if share.corporation == corporation]
 
     def reset_corporation(self, corporation):
-        for share_id, share in list(self._shares.items()):
+        for share_id, share in list(self.shares.items()):
             if share.corporation == corporation:
                 share.owner.shares_by_corporation[corporation].clear()
-                del self._shares[share_id]
+                del self.shares[share_id]
 
         for company in list(corporation.companies):
             company.close()
@@ -2136,9 +2144,8 @@ class BaseGame:
 
         if new_corporation:
             self.corporations = [new_corporation if c.id == new_corporation.id else c for c in self.corporations]
-            self._corporations[new_corporation.id] = new_corporation
-            for share in new_corporation.shares:
-                self._shares[share.id] = share
+            for share in new_corporation.corp_shares:
+                self.shares[share.id] = share
 
         return new_corporation
 
@@ -2639,7 +2646,9 @@ class BaseGame:
         return 0
 
     def corporation_opts(self):
-        return {}
+        return {
+            "ipo_owner": self.bank
+        }
 
     def init_corporations(self, stock_market):
         return [
@@ -2805,7 +2814,7 @@ class BaseGame:
                 if share in ["random_president", "first_president"]:
                     idx = 0 if share == "first_president" else randint(0, len(self.corporations) - 1)
                     corporation = self.corporations[idx]
-                    share = corporation.shares[0]
+                    share = corporation.corp_shares[0]
                     real_shares.append(share)
                     company.desc = f"Purchasing player takes a president's share (20%) of {corporation.name} \
                         and immediately sets its par value. {company.desc}"
@@ -2817,7 +2826,7 @@ class BaseGame:
                         else self.corporations
                     )
                     corporation = choice(corporations)
-                    share = next((s for s in corporation.shares if not s.president), None)
+                    share = next((s for s in corporation.corp_shares if not s.president), None)
                     if share:
                         real_shares.append(share)
                         company.desc += f" The random corporation in this game is {corporation.name}."

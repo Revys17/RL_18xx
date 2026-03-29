@@ -68,54 +68,35 @@ class ModelConfig:
 
 @dataclass
 class TrainingConfig:
-    root_dir: str = "training_examples"
-    train_dir: Optional[str] = None
-    val_dir: Optional[str] = None
-    model_checkpoint_dir: str = "model_checkpoints"
-    train_batch_size: int = 256
+    train_dir: Optional[Union[str, Path]] = None
+    val_dir: Optional[Union[str, Path]] = None
+    batch_size: int = 256
     lr: float = 1e-3
     num_epochs: int = 1
     weight_decay: float = 1e-4
     shuffle_examples: bool = True
     value_loss_weight: float = 1.0
-    learning_rate: float = 0.001
-    batch_size: int = 256
-    metrics: Optional[Metrics] = None
-    global_step: int = 0
-    def __post_init__(self):
-        self.root_dir = Path(self.root_dir)
-        self.model_checkpoint_dir = self.model_checkpoint_dir
-        self.train_batch_size = self.train_batch_size
-        self.lr = self.lr
-        self.num_epochs = self.num_epochs
-        self.weight_decay = self.weight_decay
-        self.shuffle_examples = self.shuffle_examples
-        self.value_loss_weight = self.value_loss_weight
 
+    def __post_init__(self):
         if self.train_dir is None and self.val_dir is None:
             return
 
         if self.train_dir is None or self.val_dir is None:
             raise ValueError("train_dir and val_dir must both be provided or both be None")
-
-        self.train_dir = self.root_dir / self.train_dir
-        self.val_dir = self.root_dir / self.val_dir
+        
+        self.train_dir = Path(self.train_dir)
+        self.val_dir = Path(self.val_dir)
 
     def to_json(self):
         return {
-            "root_dir": str(self.root_dir) if self.root_dir else None,
             "train_dir": str(self.train_dir) if self.train_dir else None,
             "val_dir": str(self.val_dir) if self.val_dir else None,
-            "model_checkpoint_dir": str(self.model_checkpoint_dir) if self.model_checkpoint_dir else None,
-            "train_batch_size": self.train_batch_size,
+            "batch_size": self.batch_size,
             "lr": self.lr,
             "num_epochs": self.num_epochs,
             "weight_decay": self.weight_decay,
             "shuffle_examples": self.shuffle_examples,
             "value_loss_weight": self.value_loss_weight,
-            "learning_rate": self.learning_rate,
-            "batch_size": self.batch_size,
-            "global_step": self.global_step,
         }
     
     @classmethod

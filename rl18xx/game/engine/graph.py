@@ -202,7 +202,9 @@ class Node(BasePart):
         if counter is None:
             counter = {}
 
-        # set_trace()
+        if debug:
+            from pdb import set_trace
+            set_trace()
         if self in visited:
             return
 
@@ -218,6 +220,9 @@ class Node(BasePart):
         )
 
         for node_path in self.paths:
+            if debug:
+                from pdb import set_trace
+                set_trace()
             if node_path.track == skip_track or node_path in skip_paths or node_path.ignore:
                 continue
 
@@ -1228,6 +1233,7 @@ class Graph:
         self.skip_track = opts.get("skip_track")
         self.check_tokens = opts.get("check_tokens")
         self.check_regions = opts.get("check_regions")
+        self.debug = False
 
     def clear(self):
         self._connected_hexes.clear()
@@ -1432,6 +1438,7 @@ class Graph:
                 skip_paths=skip_paths,
                 converging_path=False,
                 counter=counter,
+                debug=self.debug,
             ):
                 if path in paths:
                     continue
@@ -1456,6 +1463,8 @@ class Graph:
             if mandatory_nodes > 1:
                 routes["route_available"] = True
                 routes["route_train_purchase"] = True
+                # This route_train_purchase flag ends the loop, so we should set the routes on the corporation now.
+                self.routes[corporation] = routes
             elif mandatory_nodes == 1 and optional_nodes > 0:
                 routes["route_available"] = True
 
@@ -1828,8 +1837,11 @@ class Route:
 
     @property
     def hexes(self):
-        if not self._hexes:
-            self._hexes = {node.hex for c in self.connection_data for node in [c["left"], c["right"]] if node}
+        if not self._hexes:    
+            if not self.connection_data:
+                self._hexes = []
+            else:
+                self._hexes = {node.hex for c in self.connection_data for node in [c.get("left"), c.get("right")] if node}
         return self._hexes
 
     @property
@@ -2007,7 +2019,7 @@ class Route:
             for index, pair in enumerate(zip(possibilities, possibilities[1:])):
                 a, b = pair
                 a, b, left, right, middle = self.find_pairwise_chain(a, b, other_paths)
-                if not left.hex or not right.hex or not middle.hex:
+                if not left or not left.hex or not right or not right.hex or not middle or not middle.hex:
                     return self._connection_data.clear()
 
                 self._connection_data.append(
@@ -2899,8 +2911,9 @@ class Tile(TileConfig):
         """Count exits post-rotation."""
         if not self._exit_count:
             counts = defaultdict(int)
-            for edge in self.edges:
-                counts[self.rotate(edge.num, self.rotation)] += 1
+            for path in self.paths:
+                for edge in path.exits:
+                    counts[edge] += 1
             self._exit_count = dict(counts)
         return self._exit_count
 

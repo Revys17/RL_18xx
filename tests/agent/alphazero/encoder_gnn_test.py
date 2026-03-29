@@ -7,7 +7,7 @@ import torch
 # Assuming the encoder and game engine classes are importable
 from rl18xx.agent.alphazero.encoder import (
     G1830_STARTING_CASH,
-    Encoder_1830,
+    Encoder_GNN,
     ROUND_TYPE_MAP,
     MAX_ROUND_TYPE_IDX,
     PHASE_NAMES_ORDERED,
@@ -30,7 +30,7 @@ def assert_float(expected, actual, desc="", tolerance=1e-4):
 
 
 # Helper to get section slice and offset
-def get_section_slice(encoder: Encoder_1830, section_name: str, current_offset: int) -> tuple[slice, int]:
+def get_section_slice(encoder: Encoder_GNN, section_name: str, current_offset: int) -> tuple[slice, int]:
     size = encoder._get_section_size(section_name)
     section_slice = slice(current_offset, current_offset + size)
     next_offset = current_offset + size
@@ -38,7 +38,7 @@ def get_section_slice(encoder: Encoder_1830, section_name: str, current_offset: 
 
 
 # Helper to get map feature index by name
-def get_feature_index(encoder: Encoder_1830, feature_name: str) -> int:
+def get_feature_index(encoder: Encoder_GNN, feature_name: str) -> int:
     try:
         return encoder.map_node_features.index(feature_name)
     except ValueError:
@@ -49,8 +49,8 @@ def get_feature_index(encoder: Encoder_1830, feature_name: str) -> int:
 
 @pytest.fixture(scope="module")
 def encoder_1830():
-    """Provides a reusable Encoder_1830 instance."""
-    return Encoder_1830()
+    """Provides a reusable Encoder_GNN instance."""
+    return Encoder_GNN()
 
 
 @pytest.fixture
@@ -151,7 +151,7 @@ def check_edge_exists_in_tensor(idx1: int, idx2: int, edge_index_tensor: torch.T
     return False
 
 
-def test_edge_index(encoder_1830: Encoder_1830, test_game_1830_4p):
+def test_edge_index(encoder_1830: Encoder_GNN, test_game_1830_4p):
     test_game_1830_4p, action_helper = test_game_1830_4p
 
     # Get and check the edge_index created on the initial game state:
@@ -203,7 +203,7 @@ def test_edge_index(encoder_1830: Encoder_1830, test_game_1830_4p):
                 )
 
 
-def test_initial_encoding_structure(encoder_1830: Encoder_1830, test_game_1830_4p):
+def test_initial_encoding_structure(encoder_1830: Encoder_GNN, test_game_1830_4p):
     """Verify the basic structure and size of the initial encoding."""
     g, action_helper = test_game_1830_4p
     num_players = len(g.players)
@@ -237,7 +237,7 @@ def test_initial_encoding_structure(encoder_1830: Encoder_1830, test_game_1830_4
     assert edge_attributes.dtype == long, "Expected dtype long"
 
 
-def test_initial_game_state_encoding(encoder_1830: Encoder_1830, test_game_1830_4p):
+def test_initial_game_state_encoding(encoder_1830: Encoder_GNN, test_game_1830_4p):
     """Verify the encoding of general game state at the start."""
     g, action_helper = test_game_1830_4p
     game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
@@ -432,7 +432,7 @@ def test_initial_game_state_encoding(encoder_1830: Encoder_1830, test_game_1830_
     ), f"Final offset {offset} does not match expected size {encoder_1830.ENCODING_SIZE}"
 
 
-def test_encoding_after_bid(encoder_1830: Encoder_1830, test_game_1830_4p):
+def test_encoding_after_bid(encoder_1830: Encoder_GNN, test_game_1830_4p):
     """Verify encoding changes correctly after a player makes a bid."""
     g, action_helper = test_game_1830_4p
 
@@ -529,7 +529,7 @@ def test_encoding_after_bid(encoder_1830: Encoder_1830, test_game_1830_4p):
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after bid test"
 
 
-def test_encoding_after_purchase(encoder_1830: Encoder_1830, test_game_1830_4p):
+def test_encoding_after_purchase(encoder_1830: Encoder_GNN, test_game_1830_4p):
     """Verify encoding changes correctly after a player buys a private."""
     g, action_helper = test_game_1830_4p
 
@@ -657,7 +657,7 @@ def test_encoding_after_purchase(encoder_1830: Encoder_1830, test_game_1830_4p):
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after purchase test"
 
 
-def test_initial_map_node_features(encoder_1830: Encoder_1830, test_game_1830_4p):
+def test_initial_map_node_features(encoder_1830: Encoder_GNN, test_game_1830_4p):
     """Verify the node features encoding for specific hexes at the start."""
     g, _ = test_game_1830_4p
     _, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
@@ -880,7 +880,7 @@ def test_initial_map_node_features(encoder_1830: Encoder_1830, test_game_1830_4p
     )
 
 
-def test_encoding_after_par(encoder_1830: Encoder_1830, test_game_1830_4p):
+def test_encoding_after_par(encoder_1830: Encoder_GNN, test_game_1830_4p):
     """Verify encoding changes correctly after a corporation is parred."""
     g, action_helper = test_game_1830_4p
     player1 = g.players[0]
@@ -1591,7 +1591,7 @@ def test_encoding_after_par(encoder_1830: Encoder_1830, test_game_1830_4p):
 
 
 def test_operating_round_2_encoding(
-    encoder_1830: Encoder_1830, operating_round_2_game_state: Tuple[BaseGame, ActionHelper]
+    encoder_1830: Encoder_GNN, operating_round_2_game_state: Tuple[BaseGame, ActionHelper]
 ):
     operating_round_2_game_state, action_helper = operating_round_2_game_state
 

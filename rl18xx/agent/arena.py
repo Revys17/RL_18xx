@@ -5,7 +5,7 @@ import logging
 from rl18xx.agent.alphazero.self_play import MCTSPlayer
 from rl18xx.agent.random.random_agent import RandomPlayer
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
-from rl18xx.agent.alphazero.checkpointer import get_latest_model
+from rl18xx.agent.alphazero.checkpointer import get_latest_model, get_model_from_path
 from rl18xx.client.game_sync import GameSync
 
 LOGGER = logging.getLogger(__name__)
@@ -72,6 +72,28 @@ def test_mcts_agent_against_random_agent(browser: bool = False):
     for player_id, result in final_game_state.result().items():
         agent_scores[agent_mapping[player_id]] = result
 
+    winner = max(agent_scores, key=agent_scores.get)
+    LOGGER.info(f"Agent scores: {agent_scores}")
+    LOGGER.info(f"Winner: {winner}")
+    return final_game_state, agent_mapping, agent_scores, winner
+
+def test_mcts_versions(checkpoint_dirs: list[str], browser: bool = False):
+    assert len(checkpoint_dirs) == 4, "Must provide 4 checkpoint directories"
+
+    agents = []
+    for checkpoint_dir in checkpoint_dirs:
+        model = get_model_from_path(checkpoint_dir)
+        config = SelfPlayConfig(softpick_move_cutoff=0, dirichlet_noise_weight=0, network=model)
+        agent = MCTSPlayer(config)
+        agents.append(agent)
+    
+    LOGGER.info(f"Testing the following agents: {[model_checkpoint_dir for model_checkpoint_dir in checkpoint_dirs]}")
+    arena = Arena(agents[0], agents[1], agents[2], agents[3], browser=browser)
+    final_game_state, agent_mapping = arena.play()
+    
+    agent_scores = {}
+    for player_id, result in final_game_state.result().items():
+        agent_scores[agent_mapping[player_id]] = result
     winner = max(agent_scores, key=agent_scores.get)
     LOGGER.info(f"Agent scores: {agent_scores}")
     LOGGER.info(f"Winner: {winner}")

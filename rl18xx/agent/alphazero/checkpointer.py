@@ -1,4 +1,4 @@
-from rl18xx.agent.alphazero.model import AlphaZeroModel
+from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
 from rl18xx.agent.alphazero.config import ModelConfig
 from pathlib import Path
 from datetime import datetime
@@ -8,7 +8,7 @@ import logging
 LOGGER = logging.getLogger(__name__)
 
 
-def get_latest_model(model_checkpoint_dir: str) -> AlphaZeroModel:
+def get_latest_model(model_checkpoint_dir: str) -> AlphaZeroGNNModel:
     # Get the directory within model_checkpoint_dir with the latest timestamp in its name
     p = Path(model_checkpoint_dir)
     if not p.exists() or not p.is_dir():
@@ -35,13 +35,30 @@ def get_latest_model(model_checkpoint_dir: str) -> AlphaZeroModel:
         config = ModelConfig.from_json(config_data)
 
     config.model_checkpoint_file = str(checkpoint_path)
-    model = AlphaZeroModel(config)
+    model = AlphaZeroGNNModel(config)
     # The model's __init__ method already loads weights if model_checkpoint_file is set
     LOGGER.info(f"Loaded most recent model: {model.get_name()}")
     return model
 
+def get_model_from_path(model_checkpoint_path: str) -> AlphaZeroGNNModel:
+    p = Path(model_checkpoint_path)
+    if not p.exists() or not p.is_dir():
+        raise FileNotFoundError(f"Model checkpoint directory not found: {model_checkpoint_path}")
+    
+    config_path = p / "config.json"
+    checkpoint_path = p / "checkpoint.pth"
+    
+    with open(config_path, "r") as f:
+        config_data = json.load(f)
+        config = ModelConfig.from_json(config_data)
 
-def save_model(model: AlphaZeroModel, model_checkpoint_dir: str, new=True):
+    config.model_checkpoint_file = str(checkpoint_path)
+    model = AlphaZeroGNNModel(config)
+    # The model's __init__ method already loads weights if model_checkpoint_file is set
+    LOGGER.info(f"Loaded model from path {model_checkpoint_path}: {model.get_name()}")
+    return model
+
+def save_model(model: AlphaZeroGNNModel, model_checkpoint_dir: str, new=True):
     if new:
         model.config.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 

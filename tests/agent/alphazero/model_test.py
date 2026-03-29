@@ -2,7 +2,7 @@ import os
 import tempfile
 from rl18xx.game.gamemap import GameMap
 from rl18xx.agent.alphazero.config import ModelConfig
-from rl18xx.agent.alphazero.model import AlphaZeroModel
+from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
 
 # --- Define constants based on your model's expected inputs/outputs ---
 GAME_STATE_SIZE = 377
@@ -34,7 +34,7 @@ def get_fresh_game_state():
 
 
 def get_model():
-    return AlphaZeroModel(ModelConfig())
+    return AlphaZeroGNNModel(ModelConfig())
 
 
 def test_run_single():

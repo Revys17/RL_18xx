@@ -559,7 +559,7 @@ def test_auction(initial_game_state):
 
     all_actions = action_helper.get_all_choices_limited(initial_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, initial_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
     assert mask.shape == (26535,)
@@ -588,7 +588,7 @@ def test_auction(initial_game_state):
 
     all_actions = action_helper.get_all_choices_limited(initial_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, initial_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
     assert mask.shape == (26535,)
@@ -614,7 +614,7 @@ def test_auction(initial_game_state):
 
     all_actions = action_helper.get_all_choices_limited(initial_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, initial_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
     assert mask.shape == (26535,)
@@ -628,7 +628,7 @@ def test_auction(initial_game_state):
 
     all_actions = action_helper.get_all_choices_limited(initial_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, initial_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
     assert mask.shape == (26535,)
@@ -655,7 +655,7 @@ def test_stock_round_1_game_state(stock_round_1_game_state):
     # Test initial stock round 1 state
     all_actions = action_helper.get_all_choices_limited(stock_round_1_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, stock_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(stock_round_1_game_state)
     assert mask.shape == (26535,)
@@ -776,7 +776,7 @@ def test_stock_round_1_game_state(stock_round_1_game_state):
     all_actions = action_helper.get_all_choices_limited(stock_round_1_game_state)
     print("\n".join([str(action) for action in all_actions]))
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, stock_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(stock_round_1_game_state)
     assert mask.shape == (26535,)
@@ -805,7 +805,7 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
     # Test initial operating round 1 state
     all_actions = action_helper.get_all_choices_limited(operating_round_1_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
@@ -863,7 +863,7 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
     # Test token options
     all_actions = action_helper.get_all_choices_limited(operating_round_1_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
@@ -885,7 +885,7 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
     # Test train options
     all_actions = action_helper.get_all_choices_limited(operating_round_1_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
@@ -906,7 +906,7 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
     # Check again
     all_actions = action_helper.get_all_choices_limited(operating_round_1_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
@@ -929,7 +929,7 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
     # NYC
     all_actions = action_helper.get_all_choices_limited(operating_round_1_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
@@ -972,7 +972,7 @@ def test_stock_round_2_game_state(stock_round_2_game_state):
     # Test initial stock round 2 state
     all_actions = action_helper.get_all_choices_limited(stock_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, stock_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(stock_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1005,7 +1005,7 @@ def test_stock_round_2_game_state(stock_round_2_game_state):
     # Test MH exchange
     all_actions = action_helper.get_all_choices_limited(stock_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, stock_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(stock_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1072,7 +1072,7 @@ def test_stock_round_2_game_state(stock_round_2_game_state):
 
     all_actions = action_helper.get_all_choices_limited(stock_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, stock_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(stock_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1139,7 +1139,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test initial operating round 2 state
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1206,7 +1206,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test dividend
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1238,7 +1238,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test 3 train purchase
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1262,7 +1262,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test buy company
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1312,7 +1312,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Check cross-company BuyTrain
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1386,7 +1386,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Check company tile lay
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1442,7 +1442,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Check company tile lay again
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1510,7 +1510,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Check company token placement
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1535,7 +1535,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test tile upgrade
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1616,7 +1616,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test discard train
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1633,7 +1633,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test purchase discarded train
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1675,7 +1675,7 @@ def test_bankruptcy_game_state(bankruptcy_game_state):
     # Test bankrupcy action availability
     all_actions = action_helper.get_all_choices_limited(bankruptcy_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, bankruptcy_game_state) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(bankruptcy_game_state)
     assert mask.shape == (26535,)

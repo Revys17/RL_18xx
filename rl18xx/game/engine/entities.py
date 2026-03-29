@@ -1317,7 +1317,7 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
     @property
     def available_share(self):
         return next(
-            (share for share in self.shares_by_corporation[self] if not share.president),
+            (share for share in self.ipo_owner.shares_by_corporation[self] if not share.president),
             None,
         )
 
