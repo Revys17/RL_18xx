@@ -249,7 +249,7 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
     LOOP_LOCK_FILE.touch()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    setup_logging(logging.INFO, f"logs/loop/loop_{timestamp}.log")
+    setup_logging(logging.INFO, f"logs/loop/loop_{timestamp}.log", console=True)
 
     tb_log_dir = os.path.join(TENSORBOARD_LOG_DIR_BASE, f"experiment_{timestamp}")
     metrics = Metrics(tb_log_dir)
@@ -310,12 +310,14 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
             game_lengths_this_iteration = []
             executor = ProcessPoolExecutor(max_workers=loop_config.num_threads)
             
+            LOGGER.info(f"Loop {loop+1}: Starting {loop_config.num_games_per_iteration} self-play games across {loop_config.num_threads} processes...")
             try:
                 futures = [executor.submit(run_self_play, i, tb_log_dir, timestamp, loop, loop_config.num_readouts) for i in range(loop_config.num_games_per_iteration)]
                 for i, future in enumerate(as_completed(futures)):
                     try:
                         future.result() # Wait for game to complete and raise exceptions if any
                         games_completed_count += 1
+                        LOGGER.info(f"Loop {loop+1}: Self-play game {games_completed_count}/{loop_config.num_games_per_iteration} completed.")
                         status["games_completed_this_iteration"] = games_completed_count
                         status["status_message"] = f"Self-play: {games_completed_count}/{loop_config.num_games_per_iteration} games completed."
                         update_loop_status(status)
