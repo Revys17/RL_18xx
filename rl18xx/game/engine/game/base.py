@@ -1118,29 +1118,52 @@ class BaseGame:
         pickle's serialization runs in C, while deepcopy walks the object
         graph in pure Python.
 
-        Temporarily strips log and action history before pickling since
-        these grow linearly with game length but aren't needed for
-        processing future actions (used by MCTS)."""
-        # Save and strip heavy history data
+        To minimize pickle size and reconstruction cost, we temporarily
+        strip data before serialization and restore it after:
+        - log/actions/queued_log: history not needed for future actions
+        - graph: route caches rebuilt lazily on demand
+        - all_tiles: immutable tile catalog, shared by reference
+        - hex neighbors: static topology, rebuilt via connect_hexes()
+        """
+        # Save references to data we'll strip
         saved_log = self.log
         saved_actions = self.actions
         saved_queued_log = self.queued_log
+        saved_graph = self.graph
+        saved_all_tiles = self.all_tiles
+        saved_hex_neighbors = [
+            (h.neighbors.copy(), h.all_neighbors.copy()) for h in self.hexes
+        ]
 
+        # Strip before pickling
         self.log = []
         self.actions = []
         self.queued_log = []
+        self.graph = None
+        self.all_tiles = []
+        for h in self.hexes:
+            h.neighbors = {}
+            h.all_neighbors = {}
 
         try:
             data = pickle.dumps(self, protocol=pickle.HIGHEST_PROTOCOL)
         finally:
-            # Restore original data on the source game
+            # Restore original game state
             self.log = saved_log
             self.actions = saved_actions
             self.queued_log = saved_queued_log
+            self.graph = saved_graph
+            self.all_tiles = saved_all_tiles
+            for h, (n, an) in zip(self.hexes, saved_hex_neighbors):
+                h.neighbors = n
+                h.all_neighbors = an
 
         clone = pickle.loads(data)
-        # Restore a functional GameLog on the clone
+        # Restore stripped data on clone
         clone.log = GameLog(clone)
+        clone.graph = Graph(clone)
+        clone.all_tiles = saved_all_tiles  # share immutable tile catalog
+        clone.connect_hexes()
         return clone
 
     def deep_copy_clone(self) -> 'BaseGame':
