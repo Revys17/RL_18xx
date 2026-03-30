@@ -17,6 +17,7 @@ VALUE_SIZE = 4  # We always want to play a 4-player game.
 
 LOGGER = logging.getLogger(__name__)
 
+
 # TODO: See if we really need this.
 def calculate_entropy(probabilities: np.ndarray) -> float:
     """Calculates the entropy of a probability distribution."""
@@ -30,6 +31,7 @@ def calculate_entropy(probabilities: np.ndarray) -> float:
             LOGGER.debug(f"Probabilities do not sum to 1 for entropy calculation: sum={np.sum(probabilities)}")
         return 0.0
     return scipy.stats.entropy(probabilities)
+
 
 class DummyNode:
     """A fake node of a MCTS search tree.
@@ -58,6 +60,11 @@ class MCTSNode:
             parent = DummyNode()
         self.parent = parent
         self.fmove = fmove  # move index that led to this position
+        # Cache the index into parent's compressed arrays to avoid repeated linear scans
+        if fmove is not None and isinstance(parent, MCTSNode):
+            self._parent_index = parent.legal_action_indices.index(fmove)
+        else:
+            self._parent_index = 0  # DummyNode case
         self.is_expanded = False
         self.losses_applied = 0  # number of virtual losses on this node
 
@@ -73,7 +80,7 @@ class MCTSNode:
         self.player_mapping = {p.id: i for i, p in enumerate(sorted(self.game_object.players, key=lambda x: x.id))}
         self.active_player_index = self.player_mapping[self.game_object.active_players()[0].id]
 
-        self.legal_action_indices = self.action_mapper.get_legal_action_indices(self.game_object) # Use game_object
+        self.legal_action_indices = self.action_mapper.get_legal_action_indices(self.game_object)  # Use game_object
         self.num_legal_actions = len(self.legal_action_indices)
         self.child_N_compressed = np.zeros(self.num_legal_actions, dtype=np.float32)
         self.child_W_compressed = np.zeros([self.num_legal_actions, VALUE_SIZE], dtype=np.float32)
@@ -185,23 +192,19 @@ class MCTSNode:
 
     @property
     def N(self):
-        compressed_index = self.parent.legal_action_indices.index(self.fmove)
-        return self.parent.child_N_compressed[compressed_index]
+        return self.parent.child_N_compressed[self._parent_index]
 
     @N.setter
     def N(self, value):
-        compressed_index = self.parent.legal_action_indices.index(self.fmove)
-        self.parent.child_N_compressed[compressed_index] = value
+        self.parent.child_N_compressed[self._parent_index] = value
 
     @property
     def W(self):
-        compressed_index = self.parent.legal_action_indices.index(self.fmove)
-        return self.parent.child_W_compressed[compressed_index]
+        return self.parent.child_W_compressed[self._parent_index]
 
     @W.setter
     def W(self, value):
-        compressed_index = self.parent.legal_action_indices.index(self.fmove)
-        self.parent.child_W_compressed[compressed_index] = value
+        self.parent.child_W_compressed[self._parent_index] = value
 
     @property
     def Q_perspective(self):
@@ -213,7 +216,9 @@ class MCTSNode:
         current = self
         num_added = 0
         while current.is_expanded:
-            best_move = np.argmax(current.child_action_score)
+            # Work in compressed space to avoid allocating a 26,535-element array
+            best_compressed_idx = np.argmax(current.child_action_score_compressed)
+            best_move = current.legal_action_indices[best_compressed_idx]
             current = current.maybe_add_child(best_move)
             num_added += 1
         end_time = time.time()
@@ -242,22 +247,17 @@ class MCTSNode:
                 LOGGER.error(
                     f"Error processing action in maybe_add_child. Parent fmove: {self.fmove}, "
                     f"Action index: {action_index}, Action to take: {action_to_take}",
-                    exc_info=True
+                    exc_info=True,
                 )
                 LOGGER.error(f"Parent game actions: {self.game_object.raw_actions}")
                 raise e
-            
-            self.children[action_index] = MCTSNode(
-                new_position,
-                fmove=action_index,
-                parent=self,
-                config=self.config
-            )
+
+            self.children[action_index] = MCTSNode(new_position, fmove=action_index, parent=self, config=self.config)
             process_action_duration = time.time() - process_action_start_time
-            
+
             self.add_metric("MCTS/Maybe_Add_Child_Clone_Duration", clone_duration)
             self.add_metric("MCTS/Maybe_Add_Child_Process_Action_Duration", process_action_duration)
-        
+
         overall_call_duration = time.time() - start_time
         self.add_metric("MCTS/Maybe_Add_Child_Overall_Duration", overall_call_duration)
         return self.children[action_index]
@@ -361,7 +361,9 @@ class MCTSNode:
 
     def game_result_string(self) -> Optional[str]:
         if not self.is_done():
-            LOGGER.warning(f"game_result_string: Game is not finished (node fmove: {self.fmove}). Returning empty string.")
+            LOGGER.warning(
+                f"game_result_string: Game is not finished (node fmove: {self.fmove}). Returning empty string."
+            )
             return ""
 
         result = self.game_object.result()
@@ -414,12 +416,16 @@ class MCTSNode:
         path_nodes = self.most_visited_path_nodes()
 
         for i, node_on_path in enumerate(path_nodes):
-            parent_move_number = node_on_path.parent.game_object.move_number if isinstance(node_on_path.parent, MCTSNode) else 'root'
+            parent_move_number = (
+                node_on_path.parent.game_object.move_number if isinstance(node_on_path.parent, MCTSNode) else "root"
+            )
             output.append(f"{parent_move_number}: {node_on_path.fmove} (N={node_on_path.N:.0f}) ==> ")
 
         if path_nodes:
             final_node_on_path = path_nodes[-1]
-            output.append(f"Q: {final_node_on_path.Q_perspective:.3f} (Player {final_node_on_path.active_player_index}) N={final_node_on_path.N:.0f}\n")
+            output.append(
+                f"Q: {final_node_on_path.Q_perspective:.3f} (Player {final_node_on_path.active_player_index}) N={final_node_on_path.N:.0f}\n"
+            )
         else:
             output.append(f"Q: {self.Q_perspective:.3f} (Player {self.active_player_index}) N={self.N:.0f} (Root)\n")
         return "".join(output)
@@ -438,18 +444,20 @@ class MCTSNode:
         safe_prior = np.where(prior == 0, 1e-9, prior)
         p_delta = soft_n - prior
         p_rel = p_delta / safe_prior
-        
+
         output = []
         output.append("Q (player {}): {:.4f}, N: {:.0f}\n".format(self.active_player_index, self.Q_perspective, self.N))
         output.append(self.most_visited_path())
-        output.append("idx  | Action (from parent) | Q (curr) |    U    |   P(a|s) | P_orig  |    N   | soft-N | p-delta | p-rel")
-        
+        output.append(
+            "idx  | Action (from parent) | Q (curr) |    U    |   P(a|s) | P_orig  |    N   | soft-N | p-delta | p-rel"
+        )
+
         for compressed_idx in ranked_children_indices[:15]:
             global_action_index = self.legal_action_indices[compressed_idx]
 
             if self.child_N_compressed[compressed_idx] == 0:
                 break
-            
+
             action_display = f"{global_action_index}"
 
             output.append(
