@@ -69,7 +69,7 @@ class ActionHelper(metaclass=Singleton):
             return
 
         if json_format:
-            state = game.get_state()
+            state = self.get_state(game)
             print_str = (
                 '\n{\n    "players": {\n'
                 + ",\n".join(
@@ -196,7 +196,7 @@ class ActionHelper(metaclass=Singleton):
             else:
                 bid_values = list(
                     range(
-                        game.active_step().min_bid(company),
+                        min_bid,
                         game.active_step().max_bid(game.current_entity, company) + 1,
                         5,
                     )
@@ -228,8 +228,8 @@ class ActionHelper(metaclass=Singleton):
                 min_bid = game.active_step().min_bid(company)
                 max_bid = game.active_step().max_bid(game.current_entity, company)
                 # Make this round up to the nearest multiple of 5
-                min_bid = min_bid + (5 - (min_bid % 5))
-                max_bid = max_bid + (5 - (max_bid % 5))
+                min_bid = min_bid + (5 - (min_bid % 5)) % 5
+                max_bid = max_bid + (5 - (max_bid % 5)) % 5
                 bid_values = list(range(min_bid, max_bid + 1, 5))
 
             bids.append(
@@ -547,7 +547,7 @@ class ActionHelper(metaclass=Singleton):
                     choices.extend(self.get_company_place_token_actions(game, company))
         return choices
 
-    def get_all_choices(self, game, dict=False):
+    def get_all_choices(self, game, as_dict=False):
         if game.finished:
             return []
         choices = [
@@ -557,16 +557,16 @@ class ActionHelper(metaclass=Singleton):
         ]
         choices.extend(self.get_company_choices(game))
         sorted_actions = self.sort_actions(choices, instances=True)
-        if dict:
+        if as_dict:
             return [action.to_dict() for action in sorted_actions]
         return sorted_actions
 
-    def get_all_choices_with_index(self, game, dict=False):
+    def get_all_choices_with_index(self, game, as_dict=False):
         if game.finished:
             return {}
-        return {index: value for index, value in enumerate(self.get_all_choices(game, dict=dict))}
+        return {index: value for index, value in enumerate(self.get_all_choices(game, as_dict=as_dict))}
 
-    def get_all_choices_limited(self, game, dict=False):
+    def get_all_choices_limited(self, game, as_dict=False):
         if game.finished:
             return []
         choices = [
@@ -581,6 +581,6 @@ class ActionHelper(metaclass=Singleton):
                 return [Bankrupt(game.current_entity)]
             return []
         sorted_actions = self.sort_actions(choices, instances=True)
-        if dict:
+        if as_dict:
             return [action.to_dict() for action in sorted_actions]
         return sorted_actions

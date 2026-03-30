@@ -166,7 +166,7 @@ def check_action_in_action_helper(action_dict, game_state):
     return updated_action
 
     #if not present:
-    #    LOGGER.debug(f"Expected action {action_dict} to be in action_helper choices: {action_helper.get_all_choices(game_state, dict=True)}")
+    #    LOGGER.debug(f"Expected action {action_dict} to be in action_helper choices: {action_helper.get_all_choices(game_state, as_dict=True)}")
 
 # Online game implementations require an extra pass during BuyTrains because they allow cross-company purchases
 # Therefore, sometimes, we have an extra skip to process that would normally happen during BuyTrains, but is instead

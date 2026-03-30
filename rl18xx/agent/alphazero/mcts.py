@@ -65,6 +65,7 @@ class MCTSNode:
         if isinstance(parent, MCTSNode):
             self.depth = parent.depth + 1
 
+        self.config = config or SelfPlayConfig()
         self.game_object: BaseGame = game_state
         self.encoded_game_state = Encoder_1830.get_encoder_for_model(self.config.network).encode(self.game_object)
         self.action_mapper = ActionMapper()
@@ -80,7 +81,6 @@ class MCTSNode:
         self.child_prior_compressed = np.zeros(self.num_legal_actions, dtype=np.float32)
 
         self.children = {}
-        self.config = config or SelfPlayConfig()
         self.add_metric("MCTS/Depth", self.depth)
 
         if self.is_done():
@@ -228,7 +228,7 @@ class MCTSNode:
         if action_index not in self.children:
             clone_start_time = time.time()
             try:
-                new_position = self.game_object.deep_copy_clone()
+                new_position = self.game_object.pickle_clone()
             except Exception as e:
                 LOGGER.error(f"Error cloning game_object in MCTSNode (fmove={self.fmove}): {e}", exc_info=True)
                 raise e
