@@ -21,12 +21,15 @@ uv run pytest tests/agent/alphazero/model_test.py::test_run_single  # Single tes
 # Formatting (line length 120)
 uv run black --line-length 120 <file>
 
-# Training loop
-uv run python -m rl18xx.agent.alphazero.loop   # Main training loop (reads loop_config.json)
+# Entry points (all via main.py)
+uv run python main.py train              # AlphaZero training loop (self-play + training)
+uv run python main.py pretrain           # Pre-train from human game data
+uv run python main.py arena              # Run agent vs agent matches
+uv run python main.py dashboard          # Start training dashboard (port 5001)
+uv run python main.py replay <log_file>  # Replay a game in the browser
 
-# Services (started via startup.sh)
-# TensorBoard on :6006 (logs in runs/alphazero_runs/)
-# Dashboard on :5001 (Flask app at rl18xx/agent/dashboard/dashboard.py)
+# Services (via startup.sh)
+./startup.sh                     # Starts TensorBoard (:6006) + Dashboard (:5001)
 ```
 
 ## Architecture
@@ -35,7 +38,7 @@ uv run python -m rl18xx.agent.alphazero.loop   # Main training loop (reads loop_
 
 The engine models 1830's full rules. Key concepts:
 
-- **BaseGame** (`game/base.py`): Central game class. Holds all state, processes actions via `game.process_action(action)`. Clone with `game.clone(game.raw_actions)`.
+- **BaseGame** (`game/base.py`): Central game class. Holds all state, processes actions via `game.process_action(action)`. Clone efficiently with `game.pickle_clone()` (used by MCTS).
 - **Rounds & Steps** (`round.py`): Turn structure — Auction, Stock, and Operating rounds. Each step defines which actions are legal and how to process them. Access via `game.round` / `game.active_step()`.
 - **Entities** (`entities.py`): Players, Corporations, Companies, Bank, SharePool, StockMarket, Train depot.
 - **Graph** (`graph.py`): Hex map with tiles, nodes, edges, paths. Used for route calculation.
@@ -53,7 +56,7 @@ Many engine files are very large (100K+ lines) — these are faithful ports from
 - **MCTS** (`mcts.py`): Monte Carlo Tree Search with configurable c_puct, Dirichlet noise, parallel readouts.
 - **Self-Play** (`self_play.py`): Generates training games. Writes examples to `training_examples/` (selfplay + holdout split).
 - **Training** (`train.py`): Network training from LMDB-stored examples.
-- **Loop** (`loop.py`): Orchestrates self-play → train iterations. Configured via `loop_config.json`, status in `loop_status.json`.
+- **Loop** (`loop.py`): Orchestrates self-play -> train iterations. Configured via `loop_config.json`, status in `loop_status.json`.
 - **Config** (`config.py`): `ModelConfig`, `TrainingConfig`, `SelfPlayConfig` dataclasses.
 - **Checkpointer** (`checkpointer.py`): Model save/load with versioned directories under `model_checkpoints/`.
 - **Pretraining** (`pretraining.py`): Pre-training from human game data.
@@ -69,11 +72,16 @@ Integration with the online 18xx.games platform:
 
 Abstract base class with: `initialize_game`, `get_game_state`, `suggest_move`, `play_move`.
 
+### Arena (`rl18xx/agent/arena.py`)
+
+Runs matches between agents (MCTS or random). Can optionally sync to 18xx.games for browser visualization.
+
 ## Key Patterns
 
 - Game state is always accessed through `BaseGame` — never construct engine objects directly.
 - Legal moves come from `ActionHelper.get_all_choices(game)`, applied via `game.process_action(action)`.
 - The encoder/action_mapper bridge between the game engine's object model and the neural network's tensor representation.
+- `pickle_clone()` is used for fast game state cloning in MCTS. It strips log/action history, graph caches, hex neighbor links, and the tile catalog before pickling, then restores shared/rebuilt data on the clone.
 - Training data is stored in LMDB databases compressed with LZ4.
 - CUDA is used when available, with automatic CPU fallback.
 
