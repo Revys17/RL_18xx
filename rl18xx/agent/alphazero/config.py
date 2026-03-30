@@ -37,7 +37,7 @@ class ModelConfig:
                 self.device = torch.device("cuda")
             else:
                 self.device = torch.device("cpu")
-        
+
         if self.timestamp is None:
             self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -78,14 +78,10 @@ class TrainingConfig:
     value_loss_weight: float = 1.0
 
     def __post_init__(self):
-        if self.train_dir is None and self.val_dir is None:
-            return
-
-        if self.train_dir is None or self.val_dir is None:
-            raise ValueError("train_dir and val_dir must both be provided or both be None")
-        
-        self.train_dir = Path(self.train_dir)
-        self.val_dir = Path(self.val_dir)
+        if self.train_dir is not None:
+            self.train_dir = Path(self.train_dir)
+        if self.val_dir is not None:
+            self.val_dir = Path(self.val_dir)
 
     def to_json(self):
         return {
@@ -98,7 +94,7 @@ class TrainingConfig:
             "shuffle_examples": self.shuffle_examples,
             "value_loss_weight": self.value_loss_weight,
         }
-    
+
     @classmethod
     def from_json(cls, json_data):
         return cls(**json_data)
@@ -120,8 +116,6 @@ class SelfPlayConfig:
     game_idx_in_iteration: int = 0
     game_id: Optional[str] = None
     selfplay_dir: str = "selfplay"
-    holdout_dir: str = "holdout"
-    holdout_pct: float = 0.05
 
     def __post_init__(self):
         assert self.softpick_move_cutoff % 2 == 0
@@ -131,5 +125,3 @@ class SelfPlayConfig:
 
         root_dir = Path("training_examples")
         self.selfplay_dir = root_dir / self.selfplay_dir
-        self.holdout_dir = root_dir / self.holdout_dir
-        self.holdout_pct = self.holdout_pct

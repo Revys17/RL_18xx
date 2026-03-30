@@ -26,6 +26,7 @@ LOGGER = logging.getLogger(__name__)
 SELF_PLAY_GAMES_STATUS_PATH = Path("self_play_games_status")
 SELF_PLAY_GAMES_STATUS_PATH.mkdir(parents=True, exist_ok=True)
 
+
 class MCTSPlayer(Agent):
     def __init__(self, config: SelfPlayConfig):
         self.config = config
@@ -34,7 +35,7 @@ class MCTSPlayer(Agent):
 
     def __str__(self):
         return f"MCTSPlayer"
-    
+
     def __repr__(self):
         return self.__str__()
 
@@ -108,7 +109,7 @@ class MCTSPlayer(Agent):
         a move weighted by visit count; later on, pick the absolute max."""
         if self.root.game_object.move_number >= self.config.softpick_move_cutoff:
             return self.root.best_child()
-        
+
         if self.root.num_legal_actions == 1:
             return self.root.legal_action_indices[0]
 
@@ -187,7 +188,7 @@ class MCTSPlayer(Agent):
                 # metrics
                 leaf_depths_collected.append(leaf.depth)
                 leaf_initial_qs_collected.append(value[leaf.active_player_index].item())
-                if np.sum(leaf.child_prior_compressed) > 1e-6: # Ensure it's not all zeros
+                if np.sum(leaf.child_prior_compressed) > 1e-6:  # Ensure it's not all zeros
                     normalized_prior_compressed = leaf.child_prior_compressed / np.sum(leaf.child_prior_compressed)
                     leaf_prior_entropies_collected.append(mcts.calculate_entropy(normalized_prior_compressed))
             revert_and_incorporate_duration = time.time() - revert_and_incorporate_start
@@ -352,14 +353,14 @@ class SelfPlay:
             "current_round": current_round,
             "last_action": last_action,
             "start_time_unix": game_start_time_unix,
-            "last_update_unix": time.time()
+            "last_update_unix": time.time(),
         }
         try:
-            with open(file, 'w') as f:
+            with open(file, "w") as f:
                 json.dump(status_data, f, indent=4)
         except IOError as e:
             LOGGER.error(f"Error writing to {SELF_PLAY_GAMES_STATUS_PATH}: {e}")
-        except Exception as e: # Catch any other unexpected error during file write
+        except Exception as e:  # Catch any other unexpected error during file write
             LOGGER.error(f"Unexpected error writing {SELF_PLAY_GAMES_STATUS_PATH}: {e}", exc_info=True)
 
     def play(self):
@@ -381,7 +382,7 @@ class SelfPlay:
             current_round="N/A",
             last_action="N/A",
             game_start_time_unix=game_start_time,
-            status="Starting Up"
+            status="Starting Up",
         )
 
         total_tree_search_time_for_game = 0
@@ -421,7 +422,7 @@ class SelfPlay:
                     while player.root.N < target_readouts_for_move:
                         player.tree_search()
                         sim_count_this_move += self.config.parallel_readouts
-                    total_sims_for_mcts_moves += (player.root.N - current_readouts)
+                    total_sims_for_mcts_moves += player.root.N - current_readouts
 
                 tree_search_end_time_this_move = time.time() - tree_search_duration_this_move
                 total_tree_search_time_for_game += tree_search_end_time_this_move
@@ -445,7 +446,7 @@ class SelfPlay:
                     current_round=player.root.game_object.round.round_description(),
                     last_action=player.root.game_object.actions[-1].description(),
                     game_start_time_unix=game_start_time,
-                    status="In Progress"
+                    status="In Progress",
                 )
 
                 move_time_this_move = time.time() - start_time_for_move_processing
@@ -465,8 +466,10 @@ class SelfPlay:
                         game_ended_by_max_length = 1
 
                     player.set_result(player.root.game_result())
-                    LOGGER.info(f"Game finished after {move_counter} moves. Result: {player.root.game_object.result()}, mapped to: {player.result} via {player.root.player_mapping}")
-                    
+                    LOGGER.info(
+                        f"Game finished after {move_counter} moves. Result: {player.root.game_object.result()}, mapped to: {player.result} via {player.root.player_mapping}"
+                    )
+
                     self.update_self_play_game_progress(
                         game_id=self.config.game_id,
                         loop_number=self.config.global_step,
@@ -476,7 +479,7 @@ class SelfPlay:
                         current_round="Finished",
                         last_action=player.root.game_object.actions[-1].description(),
                         game_start_time_unix=game_start_time,
-                        status="Completed"
+                        status="Completed",
                     )
                     break
 
@@ -494,7 +497,7 @@ class SelfPlay:
                 current_round=player.root.game_object.round.round_description(),
                 last_action=player.root.game_object.actions[-1].description(),
                 game_start_time_unix=game_start_time,
-                status="Error"
+                status="Error",
             )
 
         self.add_metric("SelfPlay/Game_Length_Moves", move_counter)
@@ -513,7 +516,7 @@ class SelfPlay:
             avg_tree_search_time_per_mcts_move_ms = (total_tree_search_time_for_game / num_mcts_moves_in_game) * 1000
             self.add_metric("SelfPlay/Avg_Sims_Per_MCTS_Move", avg_sims_per_mcts_move)
             self.add_metric("SelfPlay/Avg_Tree_Search_Time_Per_MCTS_Move_ms", avg_tree_search_time_per_mcts_move_ms)
-        
+
         avg_pick_move_time_ms = (total_pick_move_time_for_game / move_counter if move_counter > 0 else 0) * 1000
         avg_play_move_time_ms = (total_play_move_time_for_game / move_counter if move_counter > 0 else 0) * 1000
         self.add_metric("SelfPlay/Avg_Pick_Move_Time_ms", avg_pick_move_time_ms)
@@ -525,7 +528,6 @@ class SelfPlay:
         """Takes a played game and record results and game data."""
         if self.config.selfplay_dir is not None:
             os.makedirs(self.config.selfplay_dir, exist_ok=True)
-            os.makedirs(self.config.holdout_dir, exist_ok=True)
 
         player = self.play()
 
@@ -541,11 +543,7 @@ class SelfPlay:
         game_data = player.extract_data()
 
         if self.config.selfplay_dir is not None:
-            # Hold out 5% of games for validation.
-            if random.random() < self.config.holdout_pct:
-                save_path = self.config.holdout_dir / self.config.network.get_name()
-            else:
-                save_path = self.config.selfplay_dir / self.config.network.get_name()
+            save_path = self.config.selfplay_dir / self.config.network.get_name()
 
             processor = TrainingExampleProcessor(self.config.network.encoder)
             processor.write_lmdb(game_data, save_path)
