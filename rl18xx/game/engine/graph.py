@@ -1235,6 +1235,23 @@ class Graph:
         self.check_regions = opts.get("check_regions")
         self.debug = False
 
+    _CACHE_KEYS = [
+        '_connected_hexes', '_connected_nodes', '_connected_paths',
+        '_connected_hexes_by_token', '_connected_nodes_by_token',
+        '_connected_paths_by_token', '_reachable_hexes',
+        '_tokenable_cities', 'routes', 'tokens', 'cheater_tokens',
+    ]
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # Clear connection/route caches — they use Hex/City/Path objects as
+        # dict keys with custom __hash__, which fails during pickle
+        # reconstruction. The caches are rebuilt lazily on first access.
+        for key in self._CACHE_KEYS:
+            if key in state:
+                state[key] = {}
+        return state
+
     def clear(self):
         self._connected_hexes.clear()
         self._connected_nodes.clear()

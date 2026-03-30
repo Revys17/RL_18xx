@@ -658,12 +658,13 @@ class ActionMapper(metaclass=Singleton):
             if is_company_action:
                 entity = state.company_by_id(args[0])
                 corp = state.corporation_by_id(args[1])
+                bank = state.bank
                 location = args[2]
                 exchange_step = [step for step in state.round.steps if isinstance(step, ExchangeStep)][0]
                 shares = exchange_step.exchangeable_shares(entity)
 
                 if location == "ipo":
-                    owner = corp
+                    owner = bank
                 elif location == "market":
                     owner = state.share_pool
                 else:
@@ -678,7 +679,7 @@ class ActionMapper(metaclass=Singleton):
                     share = corp.market_shares[0]
                 else:
                     raise ValueError(f"Unknown location for buy shares action: {location}")
-            return BuyShares(entity, share, share.price)
+            return BuyShares(entity, share)
 
         if action_type is SellShares:
             corp_id, num_shares = args

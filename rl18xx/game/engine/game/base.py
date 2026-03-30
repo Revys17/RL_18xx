@@ -65,6 +65,7 @@ from collections import defaultdict
 from itertools import combinations
 import logging
 import copy
+import pickle
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1111,6 +1112,36 @@ class BaseGame:
             actions=[action.copy() for action in actions] if actions else None,
             optional_rules=self.optional_rules,
         )
+
+    def pickle_clone(self) -> 'BaseGame':
+        """Clone game state using pickle. Much faster than deepcopy because
+        pickle's serialization runs in C, while deepcopy walks the object
+        graph in pure Python.
+
+        Temporarily strips log and action history before pickling since
+        these grow linearly with game length but aren't needed for
+        processing future actions (used by MCTS)."""
+        # Save and strip heavy history data
+        saved_log = self.log
+        saved_actions = self.actions
+        saved_queued_log = self.queued_log
+
+        self.log = []
+        self.actions = []
+        self.queued_log = []
+
+        try:
+            data = pickle.dumps(self, protocol=pickle.HIGHEST_PROTOCOL)
+        finally:
+            # Restore original data on the source game
+            self.log = saved_log
+            self.actions = saved_actions
+            self.queued_log = saved_queued_log
+
+        clone = pickle.loads(data)
+        # Restore a functional GameLog on the clone
+        clone.log = GameLog(clone)
+        return clone
 
     def deep_copy_clone(self) -> 'BaseGame':
         try:

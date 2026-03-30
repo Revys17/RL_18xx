@@ -1128,6 +1128,25 @@ class Corporation(Abilities, Operator, Entity, Ownable, Passer, ShareHolder, Spe
         self.treasury_as_holding = kwargs.get("treasury_as_holding", False)
         self.corporation_can_ipo = kwargs.get("corporation_can_ipo", None)
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # Convert share_holders from defaultdict (with entity keys that have
+        # custom __hash__) to a plain list of tuples. This avoids __hash__
+        # calls during pickle reconstruction, which would fail because
+        # Player.__hash__ requires attributes not yet restored at that point.
+        if 'share_holders' in state and isinstance(state['share_holders'], dict):
+            state['_share_holders_list'] = list(state['share_holders'].items())
+            del state['share_holders']
+        return state
+
+    def __setstate__(self, state):
+        sh_items = state.pop('_share_holders_list', None)
+        self.__dict__.update(state)
+        if sh_items is not None:
+            self.share_holders = defaultdict(int)
+            for k, v in sh_items:
+                self.share_holders[k] = v
+
     def can_buy(self):
         return True
 
@@ -1449,6 +1468,22 @@ class PlayerInfo:
             return f"{self.round_name} {self.turn}"
 
 
+def _rebuild_player(player_id, name):
+    """Pickle reconstruction helper for Player.
+
+    Creates a Player with id and name set immediately, before pickle
+    restores the rest of the state. This is necessary because Player
+    objects are used as dict keys (e.g. in Corporation.share_holders)
+    and Player.__hash__ requires self.id and self.name to be set.
+    Without this, pickle would create an empty Player via __new__,
+    then try to insert it as a dict key before restoring its attributes.
+    """
+    p = object.__new__(Player)
+    p.id = player_id
+    p.name = name
+    return p
+
+
 class Player(Entity, Passer, ShareHolder, Spender):
     def __init__(self, id, name):
         Entity.__init__(self)
@@ -1461,6 +1496,12 @@ class Player(Entity, Passer, ShareHolder, Spender):
         self.companies = []
         self.history = []
         self.unsold_companies = []
+
+    def __reduce__(self):
+        return (_rebuild_player, (self.id, self.name), self.__dict__)
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
     @property
     def value(self):

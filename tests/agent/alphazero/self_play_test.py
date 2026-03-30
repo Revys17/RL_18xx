@@ -22,6 +22,9 @@ class DummyNet:
         self.fake_log_priors = fake_log_priors
         self.fake_value = fake_value
 
+    def encoder_type(self):
+        return "GNN"
+
     def run(self, game_state):
         return self.fake_priors, self.fake_log_priors, self.fake_value
 
@@ -54,91 +57,133 @@ def get_fresh_game_state():
 
 
 def get_almost_done_game_state():
-    game_state = get_fresh_game_state()
+    g = get_fresh_game_state()
     action_helper = ActionHelper()
+    # action_helper.print_enabled = True
+
+
     # Auction
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[-2]
+    g.process_action(
+        action_helper.get_all_choices(g)[-2]
     )  # [20:39] -- Phase 2 (Operating Rounds: 1 | Train Limit: 4 | Available Tiles: Yellow) --
     # [20:39] Player 1 bids $600 for Baltimore & Ohio
-    game_state.process_action(action_helper.get_all_choices(game_state)[0])  # [20:39] Player 2 buys Schuylkill Valley for $20
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[0]
-    )  # [20:39] Player 3 buys Champlain & St.Lawrence for $40
-    game_state.process_action(action_helper.get_all_choices(game_state)[0])  # [20:39] Player 4 buys Delaware & Hudson for $70
-    game_state.process_action(action_helper.get_all_choices(game_state)[0])  # [20:39] Player 1 passes bidding
-    game_state.process_action(action_helper.get_all_choices(game_state)[0])  # [20:39] Player 2 buys Mohawk & Hudson for $110
-    game_state.process_action(action_helper.get_all_choices(game_state)[0])  # [20:39] Player 3 buys Camden & Amboy for $160
+    g.process_action(action_helper.get_all_choices(g)[0])  # [20:39] Player 2 buys Schuylkill Valley for $20
+    g.process_action(action_helper.get_all_choices(g)[0])  # [20:39] Player 3 buys Champlain & St.Lawrence for $40
+    g.process_action(action_helper.get_all_choices(g)[0])  # [20:39] Player 4 buys Delaware & Hudson for $70
+    g.process_action(action_helper.get_all_choices(g)[0])  # [20:39] Player 1 passes bidding
+    g.process_action(action_helper.get_all_choices(g)[0])  # [20:39] Player 2 buys Mohawk & Hudson for $110
+    g.process_action(action_helper.get_all_choices(g)[0])  # [20:39] Player 3 buys Camden & Amboy for $160
     # [20:39] Player 3 receives a 10% share of PRR
     # [20:39] Player 1 wins the auction for Baltimore & Ohio with the only bid of $600
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [20:39] Player 1 pars B&O at $67
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [20:39] Player 1 pars B&O at $67
     # [20:39] Player 1 receives a 20% share of B&O
     # [20:39] Player 1 becomes the president of B&O
     # [20:39] Player 4 has priority deal
+    action_helper.print_summary(g, json_format=True)
+    expected_state = {
+        "players": {
+            "Player 1": {"cash": 0, "shares": {"B&O": 20}, "companies": ["BO"]},
+            "Player 2": {"cash": 470, "shares": {}, "companies": ["SV", "MH"]},
+            "Player 3": {"cash": 400, "shares": {"PRR": 10}, "companies": ["CS", "CA"]},
+            "Player 4": {"cash": 530, "shares": {}, "companies": ["DH"]},
+        },
+        "corporations": {
+            "PRR": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "NYC": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "CPR": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&O": {"cash": 0, "companies": [], "trains": [], "share_price": 67},
+            "C&O": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "ERIE": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "NYNH": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&M": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+        },
+    }
+    assert action_helper.get_state(g) == expected_state, "State does not match expected state after auction"
     # [20:39] -- Stock Round 1 --
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[0]
+    g.process_action(
+        action_helper.get_all_choices(g)[0]
     )  # [20:39] Player 4 buys a 10% share of B&O from the IPO for $67
     # [20:39] Player 1 has no valid actions and passes
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[0]
+    g.process_action(
+        action_helper.get_all_choices(g)[0]
     )  # [21:13] Player 2 buys a 10% share of B&O from the IPO for $67
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[0]
+    g.process_action(
+        action_helper.get_all_choices(g)[0]
     )  # [21:13] Player 3 buys a 10% share of B&O from the IPO for $67
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[0]
+    g.process_action(
+        action_helper.get_all_choices(g)[0]
     )  # [21:13] Player 4 buys a 10% share of B&O from the IPO for $67
     # [21:13] B&O floats
     # [21:13] B&O receives $670
     # [21:13] Player 1 has no valid actions and passes
-    game_state.process_action(action_helper.get_all_choices(game_state)[-2])  # [21:13] Player 2 pars PRR at $67
+    g.process_action(action_helper.get_all_choices(g)[-2])  # [21:13] Player 2 pars PRR at $67
     # [21:13] Player 2 buys a 20% share of PRR from the IPO for $134
     # [21:13] Player 2 becomes the president of PRR
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[1]
+    g.process_action(
+        action_helper.get_all_choices(g)[1]
     )  # [21:13] Player 3 buys a 10% share of PRR from the IPO for $67
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[1]
+    g.process_action(
+        action_helper.get_all_choices(g)[1]
     )  # [21:13] Player 4 buys a 10% share of PRR from the IPO for $67
     # [21:13] Player 1 has no valid actions and passes
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[1]
+    g.process_action(
+        action_helper.get_all_choices(g)[1]
     )  # [21:13] Player 2 buys a 10% share of PRR from the IPO for $67
     # [21:13] PRR floats
     # [21:13] PRR receives $670
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[1]
+    g.process_action(
+        action_helper.get_all_choices(g)[1]
     )  # [21:13] Player 3 buys a 10% share of PRR from the IPO for $67
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[0]
+    g.process_action(
+        action_helper.get_all_choices(g)[0]
     )  # [21:14] Player 4 buys a 10% share of B&O from the IPO for $67
     # [21:14] Player 4 becomes the president of B&O
     # [21:14] Player 1 has no valid actions and passes
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [21:14] Player 2 passes
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [21:14] Player 3 passes
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[1]
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [21:14] Player 2 passes
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [21:14] Player 3 passes
+    g.process_action(
+        action_helper.get_all_choices(g)[1]
     )  # [21:14] Player 4 buys a 10% share of PRR from the IPO for $67
     # [21:14] Player 1 has no valid actions and passes
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [21:14] Player 2 passes
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [21:14] Player 3 passes
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[1]
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [21:14] Player 2 passes
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [21:14] Player 3 passes
+    g.process_action(
+        action_helper.get_all_choices(g)[1]
     )  # [21:14] Player 4 buys a 10% share of PRR from the IPO for $67
     # [21:14] Player 1 has no valid actions and passes
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [21:14] Player 2 passes
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [21:14] Player 3 passes
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[1]
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [21:14] Player 2 passes
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [21:14] Player 3 passes
+    g.process_action(
+        action_helper.get_all_choices(g)[1]
     )  # [21:14] Player 4 buys a 10% share of PRR from the IPO for $67
     # [21:14] Player 4 becomes the president of PRR
     # [21:14] Player 1 has no valid actions and passes
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [21:15] Player 2 passes
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [21:15] Player 3 passes
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [21:15] Player 2 passes
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [21:15] Player 3 passes
     # [21:15] Player 4 has no valid actions and passes
     # [21:15] PRR's share price moves up from 71
     # [21:15] Player 1 has priority deal
+    action_helper.print_summary(g, json_format=True)
+    expected_state = {
+        "players": {
+            "Player 1": {"cash": 30, "shares": {"B&O": 20}, "companies": ["BO"]},
+            "Player 2": {"cash": 227, "shares": {"B&O": 10, "PRR": 30}, "companies": ["SV", "MH"]},
+            "Player 3": {"cash": 234, "shares": {"PRR": 30, "B&O": 10}, "companies": ["CS", "CA"]},
+            "Player 4": {"cash": 76, "shares": {"B&O": 30, "PRR": 40}, "companies": ["DH"]},
+        },
+        "corporations": {
+            "PRR": {"cash": 670, "companies": [], "trains": [], "share_price": 71},
+            "NYC": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "CPR": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&O": {"cash": 670, "companies": [], "trains": [], "share_price": 67},
+            "C&O": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "ERIE": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "NYNH": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&M": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+        },
+    }
+    assert action_helper.get_state(g) == expected_state, "State does not match expected state after stock round 1"
+
     # [21:15] -- Operating Round 1.1 (of 1) --
     # [21:15] Player 1 collects $30 from Baltimore & Ohio
     # [21:15] Player 2 collects $5 from Schuylkill Valley
@@ -148,107 +193,119 @@ def get_almost_done_game_state():
     # [21:15] Player 4 collects $15 from Delaware & Hudson
     # [21:15] Player 4 operates PRR
     # [21:15] PRR places a token on H12
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[0]
+
+    g.process_action(
+        action_helper.get_all_choices(g)[1]
     )  # [21:16] PRR lays tile #57 with rotation 1 on H10 (Pittsburgh)
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [21:16] PRR passes place a token
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [21:16] PRR passes place a token
     # [21:16] PRR skips run routes
     # [21:16] PRR does not run
     # [21:16] PRR's share price moves left from 67
-    game_state.process_action(action_helper.get_all_choices(game_state)[0])  # [21:16] PRR buys a 2 train for $80 from The Depot
-    game_state.process_action(action_helper.get_all_choices(game_state)[0])  # [21:16] PRR buys a 2 train for $80 from The Depot
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [21:17] PRR passes buy trains
+    g.process_action(action_helper.get_all_choices(g)[1])  # [21:16] PRR buys a 2 train for $80 from The Depot
+    g.process_action(action_helper.get_all_choices(g)[1])  # [21:16] PRR buys a 2 train for $80 from The Depot
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [21:17] PRR passes buy trains
     # [21:17] PRR skips buy companies
     # [21:17] Player 4 operates B&O
     # [21:17] B&O places a token on I15
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[4]
+    g.process_action(
+        action_helper.get_all_choices(g)[5]
     )  # [21:17] B&O spends $80 and lays tile #57 with rotation 0 on J14 (Washington)
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [21:17] B&O passes place a token
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [21:17] B&O passes place a token
     # [21:17] B&O skips run routes
     # [21:17] B&O does not run
     # [21:17] B&O's share price moves left from 65
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [21:22] B&O buys a 2 train for $590 from PRR
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [21:22] B&O buys a 2 train for $590 from PRR
     # [21:22] Baltimore & Ohio closes
     # [21:22] B&O skips buy companies
+    action_helper.print_summary(g, json_format=True)
+    expected_state = {
+        "players": {
+            "Player 1": {"cash": 30, "shares": {"B&O": 20}, "companies": []},
+            "Player 2": {"cash": 227, "shares": {"B&O": 10, "PRR": 30}, "companies": ["SV", "MH"]},
+            "Player 3": {"cash": 234, "shares": {"PRR": 30, "B&O": 10}, "companies": ["CS", "CA"]},
+            "Player 4": {"cash": 76, "shares": {"B&O": 30, "PRR": 40}, "companies": ["DH"]},
+        },
+        "corporations": {
+            "PRR": {"cash": 1100, "companies": [], "trains": ["2"], "share_price": 67},
+            "NYC": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "CPR": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&O": {"cash": 0, "companies": [], "trains": ["2"], "share_price": 65},
+            "C&O": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "ERIE": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "NYNH": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&M": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+        },
+    }
+    assert action_helper.get_state(g) == expected_state, "State does not match expected state after operating round 1"
+
     # [21:22] -- Stock Round 2 --
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [21:23] Player 1 passes
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [21:23] Player 1 passes
     # [23:26] Player 2 pars NYC at $67
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[31]
+    g.process_action(
+        action_helper.get_all_choices(g)[31]
     )  # [23:26] Player 2 buys a 20% share of NYC from the IPO for $134
     # [23:26] Player 2 becomes the president of NYC
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[0]
+    g.process_action(
+        action_helper.get_all_choices(g)[0]
     )  # [23:26] Player 2 exchanges Mohawk & Hudson from the IPO for a 10% share of NYC
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [23:26] Player 2 declines to sell shares
-    game_state.process_action(action_helper.get_all_choices(game_state)[13])  # [23:26] Player 3 pars C&O at $67
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [23:26] Player 2 declines to sell shares
+    g.process_action(action_helper.get_all_choices(g)[13])  # [23:26] Player 3 pars C&O at $67
     # [23:26] Player 3 buys a 20% share of C&O from the IPO for $134
     # [23:26] Player 3 becomes the president of C&O
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [23:26] Player 3 declines to sell shares
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[-2]
-    )  # [23:26] Player 4 sells 3 shares of B&O and receives $195
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [23:26] Player 3 declines to sell shares
+    g.process_action(action_helper.get_all_choices(g)[-2])  # [23:26] Player 4 sells 3 shares of B&O and receives $195
     # [23:26] Player 1 becomes the president of B&O
     # [23:26] B&O's share price moves down from 50
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[0]
+    g.process_action(
+        action_helper.get_all_choices(g)[0]
     )  # [23:27] Player 4 buys a 10% share of NYC from the IPO for $67
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])
+    g.process_action(action_helper.get_all_choices(g)[-1])
     # [23:27] Player 1 has no valid actions and passes
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[0]
+    g.process_action(
+        action_helper.get_all_choices(g)[0]
     )  # [23:27] Player 2 buys a 10% share of NYC from the IPO for $67
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [23:27] Player 2 declines to sell shares
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[1]
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [23:27] Player 2 declines to sell shares
+    g.process_action(
+        action_helper.get_all_choices(g)[1]
     )  # [23:27] Player 3 buys a 10% share of C&O from the IPO for $67
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [23:27] Player 3 declines to sell shares
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[0]
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [23:27] Player 3 declines to sell shares
+    g.process_action(
+        action_helper.get_all_choices(g)[0]
     )  # [23:27] Player 4 buys a 10% share of NYC from the IPO for $67
     # [23:27] NYC floats
     # [23:27] NYC receives $670
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [23:27] Player 4 declines to sell shares
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [23:27] Player 4 declines to sell shares
     # [23:27] Player 1 has no valid actions and passes
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[2]
-    )  # [23:27] Player 2 sells 3 shares of PRR and receives $201
+    g.process_action(action_helper.get_all_choices(g)[2])  # [23:27] Player 2 sells 3 shares of PRR and receives $201
     # [23:27] PRR's share price moves down from 60
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[1]
+    g.process_action(
+        action_helper.get_all_choices(g)[1]
     )  # [23:27] Player 2 buys a 10% share of C&O from the IPO for $67
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[1]
-    )  # [23:27] Player 3 sells 2 shares of PRR and receives $120
+    g.process_action(action_helper.get_all_choices(g)[-1])
+    g.process_action(action_helper.get_all_choices(g)[1])  # [23:27] Player 3 sells 2 shares of PRR and receives $120
     # [23:27] PRR's share price moves down from 40
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[1]
+    g.process_action(
+        action_helper.get_all_choices(g)[1]
     )  # [23:27] Player 3 buys a 10% share of C&O from the IPO for $67
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[1]
+    g.process_action(action_helper.get_all_choices(g)[-1])
+    g.process_action(
+        action_helper.get_all_choices(g)[1]
     )  # [23:27] Player 4 buys a 10% share of C&O from the IPO for $67
     # [23:27] C&O floats
     # [23:27] C&O receives $670
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [23:35] Player 4 declines to sell shares
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [23:35] Player 4 declines to sell shares
     # [23:35] Player 1 has no valid actions and passes
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[20]
-    )  # [23:35] Player 2 sells a 10% share of B&O and receives $50
+    g.process_action(action_helper.get_all_choices(g)[20])  # [23:35] Player 2 sells a 10% share of B&O and receives $50
     # [23:35] B&O's share price moves down from 40
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [23:35] Player 2 declines to buy shares
-    game_state.process_action(
-        action_helper.get_all_choices(game_state)[4]
-    )  # [23:35] Player 3 sells a 10% share of B&O and receives $40
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [23:35] Player 2 declines to buy shares
+    g.process_action(action_helper.get_all_choices(g)[4])  # [23:35] Player 3 sells a 10% share of B&O and receives $40
     # [23:35] B&O's share price moves down from 30
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [23:35] Player 3 declines to buy shares
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [23:35] Player 4 passes
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [23:35] Player 1 passes
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [23:35] Player 2 passes
-    game_state.process_action(action_helper.get_all_choices(game_state)[-1])  # [23:35] Player 3 passes
-    return game_state
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [23:35] Player 3 declines to buy shares
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [23:35] Player 4 passes
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [23:35] Player 1 passes
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [23:35] Player 2 passes
+    g.process_action(action_helper.get_all_choices(g)[-1])  # [23:35] Player 3 passes
+    return g
 
 
 def terminal_game_state():
@@ -443,12 +500,12 @@ def test_extract_data_normal_end():
 
     data = list(player.extract_data())
     assert len(data) == 88
-    game_state, _, result = data[-1]
+    game_state, _, _, result = data[-1]
     assert np.array_equal(result, [-1.0, -1.0, 1.0, -1.0])
     assert len(game_state.raw_actions) == 87
 
     expected_actions = terminal_game_state().raw_actions
-    for i, (game_state, _, _) in enumerate(data):
+    for i, (game_state, _, _, _) in enumerate(data):
         assert len(game_state.raw_actions) == i
         if i == 0:
             continue

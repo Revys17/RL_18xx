@@ -2,6 +2,7 @@ import pytest
 import copy
 import math
 import numpy as np
+import torch
 from typing import Tuple
 
 from rl18xx.game.engine.game.base import BaseGame
@@ -13,6 +14,18 @@ from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.alphazero.config import SelfPlayConfig
 
 GameObjects = Tuple[BaseGame, ActionHelper, ActionMapper]
+
+
+class DummyNet:
+    """Minimal network stub for MCTSNode tests."""
+    def encoder_type(self):
+        return "GNN"
+
+    def run_many_encoded(self, encoded_game_states):
+        n = len(encoded_game_states)
+        priors = torch.ones(26535, dtype=torch.float32) / 26535
+        value = torch.tensor([0.0, 0.0, 0.0, 0.0], dtype=torch.float32)
+        return [priors] * n, [torch.log(priors)] * n, [value] * n
 
 
 @pytest.fixture
@@ -33,28 +46,38 @@ def near_terminal_game_objects(game_objects) -> GameObjects:
         action_helper.get_all_choices(initial_game_state)[-2]
     )  # [20:39] -- Phase 2 (Operating Rounds: 1 | Train Limit: 4 | Available Tiles: Yellow) --
     # [20:39] Player 1 bids $600 for Baltimore & Ohio
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[0]
-    )  # [20:39] Player 2 buys Schuylkill Valley for $20
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[0]
-    )  # [20:39] Player 3 buys Champlain & St.Lawrence for $40
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[0]
-    )  # [20:39] Player 4 buys Delaware & Hudson for $70
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [20:39] Player 2 buys Schuylkill Valley for $20
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [20:39] Player 3 buys Champlain & St.Lawrence for $40
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [20:39] Player 4 buys Delaware & Hudson for $70
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [20:39] Player 1 passes bidding
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[0]
-    )  # [20:39] Player 2 buys Mohawk & Hudson for $110
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[0]
-    )  # [20:39] Player 3 buys Camden & Amboy for $160
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [20:39] Player 2 buys Mohawk & Hudson for $110
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [20:39] Player 3 buys Camden & Amboy for $160
     # [20:39] Player 3 receives a 10% share of PRR
     # [20:39] Player 1 wins the auction for Baltimore & Ohio with the only bid of $600
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [20:39] Player 1 pars B&O at $67
     # [20:39] Player 1 receives a 20% share of B&O
     # [20:39] Player 1 becomes the president of B&O
     # [20:39] Player 4 has priority deal
+    action_helper.print_summary(initial_game_state, json_format=True)
+    expected_state = {
+        "players": {
+            "Player 1": {"cash": 0, "shares": {"B&O": 20}, "companies": ["BO"]},
+            "Player 2": {"cash": 470, "shares": {}, "companies": ["SV", "MH"]},
+            "Player 3": {"cash": 400, "shares": {"PRR": 10}, "companies": ["CS", "CA"]},
+            "Player 4": {"cash": 530, "shares": {}, "companies": ["DH"]},
+        },
+        "corporations": {
+            "PRR": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "NYC": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "CPR": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&O": {"cash": 0, "companies": [], "trains": [], "share_price": 67},
+            "C&O": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "ERIE": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "NYNH": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&M": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+        },
+    }
+    assert action_helper.get_state(initial_game_state) == expected_state, "State does not match expected state after auction"
     # [20:39] -- Stock Round 1 --
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[0]
@@ -119,6 +142,27 @@ def near_terminal_game_objects(game_objects) -> GameObjects:
     # [21:15] Player 4 has no valid actions and passes
     # [21:15] PRR's share price moves up from 71
     # [21:15] Player 1 has priority deal
+    action_helper.print_summary(initial_game_state, json_format=True)
+    expected_state = {
+        "players": {
+            "Player 1": {"cash": 30, "shares": {"B&O": 20}, "companies": ["BO"]},
+            "Player 2": {"cash": 227, "shares": {"B&O": 10, "PRR": 30}, "companies": ["SV", "MH"]},
+            "Player 3": {"cash": 234, "shares": {"PRR": 30, "B&O": 10}, "companies": ["CS", "CA"]},
+            "Player 4": {"cash": 76, "shares": {"B&O": 30, "PRR": 40}, "companies": ["DH"]},
+        },
+        "corporations": {
+            "PRR": {"cash": 670, "companies": [], "trains": [], "share_price": 71},
+            "NYC": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "CPR": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&O": {"cash": 670, "companies": [], "trains": [], "share_price": 67},
+            "C&O": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "ERIE": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "NYNH": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&M": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+        },
+    }
+    assert action_helper.get_state(initial_game_state) == expected_state, "State does not match expected state after stock round 1"
+
     # [21:15] -- Operating Round 1.1 (of 1) --
     # [21:15] Player 1 collects $30 from Baltimore & Ohio
     # [21:15] Player 2 collects $5 from Schuylkill Valley
@@ -128,35 +172,51 @@ def near_terminal_game_objects(game_objects) -> GameObjects:
     # [21:15] Player 4 collects $15 from Delaware & Hudson
     # [21:15] Player 4 operates PRR
     # [21:15] PRR places a token on H12
+
     initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[0]
+        action_helper.get_all_choices(initial_game_state)[1]
     )  # [21:16] PRR lays tile #57 with rotation 1 on H10 (Pittsburgh)
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [21:16] PRR passes place a token
     # [21:16] PRR skips run routes
     # [21:16] PRR does not run
     # [21:16] PRR's share price moves left from 67
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[0]
-    )  # [21:16] PRR buys a 2 train for $80 from The Depot
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[0]
-    )  # [21:16] PRR buys a 2 train for $80 from The Depot
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[1])  # [21:16] PRR buys a 2 train for $80 from The Depot
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[1])  # [21:16] PRR buys a 2 train for $80 from The Depot
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [21:17] PRR passes buy trains
     # [21:17] PRR skips buy companies
     # [21:17] Player 4 operates B&O
     # [21:17] B&O places a token on I15
     initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[4]
+        action_helper.get_all_choices(initial_game_state)[5]
     )  # [21:17] B&O spends $80 and lays tile #57 with rotation 0 on J14 (Washington)
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [21:17] B&O passes place a token
     # [21:17] B&O skips run routes
     # [21:17] B&O does not run
     # [21:17] B&O's share price moves left from 65
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[-1]
-    )  # [21:22] B&O buys a 2 train for $590 from PRR
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [21:22] B&O buys a 2 train for $590 from PRR
     # [21:22] Baltimore & Ohio closes
     # [21:22] B&O skips buy companies
+    action_helper.print_summary(initial_game_state, json_format=True)
+    expected_state = {
+        "players": {
+            "Player 1": {"cash": 30, "shares": {"B&O": 20}, "companies": []},
+            "Player 2": {"cash": 227, "shares": {"B&O": 10, "PRR": 30}, "companies": ["SV", "MH"]},
+            "Player 3": {"cash": 234, "shares": {"PRR": 30, "B&O": 10}, "companies": ["CS", "CA"]},
+            "Player 4": {"cash": 76, "shares": {"B&O": 30, "PRR": 40}, "companies": ["DH"]},
+        },
+        "corporations": {
+            "PRR": {"cash": 1100, "companies": [], "trains": ["2"], "share_price": 67},
+            "NYC": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "CPR": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&O": {"cash": 0, "companies": [], "trains": ["2"], "share_price": 65},
+            "C&O": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "ERIE": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "NYNH": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&M": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+        },
+    }
+    assert action_helper.get_state(initial_game_state) == expected_state, "State does not match expected state after operating round 1"
+
     # [21:22] -- Stock Round 2 --
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [21:23] Player 1 passes
     # [23:26] Player 2 pars NYC at $67
@@ -172,9 +232,7 @@ def near_terminal_game_objects(game_objects) -> GameObjects:
     # [23:26] Player 3 buys a 20% share of C&O from the IPO for $134
     # [23:26] Player 3 becomes the president of C&O
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:26] Player 3 declines to sell shares
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[-2]
-    )  # [23:26] Player 4 sells 3 shares of B&O and receives $195
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-2])  # [23:26] Player 4 sells 3 shares of B&O and receives $195
     # [23:26] Player 1 becomes the president of B&O
     # [23:26] B&O's share price moves down from 50
     initial_game_state.process_action(
@@ -197,17 +255,13 @@ def near_terminal_game_objects(game_objects) -> GameObjects:
     # [23:27] NYC receives $670
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:27] Player 4 declines to sell shares
     # [23:27] Player 1 has no valid actions and passes
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[2]
-    )  # [23:27] Player 2 sells 3 shares of PRR and receives $201
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[2])  # [23:27] Player 2 sells 3 shares of PRR and receives $201
     # [23:27] PRR's share price moves down from 60
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[1]
     )  # [23:27] Player 2 buys a 10% share of C&O from the IPO for $67
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[1]
-    )  # [23:27] Player 3 sells 2 shares of PRR and receives $120
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[1])  # [23:27] Player 3 sells 2 shares of PRR and receives $120
     # [23:27] PRR's share price moves down from 40
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[1]
@@ -220,14 +274,10 @@ def near_terminal_game_objects(game_objects) -> GameObjects:
     # [23:27] C&O receives $670
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:35] Player 4 declines to sell shares
     # [23:35] Player 1 has no valid actions and passes
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[20]
-    )  # [23:35] Player 2 sells a 10% share of B&O and receives $50
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[20])  # [23:35] Player 2 sells a 10% share of B&O and receives $50
     # [23:35] B&O's share price moves down from 40
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:35] Player 2 declines to buy shares
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[4]
-    )  # [23:35] Player 3 sells a 10% share of B&O and receives $40
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[4])  # [23:35] Player 3 sells a 10% share of B&O and receives $40
     # [23:35] B&O's share price moves down from 30
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:35] Player 3 declines to buy shares
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:35] Player 4 passes
@@ -235,6 +285,27 @@ def near_terminal_game_objects(game_objects) -> GameObjects:
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:35] Player 2 passes
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:35] Player 3 passes
     # [23:35] Player 4 has priority deal
+    action_helper.print_summary(initial_game_state, json_format=True)
+    expected_state = {
+        "players": {
+            "Player 1": {"cash": 30, "shares": {"B&O": 20}, "companies": []},
+            "Player 2": {"cash": 215, "shares": {"B&O": 0, "PRR": 0, "NYC": 40, "C&O": 10}, "companies": ["SV"]},
+            "Player 3": {"cash": 161, "shares": {"PRR": 10, "B&O": 0, "C&O": 40}, "companies": ["CS", "CA"]},
+            "Player 4": {"cash": 85, "shares": {"B&O": 0, "PRR": 40, "NYC": 20, "C&O": 10}, "companies": ["DH"]},
+        },
+        "corporations": {
+            "PRR": {"cash": 1100, "companies": [], "trains": ["2"], "share_price": 40},
+            "NYC": {"cash": 670, "companies": [], "trains": [], "share_price": 67},
+            "CPR": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&O": {"cash": 0, "companies": [], "trains": ["2"], "share_price": 30},
+            "C&O": {"cash": 670, "companies": [], "trains": [], "share_price": 67},
+            "ERIE": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "NYNH": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+            "B&M": {"cash": 0, "companies": [], "trains": [], "share_price": None},
+        },
+    }
+    assert action_helper.get_state(initial_game_state) == expected_state, "State does not match expected state after stock round 2"
+
     # [23:35] -- Operating Round 2.1 (of 1) --
     # [23:35] Player 4 collects $15 from Delaware & Hudson
     # [23:35] Player 2 collects $5 from Schuylkill Valley
@@ -247,18 +318,10 @@ def near_terminal_game_objects(game_objects) -> GameObjects:
     # [23:35] NYC skips run routes
     # [23:35] NYC does not run
     # [23:35] NYC's share price moves left from 65
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[0]
-    )  # [23:35] NYC buys a 2 train for $80 from The Depot
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[0]
-    )  # [23:35] NYC buys a 2 train for $80 from The Depot
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[0]
-    )  # [23:35] NYC buys a 2 train for $80 from The Depot
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[0]
-    )  # [23:36] NYC buys a 2 train for $80 from The Depot
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [23:35] NYC buys a 2 train for $80 from The Depot
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [23:35] NYC buys a 2 train for $80 from The Depot
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [23:35] NYC buys a 2 train for $80 from The Depot
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [23:36] NYC buys a 2 train for $80 from The Depot
     # [23:36] NYC skips buy companies
     # [23:36] Player 3 operates C&O
     # [23:36] C&O places a token on F6
@@ -267,37 +330,23 @@ def near_terminal_game_objects(game_objects) -> GameObjects:
     # [23:36] C&O skips run routes
     # [23:36] C&O does not run
     # [23:36] C&O's share price moves left from 65
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[0]
-    )  # [23:36] C&O buys a 3 train for $180 from The Depot
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [23:36] C&O buys a 3 train for $180 from The Depot
     # [23:36] -- Phase 3 (Operating Rounds: 2 | Train Limit: 4 | Available Tiles: Yellow, Green) --
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[-2]
-    )  # [23:36] C&O buys a 3 train for $180 from The Depot
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[-2]
-    )  # [23:36] C&O buys a 3 train for $180 from The Depot
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-2])  # [23:36] C&O buys a 3 train for $180 from The Depot
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-2])  # [23:36] C&O buys a 3 train for $180 from The Depot
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:36] C&O passes buy trains
     # [23:36] C&O passes buy companies
     # [23:36] Player 4 operates PRR
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:36] PRR passes lay/upgrade track
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:36] PRR passes place a token
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[-1]
-    )  # [23:36] PRR runs a 2 train for $30: H12-H10
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:36] PRR runs a 2 train for $30: H12-H10
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[-1]
     )  # [23:36] PRR pays out 3 per share (12 to Player 4, $3 to Player 3)
     # [23:36] PRR's share price moves right from 50
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[-2]
-    )  # [23:36] PRR buys a 3 train for $180 from The Depot
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[-2]
-    )  # [23:36] PRR buys a 3 train for $180 from The Depot
-    initial_game_state.process_action(
-        action_helper.get_all_choices(initial_game_state)[-2]
-    )  # [23:36] PRR buys a 4 train for $300 from The Depot
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-2])  # [23:36] PRR buys a 3 train for $180 from The Depot
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-2])  # [23:36] PRR buys a 3 train for $180 from The Depot
+    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-2])  # [23:36] PRR buys a 4 train for $300 from The Depot
     # [23:36] -- Phase 4 (Operating Rounds: 2 | Train Limit: 3 | Available Tiles: Yellow, Green) --
     # [23:36] -- Event: 2 trains rust ( B&O x1, PRR x1, NYC x4) --
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:36] PRR passes buy companies
@@ -313,7 +362,7 @@ def near_terminal_game_objects(game_objects) -> GameObjects:
 
 @pytest.fixture
 def mcts_config() -> SelfPlayConfig:
-    return SelfPlayConfig()
+    return SelfPlayConfig(network=DummyNet())
 
 
 def assertNoPendingVirtualLosses(root):
@@ -332,7 +381,7 @@ def test_upper_bound_confidence(game_objects, mcts_config: SelfPlayConfig):
     game_instance, action_helper, action_mapper = game_objects
 
     probs = np.array([0.02] * POLICY_SIZE)
-    root = MCTSNode(game_instance)
+    root = MCTSNode(game_instance, config=mcts_config)
     leaf = root.select_leaf()
     assert root == leaf
     value = np.array([0.5, 0.0, 0.0, 0.0])
@@ -390,7 +439,7 @@ def test_select_leaf(game_objects, mcts_config: SelfPlayConfig):
     flattened = 0
     probs = np.array([0.02] * POLICY_SIZE)
     probs[flattened] = 0.4
-    root = MCTSNode(game_instance)
+    root = MCTSNode(game_instance, config=mcts_config)
     value = np.array([0.0, 0.0, 0.0, 0.0])
     root.select_leaf().incorporate_results(probs, value, root)
 
@@ -398,11 +447,11 @@ def test_select_leaf(game_objects, mcts_config: SelfPlayConfig):
     assert root.select_leaf() == root.children[flattened]
 
 
-def test_backup_incorporate_results(game_objects):
+def test_backup_incorporate_results(game_objects, mcts_config):
     game_instance, action_helper, action_mapper = game_objects
 
     probs = np.array([0.02] * POLICY_SIZE)
-    root = MCTSNode(game_instance)
+    root = MCTSNode(game_instance, config=mcts_config)
     value = np.array([0.0, 0.0, 0.0, 0.0])
     root.select_leaf().incorporate_results(probs, value, root)
 
@@ -447,13 +496,13 @@ def test_backup_incorporate_results(game_objects):
     assert np.allclose(leaf2.Q, np.array([0.6, -0.6, -0.6, -0.6]))
 
 
-def test_do_not_explore_past_finish(near_terminal_game_objects):
+def test_do_not_explore_past_finish(near_terminal_game_objects, mcts_config):
     game_instance, action_helper, action_mapper = near_terminal_game_objects
     probs = np.array([0.02] * POLICY_SIZE, dtype=np.float32)
-    root = MCTSNode(game_instance)
+    root = MCTSNode(game_instance, config=mcts_config)
     value = np.array([0.0, 0.0, 0.0, 0.0])
     root.select_leaf().incorporate_results(probs, value, root)
-    action_index = action_mapper.get_index_for_action(action_helper.get_all_choices(game_instance)[-1])
+    action_index = action_mapper.get_index_for_action(action_helper.get_all_choices(game_instance)[-1], game_instance)
     end_game_action = root.maybe_add_child(action_index)  # Only choice is bankrupt
     with pytest.raises(AssertionError):
         value = np.array([0.0, 0.0, 0.0, 0.0])
@@ -463,22 +512,22 @@ def test_do_not_explore_past_finish(near_terminal_game_objects):
     assert end_game_action == node_to_explore
 
 
-def test_add_child(game_objects):
+def test_add_child(game_objects, mcts_config):
     game_instance, action_helper, action_mapper = game_objects
 
-    root = MCTSNode(game_instance)
-    action_index = action_mapper.get_index_for_action(action_helper.get_all_choices(game_instance)[0])
+    root = MCTSNode(game_instance, config=mcts_config)
+    action_index = action_mapper.get_index_for_action(action_helper.get_all_choices(game_instance)[0], game_instance)
     child = root.maybe_add_child(action_index)
     assert action_index in root.children
     assert root == child.parent
     assert child.fmove == action_index
 
 
-def test_add_child_idempotency(game_objects):
+def test_add_child_idempotency(game_objects, mcts_config):
     game_instance, action_helper, action_mapper = game_objects
-    root = MCTSNode(game_instance)
+    root = MCTSNode(game_instance, config=mcts_config)
 
-    action_index = action_mapper.get_index_for_action(action_helper.get_all_choices(game_instance)[0])
+    action_index = action_mapper.get_index_for_action(action_helper.get_all_choices(game_instance)[0], game_instance)
     child = root.maybe_add_child(action_index)
     current_children = copy.copy(root.children)
     child2 = root.maybe_add_child(action_index)
@@ -486,13 +535,13 @@ def test_add_child_idempotency(game_objects):
     assert current_children == root.children
 
 
-def test_never_select_illegal_moves(game_objects):
+def test_never_select_illegal_moves(game_objects, mcts_config):
     game_instance, action_helper, action_mapper = game_objects
 
     probs = np.array([0.02] * POLICY_SIZE)
     # let's say the NN were to accidentally put a high weight on an illegal move
     probs[9999] = 0.99
-    root = MCTSNode(game_instance)
+    root = MCTSNode(game_instance, config=mcts_config)
     value = np.array([0.0, 0.0, 0.0, 0.0])
     root.incorporate_results(probs, value, root)
     # and let's say the root were visited a lot of times, which pumps up the
@@ -512,14 +561,14 @@ def test_never_select_illegal_moves(game_objects):
         assert 9999 != leaf.fmove
 
 
-def test_dont_pick_unexpanded_child(game_objects):
+def test_dont_pick_unexpanded_child(game_objects, mcts_config):
     game_instance, action_helper, action_mapper = game_objects
 
     probs = np.array([0.001] * POLICY_SIZE)
     # make one move really likely so that tree search goes down that path twice
     # even with a virtual loss
     probs[0] = 0.999
-    root = MCTSNode(game_instance)
+    root = MCTSNode(game_instance, config=mcts_config)
     value = np.array([0.0, 0.0, 0.0, 0.0])
     root.incorporate_results(probs, value, root)
     root.N = 5
@@ -532,13 +581,13 @@ def test_dont_pick_unexpanded_child(game_objects):
     assert leaf1 == leaf2
 
 
-def test_normalize_policy(game_objects):
+def test_normalize_policy(game_objects, mcts_config):
     game_instance, action_helper, action_mapper = game_objects
 
     # sum of probs > 1.0
     probs = np.array([2.0] * POLICY_SIZE)
 
-    root = MCTSNode(game_instance)
+    root = MCTSNode(game_instance, config=mcts_config)
     value = np.array([0.0, 0.0, 0.0, 0.0])
     root.incorporate_results(probs, value, root)
     root.N = 0
@@ -551,11 +600,11 @@ def test_normalize_policy(game_objects):
     assert 0 == sum(root.child_prior * illegal_moves)
 
 
-def test_inject_noise_only_legal_moves(game_objects):
+def test_inject_noise_only_legal_moves(game_objects, mcts_config):
     game_instance, action_helper, action_mapper = game_objects
 
     probs = np.array([0.02] * POLICY_SIZE)
-    root = MCTSNode(game_instance)
+    root = MCTSNode(game_instance, config=mcts_config)
     value = np.array([0.0, 0.0, 0.0, 0.0])
     root.incorporate_results(probs, value, root)
     root.N = 0

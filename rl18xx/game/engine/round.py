@@ -1727,7 +1727,7 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
                 buyable_shares.append(shares)
 
         for corporation, shares in self.game.bank.shares_by_corporation.items():
-            if self.can_buy_shares(entity, shares):
+            if corporation.ipoed and self.can_buy_shares(entity, shares):
                 buyable_shares.append(shares)
 
         for corporation in self.game.corporations:

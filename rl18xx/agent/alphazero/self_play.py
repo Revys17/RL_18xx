@@ -224,7 +224,7 @@ class MCTSPlayer(Agent):
         string = self.root.game_result_string()
         self.result_string = string
 
-    def extract_data(self) -> Generator[Tuple[BaseGame, torch.Tensor, torch.Tensor], None, None]:
+    def extract_data(self) -> Generator[Tuple[BaseGame, torch.Tensor, torch.Tensor, torch.Tensor], None, None]:
         assert (
             len(self.searches_pi) == self.root.game_object.move_number
         ), f"searches_pi length {len(self.searches_pi)} != move_number {self.root.game_object.move_number}"
@@ -242,7 +242,7 @@ class MCTSPlayer(Agent):
                 else self.searches_pi[i],
                 result,
             )
-            game_state = game_state.deep_copy_clone()
+            game_state = game_state.pickle_clone()
             game_state.process_action(action)
 
     def get_num_readouts(self):

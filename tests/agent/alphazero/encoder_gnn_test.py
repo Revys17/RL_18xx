@@ -77,13 +77,14 @@ def operating_round_2_game_state(test_game_1830_4p):
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[0])  # buy MH
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[0])  # buy CA
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[0])  # Par B&O at 100
+
     # SR 1
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[-2])  # Par PRR
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[-1])  # Pass
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[-8])  # Par NYC
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[1])  # Buy PRR
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[1])  # Buy PRR
-    test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[14])  # Par C&O
+    test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[15])  # Par C&O
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[2])  # Buy NYC
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[1])  # Buy PRR
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[1])  # Buy PRR
@@ -101,14 +102,23 @@ def operating_round_2_game_state(test_game_1830_4p):
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[1])  # Buy NYC
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[1])  # Buy NYC
     # OR 1
-    test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[0])  # lays tile #57 with rotation 1 on H10
+    # PRR
+    test_game_1830_4p.process_action(
+        action_helper.get_all_choices(test_game_1830_4p)[0]
+    )  # lays tile #57 with rotation 1 on H10
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[-1])  # passes place token
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[0])  # buys a 2 train
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[0])  # buys a 2 train
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[-1])  # passes trains
-    test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[0])  # lays tile #57 with rotation 0 on E19
+
+    # NYC
+    test_game_1830_4p.process_action(
+        action_helper.get_all_choices(test_game_1830_4p)[0]
+    )  # lays tile #57 with rotation 0 on E19
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[0])  # buys a 2 train
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[-1])  # passes trains
+
+    # C&O
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[2])
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[0])  # Buys a 2 train
     test_game_1830_4p.process_action(action_helper.get_all_choices(test_game_1830_4p)[-1])  # passes trains
@@ -237,7 +247,7 @@ def test_initial_encoding_structure(encoder_1830: Encoder_GNN, test_game_1830_4p
     assert edge_attributes.dtype == long, "Expected dtype long"
 
 
-def test_initial_game_state_encoding(encoder_1830: Encoder_GNN, test_game_1830_4p):
+def test_test_game_1830_4p_encoding(encoder_1830: Encoder_GNN, test_game_1830_4p):
     """Verify the encoding of general game state at the start."""
     g, action_helper = test_game_1830_4p
     game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
@@ -1610,7 +1620,7 @@ def test_operating_round_2_encoding(
     # # Section 2: Active President
     # P3 is president of NYNH
     s_slice, offset = get_section_slice(encoder_1830, "active_president", offset)
-    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx["3"]], "Section 2: Player 3 Active President")
+    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx[3]], "Section 2: Player 3 Active President")
     assert sum(encoding[s_slice]) == 1.0, "Section 2: Player 3 Active President"
     # # Section 3: Round Type
     # Operating round
@@ -1625,82 +1635,82 @@ def test_operating_round_2_encoding(
     assert_float(expected_phase_idx, encoding[s_slice].item(), "Section 4: Game Phase 2")
     # --- Section 5: Priority Deal ---
     s_slice, offset = get_section_slice(encoder_1830, "priority_deal_player", offset)
-    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 5: Player 4 Priority Deal")
+    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 5: Player 4 Priority Deal")
     assert sum(encoding[s_slice]) == 1.0, "Section 5: Player 4 Priority Deal"
     # --- Section 6: Bank Cash ---
     s_slice, offset = get_section_slice(encoder_1830, "bank_cash", offset)
     assert_float(9431.0 / 12000.0, encoding[s_slice].item(), "Section 6: Bank Cash")
     # --- Section 7: Player Certs ---
     s_slice, offset = get_section_slice(encoder_1830, "player_certs_remaining", offset)
-    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["1"]], "Section 7: Player 1 Certs")
-    assert_float(9.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["2"]], "Section 7: Player 2 Certs")
-    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["3"]], "Section 7: Player 3 Certs")
-    assert_float(8.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 7: Player 4 Certs")
+    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[1]], "Section 7: Player 1 Certs")
+    assert_float(9.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[2]], "Section 7: Player 2 Certs")
+    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[3]], "Section 7: Player 3 Certs")
+    assert_float(8.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 7: Player 4 Certs")
     # --- Section 8: Player Cash ---
     s_slice, offset = get_section_slice(encoder_1830, "player_cash", offset)
     expected_p1_cash = 24.0 / 600.0
     assert_float(
         expected_p1_cash,
-        encoding[s_slice][encoder_1830.player_id_to_idx["1"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[1]],
         "Section 8: Player 1 Cash reduced by Par",
     )
     expected_p2_cash = 20.0 / 600.0
-    assert_float(expected_p2_cash, encoding[s_slice][encoder_1830.player_id_to_idx["2"]], "Section 8: Player 2 Cash")
+    assert_float(expected_p2_cash, encoding[s_slice][encoder_1830.player_id_to_idx[2]], "Section 8: Player 2 Cash")
     expected_p3_cash = 68.0 / 600.0
-    assert_float(expected_p3_cash, encoding[s_slice][encoder_1830.player_id_to_idx["3"]], "Section 8: Player 3 Cash")
+    assert_float(expected_p3_cash, encoding[s_slice][encoder_1830.player_id_to_idx[3]], "Section 8: Player 3 Cash")
     expected_p4_cash = 57.0 / 600.0
-    assert_float(expected_p4_cash, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 8: Player 4 Cash")
+    assert_float(expected_p4_cash, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 8: Player 4 Cash")
     # --- Section 9: Player Shares ---
     # P1 has 10% PRR, P2 has 20% B&O, others have none
     s_slice, offset = get_section_slice(encoder_1830, "player_shares", offset)
     assert_float(
         0.6,
-        encoding[s_slice][encoder_1830.player_id_to_idx["1"] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[1] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
         "Section 9: Player 1 owns 60% PRR",
     )
     assert_float(
         0.3,
-        encoding[s_slice][encoder_1830.player_id_to_idx["1"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[1] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 1 owns 30% NYC",
     )
     assert_float(
         0.6,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
         "Section 9: Player 2 owns 60% C&O",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
         "Section 9: Player 2 owns 10% NYNH",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 2 owns 10% NYC",
     )
     assert_float(
         0.5,
-        encoding[s_slice][encoder_1830.player_id_to_idx["3"] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[3] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
         "Section 9: Player 3 owns 50% NYNH",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["3"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[3] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 3 owns 10% NYC",
     )
     assert_float(
         0.4,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
         "Section 9: Player 4 owns 40% PRR",
     )
     assert_float(
         0.2,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["B&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["B&O"]],
         "Section 9: Player 4 owns 20% B&O",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
         "Section 9: Player 4 owns 10% C&O",
     )
     assert abs(sum(encoding[s_slice]) - 3.0) < 1e-6, f"Section 9 sum: expected 3.0, got {sum(encoding[s_slice])}"
@@ -1709,32 +1719,32 @@ def test_operating_round_2_encoding(
     # P1 owns SV and CA, P2 owns CS & BO, P3 owns DH, P4 owns MH
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["SV"] * (4 + 8) + encoder_1830.player_id_to_idx["1"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["SV"] * (4 + 8) + encoder_1830.player_id_to_idx[1]],
         "Section 10: Player 1 owns SV",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["CS"] * (4 + 8) + encoder_1830.player_id_to_idx["3"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["CS"] * (4 + 8) + encoder_1830.player_id_to_idx[3]],
         "Section 10: Player 3 owns CS",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["DH"] * (4 + 8) + encoder_1830.player_id_to_idx["2"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["DH"] * (4 + 8) + encoder_1830.player_id_to_idx[2]],
         "Section 10: Player 2 owns DH",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["MH"] * (4 + 8) + encoder_1830.player_id_to_idx["3"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["MH"] * (4 + 8) + encoder_1830.player_id_to_idx[3]],
         "Section 10: Player 3 owns MH",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["CA"] * (4 + 8) + encoder_1830.player_id_to_idx["4"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["CA"] * (4 + 8) + encoder_1830.player_id_to_idx[4]],
         "Section 10: Player 4 owns CA",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["BO"] * (4 + 8) + encoder_1830.player_id_to_idx["4"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["BO"] * (4 + 8) + encoder_1830.player_id_to_idx[4]],
         "Section 10: Player 4 owns BO",
     )
     assert sum(encoding[s_slice]) == 6.0, "Section 10 sum"
@@ -2098,23 +2108,23 @@ def test_operating_round_2_encoding(
 
     # MOVE TO NEXT INTERESTING POINT
     # NYNH
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[0])  # lay #1 with rotation 0 on F20
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[0])  # buy 2 train
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[2])  # lay #1 with rotation 0 on F20
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[2])  # buy 2 train
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass trains
     # PRR
     operating_round_2_game_state.process_action(
-        action_helper.get_all_choices(operating_round_2_game_state)[10]
+        action_helper.get_all_choices(operating_round_2_game_state)[12]
     )  # lay tile #9 with rotation 1 on H8
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass token
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[0])  # auto trains & run
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[0])  # pay out
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto trains & run
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass trains
     # C&O
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[2])  # lay tile #8 with rotation 2 on G3
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[0])  # auto trains & run
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[1])  # withhold
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[0])  # buy a 2 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[0])  # buy a 3 train
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[4])  # lay tile #8 with rotation 2 on G3
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto trains & run
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # withhold
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # buy a 2 train
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # buy a 3 train
 
     # Test that a 3 has been purchased
     game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(
@@ -2131,7 +2141,7 @@ def test_operating_round_2_encoding(
     # # Section 2: Active President
     # P3 is president of NYNH
     s_slice, offset = get_section_slice(encoder_1830, "active_president", offset)
-    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx["2"]], "Section 2: Player 2 Active President")
+    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx[2]], "Section 2: Player 2 Active President")
     assert sum(encoding[s_slice]) == 1.0, "Section 2: Player 2 Active President"
     # # Section 3: Round Type
     # Operating round
@@ -2146,74 +2156,74 @@ def test_operating_round_2_encoding(
     assert_float(expected_phase_idx, encoding[s_slice].item(), "Section 4: Game Phase 3")
     # --- Section 5: Priority Deal ---
     s_slice, offset = get_section_slice(encoder_1830, "priority_deal_player", offset)
-    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 5: Player 4 Priority Deal")
+    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 5: Player 4 Priority Deal")
     assert sum(encoding[s_slice]) == 1.0, "Section 5: Player 4 Priority Deal"
     # --- Section 6: Bank Cash ---
     s_slice, offset = get_section_slice(encoder_1830, "bank_cash", offset)
     assert_float(9671.0 / 12000.0, encoding[s_slice].item(), "Section 6: Bank Cash")
     # --- Section 7: Player Certs ---
     s_slice, offset = get_section_slice(encoder_1830, "player_certs_remaining", offset)
-    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["1"]], "Section 7: Player 1 Certs")
-    assert_float(14.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["2"]], "Section 7: Player 2 Certs")
-    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["3"]], "Section 7: Player 3 Certs")
-    assert_float(9.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 7: Player 4 Certs")
+    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[1]], "Section 7: Player 1 Certs")
+    assert_float(14.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[2]], "Section 7: Player 2 Certs")
+    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[3]], "Section 7: Player 3 Certs")
+    assert_float(9.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 7: Player 4 Certs")
     # --- Section 8: Player Cash ---
     s_slice, offset = get_section_slice(encoder_1830, "player_cash", offset)
-    assert_float(42.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["1"]], "Section 8: Player 1 Cash")
-    assert_float(20.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["2"]], "Section 8: Player 2 Cash")
-    assert_float(68.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["3"]], "Section 8: Player 3 Cash")
-    assert_float(69.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 8: Player 4 Cash")
+    assert_float(42.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[1]], "Section 8: Player 1 Cash")
+    assert_float(20.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[2]], "Section 8: Player 2 Cash")
+    assert_float(68.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[3]], "Section 8: Player 3 Cash")
+    assert_float(69.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 8: Player 4 Cash")
     # --- Section 9: Player Shares ---
     # P1 has 10% PRR, P2 has 20% B&O, others have none
     s_slice, offset = get_section_slice(encoder_1830, "player_shares", offset)
     assert_float(
         0.6,
-        encoding[s_slice][encoder_1830.player_id_to_idx["1"] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[1] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
         "Section 9: Player 1 owns 60% PRR",
     )
     assert_float(
         0.3,
-        encoding[s_slice][encoder_1830.player_id_to_idx["1"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[1] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 1 owns 30% NYC",
     )
     assert_float(
         0.6,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
         "Section 9: Player 2 owns 60% C&O",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
         "Section 9: Player 2 owns 10% NYNH",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 2 owns 10% NYC",
     )
     assert_float(
         0.5,
-        encoding[s_slice][encoder_1830.player_id_to_idx["3"] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[3] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
         "Section 9: Player 3 owns 50% NYNH",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["3"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[3] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 3 owns 10% NYC",
     )
     assert_float(
         0.4,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
         "Section 9: Player 4 owns 40% PRR",
     )
     assert_float(
         0.2,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["B&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["B&O"]],
         "Section 9: Player 4 owns 20% B&O",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
         "Section 9: Player 4 owns 10% C&O",
     )
     assert abs(sum(encoding[s_slice]) - 3.0) < 1e-6, f"Section 9 sum: expected 3.0, got {sum(encoding[s_slice])}"
@@ -2222,32 +2232,32 @@ def test_operating_round_2_encoding(
     # P1 owns SV and CA, P2 owns CS & BO, P3 owns DH, P4 owns MH
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["SV"] * (4 + 8) + encoder_1830.player_id_to_idx["1"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["SV"] * (4 + 8) + encoder_1830.player_id_to_idx[1]],
         "Section 10: Player 1 owns SV",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["CS"] * (4 + 8) + encoder_1830.player_id_to_idx["3"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["CS"] * (4 + 8) + encoder_1830.player_id_to_idx[3]],
         "Section 10: Player 3 owns CS",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["DH"] * (4 + 8) + encoder_1830.player_id_to_idx["2"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["DH"] * (4 + 8) + encoder_1830.player_id_to_idx[2]],
         "Section 10: Player 2 owns DH",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["MH"] * (4 + 8) + encoder_1830.player_id_to_idx["3"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["MH"] * (4 + 8) + encoder_1830.player_id_to_idx[3]],
         "Section 10: Player 3 owns MH",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["CA"] * (4 + 8) + encoder_1830.player_id_to_idx["4"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["CA"] * (4 + 8) + encoder_1830.player_id_to_idx[4]],
         "Section 10: Player 4 owns CA",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["BO"] * (4 + 8) + encoder_1830.player_id_to_idx["4"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["BO"] * (4 + 8) + encoder_1830.player_id_to_idx[4]],
         "Section 10: Player 4 owns BO",
     )
     assert sum(encoding[s_slice]) == 6.0, "Section 10 sum"
@@ -2427,15 +2437,16 @@ def test_operating_round_2_encoding(
     # MOVE TO NEXT INTERESTING POINT
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass trains
     # Move to NYC
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # buy DH from Player 2 for $140
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[0])  # pass buy companies
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-4])  # buy DH from Player 2 for $140
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass buy companies
     # Skip to next OR
+    
     operating_round_2_game_state.process_action(
-        action_helper.get_all_choices(operating_round_2_game_state)[46]
+        action_helper.get_all_choices(operating_round_2_game_state)[-4]
     )  # lay tile #8 with rotation 3 on F18
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[31])  # buy 3 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[31])  # buy 3 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[31])  # buy 3 train
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[33])  # buy 3 train
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[33])  # buy 3 train
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[33])  # buy 3 train
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass
     # SR 3
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass
@@ -2443,25 +2454,25 @@ def test_operating_round_2_encoding(
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass
     # OR 3
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[45])  # lay tile 8 rot 2 on H6
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[47])  # lay tile 8 rot 2 on H6
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip token
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto routes
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[11])  # Buy NYC 2 509
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[542])  # Buy NYC 2 509
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass trains
     operating_round_2_game_state.process_action(
-        action_helper.get_all_choices_limited(operating_round_2_game_state)[4]
+        action_helper.get_all_choices(operating_round_2_game_state)[229]
     )  # NYNH spends $80 and lays tile #57 with rotation 1 on F22 (Providence)
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip token
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto routes
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[4])  # pay out
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip trains
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip companies
     operating_round_2_game_state.process_action(
-        action_helper.get_all_choices(operating_round_2_game_state)[34]
+        action_helper.get_all_choices(operating_round_2_game_state)[36]
     )  # [17:12] C&O (DH) spends $120 and lays tile #57 with rotation 2 on F16 (Scranton)
     operating_round_2_game_state.process_action(
-        action_helper.get_all_choices(operating_round_2_game_state)[0]
+        action_helper.get_all_choices(operating_round_2_game_state)[2]
     )  # [17:13] C&O (DH) places a token on F16 (Scranton)
 
     # Check post-company action encoding
@@ -2479,7 +2490,7 @@ def test_operating_round_2_encoding(
     # # Section 2: Active President
     # P3 is president of NYNH
     s_slice, offset = get_section_slice(encoder_1830, "active_president", offset)
-    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx["2"]], "Section 2: Player 2 Active President")
+    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx[2]], "Section 2: Player 2 Active President")
     assert sum(encoding[s_slice]) == 1.0, "Section 2: Player 2 Active President"
     # # Section 3: Round Type
     # Operating round
@@ -2494,76 +2505,76 @@ def test_operating_round_2_encoding(
     assert_float(expected_phase_idx, encoding[s_slice].item(), "Section 4: Game Phase 3")
     # --- Section 5: Priority Deal ---
     s_slice, offset = get_section_slice(encoder_1830, "priority_deal_player", offset)
-    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 5: Player 4 Priority Deal")
+    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 5: Player 4 Priority Deal")
     assert sum(encoding[s_slice]) == 1.0, "Section 5: Player 4 Priority Deal"
     # --- Section 6: Bank Cash ---
     s_slice, offset = get_section_slice(encoder_1830, "bank_cash", offset)
     assert_float(10246.0 / 12000.0, encoding[s_slice].item(), "Section 6: Bank Cash")
     # --- Section 7: Player Certs ---
     s_slice, offset = get_section_slice(encoder_1830, "player_certs_remaining", offset)
-    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["1"]], "Section 7: Player 1 Certs")
-    assert_float(15.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["2"]], "Section 7: Player 2 Certs")
-    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["3"]], "Section 7: Player 3 Certs")
-    assert_float(9.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 7: Player 4 Certs")
+    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[1]], "Section 7: Player 1 Certs")
+    assert_float(15.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[2]], "Section 7: Player 2 Certs")
+    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[3]], "Section 7: Player 3 Certs")
+    assert_float(9.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 7: Player 4 Certs")
     # --- Section 8: Player Cash ---
     s_slice, offset = get_section_slice(encoder_1830, "player_cash", offset)
     assert_float(
-        65.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["1"]], "Section 8: Player 1 Cash reduced by Par"
+        65.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[1]], "Section 8: Player 1 Cash reduced by Par"
     )
-    assert_float(165.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["2"]], "Section 8: Player 2 Cash")
-    assert_float(123.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["3"]], "Section 8: Player 3 Cash")
-    assert_float(136.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 8: Player 4 Cash")
+    assert_float(165.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[2]], "Section 8: Player 2 Cash")
+    assert_float(123.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[3]], "Section 8: Player 3 Cash")
+    assert_float(136.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 8: Player 4 Cash")
     # --- Section 9: Player Shares ---
     # P1 has 10% PRR, P2 has 20% B&O, others have none
     s_slice, offset = get_section_slice(encoder_1830, "player_shares", offset)
     assert_float(
         0.6,
-        encoding[s_slice][encoder_1830.player_id_to_idx["1"] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[1] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
         "Section 9: Player 1 owns 60% PRR",
     )
     assert_float(
         0.3,
-        encoding[s_slice][encoder_1830.player_id_to_idx["1"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[1] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 1 owns 30% NYC",
     )
     assert_float(
         0.6,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
         "Section 9: Player 2 owns 60% C&O",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
         "Section 9: Player 2 owns 10% NYNH",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 2 owns 10% NYC",
     )
     assert_float(
         0.5,
-        encoding[s_slice][encoder_1830.player_id_to_idx["3"] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[3] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
         "Section 9: Player 3 owns 50% NYNH",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["3"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[3] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 3 owns 10% NYC",
     )
     assert_float(
         0.4,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
         "Section 9: Player 4 owns 40% PRR",
     )
     assert_float(
         0.2,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["B&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["B&O"]],
         "Section 9: Player 4 owns 20% B&O",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
         "Section 9: Player 4 owns 10% C&O",
     )
     assert_float(3.0, sum(encoding[s_slice]), "Section 9 sum")
@@ -2572,12 +2583,12 @@ def test_operating_round_2_encoding(
     # P1 owns SV and CA, P2 owns CS & BO, P3 owns DH, P4 owns MH
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["SV"] * (4 + 8) + encoder_1830.player_id_to_idx["1"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["SV"] * (4 + 8) + encoder_1830.player_id_to_idx[1]],
         "Section 10: Player 1 owns SV",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["CS"] * (4 + 8) + encoder_1830.player_id_to_idx["3"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["CS"] * (4 + 8) + encoder_1830.player_id_to_idx[3]],
         "Section 10: Player 3 owns CS",
     )
     assert_float(
@@ -2587,17 +2598,17 @@ def test_operating_round_2_encoding(
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["MH"] * (4 + 8) + encoder_1830.player_id_to_idx["3"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["MH"] * (4 + 8) + encoder_1830.player_id_to_idx[3]],
         "Section 10: Player 3 owns MH",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["CA"] * (4 + 8) + encoder_1830.player_id_to_idx["4"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["CA"] * (4 + 8) + encoder_1830.player_id_to_idx[4]],
         "Section 10: Player 4 owns CA",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["BO"] * (4 + 8) + encoder_1830.player_id_to_idx["4"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["BO"] * (4 + 8) + encoder_1830.player_id_to_idx[4]],
         "Section 10: Player 4 owns BO",
     )
     assert sum(encoding[s_slice]) == 6.0, "Section 10 sum"
@@ -2773,28 +2784,29 @@ def test_operating_round_2_encoding(
 
     # MOVE TO NEXT INTERESTING POINT
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto routes
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[0])  # pay out
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip trains
 
     operating_round_2_game_state.process_action(
-        action_helper.get_all_choices_limited(operating_round_2_game_state)[23]
+        action_helper.get_all_choices(operating_round_2_game_state)[54]
     )  # [17:13] NYC spends $80 and lays tile #54 with rotation 0 on G19 (New York & Newark)
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto routes
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[2])  # Buy 3 train
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
+
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[33])  # Buy 3 train
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip companies
     # PRR
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[-1])  # skip track
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[-1])  # run trains
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[0])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[-1])  # skip trains
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip track
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # run trains
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip trains
     # NYNH
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[-1])  # lay tile
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[-1])  # skip token
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[-1])  # run trains
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[4])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[4])  # buy a 4 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[0])  # NYC discard train
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # lay tile
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip token
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # run trains
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # buy a 4 train
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # NYC discard train
 
     # Check upgraded tile and discarded train encodings
     game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(
@@ -2811,7 +2823,7 @@ def test_operating_round_2_encoding(
     # # Section 2: Active President
     # P3 is president of NYNH
     s_slice, offset = get_section_slice(encoder_1830, "active_president", offset)
-    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx["3"]], "Section 2: Player 3 Active President")
+    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx[3]], "Section 2: Player 3 Active President")
     assert sum(encoding[s_slice]) == 1.0, "Section 2: Player 3 Active President"
     # # Section 3: Round Type
     # Operating round
@@ -2826,76 +2838,76 @@ def test_operating_round_2_encoding(
     assert_float(expected_phase_idx, encoding[s_slice].item(), "Section 4: Game Phase 4")
     # --- Section 5: Priority Deal ---
     s_slice, offset = get_section_slice(encoder_1830, "priority_deal_player", offset)
-    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 5: Player 4 Priority Deal")
+    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 5: Player 4 Priority Deal")
     assert sum(encoding[s_slice]) == 1.0, "Section 5: Player 4 Priority Deal"
     # --- Section 6: Bank Cash ---
     s_slice, offset = get_section_slice(encoder_1830, "bank_cash", offset)
     assert_float(10502.0 / 12000.0, encoding[s_slice].item(), "Section 6: Bank Cash")
     # --- Section 7: Player Certs ---
     s_slice, offset = get_section_slice(encoder_1830, "player_certs_remaining", offset)
-    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["1"]], "Section 7: Player 1 Certs")
-    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["2"]], "Section 7: Player 2 Certs")
-    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["3"]], "Section 7: Player 3 Certs")
-    assert_float(8.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 7: Player 4 Certs")
+    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[1]], "Section 7: Player 1 Certs")
+    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[2]], "Section 7: Player 2 Certs")
+    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[3]], "Section 7: Player 3 Certs")
+    assert_float(8.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 7: Player 4 Certs")
     # --- Section 8: Player Cash ---
     s_slice, offset = get_section_slice(encoder_1830, "player_cash", offset)
     assert_float(
-        112.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["1"]], "Section 8: Player 1 Cash reduced by Par"
+        112.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[1]], "Section 8: Player 1 Cash reduced by Par"
     )
-    assert_float(223.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["2"]], "Section 8: Player 2 Cash")
-    assert_float(201.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["3"]], "Section 8: Player 3 Cash")
-    assert_float(210.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 8: Player 4 Cash")
+    assert_float(223.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[2]], "Section 8: Player 2 Cash")
+    assert_float(201.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[3]], "Section 8: Player 3 Cash")
+    assert_float(210.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 8: Player 4 Cash")
     # --- Section 9: Player Shares ---
     # P1 has 10% PRR, P2 has 20% B&O, others have none
     s_slice, offset = get_section_slice(encoder_1830, "player_shares", offset)
     assert_float(
         0.6,
-        encoding[s_slice][encoder_1830.player_id_to_idx["1"] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[1] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
         "Section 9: Player 1 owns 60% PRR",
     )
     assert_float(
         0.3,
-        encoding[s_slice][encoder_1830.player_id_to_idx["1"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[1] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 1 owns 30% NYC",
     )
     assert_float(
         0.6,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
         "Section 9: Player 2 owns 60% C&O",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
         "Section 9: Player 2 owns 10% NYNH",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 2 owns 10% NYC",
     )
     assert_float(
         0.5,
-        encoding[s_slice][encoder_1830.player_id_to_idx["3"] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[3] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
         "Section 9: Player 3 owns 50% NYNH",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["3"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[3] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 3 owns 10% NYC",
     )
     assert_float(
         0.4,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
         "Section 9: Player 4 owns 40% PRR",
     )
     assert_float(
         0.2,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["B&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["B&O"]],
         "Section 9: Player 4 owns 20% B&O",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
         "Section 9: Player 4 owns 10% C&O",
     )
     assert abs(sum(encoding[s_slice]) - 3.0) < 1e-6, f"Section 9 sum: expected 3.0, got {sum(encoding[s_slice])}"
@@ -2904,12 +2916,12 @@ def test_operating_round_2_encoding(
     # P1 owns SV and CA, P2 owns CS & BO, P3 owns DH, P4 owns MH
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["SV"] * (4 + 8) + encoder_1830.player_id_to_idx["1"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["SV"] * (4 + 8) + encoder_1830.player_id_to_idx[1]],
         "Section 10: Player 1 owns SV",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["CS"] * (4 + 8) + encoder_1830.player_id_to_idx["3"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["CS"] * (4 + 8) + encoder_1830.player_id_to_idx[3]],
         "Section 10: Player 3 owns CS",
     )
     assert_float(
@@ -2919,17 +2931,17 @@ def test_operating_round_2_encoding(
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["MH"] * (4 + 8) + encoder_1830.player_id_to_idx["3"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["MH"] * (4 + 8) + encoder_1830.player_id_to_idx[3]],
         "Section 10: Player 3 owns MH",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["CA"] * (4 + 8) + encoder_1830.player_id_to_idx["4"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["CA"] * (4 + 8) + encoder_1830.player_id_to_idx[4]],
         "Section 10: Player 4 owns CA",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["BO"] * (4 + 8) + encoder_1830.player_id_to_idx["4"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["BO"] * (4 + 8) + encoder_1830.player_id_to_idx[4]],
         "Section 10: Player 4 owns BO",
     )
     assert sum(encoding[s_slice]) == 6.0, "Section 10 sum"
@@ -3174,7 +3186,7 @@ def test_operating_round_2_encoding(
     assert_float(6.0 + 10.0 / 80.0, sum(features_track), "Map: Track sum for F20")
 
     # MOVE TO END
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[-2])  # Buy discarded train
+    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # Buy discarded train
 
     # Check final state
     game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(
@@ -3191,7 +3203,7 @@ def test_operating_round_2_encoding(
     # # Section 2: Active President
     # P3 is president of NYNH
     s_slice, offset = get_section_slice(encoder_1830, "active_president", offset)
-    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx["3"]], "Section 2: Player 3 Active President")
+    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx[3]], "Section 2: Player 3 Active President")
     assert sum(encoding[s_slice]) == 1.0, "Section 2: Player 3 Active President"
     # # Section 3: Round Type
     # Operating round
@@ -3206,74 +3218,74 @@ def test_operating_round_2_encoding(
     assert_float(expected_phase_idx, encoding[s_slice].item(), "Section 4: Game Phase 4")
     # --- Section 5: Priority Deal ---
     s_slice, offset = get_section_slice(encoder_1830, "priority_deal_player", offset)
-    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 5: Player 4 Priority Deal")
+    assert_float(1.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 5: Player 4 Priority Deal")
     assert sum(encoding[s_slice]) == 1.0, "Section 5: Player 4 Priority Deal"
     # --- Section 6: Bank Cash ---
     s_slice, offset = get_section_slice(encoder_1830, "bank_cash", offset)
     assert_float(10682.0 / 12000.0, encoding[s_slice].item(), "Section 6: Bank Cash")
     # --- Section 7: Player Certs ---
     s_slice, offset = get_section_slice(encoder_1830, "player_certs_remaining", offset)
-    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["1"]], "Section 7: Player 1 Certs")
-    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["2"]], "Section 7: Player 2 Certs")
-    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["3"]], "Section 7: Player 3 Certs")
-    assert_float(8.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 7: Player 4 Certs")
+    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[1]], "Section 7: Player 1 Certs")
+    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[2]], "Section 7: Player 2 Certs")
+    assert_float(10.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[3]], "Section 7: Player 3 Certs")
+    assert_float(8.0 / 16.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 7: Player 4 Certs")
     # --- Section 8: Player Cash ---
     s_slice, offset = get_section_slice(encoder_1830, "player_cash", offset)
-    assert_float(112.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["1"]], "Section 8: Player 1 Cash")
-    assert_float(223.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["2"]], "Section 8: Player 2 Cash")
-    assert_float(201.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["3"]], "Section 8: Player 3 Cash")
-    assert_float(210.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx["4"]], "Section 8: Player 4 Cash")
+    assert_float(112.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[1]], "Section 8: Player 1 Cash")
+    assert_float(223.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[2]], "Section 8: Player 2 Cash")
+    assert_float(201.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[3]], "Section 8: Player 3 Cash")
+    assert_float(210.0 / 600.0, encoding[s_slice][encoder_1830.player_id_to_idx[4]], "Section 8: Player 4 Cash")
     # --- Section 9: Player Shares ---
     # P1 has 10% PRR, P2 has 20% B&O, others have none
     s_slice, offset = get_section_slice(encoder_1830, "player_shares", offset)
     assert_float(
         0.6,
-        encoding[s_slice][encoder_1830.player_id_to_idx["1"] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[1] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
         "Section 9: Player 1 owns 60% PRR",
     )
     assert_float(
         0.3,
-        encoding[s_slice][encoder_1830.player_id_to_idx["1"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[1] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 1 owns 30% NYC",
     )
     assert_float(
         0.6,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
         "Section 9: Player 2 owns 60% C&O",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
         "Section 9: Player 2 owns 10% NYNH",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["2"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[2] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 2 owns 10% NYC",
     )
     assert_float(
         0.5,
-        encoding[s_slice][encoder_1830.player_id_to_idx["3"] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[3] * 8 + encoder_1830.corp_id_to_idx["NYNH"]],
         "Section 9: Player 3 owns 50% NYNH",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["3"] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[3] * 8 + encoder_1830.corp_id_to_idx["NYC"]],
         "Section 9: Player 3 owns 10% NYC",
     )
     assert_float(
         0.4,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["PRR"]],
         "Section 9: Player 4 owns 40% PRR",
     )
     assert_float(
         0.2,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["B&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["B&O"]],
         "Section 9: Player 4 owns 20% B&O",
     )
     assert_float(
         0.1,
-        encoding[s_slice][encoder_1830.player_id_to_idx["4"] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
+        encoding[s_slice][encoder_1830.player_id_to_idx[4] * 8 + encoder_1830.corp_id_to_idx["C&O"]],
         "Section 9: Player 4 owns 10% C&O",
     )
     assert abs(sum(encoding[s_slice]) - 3.0) < 1e-6, f"Section 9 sum: expected 3.0, got {sum(encoding[s_slice])}"
@@ -3282,12 +3294,12 @@ def test_operating_round_2_encoding(
     # P1 owns SV and CA, P2 owns CS & BO, P3 owns DH, P4 owns MH
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["SV"] * (4 + 8) + encoder_1830.player_id_to_idx["1"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["SV"] * (4 + 8) + encoder_1830.player_id_to_idx[1]],
         "Section 10: Player 1 owns SV",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["CS"] * (4 + 8) + encoder_1830.player_id_to_idx["3"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["CS"] * (4 + 8) + encoder_1830.player_id_to_idx[3]],
         "Section 10: Player 3 owns CS",
     )
     assert_float(
@@ -3297,17 +3309,17 @@ def test_operating_round_2_encoding(
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["MH"] * (4 + 8) + encoder_1830.player_id_to_idx["3"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["MH"] * (4 + 8) + encoder_1830.player_id_to_idx[3]],
         "Section 10: Player 3 owns MH",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["CA"] * (4 + 8) + encoder_1830.player_id_to_idx["4"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["CA"] * (4 + 8) + encoder_1830.player_id_to_idx[4]],
         "Section 10: Player 4 owns CA",
     )
     assert_float(
         1.0,
-        encoding[s_slice][encoder_1830.private_id_to_idx["BO"] * (4 + 8) + encoder_1830.player_id_to_idx["4"]],
+        encoding[s_slice][encoder_1830.private_id_to_idx["BO"] * (4 + 8) + encoder_1830.player_id_to_idx[4]],
         "Section 10: Player 4 owns BO",
     )
     assert sum(encoding[s_slice]) == 6.0, "Section 10 sum"
