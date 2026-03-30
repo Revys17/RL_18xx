@@ -2648,6 +2648,19 @@ class TileConfig:
     ]
 
 
+def _rebuild_tile(tile_id):
+    """Pickle reconstruction helper for Tile.
+
+    Creates a Tile with id set immediately, before pickle restores
+    the rest of the state. Tile.__hash__ requires self.id, and Tile
+    objects are used transitively via BasePart.__hash__ (which hashes
+    self.tile) as dict keys during pickle reconstruction.
+    """
+    t = object.__new__(Tile)
+    t.id = tile_id
+    return t
+
+
 class Tile(TileConfig):
     ALL_EDGES = [0, 1, 2, 3, 4, 5]
 
@@ -3018,6 +3031,12 @@ class Tile(TileConfig):
         for k, v in self.__dict__.items():
             setattr(result, k, copy.deepcopy(v, memo))
         return result
+
+    def __reduce__(self):
+        return (_rebuild_tile, (self.id,), self.__dict__)
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
     def __hash__(self):
         return hash((self.id))

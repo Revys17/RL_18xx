@@ -25,6 +25,14 @@ def get_latest_model(model_checkpoint_dir: str) -> AlphaZeroGNNModel:
     config_path = latest_checkpoint_directory / "config.json"
     checkpoint_path = latest_checkpoint_directory / "checkpoint.pth"
 
+    # Handle nested checkpoint directories (e.g. from pretraining)
+    if not config_path.exists():
+        subdirs = [d for d in latest_checkpoint_directory.iterdir() if d.is_dir()]
+        if subdirs:
+            nested = max(subdirs, key=lambda x: x.name)
+            config_path = nested / "config.json"
+            checkpoint_path = nested / "checkpoint.pth"
+
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found in latest checkpoint directory: {config_path}")
     if not checkpoint_path.exists():
