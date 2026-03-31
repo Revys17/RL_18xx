@@ -30,11 +30,11 @@ class ResBlock(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         residual = x
-        out = F.relu(self.bn1(self.fc1(x)))
+        out = F.gelu(self.bn1(self.fc1(x)))
         out = self.dropout1(out)
         out = self.bn2(self.fc2(out))
         # Note: ReLU is applied after adding the residual, common in many ResNet variants
-        out = F.relu(out + residual)
+        out = F.gelu(out + residual)
         out = self.dropout2(out)
         return out
 
@@ -136,17 +136,18 @@ class AlphaZeroGNNModel(AlphaZeroModel):
             current_gnn_input_dim = self.config.gnn_heads * self.config.gnn_hidden_dim_per_head
             # Add BatchNorm and ReLU after each GAT layer
             self.gnn_layers_modulelist.append(nn.BatchNorm1d(current_gnn_input_dim))
-            self.gnn_layers_modulelist.append(nn.ReLU())
+            self.gnn_layers_modulelist.append(nn.GELU())
             self.gnn_layers_modulelist.append(nn.Dropout(self.config.dropout_rate))
 
         # Projection from final GNN node embeddings to the desired gnn_output_embed_dim before pooling
         self.gnn_final_node_proj = nn.Linear(current_gnn_input_dim, self.config.gnn_output_embed_dim)
         self.bn_gnn_final_node_proj = nn.BatchNorm1d(self.config.gnn_output_embed_dim)
 
-        # --- 3. Fusion Layer ---
-        # Dimension of concatenated embeddings from game state MLP and map GNN
+        # --- 3. Gated Fusion Layer ---
+        self.gs_proj = nn.Linear(self.config.mlp_hidden_dim, self.config.shared_trunk_hidden_dim)
+        self.map_proj = nn.Linear(self.config.gnn_output_embed_dim, self.config.shared_trunk_hidden_dim)
         fused_input_dim = self.config.mlp_hidden_dim + self.config.gnn_output_embed_dim
-        self.fusion_fc = nn.Linear(fused_input_dim, self.config.shared_trunk_hidden_dim)
+        self.gate_fc = nn.Linear(fused_input_dim, self.config.shared_trunk_hidden_dim)
         self.bn_fusion = nn.BatchNorm1d(self.config.shared_trunk_hidden_dim)
         self.dropout_fusion = nn.Dropout(self.config.dropout_rate)
 
@@ -156,8 +157,17 @@ class AlphaZeroGNNModel(AlphaZeroModel):
             self.res_blocks_modulelist.append(ResBlock(self.config.shared_trunk_hidden_dim, self.config.dropout_rate))
 
         # --- 5. Output Heads ---
-        self.policy_head = nn.Linear(self.config.shared_trunk_hidden_dim, self.config.policy_size)
-        self.value_head = nn.Linear(self.config.shared_trunk_hidden_dim, self.config.value_size)
+        head_hidden = self.config.shared_trunk_hidden_dim // 2
+        self.policy_head = nn.Sequential(
+            nn.Linear(self.config.shared_trunk_hidden_dim, head_hidden),
+            nn.GELU(),
+            nn.Linear(head_hidden, self.config.policy_size),
+        )
+        self.value_head = nn.Sequential(
+            nn.Linear(self.config.shared_trunk_hidden_dim, head_hidden),
+            nn.GELU(),
+            nn.Linear(head_hidden, self.config.value_size),
+        )
 
         if self.config.model_checkpoint_file:
             self.load_weights(self.config.model_checkpoint_file)
@@ -233,16 +243,16 @@ class AlphaZeroGNNModel(AlphaZeroModel):
         """
 
         # --- 1. Game State Embedding ---
-        gs_embed = F.relu(self.bn_game_state1(self.fc_game_state1(game_state_data.float())))
+        gs_embed = F.gelu(self.bn_game_state1(self.fc_game_state1(game_state_data.float())))
         gs_embed = self.dropout_gs1(gs_embed)
-        gs_embed = F.relu(self.bn_game_state2(self.fc_game_state2(gs_embed)))
+        gs_embed = F.gelu(self.bn_game_state2(self.fc_game_state2(gs_embed)))
         gs_embed = self.dropout_gs2(gs_embed)  # Shape: (batch_size, mlp_hidden_dim)
 
         # --- 2. Map/Graph Embedding ---
         # Graph inputs are already in PyG batched format.
         # Initial node feature projection
         node_info, edge_index = map_data.x, map_data.edge_index
-        node_repr = F.relu(self.bn_node_initial_proj(self.node_feature_initial_proj(node_info.float())))
+        node_repr = F.gelu(self.bn_node_initial_proj(self.node_feature_initial_proj(node_info.float())))
 
         processed_edge_attr = None
         if self.edge_embedding is not None and map_data.edge_attr is not None:
@@ -262,14 +272,18 @@ class AlphaZeroGNNModel(AlphaZeroModel):
             node_repr = dropout_layer(node_repr)
 
         # Final projection for node embeddings before pooling
-        node_repr_proj = F.relu(self.bn_gnn_final_node_proj(self.gnn_final_node_proj(node_repr)))
+        node_repr_proj = F.gelu(self.bn_gnn_final_node_proj(self.gnn_final_node_proj(node_repr)))
 
         # Global pooling to get a graph-level embedding
         map_embed = global_mean_pool(node_repr_proj, map_data.batch)
 
-        # --- 3. Fusion ---
-        combined_embed = torch.cat((gs_embed, map_embed), dim=1)
-        fused_features = F.relu(self.bn_fusion(self.fusion_fc(combined_embed)))
+        # --- 3. Gated Fusion ---
+        gs_projected = F.gelu(self.gs_proj(gs_embed))
+        map_projected = F.gelu(self.map_proj(map_embed))
+        gate_input = torch.cat((gs_embed, map_embed), dim=1)
+        gate = torch.sigmoid(self.gate_fc(gate_input))
+        fused_features = gate * gs_projected + (1 - gate) * map_projected
+        fused_features = self.bn_fusion(fused_features)
         fused_features = self.dropout_fusion(fused_features)  # Shape: (batch_size, shared_trunk_hidden_dim)
 
         # --- 4. Shared Trunk ---
@@ -282,9 +296,9 @@ class AlphaZeroGNNModel(AlphaZeroModel):
         probabilities = F.softmax(policy_logits, dim=1)
         policy_log_probs = F.log_softmax(policy_logits, dim=1)
 
-        value_estimates = torch.tanh(self.value_head(current_features))  # tanh to keep values in [-1, 1]
+        value_logits = self.value_head(current_features)  # raw logits for per-player win probability
 
-        return probabilities, policy_log_probs, value_estimates
+        return probabilities, policy_log_probs, value_logits
 
 
 class AlphaZeroSSMEModel(AlphaZeroModel):

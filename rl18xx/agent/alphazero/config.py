@@ -20,13 +20,13 @@ class ModelConfig:
     mlp_hidden_dim: int = 256
     gnn_node_proj_dim: int = 128
     gnn_hidden_dim_per_head: int = 64
-    gnn_layers: int = 3
-    gnn_heads: int = 4
+    gnn_layers: int = 4
+    gnn_heads: int = 8
     gnn_output_embed_dim: int = 256
     gnn_edge_categories: int = 6
     gnn_edge_embedding_dim: int = 32
     shared_trunk_hidden_dim: int = 512
-    num_res_blocks: int = 5
+    num_res_blocks: int = 7
     dropout_rate: float = 0.0
     model_checkpoint_file: Optional[str] = None
     timestamp: Optional[str] = None
