@@ -27,7 +27,7 @@ class ModelConfig:
     gnn_edge_embedding_dim: int = 32
     shared_trunk_hidden_dim: int = 512
     num_res_blocks: int = 5
-    dropout_rate: float = 0.1
+    dropout_rate: float = 0.0
     model_checkpoint_file: Optional[str] = None
     timestamp: Optional[str] = None
 
