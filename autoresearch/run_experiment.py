@@ -31,6 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 AUTORESEARCH_DIR = Path(__file__).resolve().parent
 TRAINING_DATA_DIR = AUTORESEARCH_DIR / "training_data"
 TRAINING_LMDB_PATH = TRAINING_DATA_DIR / "train.lmdb"
+EVAL_LMDB_PATH = TRAINING_DATA_DIR / "eval.lmdb"
 ENCODER_PATH = REPO_ROOT / "rl18xx" / "agent" / "alphazero" / "encoder.py"
 ENCODER_HASH_PATH = AUTORESEARCH_DIR / "training_data" / ".encoder_hash"
 
@@ -91,7 +92,7 @@ def main():
     start_time = time.time()
 
     # Step 1: Check if training data needs re-encoding
-    if encoder_changed() or not TRAINING_LMDB_PATH.exists():
+    if encoder_changed() or not TRAINING_LMDB_PATH.exists() or not EVAL_LMDB_PATH.exists():
         prepare_training_data()
     else:
         LOGGER.info("Training data is up to date (encoder unchanged)")

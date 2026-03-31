@@ -22,11 +22,11 @@ while true:
     2. Edit one or more mutable files to implement the change
     3. git add <changed files> && git commit -m "experiment: <short description>"
     4. uv run python -m autoresearch.run_experiment > run.log 2>&1
-    5. Extract metrics: grep "^policy_loss:\|^top1_accuracy:\|^top5_accuracy:\|^value_loss:" run.log
+    5. Extract metrics: grep "^combined_loss:\|^policy_loss:\|^top1_accuracy:\|^top5_accuracy:\|^value_loss:" run.log
     6. If run crashed or produced NaN, log status=crash in results.tsv
-    7. If policy_loss decreased (improved): status=keep
-    8. If policy_loss stayed same or increased: git reset --hard HEAD~1, status=discard
-    9. Append to autoresearch/results.tsv: commit | policy_loss | top1_acc | top5_acc | value_loss | status | description
+    7. If combined_loss decreased (improved): status=keep
+    8. If combined_loss stayed same or increased: git reset --hard HEAD~1, status=discard
+    9. Append to autoresearch/results.tsv: commit | combined_loss | policy_loss | top1_acc | top5_acc | value_loss | status | description
     10. Go to step 1
 ```
 
@@ -55,12 +55,14 @@ while true:
 
 ## Primary metric
 
-**`policy_loss`** — cross-entropy between the model's predicted move probabilities and human move targets (smoothed one-hot: 0.97 on played move, 0.03 spread over legal alternatives). Lower is better.
+**`combined_loss`** = `policy_loss` + `value_loss`. Lower is better.
+
+- `policy_loss` — cross-entropy between the model's predicted move probabilities and human move targets (smoothed one-hot: 0.97 on played move, 0.03 spread over legal alternatives)
+- `value_loss` — MSE between predicted and actual game outcomes (per-player, 4-element vector)
 
 Secondary metrics (logged but not used for keep/discard):
 - `top1_accuracy` — does the model's top prediction match the human move?
 - `top5_accuracy` — is the human move in the model's top 5?
-- `value_loss` — MSE between predicted and actual game outcomes
 
 ## Constraints
 

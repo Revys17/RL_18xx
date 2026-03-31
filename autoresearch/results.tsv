@@ -1,1 +1,1 @@
-commit	policy_loss	top1_acc	top5_acc	value_loss	status	description
+commit	combined_loss	policy_loss	top1_acc	top5_acc	value_loss	status	description
