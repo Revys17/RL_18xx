@@ -1,1 +1,48 @@
 commit	combined_loss	policy_loss	top1_acc	top5_acc	value_loss	status	description
+baseline	3.652993	2.629226	0.6344	0.8920	1.023767	keep	baseline: default config, no changes
+0771d92	3.766963	2.704140	0.6283	0.8845	1.062823	discard	normalize tile rotation feature to [0,1]
+6174a90	3.767392	2.645340	0.6245	0.8946	1.122052	discard	switch from Adam to AdamW optimizer
+a471862	3.693651	2.642372	0.6326	0.8931	1.051278	discard	replace ReLU with GELU activation throughout model
+1bec12b	3.673032	2.608521	0.6307	0.8975	1.064511	discard	add cosine annealing LR schedule
+da0bfef	3.690030	2.649546	0.6284	0.8813	1.040484	discard	reduce value_loss_weight from 1.0 to 0.5
+f510aa0	3.620324	2.620324	0.6298	0.8939	1.000000	keep	add 2-layer policy and value heads (512->256->output)
+6c9143b	3.591489	2.591489	0.6285	0.8995	1.000000	keep	increase GNN depth from 3 to 4 layers
+6ac9908	3.595947	2.595947	0.6308	0.8880	1.000000	discard	increase GNN depth from 4 to 5 layers
+f874c4a	3.590137	2.590137	0.6288	0.8915	1.000000	keep	increase GNN attention heads from 4 to 8
+72162b3	3.580694	2.580694	0.6290	0.8928	1.000000	keep	increase shared trunk from 5 to 7 residual blocks
+5992efd	3.624862	2.624862	0.6293	0.8924	1.000000	discard	increase MLP hidden dim from 256 to 512
+af7a5ce	3.608118	2.608118	0.6309	0.8910	1.000000	discard	add residual connections to GNN layers
+81cc690	3.586787	2.586787	0.6303	0.8943	1.000000	discard	increase GNN output embedding from 256 to 512
+d27c824	3.606012	2.606012	0.6275	0.8949	1.000000	discard	increase GNN node projection dim from 128 to 256
+6f1ee5c	3.858643	2.683048	0.6298	0.8865	1.175595	discard	deepen value head to 3 layers with batchnorm
+2d00586	3.596414	2.596414	0.6294	0.8932	1.000000	discard	increase edge embedding dim from 32 to 64
+dbdc14e	3.764559	2.753722	0.6267	0.8887	1.010836	discard	increase weight decay from 1e-4 to 1e-3
+3e33f79	3.618285	2.618285	0.6303	0.8907	1.000000	discard	add 3rd MLP layer to game state branch
+769139b	3.917396	2.917396	0.6208	0.8858	1.000000	discard	switch from global_mean_pool to global_add_pool
+e3524da	3.628143	2.628143	0.6280	0.8925	1.000000	discard	reduce GNN hidden dim per head from 64 to 32
+11040c1	3.611710	2.611710	0.6307	0.8901	1.000000	discard	pre-norm LayerNorm in ResBlocks (1ep)
+83d0573	3.616824	2.616824	0.6332	0.8891	1.000000	discard	widen trunk 512->768 (1ep)
+22038b6	3.638405	2.638405	0.6283	0.8950	1.000000	discard	concat mean+max graph pooling (1ep)
+5b85642	3.610678	2.610678	0.6253	0.8957	1.000000	discard	skip connection GNN->policy head (1ep)
+7447f45	3.610908	2.610908	0.6317	0.8858	1.000000	discard	split policy/value trunks (1ep)
+223c9d8	3.586278	2.586278	0.6331	0.8932	1.000000	discard	gated fusion (1ep)
+f15c341	3.621498	2.621498	0.6281	0.8958	1.000000	discard	cross-attention fusion (1ep)
+18704f3	3.708140	2.657011	0.6306	0.8902	1.051129	discard	Xavier/Glorot init (1ep)
+3d5b09c	3.604534	2.604534	0.6284	0.8916	1.000000	discard	gradient accumulation 2 steps (1ep)
+49e5636	3.609504	2.609504	0.6305	0.8928	1.000000	discard	bottleneck ResBlock 2x (1ep)
+baseline-3ep	3.495644	2.495644	0.6353	0.8947	1.000000	keep	3-epoch baseline (no changes, just more training)
+32dfced	3.481309	2.481309	0.6404	0.8972	1.000000	keep	gated fusion (3ep retest)
+e02d902	3.500012	2.500012	0.6395	0.8993	1.000000	discard	cross-attention + gated fusion (3ep)
+83b73f2	3.391518	2.391518	0.6468	0.8984	1.000000	keep	cosine annealing LR (3ep retest)
+7cb6221	3.409320	2.409320	0.6452	0.9018	1.000000	discard	widen trunk 512->768 (3ep)
+20a0b45	3.400555	2.400555	0.6431	0.8983	1.000000	discard	bottleneck ResBlock 2x (3ep)
+27cc854	3.406600	2.406600	0.6449	0.9004	1.000000	discard	res blocks 7->9 (3ep)
+c44c103	3.406522	2.406522	0.6444	0.8982	1.000000	discard	GNN depth 4->5 (3ep)
+b9ac2e9	3.489155	2.489155	0.6356	0.9005	1.000000	discard	dropout 0.1 (3ep)
+6520f14	3.381700	2.381700	0.6478	0.9006	1.000000	keep	GELU activation (3ep retest)
+90debe9	3.401105	2.401105	0.6488	0.9006	1.000000	discard	AdamW optimizer (3ep retest)
+fe361eb	3.379561	2.379561	0.6479	0.8995	1.000000	keep	warmup 5% + cosine LR (3ep)
+17b6d5b	3.401721	2.401721	0.6450	0.8982	1.000000	discard	value_loss_weight 4.0 (3ep)
+27136f1	3.501233	2.483574	0.6370	0.9005	1.017659	discard	gradient balancing (3ep) - value moved!
+e4e2356	3.492990	2.405099	0.6440	0.8983	1.087891	discard	separate value trunk (3ep) - value moved but worse
+ecc2fd3	3.382959	2.382959	0.6478	0.9002	1.000000	discard	Huber loss for value (3ep)

@@ -70,6 +70,12 @@ def train_model(
         train_dataset, batch_size=config.batch_size, shuffle=config.shuffle_examples, num_workers=2, pin_memory=False
     )
 
+    total_steps = len(train_loader) * config.num_epochs
+    warmup_steps = total_steps // 20  # 5% warmup
+    warmup_scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_steps)
+    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps - warmup_steps, eta_min=1e-5)
+    scheduler = optim.lr_scheduler.SequentialLR(optimizer, [warmup_scheduler, cosine_scheduler], milestones=[warmup_steps])
+
     metrics.training_examples = len(train_dataset)
     device = model.device
 
@@ -111,13 +117,20 @@ def train_model(
             masked_log_probs = move_log_probs * legal_action_mask
             masked_log_probs = masked_log_probs + 1e-8
             policy_loss = -torch.sum(pi * masked_log_probs, dim=1).mean()
-            # MSE loss for value
-            value_loss = F.mse_loss(value_pred, value)
+            # Cross-entropy loss for value (who wins?)
+            # Convert {-1, 0, +1} targets to probability distribution:
+            # +1 = sole winner, 0 = tied winner, -1 = loser
+            winners_mask = (value > -0.5).float()  # +1 and 0 are winners
+            num_winners = winners_mask.sum(dim=1, keepdim=True).clamp(min=1)
+            value_target_probs = winners_mask / num_winners
+            value_log_probs = F.log_softmax(value_pred, dim=1)
+            value_loss = -(value_target_probs * value_log_probs).sum(dim=1).mean()
             total_loss = policy_loss + config.value_loss_weight * value_loss
 
             total_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
+            scheduler.step()
 
             train_losses.append(total_loss.item())
             train_policy_losses.append(policy_loss.item())
