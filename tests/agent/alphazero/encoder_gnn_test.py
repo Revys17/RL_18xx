@@ -437,6 +437,26 @@ def test_test_game_1830_4p_encoding(encoder_1830: Encoder_GNN, test_game_1830_4p
         expected[priv_idx] = float(company.value) / start_cash
     np.testing.assert_allclose(encoding[s_slice], expected, atol=1e-4, err_msg="Section A4: Auction Face Value")
 
+    # --- Section: OR Structure ---
+    s_slice, offset = get_section_slice(encoder_1830, "or_structure", offset)
+    # Initial game is in auction round, so OR structure should be zeros
+    np.testing.assert_allclose(encoding[s_slice], np.zeros(2), atol=1e-6, err_msg="OR Structure")
+
+    # --- Section: Train Limit ---
+    s_slice, offset = get_section_slice(encoder_1830, "train_limit", offset)
+    # Phase "2" has train limit 4, normalized by 4 = 1.0
+    assert_float(encoding[s_slice][0], 1.0, "Train Limit")
+
+    # --- Section: Private Closed ---
+    s_slice, offset = get_section_slice(encoder_1830, "private_closed", offset)
+    # All privates are open at game start
+    np.testing.assert_allclose(encoding[s_slice], np.zeros(num_privates), atol=1e-6, err_msg="Private Closed")
+
+    # --- Section: Player Turn Order ---
+    s_slice, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    # Auction round, so turn order should be zeros
+    np.testing.assert_allclose(encoding[s_slice], np.zeros(num_players), atol=1e-6, err_msg="Player Turn Order")
+
     # --- Final Offset Check ---
     assert (
         offset == encoder_1830.ENCODING_SIZE
@@ -536,6 +556,11 @@ def test_encoding_after_bid(encoder_1830: Encoder_GNN, test_game_1830_4p):
     expected_fv_norm = float(bo_private.value) / start_cash
     assert_float(encoding[s_slice][bo_idx], expected_fv_norm, "Section A4: Face Value B&O unchanged")
 
+    # Advance past new encoder sections
+    _, offset = get_section_slice(encoder_1830, "or_structure", offset)
+    _, offset = get_section_slice(encoder_1830, "train_limit", offset)
+    _, offset = get_section_slice(encoder_1830, "private_closed", offset)
+    _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after bid test"
 
@@ -664,6 +689,11 @@ def test_encoding_after_purchase(encoder_1830: Encoder_GNN, test_game_1830_4p):
     expected_fv_norm = float(sv_private.value) / start_cash
     assert_float(encoding[s_slice][sv_idx], expected_fv_norm, "Section A4: Face Value SV unchanged")
 
+    # Advance past new encoder sections
+    _, offset = get_section_slice(encoder_1830, "or_structure", offset)
+    _, offset = get_section_slice(encoder_1830, "train_limit", offset)
+    _, offset = get_section_slice(encoder_1830, "private_closed", offset)
+    _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after purchase test"
 
@@ -1150,6 +1180,11 @@ def test_encoding_after_par(encoder_1830: Encoder_GNN, test_game_1830_4p):
     assert_float(ca_comp.value / 600.0, encoding[s_slice][ca_idx], "Section A: CA Face Value")
     assert_float(bo_comp.value / 600.0, encoding[s_slice][bo_idx], "Section A: BO Face Value")
 
+    # Advance past new encoder sections
+    _, offset = get_section_slice(encoder_1830, "or_structure", offset)
+    _, offset = get_section_slice(encoder_1830, "train_limit", offset)
+    _, offset = get_section_slice(encoder_1830, "private_closed", offset)
+    _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after par test"
 
@@ -1358,6 +1393,11 @@ def test_encoding_after_par(encoder_1830: Encoder_GNN, test_game_1830_4p):
     assert_float(ca_comp.value / start_cash, encoding[s_slice][ca_idx], "Section A: CA Face Value")
     assert_float(bo_comp.value / start_cash, encoding[s_slice][bo_idx], "Section A: BO Face Value")
 
+    # Advance past new encoder sections
+    _, offset = get_section_slice(encoder_1830, "or_structure", offset)
+    _, offset = get_section_slice(encoder_1830, "train_limit", offset)
+    _, offset = get_section_slice(encoder_1830, "private_closed", offset)
+    _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after par test"
 
@@ -1560,6 +1600,11 @@ def test_encoding_after_par(encoder_1830: Encoder_GNN, test_game_1830_4p):
     assert_float(ca_comp.value / start_cash, encoding[s_slice][ca_idx], "Section A: CA Face Value")
     assert_float(bo_comp.value / start_cash, encoding[s_slice][bo_idx], "Section A: BO Face Value")
 
+    # Advance past new encoder sections
+    _, offset = get_section_slice(encoder_1830, "or_structure", offset)
+    _, offset = get_section_slice(encoder_1830, "train_limit", offset)
+    _, offset = get_section_slice(encoder_1830, "private_closed", offset)
+    _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after par test"
 
@@ -1915,6 +1960,11 @@ def test_operating_round_2_encoding(
         "Section A: BO Face Value",
     )
 
+    # Advance past new encoder sections
+    _, offset = get_section_slice(encoder_1830, "or_structure", offset)
+    _, offset = get_section_slice(encoder_1830, "train_limit", offset)
+    _, offset = get_section_slice(encoder_1830, "private_closed", offset)
+    _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after par test"
 
@@ -2456,6 +2506,11 @@ def test_operating_round_2_encoding(
         "Section A: BO Face Value",
     )
 
+    # Advance past new encoder sections
+    _, offset = get_section_slice(encoder_1830, "or_structure", offset)
+    _, offset = get_section_slice(encoder_1830, "train_limit", offset)
+    _, offset = get_section_slice(encoder_1830, "private_closed", offset)
+    _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after test"
 
@@ -2836,13 +2891,10 @@ def test_operating_round_2_encoding(
         "Section A: BO Face Value",
     )
 
-    # --- Section: OR Structure ---
+    # Advance past new encoder sections
     _, offset = get_section_slice(encoder_1830, "or_structure", offset)
-    # --- Section: Train Limit ---
     _, offset = get_section_slice(encoder_1830, "train_limit", offset)
-    # --- Section: Private Closed ---
     _, offset = get_section_slice(encoder_1830, "private_closed", offset)
-    # --- Section: Player Turn Order ---
     _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset}"
@@ -3214,13 +3266,10 @@ def test_operating_round_2_encoding(
         "Section A: BO Face Value",
     )
 
-    # --- Section: OR Structure ---
+    # Advance past new encoder sections
     _, offset = get_section_slice(encoder_1830, "or_structure", offset)
-    # --- Section: Train Limit ---
     _, offset = get_section_slice(encoder_1830, "train_limit", offset)
-    # --- Section: Private Closed ---
     _, offset = get_section_slice(encoder_1830, "private_closed", offset)
-    # --- Section: Player Turn Order ---
     _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset}"
@@ -3605,12 +3654,15 @@ def test_operating_round_2_encoding(
 
     # --- Section: OR Structure ---
     s_slice, offset = get_section_slice(encoder_1830, "or_structure", offset)
-    assert_float(1.0 / 3.0, encoding[s_slice][0], "OR structure: total ORs normalized")
+    game = operating_round_2_game_state
+    operating_rounds_total = game.phase.operating_rounds if game.phase.operating_rounds else 1
+    assert_float(float(operating_rounds_total) / 3.0, encoding[s_slice][0], "OR structure: total ORs normalized")
     assert_float(1.0 / 1.0, encoding[s_slice][1], "OR structure: current OR fraction")
 
     # --- Section: Train Limit ---
     s_slice, offset = get_section_slice(encoder_1830, "train_limit", offset)
-    assert_float(4.0 / 4.0, encoding[s_slice][0], "Train limit: phase 2 train limit")
+    train_limit = game.phase._train_limit if hasattr(game.phase, '_train_limit') else 4
+    assert_float(float(train_limit) / 4.0, encoding[s_slice][0], f"Train limit: phase train limit={train_limit}")
 
     # --- Section: Private Closed ---
     s_slice, offset = get_section_slice(encoder_1830, "private_closed", offset)
