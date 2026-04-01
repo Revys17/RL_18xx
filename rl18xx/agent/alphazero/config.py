@@ -105,7 +105,7 @@ class SelfPlayConfig:
     max_game_length: int = 1000
     c_puct_base: float = 19652
     c_puct_init: float = 1.25
-    dirichlet_noise_alpha: float = 0.03
+    dirichlet_noise_alpha: float = 0.03  # Kept for backward compatibility; inject_noise() now uses 10/num_legal_actions
     dirichlet_noise_weight: float = 0.25
     softpick_move_cutoff: int = 500
     num_readouts: int = 200

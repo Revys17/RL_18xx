@@ -616,6 +616,13 @@ def test_inject_noise_only_legal_moves(game_objects, mcts_config):
         root.child_prior, expected_policy, atol=1e-6
     ), f"root.child_prior: {root.child_prior}, expected_policy: {expected_policy}"
 
+    # Verify adaptive alpha: alpha should be 10 / num_legal_actions
+    expected_alpha = 10.0 / root.num_legal_actions
+    assert expected_alpha > 0.03, (
+        f"For 1830 branching factor ({root.num_legal_actions}), "
+        f"adaptive alpha ({expected_alpha:.4f}) should be much larger than the old fixed 0.03"
+    )
+
     root.inject_noise()
 
     expected_policy_legal_moves = expected_policy[root.legal_action_indices]
@@ -624,10 +631,13 @@ def test_inject_noise_only_legal_moves(game_objects, mcts_config):
     bound_tolerance = 1e-7
     noise_weight = root.config.dirichlet_noise_weight
 
+    # Verify blending formula: (1-weight)*prior + weight*dirichlet
+    # Lower bound: noise component is 0 at minimum
     lower_bound_check_val = (expected_policy_legal_moves * (1 - noise_weight)) - child_prior_legal_moves
     assert (
         lower_bound_check_val <= bound_tolerance
     ).all(), f"Lower bound failed. Diff: {lower_bound_check_val}, Max diff: {np.max(lower_bound_check_val)}"
+    # Upper bound: noise component is at most 1.0
     upper_bound_check_val = child_prior_legal_moves - (expected_policy_legal_moves * (1 - noise_weight) + noise_weight)
     assert (
         upper_bound_check_val <= bound_tolerance
