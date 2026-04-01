@@ -21,17 +21,19 @@ class Dataset_1830(Dataset):
     pass
 
 class SelfPlayDataset(Dataset_1830):
-    def __init__(self, lmdb_path: Union[Path, str]):
+    def __init__(self, lmdb_path: Union[Path, str], start_index: int = 0):
         self.action_mapper = ActionMapper()
         if isinstance(lmdb_path, Path):
             lmdb_path = lmdb_path.as_posix()
 
         self.env = lmdb.open(lmdb_path, readonly=True, lock=False, readahead=False, meminit=False)
+        self.start_index = start_index
         with self.env.begin() as txn:
-            self.length = txn.stat()["entries"]
+            total_entries = txn.stat()["entries"]
+        self.length = total_entries - self.start_index
 
     def __getitem__(self, index):
-        key = f"{index:08}".encode("ascii")
+        key = f"{self.start_index + index:08}".encode("ascii")
         with self.env.begin() as txn:
             compressed_data = txn.get(key)
         data = lz4.frame.decompress(compressed_data)

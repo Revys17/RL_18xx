@@ -45,7 +45,19 @@ def train(config: TrainingConfig, model: AlphaZeroGNNModel, graph: bool = False)
         LOGGER.warning(f"Training directory {config.train_dir} does not exist. Aborting training.")
         return model, TrainingMetrics()
 
-    train_dataset = SelfPlayDataset(config.train_dir)
+    start_index = 0
+    if config.max_training_window > 0:
+        full_dataset = SelfPlayDataset(config.train_dir)
+        total_examples = len(full_dataset)
+        full_dataset.env.close()
+        if total_examples > config.max_training_window:
+            start_index = total_examples - config.max_training_window
+            LOGGER.info(
+                f"Training window active: using {config.max_training_window} of {total_examples} examples "
+                f"(start_index={start_index})"
+            )
+
+    train_dataset = SelfPlayDataset(config.train_dir, start_index=start_index)
 
     metrics = train_model(model, train_dataset, config, graph)
     return model, metrics

@@ -76,6 +76,7 @@ class TrainingConfig:
     weight_decay: float = 1e-4
     shuffle_examples: bool = True
     value_loss_weight: float = 1.0
+    max_training_window: int = 0  # 0 means no windowing (use all data)
 
     def __post_init__(self):
         if self.train_dir is not None:
@@ -93,6 +94,7 @@ class TrainingConfig:
             "weight_decay": self.weight_decay,
             "shuffle_examples": self.shuffle_examples,
             "value_loss_weight": self.value_loss_weight,
+            "max_training_window": self.max_training_window,
         }
 
     @classmethod
