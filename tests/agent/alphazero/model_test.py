@@ -1,8 +1,9 @@
 import os
 import tempfile
+import torch
 from rl18xx.game.gamemap import GameMap
 from rl18xx.agent.alphazero.config import ModelConfig
-from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
+from rl18xx.agent.alphazero.model import AlphaZeroGNNModel, FactoredPolicyHead
 
 # --- Define constants based on your model's expected inputs/outputs ---
 GAME_STATE_SIZE = 390
@@ -77,3 +78,35 @@ def test_run_batch_encoded():
     assert probs.shape == (4, POLICY_OUTPUT_SIZE)
     assert log_probs.shape == (4, POLICY_OUTPUT_SIZE)
     assert values.shape == (4, VALUE_OUTPUT_SIZE)
+
+
+def test_factored_policy_head_output_shape():
+    """The factored head must produce the same output size as the original flat head."""
+    from rl18xx.agent.alphazero.action_mapper import ActionMapper
+
+    action_mapper = ActionMapper()
+    lay_tile_info = action_mapper.get_lay_tile_index_info()
+
+    trunk_dim = SHARED_TRUNK_HIDDEN_DIM
+    head = FactoredPolicyHead(trunk_dim, POLICY_OUTPUT_SIZE, lay_tile_info)
+    head.eval()
+
+    x = torch.randn(3, trunk_dim)
+    logits = head(x)
+    assert logits.shape == (3, POLICY_OUTPUT_SIZE)
+
+
+def test_factored_policy_head_finite_logits():
+    """All logits produced by the factored head should be finite (no NaN or Inf)."""
+    from rl18xx.agent.alphazero.action_mapper import ActionMapper
+
+    action_mapper = ActionMapper()
+    lay_tile_info = action_mapper.get_lay_tile_index_info()
+
+    trunk_dim = SHARED_TRUNK_HIDDEN_DIM
+    head = FactoredPolicyHead(trunk_dim, POLICY_OUTPUT_SIZE, lay_tile_info)
+    head.eval()
+
+    x = torch.randn(2, trunk_dim)
+    logits = head(x)
+    assert torch.isfinite(logits).all(), "Factored policy head produced non-finite logits"

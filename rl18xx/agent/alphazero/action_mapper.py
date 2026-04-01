@@ -589,6 +589,57 @@ class ActionMapper(metaclass=Singleton):
 
         raise ValueError(f"Unknown action type: {type(action)}")
 
+    def get_lay_tile_index_info(self) -> dict:
+        """Returns layout information for the LayTile action block.
+
+        Returns a dict with:
+            offset: start index of LayTile actions in the flat action vector
+            num_hexes: number of hex positions (93)
+            num_tiles: number of tile types (46)
+            num_rotations: always 6
+            num_lay_tile: total LayTile actions (num_hexes * num_tiles * num_rotations)
+        """
+        offset = self.action_offsets["LayTile"]
+        num_hexes = len(self.hex_offsets)
+        num_tiles = len(self.tile_offsets)
+        num_rotations = 6
+        return {
+            "offset": offset,
+            "num_hexes": num_hexes,
+            "num_tiles": num_tiles,
+            "num_rotations": num_rotations,
+            "num_lay_tile": num_hexes * num_tiles * num_rotations,
+        }
+
+    def decompose_lay_tile_index(self, flat_index: int) -> Tuple[int, int, int]:
+        """Given a flat action index that falls in the LayTile range, return (hex_idx, tile_idx, rotation).
+
+        Args:
+            flat_index: an index into the full action vector that corresponds to a LayTile action.
+
+        Returns:
+            Tuple of (hex_idx, tile_idx, rotation) where each is a zero-based index.
+
+        Raises:
+            ValueError: if flat_index is outside the LayTile range.
+        """
+        info = self.get_lay_tile_index_info()
+        offset = info["offset"]
+        num_tiles = info["num_tiles"]
+        num_rotations = info["num_rotations"]
+        num_lay_tile = info["num_lay_tile"]
+
+        relative = flat_index - offset
+        if relative < 0 or relative >= num_lay_tile:
+            raise ValueError(
+                f"flat_index {flat_index} is outside the LayTile range [{offset}, {offset + num_lay_tile})"
+            )
+
+        hex_idx = relative // (num_tiles * num_rotations)
+        tile_idx = (relative % (num_tiles * num_rotations)) // num_rotations
+        rotation = relative % num_rotations
+        return (hex_idx, tile_idx, rotation)
+
     def convert_indices_to_mask(self, indices: List[int]) -> np.ndarray:
         mask = np.zeros(self.action_encoding_size, dtype=np.float32)
         mask[indices] = 1.0
