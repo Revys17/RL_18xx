@@ -13,8 +13,10 @@ import sys
 
 def cmd_train(args):
     import multiprocessing
+
     multiprocessing.set_start_method("spawn", force=True)
     from rl18xx.agent.alphazero.loop import main as loop_main
+
     loop_main(
         num_loop_iterations=args.iterations,
         num_games_per_iteration=args.games,
@@ -22,12 +24,16 @@ def cmd_train(args):
         cleanup=not args.keep_old_files,
         num_readouts=args.readouts,
         max_training_window=args.max_training_window,
+        gate_games=args.gate_games,
+        gate_threshold=args.gate_threshold,
+        no_gate=args.no_gate,
     )
 
 
 def cmd_pretrain(args):
     from rl18xx.agent.alphazero.pretraining import do_pretraining
     from rl18xx.agent.alphazero.config import TrainingConfig
+
     config = TrainingConfig(
         num_epochs=args.epochs,
         batch_size=args.batch_size,
@@ -72,11 +78,13 @@ def cmd_arena(args):
 
 def cmd_dashboard(args):
     from rl18xx.agent.dashboard.dashboard import app
+
     app.run(host=args.host, port=args.port, debug=args.debug)
 
 
 def cmd_replay(args):
     from rl18xx.client.replay_game_from_log_file import replay_game_from_log_file
+
     replay_game_from_log_file(args.log_file)
 
 
@@ -98,6 +106,9 @@ def build_parser():
         "--max-training-window", type=int, default=0,
         help="Max training examples to use (0 = all data, default: 0)"
     )
+    p.add_argument("--gate-games", type=int, default=10, help="Arena games for model gating (default: 10)")
+    p.add_argument("--gate-threshold", type=float, default=0.55, help="Min win rate to promote (default: 0.55)")
+    p.add_argument("--no-gate", action="store_true", help="Disable model gating (always promote)")
 
     # pretrain
     p = sub.add_parser("pretrain", help="Pre-train model from human game data")
@@ -108,8 +119,12 @@ def build_parser():
 
     # arena
     p = sub.add_parser("arena", help="Run a match between agents")
-    p.add_argument("--agents", nargs=4, default=["mcts", "mcts", "mcts", "mcts"],
-                    help="4 agent types: 'mcts' or 'random' (default: mcts mcts mcts mcts)")
+    p.add_argument(
+        "--agents",
+        nargs=4,
+        default=["mcts", "mcts", "mcts", "mcts"],
+        help="4 agent types: 'mcts' or 'random' (default: mcts mcts mcts mcts)",
+    )
     p.add_argument("--model-dir", type=str, default=None, help="Model checkpoint directory")
     p.add_argument("--readouts", type=int, default=200, help="MCTS readouts per move (default: 200)")
     p.add_argument("--browser", action="store_true", help="Show game in browser via 18xx.games")
