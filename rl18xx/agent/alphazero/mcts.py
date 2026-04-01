@@ -316,15 +316,12 @@ class MCTSNode:
             move_probs /= scale
 
         self.original_prior = self.child_prior = move_probs
-        # initialize child Q as current node's value, to prevent dynamics where
-        # if B is winning, then B will only ever explore 1 move, because the Q
-        # estimation will be so much larger than the 0 of the other moves.
-        #
-        # Conversely, if W is winning, then B will explore all 362 moves before
-        # continuing to explore the most favorable move. This is a waste of search.
-        #
-        # The value seeded here acts as a prior, and gets averaged into Q calculations.
-        self.child_W_compressed = np.tile(value, (self.num_legal_actions, 1))
+        # Standard AlphaZero: initialize child W to zeros rather than seeding
+        # with the parent's value. Seeding biases Q estimates toward the parent's
+        # evaluation and can prevent proper exploration of moves that significantly
+        # change the position. The exploration term (child_U) already handles the
+        # explore-vs-exploit tradeoff via the prior policy and visit counts.
+        self.child_W_compressed = np.zeros((self.num_legal_actions, VALUE_SIZE))
         self.backup_value(value, up_to=up_to)
 
     def backup_value(self, value, up_to):
