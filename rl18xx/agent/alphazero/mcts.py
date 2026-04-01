@@ -381,7 +381,8 @@ class MCTSNode:
         if self.num_legal_actions == 0:
             return
 
-        alpha = np.full(self.num_legal_actions, self.config.dirichlet_noise_alpha)
+        alpha_value = 10.0 / self.num_legal_actions
+        alpha = np.full(self.num_legal_actions, alpha_value)
         dirichlet = np.random.dirichlet(alpha)
         self.child_prior_compressed = (
             self.child_prior_compressed * (1 - self.config.dirichlet_noise_weight)
