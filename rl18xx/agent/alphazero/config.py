@@ -72,7 +72,7 @@ class TrainingConfig:
     val_dir: Optional[Union[str, Path]] = None
     batch_size: int = 256
     lr: float = 1e-3
-    num_epochs: int = 1
+    num_epochs: int = 3
     weight_decay: float = 1e-4
     shuffle_examples: bool = True
     value_loss_weight: float = 1.0

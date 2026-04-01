@@ -241,7 +241,7 @@ def cleanup_and_exit(signum=None, frame=None):
         LOOP_LOCK_FILE.unlink()
 
 
-def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: int, cleanup: bool, num_readouts: int, max_training_window: int = 0):
+def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: int, cleanup: bool, num_readouts: int, num_epochs: int = 3, max_training_window: int = 0):
     if cleanup:
         cleanup_files()
 
@@ -257,7 +257,7 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
     metrics = Metrics(tb_log_dir)
     self_play_logs_path = Path("logs/self_play")
     self_play_logs_path.mkdir(parents=True, exist_ok=True)
-    default_training_config = TrainingConfig(max_training_window=max_training_window)
+    default_training_config = TrainingConfig(num_epochs=num_epochs, max_training_window=max_training_window)
 
     # Initialize loop metrics
     loop_metrics_path = Path(f"logs/loop/loop_metrics_{timestamp}.json")
@@ -481,6 +481,7 @@ if __name__ == "__main__":
         help="Keep old files from previous runs. By default, old files are deleted.",
     )
     parser.add_argument("--num_readouts", type=int, default=64, help="Number of readouts to use for self-play")
+    parser.add_argument("--num-epochs", type=int, default=3, help="Training epochs per iteration")
     parser.add_argument(
         "--max_training_window", type=int, default=0,
         help="Max training examples to use (0 = all data, default: 0)"
@@ -491,4 +492,4 @@ if __name__ == "__main__":
     num_games_per_iteration = args.num_games_per_iteration
     num_threads = args.num_threads
     cleanup = not args.keep_old_files
-    main(num_loop_iterations, num_games_per_iteration, num_threads, cleanup, args.num_readouts, args.max_training_window)
+    main(num_loop_iterations, num_games_per_iteration, num_threads, cleanup, args.num_readouts, args.num_epochs, args.max_training_window)
