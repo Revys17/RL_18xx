@@ -38,10 +38,81 @@ class ResBlock(nn.Module):
         out = self.dropout2(out)
         return out
 
+
+class FactoredPolicyHead(nn.Module):
+    """Decomposes the LayTile action space into factored sub-heads.
+
+    Instead of a single linear layer mapping trunk_dim -> 26535, this head uses:
+    - hex_head: trunk_dim -> num_hexes (93)
+    - tile_head: trunk_dim -> num_tiles (46)
+    - rotation_head: trunk_dim -> num_rotations (6)
+    - other_head: trunk_dim -> num_other (867) for all non-LayTile actions
+
+    The joint log-probability for LayTile(hex, tile, rotation) is computed as:
+        log P(h,t,r) = log P(h) + log P(t) + log P(r)
+
+    This reduces LayTile parameters from ~6.4M to ~41K while producing the
+    same flat output vector as the original policy head.
+    """
+
+    def __init__(self, trunk_dim: int, policy_size: int, lay_tile_info: dict):
+        super().__init__()
+        self.lay_tile_offset = lay_tile_info["offset"]
+        self.num_hexes = lay_tile_info["num_hexes"]
+        self.num_tiles = lay_tile_info["num_tiles"]
+        self.num_rotations = lay_tile_info["num_rotations"]
+        self.num_lay_tile = lay_tile_info["num_lay_tile"]
+        self.num_other = policy_size - self.num_lay_tile
+        self.policy_size = policy_size
+
+        # LayTile factored sub-heads
+        self.hex_head = nn.Linear(trunk_dim, self.num_hexes)
+        self.tile_head = nn.Linear(trunk_dim, self.num_tiles)
+        self.rotation_head = nn.Linear(trunk_dim, self.num_rotations)
+
+        # All non-LayTile actions (flat, small)
+        self.other_head = nn.Sequential(
+            nn.Linear(trunk_dim, trunk_dim // 2),
+            nn.GELU(),
+            nn.Linear(trunk_dim // 2, self.num_other),
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        batch_size = x.shape[0]
+
+        # Factored LayTile log-probabilities
+        hex_log = F.log_softmax(self.hex_head(x), dim=1)  # (B, num_hexes)
+        tile_log = F.log_softmax(self.tile_head(x), dim=1)  # (B, num_tiles)
+        rot_log = F.log_softmax(self.rotation_head(x), dim=1)  # (B, num_rotations)
+
+        # Outer sum: log P(h,t,r) = log P(h) + log P(t) + log P(r)
+        # (B, H, 1, 1) + (B, 1, T, 1) + (B, 1, 1, R) -> (B, H, T, R)
+        lay_tile_logits = (
+            hex_log.unsqueeze(2).unsqueeze(3) + tile_log.unsqueeze(1).unsqueeze(3) + rot_log.unsqueeze(1).unsqueeze(2)
+        )
+        lay_tile_flat = lay_tile_logits.reshape(batch_size, -1)  # (B, num_lay_tile)
+
+        # Non-LayTile actions
+        other_logits = self.other_head(x)  # (B, num_other)
+
+        # Assemble full policy vector with LayTile block at its correct offset
+        other_before = self.lay_tile_offset
+        full_logits = torch.cat(
+            [
+                other_logits[:, :other_before],
+                lay_tile_flat,
+                other_logits[:, other_before:],
+            ],
+            dim=1,
+        )
+
+        return full_logits
+
+
 class AlphaZeroModel(nn.Module):
     def encoder_type(self):
         raise NotImplementedError("Subclasses must implement this method")
-    
+
     def load_weights(self, save_file: str):
         try:
             with open(save_file, "rb") as f:
@@ -158,10 +229,15 @@ class AlphaZeroGNNModel(AlphaZeroModel):
 
         # --- 5. Output Heads ---
         head_hidden = self.config.shared_trunk_hidden_dim // 2
-        self.policy_head = nn.Sequential(
-            nn.Linear(self.config.shared_trunk_hidden_dim, head_hidden),
-            nn.GELU(),
-            nn.Linear(head_hidden, self.config.policy_size),
+
+        from rl18xx.agent.alphazero.action_mapper import ActionMapper
+
+        action_mapper = ActionMapper()
+        lay_tile_info = action_mapper.get_lay_tile_index_info()
+        self.policy_head = FactoredPolicyHead(
+            self.config.shared_trunk_hidden_dim,
+            self.config.policy_size,
+            lay_tile_info,
         )
         self.value_head = nn.Sequential(
             nn.Linear(self.config.shared_trunk_hidden_dim, head_hidden),
@@ -305,6 +381,7 @@ class AlphaZeroSSMEModel(AlphaZeroModel):
     """
     Neural Network model for an 18xx AlphaZero agent, incorporating a SSME for map data.
     """
+
     def __init__(self, config: ModelConfig):
         super(AlphaZeroSSMEModel, self).__init__()
         self.config = config

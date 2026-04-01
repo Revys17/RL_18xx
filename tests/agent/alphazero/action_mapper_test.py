@@ -86,22 +86,38 @@ def stock_round_2_game_state(operating_round_1_game_state):
     operating_round_1_game_state.process_action(
         action_helper.get_all_choices(operating_round_1_game_state)[0]
     )  # lays tile #57 with rotation 1 on H10
-    operating_round_1_game_state.process_action(action_helper.get_all_choices(operating_round_1_game_state)[-1])  # passes place token
-    operating_round_1_game_state.process_action(action_helper.get_all_choices(operating_round_1_game_state)[0])  # buys a 2 train
-    operating_round_1_game_state.process_action(action_helper.get_all_choices(operating_round_1_game_state)[0])  # buys a 2 train
-    operating_round_1_game_state.process_action(action_helper.get_all_choices(operating_round_1_game_state)[-1])  # passes trains
+    operating_round_1_game_state.process_action(
+        action_helper.get_all_choices(operating_round_1_game_state)[-1]
+    )  # passes place token
+    operating_round_1_game_state.process_action(
+        action_helper.get_all_choices(operating_round_1_game_state)[0]
+    )  # buys a 2 train
+    operating_round_1_game_state.process_action(
+        action_helper.get_all_choices(operating_round_1_game_state)[0]
+    )  # buys a 2 train
+    operating_round_1_game_state.process_action(
+        action_helper.get_all_choices(operating_round_1_game_state)[-1]
+    )  # passes trains
 
     # NYC
     operating_round_1_game_state.process_action(
         action_helper.get_all_choices(operating_round_1_game_state)[0]
     )  # lays tile #57 with rotation 0 on E19
-    operating_round_1_game_state.process_action(action_helper.get_all_choices(operating_round_1_game_state)[0])  # buys a 2 train
-    operating_round_1_game_state.process_action(action_helper.get_all_choices(operating_round_1_game_state)[-1])  # passes trains
+    operating_round_1_game_state.process_action(
+        action_helper.get_all_choices(operating_round_1_game_state)[0]
+    )  # buys a 2 train
+    operating_round_1_game_state.process_action(
+        action_helper.get_all_choices(operating_round_1_game_state)[-1]
+    )  # passes trains
 
     # C&O
     operating_round_1_game_state.process_action(action_helper.get_all_choices(operating_round_1_game_state)[2])
-    operating_round_1_game_state.process_action(action_helper.get_all_choices(operating_round_1_game_state)[0])  # Buys a 2 train
-    operating_round_1_game_state.process_action(action_helper.get_all_choices(operating_round_1_game_state)[-1])  # passes trains
+    operating_round_1_game_state.process_action(
+        action_helper.get_all_choices(operating_round_1_game_state)[0]
+    )  # Buys a 2 train
+    operating_round_1_game_state.process_action(
+        action_helper.get_all_choices(operating_round_1_game_state)[-1]
+    )  # passes trains
     return operating_round_1_game_state
 
 
@@ -109,7 +125,9 @@ def stock_round_2_game_state(operating_round_1_game_state):
 def operating_round_2_game_state(stock_round_2_game_state):
     action_helper = ActionHelper()
     stock_round_2_game_state.process_action(action_helper.get_all_choices(stock_round_2_game_state)[-2])  # sell 50% nyc
-    stock_round_2_game_state.process_action(action_helper.get_all_choices(stock_round_2_game_state)[-3])  # par nynh at 71
+    stock_round_2_game_state.process_action(
+        action_helper.get_all_choices(stock_round_2_game_state)[-3]
+    )  # par nynh at 71
     stock_round_2_game_state.process_action(action_helper.get_all_choices(stock_round_2_game_state)[0])  # buy C&O
     stock_round_2_game_state.process_action(action_helper.get_all_choices(stock_round_2_game_state)[-1])  # pass sell
     stock_round_2_game_state.process_action(action_helper.get_all_choices(stock_round_2_game_state)[0])  # Buy NYC
@@ -143,15 +161,29 @@ def bankruptcy_game_state(initial_game_state):
         action_helper.get_all_choices(initial_game_state)[-2]
     )  # [20:39] -- Phase 2 (Operating Rounds: 1 | Train Limit: 4 | Available Tiles: Yellow) --
     # [20:39] Player 1 bids $600 for Baltimore & Ohio
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [20:39] Player 2 buys Schuylkill Valley for $20
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [20:39] Player 3 buys Champlain & St.Lawrence for $40
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [20:39] Player 4 buys Delaware & Hudson for $70
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [20:39] Player 1 passes bidding
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [20:39] Player 2 buys Mohawk & Hudson for $110
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [20:39] Player 3 buys Camden & Amboy for $160
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[0]
+    )  # [20:39] Player 2 buys Schuylkill Valley for $20
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[0]
+    )  # [20:39] Player 3 buys Champlain & St.Lawrence for $40
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[0]
+    )  # [20:39] Player 4 buys Delaware & Hudson for $70
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[0]
+    )  # [20:39] Player 1 passes bidding
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[0]
+    )  # [20:39] Player 2 buys Mohawk & Hudson for $110
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[0]
+    )  # [20:39] Player 3 buys Camden & Amboy for $160
     # [20:39] Player 3 receives a 10% share of PRR
     # [20:39] Player 1 wins the auction for Baltimore & Ohio with the only bid of $600
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [20:39] Player 1 pars B&O at $67
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [20:39] Player 1 pars B&O at $67
     # [20:39] Player 1 receives a 20% share of B&O
     # [20:39] Player 1 becomes the president of B&O
     # [20:39] Player 4 has priority deal
@@ -174,7 +206,9 @@ def bankruptcy_game_state(initial_game_state):
             "B&M": {"cash": 0, "companies": [], "trains": [], "share_price": None},
         },
     }
-    assert action_helper.get_state(initial_game_state) == expected_state, "State does not match expected state after auction"
+    assert (
+        action_helper.get_state(initial_game_state) == expected_state
+    ), "State does not match expected state after auction"
     # [20:39] -- Stock Round 1 --
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[0]
@@ -192,7 +226,9 @@ def bankruptcy_game_state(initial_game_state):
     # [21:13] B&O floats
     # [21:13] B&O receives $670
     # [21:13] Player 1 has no valid actions and passes
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-2])  # [21:13] Player 2 pars PRR at $67
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-2]
+    )  # [21:13] Player 2 pars PRR at $67
     # [21:13] Player 2 buys a 20% share of PRR from the IPO for $134
     # [21:13] Player 2 becomes the president of PRR
     initial_game_state.process_action(
@@ -258,7 +294,9 @@ def bankruptcy_game_state(initial_game_state):
             "B&M": {"cash": 0, "companies": [], "trains": [], "share_price": None},
         },
     }
-    assert action_helper.get_state(initial_game_state) == expected_state, "State does not match expected state after stock round 1"
+    assert (
+        action_helper.get_state(initial_game_state) == expected_state
+    ), "State does not match expected state after stock round 1"
 
     # [21:15] -- Operating Round 1.1 (of 1) --
     # [21:15] Player 1 collects $30 from Baltimore & Ohio
@@ -273,24 +311,36 @@ def bankruptcy_game_state(initial_game_state):
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[1]
     )  # [21:16] PRR lays tile #57 with rotation 1 on H10 (Pittsburgh)
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [21:16] PRR passes place a token
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [21:16] PRR passes place a token
     # [21:16] PRR skips run routes
     # [21:16] PRR does not run
     # [21:16] PRR's share price moves left from 67
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[1])  # [21:16] PRR buys a 2 train for $80 from The Depot
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[1])  # [21:16] PRR buys a 2 train for $80 from The Depot
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [21:17] PRR passes buy trains
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[1]
+    )  # [21:16] PRR buys a 2 train for $80 from The Depot
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[1]
+    )  # [21:16] PRR buys a 2 train for $80 from The Depot
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [21:17] PRR passes buy trains
     # [21:17] PRR skips buy companies
     # [21:17] Player 4 operates B&O
     # [21:17] B&O places a token on I15
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[5]
     )  # [21:17] B&O spends $80 and lays tile #57 with rotation 0 on J14 (Washington)
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [21:17] B&O passes place a token
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [21:17] B&O passes place a token
     # [21:17] B&O skips run routes
     # [21:17] B&O does not run
     # [21:17] B&O's share price moves left from 65
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [21:22] B&O buys a 2 train for $590 from PRR
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [21:22] B&O buys a 2 train for $590 from PRR
     # [21:22] Baltimore & Ohio closes
     # [21:22] B&O skips buy companies
     action_helper.print_summary(initial_game_state, json_format=True)
@@ -312,7 +362,9 @@ def bankruptcy_game_state(initial_game_state):
             "B&M": {"cash": 0, "companies": [], "trains": [], "share_price": None},
         },
     }
-    assert action_helper.get_state(initial_game_state) == expected_state, "State does not match expected state after operating round 1"
+    assert (
+        action_helper.get_state(initial_game_state) == expected_state
+    ), "State does not match expected state after operating round 1"
 
     # [21:22] -- Stock Round 2 --
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [21:23] Player 1 passes
@@ -324,12 +376,20 @@ def bankruptcy_game_state(initial_game_state):
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[0]
     )  # [23:26] Player 2 exchanges Mohawk & Hudson from the IPO for a 10% share of NYC
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:26] Player 2 declines to sell shares
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[13])  # [23:26] Player 3 pars C&O at $67
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:26] Player 2 declines to sell shares
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[13]
+    )  # [23:26] Player 3 pars C&O at $67
     # [23:26] Player 3 buys a 20% share of C&O from the IPO for $134
     # [23:26] Player 3 becomes the president of C&O
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:26] Player 3 declines to sell shares
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-2])  # [23:26] Player 4 sells 3 shares of B&O and receives $195
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:26] Player 3 declines to sell shares
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-2]
+    )  # [23:26] Player 4 sells 3 shares of B&O and receives $195
     # [23:26] Player 1 becomes the president of B&O
     # [23:26] B&O's share price moves down from 50
     initial_game_state.process_action(
@@ -340,25 +400,35 @@ def bankruptcy_game_state(initial_game_state):
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[0]
     )  # [23:27] Player 2 buys a 10% share of NYC from the IPO for $67
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:27] Player 2 declines to sell shares
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:27] Player 2 declines to sell shares
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[1]
     )  # [23:27] Player 3 buys a 10% share of C&O from the IPO for $67
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:27] Player 3 declines to sell shares
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:27] Player 3 declines to sell shares
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[0]
     )  # [23:27] Player 4 buys a 10% share of NYC from the IPO for $67
     # [23:27] NYC floats
     # [23:27] NYC receives $670
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:27] Player 4 declines to sell shares
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:27] Player 4 declines to sell shares
     # [23:27] Player 1 has no valid actions and passes
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[2])  # [23:27] Player 2 sells 3 shares of PRR and receives $201
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[2]
+    )  # [23:27] Player 2 sells 3 shares of PRR and receives $201
     # [23:27] PRR's share price moves down from 60
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[1]
     )  # [23:27] Player 2 buys a 10% share of C&O from the IPO for $67
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[1])  # [23:27] Player 3 sells 2 shares of PRR and receives $120
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[1]
+    )  # [23:27] Player 3 sells 2 shares of PRR and receives $120
     # [23:27] PRR's share price moves down from 40
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[1]
@@ -369,14 +439,24 @@ def bankruptcy_game_state(initial_game_state):
     )  # [23:27] Player 4 buys a 10% share of C&O from the IPO for $67
     # [23:27] C&O floats
     # [23:27] C&O receives $670
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:35] Player 4 declines to sell shares
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:35] Player 4 declines to sell shares
     # [23:35] Player 1 has no valid actions and passes
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[20])  # [23:35] Player 2 sells a 10% share of B&O and receives $50
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[20]
+    )  # [23:35] Player 2 sells a 10% share of B&O and receives $50
     # [23:35] B&O's share price moves down from 40
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:35] Player 2 declines to buy shares
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[4])  # [23:35] Player 3 sells a 10% share of B&O and receives $40
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:35] Player 2 declines to buy shares
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[4]
+    )  # [23:35] Player 3 sells a 10% share of B&O and receives $40
     # [23:35] B&O's share price moves down from 30
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:35] Player 3 declines to buy shares
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:35] Player 3 declines to buy shares
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:35] Player 4 passes
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:35] Player 1 passes
     initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:35] Player 2 passes
@@ -401,7 +481,9 @@ def bankruptcy_game_state(initial_game_state):
             "B&M": {"cash": 0, "companies": [], "trains": [], "share_price": None},
         },
     }
-    assert action_helper.get_state(initial_game_state) == expected_state, "State does not match expected state after stock round 2"
+    assert (
+        action_helper.get_state(initial_game_state) == expected_state
+    ), "State does not match expected state after stock round 2"
 
     # [23:35] -- Operating Round 2.1 (of 1) --
     # [23:35] Player 4 collects $15 from Delaware & Hudson
@@ -410,45 +492,81 @@ def bankruptcy_game_state(initial_game_state):
     # [23:35] Player 3 collects $25 from Camden & Amboy
     # [23:35] Player 2 operates NYC
     # [23:35] NYC places a token on E19
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:35] NYC passes lay/upgrade track
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:35] NYC passes lay/upgrade track
     # [23:35] NYC skips place a token
     # [23:35] NYC skips run routes
     # [23:35] NYC does not run
     # [23:35] NYC's share price moves left from 65
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [23:35] NYC buys a 2 train for $80 from The Depot
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [23:35] NYC buys a 2 train for $80 from The Depot
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [23:35] NYC buys a 2 train for $80 from The Depot
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [23:36] NYC buys a 2 train for $80 from The Depot
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[0]
+    )  # [23:35] NYC buys a 2 train for $80 from The Depot
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[0]
+    )  # [23:35] NYC buys a 2 train for $80 from The Depot
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[0]
+    )  # [23:35] NYC buys a 2 train for $80 from The Depot
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[0]
+    )  # [23:36] NYC buys a 2 train for $80 from The Depot
     # [23:36] NYC skips buy companies
     # [23:36] Player 3 operates C&O
     # [23:36] C&O places a token on F6
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:36] C&O passes lay/upgrade track
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:36] C&O passes lay/upgrade track
     # [23:36] C&O skips place a token
     # [23:36] C&O skips run routes
     # [23:36] C&O does not run
     # [23:36] C&O's share price moves left from 65
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[0])  # [23:36] C&O buys a 3 train for $180 from The Depot
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[0]
+    )  # [23:36] C&O buys a 3 train for $180 from The Depot
     # [23:36] -- Phase 3 (Operating Rounds: 2 | Train Limit: 4 | Available Tiles: Yellow, Green) --
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-2])  # [23:36] C&O buys a 3 train for $180 from The Depot
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-2])  # [23:36] C&O buys a 3 train for $180 from The Depot
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:36] C&O passes buy trains
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-2]
+    )  # [23:36] C&O buys a 3 train for $180 from The Depot
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-2]
+    )  # [23:36] C&O buys a 3 train for $180 from The Depot
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:36] C&O passes buy trains
     # [23:36] C&O passes buy companies
     # [23:36] Player 4 operates PRR
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:36] PRR passes lay/upgrade track
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:36] PRR passes place a token
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:36] PRR runs a 2 train for $30: H12-H10
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:36] PRR passes lay/upgrade track
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:36] PRR passes place a token
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:36] PRR runs a 2 train for $30: H12-H10
     initial_game_state.process_action(
         action_helper.get_all_choices(initial_game_state)[-1]
     )  # [23:36] PRR pays out 3 per share (12 to Player 4, $3 to Player 3)
     # [23:36] PRR's share price moves right from 50
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-2])  # [23:36] PRR buys a 3 train for $180 from The Depot
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-2])  # [23:36] PRR buys a 3 train for $180 from The Depot
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-2])  # [23:36] PRR buys a 4 train for $300 from The Depot
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-2]
+    )  # [23:36] PRR buys a 3 train for $180 from The Depot
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-2]
+    )  # [23:36] PRR buys a 3 train for $180 from The Depot
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-2]
+    )  # [23:36] PRR buys a 4 train for $300 from The Depot
     # [23:36] -- Phase 4 (Operating Rounds: 2 | Train Limit: 3 | Available Tiles: Yellow, Green) --
     # [23:36] -- Event: 2 trains rust ( B&O x1, PRR x1, NYC x4) --
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:36] PRR passes buy companies
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:36] PRR passes buy companies
     # [23:36] Player 1 operates B&O
-    initial_game_state.process_action(action_helper.get_all_choices(initial_game_state)[-1])  # [23:36] B&O passes lay/upgrade track
+    initial_game_state.process_action(
+        action_helper.get_all_choices(initial_game_state)[-1]
+    )  # [23:36] B&O passes lay/upgrade track
     # [23:36] B&O skips place a token
     # [23:36] B&O skips run routes
     # [23:36] B&O does not run
@@ -596,7 +714,9 @@ def test_auction(initial_game_state):
 
     all_actions = action_helper.get_all_choices_limited(initial_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, initial_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, initial_game_state) == get_expected_index_for_action(
+            action_mapper, action
+        )
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
     assert mask.shape == (26535,)
@@ -625,7 +745,9 @@ def test_auction(initial_game_state):
 
     all_actions = action_helper.get_all_choices_limited(initial_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, initial_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, initial_game_state) == get_expected_index_for_action(
+            action_mapper, action
+        )
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
     assert mask.shape == (26535,)
@@ -651,7 +773,9 @@ def test_auction(initial_game_state):
 
     all_actions = action_helper.get_all_choices_limited(initial_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, initial_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, initial_game_state) == get_expected_index_for_action(
+            action_mapper, action
+        )
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
     assert mask.shape == (26535,)
@@ -665,7 +789,9 @@ def test_auction(initial_game_state):
 
     all_actions = action_helper.get_all_choices_limited(initial_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, initial_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, initial_game_state) == get_expected_index_for_action(
+            action_mapper, action
+        )
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
     assert mask.shape == (26535,)
@@ -694,7 +820,9 @@ def test_stock_round_1_game_state(stock_round_1_game_state):
     print("\n".join([str(action) for action in all_actions]))
     for action in all_actions:
         print(action_mapper.get_index_for_action(action, initial_game_state))
-        assert action_mapper.get_index_for_action(action, stock_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, stock_round_1_game_state) == get_expected_index_for_action(
+            action_mapper, action
+        )
 
     print(stock_round_1_game_state.log)
     mask = action_mapper.get_legal_action_mask(stock_round_1_game_state)
@@ -817,7 +945,9 @@ def test_stock_round_1_game_state(stock_round_1_game_state):
     all_actions = action_helper.get_all_choices_limited(stock_round_1_game_state)
     print("\n".join([str(action) for action in all_actions]))
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, stock_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, stock_round_1_game_state) == get_expected_index_for_action(
+            action_mapper, action
+        )
 
     mask = action_mapper.get_legal_action_mask(stock_round_1_game_state)
     assert mask.shape == (26535,)
@@ -849,7 +979,9 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
     # Test initial operating round 1 state
     all_actions = action_helper.get_all_choices_limited(operating_round_1_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_1_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
@@ -907,7 +1039,9 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
     # Test token options
     all_actions = action_helper.get_all_choices_limited(operating_round_1_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_1_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
@@ -924,12 +1058,16 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
         check_action_in_all_actions(action, all_actions)
 
     # Move to trains
-    operating_round_1_game_state.process_action(action_helper.get_all_choices(operating_round_1_game_state)[-1])  # passes place token
+    operating_round_1_game_state.process_action(
+        action_helper.get_all_choices(operating_round_1_game_state)[-1]
+    )  # passes place token
 
     # Test train options
     all_actions = action_helper.get_all_choices_limited(operating_round_1_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_1_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
@@ -945,12 +1083,16 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
     for action in mapped_actions:
         check_action_in_all_actions(action, all_actions)
 
-    operating_round_1_game_state.process_action(action_helper.get_all_choices(operating_round_1_game_state)[0])  # buys a 2 train
+    operating_round_1_game_state.process_action(
+        action_helper.get_all_choices(operating_round_1_game_state)[0]
+    )  # buys a 2 train
 
     # Check again
     all_actions = action_helper.get_all_choices_limited(operating_round_1_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_1_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
@@ -967,13 +1109,19 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
         check_action_in_all_actions(action, all_actions)
 
     # Move to NYC
-    operating_round_1_game_state.process_action(action_helper.get_all_choices(operating_round_1_game_state)[0])  # buys a 2 train
-    operating_round_1_game_state.process_action(action_helper.get_all_choices(operating_round_1_game_state)[-1])  # passes trains
+    operating_round_1_game_state.process_action(
+        action_helper.get_all_choices(operating_round_1_game_state)[0]
+    )  # buys a 2 train
+    operating_round_1_game_state.process_action(
+        action_helper.get_all_choices(operating_round_1_game_state)[-1]
+    )  # passes trains
 
     # NYC
     all_actions = action_helper.get_all_choices_limited(operating_round_1_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_1_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_1_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
     assert mask.shape == (26535,)
@@ -1016,7 +1164,9 @@ def test_stock_round_2_game_state(stock_round_2_game_state):
     # Test initial stock round 2 state
     all_actions = action_helper.get_all_choices_limited(stock_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, stock_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, stock_round_2_game_state) == get_expected_index_for_action(
+            action_mapper, action
+        )
 
     mask = action_mapper.get_legal_action_mask(stock_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1049,7 +1199,9 @@ def test_stock_round_2_game_state(stock_round_2_game_state):
     # Test MH exchange
     all_actions = action_helper.get_all_choices_limited(stock_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, stock_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, stock_round_2_game_state) == get_expected_index_for_action(
+            action_mapper, action
+        )
 
     mask = action_mapper.get_legal_action_mask(stock_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1112,11 +1264,15 @@ def test_stock_round_2_game_state(stock_round_2_game_state):
         check_action_in_all_actions(action, all_actions)
 
     # Test MH exchange
-    stock_round_2_game_state.process_action(action_helper.get_all_choices(stock_round_2_game_state)[2])  # exchange MH for NYC IPO
+    stock_round_2_game_state.process_action(
+        action_helper.get_all_choices(stock_round_2_game_state)[2]
+    )  # exchange MH for NYC IPO
 
     all_actions = action_helper.get_all_choices_limited(stock_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, stock_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, stock_round_2_game_state) == get_expected_index_for_action(
+            action_mapper, action
+        )
 
     mask = action_mapper.get_legal_action_mask(stock_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1183,7 +1339,9 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Test initial operating round 2 state
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_2_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1228,7 +1386,9 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     assert mask[lay_69_idx + 4] == 1.0
 
     exchange_mh_ipo = action_mapper.action_offsets["CompanyBuyShares"] + action_mapper.share_location_offsets["ipo"]
-    exchange_mh_market = action_mapper.action_offsets["CompanyBuyShares"] + action_mapper.share_location_offsets["market"]
+    exchange_mh_market = (
+        action_mapper.action_offsets["CompanyBuyShares"] + action_mapper.share_location_offsets["market"]
+    )
 
     assert mask[exchange_mh_ipo] == 1.0
     assert mask[exchange_mh_market] == 1.0
@@ -1242,21 +1402,33 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         check_action_in_all_actions(action, all_actions)
 
     # NYNH
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[2])  # lay #1 with rotation 0 on F20
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[2])  # buy 2 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[2]
+    )  # lay #1 with rotation 0 on F20
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[2]
+    )  # buy 2 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # pass trains
 
     # PRR
     operating_round_2_game_state.process_action(
         action_helper.get_all_choices(operating_round_2_game_state)[12]
     )  # lay tile #9 with rotation 1 on H8
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass token
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto trains & run
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # pass token
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # auto trains & run
 
     # Test dividend
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_2_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1276,19 +1448,33 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         check_action_in_all_actions(action, all_actions)
 
     # Move to C&O buy 3 step
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # pass trains
 
     # C&O
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[4])  # lay tile #8 with rotation 2 on G3
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto trains & run
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # withhold
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # buy a 2 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[4]
+    )  # lay tile #8 with rotation 2 on G3
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # auto trains & run
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # withhold
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # buy a 2 train
 
     # Test 3 train purchase
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_2_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1306,13 +1492,19 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         check_action_in_all_actions(action, all_actions)
 
     # Move on
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # buy a 3 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # buy a 3 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # pass trains
 
     # Test buy company
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_2_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1337,16 +1529,26 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         check_action_in_all_actions(action, all_actions)
 
     # Move to NYC
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-4])  # buy DH from Player 2 for $140
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass buy companies
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-4]
+    )  # buy DH from Player 2 for $140
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # pass buy companies
 
     # Skip to next OR
     operating_round_2_game_state.process_action(
         action_helper.get_all_choices(operating_round_2_game_state)[-4]
     )  # lay tile #8 with rotation 3 on F18
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[33])  # buy 3 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[33])  # buy 3 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[33])  # buy 3 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[33]
+    )  # buy 3 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[33]
+    )  # buy 3 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[33]
+    )  # buy 3 train
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass
     # SR 3
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass
@@ -1354,15 +1556,25 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass
 
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[47])  # lay tile 8 rot 2 on H6
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip token
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto routes
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[47]
+    )  # lay tile 8 rot 2 on H6
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip token
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # auto routes
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
 
     # Check cross-company BuyTrain
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_2_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1424,20 +1636,34 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     for action in mapped_actions:
         check_action_in_all_actions(action, all_actions)
 
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[542])  # Buy NYC 2 509
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[542]
+    )  # Buy NYC 2 509
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # pass trains
     operating_round_2_game_state.process_action(
         action_helper.get_all_choices(operating_round_2_game_state)[229]
     )  # NYNH spends $80 and lays tile #57 with rotation 1 on F22 (Providence)
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip token
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto routes
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[0])  # buy CS min
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip token
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # auto routes
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[0]
+    )  # buy CS min
 
     # Check company tile lay
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_2_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1492,14 +1718,22 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     for action in mapped_actions:
         check_action_in_all_actions(action, all_actions)
 
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # lay tile 58 on B20 rot 5
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip trains
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip companies
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # lay tile 58 on B20 rot 5
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip companies
 
     # Check company tile lay again
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_2_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1567,7 +1801,9 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     # Check company token placement
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_2_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1585,14 +1821,22 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         action_helper.get_all_choices(operating_round_2_game_state)[2]
     )  # [17:13] C&O (DH) places a token on F16 (Scranton)
 
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto routes
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # auto routes
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip trains
 
     # Test tile upgrade
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_2_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1652,28 +1896,56 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     operating_round_2_game_state.process_action(
         action_helper.get_all_choices(operating_round_2_game_state)[54]
     )  # [17:13] NYC spends $80 and lays tile #54 with rotation 0 on G19 (New York & Newark)
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto routes
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[33])  # Buy 3 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip companies
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # auto routes
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[33]
+    )  # Buy 3 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip companies
 
     # PRR
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip track
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # run trains
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip track
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # run trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip trains
 
     # NYNH
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip track
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip token
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # run trains
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[168])  # buy a 4 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip track
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip token
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # run trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[168]
+    )  # buy a 4 train
 
     # Test discard train
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_2_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1685,12 +1957,16 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     assert mask[discard_idx + action_mapper.train_type_offsets["3"]] == 1.0
     assert sum(mask) == 1.0
 
-    operating_round_2_game_state.process_action(action_helper.get_all_choices_limited(operating_round_2_game_state)[0])  # NYC discard train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices_limited(operating_round_2_game_state)[0]
+    )  # NYC discard train
 
     # Test purchase discarded train
     all_actions = action_helper.get_all_choices_limited(operating_round_2_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, operating_round_2_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(
+            action, operating_round_2_game_state
+        ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
     assert mask.shape == (26535,)
@@ -1729,7 +2005,9 @@ def test_bankruptcy_game_state(bankruptcy_game_state):
     # Test bankrupcy action availability
     all_actions = action_helper.get_all_choices_limited(bankruptcy_game_state)
     for action in all_actions:
-        assert action_mapper.get_index_for_action(action, bankruptcy_game_state) == get_expected_index_for_action(action_mapper, action)
+        assert action_mapper.get_index_for_action(action, bankruptcy_game_state) == get_expected_index_for_action(
+            action_mapper, action
+        )
 
     mask = action_mapper.get_legal_action_mask(bankruptcy_game_state)
     assert mask.shape == (26535,)
@@ -1742,3 +2020,60 @@ def test_bankruptcy_game_state(bankruptcy_game_state):
     mapped_actions = [action_mapper.map_index_to_action(i, bankruptcy_game_state) for i in indices]
     for action in mapped_actions:
         check_action_in_all_actions(action, all_actions)
+
+
+# --- Tests for get_lay_tile_index_info and decompose_lay_tile_index ---
+
+
+def test_get_lay_tile_index_info():
+    action_mapper = ActionMapper()
+    info = action_mapper.get_lay_tile_index_info()
+
+    assert info["num_hexes"] == len(action_mapper.hex_offsets)
+    assert info["num_tiles"] == len(action_mapper.tile_offsets)
+    assert info["num_rotations"] == 6
+    assert info["num_lay_tile"] == info["num_hexes"] * info["num_tiles"] * info["num_rotations"]
+    assert info["offset"] == action_mapper.action_offsets["LayTile"]
+
+
+def test_decompose_lay_tile_index_first():
+    """The first LayTile index should decompose to (0, 0, 0)."""
+    action_mapper = ActionMapper()
+    offset = action_mapper.action_offsets["LayTile"]
+    assert action_mapper.decompose_lay_tile_index(offset) == (0, 0, 0)
+
+
+def test_decompose_lay_tile_index_last():
+    """The last LayTile index should decompose to (num_hexes-1, num_tiles-1, 5)."""
+    action_mapper = ActionMapper()
+    info = action_mapper.get_lay_tile_index_info()
+    last_index = info["offset"] + info["num_lay_tile"] - 1
+    expected = (info["num_hexes"] - 1, info["num_tiles"] - 1, 5)
+    assert action_mapper.decompose_lay_tile_index(last_index) == expected
+
+
+def test_decompose_lay_tile_index_roundtrip():
+    """Decomposing then recomposing should recover the original flat index."""
+    action_mapper = ActionMapper()
+    info = action_mapper.get_lay_tile_index_info()
+    offset = info["offset"]
+    num_tiles = info["num_tiles"]
+
+    # Test a few specific indices
+    for relative in [0, 1, 6, 7, 276, 1000, info["num_lay_tile"] - 1]:
+        flat_index = offset + relative
+        hex_idx, tile_idx, rotation = action_mapper.decompose_lay_tile_index(flat_index)
+        recomposed = offset + hex_idx * num_tiles * 6 + tile_idx * 6 + rotation
+        assert recomposed == flat_index, f"Roundtrip failed for index {flat_index}"
+
+
+def test_decompose_lay_tile_index_out_of_range():
+    """Indices outside the LayTile range should raise ValueError."""
+    action_mapper = ActionMapper()
+    info = action_mapper.get_lay_tile_index_info()
+
+    with pytest.raises(ValueError):
+        action_mapper.decompose_lay_tile_index(info["offset"] - 1)
+
+    with pytest.raises(ValueError):
+        action_mapper.decompose_lay_tile_index(info["offset"] + info["num_lay_tile"])
