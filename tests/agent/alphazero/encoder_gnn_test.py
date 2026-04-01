@@ -14,11 +14,12 @@ from rl18xx.agent.alphazero.encoder import (
     G1830_BANK_CASH,
     G1830_TRAIN_COUNT,
     CORPORATION_IDS_ORDERED,
+    PRIVATE_IDS_ORDERED,
     MAX_SHARE_PRICE,
 )
 from rl18xx.game.engine.game.base import BaseGame
 from rl18xx.game.engine.game.title.g1830 import Game as Game_1830, Map as Map_1830
-from rl18xx.game.engine.round import WaterfallAuction, Stock
+from rl18xx.game.engine.round import WaterfallAuction, Stock, Operating
 from rl18xx.game.engine.core import Phase
 from rl18xx.game.gamemap import GameMap
 from rl18xx.game.action_helper import ActionHelper
@@ -2108,23 +2109,47 @@ def test_operating_round_2_encoding(
 
     # MOVE TO NEXT INTERESTING POINT
     # NYNH
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[2])  # lay #1 with rotation 0 on F20
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[2])  # buy 2 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[2]
+    )  # lay #1 with rotation 0 on F20
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[2]
+    )  # buy 2 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # pass trains
     # PRR
     operating_round_2_game_state.process_action(
         action_helper.get_all_choices(operating_round_2_game_state)[12]
     )  # lay tile #9 with rotation 1 on H8
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass token
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto trains & run
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # pass token
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # auto trains & run
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # pass trains
     # C&O
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[4])  # lay tile #8 with rotation 2 on G3
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto trains & run
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # withhold
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # buy a 2 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # buy a 3 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[4]
+    )  # lay tile #8 with rotation 2 on G3
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # auto trains & run
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # withhold
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # buy a 2 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # buy a 3 train
 
     # Test that a 3 has been purchased
     game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(
@@ -2435,18 +2460,30 @@ def test_operating_round_2_encoding(
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after test"
 
     # MOVE TO NEXT INTERESTING POINT
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # pass trains
     # Move to NYC
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-4])  # buy DH from Player 2 for $140
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass buy companies
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-4]
+    )  # buy DH from Player 2 for $140
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # pass buy companies
     # Skip to next OR
-    
+
     operating_round_2_game_state.process_action(
         action_helper.get_all_choices(operating_round_2_game_state)[-4]
     )  # lay tile #8 with rotation 3 on F18
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[33])  # buy 3 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[33])  # buy 3 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[33])  # buy 3 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[33]
+    )  # buy 3 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[33]
+    )  # buy 3 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[33]
+    )  # buy 3 train
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass
     # SR 3
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass
@@ -2454,20 +2491,42 @@ def test_operating_round_2_encoding(
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass
     operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass
     # OR 3
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[47])  # lay tile 8 rot 2 on H6
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip token
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto routes
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[542])  # Buy NYC 2 509
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # pass trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[47]
+    )  # lay tile 8 rot 2 on H6
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip token
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # auto routes
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[542]
+    )  # Buy NYC 2 509
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # pass trains
     operating_round_2_game_state.process_action(
         action_helper.get_all_choices(operating_round_2_game_state)[229]
     )  # NYNH spends $80 and lays tile #57 with rotation 1 on F22 (Providence)
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip token
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto routes
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip trains
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip companies
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip token
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # auto routes
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip companies
     operating_round_2_game_state.process_action(
         action_helper.get_all_choices(operating_round_2_game_state)[36]
     )  # [17:12] C&O (DH) spends $120 and lays tile #57 with rotation 2 on F16 (Scranton)
@@ -2777,36 +2836,78 @@ def test_operating_round_2_encoding(
         "Section A: BO Face Value",
     )
 
+    # --- Section: OR Structure ---
+    _, offset = get_section_slice(encoder_1830, "or_structure", offset)
+    # --- Section: Train Limit ---
+    _, offset = get_section_slice(encoder_1830, "train_limit", offset)
+    # --- Section: Private Closed ---
+    _, offset = get_section_slice(encoder_1830, "private_closed", offset)
+    # --- Section: Player Turn Order ---
+    _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset}"
 
     # Not checking map
 
     # MOVE TO NEXT INTERESTING POINT
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto routes
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # auto routes
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip trains
 
     operating_round_2_game_state.process_action(
         action_helper.get_all_choices(operating_round_2_game_state)[54]
     )  # [17:13] NYC spends $80 and lays tile #54 with rotation 0 on G19 (New York & Newark)
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # auto routes
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # auto routes
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
 
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[33])  # Buy 3 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip companies
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[33]
+    )  # Buy 3 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip companies
     # PRR
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip track
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # run trains
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip track
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # run trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip trains
     # NYNH
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # lay tile
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # skip token
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # run trains
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # pay out
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # buy a 4 train
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-1])  # NYC discard train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # lay tile
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # skip token
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # run trains
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # pay out
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # buy a 4 train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-1]
+    )  # NYC discard train
 
     # Check upgraded tile and discarded train encodings
     game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(
@@ -3113,6 +3214,14 @@ def test_operating_round_2_encoding(
         "Section A: BO Face Value",
     )
 
+    # --- Section: OR Structure ---
+    _, offset = get_section_slice(encoder_1830, "or_structure", offset)
+    # --- Section: Train Limit ---
+    _, offset = get_section_slice(encoder_1830, "train_limit", offset)
+    # --- Section: Private Closed ---
+    _, offset = get_section_slice(encoder_1830, "private_closed", offset)
+    # --- Section: Player Turn Order ---
+    _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset}"
 
@@ -3186,7 +3295,9 @@ def test_operating_round_2_encoding(
     assert_float(6.0 + 10.0 / 80.0, sum(features_track), "Map: Track sum for F20")
 
     # MOVE TO END
-    operating_round_2_game_state.process_action(action_helper.get_all_choices(operating_round_2_game_state)[-2])  # Buy discarded train
+    operating_round_2_game_state.process_action(
+        action_helper.get_all_choices(operating_round_2_game_state)[-2]
+    )  # Buy discarded train
 
     # Check final state
     game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(
@@ -3490,6 +3601,71 @@ def test_operating_round_2_encoding(
         operating_round_2_game_state.company_by_id("BO").value / 600.0,
         encoding[s_slice][encoder_1830.private_id_to_idx["BO"]],
         "Section A: BO Face Value",
+    )
+
+    # --- Section: OR Structure ---
+    s_slice, offset = get_section_slice(encoder_1830, "or_structure", offset)
+    assert_float(1.0 / 3.0, encoding[s_slice][0], "OR structure: total ORs normalized")
+    assert_float(1.0 / 1.0, encoding[s_slice][1], "OR structure: current OR fraction")
+
+    # --- Section: Train Limit ---
+    s_slice, offset = get_section_slice(encoder_1830, "train_limit", offset)
+    assert_float(4.0 / 4.0, encoding[s_slice][0], "Train limit: phase 2 train limit")
+
+    # --- Section: Private Closed ---
+    s_slice, offset = get_section_slice(encoder_1830, "private_closed", offset)
+    np.testing.assert_allclose(
+        np.zeros(encoder_1830.NUM_PRIVATES), encoding[s_slice], atol=1e-6, err_msg="Private closed in OR2"
+    )
+
+    # --- Section: Player Turn Order ---
+    s_slice, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    np.testing.assert_allclose(
+        np.zeros(encoder_1830.num_players), encoding[s_slice], atol=1e-6, err_msg="Turn order in OR"
+    )
+
+    # --- Final Offset Check ---
+    assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset}"
+
+
+def test_new_features(encoder_1830: Encoder_GNN, test_game_1830_4p):
+    """Verify the new encoder features: OR structure, train limit, private closed, player turn order."""
+    g, action_helper = test_game_1830_4p
+
+    # Initial game state is in the auction round
+    game_state_tensor, _, _, _ = encoder_1830.encode(g)
+    encoding = game_state_tensor.squeeze(0).numpy()
+
+    # Navigate to the new feature sections by advancing offset through all prior sections
+    offset = 0
+    for section_name in encoder_1830.GAME_STATE_ENCODING_STRUCTURE:
+        if section_name == "or_structure":
+            break
+        _, offset = get_section_slice(encoder_1830, section_name, offset)
+
+    # --- OR Structure: should be zeros during auction round ---
+    s_slice, offset = get_section_slice(encoder_1830, "or_structure", offset)
+    np.testing.assert_allclose(
+        np.zeros(2), encoding[s_slice], atol=1e-6, err_msg="OR structure should be zero during auction"
+    )
+
+    # --- Train Limit: phase "2" has train_limit=4, so 4/4 = 1.0 ---
+    s_slice, offset = get_section_slice(encoder_1830, "train_limit", offset)
+    assert_float(1.0, encoding[s_slice][0], "Train limit: phase 2 = 4/4 = 1.0")
+
+    # --- Private Closed: all should be 0.0 at game start ---
+    s_slice, offset = get_section_slice(encoder_1830, "private_closed", offset)
+    for priv_id in PRIVATE_IDS_ORDERED:
+        priv_idx = encoder_1830.private_id_to_idx[priv_id]
+        assert_float(0.0, encoding[s_slice][priv_idx], f"Private {priv_id} should not be closed at start")
+
+    # --- Player Turn Order: should be zeros during auction round ---
+    s_slice, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    np.testing.assert_allclose(
+        np.zeros(encoder_1830.num_players),
+        encoding[s_slice],
+        atol=1e-6,
+        err_msg="Player turn order should be zero during auction",
     )
 
     # --- Final Offset Check ---

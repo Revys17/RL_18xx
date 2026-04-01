@@ -13,7 +13,7 @@ from rl18xx.agent.alphazero.metrics import Metrics
 @dataclass
 class ModelConfig:
     device: Optional[torch.device] = None
-    game_state_size: int = 377
+    game_state_size: int = 390
     map_node_features: int = 50
     policy_size: int = 26535
     value_size: int = 4
