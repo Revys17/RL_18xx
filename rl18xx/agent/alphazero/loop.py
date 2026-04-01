@@ -480,7 +480,7 @@ if __name__ == "__main__":
         action="store_true",
         help="Keep old files from previous runs. By default, old files are deleted.",
     )
-    parser.add_argument("--num_readouts", type=int, default=64, help="Number of readouts to use for self-play")
+    parser.add_argument("--num_readouts", type=int, default=200, help="Number of readouts to use for self-play")
     parser.add_argument("--num-epochs", type=int, default=3, help="Training epochs per iteration")
     parser.add_argument(
         "--max_training_window", type=int, default=0,
