@@ -1,5 +1,5 @@
 from rl18xx.game.engine.game.base import BaseGame
-from rl18xx.game.engine.round import WaterfallAuction
+from rl18xx.game.engine.round import WaterfallAuction, Operating, Stock
 from rl18xx.game.engine.entities import Player, Corporation, Company, Bank, Depot, Train
 from rl18xx.game.engine.game.title.g1830 import Game as Game_1830, Entities as Entities_1830, Map as Map_1830
 from rl18xx.game.engine.graph import Hex, Tile, Edge, City
@@ -54,6 +54,7 @@ ROUND_TYPE_MAP = {
 }
 MAX_ROUND_TYPE_IDX = max(ROUND_TYPE_MAP.values())
 
+
 class Encoder_1830:
     @classmethod
     def get_encoder_for_model(cls, model: Any) -> "Encoder_1830":
@@ -65,7 +66,7 @@ class Encoder_1830:
             return Encoder_SSME()
         else:
             raise ValueError(f"Unknown model name: {model.encoder_type()}")
-        
+
     def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         raise NotImplementedError("Subclasses must implement this method")
 
@@ -121,6 +122,11 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
         "auction_min_bid": (NUM_PRIVATES, 0),
         "auction_available": (NUM_PRIVATES, 0),
         "auction_face_value": (NUM_PRIVATES, 0),
+        # --- New Feature Groups ---
+        "or_structure": (2, 0),
+        "train_limit": (1, 0),
+        "private_closed": (NUM_PRIVATES, 0),
+        "player_turn_order": ("num_players", 0),
     }
     GAME_STATE_ENCODING_SIZE: int = 0
 
@@ -611,7 +617,7 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
 
             # A1: Bids
             section_name = "auction_bids"
-            #print(f"Offset for auction bids: {offset}")
+            # print(f"Offset for auction bids: {offset}")
             for priv_id, priv_idx in self.private_id_to_idx.items():
                 company = game.company_by_id(priv_id)
                 if not company:
@@ -628,7 +634,7 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
             section_start_offset = self.check_offset(section_name, offset, section_start_offset)
 
             # A2: Min Bid/Price
-            #print(f"Offset for auction min bids: {offset}")
+            # print(f"Offset for auction min bids: {offset}")
             section_name = "auction_min_bid"
             for priv_id, priv_idx in self.private_id_to_idx.items():
                 company = game.company_by_id(priv_id)
@@ -677,6 +683,30 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
         offset += self._get_section_size(section_name)
         section_start_offset = self.check_offset(section_name, offset, section_start_offset)
 
+        # --- Section: Operating Round Structure ---
+        section_name = "or_structure"
+        self._encode_or_structure(game, state_encoding, offset)
+        offset += self._get_section_size(section_name)
+        section_start_offset = self.check_offset(section_name, offset, section_start_offset)
+
+        # --- Section: Train Limit for Current Phase ---
+        section_name = "train_limit"
+        self._encode_train_limit(game, state_encoding, offset)
+        offset += self._get_section_size(section_name)
+        section_start_offset = self.check_offset(section_name, offset, section_start_offset)
+
+        # --- Section: Private Company Closed Status ---
+        section_name = "private_closed"
+        self._encode_private_closed(game, state_encoding, offset)
+        offset += self._get_section_size(section_name)
+        section_start_offset = self.check_offset(section_name, offset, section_start_offset)
+
+        # --- Section: Player Turn Order in Stock Round ---
+        section_name = "player_turn_order"
+        self._encode_player_turn_order(game, state_encoding, offset)
+        offset += self._get_section_size(section_name)
+        section_start_offset = self.check_offset(section_name, offset, section_start_offset)
+
         # --- Final Offset Check ---
         # LOGGER.debug(f"Final offset after encoding: {offset}")
         if offset != self.ENCODING_SIZE:
@@ -692,6 +722,42 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
         duration_ms = (end_time - start_time) * 1000
         LOGGER.debug(f"Game State Encoding finished in {duration_ms:.3f} ms.")
         return tensor_encoding
+
+    def _encode_or_structure(self, game: BaseGame, state_encoding: np.ndarray, offset: int) -> None:
+        """Encode operating round structure features."""
+        is_operating_round = isinstance(game.round, Operating)
+        if is_operating_round:
+            operating_rounds_total = game.phase.operating_rounds if game.phase.operating_rounds else 1
+            state_encoding[offset] = float(operating_rounds_total) / 3.0
+            current_or_num = game.round.round_num if hasattr(game.round, "round_num") else 1
+            state_encoding[offset + 1] = float(current_or_num) / float(operating_rounds_total)
+
+    def _encode_train_limit(self, game: BaseGame, state_encoding: np.ndarray, offset: int) -> None:
+        """Encode train limit for current phase."""
+        phase_train_limit = game.phase._train_limit if hasattr(game.phase, "_train_limit") else 0
+        if isinstance(phase_train_limit, dict):
+            phase_train_limit = max(phase_train_limit.values()) if phase_train_limit else 0
+        state_encoding[offset] = float(phase_train_limit) / 4.0
+
+    def _encode_private_closed(self, game: BaseGame, state_encoding: np.ndarray, offset: int) -> None:
+        """Encode private company closed status."""
+        for priv_id, priv_idx in self.private_id_to_idx.items():
+            company = game.company_by_id(priv_id)
+            if company and hasattr(company, "closed") and company.closed:
+                state_encoding[offset + priv_idx] = 1.0
+
+    def _encode_player_turn_order(self, game: BaseGame, state_encoding: np.ndarray, offset: int) -> None:
+        """Encode player turn order in stock round."""
+        is_stock_round = isinstance(game.round, Stock)
+        if is_stock_round and self.num_players > 1:
+            priority_player = game.priority_deal_player()
+            player_list = [p for p in game.players if not p.bankrupt]
+            priority_idx_in_list = next((i for i, p in enumerate(player_list) if p.id == priority_player.id), 0)
+            ordered_players = player_list[priority_idx_in_list:] + player_list[:priority_idx_in_list]
+            for position, player in enumerate(ordered_players):
+                if player.id in self.player_id_to_idx:
+                    player_idx = self.player_id_to_idx[player.id]
+                    state_encoding[offset + player_idx] = float(position) / float(self.num_players - 1)
 
     def get_edge_index(self, game: BaseGame) -> Tuple[Tensor, Tensor]:
         self.initialize(game)
@@ -1402,38 +1468,38 @@ class Encoder_SSME(Encoder_1830, metaclass=Singleton):
     def get_sequence_features(self, game: BaseGame) -> Tuple[Tensor, Tensor]:
         """
         Returns hex features as a sequence for transformer processing.
-        
+
         Returns:
             features: (num_hexes, feature_dim) - Features for each hex in sequence order
             positions: (num_hexes, 2) - Row/col positions for spatial encoding
         """
         start_time = time.perf_counter()
         self.initialize(game)
-        
+
         features = np.zeros((self.NUM_HEXES, self.total_features_dim), dtype=np.float32)
         positions = np.zeros((self.NUM_HEXES, 2), dtype=np.float32)
-        
+
         # First pass: compute base features for each hex
         hex_base_features = {}
         for seq_idx, hex_coord in enumerate(self.hex_sequence_order):
             hex_obj = game.hex_by_id(hex_coord)
             base_features = self._compute_base_features(hex_obj, game)
             hex_base_features[hex_coord] = base_features
-            
+
             # Store base features and position
-            features[seq_idx, :self.base_features_dim] = base_features
+            features[seq_idx, : self.base_features_dim] = base_features
             positions[seq_idx] = self.hex_positions[hex_coord]
-        
+
         # Second pass: add neighbor context features
         for seq_idx, hex_coord in enumerate(self.hex_sequence_order):
             hex_obj = game.hex_by_id(hex_coord)
             neighbor_features = self._compute_neighbor_context(hex_obj, hex_base_features)
-            features[seq_idx, self.base_features_dim:] = neighbor_features
-        
+            features[seq_idx, self.base_features_dim :] = neighbor_features
+
         end_time = time.perf_counter()
         duration_ms = (end_time - start_time) * 1000
         LOGGER.debug(f"Spatial sequence encoding finished in {duration_ms:.3f} ms.")
-        
+
         return from_numpy(features).float(), from_numpy(positions).float()
 
     def _compute_base_features(self, hex_obj, game) -> np.ndarray:
@@ -1441,10 +1507,10 @@ class Encoder_SSME(Encoder_1830, metaclass=Singleton):
         tile = hex_obj.tile
         features = np.zeros(self.base_features_dim, dtype=np.float32)
         offset = 0
-        
+
         if not tile:
             return features  # Return zeros for empty hexes
-        
+
         # 1. Revenue
         revenue = 0
         if tile.cities:
@@ -1453,7 +1519,7 @@ class Encoder_SSME(Encoder_1830, metaclass=Singleton):
             revenue = tile.towns[0].revenue
         elif tile.offboards:
             revenue = tile.offboards[0].revenue
-            
+
         if isinstance(revenue, dict):
             k = -1
             while game.phase.tiles[k] not in revenue:
@@ -1463,28 +1529,28 @@ class Encoder_SSME(Encoder_1830, metaclass=Singleton):
                     break
             else:
                 revenue = revenue[game.phase.tiles[k]]
-        
+
         features[offset] = float(revenue) / self.MAX_HEX_REVENUE
         offset += 1
-        
+
         # 2-5. Type flags
         features[offset] = float(bool(tile.cities))
         features[offset + 1] = float(len(tile.cities) > 1 or len(tile.towns) > 1)  # OO
         features[offset + 2] = float(bool(tile.towns))
         features[offset + 3] = float(bool(tile.offboards))
         offset += 4
-        
+
         # 6. Upgrade/lay cost
         cost = 0
         if tile.upgrades:
             cost = tile.upgrades[0].cost
         features[offset] = float(cost) / self.MAX_LAY_COST
         offset += 1
-        
+
         # 7. Rotation
         features[offset] = tile.rotation
         offset += 1
-        
+
         # 8. Token presence
         for i, city in enumerate(tile.cities):
             for token in city.tokens:
@@ -1495,26 +1561,26 @@ class Encoder_SSME(Encoder_1830, metaclass=Singleton):
                     corp_idx = self.corp_id_to_idx[corp_id]
                     features[offset + corp_idx * 2 + i] = 1.0
         offset += self.NUM_CORPORATIONS * 2
-        
+
         # 9. Internal connectivity (edge-to-edge)
         edge_connections = np.zeros((self.NUM_TILE_EDGES, self.NUM_TILE_EDGES), dtype=np.float32)
         revenue_connections = np.zeros((self.NUM_TILE_EDGES, 2), dtype=np.float32)
-        
+
         for path in tile.paths:
-            if hasattr(path, 'a') and hasattr(path, 'b'):
-                if hasattr(path.a, 'num') and hasattr(path.b, 'num'):  # Edge to Edge
+            if hasattr(path, "a") and hasattr(path, "b"):
+                if hasattr(path.a, "num") and hasattr(path.b, "num"):  # Edge to Edge
                     edge_connections[path.a.num][path.b.num] = 1.0
                     edge_connections[path.b.num][path.a.num] = 1.0
                     continue
-                    
+
                 # Edge to revenue location
-                if hasattr(path.a, 'num'):
+                if hasattr(path.a, "num"):
                     edge = path.a
                     revenue_location = path.b
                 else:
                     edge = path.b
                     revenue_location = path.a
-                
+
                 # Handle OO cities/towns
                 if len(tile.cities) > 1 or len(tile.towns) > 1:
                     if revenue_location in tile.cities:
@@ -1526,27 +1592,27 @@ class Encoder_SSME(Encoder_1830, metaclass=Singleton):
                     revenue_connections[edge.num][idx] = 1.0
                 else:
                     revenue_connections[edge.num][0] = 1.0
-        
+
         # Store edge-to-edge connections (upper triangular)
         for i in range(self.NUM_TILE_EDGES):
             for j in range(i):
                 features[offset + (i * (i - 1) // 2) + j] = edge_connections[i][j]
         offset += self.NUM_PORT_PAIRS
-        
+
         # Store edge-to-revenue connections
         for i in range(self.NUM_TILE_EDGES):
             for j in range(2):
                 features[offset + i * 2 + j] = revenue_connections[i][j]
         offset += self.NUM_TILE_EDGES * 2
-        
+
         return features
-    
+
     def _compute_neighbor_context(self, hex_obj, hex_base_features: Dict[str, np.ndarray]) -> np.ndarray:
         """Compute summary features of neighboring hexes for spatial context."""
         context_features = np.zeros(self.neighbor_context_dim, dtype=np.float32)
-        
-        neighbors = list(hex_obj.all_neighbors.values()) if hasattr(hex_obj, 'all_neighbors') else []
-        
+
+        neighbors = list(hex_obj.all_neighbors.values()) if hasattr(hex_obj, "all_neighbors") else []
+
         for i, neighbor in enumerate(neighbors[:6]):  # Ensure max 6 neighbors
             if neighbor.id in hex_base_features:
                 neighbor_features = hex_base_features[neighbor.id]
@@ -1557,44 +1623,47 @@ class Encoder_SSME(Encoder_1830, metaclass=Singleton):
                 context_features[i * 3] = neighbor_features[0]  # Revenue
                 context_features[i * 3 + 1] = max(neighbor_features[1:5])  # Any revenue location
                 # Connectivity density: fraction of possible edge connections that exist
-                edge_connections = neighbor_features[self.base_features_dim - self.NUM_TILE_EDGES * 2 - self.NUM_PORT_PAIRS:
-                                                  self.base_features_dim - self.NUM_TILE_EDGES * 2]
+                edge_connections = neighbor_features[
+                    self.base_features_dim
+                    - self.NUM_TILE_EDGES * 2
+                    - self.NUM_PORT_PAIRS : self.base_features_dim
+                    - self.NUM_TILE_EDGES * 2
+                ]
                 context_features[i * 3 + 2] = np.mean(edge_connections)
-        
+
         return context_features
-    
+
     def get_attention_mask(self, local_radius: int = 2) -> Tensor:
         """
         Generate spatial attention mask for transformer.
         Each hex can attend to neighbors within local_radius.
-        
+
         Args:
             local_radius: How many hex steps away a hex can attend to
-            
+
         Returns:
             mask: (num_hexes, num_hexes) boolean mask
         """
         mask = np.zeros((self.NUM_HEXES, self.NUM_HEXES), dtype=bool)
-        
+
         for i, hex_coord_i in enumerate(self.hex_sequence_order):
             pos_i = self.hex_positions[hex_coord_i]
-            
+
             for j, hex_coord_j in enumerate(self.hex_sequence_order):
                 pos_j = self.hex_positions[hex_coord_j]
-                
+
                 # Calculate hex distance (Manhattan distance as approximation)
                 hex_distance = abs(pos_i[0] - pos_j[0]) + abs(pos_i[1] - pos_j[1])
-                
+
                 if hex_distance <= local_radius:
                     mask[i, j] = True
-        
+
         return from_numpy(mask)
-    
-    
+
     def sequence_idx_to_hex_coord(self, seq_idx: int) -> str:
         """Convert sequence index back to hex coordinate."""
         return self.idx_to_hex_coord[seq_idx]
-    
+
     def hex_coord_to_sequence_idx(self, hex_coord: str) -> int:
         """Convert hex coordinate to sequence index."""
         return self.hex_coord_to_idx[hex_coord]

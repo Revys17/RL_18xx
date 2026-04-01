@@ -5,7 +5,7 @@ from rl18xx.agent.alphazero.config import ModelConfig
 from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
 
 # --- Define constants based on your model's expected inputs/outputs ---
-GAME_STATE_SIZE = 377
+GAME_STATE_SIZE = 390
 NUM_MAP_NODES = 93
 MAP_NODE_FEATURES = 50
 NUM_EDGES = 470
