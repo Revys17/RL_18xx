@@ -9,8 +9,9 @@ from dataclasses import dataclass, asdict
 from rl18xx.agent.alphazero.checkpointer import get_latest_model, save_model
 from rl18xx.agent.alphazero.config import SelfPlayConfig, TrainingConfig
 from rl18xx.agent.alphazero.metrics import Metrics
-from rl18xx.agent.alphazero.self_play import SelfPlay, SELF_PLAY_GAMES_STATUS_PATH
+from rl18xx.agent.alphazero.self_play import MCTSPlayer, SelfPlay, SELF_PLAY_GAMES_STATUS_PATH
 from rl18xx.agent.alphazero.train import train
+from rl18xx.game.gamemap import GameMap
 from pathlib import Path
 import signal
 import sys
@@ -241,7 +242,139 @@ def cleanup_and_exit(signum=None, frame=None):
         LOOP_LOCK_FILE.unlink()
 
 
-def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: int, cleanup: bool, num_readouts: int, num_epochs: int = 3, max_training_window: int = 0):
+def _create_fresh_game():
+    """Create a new 4-player 1830 game instance."""
+    game_map = GameMap()
+    game_class = game_map.game_by_title("1830")
+    players = {1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"}
+    return game_class(players)
+
+
+def _play_gate_game(candidate_model, current_best_model, game_index: int, num_readouts: int) -> dict:
+    """Play a single gating arena game and return result info.
+
+    Even-indexed games: candidate gets seats 0,1; best gets seats 2,3.
+    Odd-indexed games: best gets seats 0,1; candidate gets seats 2,3.
+
+    Returns a dict with 'candidate_seats', 'winner_seat', and 'scores',
+    or None if the game crashed.
+    """
+    eval_config_candidate = SelfPlayConfig(
+        softpick_move_cutoff=0,
+        dirichlet_noise_weight=0,
+        num_readouts=num_readouts,
+        network=candidate_model,
+    )
+    eval_config_best = SelfPlayConfig(
+        softpick_move_cutoff=0,
+        dirichlet_noise_weight=0,
+        num_readouts=num_readouts,
+        network=current_best_model,
+    )
+
+    if game_index % 2 == 0:
+        agents = [
+            MCTSPlayer(eval_config_candidate),
+            MCTSPlayer(eval_config_candidate),
+            MCTSPlayer(eval_config_best),
+            MCTSPlayer(eval_config_best),
+        ]
+        candidate_seats = {0, 1}
+    else:
+        agents = [
+            MCTSPlayer(eval_config_best),
+            MCTSPlayer(eval_config_best),
+            MCTSPlayer(eval_config_candidate),
+            MCTSPlayer(eval_config_candidate),
+        ]
+        candidate_seats = {2, 3}
+
+    game_state = _create_fresh_game()
+    for agent in agents:
+        agent.initialize_game(game_state)
+
+    agent_by_player_id = {player.id: agent for player, agent in zip(game_state.players, agents)}
+    seat_by_player_id = {player.id: seat for seat, player in enumerate(game_state.players)}
+
+    while not game_state.finished:
+        if game_state.move_number >= 1000:
+            game_state.end_game()
+            break
+
+        current_player = game_state.active_players()[0]
+        move = agent_by_player_id[current_player.id].suggest_move()
+        for agent in agents:
+            agent.play_move(move)
+
+    result = game_state.result()
+    best_score = max(result.values())
+    winner_player_id = next(pid for pid, score in result.items() if score == best_score)
+    winner_seat = seat_by_player_id[winner_player_id]
+
+    return {
+        "candidate_seats": candidate_seats,
+        "winner_seat": winner_seat,
+        "scores": {seat_by_player_id[pid]: score for pid, score in result.items()},
+    }
+
+
+def evaluate_candidate(
+    candidate_model,
+    current_best_model,
+    num_games: int = 10,
+    num_readouts: int = 50,
+) -> float:
+    """Play candidate vs current_best in arena games, return candidate win rate.
+
+    Each game has 4 players: 2 with the candidate model, 2 with the current best.
+    Positions alternate between games. A win is counted when the overall game
+    winner occupies a candidate seat.
+
+    Games that crash are skipped and not counted toward the total.
+    """
+    candidate_wins = 0
+    games_completed = 0
+
+    for game_index in range(num_games):
+        LOGGER.info(f"Gating game {game_index + 1}/{num_games} starting...")
+        try:
+            result = _play_gate_game(candidate_model, current_best_model, game_index, num_readouts)
+            games_completed += 1
+            if result["winner_seat"] in result["candidate_seats"]:
+                candidate_wins += 1
+                LOGGER.info(
+                    f"Gating game {game_index + 1}: candidate WON (seat {result['winner_seat']}). "
+                    f"Scores: {result['scores']}"
+                )
+            else:
+                LOGGER.info(
+                    f"Gating game {game_index + 1}: candidate LOST (winner seat {result['winner_seat']}). "
+                    f"Scores: {result['scores']}"
+                )
+        except Exception as e:
+            LOGGER.error(f"Gating game {game_index + 1} crashed, skipping: {e}", exc_info=True)
+
+    if games_completed == 0:
+        LOGGER.warning("All gating games crashed. Returning 0.0 win rate.")
+        return 0.0
+
+    win_rate = candidate_wins / games_completed
+    LOGGER.info(f"Gating evaluation complete: {candidate_wins}/{games_completed} wins ({win_rate:.1%})")
+    return win_rate
+
+
+def main(
+    num_loop_iterations: int,
+    num_games_per_iteration: int,
+    num_threads: int,
+    cleanup: bool,
+    num_readouts: int,
+    num_epochs: int = 3,
+    max_training_window: int = 0,
+    gate_games: int = 10,
+    gate_threshold: float = 0.55,
+    no_gate: bool = False,
+):
     if cleanup:
         cleanup_files()
 
@@ -385,7 +518,34 @@ def main(num_loop_iterations: int, num_games_per_iteration: int, num_threads: in
 
             # Train the model and capture metrics
             _, train_metrics = train(training_config, model)
-            save_model(model, training_config.model_checkpoint_dir)
+
+            # Model gating: evaluate candidate before promoting
+            if no_gate or loop == 0:
+                if loop == 0:
+                    LOGGER.info("First iteration — skipping gating, saving model directly.")
+                else:
+                    LOGGER.info("Gating disabled (--no-gate) — saving model directly.")
+                save_model(model, training_config.model_checkpoint_dir)
+            else:
+                status["status_message"] = f"Running gating evaluation ({gate_games} games)..."
+                update_loop_status(status)
+
+                current_best_model = get_latest_model("model_checkpoints")
+                win_rate = evaluate_candidate(
+                    candidate_model=model,
+                    current_best_model=current_best_model,
+                    num_games=gate_games,
+                    num_readouts=min(num_readouts, 50),
+                )
+                metrics.add_scalar("Gating/Win_Rate", win_rate, loop)
+                metrics.add_scalar("Gating/Promoted", 1.0 if win_rate >= gate_threshold else 0.0, loop)
+
+                if win_rate >= gate_threshold:
+                    LOGGER.info(f"Model promoted! Win rate: {win_rate:.1%} >= {gate_threshold:.1%}")
+                    save_model(model, training_config.model_checkpoint_dir)
+                else:
+                    LOGGER.info(f"Model rejected. Win rate: {win_rate:.1%} < {gate_threshold:.1%}")
+
             # Update loop metrics with training results
             if train_metrics and train_metrics.epochs_trained > 0:
                 loop_metrics.training_losses.append(train_metrics.avg_total_loss)
@@ -486,10 +646,28 @@ if __name__ == "__main__":
         "--max_training_window", type=int, default=0,
         help="Max training examples to use (0 = all data, default: 0)"
     )
+    parser.add_argument(
+        "--gate-games", type=int, default=10, help="Number of arena games for model gating (default: 10)"
+    )
+    parser.add_argument(
+        "--gate-threshold", type=float, default=0.55, help="Minimum win rate to promote model (default: 0.55)"
+    )
+    parser.add_argument("--no-gate", action="store_true", help="Disable model gating (always promote)")
     args = parser.parse_args()
 
     num_loop_iterations = args.num_loop_iterations
     num_games_per_iteration = args.num_games_per_iteration
     num_threads = args.num_threads
     cleanup = not args.keep_old_files
-    main(num_loop_iterations, num_games_per_iteration, num_threads, cleanup, args.num_readouts, args.num_epochs, args.max_training_window)
+    main(
+        num_loop_iterations,
+        num_games_per_iteration,
+        num_threads,
+        cleanup,
+        args.num_readouts,
+        num_epochs=args.num_epochs,
+        max_training_window=args.max_training_window,
+        gate_games=args.gate_games,
+        gate_threshold=args.gate_threshold,
+        no_gate=args.no_gate,
+    )
