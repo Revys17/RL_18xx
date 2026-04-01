@@ -21,6 +21,7 @@ def cmd_train(args):
         num_threads=args.threads,
         cleanup=not args.keep_old_files,
         num_readouts=args.readouts,
+        max_training_window=args.max_training_window,
     )
 
 
@@ -93,6 +94,10 @@ def build_parser():
     p.add_argument("--threads", type=int, default=2, help="Parallel self-play threads (default: 2)")
     p.add_argument("--readouts", type=int, default=64, help="MCTS readouts per move (default: 64)")
     p.add_argument("--keep-old-files", action="store_true", help="Keep files from previous runs")
+    p.add_argument(
+        "--max-training-window", type=int, default=0,
+        help="Max training examples to use (0 = all data, default: 0)"
+    )
 
     # pretrain
     p = sub.add_parser("pretrain", help="Pre-train model from human game data")
