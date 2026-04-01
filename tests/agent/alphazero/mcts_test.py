@@ -466,8 +466,8 @@ def test_backup_incorporate_results(game_objects, mcts_config):
     # Leaf should have one visit
     assert root.child_N[leaf.fmove] == 1
     assert leaf.N == 1
-    # And that leaf's value had its parent's Q (0) as a prior, so the Q
-    # should now be the average of 0, -1
+    # Child W starts at zero; with one backup of [1,-1,-1,-1], Q = W/(1+N)
+    # = [1,-1,-1,-1] / (1+1) = [0.5, -0.5, -0.5, -0.5]
     assert np.allclose(root.child_Q[leaf.fmove], np.array([0.5, -0.5, -0.5, -0.5]))
     assert np.allclose(leaf.Q, np.array([0.5, -0.5, -0.5, -0.5]))
 
@@ -491,9 +491,10 @@ def test_backup_incorporate_results(game_objects, mcts_config):
     # average of 0, -1, -0.2
     assert np.allclose(root.child_Q[leaf.fmove], leaf.Q)
     assert np.allclose(leaf.Q, np.array([0.4, -0.4, -0.4, -0.4]))
-    # average of -1, -0.2
-    assert np.allclose(leaf.child_Q[leaf2.fmove], np.array([0.6, -0.6, -0.6, -0.6]))
-    assert np.allclose(leaf2.Q, np.array([0.6, -0.6, -0.6, -0.6]))
+    # Child W is initialized to zeros (standard AlphaZero), so leaf2's Q
+    # is just its single backup value [0.2, -0.2, -0.2, -0.2] / (1 + 1)
+    assert np.allclose(leaf.child_Q[leaf2.fmove], np.array([0.1, -0.1, -0.1, -0.1]))
+    assert np.allclose(leaf2.Q, np.array([0.1, -0.1, -0.1, -0.1]))
 
 
 def test_do_not_explore_past_finish(near_terminal_game_objects, mcts_config):
