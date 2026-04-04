@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::entities::Token;
+use crate::tiles::{PathDef, TileColor};
 
 /// A city on a tile (provides revenue, has token slots).
 #[pyclass]
@@ -21,7 +22,11 @@ impl City {
     #[new]
     pub fn new(revenue: i32, slots: u8) -> Self {
         let tokens = vec![None; slots as usize];
-        City { revenue, slots, tokens }
+        City {
+            revenue,
+            slots,
+            tokens,
+        }
     }
 }
 
@@ -111,6 +116,14 @@ pub struct Tile {
     pub offboards: Vec<Offboard>,
     #[pyo3(get)]
     pub upgrades: Vec<Upgrade>,
+
+    // Phase 4: connectivity data
+    /// Parsed path definitions for graph traversal.
+    pub paths: Vec<PathDef>,
+    /// Tile color (white/yellow/green/brown/gray/red).
+    pub color: TileColor,
+    /// Label (e.g., "B", "NY", "OO") for upgrade matching.
+    pub label: Option<String>,
 }
 
 #[pymethods]
@@ -126,6 +139,9 @@ impl Tile {
             edges: Vec::new(),
             offboards: Vec::new(),
             upgrades: Vec::new(),
+            paths: Vec::new(),
+            color: TileColor::White,
+            label: None,
         }
     }
 

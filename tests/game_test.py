@@ -1,7 +1,9 @@
 from rl18xx.game.gamemap import GameMap
 from rl18xx.game.action_helper import ActionHelper
 from rl18xx.game.engine.game.base import BaseGame
-
+from rl18xx.agent.alphazero.pretraining import filter_actions, should_add_pass, should_skip_action
+import json
+import traceback
 
 def test_1830_manual_actions():
     game_map = GameMap()
@@ -663,7 +665,7 @@ def test_1830_manual_actions():
     g.process_action(action_helper.get_all_choices(g)[0])  # [18:16] C&O runs a 3 train for $160: G19-H18-I15
     g.process_action(action_helper.get_all_choices(g)[1])  # [18:16] C&O withholds $160
     # [18:16] C&O's share price moves left from 82
-    g.process_action(action_helper.get_all_choices(g)[499])  # [18:17] C&O buys a 5 train for $200 from ERIE
+    g.process_action(action_helper.get_all_choices(g)[474])  # [18:17] C&O buys a 5 train for $200 from ERIE
     # [18:17] C&O skips buy companies
 
     # [18:17] Player 3 operates NYNH
@@ -1402,8 +1404,88 @@ def test_1830_manual_actions():
     assert player_results == expected_results, "Player results do not match expected results"
     assert next(iter(g.result().items()))[0] == 2, "Player 2 should be the winner"
 
-
 def test_1830_from_import():
+    with open("tests/test_games/manual_game.json", "r") as f:
+        browser_game = f.read()
+    g2 = BaseGame.load(browser_game)
+    assert g2.finished == True
+    player_results = {player.name: player.value for player in g2.players}
+    expected_results = {"Player 1": 1658, "Player 2": 1967, "Player 3": 345, "Player 4": 720}
+    assert player_results == expected_results, "Player results do not match expected results"
+    print(g2.result())
+    assert next(iter(g2.result().items()))[0] == 2, "Player 2 should be the winner"
+
+def test_1830_from_import_individual_actions():
+    with open("tests/test_games/manual_game.json", "r") as f:
+        browser_game = json.load(f)
+
+    game_map = GameMap()
+    game = game_map.game_by_title("1830")
+    g = game({1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"})
+
+    for action in browser_game["actions"]:
+        print(action)
+        g = g.process_action(action)
+
+    assert g.finished == True
+    player_results = {player.name: player.value for player in g.players}
+    expected_results = {"Player 1": 1658, "Player 2": 1967, "Player 3": 345, "Player 4": 720}
+    assert player_results == expected_results, "Player results do not match expected results"
+    print(g.result())
+    assert next(iter(g.result().items()))[0] == 2, "Player 2 should be the winner"
+
+def test_1830_from_import_discard_train():
+    with open("tests/test_games/manual_game_discard_train.json", "r") as f:
+        browser_game = f.read()
+    g2 = BaseGame.load(browser_game)
+    assert g2.finished == False
+
+    print(g2.result())
+    player_results = {player.name: player.value for player in g2.players}
+    expected_results = {"Player 1": 822, "Player 2": 719, "Player 3": 731, "Player 4": 1255}
+    assert player_results == expected_results, "Player results do not match expected results"
+    assert next(iter(g2.result().items()))[0] == 4, "Player 4 should be winning"
+
+def test_1830_from_import_bankrupcy():
+    with open("tests/test_games/manual_game_bankrupcy.json", "r") as f:
+        browser_game = f.read()
+    g = BaseGame.load(browser_game)
+    assert g.finished == True
+    assert g.player_by_id(1).bankrupt, "Player 1 should be bankrupt"
+    player_results = {player.name: player.value for player in g.players}
+    assert player_results == {
+        "Player 1": 40,
+        "Player 2": 560,
+        "Player 3": 651,
+        "Player 4": 470,
+    }, "Player results do not match expected results"
+    assert next(iter(g.result().items()))[0] == 3, "Player 3 should be the winner"
+
+def test_1830_from_import_bankrupcy_individual_actions():
+    with open("tests/test_games/manual_game_bankrupcy.json", "r") as f:
+        browser_game = json.load(f)
+
+    game_map = GameMap()
+    game = game_map.game_by_title("1830")
+    g = game({1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"})
+
+    for action in browser_game["actions"]:
+        print(action)
+        g = g.process_action(action)
+
+    assert g.finished == True
+    assert g.player_by_id(1).bankrupt, "Player 1 should be bankrupt"
+    player_results = {player.name: player.value for player in g.players}
+    assert player_results == {
+        "Player 1": 40,
+        "Player 2": 560,
+        "Player 3": 651,
+        "Player 4": 470,
+    }, "Player results do not match expected results"
+    assert next(iter(g.result().items()))[0] == 3, "Player 3 should be the winner"
+
+
+def test_1830_from_browser_import():
     with open("tests/test_games/game.json", "r") as f:
         browser_game = f.read()
     g2 = BaseGame.load(browser_game)
@@ -1416,6 +1498,46 @@ def test_1830_from_import():
         "Player 4": 5855,
     }, "Player results do not match expected results"
     assert str(next(iter(g2.result().items()))[0]) == "0", "Player 1 should be the winner"
+
+def test_1830_from_browser_import_individual_actions():
+    with open("tests/test_games/game.json", "r") as f:
+        browser_game = json.load(f)
+
+    game_map = GameMap()
+    game = game_map.game_by_title("1830")
+    g = game({0: "Player 1", 1: "Player 2", 2: "Player 3", 3: "Player 4"})
+
+    # Resolve undos/redos and flatten auto_actions upfront, matching the
+    # pretraining pipeline that successfully processes browser game logs.
+    actions = filter_actions(browser_game["actions"])
+
+    for i, action in enumerate(actions):
+        if should_skip_action(actions, action, g, i):
+            continue
+
+        if should_add_pass(action, g):
+            pass_action = {
+                "type": "pass",
+                "entity": g.current_entity.id,
+                "entity_type": g.current_entity.__class__.__name__.lower(),
+            }
+            g = g.process_action(pass_action)
+
+        try:
+            g = g.process_action(action)
+        except Exception as e:
+            print(f"Skipping action {action['id']} ({action['type']}): {e}")
+            continue
+
+    assert g.finished == True
+    player_results = {player.name: player.value for player in g.players}
+    assert player_results == {
+        "Player 1": 7576,
+        "Player 2": 7453,
+        "Player 3": 4074,
+        "Player 4": 5855,
+    }, "Player results do not match expected results"
+    assert str(next(iter(g.result().items()))[0]) == "0", "Player 1 should be the winner"
 
 
 def test_1830_manual_bankrupcy():

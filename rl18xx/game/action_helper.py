@@ -404,11 +404,27 @@ class ActionHelper(metaclass=Singleton):
                 unique_train_list.append(train)
 
         options = []
+        step = game.round.active_step()
+        pres_may_contribute = step.president_may_contribute(game.current_entity)
+
+        # When president must contribute (emergency buy) and EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST,
+        # only the cheapest depot train variant is allowed.
+        ebuy_cheapest_only = pres_may_contribute and game.EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST
+        cheapest_depot_names = None
+        if ebuy_cheapest_only:
+            cheapest_depot_train = game.depot.min_depot_train
+            if cheapest_depot_train:
+                cheapest_depot_names = step.names_of_cheapest_variants(cheapest_depot_train)
+
         for train in unique_train_list:
             if train.from_depot():
                 LOGGER.debug(f"Train {train.name} from depot")
+                # In emergency buy, only the cheapest depot train is allowed
+                if ebuy_cheapest_only and cheapest_depot_names and train.name not in cheapest_depot_names:
+                    LOGGER.debug(f"Skipping {train.name}: not cheapest depot train during emergency buy")
+                    continue
                 if train.min_price() <= game.buying_power(game.current_entity) or (
-                    game.round.active_step().president_may_contribute(game.current_entity) and
+                    pres_may_contribute and
                     train.min_price() <= game.buying_power(game.current_entity.owner) + game.buying_power(game.current_entity)
                 ):
                     LOGGER.debug(f"Adding train {train.name} with price {train.min_price()}")
@@ -417,12 +433,18 @@ class ActionHelper(metaclass=Singleton):
                 LOGGER.debug(f"Train {train.name} not from depot")
                 if limited_price_options:
                     min = 1
-                    if game.current_entity.cash == 0 and game.round.active_step().president_may_contribute(game.current_entity):
+                    if game.current_entity.cash == 0 and pres_may_contribute:
                         max = game.current_entity.cash + game.current_entity.owner.cash
                     else:
                         max = game.current_entity.cash
                 else:
-                    min, max = game.round.active_step().spend_minmax(game.current_entity, train)
+                    min, max = step.spend_minmax(game.current_entity, train)
+                    # spend_minmax may include president's cash in the EBUY path,
+                    # but the president can only contribute when must_buy_train is true.
+                    # Cap max at the entity's own buying power when president cannot contribute.
+                    if not pres_may_contribute:
+                        entity_buying_power = game.buying_power(game.current_entity)
+                        max = max if max <= entity_buying_power else entity_buying_power
                 LOGGER.debug(f"Min: {min}, Max: {max}")
                 valid_prices = self.get_valid_cross_company_train_prices(min, max, limited_price_options)
                 for price in valid_prices:
@@ -457,9 +479,18 @@ class ActionHelper(metaclass=Singleton):
 
         unique_trains = self.get_unique_trains([discount[1] for discount in discounted_trains])
         unique_discounts = [discount for discount in discounted_trains if discount[1] in unique_trains]
+
+        entity = game.current_entity
+        entity_cash = game.buying_power(entity)
+        can_president_help = game.round.active_step().president_may_contribute(entity)
+        available_funds = entity_cash
+        if can_president_help and hasattr(entity, 'owner') and entity.owner:
+            available_funds = entity_cash + game.buying_power(entity.owner)
+
         return [
-            BuyTrain(game.current_entity, discount[1], discount[3], exchange=discount[0])
+            BuyTrain(entity, discount[1], discount[3], exchange=discount[0])
             for discount in unique_discounts
+            if discount[3] <= available_funds
         ]
 
     def auto_route_action(self, game):

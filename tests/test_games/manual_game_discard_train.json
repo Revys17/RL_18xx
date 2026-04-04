@@ -1,0 +1,1887 @@
+{
+    "title": "1830",
+    "players": [
+        {
+            "id": 1,
+            "name": "Player 1"
+        },
+        {
+            "id": 2,
+            "name": "Player 2"
+        },
+        {
+            "id": 3,
+            "name": "Player 3"
+        },
+        {
+            "id": 4,
+            "name": "Player 4"
+        }
+    ],
+    "actions": [
+        {
+            "type": "pass",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 1,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "bid",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 2,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "company": "CS",
+            "corporation": null,
+            "minor": null,
+            "price": 45
+        },
+        {
+            "type": "bid",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 3,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "company": "CS",
+            "corporation": null,
+            "minor": null,
+            "price": 50
+        },
+        {
+            "type": "bid",
+            "entity": 4,
+            "entity_type": "player",
+            "id": 4,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "company": "BO",
+            "corporation": null,
+            "minor": null,
+            "price": 225
+        },
+        {
+            "type": "bid",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 5,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "company": "SV",
+            "corporation": null,
+            "minor": null,
+            "price": 20
+        },
+        {
+            "type": "pass",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 6,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "bid",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 7,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "company": "DH",
+            "corporation": null,
+            "minor": null,
+            "price": 70
+        },
+        {
+            "type": "bid",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 8,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "company": "MH",
+            "corporation": null,
+            "minor": null,
+            "price": 110
+        },
+        {
+            "type": "bid",
+            "entity": 4,
+            "entity_type": "player",
+            "id": 9,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "company": "CA",
+            "corporation": null,
+            "minor": null,
+            "price": 160
+        },
+        {
+            "type": "par",
+            "entity": 4,
+            "entity_type": "player",
+            "id": 10,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "corporation": "B&O",
+            "share_price": "100,0,6",
+            "slot": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null
+        },
+        {
+            "type": "par",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 11,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "corporation": "PRR",
+            "share_price": "67,5,6",
+            "slot": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null
+        },
+        {
+            "type": "pass",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 12,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "par",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 13,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "corporation": "NYC",
+            "share_price": "67,5,6",
+            "slot": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 4,
+            "entity_type": "player",
+            "id": 14,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "PRR_2"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 15,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "PRR_3"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "par",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 16,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "corporation": "C&O",
+            "share_price": "67,5,6",
+            "slot": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 17,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "NYC_1"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 4,
+            "entity_type": "player",
+            "id": 18,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "PRR_4"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 19,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "PRR_5"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 20,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "C&O_1"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 21,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "NYC_2"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 4,
+            "entity_type": "player",
+            "id": 22,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "PRR_6"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 23,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "PRR_7"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 24,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "C&O_2"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 25,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "NYC_3"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 26,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "PRR_8"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 27,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "C&O_3"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 28,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "NYC_4"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 29,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "NYC_5"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 30,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "C&O_4"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 31,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "NYC_6"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 32,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "NYC_7"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "lay_tile",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 33,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "hex": "H10",
+            "tile": "57-0",
+            "rotation": 1,
+            "combo_entities": null
+        },
+        {
+            "type": "pass",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 34,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "buy_train",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 35,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "2-0",
+            "price": 80,
+            "variant": null,
+            "exchange": null,
+            "shell": null,
+            "slots": [],
+            "extra_due": null,
+            "warranties": null
+        },
+        {
+            "type": "buy_train",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 36,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "2-1",
+            "price": 80,
+            "variant": null,
+            "exchange": null,
+            "shell": null,
+            "slots": [],
+            "extra_due": null,
+            "warranties": null
+        },
+        {
+            "type": "pass",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 37,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "lay_tile",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 38,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "hex": "E19",
+            "tile": "57-1",
+            "rotation": 0,
+            "combo_entities": null
+        },
+        {
+            "type": "buy_train",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 39,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "2-2",
+            "price": 80,
+            "variant": null,
+            "exchange": null,
+            "shell": null,
+            "slots": [],
+            "extra_due": null,
+            "warranties": null
+        },
+        {
+            "type": "pass",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 40,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "lay_tile",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 41,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "hex": "G5",
+            "tile": "8-0",
+            "rotation": 1,
+            "combo_entities": null
+        },
+        {
+            "type": "buy_train",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 42,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "2-3",
+            "price": 80,
+            "variant": null,
+            "exchange": null,
+            "shell": null,
+            "slots": [],
+            "extra_due": null,
+            "warranties": null
+        },
+        {
+            "type": "pass",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 43,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "sell_shares",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 44,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "NYC_1",
+                "NYC_2",
+                "NYC_3",
+                "NYC_4",
+                "NYC_0"
+            ],
+            "share_price": null,
+            "percent": 50,
+            "swap": null
+        },
+        {
+            "type": "par",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 45,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "corporation": "NYNH",
+            "share_price": "71,4,6",
+            "slot": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 4,
+            "entity_type": "player",
+            "id": 46,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "C&O_5"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "pass",
+            "entity": 4,
+            "entity_type": "player",
+            "id": 47,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 48,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "NYC_2"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "pass",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 49,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 50,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "NYNH_1"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "pass",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 51,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 52,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "NYNH_2"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "pass",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 53,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 4,
+            "entity_type": "player",
+            "id": 54,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 55,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 56,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 57,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "NYNH_3"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "pass",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 58,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 4,
+            "entity_type": "player",
+            "id": 59,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 60,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 61,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "buy_shares",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 62,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "shares": [
+                "NYNH_4"
+            ],
+            "percent": 10,
+            "share_price": null,
+            "swap": null,
+            "purchase_for_type": null,
+            "purchase_for": null,
+            "borrow_from_type": null,
+            "borrow_from": null,
+            "total_price": null
+        },
+        {
+            "type": "pass",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 63,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 4,
+            "entity_type": "player",
+            "id": 64,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 65,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 66,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 67,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "lay_tile",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 68,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "hex": "F20",
+            "tile": "1-0",
+            "rotation": 0,
+            "combo_entities": null
+        },
+        {
+            "type": "buy_train",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 69,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "2-4",
+            "price": 80,
+            "variant": null,
+            "exchange": null,
+            "shell": null,
+            "slots": [],
+            "extra_due": null,
+            "warranties": null
+        },
+        {
+            "type": "pass",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 70,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "lay_tile",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 71,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "hex": "H8",
+            "tile": "9-0",
+            "rotation": 1,
+            "combo_entities": null
+        },
+        {
+            "type": "pass",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 72,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "run_routes",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 73,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "routes": [
+                {
+                    "train": "2-0",
+                    "connections": [
+                        [
+                            "H12",
+                            "H10"
+                        ]
+                    ],
+                    "hexes": [
+                        "H12",
+                        "H10"
+                    ],
+                    "revenue": 30,
+                    "revenue_str": "H12-H10",
+                    "subsidy": null,
+                    "halts": null,
+                    "abilities": [],
+                    "nodes": [
+                        "H10-0",
+                        "H12-0"
+                    ]
+                }
+            ],
+            "extra_revenue": 0
+        },
+        {
+            "type": "dividend",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 74,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "kind": "payout",
+            "amount": null
+        },
+        {
+            "type": "pass",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 75,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "lay_tile",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 76,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "hex": "G3",
+            "tile": "8-1",
+            "rotation": 2,
+            "combo_entities": null
+        },
+        {
+            "type": "run_routes",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 77,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "routes": [
+                {
+                    "train": "2-3",
+                    "connections": [
+                        [
+                            "F6",
+                            "G5",
+                            "G3",
+                            "F2"
+                        ]
+                    ],
+                    "hexes": [
+                        "F2",
+                        "F6"
+                    ],
+                    "revenue": 70,
+                    "revenue_str": "F2-F6",
+                    "subsidy": null,
+                    "halts": null,
+                    "abilities": [],
+                    "nodes": [
+                        "F6-0",
+                        "F2-0"
+                    ]
+                }
+            ],
+            "extra_revenue": 0
+        },
+        {
+            "type": "dividend",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 78,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "kind": "withhold",
+            "amount": null
+        },
+        {
+            "type": "buy_train",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 79,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "2-5",
+            "price": 80,
+            "variant": null,
+            "exchange": null,
+            "shell": null,
+            "slots": [],
+            "extra_due": null,
+            "warranties": null
+        },
+        {
+            "type": "buy_train",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 80,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "3-0",
+            "price": 180,
+            "variant": null,
+            "exchange": null,
+            "shell": null,
+            "slots": [],
+            "extra_due": null,
+            "warranties": null
+        },
+        {
+            "type": "pass",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 81,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "buy_company",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 82,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "company": "DH",
+            "price": 140
+        },
+        {
+            "type": "pass",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 83,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "lay_tile",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 84,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "hex": "F18",
+            "tile": "8-2",
+            "rotation": 3,
+            "combo_entities": null
+        },
+        {
+            "type": "buy_train",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 85,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "3-1",
+            "price": 180,
+            "variant": null,
+            "exchange": null,
+            "shell": null,
+            "slots": [],
+            "extra_due": null,
+            "warranties": null
+        },
+        {
+            "type": "buy_train",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 86,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "3-2",
+            "price": 180,
+            "variant": null,
+            "exchange": null,
+            "shell": null,
+            "slots": [],
+            "extra_due": null,
+            "warranties": null
+        },
+        {
+            "type": "buy_train",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 87,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "3-3",
+            "price": 180,
+            "variant": null,
+            "exchange": null,
+            "shell": null,
+            "slots": [],
+            "extra_due": null,
+            "warranties": null
+        },
+        {
+            "type": "pass",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 88,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 4,
+            "entity_type": "player",
+            "id": 89,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 1,
+            "entity_type": "player",
+            "id": 90,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 2,
+            "entity_type": "player",
+            "id": 91,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": 3,
+            "entity_type": "player",
+            "id": 92,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "lay_tile",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 93,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "hex": "H6",
+            "tile": "8-3",
+            "rotation": 2,
+            "combo_entities": null
+        },
+        {
+            "type": "pass",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 94,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "run_routes",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 95,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "routes": [
+                {
+                    "train": "2-0",
+                    "connections": [
+                        [
+                            "H12",
+                            "H10"
+                        ]
+                    ],
+                    "hexes": [
+                        "H12",
+                        "H10"
+                    ],
+                    "revenue": 30,
+                    "revenue_str": "H12-H10",
+                    "subsidy": null,
+                    "halts": null,
+                    "abilities": [],
+                    "nodes": [
+                        "H10-0",
+                        "H12-0"
+                    ]
+                }
+            ],
+            "extra_revenue": 0
+        },
+        {
+            "type": "dividend",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 96,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "kind": "payout",
+            "amount": null
+        },
+        {
+            "type": "buy_train",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 97,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "2-2",
+            "price": 509,
+            "variant": null,
+            "exchange": null,
+            "shell": null,
+            "slots": [],
+            "extra_due": null,
+            "warranties": null
+        },
+        {
+            "type": "pass",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 98,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "lay_tile",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 99,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "hex": "F22",
+            "tile": "57-2",
+            "rotation": 1,
+            "combo_entities": null
+        },
+        {
+            "type": "pass",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 100,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "run_routes",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 101,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "routes": [
+                {
+                    "train": "2-4",
+                    "connections": [
+                        [
+                            "G19",
+                            "F20"
+                        ]
+                    ],
+                    "hexes": [
+                        "F20",
+                        "G19"
+                    ],
+                    "revenue": 50,
+                    "revenue_str": "F20-G19",
+                    "subsidy": null,
+                    "halts": null,
+                    "abilities": [],
+                    "nodes": [
+                        "F20-1",
+                        "G19-1"
+                    ]
+                }
+            ],
+            "extra_revenue": 0
+        },
+        {
+            "type": "dividend",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 102,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "kind": "payout",
+            "amount": null
+        },
+        {
+            "type": "buy_company",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 103,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "company": "CS",
+            "price": 20
+        },
+        {
+            "type": "lay_tile",
+            "entity": "CS",
+            "entity_type": "company",
+            "id": 104,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "hex": "B20",
+            "tile": "58-0",
+            "rotation": 5,
+            "combo_entities": null
+        },
+        {
+            "type": "pass",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 105,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 106,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "lay_tile",
+            "entity": "DH",
+            "entity_type": "company",
+            "id": 107,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "hex": "F16",
+            "tile": "57-3",
+            "rotation": 2,
+            "combo_entities": null
+        },
+        {
+            "type": "place_token",
+            "entity": "DH",
+            "entity_type": "company",
+            "id": 108,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "city": "57-3-0",
+            "slot": 0,
+            "cost": null,
+            "tokener": null,
+            "token_type": null
+        },
+        {
+            "type": "run_routes",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 109,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "routes": [
+                {
+                    "train": "3-0",
+                    "connections": [
+                        [
+                            "F6",
+                            "G5",
+                            "G3",
+                            "F2"
+                        ]
+                    ],
+                    "hexes": [
+                        "F2",
+                        "F6"
+                    ],
+                    "revenue": 70,
+                    "revenue_str": "F2-F6",
+                    "subsidy": null,
+                    "halts": null,
+                    "abilities": [],
+                    "nodes": [
+                        "F6-0",
+                        "F2-0"
+                    ]
+                }
+            ],
+            "extra_revenue": 0
+        },
+        {
+            "type": "dividend",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 110,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "kind": "payout",
+            "amount": null
+        },
+        {
+            "type": "pass",
+            "entity": "C&O",
+            "entity_type": "corporation",
+            "id": 111,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "lay_tile",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 112,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "hex": "G19",
+            "tile": "54-0",
+            "rotation": 0,
+            "combo_entities": null
+        },
+        {
+            "type": "run_routes",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 113,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "routes": [
+                {
+                    "train": "3-1",
+                    "connections": [
+                        [
+                            "E19",
+                            "F18",
+                            "G19"
+                        ]
+                    ],
+                    "hexes": [
+                        "E19",
+                        "G19"
+                    ],
+                    "revenue": 80,
+                    "revenue_str": "E19-G19",
+                    "subsidy": null,
+                    "halts": null,
+                    "abilities": [],
+                    "nodes": [
+                        "E19-0",
+                        "G19-1"
+                    ]
+                }
+            ],
+            "extra_revenue": 0
+        },
+        {
+            "type": "dividend",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 114,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "kind": "payout",
+            "amount": null
+        },
+        {
+            "type": "buy_train",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 115,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "3-4",
+            "price": 180,
+            "variant": null,
+            "exchange": null,
+            "shell": null,
+            "slots": [],
+            "extra_due": null,
+            "warranties": null
+        },
+        {
+            "type": "pass",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 116,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 117,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "run_routes",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 118,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "routes": [
+                {
+                    "train": "2-0",
+                    "connections": [
+                        [
+                            "H12",
+                            "H10"
+                        ]
+                    ],
+                    "hexes": [
+                        "H12",
+                        "H10"
+                    ],
+                    "revenue": 30,
+                    "revenue_str": "H12-H10",
+                    "subsidy": null,
+                    "halts": null,
+                    "abilities": [],
+                    "nodes": [
+                        "H10-0",
+                        "H12-0"
+                    ]
+                }
+            ],
+            "extra_revenue": 0
+        },
+        {
+            "type": "dividend",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 119,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "kind": "payout",
+            "amount": null
+        },
+        {
+            "type": "pass",
+            "entity": "PRR",
+            "entity_type": "corporation",
+            "id": 120,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 121,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "pass",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 122,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null
+        },
+        {
+            "type": "run_routes",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 123,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "routes": [
+                {
+                    "train": "2-4",
+                    "connections": [
+                        [
+                            "G19",
+                            "F18",
+                            "E19"
+                        ]
+                    ],
+                    "hexes": [
+                        "E19",
+                        "G19"
+                    ],
+                    "revenue": 80,
+                    "revenue_str": "E19-G19",
+                    "subsidy": null,
+                    "halts": null,
+                    "abilities": [],
+                    "nodes": [
+                        "G19-1",
+                        "E19-0"
+                    ]
+                }
+            ],
+            "extra_revenue": 0
+        },
+        {
+            "type": "dividend",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 124,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "kind": "payout",
+            "amount": null
+        },
+        {
+            "type": "buy_train",
+            "entity": "NYNH",
+            "entity_type": "corporation",
+            "id": 125,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "4-0",
+            "price": 300,
+            "variant": null,
+            "exchange": null,
+            "shell": null,
+            "slots": [],
+            "extra_due": null,
+            "warranties": null
+        },
+        {
+            "type": "discard_train",
+            "entity": "NYC",
+            "entity_type": "corporation",
+            "id": 126,
+            "user": null,
+            "created_at": 1775176248,
+            "auto_actions": null,
+            "train": "3-1"
+        }
+    ],
+    "id": 0,
+    "finished": false,
+    "move_number": 126,
+    "result": {
+        "4": 1255,
+        "1": 822,
+        "3": 731,
+        "2": 719
+    }
+}
