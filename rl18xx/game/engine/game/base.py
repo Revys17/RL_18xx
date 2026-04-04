@@ -864,7 +864,7 @@ class BaseGame:
             if action_type == "undo":
                 # set_trace()
                 undo_to = None
-                if "action_id" in action:
+                if "action_id" in action and action["action_id"] is not None:
                     action_id = action["action_id"]
                     if action_id == 0:
                         undo_to = 0
@@ -891,8 +891,10 @@ class BaseGame:
                 # set_trace()
                 for undo_action, pos in active_undos.pop():
                     filtered_actions[pos] = undo_action
+            elif action_type == "message":
+                filtered_actions[index] = action
             else:
-                if action_type != "message":
+                if active_undos:
                     active_undos.clear()
                 filtered_actions[index] = action
 

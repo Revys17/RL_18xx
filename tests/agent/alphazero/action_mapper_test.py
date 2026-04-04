@@ -1332,6 +1332,8 @@ def test_stock_round_2_game_state(stock_round_2_game_state):
     # Don't really need to check the rest
 
 
+import json
+
 def test_operating_round_2_game_state(operating_round_2_game_state):
     action_mapper = ActionMapper()
     action_helper = ActionHelper()

@@ -1,0 +1,292 @@
+ 1830 Rules RSS Feed
+1.0 INTRODUCTION
+1830 is a railroad game set in the northeastern United States and southern Canada. The players take on the role of railroad investors, promoters and presidents with the general objective of making money. Their methods may reflect a greater or lesser degree of public responsibility depending on their personal inclinations.
+A player's wealth is accumulated mainly through owning shares of stock in the eight Railroad Corporations included in the game. Stock shares make money in two ways - they can provide ready cash via dividend payments and they can increase in value. The single largest stockholder in a Corporation becomes its president and operates the Railroad, ideally, but not necessarily, for the benefit of all stockholders. The game ends when either:
+
+    1) The Bank funds are exhausted, or
+    2) A player goes bankrupt.
+
+The winner is the wealthiest player at the end of the game. A player's wealth is made up of his personal cash and his stock certificates at current market values. (Railroad Corporation assets, whether funds or trains, are NOT counted in the total.)
+2.0 PREPARING FOR PLAY
+
+Lay out the board and choose a player to be Banker. He should sit at the "south" side of the board and will need space for the Bank funds to be laid out in addition to his own money and possessions. He will also need space for a pencil and paper. A calculator is very useful.
+Before the other players take their seats, the Banker shuffles the place cards and deals one to each player, including himself. The players then take their seats in clockwise order relative to the Banker.
+
+The Banker next distributes $2400 equally among the players (including himself). He can refer to Table 5 for the exact amounts. All remaining money is placed in the Bank.
+
+In an open area by the board the Private Company certificates are laid out face upwards. The stock certificates are placed in separate stacks in the initial offering area of the board, with the president's certificate on top in each case. It is essential that unsold stock in the Bank and stock in the Bank Pool always be clearly distinguished. (Note there is no stock in the Bank Pool when the game begins.)
+The train cards should be laid out along the board's "east" edge so that the number of each type available can be clearly seen.
+The track tiles must also be laid out so as to be visible. Only the yellow tiles are needed at first, but the others are relevant to planning for the later stages of the game and should be available for inspection.
+
+Eight Charters of Incorporation are provided on four 8" X 10" cards, one Charter for each Railroad. Although not necessary for play, they are recommended as play aids. Before use the cards must be cut in half to separate the two Charters on each card.
+Play may now commence.
+3.0 GENERAL DESCRIPTION
+
+The play of 1830 is composed of two routines: Stock Rounds and Operating Rounds. In a Stock Round the players have the opportunity to buy and sell stock in Railroad Corporations. In an Operating Round they perform the various functions concerned with running a Railroad. Stock Rounds are interspersed with one or more Operating Rounds, the number increasing as the game proceeds.
+4.0 STOCK ROUND
+
+During his turn of a Stock Round a player may buy ONE stock certificate and sell ANY NUMBER of certificates. Either or both of these actions may be performed (and in either order). Alternatively the player may PASS. When he is finished play then proceeds to the next player on his left. A player may have several turns to buy and sell before a Stock Round ends. In the game's first Stock Round and possibly others, players will also have the opportunity to buy Private Company certificates.
+A player may buy EITHER a certificate from the pack of unsold certificates (the initial offerings) OR (when available) any certificates from the Bank Pool. If he or she sells any certificates these are placed in the Pool and may be bought by other players in their respective turns. A player who has sold stock in any Corporation may not then buy stock in that Corporation until the next Stock Round.
+
+A Stock Round will keep going as long as players continue to buy or sell. Only when everyone has passed consecutively does the Round end. A player is not precluded from further dealing because he or she has passed, as the Round may be kept going by someone else and anyone is then free to resume trading subsequently. When everyone has stopped trading the player on the left of the last player to buy or sell is given the Priority Deal card to signify that he or she will have the first opportunity to buy or sell stock in the next Stock Round. If no deals take place during a Stock Round, the holding player retains the Priority Deal card.
+5.0 OPERATING ROUNDS
+
+During an Operating Round each Railroad may lay (or replace) a track tile, purchase and place a token (to mark a new railhead), run its trains, and make any desired purchases of new trains. In certain circumstances Railroads may purchase Private Companies from players. These actions are directed by the president of the Railroad. It is also the president who decides whether any earnings should be paid as dividend to the stockholders or retained by the Corporation to finance further development.
+6.0 PRIVATE COMPANIES - GENERAL
+
+Private Companies pay a fixed revenue each turn to their owner who may be either a player or a Corporation. The location of these companies is shown on the board by the letters of the initials of their name. Unlike Corporations, Private Companies do not place tiles on the board or purchase trains. All Private Companies must be bought from the Bank before stock in the Railroads is put on sale. (See Table 1.)
+7.0 FIRST STOCK ROUND
+
+The Banker begins the game by offering for sale the Private Companies one at a time, in order of increasing face value. He starts with the player who drew the lowest number place card (this could be himself) and offers him the first company, the Schuylkill Valley Navigation and Railroad Company, using the procedure given in case 7.1. If player #l buys the SVN&RR, the C&SL is then offered to the next player and so on in clockwise rotation. If player #l passes the opportunity to buy the SVN&RR, it is offered to player #2, and so on.
+
+Only after all the Private Companies have been bought may the Banker begin selling stock in the Corporations. When buying stops the player on the left of the last person to buy is given the Priority Deal card.
+Players are not allowed to SELL any certificates during the FIRST Stock Round.
+7.1 Initial Purchase of Private Companies
+While at least one Private Company remains unsold a player must, in his or her turn, do one of the following:
+
+    1) Buy the Private Company offered at face value;
+    2) Bid for another as yet unsold Private Company; or
+    3) Pass (i.e., elect not to make any deal).
+
+7.2 Making a Bid for a Private Company
+
+A bid for a Private Company not yet offered for sale must exceed the face value of the company (or of any other bid already made for it) by at least $5. The player must place the bid money in front of him on the table and not use it for any other purpose until ownership of the company is resolved. Any number of players may bid for the same company. A player gains no benefit from bidding twice for the same company.
+
+A company which has been bid on is not offered for sale in the usual way. Instead, once the company preceding it has been sold, the usual procedure is halted. If only one bid has been received the Private Company is sold to the player concerned for the amount bid. If several bids have been made an auction is held in which all bidders (but no one else) take part. The starting price for the auction is the highest sum bid, and the minimum raise is $5. A player purchasing a company by auction may use the money he has already staked in the original bid to make the purchase. Unsuccessful bidders are now free to use the money they set aside as their bid. Play then resumes with the player to the left of the last player to buy a company offered by the Banker.
+7.3 Failure to Sell Private Companies
+
+If a complete Stock Round fails to sell the Schuylkill Valley Navigation and Railroad Company, then another Stock Round is commenced immediately. The SVN&RR is offered again but for $5 less than face value. This procedure may be repeated if necessary, the price being reduced in $5 decrements until a buyer is found. If there is no buyer at $5, then the first player offered it at $5 must accept it now for free. This counts as a purchase. If any other Private Company fails to find a buyer after a complete Round, the Stock Round is closed in the usual way and revenue is paid to each company that has been bought. Another Stock Round is then commenced. This situation may continue for several Rounds - to the great delight of those who are making money out of it!
+8.0 RAILROAD STOCK
+
+Railroad stock is offered for sale by the Bank once all the Private Companies have been sold. The shares for all Railroads are available for purchase. Each Railroad Corporation has ten shares of stock available in nine certificates: eight 10% certificates and one 20% president's certificate. The first certificate of a corporation bought from the Bank must be the president's certificate. (Note that the president's certificate in the B&O will no longer be available. It goes automatically to the purchaser of the B&O Private Company.) A Corporation may start operations once 5 stock certificates (60% of the shares) have been sold by the Bank. Stock which has been sold back into the Pool does not prevent this.
+8.1 Initial Stock Price
+
+When a player buys a president’s certificate from the Bank (or when the owner of the B&0 Private Company takes possession of the B&O President’s Certificate), the buyer must announce the par share price he is paying. This is the par price and it can be $67, $71, $76, $82, $90, or $100. Mark the par price in two places: on the Stock Market in a red edged box with a round token from the Railroad, and on the Par Chart with the Railroad’s square marker. Thereafter, all purchases of previously unsold shares from the Bank will be made at this price. When the Corporation begins operating it will receive capital equal to 10 times the par price.
+
+The Railroad token on the Stock Market will move about to indicate changes in stock valuation due to game events. The square marker remains as a permanent record of the stock’s initial price. The spaces on the Par Chart do not limit the number of Railroads choosing the same initial price, all eight could select a $100 par price if desired.
+
+Note that the owner of the Camden & Amboy Private Company receives a free 10% share of the Pennsylvania RR. This share cannot be sold until the president’s certificate has been purchased, thereby setting the value of the Pennsylvania share.
+8.2 Stock Valuation and the Stock Market
+
+New stock is always sold from the Bank at par (face value) but all stock transactions dealing with previously sold shares take place at the value indicated on the Stock Market.
+Stock valuation is changed as follows:
+
+    1) During a Stock Round the indicator token is moved downwards (i.e. towards the bottom of the chart) one line for each 10% of corporate stock sold into the Bank Pool. This action may be repeated as many times as is necessary but the token cannot be moved further once it reaches the bottom line of the Stock Market. (The token can only be moved straight downwards, it may not be moved sideways in order to achieve a lower line.)
+    2) At the end of a Stock Round, if there is no stock for a particular Corporation remaining in either the Initial Offering or the Bank Pool (i.e., 100% in player hands), its token is moved upwards one line (unless already on the top line).
+    3) Every time a Corporation declares a dividend the token is moved 1 space to the right. (If the token has already reached the end of a track it will be moved up 1 line instead.) In this way all stock can theoretically reach a value of $350 given sufficient time.
+    4) If’ the Corporation is operating and no dividend is paid (for whatever reason) the token is moved 1 space to the left unless the end of the track prevents this, in which case the token is moved 1 space downward.
+
+When a token is moved on the Stock Market to indicate a change in a share’s price and it enters a square already containing one or more tokens of other Corporations, the shifting token is always placed on the bottom, under any tokens already there.
+
+If less than 5 stock certificates have been sold, the Corporation is not yet capable of operation. Under these conditions the token will not be moved on the Stock Market except downwards as the result of stock sold to the Pool.
+The Banker should ensure that the Stock Market is kept up to date.
+9.0 RAILROAD STOCK APPOINTMENT OF PRESIDENT
+
+The president’s 20% stock certificate must be the first certificate bought from the Bank, This certificate signifies that the holder is responsible for all decisions concerned with the Railroad’s operations such as construction of track, planning of routes, payment of dividends, etc. (Note that one player will already hold the President’s Certificate of the Baltimore & Ohio RR as a result of the purchase of the Private Company.)
+
+A player remains president as long as no other player accumulates a larger holding of stock in that Railroad.
+10.0 LIMIT OF STOCK HOLDING
+
+Ordinarily, no player may hold more than 5 certificates in the same Corporation. However, when an indicated stock value descends into the orange zone of the Stock Market, shares in this Corporation may be held without limit.
+
+The maximum number of certificates a player may hold altogether (stock certificates and Private Company certificates) is given in Table 3. If a player acquires more than the regulation number (as a result of losing a presidency) the situation must be corrected in his or her next turn of the Stock Round. Certificates whose value has descended into the yellow zone do not count towards a player’s entitlement, and any number may be held in excess of the limit.
+
+Stock valued in the brown zone is exempt from the rules limiting stock buying and holding, and may be bought in any available quantity during the same turn.
+11.0 RAILROAD STOCK – FORMATION OF CORPORATION
+
+Once 5 stock certificates (60% of the stock) of a Corporation have been sold, the Corporation is ”floated” and will begin operating in the next Operating Round. (Stock sold back to the Bank Pool does not effect this, and certificates obtained via ownership of the B&O, Camden & Amboy, and Mohawk & Hudson Private Companies are considered in sales.)
+At the beginning of the Operating Round in which the new Corporation is going to start operations, the Bank issues to the president:
+
+    1) The Charter of Incorporation,
+    2) The Corporation’s tokens,
+    3) The Corporation’s initial capital.
+
+The number of tokens each Corporation receives is shown on the Charter and on Table 2. Note certain Corporations have more tokens than others, and one token must be used on the Stock Market. The initial capital is always equal to the FULLY subscribed stock value of the Corporation (even though the stock may not yet be fully taken up). For example, if the NYC shares have a par value of $90 and 70% of the stock has been sold, the NYC is floated and the president will receive $900 for its treasury, regardless of the price for NYC stock currently quoted on the Stock Market.
+
+The tokens, trains (when these have been acquired), and money in the treasury are placed in the appropriate positions on the Charter of Incorporation. The number of tokens available and the number and type of trains owned must be clearly visible for inspection by other players. The money may be kept in a stack and the amount held need not be divulged! It is very important that these funds be kept strictly separate from the player’s own reserve of cash. Consequently, corporate funds must ALWAYS be held on the Charter.
+12.0 SALE OF RAILROAD STOCK
+During his or her turn of a Stock Round a player may sell any amount of Railroad stock except that:
+
+    1) No stock may be sold during the first Stock Round.
+    2) No further stock in a Corporation may be sold if the Bank Pool already holds 50% of the stock in that Railroad.
+    3) The president’s stock certificate may NOT be sold into the Pool; it can only be disposed of as explained in 13.0.
+
+13.0 CHANGE OF PRESIDENT
+
+The original president will only retain control of the Corporation as long as his or her stockholding is not exceeded by another player’s. Another player may gain control due to purchasing more stock or because the president has sold stock. Note there is no change of control just because another player’s holding is equal to the president’s.
+
+When a change of control occurs there is an immediate exchange of stock certificates to enable the new president to hold the 20% certificate. This is a straight-forward exchange which permits both players to hold the same percentage of stock as they did before the exchange took place. For example, consider two players both holding 30% of the NYC, with player #1 holding the president’s certificate. If player #2 bought a fourth 10% certificate, a change of president would immediately take place as player #2’s holdings now exceed the president’s, 40% to 30%. Player #1 passes the president’s certificate to player #2 in exchange for two 10% certificates, and passes also the Charter and corporate assets.
+
+By means of this procedure a player can relinquish his position as president in any situation where the necessary amount of stock can be sold (i.e., no more than 50% of the total shares will appear in the Pool), and provided there is another stockholder holding at least 20%. In effect he announces the sale of his stock, exchanges certificates with the new president, and then places the ordinary certificates in the Bank Pool. Note that a presidency cannot be transferred in cases where there is no other stockholder holding more than 10%.
+
+A president’s certificate may never appear in the Bank Pool. Thus, once a president’s certificate is obtained by any player, it will be held by one player or another for the rest of the game.
+
+An exchange of stock certificates may well result in the outgoing president holding more certificates than normally allowed (see Table 3). In such cases the excess must be sold in the player’s next Stock Round turn.
+14.0 SELECTION OF NEW PRESIDENT
+
+In most cases the new president is simply the largest stockholder. If several people have the same stockholding after the former president has sold stock (and they now each hold more than the former president) the office passes to the player who is next in line to the left of the old president.
+15.0 STOCK TRANSACTIONS INVOLVING THE BANK POOL
+
+Players may not sell stock directly to each other. Stock sold is placed in the Bank Pool and is available to be purchased. All sales of stock and purchases from the Bank Pool are made at the price quoted on the Stock Market.
+
+Sales of stock have the effect of lowering its value but the change does not affect the price the seller receives for that sale. The value shown on the Stock Market is lowered one line for every 10% of stock sold.
+
+For example, a player holding two 10% certificates of the Canadian Pacific RR valued each at $100 sells them both. He or she collects $200 from the Bank, the shares are placed in the Bank Pool, and the Canadian Pacific token on the Stock Market is moved downward two spaces to indicate the new value of $82 per share for CP stock.
+16.0 RAILROAD OPERATIONS – GENERAL
+
+Once the first Stock Round has finished, the Operating Round begins. First the Private Companies and then the Railroads operate. The Private Companies simply collect the revenue shown on their certificate on behalf of their owner. Then the Railroads have their turns in order, beginning with the highest current share value.
+The Banker examines the Stock Market to determine which share has the highest value. This Railroad operates first, then the next highest value, and so on. When tokens are in the same space of the Stock Market, the Railroad whose token is on top operates first. When shares have the same value but in different columns, the token furthest to the right determines which Corporation operates first.
+
+Corporations are run by their respective presidents and are operated according to the sequence discussed in the next rules section. They will each have the opportunity to construct track, earn revenue, and purchase trains. They may either distribute their earnings as dividends among the stockholders (raising their stock value) or retain them to finance further corporate activities (thus lowering their stock value).
+17.0 RAILROAD OPERATIONS – SEQUENCE
+Each Railroad operating turn consists of the following activities:
+
+    1) Construct track if desired by laying or replacing a tile on the board. (See 18.0)
+    2) Purchase and place a new token on the board if desired. (See 19.0)
+    3) Run trains owned on routes which are available. (See 20.0)
+    4) Collect any revenue earned by (3) and either pay it out as dividend or reinvest it in the Corporation (place the money in the treasury on the Charter).
+    5) Purchase a new train or trains if desired. (See 21.0)
+
+These activities MUST be carried out in the order given. Any which are optional may simply be skipped. Any purchase must be made with available funds Credit is not allowed, even to the end of the same turn.
+
+For example, the money required to place a token or lay a tile in a mountain hexagon must be available in the treasury. Revenues are not available until step #4 of the turn, and thus cannot be spent on track construction or tokens until next turn.
+
+Note as an exception that Private Companies may be bought by a Railroad at any time during an Operating Round turn and the ownership of certain Private Companies may make possible actions otherwise not allowed. (See Table 1).
+During the later stages of the game the scope for corporate activities expands steadily on account of the availability of:
+
+    1) Larger trains which can travel a greater distance and thus earn more revenue per turn; and
+    2) More complex designs of track tiles which produce more elaborate routes and which also raise city revenue values.
+
+The sequence of routines changes in the later stages of the game, when first two and then three Operating Rounds are performed between each Stock Round. All these changes are directly linked to the types of trains in use. (See 22.0).
+18.0 RAILROAD OPERATIONS – TRACK CONSTRUCTION
+
+The game board features a hexagonal grid superimposed over a map of the northeastern U.S. and southern Canada, The hexagonal tiles may be laid on this grid to construct railroad routes joining the various cities portrayed on the map. Areas of the map colored grey depict already existing lengths of track. Others (colored red) depict available connections with districts beyond the edge of the board. Tiles must not be laid on either of these colored areas. Hexagons colored or edged in yellow cannot be played on until green tiles are available.
+
+Each Railroad that is operating may lay one tile during each Operating Round. At first only yellow tiles are available and these may be placed only on beige areas of the board. The tile and position chosen must constitute an extension of a route already available to the Railroad building it. The new track must be connected ultimately to a city position occupied by a token of the Railroad. (In the case of tiles which portray 2 different pieces of track it is only necessary for one of them to form a legal extension.)
+
+There are four exceptions to the rule requiring a tile placement to be an extension of an existing route: the hexagons containing the base cities of the NYC and Erie, and the hexagons containing the C&SL and D&H Private Companies, The NYC may place a #57 yellow tile on its base and the Erie may place a #59 green tile on its base (assuming green tiles are available), regardless of connections. Tiles may be placed in the hexagons of the C&SL and D&H by Railroads owning these Private Companies regardless of other connections and according to the rules given in the notes to Table 1. Tiles may also be placed on these locations by other Railroads according to the normal rules.
+
+A tile may not be placed so that a track runs off the grid, terminates against the blank side of a grey hexagon, or terminates against a solid blue hexside in a lake or river. It may be placed so as to utilize track on a grey hexagon, but this is not required.
+
+Tiles may be laid on most hexagons without charge but laying a tile on a hexagon which is divided by water costs $80 (the hexagon of the Erie base city is an exception to this rule), and on a hexagon which contains a mountain costs $120. There is no further charge if such a tile is replaced by another at a later stage in the game.
+Tiles may NOT be placed on hexagons containing all or part of’ a Private Company owned by a player. Tiles may be placed there if the Private Company is owned by a Corporation (see 23.1) or closed.
+
+Cities portrayed on the board must be represented by tiles of the correct type as follows:
+Type of City or Cities 	Representation on Map 	Representation on Tiles
+Small 	One black dot 	One black cross-bar
+2 Small 	Two black dots 	Two black cross-bars
+Large 	One circle 	One circle/two tangent circles
+2 Large 	Two circles 	Two separate circles
+
+Tiles representing cities must not be placed on other locations.
+
+New York, Baltimore, and Boston are special cases and will be dealt with separately.
+18.1 Replacement of Tiles
+
+When green tiles become available (see 22.0) they may, in general, be used to replace yellow tiles which are already on the board. A replacement has to always maintain all existing track, alterations being additions to what was previously depicted. Similarly, when brown tiles become available, they may be used to replace green tiles. A list of all legal replacements is given in Table 6 for reference.
+A Railroad may only replace a tile if at least part of the track on the new tile is part of a route which is open to that Railroad. This does not require that the route be actually in use, or even could be used with a train able to travel a sufficient distance, but it must not be closed to the Railroad.
+Yellow and green tiles which have been replaced are available for reuse. Replacing a tile is an alternative to laying a new tile.
+18.2 Special Cases
+Certain green tiles are not used as replacements for yellow tiles, but are placed on specific yellow and yellow edged hexagons of the board. They are distinguishable from other green tiles by special labels and are of two types:
+
+    1) Tiles representing two separate large cities and designated 0 0.
+    2) Tiles which are specific to the positions of New York or Baltimore and Boston and designated NY and B respectively.
+
+Such tiles may not be used on any other locations, nor may ordinary tiles be laid on these positions on the board. The orientation of these tiles is restricted by the rules requiring the maintenance of existing track.
+
+When brown tiles become available further restricted replacements on these positions are possible.
+18.3 Tile Laying Is Optional
+
+No Corporation is obliged to lay a tile if it does not wish or cannot afford to do so. This applies even to the Erie and NYC Railroads where no tile has yet been laid in the hexagon containing their base city.
+19.0 RAILROAD OPERATIONS – TOKENS
+Tokens designate priority railroad rights when placed on a city. They have two effects:
+
+    1) They prohibit rival Corpotions from running train routes BEYOND the city.
+    2) They allow the city to be used as a base for their Corporation’s train routes. The token base and the track connecting to it are a Railhead for the Corporation.
+
+When a railroad starts its first turn of operations, a token is placed at no cost on its base city (see Table 2, but note, however, 19.1). Base cities are noted on the board by the presence of the Railroad logos in the city circles. Additional tokens may be placed by a Railroad during an Opeting Round on any permitted location for a cost of $40 for the first and $100 for any subsequent tokens up to the maximum that are available. A permitted location is any large city which is connected by a legal route (however long) to a Railhead. Note there must be a vacant space to receive the token on the city concerned. Some city tiles have space for more than one token. In these cases the city remains open to all until both spaces are occupied. Tokens may not be placed so as to block the base city of a Corporation which is not yet in operation. Two tokens of the same color may never be placed on the same tile or hexagon. A Corporation may place only one token per turn, not counting the token placed on the base city.
+
+A Railroad may run routes into a city which is occupied by other tokens but such a city may only serve as a terminus; the route may not extend past the city. (Note this restriction also applies to the placing of tokens themselves. A Railroad may not place a token on a city which can only be reached by passing through a city which is entirely blocked by other Corporation’s tokens.)
+19.1 Base of Erie RR
+
+The Erie base token may be placed on either city in the yellow hexagon showing the Erie logo but may not then be moved. No other token may be placed here until the Erie has established its base. (The Erie does not have to lay a tile on its base if it does not wish to do so.)
+20.0 RAILROAD OPERATIONS – TRAINS, ROUTES, AND REVENUE
+
+Wealth being the objective of the game, and Railroad revenue beone of the principal methods of gaining wealth, it follows that the planning of remunerative routes and the provision of trains to run them is of paramount significance to the strategy of this game.
+20.1 Routes
+
+A route is a length of track joining 2 or more cities. It must be continuous and it must not involve reversing across junctions, changing track at cross-overs, or traveling the same track section twice. A route that enters a city down one line may, however, leave along any other line. A route may begin or end at any city. The ”arrows” at which track enters the red hexagons may also form the start or finish of a route (or both if different red hexagons are involved) but these red sections may not form part of the middle of a route (i.e., they cannot be run through). At no time may the same station be used twice over (although separate cities on the same hexagon certainly may be!). Note that New York is shown as 2 separate stations which may be considered as different ”cities” for route purposestiles featuring 2 separate cities may be treated similarly. For example, a route may enter the top New York city from the northeast, exit to the northwest, and then enter the bottom New York city from the west to score both cities.
+
+When two or more routes are being used in the same turn (i.e., two or more trains are operating) they must all be entirely separate along their entire length except that they may meet or cross at cities, or use two independent tracks on the same tile.
+
+Every route used by a Corporation must include at least one city occupied by that Corporation’s token. Initially, such a city is very likely to be the base city of the Railroad concerned, but as the game progresses, Railroads may operate from other cities which provide the base for more lucrative routes.
+
+The large number on a train card indicates the length of route it may run in terms of the number of cities involved. Thus a 2 Train may only join two cities without any intermediate stops. (A train may not run ”through” a citout stopping.) Similarly a 5 Train may connect up to five different cities. A train may be used on a shorter route than the maximum allowed if desired or when a maximum route does not exist. Note also that the ”arrow” connections on the pink hexagons count as cities for the purpose of establishing a route. A Diesel (D) Train may run a legal route of ANY length. Trains may not be combined or ”doubleheaded” to obtain a longer route.
+20.2 Train Required
+
+Any Corporation which is operating must have at e train during its turn of an Operating Round unless there is no route available on which it could possibly run. Otherwise a Corporation that begins its turn of an Operating Round without a train must purchase one during that turn. (See 21.0 and 23.0.)
+A train is acquired as the last activity in a turn and therefore may not be used until the next turn.
+20.3 Revenue
+
+All cities on either the tiles or the board are marked with revenue points. The revenue which is earned each time a train is run on the route is the total of all the revenue points of the cities concerned. For example, a 3 Train running a route through cities of 30, 10 and 20 points would earn a revenue of’ $60. The highest legal revenue that can be demonstrated must be collected, although sharp-eyed players are not required to point out a higher possible revenue than claimed. Two sets of revenue points are shown on the red hexagons. The lower figure is used until the first 5 Train is bought, immediately after which the higher figure is used.
+
+T president decides whether the revenue should be paid as dividends or diverted into the corporate treasury. If a dividend is paid, the total earnings from all the trains owned by the Corporation are paid out to the stockholders (10% for each 10% stock held). Nothing is paid for unsold stock but the Corporation receives the payment due any stock in the Bank Pool. For example, consider a Railroad where the president owns 50% of the stock, 30% remains unsold in the Bank, and 20% is in the Bank Pool. If the Railroad’s revenue is $50 and a dividend is declared, the player holding 50% receives $25, $10 goes into the Railroad’s treasury, and the other $15 remains in the Bank. Note that earnings from a Private Company owned by a Corporation are not available for dividend, but are paid into the treasury. If no dividend is paid the entire earnings are passed to the Corporation. The stock valuation is then adjusted on the Stock Market.
+21.0 RAILROAD OPERATIONS – PURCHASING TRAINS
+
+Trains are bought from the Bank ir of increasing size. The smallest, the 2s, are bought first. When all these have been sold the 3s become available, then the 4s etc. (A complete list of the number of trains of each type is given in Table 4.)
+
+A Corporation may own a maximum of four trains until the first 4 Train is bought. The number is then reduced to three. After the first 5 is bought the number is reduced to two, A Corporation which finds itself with excess trains must immediately return the surplus to the Bank. No payment is made for them but they may be re-sold by the Bank as an alternative to whatever other trains are on offer if they are of a type still in use. Re-sale is at face value. For example, a Railroad owning a 3 and 4 Train may buy the first 5 Train offered because prior to this sale the Corporation was allowed to hold three trains. Immediately after the purchase, however, the Railroad must return one of its trains to the Bank as it is now over the new train limit of two.
+
+Trains may be either purchased from the Bank at face value or from another Corporation at any mutually agreed price. Whenever a train is purchased from one Corporation by another the transfer takes place in the purchaser’s turn, Corporations which have the same president may sell trains to each other for at least $1.
+Once the first 6 Train is purchased, D (Diesel) Trains are also available as an alternative to other 6 Trains. Diesels may be bought for the $1100 face value or for $800 with a trade-in. Either a 4, 5, or 6 Train may be traded in for the $300 scount, but note that the purchase of the first Diesel removes the remaining 4 Trains from play. 5 and 6 Trains traded in may be purchased from the Bank at face value.
+22.0 STAGES OF THE GAME
+Whenever the first train of a new type is bought, some aspect of the game changes immediately as follows:
+
+    ”2” Train - First train type available. Four trains allowed per Railroad. Only yellow tiles available for play.
+    ”3” Train - Green tiles become available. Private Companies may be bought by Railroad4” Train - All 2 Trains taken out of play. Three trains per Railroad.
+    ”5” Train - Brown tiles become available. Any remaining Private Companies closed. Two trains per Railroad. Higher revenue point value now scored on red positions.
+    ”6” Tram - All 3 Trains taken out of play. ”D” Trains become available as an option.
+    ”D” Train - All 4 Trains taken out of play.
+
+Note:
+
+    1) Yellow tiles are available for use throughout the game. Green and brown tiles become available as above.
+  2) All of these changes affect all players, not just the player who introduced the change.
+
+The sequence of game routines also changes AFTER the next Stock Round following the introduction of a 3 or a 5 Train.
+
+    1) Beginning with the next Stock Round following the purchase of a 3 Train there are 2 Operating Rounds between each Stock Round.
+    2) Beginning with the next Stock Round following the purchase of a 5 Train there are 3 Operating Rounds between each Stock Round.
+
+23.0 PRIVATE COMPANIES – SAL, CLOSURE, AND VALUATION
+23.1 Sale of Private Companies
+
+Private Companies may be sold between players for any mutually agreed price at any time during the buyer’s or the seller’s turn of a Stock Round (other than the first).
+
+Private Companies may be bought by Corporations but not sold by them. This may not be done until the first 3 Train has been bought. The price paid may not be less than half or more than twice the face value of the company and must be publicly declared. This action may be performedany time during the buying Corporation’s turn of an Operating Round.
+23.2 Closure of Private Companies
+
+The B&O Private Company is closed down immediately when the B&O Corporation purchases its first train. The Mohawk & Hudson is closed if traded for a 10% share of the New York Central Railroad as described in Table 1. The remaining Private Companies are closed when the first 5 Train is bought. Private Companies may not be closed voluntarily, nor may they be sold into the Bank Pool. Once closed a Private mpany ceases to exist and takes no further part in the game.
+23.3 Valuation of Private Companies
+
+If the game ends with Private Companies still in existence they count towards the owner’s score at face value. (This is possible but unlikely – the game would have to end before a 5 Train had been bought.) Private Companies that are owned by Corporations or have been closed have no value. Private Company certificates count as part of a player’s certificate entitlement while they remain in operation.
+24.0 ED PURCHASES, INSOLVENCY
+
+If a Corporation lacks the necessary funds when it is required to purchase a train, the president has to make up any deficiency out of his own money. If a choice of trains is available in the Bank he must choose the cheapest alternative. He may not, however, use his own money to purchase any additional trains or to assist the Corporation in any other way.
+When a president has to assist a Corporation to buy a train the following rules apply:
+
+    1) The Corporation must first use all of its own money (if any).
+    2) The president must first attempt to make up any deficiency from his own cash. However, when adding in his own cash the president may not pay more than face value if buying a train from another Corporation.
+    3) If necessary the president must raise further funds by selling stock or Private Companies. Such sales occur immediately (i.e., during the Operating Round in question), but in all other respects must conform to the usual rules for such sales. Also, stock sales must not lead to a change in president in the Corporation concerned. (Stock may be sold which will cause the transfer of other presidencies.) The president may sell Private Companies he owns (if he can find a buyer) hut he is not compelled to do so.
+    4) A president who controls more than one Corporation MAY arrange the purchase of a train from another Corporation which he controls but he is not REQUIRED to do so,
+    5) If a forced sale of stock as above causes a change in control of a Corporation then this change takes place immediately.
+    6) If the president is not able to raise the required sum of money, even by selling everything he is allowed to sell, he is declared bankrupt.
+
+25.0 END OF GAME
+
+If a player goes bankrupt the game ends immediately. The bankrupt player’s final score is the value of all stock he or she still holds but is not allowed to sell. All other players value their assets in the usual way. Railroads that have not yet operated for this Operating Round lose their turns.
+
+If the Bank ns out of money the game ends an the completion of the sequence of Operating Rounds that are currently in progress (i.e., at the point at which the next Stock Round would otherwise commence). If the Bank is depleted during a Stock Round, the sequence of events must be played out to the end of the next series of Operating Rounds. For example, if the Bank runs out of money in a Stock Round, the Stock Round and the number of Operating Rounds which would normally take place must be completed before the game is ended. If the Bank runs out during the first Operating Round of three, complete this Operating Round and the two remaining. During this time all payouts that cannot be met from the Bank should be recorded on paper and added to the players’ scores at the end of the game or, if preferred, all players may be asked to contribute an equal sum of the Bank to allow normal payouts to continue.
+
+(The regulation requiring a full sequence of railroad operations after each opportunity to play the stock market is to pvent a financial swindle which is too devastating even for 1830. As the rules now disarm this ploy, you need not worry about it. But if you haven’t yet worked out what it is, you ought, perhaps, to be asking yourself whether you are a big enough crook ever to make the big time as a stock racketeer.)
+

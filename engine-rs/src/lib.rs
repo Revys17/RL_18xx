@@ -1,15 +1,22 @@
 use pyo3::prelude::*;
 
+pub mod actions;
 pub mod core;
 pub mod entities;
 pub mod game;
 pub mod graph;
+pub mod map;
+pub mod rounds;
+pub mod router;
+pub mod tiles;
+pub mod title;
 
 /// Rust-accelerated game engine for 18xx board games.
 #[pymodule]
 fn engine_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Game
     m.add_class::<game::BaseGame>()?;
+    m.add_class::<game::RoundState>()?;
 
     // Core
     m.add_class::<core::SharePrice>()?;

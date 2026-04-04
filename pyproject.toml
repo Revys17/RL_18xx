@@ -22,11 +22,17 @@ dependencies = [
     "torch-tb-profiler>=0.4.3",
 ]
 
-# [tool.pytest.ini_options]
-# addopts = "--tb=line"
-# testpaths = [
-#     "tests",
-# ]
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
+]
+
+[build-system]
+requires = ["maturin>=1.12.6"]
+build-backend = "maturin"
+
+[tool.maturin]
+manifest-path = "engine-rs/Cargo.toml"
 
 [tool.black]
 line-length = 120
