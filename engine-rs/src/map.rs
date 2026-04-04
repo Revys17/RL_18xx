@@ -222,11 +222,19 @@ fn compute_corp_graph(
 /// When true, paths walked through this edge should be temporarily visited
 /// (removed from visited_paths after the recursive walk completes).
 fn is_converging_exit(tile: &Tile, edge: u8) -> bool {
+    // An edge is "converging" when multiple edge-to-edge paths share it.
+    // City/town-to-edge paths don't count — they represent a single route
+    // through the city, not a crossover.
     let edge_ep = PathEndpoint::Edge(edge);
     let count = tile
         .paths
         .iter()
-        .filter(|p| !p.terminal && (p.a == edge_ep || p.b == edge_ep))
+        .filter(|p| {
+            !p.terminal
+                && (p.a == edge_ep || p.b == edge_ep)
+                && p.a.edge_num().is_some()
+                && p.b.edge_num().is_some()
+        })
         .count();
     count > 1
 }
@@ -511,6 +519,9 @@ fn walk_into_hex(
             .iter()
             .any(|e| *edge_counter.get(&(hex_id.to_string(), *e)).unwrap_or(&0) > 0);
         if edge_in_stack {
+            if hex_id == "H10" {
+                eprintln!("  path[{}] SKIPPED by edge_in_stack (path_edges={:?})", path_idx, path_edges);
+            }
             continue;
         }
 
