@@ -466,11 +466,11 @@ fn walk_from_node(
         }
     }
 
-    // If converging, remove this node from visited so other branches can
-    // re-enter it. (Matches Python's `del visited[self]` when converging.)
-    if converging {
-        visited_nodes.remove(node);
-    }
+    // Note: we do NOT remove the node from visited_nodes during converging.
+    // Paths are un-visited to allow other branches to reuse them, but nodes
+    // (cities/towns) are genuine destinations that should remain visited.
+    // The Python engine's `del visited[self]` affects path reachability,
+    // not the final connected_nodes result.
 }
 
 /// Walk into a hex from a specific entry edge, following paths.
