@@ -85,6 +85,194 @@ impl BaseGame {
             }
         }
 
+        // Handle pending token re-placement (displaced by OO tile upgrade).
+        // The operating corp acts to place the displaced corp's token.
+        // Action entity_id is the operating corp, but the token placed belongs
+        // to the displaced corp. This is an extra action (doesn't consume the
+        // operating corp's regular token step).
+        let pending_token = match &self.round {
+            crate::rounds::Round::Operating(s) if !s.pending_tokens.is_empty() => {
+                Some(s.pending_tokens[0].clone())
+            }
+            _ => None,
+        };
+        if let Some((ref pending_corp, pending_token_idx)) = pending_token {
+            if let Action::PlaceToken {
+                hex_id,
+                city_index,
+                ..
+            } = action
+            {
+                // Resolve hex_id
+                let resolved_hex_id = if let Some(tile_instance) = hex_id.strip_prefix("__tile:") {
+                    let base_name = tile_instance.split('-').next().unwrap_or(tile_instance);
+                    self.hexes
+                        .iter()
+                        .find(|h| {
+                            h.tile.name == tile_instance
+                                || h.tile.id == tile_instance
+                                || h.tile.name == base_name
+                                || h.id == base_name
+                        })
+                        .map(|h| h.id.clone())
+                        .ok_or_else(|| GameError::new(format!("No hex with tile {}", tile_instance)))?
+                } else {
+                    hex_id.clone()
+                };
+
+                let hex_idx = *self
+                    .hex_idx
+                    .get(resolved_hex_id.as_str())
+                    .ok_or_else(|| GameError::new(format!("Unknown hex: {}", resolved_hex_id)))?;
+                let corp_idx = self.corp_idx[pending_corp.as_str()];
+                let city = self.hexes[hex_idx]
+                    .tile
+                    .cities
+                    .get_mut(*city_index as usize)
+                    .ok_or_else(|| GameError::new("Invalid city index"))?;
+
+                let slot_idx = city
+                    .tokens
+                    .iter()
+                    .position(|t| t.is_none())
+                    .ok_or_else(|| GameError::new("No empty token slots"))?;
+
+                let mut token = self.corporations[corp_idx].tokens[pending_token_idx].clone();
+                token.used = true;
+                token.city_hex_id = resolved_hex_id.clone();
+                city.tokens[slot_idx] = Some(token);
+
+                self.corporations[corp_idx].tokens[pending_token_idx].used = true;
+                self.corporations[corp_idx].tokens[pending_token_idx].city_hex_id = resolved_hex_id;
+
+                self.clear_graph_cache();
+
+                // Remove from pending_tokens
+                if let crate::rounds::Round::Operating(ref mut s) = self.round {
+                    s.pending_tokens.remove(0);
+                }
+                self.update_round_state();
+
+                // Run skip_steps and advance logic (same as post-action flow)
+                self.skip_steps();
+                let is_done = matches!(
+                    &self.round,
+                    crate::rounds::Round::Operating(s) if !s.finished && s.step == OperatingStep::Done
+                );
+                if is_done {
+                    if let crate::rounds::Round::Operating(ref mut s) = self.round {
+                        s.advance_to_next_corp();
+                    }
+                    if !matches!(&self.round, crate::rounds::Round::Operating(s) if s.finished) {
+                        self.start_operating();
+                    }
+                }
+                return Ok(());
+            }
+        }
+
+        // Home token placement on an upgraded OO hex: the corp must choose
+        // which city. Accept place_token at the start of the turn (before Track).
+        if let Action::PlaceToken {
+            entity_id,
+            hex_id,
+            city_index,
+        } = action
+        {
+            if let Some(corp_sym) = state.current_corp_sym() {
+                if entity_id == corp_sym {
+                    if let Some(&ci) = self.corp_idx.get(corp_sym) {
+                        let needs_home = !self.corporations[ci].tokens.is_empty()
+                            && !self.corporations[ci].tokens[0].used;
+                        // Handle as HomeToken if the home token needs placement
+                        // AND the target hex is the corp's home hex.
+                        let corp_defs = crate::title::g1830::corporations();
+                        let is_home_hex = corp_defs.iter()
+                            .find(|cd| cd.sym == corp_sym)
+                            .map_or(false, |cd| {
+                                // Resolve hex_id for comparison
+                                let target = if let Some(ti) = hex_id.strip_prefix("__tile:") {
+                                    self.hexes.iter().find(|h| {
+                                        let base = ti.split('-').next().unwrap_or(ti);
+                                        h.tile.name == ti || h.tile.id == ti
+                                            || h.tile.name == base || h.id == base
+                                    }).map(|h| h.id.as_str())
+                                } else {
+                                    Some(hex_id.as_str())
+                                };
+                                target.map_or(false, |t| t == cd.home_hex)
+                            });
+                        let is_home_token = needs_home
+                            && state.step == OperatingStep::PlaceToken
+                            && is_home_hex;
+                    if is_home_token {
+                            // Resolve hex_id (may be "__tile:59-1" format)
+                            let resolved = if let Some(ti) = hex_id.strip_prefix("__tile:") {
+                                let base = ti.split('-').next().unwrap_or(ti);
+                                self.hexes.iter().find(|h| {
+                                    h.tile.name == ti || h.tile.id == ti
+                                        || h.tile.name == base || h.id == base
+                                }).map(|h| h.id.clone())
+                            } else {
+                                Some(hex_id.to_string())
+                            };
+                            if let Some(rhex) = resolved {
+                                let city_idx = *city_index as usize;
+                                if let Some(&hi) = self.hex_idx.get(&rhex) {
+                                    if let Some(city) = self.hexes[hi].tile.cities.get_mut(city_idx) {
+                                        for token_slot in &mut city.tokens {
+                                            if token_slot.is_none() {
+                                                let mut token =
+                                                    self.corporations[ci].tokens[0].clone();
+                                                token.used = true;
+                                                token.city_hex_id = rhex.clone();
+                                                *token_slot = Some(token);
+                                                self.corporations[ci].tokens[0].used = true;
+                                                self.corporations[ci].tokens[0].city_hex_id =
+                                                    rhex;
+                                                self.corporations[ci].home_token_ever_placed = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            self.clear_graph_cache();
+                            if let crate::rounds::Round::Operating(ref mut s) = self.round {
+                                if s.num_laid_track == 0 {
+                                    // Start of turn — advance to LayTile
+                                    s.step = OperatingStep::LayTile;
+                                }
+                                // Mid-turn: step stays at PlaceToken.
+                                // Don't increment num_placed_token — home token
+                                // doesn't consume the regular token step.
+                            }
+                            self.update_round_state();
+                            // After mid-turn home token, run skip_steps to
+                            // advance past PlaceToken if no regular token
+                            // placement is possible.
+                            if state.num_laid_track > 0 {
+                                self.skip_steps();
+                                let is_done = matches!(
+                                    &self.round,
+                                    crate::rounds::Round::Operating(s) if !s.finished && s.step == OperatingStep::Done
+                                );
+                                if is_done {
+                                    if let crate::rounds::Round::Operating(ref mut s) = self.round {
+                                        s.advance_to_next_corp();
+                                    }
+                                    if !matches!(&self.round, crate::rounds::Round::Operating(s) if s.finished) {
+                                        self.start_operating();
+                                    }
+                                }
+                            }
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+
         // Emergency sell: president sells shares during BuyTrain step to fund
         // a forced train purchase. Accepted when a player entity sells shares
         // while the OR is at BuyTrain step.
@@ -261,19 +449,18 @@ impl BaseGame {
             t
         };
 
-        // Determine if tokens on the old tile had an ambiguous destination.
-        // When the old tile has cities with no exits (placeholder preprinted cities
-        // like E11's 0-revenue unconnected cities) and the new tile has multiple
-        // cities, the corp must choose which city the token goes in (via explicit
-        // place_token action). Cities WITH exits have well-defined positions that
-        // map unambiguously to the new tile.
+        // When upgrading an OO hex (preprinted with pathless 0-revenue cities)
+        // to a tile with multiple cities AND paths, tokens must be re-placed
+        // explicitly (Python's update_token / pending_tokens mechanism).
+        // Tokens on tiles that already have paths are transferred automatically.
         let old_has_token = old_cities
             .iter()
             .any(|c| c.tokens.iter().any(|t| t.is_some()));
-        let old_cities_are_placeholders = old_cities.iter().all(|c| c.revenue == 0);
+        let old_tile_has_no_paths = self.hexes[hex_idx].tile.paths.is_empty();
         let new_has_multiple_cities = new_tile.cities.len() > 1;
+        let new_has_paths = !new_tile.paths.is_empty();
         let needs_token_choice =
-            old_has_token && old_cities_are_placeholders && new_has_multiple_cities;
+            old_has_token && old_tile_has_no_paths && new_has_paths && new_has_multiple_cities;
 
         // Preserve existing tokens: map old cities to new cities
         if !old_cities.is_empty() && !needs_token_choice {
@@ -343,6 +530,26 @@ impl BaseGame {
             }
         }
 
+        // Collect tokens displaced by OO upgrade (needs_token_choice) for
+        // re-placement via pending_tokens. Must be done BEFORE resetting below.
+        let mut displaced_tokens: Vec<(String, usize)> = Vec::new();
+        if needs_token_choice {
+            for old_city in &old_cities {
+                for old_tok in old_city.tokens.iter().flatten() {
+                    let corp_sym = &old_tok.corporation_id;
+                    if let Some(&ci) = self.corp_idx.get(corp_sym.as_str()) {
+                        // Find the token index in the corporation's token list
+                        for (ti, ct) in self.corporations[ci].tokens.iter().enumerate() {
+                            if ct.used && ct.city_hex_id == hex_id {
+                                displaced_tokens.push((corp_sym.clone(), ti));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Reset corp tokens that were on the old tile, then re-mark those that
         // survived the transfer onto the new tile.
         for old_city in &old_cities {
@@ -384,6 +591,11 @@ impl BaseGame {
             if *count == 0 {
                 self.tile_counts_remaining.remove(&base_id);
             }
+        }
+
+        // Add displaced tokens to pending_tokens for re-placement
+        if !displaced_tokens.is_empty() {
+            new_state.pending_tokens.extend(displaced_tokens);
         }
 
         new_state.num_laid_track += 1;
@@ -641,7 +853,11 @@ impl BaseGame {
         // 2. If the depot has this train type → depot
         // 3. Otherwise → search corporations
         let base_name = train_name.split('-').next().unwrap_or(train_name);
-        let actual_from = if from == "depot" {
+        // When exchanging a train (e.g., 4→D), the source is always depot
+        // even though the price differs from depot price (it's discounted).
+        let actual_from = if exchange.is_some() {
+            "depot".to_string()
+        } else if from == "depot" {
             let depot_price = self
                 .depot
                 .trains
@@ -649,20 +865,27 @@ impl BaseGame {
                 .find(|t| t.name == base_name)
                 .map(|t| t.price);
 
-            // Find the specific train instance by its full ID.
-            // Check: (1) inter-corp by ID, (2) discarded pile by ID,
-            // (3) depot by price, (4) inter-corp by base name, (5) fallback depot.
+            // Source detection priority:
+            // 1. Exact train ID in discard → depot (definitive)
+            // 2. Exact train ID on another corp → inter-corp (definitive)
+            // 3. Base name in discard → depot
+            // 4. Base name in depot at matching price → depot
+            // 5. Base name on another corp → inter-corp
             let inter_corp = self
                 .corporations
                 .iter()
                 .find(|c| c.sym != corp_sym && c.trains.iter().any(|t| t.id == train_name));
 
-            let in_discard = self.depot.discarded.iter().any(|t| t.id == train_name);
+            let in_discard_by_id = self.depot.discarded.iter().any(|t| t.id == train_name);
+            let in_discard_by_name = self.depot.discarded.iter().any(|t| t.name == base_name);
 
-            if let Some(seller) = inter_corp {
+            if in_discard_by_id {
+                "depot".to_string()
+            } else if let Some(seller) = inter_corp {
+                // Exact train ID match on a corporation — definitive inter-corp source.
                 seller.sym.clone()
-            } else if in_discard {
-                "depot".to_string() // bought from discard (bank pool)
+            } else if in_discard_by_name {
+                "depot".to_string()
             } else if let Some(dp) = depot_price {
                 if price == dp {
                     "depot".to_string()
@@ -708,10 +931,17 @@ impl BaseGame {
             // and use the discounted price from the action.
             if let Some(exchange_name) = exchange {
                 let exchange_base = exchange_name.split('-').next().unwrap_or(exchange_name);
+                // Match by full ID first, then fall back to base name
                 let ex_idx = self.corporations[corp_idx]
                     .trains
                     .iter()
-                    .position(|t| t.name == exchange_base)
+                    .position(|t| t.id == exchange_name)
+                    .or_else(|| {
+                        self.corporations[corp_idx]
+                            .trains
+                            .iter()
+                            .position(|t| t.name == exchange_base)
+                    })
                     .ok_or_else(|| {
                         GameError::new(format!(
                             "Exchange train {} not owned by {}",
@@ -834,6 +1064,16 @@ impl BaseGame {
                 new_state.crowded_corps = current.crowded_corps.clone();
                 new_state.step = OperatingStep::DiscardTrain;
             }
+        }
+
+        // Also check if the buying corp is now over the train limit
+        // (can happen when buying at the limit — Python allows buy+discard).
+        let train_limit = self.phase.train_limit as usize;
+        if self.corporations[corp_idx].trains.len() > train_limit {
+            if !new_state.crowded_corps.contains(&corp_sym) {
+                new_state.crowded_corps.push(corp_sym.clone());
+            }
+            new_state.step = OperatingStep::DiscardTrain;
         }
 
         self.round = crate::rounds::Round::Operating(new_state);
@@ -1042,11 +1282,33 @@ impl BaseGame {
         // Clear graph cache (tile/token state may have changed since last corp)
         self.clear_graph_cache();
 
-        // Place home token if the corp hasn't placed one yet
+        // Place home token if the corp hasn't placed one yet.
+        // For E11 (ERIE's home, an OO hex), if the tile has been upgraded
+        // the player must choose which city. For all other hexes, auto-place.
         if !self.corporations[ci].tokens.is_empty()
             && !self.corporations[ci].tokens[0].used
         {
-            self.place_home_token(ci);
+            let corp_defs = crate::title::g1830::corporations();
+            let mut needs_choice = false;
+            if let Some(cd) = corp_defs.iter().find(|cd| cd.sym == sym) {
+                // E11 is the only OO hex that requires explicit choice after upgrade
+                if cd.home_hex == "E11" {
+                    if let Some(&hi) = self.hex_idx.get(cd.home_hex) {
+                        let tile = &self.hexes[hi].tile;
+                        let is_upgraded = tile.name != cd.home_hex;
+                        if is_upgraded && tile.cities.len() > 1 {
+                            needs_choice = true;
+                        }
+                    }
+                }
+            }
+            if needs_choice {
+                if let crate::rounds::Round::Operating(ref mut s) = self.round {
+                    s.step = OperatingStep::PlaceToken;
+                }
+            } else {
+                self.place_home_token(ci);
+            }
         }
     }
 
@@ -1119,7 +1381,9 @@ impl BaseGame {
                         return;
                     }
                     match s.current_corp_sym() {
-                        Some(sym) => (s.step.clone(), sym.to_string()),
+                        Some(sym) => {
+                                (s.step.clone(), sym.to_string())
+                        }
                         None => return,
                     }
                 }
@@ -1137,8 +1401,17 @@ impl BaseGame {
                     false
                 }
                 OperatingStep::PlaceToken => {
-                    // Skip if the corp can't place a token anywhere.
-                    !self.can_place_token(&corp_sym)
+                    // Check for pending tokens from OO upgrade
+                    let has_pending = match &self.round {
+                        crate::rounds::Round::Operating(s) => !s.pending_tokens.is_empty(),
+                        _ => false,
+                    };
+                    if has_pending {
+                        false // blocking — displaced tokens must be re-placed
+                    } else {
+                        // Skip if the corp can't place a token anywhere.
+                        !self.can_place_token(&corp_sym)
+                    }
                 }
                 OperatingStep::RunRoutes => {
                     let has_runnable_train = self.corporations[corp_idx]
@@ -1185,16 +1458,25 @@ impl BaseGame {
                     }
                 }
                 OperatingStep::BuyCompany => {
-                    // BuyCompany during OR is only available from Phase 3+.
-                    // Any player-owned company can be sold to the corp.
                     let phase_num: u8 = self.phase.name.parse().unwrap_or(0);
                     if phase_num < 3 {
                         true
                     } else {
                         let corp_cash = self.corporations[corp_idx].cash;
-                        !self.companies.iter().any(|c| {
-                            !c.closed && !c.no_buy && c.owner.is_player() && corp_cash >= c.value / 2
-                        })
+                        let can_buy_company = self.companies.iter().any(|c| {
+                            !c.closed && !c.no_buy && c.owner.is_player()
+                                && corp_cash >= c.value / 2
+                        });
+                        // Check if the corp owns CS with unused tile_lay ability.
+                        // ability_used is set when CS's lay_tile fires.
+                        // DH's teleport ability doesn't block BuyCompany
+                        // (it's filtered by Python's abilities() timing check).
+                        let corp_eid = EntityId::corporation(&corp_sym);
+                        let has_ability = self.companies.iter().any(|c| {
+                            c.sym == "CS" && !c.closed && !c.ability_used
+                                && c.owner == corp_eid
+                        });
+                        !can_buy_company && !has_ability
                     }
                 }
                 OperatingStep::BuyTrain => {
@@ -1223,14 +1505,10 @@ impl BaseGame {
                             .any(|t| corp_cash >= t.price);
 
                         // Can exchange for discounted D?
-                        // D-train exchanges are only available when D-trains are
-                        // purchasable (phase D). The depot.trains list includes
-                        // future trains; only the first of each type is available.
-                        // D-trains become available when phase "D" or "6" is reached
-                        // (the "D" train's "on" field is "D", available after first
-                        // D purchase, but also available once "6" trains are out).
-                        let d_available = self.phase.name == "D"
-                            || self.depot.trains.first().map_or(false, |t| t.name == "D");
+                        // D-trains become purchasable once phase 6 is reached
+                        // (D-trains have available_on="6"). They're also available
+                        // in phase D. Check phase name for "6" or "D".
+                        let d_available = self.phase.name == "D" || self.phase.name == "6";
                         let can_exchange = if d_available {
                             if let Some(d_train) =
                                 self.depot.trains.iter().find(|t| t.name == "D")

@@ -33,6 +33,12 @@ build-backend = "maturin"
 
 [tool.maturin]
 manifest-path = "engine-rs/Cargo.toml"
+profile = "release"
+
+[tool.uv]
+# Include Rust sources in cache key so uv invalidates its cached wheel
+# when .rs files change (otherwise only pyproject.toml/Python changes trigger rebuild)
+cache-keys = [{ file = "engine-rs/src/**/*.rs" }, { file = "engine-rs/Cargo.toml" }]
 
 [tool.black]
 line-length = 120

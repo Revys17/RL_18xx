@@ -182,6 +182,8 @@ pub struct Company {
     pub closed: bool,
     /// If true, this company cannot be purchased by a corporation during OR.
     pub no_buy: bool,
+    /// True once the company's special ability has been used (e.g., CS tile_lay).
+    pub ability_used: bool,
     pub owner: EntityId,
 }
 
@@ -197,6 +199,7 @@ impl Company {
             revenue,
             closed: false,
             no_buy: false,
+            ability_used: false,
             owner: EntityId::none(),
         }
     }
@@ -229,6 +232,10 @@ pub struct Corporation {
     pub share_price: Option<SharePrice>,
     pub ipo_price: Option<SharePrice>,
     pub owner_id: EntityId,
+    /// True once the home token has been placed at least once (even if later
+    /// removed by tile upgrade). Used to determine if the home city reservation
+    /// has been consumed.
+    pub home_token_ever_placed: bool,
 }
 
 #[pymethods]
@@ -247,6 +254,7 @@ impl Corporation {
             share_price: None,
             ipo_price: None,
             owner_id: EntityId::none(),
+            home_token_ever_placed: false,
         }
     }
 

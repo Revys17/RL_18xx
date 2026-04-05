@@ -231,6 +231,8 @@ def compare_state(rust_game, py_game):
                 continue
 
             p_graph = py_game.token_graph_for_entity(pc)
+            # Clear stale cache — graph may not have been invalidated for this corp
+            p_graph.clear_graph_for(pc)
 
             # Connected nodes (revenue locations reachable from tokens).
             # This is what matters for route running and token placement.
