@@ -390,6 +390,9 @@ pub struct OperatingState {
     pub finished: bool,
     /// Corps that are over the train limit and must discard (set after phase change).
     pub crowded_corps: Vec<String>,
+    /// Tokens displaced by OO tile upgrades, awaiting re-placement.
+    /// Each entry: (corporation_sym, token_index).
+    pub pending_tokens: Vec<(String, usize)>,
 }
 
 impl OperatingState {
@@ -404,6 +407,7 @@ impl OperatingState {
             num_placed_token: 0,
             routes: Vec::new(),
             crowded_corps: Vec::new(),
+            pending_tokens: Vec::new(),
             revenue: 0,
             finished: false,
         }
@@ -428,6 +432,7 @@ impl OperatingState {
         self.num_laid_track = 0;
         self.num_placed_token = 0;
         self.routes.clear();
+        self.pending_tokens.clear();
         self.revenue = 0;
 
         if self.entity_index >= self.operating_order.len() {

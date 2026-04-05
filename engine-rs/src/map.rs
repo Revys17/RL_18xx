@@ -44,6 +44,9 @@ pub struct CorpGraph {
     pub connected_nodes: HashSet<NodeId>,
     /// Cities where a new token can be placed.
     pub tokenable_cities: Vec<TokenableCity>,
+    /// True if any token walk found at least one additional revenue node
+    /// beyond the starting token city (valid route exists).
+    pub route_available: bool,
 }
 
 /// Full graph cache holding per-corporation data.
@@ -112,6 +115,7 @@ fn compute_corp_graph(
 ) -> CorpGraph {
     let mut visited_nodes = HashSet::new();
     let mut visited_hexes: HashMap<String, HashSet<u8>> = HashMap::new();
+    let mut route_available = false;
 
     // Each token walk gets its own visited_paths (matching Python's per-token
     // fresh visited_paths dict).  The visited_nodes set for each walk is
@@ -126,7 +130,7 @@ fn compute_corp_graph(
         };
 
         // Pre-seed visited_nodes with other token cities
-        let mut local_visited_nodes: HashSet<NodeId> = corp_token_hexes
+        let pre_seed: HashSet<NodeId> = corp_token_hexes
             .iter()
             .filter(|(h, ci)| h != token_hex_id || *ci != *city_index)
             .map(|(h, ci)| NodeId {
@@ -135,9 +139,11 @@ fn compute_corp_graph(
                 index: *ci,
             })
             .collect();
+        let mut local_visited_nodes: HashSet<NodeId> = pre_seed.clone();
         let mut local_visited_hexes: HashMap<String, HashSet<u8>> = HashMap::new();
         let mut local_visited_paths: HashSet<(String, usize)> = HashSet::new();
         let mut edge_counter: HashMap<(String, u8), u32> = HashMap::new();
+        let mut local_result_nodes: HashSet<NodeId> = HashSet::new();
 
         walk_from_node(
             hexes,
@@ -146,15 +152,52 @@ fn compute_corp_graph(
             token_hex_id,
             &start_node,
             &mut local_visited_nodes,
+            &mut local_result_nodes,
             &mut local_visited_hexes,
             &mut local_visited_paths,
             corp_sym,
             false, // converging starts as false for the token node
             &mut edge_counter,
+            false, // converging_path starts as false
         );
+
+        // Check if this walk found additional revenue nodes
+        if !route_available {
+            let pre_seed: HashSet<NodeId> = corp_token_hexes
+                .iter()
+                .filter(|(h, ci)| h != token_hex_id || *ci != *city_index)
+                .map(|(h, ci)| NodeId {
+                    hex_id: h.clone(),
+                    node_type: NodeType::City,
+                    index: *ci,
+                })
+                .collect();
+            // Union of visited and result nodes — visited may miss nodes that
+            // were un-visited by converging, result catches those.
+            let all_found: HashSet<&NodeId> = local_visited_nodes
+                .iter()
+                .chain(local_result_nodes.iter())
+                .collect();
+            let has_optional = all_found.iter().any(|n| {
+                **n != start_node
+                    && !pre_seed.contains(n)
+                    && (n.node_type == NodeType::City
+                        || n.node_type == NodeType::Town
+                        || n.node_type == NodeType::Offboard)
+            });
+            let reached_other_token = all_found.iter().any(|n| {
+                pre_seed.contains(n) && local_visited_hexes.contains_key(&n.hex_id)
+            });
+            if has_optional || reached_other_token {
+                route_available = true;
+            }
+        }
 
         // Merge results
         for node in local_visited_nodes {
+            visited_nodes.insert(node);
+        }
+        for node in local_result_nodes {
             visited_nodes.insert(node);
         }
         for (hex_id, edges) in local_visited_hexes {
@@ -190,13 +233,29 @@ fn compute_corp_graph(
                         .any(|t| t.as_ref().is_some_and(|tok| tok.corporation_id == corp_sym))
                 });
                 if !corp_already_in_hex {
-                    // Check reservations: in 1830 (reservation_blocks="always"),
-                    // if ANY city on this hex is reserved for another corp,
-                    // this corp can't place a token here.
-                    let blocked_by_reservation = reservations
-                        .iter()
-                        .any(|(rh, _rc, rsym)| rh == &node.hex_id && rsym != corp_sym);
-                    if !blocked_by_reservation {
+                    // Reservation blocking:
+                    // - Tile-level reservations (city_index=usize::MAX) use
+                    //   "always" blocking: any city on the hex is blocked.
+                    // - City-level reservations: slot-level blocking on the
+                    //   specific city.
+                    let tile_level_blocked = reservations.iter().any(|(rh, rc, rsym)| {
+                        rh == &node.hex_id && *rc == usize::MAX && rsym != corp_sym
+                    });
+                    let blocked = if tile_level_blocked {
+                        true
+                    } else {
+                        // City-level: slot-level blocking
+                        let num_tokens = city.tokens.iter().filter(|t| t.is_some()).count();
+                        let num_other_reservations = reservations
+                            .iter()
+                            .filter(|(rh, rc, rsym)| {
+                                rh == &node.hex_id && *rc == node.index && rsym != corp_sym
+                            })
+                            .count();
+                        let total_slots = city.tokens.len();
+                        total_slots.saturating_sub(num_tokens + num_other_reservations) == 0
+                    };
+                    if !blocked {
                         tokenable.push(TokenableCity {
                             hex_id: node.hex_id.clone(),
                             city_index: node.index,
@@ -211,6 +270,7 @@ fn compute_corp_graph(
         connected_hexes: visited_hexes,
         connected_nodes: visited_nodes,
         tokenable_cities: tokenable,
+        route_available,
     }
 }
 
@@ -257,16 +317,19 @@ fn walk_from_node(
     hex_id: &str,
     node: &NodeId,
     visited_nodes: &mut HashSet<NodeId>,
+    result_nodes: &mut HashSet<NodeId>,
     visited_hexes: &mut HashMap<String, HashSet<u8>>,
     visited_paths: &mut HashSet<(String, usize)>,
     corp_sym: &str,
     converging: bool,
     edge_counter: &mut HashMap<(String, u8), u32>,
+    converging_path: bool,
 ) {
     if visited_nodes.contains(node) {
         return;
     }
     visited_nodes.insert(node.clone());
+    result_nodes.insert(node.clone());
 
     // Add the hex itself to visited
     visited_hexes.entry(hex_id.to_string()).or_default();
@@ -335,6 +398,7 @@ fn walk_from_node(
                             neighbor_id,
                             enter_edge,
                             visited_nodes,
+                            result_nodes,
                             visited_hexes,
                             visited_paths,
                             corp_sym,
@@ -359,11 +423,13 @@ fn walk_from_node(
                         hex_id,
                         &dest_node,
                         visited_nodes,
+                        result_nodes,
                         visited_hexes,
                         visited_paths,
                         corp_sym,
                         converging,
                         edge_counter,
+                        converging_path || converging,
                     );
                 }
             }
@@ -380,11 +446,13 @@ fn walk_from_node(
                     hex_id,
                     &dest_node,
                     visited_nodes,
+                    result_nodes,
                     visited_hexes,
                     visited_paths,
                     corp_sym,
                     converging,
                     edge_counter,
+                    converging_path || converging,
                 );
             }
             PathEndpoint::Offboard(idx) => {
@@ -393,6 +461,7 @@ fn walk_from_node(
                     node_type: NodeType::Offboard,
                     index: *idx,
                 };
+                result_nodes.insert(dest_node.clone());
                 visited_nodes.insert(dest_node);
             }
             PathEndpoint::Junction => {
@@ -439,6 +508,7 @@ fn walk_from_node(
                                     neighbor_id,
                                     enter_edge,
                                     visited_nodes,
+                                    result_nodes,
                                     visited_hexes,
                                     visited_paths,
                                     corp_sym,
@@ -466,11 +536,13 @@ fn walk_from_node(
         }
     }
 
-    // Note: we do NOT remove the node from visited_nodes during converging.
-    // Paths are un-visited to allow other branches to reuse them, but nodes
-    // (cities/towns) are genuine destinations that should remain visited.
-    // The Python engine's `del visited[self]` affects path reachability,
-    // not the final connected_nodes result.
+    // Un-visit the node when converging_path is true (matching Python's
+    // `if converging_path: del visited[self]` in Node.walk). This allows
+    // sibling DFS branches to re-enter this node. The node stays in
+    // result_nodes permanently — only the cycle-prevention set is affected.
+    if converging_path {
+        visited_nodes.remove(node);
+    }
 }
 
 /// Walk into a hex from a specific entry edge, following paths.
@@ -484,6 +556,7 @@ fn walk_into_hex(
     hex_id: &str,
     enter_edge: u8,
     visited_nodes: &mut HashSet<NodeId>,
+    result_nodes: &mut HashSet<NodeId>,
     visited_hexes: &mut HashMap<String, HashSet<u8>>,
     visited_paths: &mut HashSet<(String, usize)>,
     corp_sym: &str,
@@ -496,10 +569,9 @@ fn walk_into_hex(
     };
     let tile = &hexes[hi].tile;
 
-    visited_hexes
-        .entry(hex_id.to_string())
-        .or_default()
-        .insert(enter_edge);
+    // Don't add hex to visited_hexes yet — only add after finding a matching
+    // path from the entry edge. This prevents "phantom" connectivity through
+    // hexes that have no path matching the entry direction.
 
     let enter_ep = PathEndpoint::Edge(enter_edge);
 
@@ -519,9 +591,6 @@ fn walk_into_hex(
             .iter()
             .any(|e| *edge_counter.get(&(hex_id.to_string(), *e)).unwrap_or(&0) > 0);
         if edge_in_stack {
-            if hex_id == "H10" {
-                eprintln!("  path[{}] SKIPPED by edge_in_stack (path_edges={:?})", path_idx, path_edges);
-            }
             continue;
         }
 
@@ -538,6 +607,12 @@ fn walk_into_hex(
         } else {
             continue;
         };
+
+        // Found a matching path — now add the hex to visited with entry edge
+        visited_hexes
+            .entry(hex_id.to_string())
+            .or_default()
+            .insert(enter_edge);
 
         // Mark path as visited
         visited_paths.insert(path_key.clone());
@@ -567,6 +642,7 @@ fn walk_into_hex(
                             neighbor_id,
                             next_enter,
                             visited_nodes,
+                            result_nodes,
                             visited_hexes,
                             visited_paths,
                             corp_sym,
@@ -591,13 +667,16 @@ fn walk_into_hex(
                         hex_id,
                         &node,
                         visited_nodes,
+                        result_nodes,
                         visited_hexes,
                         visited_paths,
                         corp_sym,
                         converging,
                         edge_counter,
+                        converging,
                     );
                 } else {
+                    result_nodes.insert(node.clone());
                     visited_nodes.insert(node);
                 }
             }
@@ -614,11 +693,13 @@ fn walk_into_hex(
                     hex_id,
                     &node,
                     visited_nodes,
+                    result_nodes,
                     visited_hexes,
                     visited_paths,
                     corp_sym,
                     converging,
                     edge_counter,
+                    converging,
                 );
             }
             PathEndpoint::Offboard(idx) => {
@@ -627,6 +708,7 @@ fn walk_into_hex(
                     node_type: NodeType::Offboard,
                     index: *idx,
                 };
+                result_nodes.insert(node.clone());
                 visited_nodes.insert(node);
             }
             PathEndpoint::Junction => {
@@ -676,6 +758,7 @@ fn walk_into_hex(
                                     neighbor_id,
                                     next_enter,
                                     visited_nodes,
+                                    result_nodes,
                                     visited_hexes,
                                     visited_paths,
                                     corp_sym,

@@ -7,7 +7,7 @@
 //! The round ends when all players pass without acting.
 
 use crate::actions::{Action, GameError};
-use crate::entities::EntityId;
+use crate::entities::{Corporation, EntityId};
 use crate::game::BaseGame;
 use crate::rounds::StockState;
 
@@ -202,16 +202,19 @@ impl BaseGame {
             )));
         }
 
-        // Check cert limit
-        let current_certs = self.num_certs_internal(player_id);
-        if current_certs >= self.cert_limit as u32 {
-            return Err(GameError::new("At certificate limit"));
-        }
-
         let corp_idx = *self
             .corp_idx
             .get(corporation_sym)
             .ok_or_else(|| GameError::new(format!("Unknown corporation: {}", corporation_sym)))?;
+
+        // Check cert limit — bypass if the target corporation is in a cert-limit-exempt zone
+        let target_counts_for_limit = !Self::corp_exempt_from_cert_limit(&self.corporations[corp_idx]);
+        if target_counts_for_limit {
+            let current_certs = self.num_certs_internal(player_id);
+            if current_certs >= self.cert_limit as u32 {
+                return Err(GameError::new("At certificate limit"));
+            }
+        }
 
         let ipo_eid = EntityId::ipo(corporation_sym);
         let market_eid = EntityId::market();
@@ -572,17 +575,16 @@ impl BaseGame {
     // and stock_start_entity should handle all player advancement correctly.
 
     /// Internal cert counting (used by stock round logic).
-    /// In 1830, shares of corps in the Yellow zone (no_cert_limit) don't count.
+    /// In 1830, shares of corps in cert-limit-exempt zones don't count.
+    /// Exempt types: "no_cert_limit", "multiple_buy", "unlimited".
     pub(crate) fn num_certs_internal(&self, player_id: u32) -> u32 {
         let player_eid = EntityId::player(player_id);
         let share_certs: u32 = self
             .corporations
             .iter()
             .filter(|c| {
-                // Exclude corps whose share price is in a no_cert_limit zone (Yellow)
-                !c.share_price
-                    .as_ref()
-                    .is_some_and(|sp| sp.types.iter().any(|t| t == "no_cert_limit"))
+                // Exclude corps whose share price is in a cert-limit-exempt zone
+                !Self::corp_exempt_from_cert_limit(c)
             })
             .flat_map(|c| c.shares.iter())
             .filter(|s| s.owner == player_eid)
@@ -594,6 +596,15 @@ impl BaseGame {
             .filter(|c| c.owner == player_eid && !c.closed)
             .count() as u32;
         share_certs + company_certs
+    }
+
+    /// Check if a corporation is in a cert-limit-exempt price zone.
+    /// In 1830, CERT_LIMIT_TYPES = ["multiple_buy", "unlimited", "no_cert_limit"].
+    fn corp_exempt_from_cert_limit(corp: &Corporation) -> bool {
+        const EXEMPT_TYPES: &[&str] = &["no_cert_limit", "multiple_buy", "unlimited"];
+        corp.share_price
+            .as_ref()
+            .is_some_and(|sp| sp.types.iter().any(|t| EXEMPT_TYPES.contains(&t.as_str())))
     }
 
     /// Check if a corporation should float (60%+ sold from IPO).
@@ -633,6 +644,7 @@ impl BaseGame {
                             *token_slot = Some(token);
                             self.corporations[corp_idx].tokens[0].used = true;
                             self.corporations[corp_idx].tokens[0].city_hex_id = home_hex;
+                            self.corporations[corp_idx].home_token_ever_placed = true;
                             break;
                         }
                     }

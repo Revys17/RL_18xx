@@ -181,24 +181,75 @@ impl BaseGame {
             // and PlaceToken steps are consumed.
             //
             // CS's lay_tile is a BONUS tile — doesn't consume anything.
+            // After CS lay_tile, skip_steps should check if BuyCompany
+            // (or whatever step we're at) can auto-advance.
             let entity_id = action.entity_id();
-            let mut needs_skip_steps = false;
+            let mut needs_skip_steps = entity_id == "CS";
+            let mut dh_post_token: Option<(String, bool)> = None;
             if entity_id == "DH" {
                 if let Round::Operating(ref mut s) = self.round {
                     match action {
                         Action::LayTile { .. } if s.step == crate::rounds::OperatingStep::LayTile => {
                             s.num_laid_track += 1;
-                            s.num_placed_token += 1;
-                            // Advance past Track and PlaceToken to RunRoutes.
-                            // DH place_token (if it comes) is a no-op on step.
-                            s.step = crate::rounds::OperatingStep::RunRoutes;
+                            // Check if the owning corp has unused tokens.
+                            // If yes, DH place_token will come as a separate action.
+                            // If no, consume both track and token and advance to RunRoutes.
+                            let corp_sym = s.current_corp_sym().unwrap_or("").to_string();
+                            let corp_has_unused_token = self.corp_idx.get(corp_sym.as_str())
+                                .map(|&ci| self.corporations[ci].next_token_index().is_some())
+                                .unwrap_or(false);
+                            if corp_has_unused_token {
+                                // DH place_token will come — advance to PlaceToken
+                                s.step = crate::rounds::OperatingStep::PlaceToken;
+                            } else {
+                                // No tokens available — consume both and advance
+                                s.num_placed_token += 1;
+                                s.step = crate::rounds::OperatingStep::RunRoutes;
+                                needs_skip_steps = true;
+                            }
                         }
-                        Action::Pass { .. } | Action::PlaceToken { .. } => {
-                            // DH token placed or declined — skip_steps from
-                            // current position to advance through RunRoutes etc.
+                        Action::PlaceToken { .. } => {
+                            // DH token placed — consume the token step.
+                            s.num_placed_token += 1;
+                            let corp_sym = s.current_corp_sym().unwrap_or("").to_string();
+                            let has_trains = self.corp_idx.get(corp_sym.as_str())
+                                .map(|&ci| !self.corporations[ci].trains.is_empty())
+                                .unwrap_or(false);
+                            s.step = s.step.next(); // PlaceToken → RunRoutes
+                            needs_skip_steps = true;
+                            dh_post_token = Some((corp_sym, has_trains));
+                        }
+                        Action::Pass { .. } => {
+                            // DH token declined — do NOT consume the regular
+                            // token step. The corp can still place its own token.
+                            // Just advance past DH's PlaceToken offer to the
+                            // regular PlaceToken, which skip_steps will handle.
                             needs_skip_steps = true;
                         }
                         _ => {}
+                    }
+                }
+            }
+            // After DH place_token: if the corp has trains but can't run
+            // a route, auto-operate them, auto-withhold (move price left),
+            // and jump to BuyTrain (Python behavior).
+            if let Some((ref corp_sym, has_trains)) = dh_post_token {
+                if has_trains && !self.can_run_route(corp_sym) {
+                    if let Some(&ci) = self.corp_idx.get(corp_sym.as_str()) {
+                        for train in &mut self.corporations[ci].trains {
+                            train.operated = true;
+                        }
+                        // Auto-withhold: 0 revenue → move share price left
+                        if let Some(sp) = self.corporations[ci].share_price.clone() {
+                            let (nr, nc) = self.stock_market.move_left(sp.row, sp.column);
+                            if let Some(new_sp) = self.stock_market.share_price_at(nr, nc) {
+                                self.corporations[ci].share_price = Some(new_sp);
+                                self.update_market_cell(corp_sym, sp.row, sp.column, nr, nc);
+                            }
+                        }
+                    }
+                    if let Round::Operating(ref mut s) = self.round {
+                        s.step = crate::rounds::OperatingStep::BuyTrain;
                     }
                 }
             }
@@ -218,6 +269,23 @@ impl BaseGame {
                         }
                     }
                 }
+            }
+
+            // Check for round transitions after company ability processing
+            for _ in 0..20 {
+                let round_finished = match &self.round {
+                    Round::Auction(s) => s.finished,
+                    Round::Stock(s) => s.finished,
+                    Round::Operating(s) => s.finished,
+                };
+                if !round_finished {
+                    break;
+                }
+                if self.game_end_triggered && self.should_end_now() {
+                    self.end_game();
+                    break;
+                }
+                self.transition_to_next_round();
             }
 
             return Ok(());
@@ -429,13 +497,14 @@ impl BaseGame {
     /// Returns Ok(true) if the action was a company exchange and was processed,
     /// Ok(false) if it's not a company exchange (caller should dispatch normally).
     fn try_process_company_exchange(&mut self, action: &Action) -> Result<bool, GameError> {
-        let (entity_id, corp_sym, percent) = match action {
+        let (entity_id, corp_sym, percent, share_indices) = match action {
             Action::BuyShares {
                 entity_id,
                 corporation_sym,
                 percent,
+                share_indices,
                 ..
-            } => (entity_id.as_str(), corporation_sym.as_str(), *percent),
+            } => (entity_id.as_str(), corporation_sym.as_str(), *percent, share_indices),
             _ => return Ok(false),
         };
 
@@ -458,17 +527,29 @@ impl BaseGame {
 
         let player_eid = EntityId::player(owner_player_id);
 
-        // Find a share to transfer: prefer IPO, then market, then uninitialized
+        // Find a share to transfer.
+        // If specific share indices are provided, use the exact share.
+        // Otherwise: prefer IPO, then market, then uninitialized.
         let mut transferred = false;
         let ipo_eid = EntityId::ipo(corp_sym);
         let market_eid = EntityId::market();
 
-        // Try IPO first
-        for share in &mut self.corporations[corp_idx].shares {
-            if !share.president && share.percent == percent && share.owner == ipo_eid {
-                share.owner = player_eid.clone();
+        if !share_indices.is_empty() {
+            let idx = share_indices[0];
+            if idx < self.corporations[corp_idx].shares.len() {
+                self.corporations[corp_idx].shares[idx].owner = player_eid.clone();
                 transferred = true;
-                break;
+            }
+        }
+
+        // Fallback: try IPO first
+        if !transferred {
+            for share in &mut self.corporations[corp_idx].shares {
+                if !share.president && share.percent == percent && share.owner == ipo_eid {
+                    share.owner = player_eid.clone();
+                    transferred = true;
+                    break;
+                }
             }
         }
         // Then market
@@ -632,6 +713,9 @@ impl BaseGame {
                         }
                     }
                 }
+
+                // Mark the company's ability as used
+                self.companies[company_idx].ability_used = true;
 
                 Ok(true)
             }
@@ -824,11 +908,25 @@ impl BaseGame {
         let mut reservations = Vec::new();
         for cd in &corp_defs {
             let sym = cd.sym.to_string();
-            // Only reserve if the corp hasn't placed its home token yet
             if let Some(&ci) = self.corp_idx.get(sym.as_str()) {
-                let home_token_placed =
-                    self.corporations[ci].tokens.first().is_some_and(|t| t.used);
-                if !home_token_placed {
+                let corp = &self.corporations[ci];
+                // Once the home token has been placed (even if later removed
+                // by tile upgrade), the reservation is consumed permanently.
+                if corp.home_token_ever_placed {
+                    continue;
+                }
+                let token_at_home = corp.tokens.iter().any(|t| {
+                    t.used && t.city_hex_id == cd.home_hex
+                });
+                if token_at_home {
+                    continue;
+                }
+                // In Python, E11 (ERIE's home) uses tile-level reservation
+                // (reservation_blocks="always" at tile level). All other
+                // homes use city-level reservations.
+                if cd.home_hex == "E11" {
+                    reservations.push((cd.home_hex.to_string(), usize::MAX, sym));
+                } else {
                     reservations.push((cd.home_hex.to_string(), cd.home_city_index as usize, sym));
                 }
             }
@@ -1316,6 +1414,18 @@ impl BaseGame {
         hexes
     }
 
+    /// Get hex adjacency for debugging.
+    fn get_hex_neighbors(&self, hex_id: String) -> Vec<(u8, String)> {
+        self.hex_adjacency
+            .get(&hex_id)
+            .map(|m| {
+                let mut v: Vec<_> = m.iter().map(|(e, h)| (*e, h.clone())).collect();
+                v.sort();
+                v
+            })
+            .unwrap_or_default()
+    }
+
     /// Get the current OR step as a string (for debugging).
     fn get_or_step(&self) -> String {
         match &self.round {
@@ -1564,8 +1674,7 @@ impl BaseGame {
             &token_positions,
             &reservations,
         );
-        // Need at least 2 connected nodes to form a route
-        graph.connected_nodes.len() >= 2
+        graph.route_available
     }
 
     pub(crate) fn can_place_token(&mut self, corp_sym: &str) -> bool {
@@ -1584,8 +1693,14 @@ impl BaseGame {
         if corp.cash < price {
             return false;
         }
-        // If the corp has no tokens on the board (home token not yet placed),
-        // it can always place on its home hex — no reachability needed.
+        // If the home token (token[0]) is unplaced, the corp can place it
+        // on its home hex without connectivity. This handles both initial
+        // placement and re-placement after OO tile upgrade.
+        let home_token_unplaced = !corp.tokens.is_empty() && !corp.tokens[0].used;
+        if home_token_unplaced {
+            return true;
+        }
+        // If no tokens are placed at all, can always place on home hex
         let has_placed_token = corp.tokens.iter().any(|t| t.used);
         if !has_placed_token {
             return true;
