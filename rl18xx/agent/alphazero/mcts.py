@@ -18,31 +18,47 @@ VALUE_SIZE = 4  # We always want to play a 4-player game.
 
 LOGGER = logging.getLogger(__name__)
 
-# Cached edge index/attributes for Rust encoder (static hex adjacency, computed once)
+# Module-level singletons (stateless, computed once)
 _cached_edge_index = None
 _cached_edge_attrs = None
+_cached_action_mapper = None
+
+
+def _get_action_mapper() -> ActionMapper:
+    global _cached_action_mapper
+    if _cached_action_mapper is None:
+        _cached_action_mapper = ActionMapper()
+    return _cached_action_mapper
 
 
 def _rust_encode(game: RustGameAdapter) -> tuple:
     """Encode a RustGameAdapter using the Rust-native encoder.
-    Returns the same (game_state, node_features, edge_index, edge_attrs) tuple
-    that the Python encoder returns. Falls back to Python encoder if Rust
-    encode_for_gnn is not available."""
+    Returns (game_state, node_features, edge_index, edge_attrs, round_type_idx, active_player_idx).
+    Falls back to Python encoder if Rust encode_for_gnn is not available."""
     global _cached_edge_index, _cached_edge_attrs
+
+    from rl18xx.agent.alphazero.encoder import ROUND_TYPE_MAP
 
     # Compute static edge index once (hex adjacency never changes)
     if _cached_edge_index is None:
         from rl18xx.agent.alphazero.encoder import Encoder_GNN
         encoder = Encoder_GNN()
         encoder.initialize(game)
-        _, _, _cached_edge_index, _cached_edge_attrs = encoder.encode(game)
+        result = encoder.encode(game)
+        _cached_edge_index, _cached_edge_attrs = result[2], result[3]
+
+    round_name = game.round.__class__.__name__
+    round_type_idx = ROUND_TYPE_MAP.get(round_name, 0)
+    player_ids = sorted([p.id for p in game.players])
+    player_id_to_idx = {pid: i for i, pid in enumerate(player_ids)}
+    active_player_idx = player_id_to_idx.get(game.active_players()[0].id, 0)
 
     # Use Rust encoder if available, otherwise fall back to Python
     if hasattr(game._game, 'encode_for_gnn'):
         gs_flat, nf_flat, enc_size, num_hexes, num_nf = game._game.encode_for_gnn()
         gs_tensor = torch.tensor(gs_flat, dtype=torch.float32).unsqueeze(0)
         nf_tensor = torch.tensor(nf_flat, dtype=torch.float32).reshape(num_hexes, num_nf)
-        return (gs_tensor, nf_tensor, _cached_edge_index, _cached_edge_attrs)
+        return (gs_tensor, nf_tensor, _cached_edge_index, _cached_edge_attrs, round_type_idx, active_player_idx)
 
     # Fallback: Python encoder on adapter
     from rl18xx.agent.alphazero.encoder import Encoder_GNN
@@ -107,22 +123,17 @@ class MCTSNode:
 
         self.config = config or SelfPlayConfig()
         self.game_object = game_state
+        self.encoded_game_state = None  # lazy — computed on demand via ensure_encoded()
 
-        t0 = time.perf_counter()
-        if isinstance(game_state, RustGameAdapter):
-            self.encoded_game_state = _rust_encode(game_state)
-        else:
-            self.encoded_game_state = Encoder_1830.get_encoder_for_model(self.config.network).encode(self.game_object)
-        t1 = time.perf_counter()
-        self.action_mapper = ActionMapper()
+        self.action_mapper = _get_action_mapper()
 
         self.player_mapping = {p.id: i for i, p in enumerate(sorted(self.game_object.players, key=lambda x: x.id))}
         self.active_player_index = self.player_mapping[self.game_object.active_players()[0].id]
 
+        t0 = time.perf_counter()
         self.legal_action_indices = self.action_mapper.get_legal_action_indices(self.game_object)
-        t2 = time.perf_counter()
-        self.add_metric("MCTS/Node_Encode_Duration", t1 - t0)
-        self.add_metric("MCTS/Node_ActionEnum_Duration", t2 - t1)
+        t1 = time.perf_counter()
+        self.add_metric("MCTS/Node_ActionEnum_Duration", t1 - t0)
         self.num_legal_actions = len(self.legal_action_indices)
         self.child_N_compressed = np.zeros(self.num_legal_actions, dtype=np.float32)
         self.child_W_compressed = np.zeros([self.num_legal_actions, VALUE_SIZE], dtype=np.float32)
@@ -139,6 +150,19 @@ class MCTSNode:
         if self.config.metrics is None:
             return
         self.config.metrics.add_scalar(name, value, self.config.global_step, self.config.game_idx_in_iteration)
+
+    def ensure_encoded(self):
+        """Lazily encode the game state on first access. Most MCTS nodes are never
+        selected as leaves, so deferring encoding avoids wasted computation."""
+        if self.encoded_game_state is not None:
+            return
+        t0 = time.perf_counter()
+        if isinstance(self.game_object, RustGameAdapter):
+            self.encoded_game_state = _rust_encode(self.game_object)
+        else:
+            self.encoded_game_state = Encoder_1830.get_encoder_for_model(self.config.network).encode(self.game_object)
+        t1 = time.perf_counter()
+        self.add_metric("MCTS/Node_Encode_Duration", t1 - t0)
 
     def __repr__(self):
         return f"<MCTSNode move_number={self.game_object.move_number}, move=[{self.fmove}], N={self.N if self.parent and self.fmove is not None else 'N/A'}, to_play={self.active_player_index}>"
@@ -214,14 +238,12 @@ class MCTSNode:
 
     @property
     def child_U_compressed(self):
-        # U for all children (legal moves only)
-        # U(s, a) = c_puct * P(s, a) * sqrt(N(s)) / (1 + N(s, a)))
-        # c_puct = 2.0 * (log(1.0 + N(s, parent)) + c_puct_init) * sqrt(1 / (1 + N(s, a)))
-        # P(s, a) = child_prior
-        # N(s) = self.N
-        # N(s, a) = child_N
+        # U(s, a) = c_puct * P(s, a) * sqrt(N(s)) / (1 + N(s, a))
+        # Per-round-type c_puct_init (Phase 6.2)
+        round_name = self.game_object.round.__class__.__name__
+        c_puct_init = self.config.c_puct_by_round.get(round_name, self.config.c_puct_init)
         c_puct = 2.0 * (
-            math.log((1.0 + self.N + self.config.c_puct_base) / self.config.c_puct_base) + self.config.c_puct_init
+            math.log((1.0 + self.N + self.config.c_puct_base) / self.config.c_puct_base) + c_puct_init
         )
         p_s_a = self.child_prior_compressed
         n_s = max(1, self.N - 1)
@@ -258,8 +280,19 @@ class MCTSNode:
         current = self
         num_added = 0
         while current.is_expanded:
-            # Work in compressed space to avoid allocating a 26,535-element array
-            best_compressed_idx = np.argmax(current.child_action_score_compressed)
+            scores = current.child_action_score_compressed
+            # Progressive widening (Phase 6.3): only apply when many legal actions
+            if current.num_legal_actions > 20:
+                k = max(1, int(current.config.pw_c * (current.N ** current.config.pw_alpha)))
+                if k < current.num_legal_actions:
+                    top_k_indices = np.argpartition(current.child_prior_compressed, -k)[-k:]
+                    masked_scores = np.full_like(scores, -np.inf)
+                    masked_scores[top_k_indices] = scores[top_k_indices]
+                    best_compressed_idx = np.argmax(masked_scores)
+                else:
+                    best_compressed_idx = np.argmax(scores)
+            else:
+                best_compressed_idx = np.argmax(scores)
             best_move = current.legal_action_indices[best_compressed_idx]
             current = current.maybe_add_child(best_move)
             num_added += 1
@@ -367,17 +400,17 @@ class MCTSNode:
         self.backup_value(value, up_to=up_to)
 
     def backup_value(self, value, up_to):
-        """Propagates a value estimation up to the root node.
+        """Propagates a value estimation up to the root node with depth discounting.
 
         Args:
-            value: the value to be propagated
+            value: the value to be propagated (discounted at each level)
             up_to: the node to propagate until.
         """
         self.N += 1
         self.W += value
         if self.parent is None or self is up_to:
             return
-        self.parent.backup_value(value, up_to)
+        self.parent.backup_value(value * self.config.backup_discount, up_to)
 
     def is_done(self):
         return self.game_object.finished or self.game_object.move_number >= self.config.max_game_length
@@ -387,15 +420,27 @@ class MCTSNode:
             LOGGER.warning(f"Getting game result for unfinished game (node fmove: {self.fmove}).")
 
         result = self.game_object.result()
-        winning_score = max(result.values())
 
+        if self.config.use_score_values:
+            # Phase 6.4: normalized score fractions for richer gradient signal
+            scores = np.array(
+                [result[pid] for pid in sorted(result.keys())],
+                dtype=np.float32,
+            )
+            total = scores.sum()
+            if total > 0:
+                return scores / total
+            # Fallback: equal share if all scores are 0
+            return np.full(VALUE_SIZE, 1.0 / VALUE_SIZE, dtype=np.float32)
+
+        # Legacy win/loss encoding
+        winning_score = max(result.values())
         value = np.full(VALUE_SIZE, -1.0, dtype=np.float32)
         winners = [self.player_mapping[pid] for pid, score in result.items() if score == winning_score]
         if len(winners) > 1:
             value[winners] = 0.0
         else:
             value[winners] = 1.0
-
         return value
 
     def game_result_string(self) -> Optional[str]:
@@ -428,14 +473,25 @@ class MCTSNode:
             + dirichlet * self.config.dirichlet_noise_weight
         )
 
-    def children_as_pi(self, squash=False) -> np.ndarray:
-        probs = self.child_N
-        if squash:
-            probs = probs**0.98
+    def children_as_pi(self, temperature: float = 1.0) -> np.ndarray:
+        """Return visit-count policy vector, optionally with temperature scaling.
+
+        When temperature=1.0, returns visit counts normalized to a probability distribution.
+        When temperature<1.0, sharpens toward the most-visited action (temperature→0 = argmax).
+        When temperature>1.0, flattens (more exploratory).
+        """
+        if temperature < 1e-8:
+            # Temperature → 0: deterministic argmax
+            probs = np.zeros_like(self.child_N, dtype=np.float64)
+            probs[np.argmax(self.child_N)] = 1.0
+            return probs
+        probs = self.child_N.astype(np.float64)
+        if temperature != 1.0:
+            probs = probs ** (1.0 / temperature)
         sum_probs = np.sum(probs)
         if sum_probs == 0:
             return probs
-        return probs / np.sum(probs)
+        return probs / sum_probs
 
     def best_child(self) -> int:
         # Sort by child_N tie break with action score.

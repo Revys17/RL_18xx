@@ -362,7 +362,7 @@ def near_terminal_game_objects(game_objects) -> GameObjects:
 
 @pytest.fixture
 def mcts_config() -> SelfPlayConfig:
-    return SelfPlayConfig(network=DummyNet())
+    return SelfPlayConfig(network=DummyNet(), backup_discount=1.0, use_score_values=False)
 
 
 def assertNoPendingVirtualLosses(root):
@@ -396,9 +396,12 @@ def test_upper_bound_confidence(game_objects, mcts_config: SelfPlayConfig):
         root.child_prior[1], 1.0 / num_legal_actions, rtol=1e-6
     ), f"root.child_prior[1]: {root.child_prior[1]}, should be 1/{num_legal_actions} {1.0/num_legal_actions}"
 
+    # Use round-type-specific c_puct_init (Phase 6.2)
+    round_name = game_instance.round.__class__.__name__
+    effective_c_puct_init = mcts_config.c_puct_by_round.get(round_name, mcts_config.c_puct_init)
     puct_policy = (
         lambda n: 2.0
-        * (math.log((1.0 + n + mcts_config.c_puct_base) / mcts_config.c_puct_base) + mcts_config.c_puct_init)
+        * (math.log((1.0 + n + mcts_config.c_puct_base) / mcts_config.c_puct_base) + effective_c_puct_init)
         * 1.0
         / num_legal_actions
     )

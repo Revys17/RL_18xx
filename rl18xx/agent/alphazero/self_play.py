@@ -95,9 +95,8 @@ class MCTSPlayer(Agent):
           `inject_noise` calls.
         """
         self.log_memory_usage(stage_name="MCTSPlayer.play_move")
-        self.searches_pi.append(
-            self.root.children_as_pi(self.root.game_object.move_number < self.config.softpick_move_cutoff)
-        )
+        temperature = 1.0 if self.root.game_object.move_number < self.config.softpick_move_cutoff else 0.0
+        self.searches_pi.append(self.root.children_as_pi(temperature=temperature))
 
         self.root = self.root.maybe_add_child(action_index)
         # Prune the tree
@@ -113,31 +112,25 @@ class MCTSPlayer(Agent):
         """Picks a move to play, based on MCTS readout statistics.
 
         Highest N is most robust indicator. In the early stage of the game, pick
-        a move weighted by visit count; later on, pick the absolute max."""
+        a move weighted by visit count (temperature=1.0); later on, pick the
+        absolute max (equivalent to temperature→0)."""
         if self.root.game_object.move_number >= self.config.softpick_move_cutoff:
             return self.root.best_child()
 
         if self.root.num_legal_actions == 1:
             return self.root.legal_action_indices[0]
 
-        cdf = self.root.children_as_pi(squash=True).cumsum()
+        pi = self.root.children_as_pi(temperature=1.0)
+        cdf = pi.cumsum()
         selection = random.random()
         action_index = cdf.searchsorted(selection)
-        if action_index >= len(self.root.children_as_pi(squash=True)):
-            LOGGER.error(
-                f"Action index {action_index} is out of bounds. Root children_as_pi: {self.root.children_as_pi(squash=True)}"
-            )
-            raise ValueError(
-                f"Action index {action_index} is out of bounds. Root children_as_pi: {self.root.children_as_pi(squash=True)}"
-            )
+        if action_index >= len(pi):
+            LOGGER.error(f"Action index {action_index} is out of bounds. Root children_as_pi: {pi}")
+            raise ValueError(f"Action index {action_index} is out of bounds. Root children_as_pi: {pi}")
 
         if self.root.child_N[action_index] == 0:
-            LOGGER.error(
-                f"Action index {action_index} has no visits. Root children_as_pi: {self.root.children_as_pi(squash=True)}"
-            )
-            raise ValueError(
-                f"Action index {action_index} has no visits. Root children_as_pi: {self.root.children_as_pi(squash=True)}"
-            )
+            LOGGER.error(f"Action index {action_index} has no visits. Root children_as_pi: {pi}")
+            raise ValueError(f"Action index {action_index} has no visits. Root children_as_pi: {pi}")
         return action_index
 
     def tree_search(self, parallel_readouts=None):
@@ -183,8 +176,19 @@ class MCTSPlayer(Agent):
 
         if leaves:
             run_network_start = time.time()
-            with torch.no_grad():
-                move_probs, _, values = self.network.run_many_encoded([leaf.encoded_game_state for leaf in leaves])
+            for leaf in leaves:
+                leaf.ensure_encoded()
+            # Phase 6.5: FP16 inference for ~2x GPU throughput
+            if self.config.use_fp16_inference and torch.cuda.is_available():
+                with torch.no_grad(), torch.amp.autocast("cuda"):
+                    move_probs, _, values = self.network.run_many_encoded(
+                        [leaf.encoded_game_state for leaf in leaves]
+                    )
+            else:
+                with torch.no_grad():
+                    move_probs, _, values = self.network.run_many_encoded(
+                        [leaf.encoded_game_state for leaf in leaves]
+                    )
             run_network_duration = time.time() - run_network_start
 
             revert_and_incorporate_start = time.time()
@@ -215,9 +219,15 @@ class MCTSPlayer(Agent):
             return self.pick_move()
 
         current_readouts = self.root.N
-        target_readouts_for_move = current_readouts + self.config.num_readouts
+        n_legal = self.root.num_legal_actions
+        if n_legal <= 5:
+            readouts = max(self.config.min_readouts, self.config.num_readouts // 4)
+        elif n_legal <= 20:
+            readouts = max(self.config.min_readouts, self.config.num_readouts // 2)
+        else:
+            readouts = self.config.num_readouts
+        target_readouts_for_move = current_readouts + readouts
 
-        # MCTS simulation loop
         while self.root.N < target_readouts_for_move:
             self.tree_search()
 
@@ -408,8 +418,13 @@ class SelfPlay:
 
         # Must run this once at the start to expand the root node.
         first_node = player.root.select_leaf()
-        with torch.no_grad():
-            probs, _, val = self.config.network.run_encoded(first_node.encoded_game_state)
+        first_node.ensure_encoded()
+        if self.config.use_fp16_inference and torch.cuda.is_available():
+            with torch.no_grad(), torch.amp.autocast("cuda"):
+                probs, _, val = self.config.network.run_encoded(first_node.encoded_game_state)
+        else:
+            with torch.no_grad():
+                probs, _, val = self.config.network.run_encoded(first_node.encoded_game_state)
         first_node.incorporate_results(probs, val, first_node)
         del first_node
         move_counter = 0
@@ -421,6 +436,7 @@ class SelfPlay:
                 start_time_for_move_processing = time.time()
                 player.root.inject_noise()
 
+                sim_count_this_move = 0
                 tree_search_duration_this_move = 0
                 if player.root.num_legal_actions == 1:
                     LOGGER.info(f"Move {move_counter}: Only one legal action. Skipping MCTS.")
@@ -428,17 +444,25 @@ class SelfPlay:
                 else:
                     num_mcts_moves_in_game += 1
                     current_readouts = player.root.N
-                    target_readouts_for_move = current_readouts + self.config.num_readouts
+
+                    # Adaptive readouts: scale by position complexity
+                    n_legal = player.root.num_legal_actions
+                    if n_legal <= 5:
+                        readouts = max(self.config.min_readouts, self.config.num_readouts // 4)
+                    elif n_legal <= 20:
+                        readouts = max(self.config.min_readouts, self.config.num_readouts // 2)
+                    else:
+                        readouts = self.config.num_readouts
+                    target_readouts_for_move = current_readouts + readouts
 
                     # MCTS simulation loop
-                    sim_count_this_move = 0
+                    tree_search_start = time.time()
                     while player.root.N < target_readouts_for_move:
                         player.tree_search()
                         sim_count_this_move += self.config.parallel_readouts
+                    tree_search_duration_this_move = time.time() - tree_search_start
                     total_sims_for_mcts_moves += player.root.N - current_readouts
-
-                tree_search_end_time_this_move = time.time() - tree_search_duration_this_move
-                total_tree_search_time_for_game += tree_search_end_time_this_move
+                total_tree_search_time_for_game += tree_search_duration_this_move
 
                 pick_move_start_time = time.time()
                 move = player.pick_move()
