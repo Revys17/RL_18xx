@@ -23,7 +23,7 @@ def compare_encodings(py_game, rust_game, move_num):
     encoder.initialize(py_game)
 
     # Python encoding
-    py_gs, py_nf, py_ei, py_ea = encoder.encode(py_game)
+    py_gs, py_nf, py_ei, py_ea, *_ = encoder.encode(py_game)
     py_gs_np = py_gs.squeeze(0).numpy()
     py_nf_np = py_nf.numpy()
 

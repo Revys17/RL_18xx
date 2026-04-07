@@ -220,7 +220,7 @@ def test_initial_encoding_structure(encoder_1830: Encoder_GNN, test_game_1830_4p
     num_players = len(g.players)
     assert num_players == 4, "Test requires a 4-player game"
 
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(g)
 
     expected_size = encoder_1830.GAME_STATE_ENCODING_SIZE
     assert game_state_tensor.shape == (
@@ -251,7 +251,7 @@ def test_initial_encoding_structure(encoder_1830: Encoder_GNN, test_game_1830_4p
 def test_test_game_1830_4p_encoding(encoder_1830: Encoder_GNN, test_game_1830_4p):
     """Verify the encoding of general game state at the start."""
     g, action_helper = test_game_1830_4p
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(g)
     encoding = game_state_tensor.squeeze(0).numpy()  # Work with numpy array
 
     offset = 0
@@ -482,7 +482,7 @@ def test_encoding_after_bid(encoder_1830: Encoder_GNN, test_game_1830_4p):
 
     g.process_action(bid_action)
 
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     player_map = encoder_1830.player_id_to_idx
@@ -595,7 +595,7 @@ def test_encoding_after_purchase(encoder_1830: Encoder_GNN, test_game_1830_4p):
     assert buy_action_p2 is not None, "Could not find buy action for P2 on SV"
     g.process_action(buy_action_p2)
 
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     player_map = encoder_1830.player_id_to_idx
@@ -701,7 +701,7 @@ def test_encoding_after_purchase(encoder_1830: Encoder_GNN, test_game_1830_4p):
 def test_initial_map_node_features(encoder_1830: Encoder_GNN, test_game_1830_4p):
     """Verify the node features encoding for specific hexes at the start."""
     g, _ = test_game_1830_4p
-    _, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
+    _, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(g)
     node_features = node_features_tensor.numpy()
 
     # --- Check G19 (New York - City) ---
@@ -961,7 +961,7 @@ def test_encoding_after_par(encoder_1830: Encoder_GNN, test_game_1830_4p):
     g.process_action(par_action)
 
     # Encode the new state
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     player_map = encoder_1830.player_id_to_idx
@@ -1198,7 +1198,7 @@ def test_encoding_after_par(encoder_1830: Encoder_GNN, test_game_1830_4p):
     g.process_action(action_helper.get_all_choices_limited(g)[-1])
     g.process_action(action_helper.get_all_choices_limited(g)[-1])
 
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
 
@@ -1406,7 +1406,7 @@ def test_encoding_after_par(encoder_1830: Encoder_GNN, test_game_1830_4p):
     g.process_action(action_helper.get_all_choices_limited(g)[0])
     g.process_action(action_helper.get_all_choices_limited(g)[-1])
 
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
 
@@ -1652,7 +1652,7 @@ def test_operating_round_2_encoding(
     operating_round_2_game_state, action_helper = operating_round_2_game_state
 
     # Test initial encoding
-    game_state_tensor, node_features_tensor, edge_index_tensor, edge_attributes_tensor = encoder_1830.encode(
+    game_state_tensor, node_features_tensor, edge_index_tensor, edge_attributes_tensor, *_ = encoder_1830.encode(
         operating_round_2_game_state
     )
     encoding = game_state_tensor.squeeze(0).numpy()
@@ -2202,7 +2202,7 @@ def test_operating_round_2_encoding(
     )  # buy a 3 train
 
     # Test that a 3 has been purchased
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(
         operating_round_2_game_state
     )
     encoding = game_state_tensor.squeeze(0).numpy()
@@ -2590,7 +2590,7 @@ def test_operating_round_2_encoding(
     )  # [17:13] C&O (DH) places a token on F16 (Scranton)
 
     # Check post-company action encoding
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(
         operating_round_2_game_state
     )
     encoding = game_state_tensor.squeeze(0).numpy()
@@ -2962,7 +2962,7 @@ def test_operating_round_2_encoding(
     )  # NYC discard train
 
     # Check upgraded tile and discarded train encodings
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(
         operating_round_2_game_state
     )
     encoding = game_state_tensor.squeeze(0).numpy()
@@ -3349,7 +3349,7 @@ def test_operating_round_2_encoding(
     )  # Buy discarded train
 
     # Check final state
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes = encoder_1830.encode(
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(
         operating_round_2_game_state
     )
     encoding = game_state_tensor.squeeze(0).numpy()
@@ -3685,7 +3685,7 @@ def test_new_features(encoder_1830: Encoder_GNN, test_game_1830_4p):
     g, action_helper = test_game_1830_4p
 
     # Initial game state is in the auction round
-    game_state_tensor, _, _, _ = encoder_1830.encode(g)
+    game_state_tensor, _, _, _, *_ = encoder_1830.encode(g)
     encoding = game_state_tensor.squeeze(0).numpy()
 
     # Navigate to the new feature sections by advancing offset through all prior sections

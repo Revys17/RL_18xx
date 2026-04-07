@@ -103,15 +103,17 @@ def train_model(
     else:
         fig, axes = None, None
 
+    accum_steps = config.gradient_accumulation_steps
     global_batch_number = 0
     for epoch in range(config.num_epochs):
         model.train()
         train_losses = []
         train_policy_losses = []
         train_value_losses = []
+        optimizer.zero_grad()
         train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config.num_epochs} [Train]", leave=False)
 
-        for batch in train_pbar:
+        for batch_idx, batch in enumerate(train_pbar):
             global_batch_number += 1
             game_state_data, batch_data, legal_action_mask, pi, value = batch
             # DataLoader adds an extra dimension
@@ -121,34 +123,57 @@ def train_model(
             pi = pi.to(device, non_blocking=True)
             value = value.to(device, non_blocking=True)
 
-            optimizer.zero_grad()
-            _, move_log_probs, value_pred = model(game_state_data, batch_data)
+            policy_logits, value_pred, aux_action_count_pred = model(game_state_data, batch_data)
 
-            # Cross-entropy loss for policy
-            # Mask illegal actions
-            masked_log_probs = move_log_probs * legal_action_mask
-            masked_log_probs = masked_log_probs + 1e-8
-            policy_loss = -torch.sum(pi * masked_log_probs, dim=1).mean()
-            # Cross-entropy loss for value (who wins?)
-            # Convert {-1, 0, +1} targets to probability distribution:
-            # +1 = sole winner, 0 = tied winner, -1 = loser
-            winners_mask = (value > -0.5).float()  # +1 and 0 are winners
-            num_winners = winners_mask.sum(dim=1, keepdim=True).clamp(min=1)
-            value_target_probs = winners_mask / num_winners
-            value_log_probs = F.log_softmax(value_pred, dim=1)
-            value_loss = -(value_target_probs * value_log_probs).sum(dim=1).mean()
-            total_loss = policy_loss + config.value_loss_weight * value_loss
+            # Cross-entropy loss for policy with proper illegal-action masking
+            masked_logits = policy_logits.masked_fill(legal_action_mask == 0, float("-inf"))
+            log_probs = F.log_softmax(masked_logits, dim=1)
+            policy_loss = -torch.sum(pi * log_probs, dim=1).mean()
 
-            total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-            scheduler.step()
+            # Phase 6.6: Policy entropy bonus to prevent premature collapse
+            policy_probs = F.softmax(masked_logits, dim=1)
+            entropy = -(policy_probs * log_probs).sum(dim=1).mean()
+
+            # Value loss — supports both score fractions and legacy win/loss targets
+            # Score fractions: values are in [0, 1] summing to 1 → use KL divergence
+            # Legacy win/loss: values are in {-1, 0, +1} → convert to prob distribution
+            is_score_values = (value >= 0).all()
+            if is_score_values:
+                # KL divergence for score fraction targets (Phase 6.4)
+                value_log_probs = F.log_softmax(value_pred, dim=1)
+                value_loss = F.kl_div(value_log_probs, value, reduction="batchmean")
+            else:
+                # Legacy: convert {-1, 0, +1} to probability distribution
+                winners_mask = (value > -0.5).float()
+                num_winners = winners_mask.sum(dim=1, keepdim=True).clamp(min=1)
+                value_target_probs = winners_mask / num_winners
+                value_log_probs = F.log_softmax(value_pred, dim=1)
+                value_loss = -(value_target_probs * value_log_probs).sum(dim=1).mean()
+
+            # Auxiliary loss: predict log(legal_action_count) (Phase 5.4)
+            legal_action_count = legal_action_mask.sum(dim=1)
+            aux_target = torch.log(legal_action_count.float().clamp(min=1))
+            aux_loss = F.mse_loss(aux_action_count_pred.squeeze(1), aux_target)
+
+            total_loss = (
+                policy_loss
+                + config.value_loss_weight * value_loss
+                + model.config.aux_loss_weight * aux_loss
+                - config.entropy_weight * entropy
+            )
+
+            # Phase 6.7: Gradient accumulation for larger effective batch size
+            (total_loss / accum_steps).backward()
+            if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(train_loader):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
 
             train_losses.append(total_loss.item())
             train_policy_losses.append(policy_loss.item())
             train_value_losses.append(value_loss.item())
 
-            # Add these lines to store batch-level metrics:
             metrics.batch_losses.append(total_loss.item())
             metrics.batch_policy_losses.append(policy_loss.item())
             metrics.batch_value_losses.append(value_loss.item())

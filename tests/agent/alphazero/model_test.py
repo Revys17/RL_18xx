@@ -88,7 +88,7 @@ def test_factored_policy_head_output_shape():
     lay_tile_info = action_mapper.get_lay_tile_index_info()
 
     trunk_dim = SHARED_TRUNK_HIDDEN_DIM
-    head = FactoredPolicyHead(trunk_dim, POLICY_OUTPUT_SIZE, lay_tile_info)
+    head = FactoredPolicyHead(trunk_dim, GNN_OUTPUT_EMBED_DIM, POLICY_OUTPUT_SIZE, lay_tile_info)
     head.eval()
 
     x = torch.randn(3, trunk_dim)
@@ -104,7 +104,7 @@ def test_factored_policy_head_finite_logits():
     lay_tile_info = action_mapper.get_lay_tile_index_info()
 
     trunk_dim = SHARED_TRUNK_HIDDEN_DIM
-    head = FactoredPolicyHead(trunk_dim, POLICY_OUTPUT_SIZE, lay_tile_info)
+    head = FactoredPolicyHead(trunk_dim, GNN_OUTPUT_EMBED_DIM, POLICY_OUTPUT_SIZE, lay_tile_info)
     head.eval()
 
     x = torch.randn(2, trunk_dim)

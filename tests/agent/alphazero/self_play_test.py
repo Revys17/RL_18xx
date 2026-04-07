@@ -367,11 +367,12 @@ def terminal_game_state():
 
 
 def initialize_basic_player(game_state=None):
-    player = MCTSPlayer(SelfPlayConfig(network=DummyNet()))
+    player = MCTSPlayer(SelfPlayConfig(network=DummyNet(), use_score_values=False, backup_discount=1.0))
     player.initialize_game(game_state)
     first_node = player.root.select_leaf()
+    first_node.ensure_encoded()
     with torch.no_grad():
-        priors, _, values = player.config.network.run_encoded(player.root.encoded_game_state)
+        priors, _, values = player.config.network.run_encoded(first_node.encoded_game_state)
     first_node.incorporate_results(priors, values, up_to=player.root)
     return player
 

@@ -67,7 +67,7 @@ class Encoder_1830:
         else:
             raise ValueError(f"Unknown model name: {model.encoder_type()}")
 
-    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, int]:
         raise NotImplementedError("Subclasses must implement this method")
 
 
@@ -268,9 +268,8 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
 
             self.initialized = True
 
-    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, int]:
         start_time = time.perf_counter()
-        # LOGGER.debug("Starting encoding.")
 
         self.initialize(game)
 
@@ -278,13 +277,21 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
         node_features_tensor = self.get_node_features(game)
         base_edge_index_tensor, base_edge_attributes_tensor = self.get_edge_index(game)
 
+        round_name = game.round.__class__.__name__
+        round_type_idx = ROUND_TYPE_MAP.get(round_name, 0)
+        active_player_idx = self.player_id_to_idx.get(game.active_players()[0].id, 0)
+
         end_time = time.perf_counter()
         duration_ms = (end_time - start_time) * 1000
         LOGGER.debug(f"Encoding finished in {duration_ms:.3f} ms.")
-        # LOGGER.debug(f"  Flat state shape: {game_state_tensor.shape}")
-        # LOGGER.debug(f"  Node features shape: {node_features_tensor.shape}")
-        # LOGGER.debug(f"  Edge index shape: {edge_index_tensor.shape}")
-        return game_state_tensor, node_features_tensor, base_edge_index_tensor, base_edge_attributes_tensor
+        return (
+            game_state_tensor,
+            node_features_tensor,
+            base_edge_index_tensor,
+            base_edge_attributes_tensor,
+            round_type_idx,
+            active_player_idx,
+        )
 
     def encode_game_state(self, game: BaseGame) -> Tensor:
         start_time = time.perf_counter()
@@ -1036,9 +1043,8 @@ class Encoder_SSME(Encoder_1830, metaclass=Singleton):
 
             self.initialized = True
 
-    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, int]:
         start_time = time.perf_counter()
-        # LOGGER.debug("Starting encoding.")
 
         self.initialize(game)
 
@@ -1046,13 +1052,21 @@ class Encoder_SSME(Encoder_1830, metaclass=Singleton):
         node_features_tensor = self.get_node_features(game)
         base_edge_index_tensor, base_edge_attributes_tensor = self.get_edge_index(game)
 
+        round_name = game.round.__class__.__name__
+        round_type_idx = ROUND_TYPE_MAP.get(round_name, 0)
+        active_player_idx = self.player_id_to_idx.get(game.active_players()[0].id, 0)
+
         end_time = time.perf_counter()
         duration_ms = (end_time - start_time) * 1000
         LOGGER.debug(f"Encoding finished in {duration_ms:.3f} ms.")
-        # LOGGER.debug(f"  Flat state shape: {game_state_tensor.shape}")
-        # LOGGER.debug(f"  Node features shape: {node_features_tensor.shape}")
-        # LOGGER.debug(f"  Edge index shape: {edge_index_tensor.shape}")
-        return game_state_tensor, node_features_tensor, base_edge_index_tensor, base_edge_attributes_tensor
+        return (
+            game_state_tensor,
+            node_features_tensor,
+            base_edge_index_tensor,
+            base_edge_attributes_tensor,
+            round_type_idx,
+            active_player_idx,
+        )
 
     def encode_game_state(self, game: BaseGame) -> Tensor:
         start_time = time.perf_counter()

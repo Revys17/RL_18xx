@@ -28,6 +28,10 @@ class ModelConfig:
     shared_trunk_hidden_dim: int = 512
     num_res_blocks: int = 7
     dropout_rate: float = 0.0
+    num_round_types: int = 3  # Stock, Operating, Auction
+    film_embed_dim: int = 32
+    value_head_layers: int = 3
+    aux_loss_weight: float = 0.1
     model_checkpoint_file: Optional[str] = None
     timestamp: Optional[str] = None
 
@@ -58,6 +62,10 @@ class ModelConfig:
             "shared_trunk_hidden_dim": self.shared_trunk_hidden_dim,
             "num_res_blocks": self.num_res_blocks,
             "dropout_rate": self.dropout_rate,
+            "num_round_types": self.num_round_types,
+            "film_embed_dim": self.film_embed_dim,
+            "value_head_layers": self.value_head_layers,
+            "aux_loss_weight": self.aux_loss_weight,
             "timestamp": self.timestamp,
         }
 
@@ -76,6 +84,8 @@ class TrainingConfig:
     weight_decay: float = 1e-4
     shuffle_examples: bool = True
     value_loss_weight: float = 1.0
+    entropy_weight: float = 0.01  # Phase 6.6: policy entropy bonus weight
+    gradient_accumulation_steps: int = 4  # Phase 6.7: accumulate gradients over N mini-batches
     max_training_window: int = 0  # 0 means no windowing (use all data)
 
     def __post_init__(self):
@@ -94,6 +104,8 @@ class TrainingConfig:
             "weight_decay": self.weight_decay,
             "shuffle_examples": self.shuffle_examples,
             "value_loss_weight": self.value_loss_weight,
+            "entropy_weight": self.entropy_weight,
+            "gradient_accumulation_steps": self.gradient_accumulation_steps,
             "max_training_window": self.max_training_window,
         }
 
@@ -107,11 +119,18 @@ class SelfPlayConfig:
     max_game_length: int = 1000
     c_puct_base: float = 19652
     c_puct_init: float = 1.25
+    c_puct_by_round: Optional[dict] = None  # Phase 6.2: per-round-type c_puct overrides
     dirichlet_noise_alpha: float = 0.03  # Kept for backward compatibility; inject_noise() now uses 10/num_legal_actions
     dirichlet_noise_weight: float = 0.25
     softpick_move_cutoff: int = 500
     num_readouts: int = 200
-    parallel_readouts: int = 8
+    min_readouts: int = 50
+    parallel_readouts: int = 32
+    backup_discount: float = 0.995  # Phase 6.1: depth-discounted value backup
+    pw_c: float = 1.0  # Phase 6.3: progressive widening constant
+    pw_alpha: float = 0.5  # Phase 6.3: progressive widening exponent
+    use_score_values: bool = True  # Phase 6.4: use normalized score fractions instead of win/loss
+    use_fp16_inference: bool = True  # Phase 6.5: FP16 inference during self-play
     network: Any = None
     metrics: Optional[Metrics] = None
     global_step: int = 0
@@ -124,6 +143,13 @@ class SelfPlayConfig:
         assert self.num_readouts > 0
         if self.game_id is None:
             self.game_id = str(uuid.uuid4())
+        if self.c_puct_by_round is None:
+            self.c_puct_by_round = {
+                "Auction": 1.5,
+                "WaterfallAuction": 1.5,
+                "Stock": 1.25,
+                "Operating": 1.0,
+            }
 
         root_dir = Path("training_examples")
         self.selfplay_dir = root_dir / self.selfplay_dir
