@@ -219,10 +219,8 @@ impl BaseGame {
         let ipo_eid = EntityId::ipo(corporation_sym);
         let market_eid = EntityId::market();
 
-        // Determine the source. When share_indices are provided, check the PYTHON
+        // Determine the source. When share_indices are provided, check Rust's
         // state of that share to infer the intended source (IPO vs market).
-        // Since specific share positions may diverge between Python and Rust,
-        // we use the inferred source to find ANY available share from that source.
         let inferred_source = if !share_indices.is_empty() {
             let idx = share_indices[0];
             if idx < self.corporations[corp_idx].shares.len() {
@@ -232,8 +230,7 @@ impl BaseGame {
                 } else if share.owner == market_eid {
                     Some("market")
                 } else {
-                    // Share at this index is owned by someone - fall back to auto
-                    None
+                    None // Share owned by player/other — index diverged
                 }
             } else {
                 None

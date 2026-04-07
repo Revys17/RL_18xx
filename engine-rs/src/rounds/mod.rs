@@ -80,6 +80,9 @@ pub struct AuctionState {
     /// A corporation pending par: (corp_sym, player_id who must set the par).
     /// Set when a company with triggers_par ability is bought (e.g., BO → B&O).
     pub pending_par: Option<(String, u32)>,
+    /// Last player to purchase a company (for priority_deal_player computation).
+    /// Only set on outright purchases, not competitive bids.
+    pub last_purchaser_id: Option<u32>,
     /// Whether the auction is complete.
     pub finished: bool,
 }
@@ -99,6 +102,7 @@ impl AuctionState {
             discount: 0,
             current_auction_company: first,
             pending_par: None,
+            last_purchaser_id: None,
             finished: false,
         }
     }
@@ -148,13 +152,23 @@ impl AuctionState {
     /// Get the minimum bid for a company.
     pub fn min_bid_for(&self, company_idx: usize, company_value: i32) -> i32 {
         if self.may_purchase(company_idx) {
+            // Cheapest company: discount applies
             return (company_value - self.discount).max(0);
         }
+        // Non-cheapest or during active auction: use highest bid or face value.
+        // Note: self.discount only applies to the cheapest company (Python uses
+        // per-company discount which is 0 for non-cheapest).
+        let is_cheapest = Some(company_idx) == self.cheapest_company();
+        let base_value = if is_cheapest {
+            (company_value - self.discount).max(0)
+        } else {
+            company_value
+        };
         let highest = self
             .bids
             .get(&company_idx)
             .and_then(|bids| bids.iter().map(|b| b.price).max())
-            .unwrap_or((company_value - self.discount).max(0));
+            .unwrap_or(base_value);
         highest + 5 // MIN_BID_INCREMENT
     }
 
@@ -246,6 +260,9 @@ pub struct StockState {
     pub priority_deal_player: u32,
     /// Whether the round is finished.
     pub finished: bool,
+    /// Turn number (increments when player index wraps). Starts at 1.
+    /// SELL_AFTER="first" in 1830 means no selling until turn > 1.
+    pub turn: u32,
 }
 
 impl StockState {
@@ -273,6 +290,7 @@ impl StockState {
             player_passed: vec![false; num_players],
             priority_deal_player,
             finished: false,
+            turn: 1,
         }
     }
 
@@ -291,7 +309,12 @@ impl StockState {
             }
         }
 
-        self.current_player_index = (self.current_player_index + 1) % self.player_order.len();
+        let next = (self.current_player_index + 1) % self.player_order.len();
+        if next == 0 {
+            // Wrapped around to start — new turn
+            self.turn += 1;
+        }
+        self.current_player_index = next;
         self.bought_this_turn = false;
         self.bought_corp_this_turn = None;
         self.bought_from_ipo = false;

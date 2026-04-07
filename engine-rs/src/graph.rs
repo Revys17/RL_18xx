@@ -52,13 +52,35 @@ impl Town {
 pub struct Offboard {
     #[pyo3(get)]
     pub revenue: i32,
+    /// Brown-phase revenue (used when phase allows brown tiles).
+    #[pyo3(get)]
+    pub brown_revenue: Option<i32>,
 }
 
 #[pymethods]
 impl Offboard {
     #[new]
     pub fn new(revenue: i32) -> Self {
-        Offboard { revenue }
+        Offboard {
+            revenue,
+            brown_revenue: None,
+        }
+    }
+
+}
+
+impl Offboard {
+    /// Get phase-appropriate revenue based on available tile colors.
+    pub fn phase_revenue(&self, phase_tiles: &[String]) -> i32 {
+        if let Some(brown) = self.brown_revenue {
+            if phase_tiles.iter().any(|t| t == "brown") {
+                brown
+            } else {
+                self.revenue
+            }
+        } else {
+            self.revenue
+        }
     }
 }
 
@@ -143,6 +165,32 @@ impl Tile {
             color: TileColor::White,
             label: None,
         }
+    }
+
+    /// Tile color as string: "white", "yellow", "green", "brown", "gray", "red".
+    #[getter]
+    fn color(&self) -> String {
+        format!("{:?}", self.color).to_lowercase()
+    }
+
+    /// Tile label (e.g., "B", "NY", "OO") or None.
+    #[getter]
+    fn label(&self) -> Option<String> {
+        self.label.clone()
+    }
+
+    /// Path definitions as list of (endpoint_a, endpoint_b, terminal) tuples.
+    /// Each endpoint is a string like "Edge(0)", "City(0)", "Town(1)", "Junction".
+    #[getter]
+    fn path_defs(&self) -> Vec<(String, String, bool)> {
+        self.paths
+            .iter()
+            .map(|p| {
+                let a = format!("{:?}", p.a);
+                let b = format!("{:?}", p.b);
+                (a, b, p.terminal)
+            })
+            .collect()
     }
 
     fn __repr__(&self) -> String {

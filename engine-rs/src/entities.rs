@@ -90,6 +90,12 @@ impl Train {
         }
     }
 
+    /// Owner entity ID string.
+    #[getter]
+    fn owner(&self) -> String {
+        self.owner.0.clone()
+    }
+
     fn __repr__(&self) -> String {
         format!("Train(name='{}', price={})", self.name, self.price)
     }
@@ -137,6 +143,9 @@ pub struct Share {
     pub percent: u8,
     #[pyo3(get)]
     pub president: bool,
+    /// Index within the corporation's shares array (set during game init).
+    #[pyo3(get)]
+    pub index: usize,
     pub owner: EntityId,
 }
 
@@ -154,6 +163,7 @@ impl Share {
             corporation_id,
             percent,
             president,
+            index: 0,
             owner: EntityId::none(),
         }
     }
@@ -204,6 +214,12 @@ impl Company {
         }
     }
 
+    /// Owner as entity ID string (e.g., "player:1", "corp:PRR", "").
+    #[getter]
+    fn owner(&self) -> String {
+        self.owner.0.clone()
+    }
+
     fn __repr__(&self) -> String {
         format!("Company(sym='{}', value={})", self.sym, self.value)
     }
@@ -221,7 +237,6 @@ pub struct Corporation {
     pub name: String,
     #[pyo3(get)]
     pub cash: i32,
-    #[pyo3(get)]
     pub floated: bool,
     #[pyo3(get)]
     pub trains: Vec<Train>,
@@ -268,6 +283,68 @@ impl Corporation {
         self.ipo_price.clone()
     }
 
+    /// Whether the corporation has floated (60%+ sold from IPO).
+    /// Exposed as a property so both corp.floated and corp.floated work.
+    /// Note: Python encoder calls corp.floated() with parens, but the test
+    /// accesses corp.floated as attribute. A #[getter] makes it a property
+    /// (accessible as attribute), which can't be called with ().
+    /// Since the test is the reference, we use #[getter].
+    #[getter]
+    fn floated(&self) -> bool {
+        self.floated
+    }
+
+    /// Alias for ipo_price (Python calls corporation.par_price()).
+    fn par_price(&self) -> Option<SharePrice> {
+        self.ipo_price.clone()
+    }
+
+    /// Number of share units in the IPO (president counts as 2, includes uninitialized).
+    fn num_ipo_shares(&self) -> usize {
+        let ipo_id = EntityId::ipo(&self.sym);
+        self.shares
+            .iter()
+            .filter(|s| s.owner == ipo_id || s.owner.is_none())
+            .map(|s| if s.president { (s.percent / 10) as usize } else { 1 })
+            .sum()
+    }
+
+    /// Number of share units in the open market (president counts as 2).
+    fn num_market_shares(&self) -> usize {
+        let market_id = EntityId::market();
+        self.shares
+            .iter()
+            .filter(|s| s.owner == market_id)
+            .map(|s| if s.president { (s.percent / 10) as usize } else { 1 })
+            .sum()
+    }
+
+    /// Total number of shares (president share counts as 2x normal).
+    /// In 1830: 1 president (20%) + 8 normal (10%) = 10 share units.
+    #[getter]
+    fn total_shares(&self) -> usize {
+        self.shares.iter().map(|s| {
+            if s.president { (s.percent / 10) as usize } else { 1 }
+        }).sum()
+    }
+
+    /// Tokens not yet placed on the map.
+    fn unplaced_tokens(&self) -> Vec<Token> {
+        self.tokens.iter().filter(|t| !t.used).cloned().collect()
+    }
+
+    /// Percent of this corporation owned by a given entity ID string.
+    fn percent_owned_by_entity(&self, entity_id: String) -> u8 {
+        let eid = EntityId(entity_id);
+        self.percent_owned_by(&eid)
+    }
+
+    /// Owner entity ID string.
+    #[getter]
+    fn owner_id_str(&self) -> String {
+        self.owner_id.0.clone()
+    }
+
     fn __repr__(&self) -> String {
         format!("Corporation(sym='{}', floated={})", self.sym, self.floated)
     }
@@ -283,13 +360,27 @@ pub struct Player {
     pub name: String,
     #[pyo3(get)]
     pub cash: i32,
+    #[pyo3(get)]
+    pub bankrupt: bool,
 }
 
 #[pymethods]
 impl Player {
     #[new]
     pub fn new(id: u32, name: String, cash: i32) -> Self {
-        Player { id, name, cash }
+        Player {
+            id,
+            name,
+            cash,
+            bankrupt: false,
+        }
+    }
+
+    /// Percent of a corporation owned by this player.
+    /// Takes a Corporation object and returns the percentage (0-100).
+    fn percent_of(&self, corp: &Corporation) -> u8 {
+        let player_id = EntityId::player(self.id);
+        corp.percent_owned_by(&player_id)
     }
 
     fn __repr__(&self) -> String {

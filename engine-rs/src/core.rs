@@ -29,6 +29,12 @@ impl SharePrice {
         }
     }
 
+    /// Primary type string (e.g., "par", "multiple_buy"). Matches Python's .type attribute.
+    #[getter(r#type)]
+    fn share_type(&self) -> Option<String> {
+        self.types.first().cloned()
+    }
+
     fn __repr__(&self) -> String {
         format!("SharePrice(price={}, types={:?})", self.price, self.types)
     }
