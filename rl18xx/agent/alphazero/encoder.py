@@ -49,8 +49,8 @@ MAX_LAY_COST = 120
 ROUND_TYPE_MAP = {
     "Stock": 0,
     "Operating": 1,
-    "Auction": 2,  # Assuming this is the class name used
-    # Add other round types if necessary
+    "Auction": 2,
+    "WaterfallAuction": 2,  # Python's actual class name
 }
 MAX_ROUND_TYPE_IDX = max(ROUND_TYPE_MAP.values())
 

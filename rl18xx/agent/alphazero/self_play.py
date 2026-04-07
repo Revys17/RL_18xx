@@ -1,5 +1,6 @@
 from rl18xx.game.gamemap import GameMap
 from rl18xx.game.engine.game import BaseGame
+from rl18xx.rust_adapter import RustGameAdapter
 import random
 import os
 import socket
@@ -65,10 +66,16 @@ class MCTSPlayer(Agent):
         return self.result_string
 
     def get_new_game_state(self):
-        game_map = GameMap()
-        game_class = game_map.game_by_title("1830")
-        players = {1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"}
-        return game_class(players)
+        try:
+            from engine_rs import BaseGame as RustGame
+            players = {1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"}
+            return RustGameAdapter(RustGame(players))
+        except ImportError:
+            LOGGER.warning("Rust engine not available, falling back to Python engine")
+            game_map = GameMap()
+            game_class = game_map.game_by_title("1830")
+            players = {1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"}
+            return game_class(players)
 
     def initialize_game(self, game_state: Optional[BaseGame] = None):
         if game_state is None:
@@ -232,7 +239,13 @@ class MCTSPlayer(Agent):
         assert not np.array_equal(self.result, [0.0, 0.0, 0.0, 0.0]), f"result {self.result} is 0"
 
         result = torch.tensor(self.result)
-        game_state = self.get_new_game_state()
+        # Use same engine type as the played game for replay consistency
+        if isinstance(self.root.game_object, RustGameAdapter):
+            game_state = self.get_new_game_state()
+        else:
+            game_map = GameMap()
+            game_class = game_map.game_by_title("1830")
+            game_state = game_class({1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"})
         action_mapper = ActionMapper()
         for i, action in enumerate(self.root.game_object.raw_actions):
             yield (

@@ -494,6 +494,21 @@ class ActionHelper(metaclass=Singleton):
         ]
 
     def auto_route_action(self, game):
+        # Use Rust router if available (RustGameAdapter)
+        if hasattr(game, 'auto_routes_for'):
+            route_dicts, revenue = game.auto_routes_for(game.current_entity)
+            routes = []
+            for rd in route_dicts:
+                train_name = rd.get("train", "")
+                hexes_str = rd.get("hexes", "")
+                revenue_val = int(rd.get("revenue", "0"))
+                routes.append(type("Route", (), {
+                    "train": type("TrainRef", (), {"name": train_name})(),
+                    "hexes": hexes_str.split(",") if hexes_str else [],
+                    "revenue": revenue_val,
+                })())
+            return [RunRoutes(game.current_entity, routes)]
+
         router = AutoRouter(game)
         best_routes = router.compute(game.current_entity)
         return [

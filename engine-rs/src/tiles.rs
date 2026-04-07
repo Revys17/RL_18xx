@@ -34,6 +34,17 @@ impl TileColor {
     pub fn can_upgrade_to(self, to: TileColor) -> bool {
         to.index() == self.index() + 1
     }
+
+    /// The next color in the upgrade chain, or None if at the top.
+    pub fn next_color(self) -> Option<TileColor> {
+        match self {
+            TileColor::White => Some(TileColor::Yellow),
+            TileColor::Yellow => Some(TileColor::Green),
+            TileColor::Green => Some(TileColor::Brown),
+            TileColor::Brown => Some(TileColor::Gray),
+            TileColor::Gray | TileColor::Red => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +85,20 @@ impl PathEndpoint {
             self,
             PathEndpoint::City(_) | PathEndpoint::Town(_) | PathEndpoint::Offboard(_)
         )
+    }
+}
+
+/// Lenient endpoint matching for path subset checks.
+/// Edges must match exactly. City/Town/Offboard match by TYPE only (ignoring index).
+/// Junction matches Junction.
+fn endpoints_match_lenient(a: &PathEndpoint, b: &PathEndpoint) -> bool {
+    match (a, b) {
+        (PathEndpoint::Edge(e1), PathEndpoint::Edge(e2)) => e1 == e2,
+        (PathEndpoint::City(_), PathEndpoint::City(_)) => true,
+        (PathEndpoint::Town(_), PathEndpoint::Town(_)) => true,
+        (PathEndpoint::Offboard(_), PathEndpoint::Offboard(_)) => true,
+        (PathEndpoint::Junction, PathEndpoint::Junction) => true,
+        _ => false,
     }
 }
 
@@ -156,6 +181,11 @@ impl TileDef {
         }
     }
 
+    /// Collect unique edge numbers from all paths (public for external callers).
+    pub fn compute_edges_pub(paths: &[PathDef]) -> Vec<u8> {
+        Self::compute_edges(paths)
+    }
+
     /// Collect unique edge numbers from all paths.
     fn compute_edges(paths: &[PathDef]) -> Vec<u8> {
         let set: HashSet<u8> = paths
@@ -168,13 +198,89 @@ impl TileDef {
         edges
     }
 
-    /// Check if all paths of `old` exist in `self` (path subset for upgrade validation).
+    /// Check if all paths of `old` exist in `self` at a specific rotation.
+    /// Uses lenient matching: edge endpoints must match exactly, but city/town
+    /// indices are treated as equivalent (City(0) matches City(1)).
     pub fn paths_are_superset_of(&self, old: &TileDef) -> bool {
         old.paths.iter().all(|op| {
-            self.paths
-                .iter()
-                .any(|np| (np.a == op.a && np.b == op.b) || (np.a == op.b && np.b == op.a))
+            self.paths.iter().any(|np| {
+                (endpoints_match_lenient(&np.a, &op.a) && endpoints_match_lenient(&np.b, &op.b))
+                    || (endpoints_match_lenient(&np.a, &op.b)
+                        && endpoints_match_lenient(&np.b, &op.a))
+            })
         })
+    }
+
+    /// Check if all paths of `old` exist in `self` at ANY of the 6 rotations.
+    /// Returns true if there's at least one rotation where all old paths are present.
+    pub fn paths_are_superset_of_any_rotation(&self, old: &TileDef) -> bool {
+        if old.paths.is_empty() {
+            return true;
+        }
+        for rotation in 0..6u8 {
+            let rotated = self.rotated(rotation);
+            if rotated.paths_are_superset_of(old) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if `self` (at a specific rotation) is a valid upgrade for `old_tile`.
+    /// Mirrors Python's `upgrades_to(from_tile, to_tile)`.
+    pub fn is_valid_upgrade_for(&self, old: &TileDef) -> bool {
+        // 1. Color must be exactly one step up
+        if !old.color.can_upgrade_to(self.color) {
+            return false;
+        }
+
+        // 2. Old paths must exist in new tile (at any rotation)
+        if !self.paths_are_superset_of_any_rotation(old) {
+            return false;
+        }
+
+        // 3. Label match (None == None is OK)
+        if old.label != self.label {
+            return false;
+        }
+
+        // 4. Town count must match
+        if old.towns.len() != self.towns.len() {
+            return false;
+        }
+
+        // 5. City count must match (when no label)
+        if old.label.is_none() && old.cities.len() != self.cities.len() {
+            return false;
+        }
+
+        // 6. If old has label but no cities, new can't have cities
+        if old.label.is_some() && old.cities.is_empty() && !self.cities.is_empty() {
+            return false;
+        }
+
+        true
+    }
+
+    /// Find all rotations (0-5) at which `self` maintains all old paths.
+    pub fn legal_rotations_for(&self, old: &TileDef, valid_exits: &[u8]) -> Vec<u8> {
+        let mut rotations = Vec::new();
+        for rotation in 0..6u8 {
+            let rotated = self.rotated(rotation);
+
+            // All old paths must be maintained
+            if !rotated.paths_are_superset_of(old) {
+                continue;
+            }
+
+            // All new exits must be valid hex edges (have neighbors)
+            if !rotated.edges.iter().all(|e| valid_exits.contains(e)) {
+                continue;
+            }
+
+            rotations.push(rotation);
+        }
+        rotations
     }
 }
 

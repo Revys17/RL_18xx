@@ -10,12 +10,45 @@ from rl18xx.game.engine.game.base import BaseGame
 from rl18xx.agent.alphazero.encoder import Encoder_1830
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.alphazero.config import SelfPlayConfig
+from rl18xx.rust_adapter import RustGameAdapter
 import time
 
 POLICY_SIZE = 26535  # This is calculated dynamically but shouldn't be.
 VALUE_SIZE = 4  # We always want to play a 4-player game.
 
 LOGGER = logging.getLogger(__name__)
+
+# Cached edge index/attributes for Rust encoder (static hex adjacency, computed once)
+_cached_edge_index = None
+_cached_edge_attrs = None
+
+
+def _rust_encode(game: RustGameAdapter) -> tuple:
+    """Encode a RustGameAdapter using the Rust-native encoder.
+    Returns the same (game_state, node_features, edge_index, edge_attrs) tuple
+    that the Python encoder returns. Falls back to Python encoder if Rust
+    encode_for_gnn is not available."""
+    global _cached_edge_index, _cached_edge_attrs
+
+    # Compute static edge index once (hex adjacency never changes)
+    if _cached_edge_index is None:
+        from rl18xx.agent.alphazero.encoder import Encoder_GNN
+        encoder = Encoder_GNN()
+        encoder.initialize(game)
+        _, _, _cached_edge_index, _cached_edge_attrs = encoder.encode(game)
+
+    # Use Rust encoder if available, otherwise fall back to Python
+    if hasattr(game._game, 'encode_for_gnn'):
+        gs_flat, nf_flat, enc_size, num_hexes, num_nf = game._game.encode_for_gnn()
+        gs_tensor = torch.tensor(gs_flat, dtype=torch.float32).unsqueeze(0)
+        nf_tensor = torch.tensor(nf_flat, dtype=torch.float32).reshape(num_hexes, num_nf)
+        return (gs_tensor, nf_tensor, _cached_edge_index, _cached_edge_attrs)
+
+    # Fallback: Python encoder on adapter
+    from rl18xx.agent.alphazero.encoder import Encoder_GNN
+    encoder = Encoder_GNN()
+    encoder.initialize(game)
+    return encoder.encode(game)
 
 
 # TODO: See if we really need this.
@@ -73,14 +106,23 @@ class MCTSNode:
             self.depth = parent.depth + 1
 
         self.config = config or SelfPlayConfig()
-        self.game_object: BaseGame = game_state
-        self.encoded_game_state = Encoder_1830.get_encoder_for_model(self.config.network).encode(self.game_object)
+        self.game_object = game_state
+
+        t0 = time.perf_counter()
+        if isinstance(game_state, RustGameAdapter):
+            self.encoded_game_state = _rust_encode(game_state)
+        else:
+            self.encoded_game_state = Encoder_1830.get_encoder_for_model(self.config.network).encode(self.game_object)
+        t1 = time.perf_counter()
         self.action_mapper = ActionMapper()
 
         self.player_mapping = {p.id: i for i, p in enumerate(sorted(self.game_object.players, key=lambda x: x.id))}
         self.active_player_index = self.player_mapping[self.game_object.active_players()[0].id]
 
-        self.legal_action_indices = self.action_mapper.get_legal_action_indices(self.game_object)  # Use game_object
+        self.legal_action_indices = self.action_mapper.get_legal_action_indices(self.game_object)
+        t2 = time.perf_counter()
+        self.add_metric("MCTS/Node_Encode_Duration", t1 - t0)
+        self.add_metric("MCTS/Node_ActionEnum_Duration", t2 - t1)
         self.num_legal_actions = len(self.legal_action_indices)
         self.child_N_compressed = np.zeros(self.num_legal_actions, dtype=np.float32)
         self.child_W_compressed = np.zeros([self.num_legal_actions, VALUE_SIZE], dtype=np.float32)

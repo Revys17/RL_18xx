@@ -38,6 +38,24 @@ impl RoundState {
         }
     }
 
+    /// The active entity's ID string (e.g., "player:1", "corp:PRR").
+    #[getter]
+    fn active_entity_id_str(&self) -> String {
+        self.active_entity_id.0.clone()
+    }
+
+    /// Whether the active entity is a player (vs corporation).
+    #[getter]
+    fn active_entity_is_player(&self) -> bool {
+        self.active_entity_id.is_player()
+    }
+
+    /// Whether the active entity is a corporation.
+    #[getter]
+    fn active_entity_is_corporation(&self) -> bool {
+        self.active_entity_id.is_corporation()
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "RoundState(type='{}', num={})",
@@ -77,10 +95,10 @@ pub struct BaseGame {
     // Graph connectivity cache (cleared when tiles/tokens change)
     pub(crate) graph_cache: GraphCache,
 
-    // Lookup caches
-    pub(crate) corp_idx: HashMap<String, usize>,
-    pub(crate) company_idx: HashMap<String, usize>,
-    pub(crate) hex_idx: HashMap<String, usize>,
+    // Lookup caches (immutable after init — Arc-shared for free cloning)
+    pub(crate) corp_idx: Arc<HashMap<String, usize>>,
+    pub(crate) company_idx: Arc<HashMap<String, usize>>,
+    pub(crate) hex_idx: Arc<HashMap<String, usize>>,
 
     // Metadata
     pub(crate) title: String,
@@ -89,6 +107,10 @@ pub struct BaseGame {
     /// Turn counter: incremented each time a new round starts (Auction=0, Stock1=1, OR=2, Stock2=3, ...).
     /// Used for SELL_AFTER="first" rule: selling is only allowed when turn > 1.
     pub(crate) turn: u32,
+
+    /// Recent actions: (entity_id, action_type) for the last N actions.
+    /// Used by ActionHelper to check if last 3 players all passed (auction round).
+    pub(crate) recent_actions: Vec<(String, String)>,
 
     // Game end tracking
     pub(crate) game_end_triggered: bool,
@@ -99,6 +121,64 @@ pub struct BaseGame {
 }
 
 impl BaseGame {
+    /// Get active company tile-lay abilities for the current operating corp.
+    /// Returns a list of company syms that have available tile lay abilities.
+    /// - CS: bonus tile lay on B20 (available at any OR step, when owned by corp)
+    /// - DH: teleport tile lay on F16 (available at LayTile step, when owned by corp)
+    fn company_tile_abilities(&self, s: &crate::rounds::OperatingState) -> Vec<String> {
+        let corp_sym = match s.current_corp_sym() {
+            Some(sym) => sym.to_string(),
+            None => return Vec::new(),
+        };
+        let corp_eid = EntityId::corporation(&corp_sym);
+        self.companies
+            .iter()
+            .filter(|co| {
+                !co.closed
+                    && !co.ability_used
+                    && (co.sym == "CS" || co.sym == "DH")
+                    && co.owner == corp_eid
+            })
+            .map(|co| co.sym.clone())
+            .collect()
+    }
+
+    /// Check if MH exchange is available (any round, MH not closed, NYC has shares).
+    fn mh_exchange_available(&self) -> bool {
+        self.companies.iter().any(|co| co.sym == "MH" && !co.closed)
+            && self.corp_idx.get("NYC").map_or(false, |&ci| {
+                self.corporations[ci]
+                    .shares
+                    .iter()
+                    .any(|s| !s.president && !s.owner.is_player())
+            })
+    }
+
+    /// Check if the active corp's president owns CS or DH with unused ability.
+    /// 1830 rules: corps can only buy privates from their president, in phases 3-4.
+    fn has_buyable_companies(&self, s: &crate::rounds::OperatingState) -> bool {
+        if self.phase.name != "3" && self.phase.name != "4" {
+            return false;
+        }
+        let corp_sym = match s.current_corp_sym() {
+            Some(sym) => sym.to_string(),
+            None => return false,
+        };
+        let ci = match self.corp_idx.get(corp_sym.as_str()) {
+            Some(&i) => i,
+            None => return false,
+        };
+        let corp = &self.corporations[ci];
+        let president_id = match corp.president_id() {
+            Some(pid) => pid,
+            None => return false,
+        };
+        let president_eid = EntityId::player(president_id);
+        self.companies.iter().any(|co| {
+            !co.closed && !co.no_buy && co.owner == president_eid && corp.cash >= co.value / 2
+        })
+    }
+
     /// Fast clone for MCTS search — shares immutable data via Arc.
     pub fn clone_for_search(&self) -> BaseGame {
         BaseGame {
@@ -122,15 +202,20 @@ impl BaseGame {
 
             graph_cache: GraphCache::new(), // fresh cache for cloned state
 
-            corp_idx: self.corp_idx.clone(),
-            company_idx: self.company_idx.clone(),
-            hex_idx: self.hex_idx.clone(),
+            corp_idx: Arc::clone(&self.corp_idx),
+            company_idx: Arc::clone(&self.company_idx),
+            hex_idx: Arc::clone(&self.hex_idx),
 
             title: self.title.clone(),
             finished: self.finished,
             move_number: self.move_number,
             turn: self.turn,
 
+            recent_actions: if self.recent_actions.len() > 5 {
+                self.recent_actions[self.recent_actions.len() - 5..].to_vec()
+            } else {
+                self.recent_actions.clone()
+            },
             game_end_triggered: self.game_end_triggered,
             player_order: self.player_order.clone(),
             priority_deal_player: self.priority_deal_player,
@@ -291,6 +376,14 @@ impl BaseGame {
             return Ok(());
         }
 
+        // Track recent actions (for ActionHelper's last-3-passed check)
+        let entity_id = action.entity_id().to_string();
+        let action_type = action.action_type().to_string();
+        self.recent_actions.push((entity_id, action_type));
+        if self.recent_actions.len() > 10 {
+            self.recent_actions.remove(0);
+        }
+
         match &self.round {
             Round::Auction(_) => self.process_auction_action(action)?,
             Round::Stock(_) => self.process_stock_action(action)?,
@@ -320,6 +413,8 @@ impl BaseGame {
             self.transition_to_next_round();
         }
 
+        // Sync PyO3-visible round state after every action (not just round transitions)
+        self.update_round_state();
         Ok(())
     }
 
@@ -638,10 +733,10 @@ impl BaseGame {
                 }
 
                 if let Some(&hex_idx) = self.hex_idx.get(hex_id.as_str()) {
-                    // Return old tile to supply
+                    // Return old tile to supply (if it's a placed tile, not a preprinted one)
                     let old_tile_name = self.hexes[hex_idx].tile.name.clone();
                     let old_base = old_tile_name.split('-').next().unwrap_or(&old_tile_name);
-                    if !old_base.starts_with("preprinted") {
+                    if !old_base.starts_with("preprinted") && !old_base.is_empty() && old_base != hex_id {
                         *self
                             .tile_counts_remaining
                             .entry(old_base.to_string())
@@ -950,7 +1045,9 @@ impl BaseGame {
             tile.towns.push(Town::new(td.revenue));
         }
         for od in &rotated.offboards {
-            tile.offboards.push(Offboard::new(od.yellow_revenue));
+            let mut ob = Offboard::new(od.yellow_revenue);
+            ob.brown_revenue = Some(od.brown_revenue);
+            tile.offboards.push(ob);
         }
         for ud in &rotated.upgrades {
             tile.upgrades
@@ -1069,10 +1166,12 @@ fn build_hex_from_def(def: &g1830::HexDef) -> Hex {
         }
         HexType::Offboard {
             yellow_revenue,
-            brown_revenue: _,
+            brown_revenue,
         } => {
             let mut t = Tile::new(format!("offboard_{}", coord), coord.clone());
-            t.offboards.push(Offboard::new(*yellow_revenue));
+            let mut ob = Offboard::new(*yellow_revenue);
+            ob.brown_revenue = Some(*brown_revenue);
+            t.offboards.push(ob);
             t
         }
         HexType::Path => Tile::new(format!("path_{}", coord), coord.clone()),
@@ -1138,10 +1237,14 @@ impl BaseGame {
 
                 let mut shares = Vec::with_capacity(9);
                 // President share (20%)
-                shares.push(Share::new(cd.sym.to_string(), 20, true));
+                let mut pres = Share::new(cd.sym.to_string(), 20, true);
+                pres.index = 0;
+                shares.push(pres);
                 // 8 normal shares (10%)
-                for _ in 0..8 {
-                    shares.push(Share::new(cd.sym.to_string(), 10, false));
+                for si in 1..=8 {
+                    let mut s = Share::new(cd.sym.to_string(), 10, false);
+                    s.index = si;
+                    shares.push(s);
                 }
 
                 Corporation::new(cd.sym.to_string(), cd.name.to_string(), tokens, shares)
@@ -1242,13 +1345,14 @@ impl BaseGame {
             starting_cash: cash,
             cert_limit: cert_lim,
             graph_cache: GraphCache::new(),
-            corp_idx,
-            company_idx,
-            hex_idx,
+            corp_idx: Arc::new(corp_idx),
+            company_idx: Arc::new(company_idx),
+            hex_idx: Arc::new(hex_idx),
             title: "1830".to_string(),
             finished: false,
             move_number: 0,
             turn: 1, // Start at 1 (Auction round is turn 1, first Stock round is still turn 1)
+            recent_actions: Vec::new(),
             game_end_triggered: false,
             player_order: player_ids.clone(),
             priority_deal_player: first_player_id,
@@ -1367,11 +1471,26 @@ impl BaseGame {
     }
 
     /// Returns the priority deal player.
+    /// Mimics Python's priority_deal_player() which computes from last_to_act.
+    /// - Stock round: reads from stock state (updated per-action)
+    /// - Auction round: computes from recent_actions (last bidder + 1)
+    /// - OR: uses game-level field
     fn priority_deal_player_py(&self) -> Player {
+        let pd_id = match &self.round {
+            Round::Stock(s) => s.priority_deal_player,
+            Round::Auction(s) => {
+                // Python: priority = next player after last purchaser
+                match s.last_purchaser_id {
+                    Some(pid) => self.next_player_id(pid),
+                    None => self.priority_deal_player,
+                }
+            }
+            _ => self.priority_deal_player,
+        };
         let idx = self
             .players
             .iter()
-            .position(|p| p.id == self.priority_deal_player)
+            .position(|p| p.id == pd_id)
             .unwrap_or(0);
         self.players[idx].clone()
     }
@@ -1414,6 +1533,15 @@ impl BaseGame {
         hexes
     }
 
+    /// Get full hex adjacency map: {hex_id: {edge: neighbor_id}}.
+    #[getter]
+    fn hex_adjacency_map(&self) -> HashMap<String, HashMap<u8, String>> {
+        self.hex_adjacency
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
     /// Get hex adjacency for debugging.
     fn get_hex_neighbors(&self, hex_id: String) -> Vec<(u8, String)> {
         self.hex_adjacency
@@ -1447,17 +1575,47 @@ impl BaseGame {
     }
 
     /// Returns the set of valid action type strings at the current game state.
-    fn legal_action_types(&self) -> Vec<String> {
+    fn legal_action_types(&mut self) -> Vec<String> {
         if self.finished {
             return Vec::new();
         }
 
-        match &self.round {
+        // Extract round state upfront to avoid borrow conflicts with &mut self
+        let round_snapshot = self.round.clone();
+
+        match &round_snapshot {
             Round::Auction(s) => {
+                if s.pending_par.is_some() {
+                    return vec!["par".to_string()];
+                }
                 if s.remaining_companies.is_empty() {
                     return Vec::new();
                 }
-                vec!["bid".to_string(), "pass".to_string()]
+                // Check if the player can actually bid on anything
+                let player_id = s.active_player_id();
+                let player_cash = self
+                    .players
+                    .iter()
+                    .find(|p| p.id == player_id)
+                    .map_or(0, |p| p.cash);
+                // When there's an active auction, can only bid on that company
+                let biddable_companies: Vec<usize> = if let Some(auc_ci) = s.auctioning {
+                    vec![auc_ci]
+                } else {
+                    s.remaining_companies.clone()
+                };
+                let can_bid = biddable_companies.iter().any(|&ci| {
+                    let value = self.companies.get(ci).map_or(0, |c| c.value);
+                    let min_bid = s.min_bid_for(ci, value);
+                    let max_bid = s.max_bid(player_id, ci, player_cash);
+                    max_bid >= min_bid
+                });
+                let mut types = Vec::new();
+                if can_bid {
+                    types.push("bid".to_string());
+                }
+                types.push("pass".to_string());
+                types
             }
             Round::Stock(s) => {
                 let player_id = s.current_player_id();
@@ -1466,44 +1624,35 @@ impl BaseGame {
                 // Check must_sell (over cert limit)
                 let certs = self.num_certs_internal(player_id);
                 if certs > self.cert_limit as u32 {
-                    // Can only sell if must_sell
                     types.push("sell_shares".to_string());
                     return types;
                 }
 
-                // Can sell (1830: sell_buy_sell = no ordering restriction)
-                let player_eid = EntityId::player(player_id);
-                let has_sellable = self
-                    .corporations
-                    .iter()
-                    .any(|c| c.floated && c.percent_owned_by(&player_eid) > 0);
-                if has_sellable {
+                // Use the buyable_shares/sellable_bundles methods for accuracy
+                let buyable = !self.buyable_shares(player_id).is_empty();
+                let sellable = !self.sellable_bundles(player_id).is_empty();
+
+                let mh_exchange = self.mh_exchange_available();
+
+                if sellable {
                     types.push("sell_shares".to_string());
+                }
+                if buyable || mh_exchange {
+                    types.push("buy_shares".to_string());
                 }
 
                 if !s.bought_this_turn {
-                    // Can buy shares
-                    let can_buy = certs < self.cert_limit as u32
-                        && self.corporations.iter().any(|c| {
-                            if !c.floated {
-                                return false;
-                            }
-                            if s.sold_corp_this_round(player_id, &c.sym) {
-                                return false;
-                            }
-                            let ipo_eid = EntityId::ipo(&c.sym);
-                            let market_eid = EntityId::market();
-                            c.shares.iter().any(|sh| {
-                                !sh.president && (sh.owner == ipo_eid || sh.owner == market_eid)
-                            })
-                        });
-                    if can_buy {
-                        types.push("buy_shares".to_string());
-                    }
-
-                    // Can par
                     let can_par = certs < self.cert_limit as u32
-                        && self.corporations.iter().any(|c| c.ipo_price.is_none());
+                        && self.corporations.iter().any(|c| {
+                            c.ipo_price.is_none()
+                                && self
+                                    .players
+                                    .iter()
+                                    .find(|p| p.id == player_id)
+                                    .map_or(false, |p| {
+                                        p.cash >= self.stock_market.par_prices().first().copied().unwrap_or(0) * 2
+                                    })
+                        });
                     if can_par {
                         types.push("par".to_string());
                     }
@@ -1512,33 +1661,220 @@ impl BaseGame {
                 types.push("pass".to_string());
                 types
             }
-            Round::Operating(s) => {
+            Round::Operating(os) => {
                 let mut types = Vec::new();
-                match s.step {
+
+                // Company tile-lay abilities available during OR
+                let co_abilities = self.company_tile_abilities(&os);
+                let cs_available = co_abilities.iter().any(|s| s == "CS");
+                let dh_available = co_abilities.iter().any(|s| s == "DH");
+                let mh_available = self.mh_exchange_available();
+
+                match os.step {
                     crate::rounds::OperatingStep::DiscardTrain => {
                         types.push("discard_train".to_string());
                     }
                     crate::rounds::OperatingStep::LayTile => {
-                        types.push("lay_tile".to_string());
+                        // Check all connected hexes for layable tiles, matching
+                        // Python's get_lay_tile_actions: for each hex in connected_hexes,
+                        // check if any tile rotation has an exit matching the corp's
+                        // connected edges AND terrain cost <= corp cash.
+                        let corp_sym = os.current_corp_sym().unwrap_or("").to_string();
+                        let ci = self.corp_idx.get(corp_sym.as_str()).copied();
+                        let corp_cash = ci.map_or(0, |i| self.corporations[i].cash);
+                        let connected = self.connected_hexes(&corp_sym);
+
+                        // Build set of blocked hexes (private company hex blocks)
+                        let blocked_hexes: std::collections::HashSet<&str> = self
+                            .companies
+                            .iter()
+                            .filter(|co| !co.closed && co.owner.is_player())
+                            .flat_map(|co| match co.sym.as_str() {
+                                "SV" => vec!["G15"],
+                                "CS" => vec!["B20"],
+                                "DH" => vec!["F16"],
+                                "MH" => vec!["D18"],
+                                "CA" => vec!["H18"],
+                                "BO" => vec!["I13", "I15"],
+                                _ => vec![],
+                            })
+                            .collect();
+
+                        let mut has_layable = false;
+                        // Python's connected_hexes includes both tiled hexes in the
+                        // network AND their white neighbors (with entry edges).
+                        // Check each connected hex for layable tiles.
+                        'lay_check: for (hex_id, edges) in &connected {
+                            if blocked_hexes.contains(hex_id.as_str()) {
+                                continue;
+                            }
+                            let edge_slice: Vec<u8> = edges.clone();
+                            if self.has_layable_tile_for_corp(hex_id, &edge_slice, corp_cash) {
+                                has_layable = true;
+                                break 'lay_check;
+                            }
+                            // Also check neighbor hexes reachable through this hex's
+                            // track edges that aren't already in connected_hexes.
+                            if let Some(neighbors) = self.hex_adjacency.get(hex_id.as_str()) {
+                                for &edge in edges {
+                                    if let Some(n_id) = neighbors.get(&edge) {
+                                        if blocked_hexes.contains(n_id.as_str()) {
+                                            continue;
+                                        }
+                                        if connected.contains_key(n_id.as_str()) {
+                                            continue; // already checked above
+                                        }
+                                        // Entry edge on the neighbor is opposite: (edge+3)%6
+                                        let entry_edge = (edge + 3) % 6;
+                                        if self.has_layable_tile_for_corp(n_id, &[entry_edge], corp_cash) {
+                                            has_layable = true;
+                                            break 'lay_check;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if has_layable || cs_available || dh_available {
+                            types.push("lay_tile".to_string());
+                        }
+                        if self.has_buyable_companies(&os) {
+                            types.push("buy_company".to_string());
+                        }
+                        if mh_available {
+                            types.push("buy_shares".to_string());
+                        }
                         types.push("pass".to_string());
                     }
                     crate::rounds::OperatingStep::PlaceToken => {
-                        types.push("place_token".to_string());
-                        types.push("pass".to_string());
+                        // If there are pending tokens (from home token choice or OO
+                        // tile displacement), place_token is mandatory — no pass.
+                        if !os.pending_tokens.is_empty() {
+                            types.push("place_token".to_string());
+                        } else {
+                            let corp_sym = os.current_corp_sym().unwrap_or("").to_string();
+                            let tokenable = self.tokenable_cities_for(&corp_sym);
+                            // Check if home token needs to be placed (mandatory, no connectivity needed)
+                            let needs_home_token = self.corp_idx.get(corp_sym.as_str())
+                                .map_or(false, |&ci| !self.corporations[ci].home_token_ever_placed);
+                            // Also check DH special token (teleport: place on F16 without connectivity)
+                            let dh_token = self.companies.iter().any(|co| {
+                                co.sym == "DH"
+                                    && !co.closed
+                                    && co.ability_used  // tile already laid
+                                    && co.owner == EntityId::corporation(&corp_sym)
+                            }) && self.hex_idx.get("F16").map_or(false, |&hi| {
+                                let ci = match self.corp_idx.get(corp_sym.as_str()) {
+                                    Some(&i) => i,
+                                    None => return false,
+                                };
+                                // Corp has an unplaced token
+                                self.corporations[ci].next_token_index().is_some()
+                                    && self.hexes[hi].tile.cities.iter().any(|c| c.tokens.iter().any(|t| t.is_none()))
+                            });
+                            if !tokenable.is_empty() || dh_token || needs_home_token {
+                                types.push("place_token".to_string());
+                            }
+                            if cs_available {
+                                types.push("lay_tile".to_string());
+                            }
+                            if mh_available {
+                                types.push("buy_shares".to_string());
+                            }
+                            types.push("pass".to_string());
+                        }
                     }
                     crate::rounds::OperatingStep::RunRoutes => {
                         types.push("run_routes".to_string());
-                        types.push("pass".to_string());
+                        if cs_available {
+                            types.push("lay_tile".to_string());
+                        }
+                        if mh_available {
+                            types.push("buy_shares".to_string());
+                        }
                     }
                     crate::rounds::OperatingStep::Dividend => {
                         types.push("dividend".to_string());
+                        if cs_available {
+                            types.push("lay_tile".to_string());
+                        }
+                        if mh_available {
+                            types.push("buy_shares".to_string());
+                        }
                     }
                     crate::rounds::OperatingStep::BuyTrain => {
-                        types.push("buy_train".to_string());
-                        types.push("pass".to_string());
+                        let corp_sym = os.current_corp_sym().unwrap_or("").to_string();
+                        let ci = self.corp_idx.get(corp_sym.as_str()).copied();
+                        let corp_cash = ci.map_or(0, |i| self.corporations[i].cash);
+                        let no_trains = ci.map_or(true, |i| self.corporations[i].trains.is_empty());
+                        let depot_has_trains = !self.depot.trains.is_empty();
+                        // must_buy uses route_train_purchase (2+ mandatory/city nodes),
+                        // matching Python's must_buy_train.
+                        let must_buy = no_trains && depot_has_trains && self.must_buy_train(&corp_sym);
+                        let cheapest_price = self.depot.trains.first().map_or(0, |t| t.price);
+
+                        // Check cheapest available train (depot OR sister corp at min price 1)
+                        let pres_id = ci.and_then(|i| self.corporations[i].president_id());
+                        let has_sister_trains = pres_id.map_or(false, |pid| {
+                            self.corporations.iter().any(|c| {
+                                c.sym != *corp_sym
+                                    && c.president_id() == Some(pid)
+                                    && !c.trains.is_empty()
+                            })
+                        });
+                        // Min price to buy ANY train: 1 from sister corp, or depot price
+                        let min_train_price = if has_sister_trains { 1 } else { cheapest_price };
+                        let can_afford_some_train = corp_cash >= min_train_price;
+
+                        if must_buy && !can_afford_some_train {
+                            // True emergency — president must sell shares or go bankrupt
+                            let pres_cash = pres_id
+                                .and_then(|pid| self.players.iter().find(|p| p.id == pid))
+                                .map_or(0, |p| p.cash);
+                            let pres_sell_value = pres_id.map_or(0, |pid| {
+                                let peid = EntityId::player(pid);
+                                self.corporations.iter().map(|c| {
+                                    let pct = c.percent_owned_by(&peid);
+                                    let price = c.share_price.as_ref().map_or(0, |sp| sp.price);
+                                    (pct.saturating_sub(if c.president_id() == Some(pid) { 20 } else { 0 }) as i32 / 10) * price
+                                }).sum::<i32>()
+                            });
+
+                            if corp_cash + pres_cash + pres_sell_value >= min_train_price {
+                                types.push("buy_train".to_string());
+                                types.push("sell_shares".to_string());
+                            } else {
+                                types.push("bankrupt".to_string());
+                            }
+                        } else if must_buy {
+                            // Corp can afford cheapest train but must buy. Python's BuyTrain
+                            // step returns [SellShares, BuyTrain] — sell_shares for president
+                            // to sell shares to help buy a more expensive train.
+                            types.push("buy_train".to_string());
+                            types.push("sell_shares".to_string());
+                        } else {
+                            types.push("buy_train".to_string());
+                            if cs_available {
+                                types.push("lay_tile".to_string());
+                            }
+                            if self.has_buyable_companies(&os) {
+                                types.push("buy_company".to_string());
+                            }
+                            if mh_available {
+                                types.push("buy_shares".to_string());
+                            }
+                            types.push("pass".to_string());
+                        }
                     }
                     crate::rounds::OperatingStep::BuyCompany => {
-                        types.push("buy_company".to_string());
+                        if self.has_buyable_companies(&os) {
+                            types.push("buy_company".to_string());
+                        }
+                        if cs_available {
+                            types.push("lay_tile".to_string());
+                        }
+                        if mh_available {
+                            types.push("buy_shares".to_string());
+                        }
                         types.push("pass".to_string());
                     }
                     crate::rounds::OperatingStep::Done => {}
@@ -1546,6 +1882,793 @@ impl BaseGame {
                 types
             }
         }
+    }
+
+    /// The currently active entity's ID string (e.g., "player:1", "corp:PRR").
+    #[getter]
+    fn current_entity_id(&self) -> String {
+        self.round_state.active_entity_id.0.clone()
+    }
+
+    /// The currently active player (if any).
+    #[getter]
+    fn current_player(&self) -> Option<Player> {
+        let eid = &self.round_state.active_entity_id;
+        if eid.is_player() {
+            let pid = eid.player_id()?;
+            self.players.iter().find(|p| p.id == pid).cloned()
+        } else {
+            None
+        }
+    }
+
+    /// The currently active corporation (if any).
+    #[getter]
+    fn current_corporation(&self) -> Option<Corporation> {
+        let eid = &self.round_state.active_entity_id;
+        if eid.is_corporation() {
+            let sym = eid.corp_sym()?;
+            self.corp_idx.get(sym).map(|&i| self.corporations[i].clone())
+        } else {
+            None
+        }
+    }
+
+    /// Buying power for a player (cash available for stock purchases).
+    fn buying_power_player(&self, player_id: u32) -> i32 {
+        self.players
+            .iter()
+            .find(|p| p.id == player_id)
+            .map_or(0, |p| p.cash)
+    }
+
+    /// Buying power for a corporation (cash for train purchases, etc.).
+    fn buying_power_corp(&self, corp_sym: &str) -> i32 {
+        self.corp_idx
+            .get(corp_sym)
+            .map_or(0, |&i| self.corporations[i].cash)
+    }
+
+    /// Recent actions as list of {entity, type} dicts (most recent last).
+    /// Used by ActionHelper to check if last 3 players all passed.
+    #[getter]
+    fn raw_actions(&self) -> Vec<HashMap<String, String>> {
+        self.recent_actions
+            .iter()
+            .map(|(eid, atype)| {
+                let mut d = HashMap::new();
+                d.insert("entity".to_string(), eid.clone());
+                d.insert("type".to_string(), atype.clone());
+                d
+            })
+            .collect()
+    }
+
+    /// Alias for priority_deal_player_py (matching Python's method name).
+    fn priority_deal_player(&self) -> Player {
+        self.priority_deal_player_py()
+    }
+
+    // -- Tile upgrade queries --
+
+    /// Get all valid tile upgrades for a hex.
+    /// Returns list of (tile_name, rotation) tuples for tiles that can be placed.
+    fn upgradeable_tiles_for(&self, hex_id: &str) -> Vec<(String, u8)> {
+        let hi = match self.hex_idx.get(hex_id) {
+            Some(&i) => i,
+            None => return Vec::new(),
+        };
+        let hex = &self.hexes[hi];
+        let current_tile = &hex.tile;
+
+        // Get the current tile's TileDef from catalog or build from hex state
+        let old_tile_def = self.tile_catalog.get(&current_tile.name);
+        let old_tile_def = match old_tile_def {
+            Some(def) => def.rotated(current_tile.rotation),
+            None => {
+                // Build a minimal TileDef from current hex tile
+                crate::tiles::TileDef {
+                    name: current_tile.name.clone(),
+                    color: current_tile.color,
+                    paths: current_tile.paths.clone(),
+                    cities: current_tile.cities.iter().map(|c| crate::tiles::CityDef {
+                        revenue: c.revenue,
+                        slots: c.slots as u8,
+                    }).collect(),
+                    towns: current_tile.towns.iter().map(|t| crate::tiles::TownDef {
+                        revenue: t.revenue,
+                    }).collect(),
+                    offboards: Vec::new(),
+                    edges: crate::tiles::TileDef::compute_edges_pub(&current_tile.paths),
+                    upgrades: Vec::new(),
+                    label: current_tile.label.clone(),
+                    has_junction: current_tile.paths.iter().any(|p|
+                        p.a == crate::tiles::PathEndpoint::Junction || p.b == crate::tiles::PathEndpoint::Junction
+                    ),
+                }
+            }
+        };
+
+        // Valid exit edges for this hex (edges that have neighbors)
+        let valid_exits: Vec<u8> = self
+            .hex_adjacency
+            .get(hex_id)
+            .map(|n| n.keys().copied().collect())
+            .unwrap_or_default();
+
+        // Phase-allowed tile colors
+        let next_color = old_tile_def.color.next_color();
+        let next_color = match next_color {
+            Some(c) => c,
+            None => return Vec::new(), // Gray/Red tiles can't be upgraded
+        };
+
+        // Check if the next color is allowed in the current phase
+        let next_color_str = format!("{:?}", next_color).to_lowercase();
+        if !self.phase.tiles.iter().any(|t| t == &next_color_str) {
+            return Vec::new(); // Phase doesn't allow this color yet
+        }
+
+        let mut result = Vec::new();
+
+        // Check all tiles in catalog
+        for (tile_name, tile_def) in self.tile_catalog.iter() {
+            // Must be correct color
+            if tile_def.color != next_color {
+                continue;
+            }
+
+            // Must be available (remaining count > 0)
+            let remaining = self.tile_counts_remaining.get(tile_name).copied().unwrap_or(0);
+            if remaining == 0 {
+                continue;
+            }
+
+            // Must pass upgrade validation
+            if !tile_def.is_valid_upgrade_for(&old_tile_def) {
+                continue;
+            }
+
+            // Find legal rotations
+            let rotations = tile_def.legal_rotations_for(&old_tile_def, &valid_exits);
+            if let Some(&first_rot) = rotations.first() {
+                result.push((tile_name.clone(), first_rot));
+            }
+        }
+
+        result
+    }
+
+    /// Check if a corp can legally lay any tile on a hex, considering:
+    /// - Tile upgrade validity (color, path superset, label matching)
+    /// - Entity reaches a new exit: at least one exit of a valid tile rotation
+    ///   must match an edge in the corp's connected_edges for this hex
+    /// - Terrain cost <= corp cash
+    /// This mirrors Python's get_lay_tile_actions filtering.
+    fn has_layable_tile_for_corp(
+        &self,
+        hex_id: &str,
+        corp_connected_edges: &[u8],
+        corp_cash: i32,
+    ) -> bool {
+        let hi = match self.hex_idx.get(hex_id) {
+            Some(&i) => i,
+            None => return false,
+        };
+
+        // Check terrain cost vs corp cash
+        let terrain_cost: i32 = self.hexes[hi]
+            .tile
+            .upgrades
+            .iter()
+            .map(|u| u.cost)
+            .sum();
+        if terrain_cost > corp_cash {
+            return false;
+        }
+
+        let hex = &self.hexes[hi];
+        let current_tile = &hex.tile;
+
+        let old_tile_def = self.tile_catalog.get(&current_tile.name);
+        let old_tile_def = match old_tile_def {
+            Some(def) => def.rotated(current_tile.rotation),
+            None => {
+                crate::tiles::TileDef {
+                    name: current_tile.name.clone(),
+                    color: current_tile.color,
+                    paths: current_tile.paths.clone(),
+                    cities: current_tile.cities.iter().map(|c| crate::tiles::CityDef {
+                        revenue: c.revenue,
+                        slots: c.slots as u8,
+                    }).collect(),
+                    towns: current_tile.towns.iter().map(|t| crate::tiles::TownDef {
+                        revenue: t.revenue,
+                    }).collect(),
+                    offboards: Vec::new(),
+                    edges: crate::tiles::TileDef::compute_edges_pub(&current_tile.paths),
+                    upgrades: Vec::new(),
+                    label: current_tile.label.clone(),
+                    has_junction: current_tile.paths.iter().any(|p|
+                        p.a == crate::tiles::PathEndpoint::Junction || p.b == crate::tiles::PathEndpoint::Junction
+                    ),
+                }
+            }
+        };
+
+        let valid_exits: Vec<u8> = self
+            .hex_adjacency
+            .get(hex_id)
+            .map(|n| n.keys().copied().collect())
+            .unwrap_or_default();
+
+        let next_color = match old_tile_def.color.next_color() {
+            Some(c) => c,
+            None => return false,
+        };
+
+        let next_color_str = format!("{:?}", next_color).to_lowercase();
+        if !self.phase.tiles.iter().any(|t| t == &next_color_str) {
+            return false;
+        }
+
+        for (tile_name, tile_def) in self.tile_catalog.iter() {
+            if tile_def.color != next_color {
+                continue;
+            }
+            let remaining = self.tile_counts_remaining.get(tile_name).copied().unwrap_or(0);
+            if remaining == 0 {
+                continue;
+            }
+            if !tile_def.is_valid_upgrade_for(&old_tile_def) {
+                continue;
+            }
+            // Check all rotations, not just the first
+            let rotations = tile_def.legal_rotations_for(&old_tile_def, &valid_exits);
+            for &rot in &rotations {
+                let rotated = tile_def.rotated(rot);
+                // entity_reaches_a_new_exit: at least one exit of this rotation
+                // must be an edge the corp connects to this hex through
+                if rotated.edges.iter().any(|e| corp_connected_edges.contains(e)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Get legal rotations for a specific tile on a hex.
+    /// Returns list of rotation values (0-5).
+    fn legal_tile_rotations(&self, hex_id: &str, tile_name: &str) -> Vec<u32> {
+        let hi = match self.hex_idx.get(hex_id) {
+            Some(&i) => i,
+            None => return Vec::new(),
+        };
+        let hex = &self.hexes[hi];
+        let current_tile = &hex.tile;
+
+        let old_tile_def = self.tile_catalog.get(&current_tile.name);
+        let old_tile_def = match old_tile_def {
+            Some(def) => def.rotated(current_tile.rotation),
+            None => return Vec::new(),
+        };
+
+        let tile_def = match self.tile_catalog.get(tile_name) {
+            Some(def) => def,
+            None => return Vec::new(),
+        };
+
+        let valid_exits: Vec<u8> = self
+            .hex_adjacency
+            .get(hex_id)
+            .map(|n| n.keys().copied().collect())
+            .unwrap_or_default();
+
+        tile_def
+            .legal_rotations_for(&old_tile_def, &valid_exits)
+            .into_iter()
+            .map(|r| r as u32)
+            .collect()
+    }
+
+    // -- Operating round queries --
+
+    /// Buyable trains for a corporation.
+    /// Returns list of (train_id, train_name, price, source) tuples.
+    /// source is "depot", "discard", or corp_sym (for inter-corp purchases).
+    fn buyable_trains_for(&self, corp_sym: &str) -> Vec<(String, String, i32, String)> {
+        let ci = match self.corp_idx.get(corp_sym) {
+            Some(&i) => i,
+            None => return Vec::new(),
+        };
+        let corp = &self.corporations[ci];
+        let corp_cash = corp.cash;
+        let president_id = corp.president_id();
+
+        // Check if president may contribute (must_buy_train = no trains + has route)
+        let must_buy = corp.trains.is_empty() && !self.depot.trains.is_empty();
+        let pres_cash = if must_buy {
+            president_id
+                .and_then(|pid| self.players.iter().find(|p| p.id == pid))
+                .map_or(0, |p| p.cash)
+        } else {
+            0
+        };
+        let total_cash = corp_cash + pres_cash;
+        let is_ebuy = corp_cash < self.depot.trains.first().map_or(0, |t| t.price);
+
+        let mut result = Vec::new();
+
+        // Depot trains: first train always visible; subsequent if phase unlocked
+        // For 1830 simplicity: all depot trains are visible (phase gating handled elsewhere)
+        if is_ebuy {
+            // Emergency buy: only cheapest depot train
+            if let Some(t) = self.depot.trains.first() {
+                if t.price <= total_cash {
+                    result.push((t.id.clone(), t.name.clone(), t.price, "depot".to_string()));
+                }
+            }
+        } else {
+            for t in &self.depot.trains {
+                if t.price <= corp_cash {
+                    result.push((t.id.clone(), t.name.clone(), t.price, "depot".to_string()));
+                }
+            }
+        }
+
+        // Discarded trains
+        for t in &self.depot.discarded {
+            if t.price <= corp_cash || (must_buy && t.price <= total_cash) {
+                result.push((
+                    t.id.clone(),
+                    t.name.clone(),
+                    t.price,
+                    "discard".to_string(),
+                ));
+            }
+        }
+
+        // Other-corp trains (same president only in 1830)
+        if let Some(pres_id) = president_id {
+            for other_corp in &self.corporations {
+                if other_corp.sym == *corp_sym {
+                    continue;
+                }
+                // Same president check
+                if other_corp.president_id() != Some(pres_id) {
+                    continue;
+                }
+                for t in &other_corp.trains {
+                    // Min price for other-corp trains is 1
+                    let max_price = if must_buy {
+                        total_cash.min(t.price)
+                    } else {
+                        corp_cash.min(t.price)
+                    };
+                    if max_price >= 1 {
+                        result.push((
+                            t.id.clone(),
+                            t.name.clone(),
+                            max_price,
+                            other_corp.sym.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Whether president must contribute to train purchase.
+    /// 1830 MUST_BUY_TRAIN="route": only when corp has no trains, depot not empty,
+    /// AND the corp has a route (≥2 connected revenue nodes with a token).
+    fn president_may_contribute(&mut self, corp_sym: &str) -> bool {
+        let ci = match self.corp_idx.get(corp_sym) {
+            Some(&i) => i,
+            None => return false,
+        };
+        self.corporations[ci].trains.is_empty()
+            && !self.depot.trains.is_empty()
+            && self.can_run_route(corp_sym)
+    }
+
+    /// Dividend options for a corporation: returns list of option names.
+    /// In 1830: ["payout", "withhold"] always (for the dividend step).
+    fn dividend_options(&self, _corp_sym: &str) -> Vec<String> {
+        vec!["payout".to_string(), "withhold".to_string()]
+    }
+
+    // -- Step-level state queries (for ActionHelper/Encoder) --
+
+    /// Active step type as string: "WaterfallAuction", "BuySellPar", "LayTile",
+    /// "PlaceToken", "RunRoutes", "Dividend", "BuyTrain", "BuyCompany",
+    /// "DiscardTrain", "CompanyPendingPar", "Done".
+    fn active_step_type(&self) -> String {
+        match &self.round {
+            Round::Auction(s) => {
+                if s.pending_par.is_some() {
+                    "CompanyPendingPar".to_string()
+                } else {
+                    "WaterfallAuction".to_string()
+                }
+            }
+            Round::Stock(_) => "BuySellPar".to_string(),
+            Round::Operating(s) => format!("{:?}", s.step),
+        }
+    }
+
+    /// Auction: company currently being auctioned (sym), or None.
+    fn auctioning_company(&self) -> Option<String> {
+        match &self.round {
+            Round::Auction(s) => s
+                .auctioning
+                .and_then(|ci| self.companies.get(ci))
+                .map(|c| c.sym.clone()),
+            _ => None,
+        }
+    }
+
+    /// Auction: remaining companies in order (cheapest first), as sym list.
+    fn auction_companies(&self) -> Vec<String> {
+        match &self.round {
+            Round::Auction(s) => s
+                .remaining_companies
+                .iter()
+                .filter_map(|&ci| self.companies.get(ci))
+                .map(|c| c.sym.clone())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Auction: bids on a company as list of (player_id, price).
+    fn auction_bids(&self, company_sym: &str) -> Vec<(u32, i32)> {
+        match &self.round {
+            Round::Auction(s) => {
+                let ci = self.companies.iter().position(|c| c.sym == company_sym);
+                ci.and_then(|ci| s.bids.get(&ci))
+                    .map(|bids| bids.iter().map(|b| (b.player_id, b.price)).collect())
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Auction: minimum bid for a company.
+    fn auction_min_bid(&self, company_sym: &str) -> i32 {
+        match &self.round {
+            Round::Auction(s) => {
+                let ci = self
+                    .companies
+                    .iter()
+                    .position(|c| c.sym == company_sym)
+                    .unwrap_or(0);
+                let value = self.companies.get(ci).map_or(0, |c| c.value);
+                s.min_bid_for(ci, value)
+            }
+            _ => 0,
+        }
+    }
+
+    /// Auction: maximum bid for a player on a company.
+    fn auction_max_bid(&self, player_id: u32, company_sym: &str) -> i32 {
+        match &self.round {
+            Round::Auction(s) => {
+                let ci = self
+                    .companies
+                    .iter()
+                    .position(|c| c.sym == company_sym)
+                    .unwrap_or(0);
+                let player_cash = self
+                    .players
+                    .iter()
+                    .find(|p| p.id == player_id)
+                    .map_or(0, |p| p.cash);
+                s.max_bid(player_id, ci, player_cash)
+            }
+            _ => 0,
+        }
+    }
+
+    /// Auction: pending par info as (corp_sym, player_id), or None.
+    fn auction_pending_par(&self) -> Option<(String, u32)> {
+        match &self.round {
+            Round::Auction(s) => s.pending_par.clone(),
+            _ => None,
+        }
+    }
+
+    /// Operating: current step name as string.
+    fn operating_step(&self) -> String {
+        match &self.round {
+            Round::Operating(s) => format!("{:?}", s.step),
+            _ => String::new(),
+        }
+    }
+
+    /// Stock: corps sold by this player this round (sym list).
+    fn stock_sold_corps(&self, player_id: u32) -> Vec<String> {
+        match &self.round {
+            Round::Stock(s) => s
+                .players_sold
+                .get(&player_id)
+                .map(|sold| sold.keys().cloned().collect())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Stock: whether current player has bought a share this turn.
+    fn stock_bought_this_turn(&self) -> bool {
+        match &self.round {
+            Round::Stock(s) => s.bought_this_turn,
+            _ => false,
+        }
+    }
+
+    /// Debug: check home_token_ever_placed for a corp.
+    fn debug_home_token(&self, corp_sym: &str) -> bool {
+        self.corp_idx
+            .get(corp_sym)
+            .map_or(true, |&ci| self.corporations[ci].home_token_ever_placed)
+    }
+
+    /// Stock: current turn number within this stock round.
+    fn stock_turn(&self) -> u32 {
+        match &self.round {
+            Round::Stock(s) => s.turn,
+            _ => 0,
+        }
+    }
+
+    /// Debug: stock state internals
+    fn debug_stock_state(&self) -> HashMap<String, String> {
+        let mut d = HashMap::new();
+        if let Round::Stock(s) = &self.round {
+            d.insert("bought_this_turn".into(), s.bought_this_turn.to_string());
+            d.insert("bought_corp".into(), s.bought_corp_this_turn.clone().unwrap_or_default());
+            d.insert("bought_from_ipo".into(), s.bought_from_ipo.to_string());
+            d.insert("parred_this_turn".into(), s.parred_this_turn.to_string());
+            d.insert("turn".into(), s.turn.to_string());
+        }
+        d
+    }
+
+    /// Stock: buyable shares for a player.
+    /// Returns list of (corp_sym, source_type, share_index, price) tuples.
+    /// source_type is "ipo" or "market". share_index is the position in corp.shares.
+    /// Only the lowest-index buyable share per (corp, source) group is returned.
+    fn buyable_shares(&self, player_id: u32) -> Vec<(String, String, usize, i32)> {
+        let stock_state = match &self.round {
+            Round::Stock(s) => s,
+            _ => return Vec::new(),
+        };
+
+        // 1830: can buy multiple shares of the SAME corp if its share price
+        // is in the "multiple_buy" zone AND we haven't parred this turn AND
+        // we only bought from this same corp so far.
+        let bought_corp = stock_state.bought_corp_this_turn.as_deref();
+
+        let player_cash = self
+            .players
+            .iter()
+            .find(|p| p.id == player_id)
+            .map_or(0, |p| p.cash);
+        let player_eid = EntityId::player(player_id);
+        let player_certs = self.num_certs_internal(player_id);
+
+        let mut result = Vec::new();
+
+        for corp in &self.corporations {
+            // Check ipoed (has par price), not floated — Python uses corporation.ipoed
+            let ipoed = corp.ipo_price.is_some();
+            if !ipoed {
+                continue;
+            }
+            if stock_state.sold_corp_this_round(player_id, &corp.sym) {
+                continue;
+            }
+
+            // Multiple buy check: after buying, can only buy more of same corp
+            // if it's in the "multiple_buy" zone and no par was done this turn.
+            // Note: we don't check bought_from_ipo here because share index
+            // divergence between Python and Rust can cause false positives.
+            // The enforcement happens in stock_process_buy_shares instead.
+            if stock_state.bought_this_turn {
+                let is_multiple_buy = corp
+                    .share_price
+                    .as_ref()
+                    .map_or(false, |sp| sp.types.iter().any(|t| t == "multiple_buy"));
+                let same_corp = bought_corp == Some(corp.sym.as_str());
+                if !is_multiple_buy || !same_corp || stock_state.parred_this_turn {
+                    continue;
+                }
+            }
+
+            let corp_price = corp.share_price.as_ref().map_or(0, |sp| sp.price);
+            let ipo_eid = EntityId::ipo(&corp.sym);
+            let market_eid = EntityId::market();
+
+            // Current player ownership
+            let player_pct = corp.percent_owned_by(&player_eid);
+            // Max ownership: 60% normally, lifted for multiple_buy/unlimited zones
+            let sp_types = corp
+                .share_price
+                .as_ref()
+                .map(|sp| &sp.types)
+                .cloned()
+                .unwrap_or_default();
+            let ownership_exempt = sp_types.iter().any(|t| t == "multiple_buy" || t == "unlimited");
+            let max_pct: u8 = if ownership_exempt { 100 } else { 60 };
+
+            // Cert limit exempt for multiple_buy/unlimited zones
+            let cert_exempt = ownership_exempt;
+            let at_cert_limit = !cert_exempt && player_certs >= self.cert_limit as u32;
+
+            // IPO shares (non-president only — president is bought via par action).
+            // During multiple buy (bought_this_turn=true), only market shares allowed.
+            if !stock_state.bought_this_turn {
+                let ipo_share = corp
+                    .shares
+                    .iter()
+                    .enumerate()
+                    .find(|(_, s)| s.owner == ipo_eid && !s.president);
+                if let Some((idx, share)) = ipo_share {
+                    let price = corp.ipo_price.as_ref().map_or(0, |sp| sp.price);
+                    if player_cash >= price
+                        && player_pct + share.percent <= max_pct
+                        && !at_cert_limit
+                    {
+                        result.push((corp.sym.clone(), "ipo".to_string(), idx, price));
+                    }
+                }
+            }
+
+            // Market shares
+            let market_share = corp
+                .shares
+                .iter()
+                .enumerate()
+                .find(|(_, s)| s.owner == market_eid && !s.president);
+            if let Some((idx, share)) = market_share {
+                let price = corp_price;
+                if player_cash >= price
+                    && player_pct + share.percent <= max_pct
+                    && !at_cert_limit
+                {
+                    result.push((corp.sym.clone(), "market".to_string(), idx, price));
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Stock: sellable share bundles for a player.
+    /// Returns list of (corp_sym, num_shares, percent) tuples.
+    /// Each tuple represents a sellable bundle (cumulative prefix of shares).
+    fn sellable_bundles(&self, player_id: u32) -> Vec<(String, usize, u8)> {
+        let stock_state = match &self.round {
+            Round::Stock(s) => s,
+            _ => return Vec::new(),
+        };
+
+        // 1830 SELL_BUY_ORDER = "sell_buy_sell": selling is always allowed
+        // regardless of whether the player has already bought this turn.
+
+        // 1830 SELL_AFTER = "first": no selling in the first stock round.
+        // self.turn starts at 1 and increments when transitioning OR → Stock.
+        // Turn 1 = first stock round (no selling). Turn 2+ = selling allowed.
+        // Note: Python tracks per-rotation turns within a stock round; we use
+        // the coarser game-level turn which blocks selling for the entire first SR.
+        // This is slightly more restrictive but correct for the common case.
+        if self.turn <= 1 {
+            return Vec::new();
+        }
+
+        let player_eid = EntityId::player(player_id);
+        let market_eid = EntityId::market();
+        let mut result = Vec::new();
+
+        for corp in &self.corporations {
+            // Must be IPO'd (has par price) to sell
+            if corp.ipo_price.is_none() {
+                continue;
+            }
+
+            // Gather player's shares in this corp, sorted: non-president first, then president
+            let mut player_shares: Vec<(usize, &Share)> = corp
+                .shares
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.owner == player_eid)
+                .collect();
+
+            if player_shares.is_empty() {
+                continue;
+            }
+
+            player_shares.sort_by_key(|(_, s)| if s.president { 1 } else { 0 });
+
+            // Market pool capacity check: 50% limit in 1830
+            let market_pct: u8 = corp
+                .shares
+                .iter()
+                .filter(|s| s.owner == market_eid)
+                .map(|s| s.percent)
+                .sum();
+
+            // Build cumulative bundles
+            let mut cum_percent: u8 = 0;
+            let mut cum_count: usize = 0;
+            let mut includes_president = false;
+
+            for (_, share) in &player_shares {
+                cum_percent += share.percent;
+                cum_count += 1;
+                if share.president {
+                    includes_president = true;
+                }
+
+                // Check market capacity (pool can't exceed 50%)
+                if market_pct + cum_percent > 50 {
+                    break;
+                }
+
+                // President dump check: if bundle includes president share,
+                // another player must hold >= 20% (president's share percent)
+                if includes_president {
+                    let presidents_pct = corp
+                        .shares
+                        .iter()
+                        .find(|s| s.president)
+                        .map_or(20, |s| s.percent);
+
+                    // Find max other player holding
+                    let max_other = self
+                        .players
+                        .iter()
+                        .filter(|p| p.id != player_id)
+                        .map(|p| corp.percent_owned_by(&EntityId::player(p.id)))
+                        .max()
+                        .unwrap_or(0);
+
+                    if max_other < presidents_pct {
+                        continue; // Can't dump president — skip this bundle size
+                    }
+                }
+
+                result.push((corp.sym.clone(), cum_count, cum_percent));
+            }
+
+            // Partial president bundles: if the last share is the president share,
+            // add a bundle for (total - 10%) representing selling half the president.
+            // In 1830: president=20%, normal=10%, so one partial bundle at cum_percent-10.
+            if includes_president && cum_percent > 10 {
+                let partial_pct = cum_percent - 10;
+                if market_pct + partial_pct <= 50 {
+                    // Check dump for the partial bundle too
+                    let presidents_pct = corp
+                        .shares
+                        .iter()
+                        .find(|s| s.president)
+                        .map_or(20, |s| s.percent);
+                    let max_other = self
+                        .players
+                        .iter()
+                        .filter(|p| p.id != player_id)
+                        .map(|p| corp.percent_owned_by(&EntityId::player(p.id)))
+                        .max()
+                        .unwrap_or(0);
+                    if max_other >= presidents_pct {
+                        result.push((corp.sym.clone(), cum_count, partial_pct));
+                    }
+                }
+            }
+        }
+
+        result
     }
 
     /// Get the game result: player_id -> total value (cash + share values).
@@ -1558,9 +2681,33 @@ impl BaseGame {
         self.stock_market.par_prices()
     }
 
+    /// Par prices with coordinates: returns [(price, row, col), ...].
+    fn par_prices_with_coords(&self) -> Vec<(i32, usize, usize)> {
+        let mut result = Vec::new();
+        for (row_idx, row) in self.stock_market.grid.iter().enumerate() {
+            for (col_idx, cell) in row.iter().enumerate() {
+                if let Some(sp) = cell {
+                    if sp.zone == "par" {
+                        result.push((sp.price, row_idx, col_idx));
+                    }
+                }
+            }
+        }
+        result.sort_by_key(|&(p, _, _)| p);
+        result
+    }
+
     /// Fast clone for MCTS (exposed to Python as pickle_clone for compat).
     fn pickle_clone(&self) -> BaseGame {
         self.clone_for_search()
+    }
+
+    /// Encode the game state for the GNN model.
+    /// Returns (game_state_flat, node_features_flat, encoding_size, num_hexes, num_node_features).
+    fn encode_for_gnn(&self) -> (Vec<f32>, Vec<f32>, usize, usize, usize) {
+        let (gs, nf) = self.encode_state();
+        let enc_size = gs.len();
+        (gs, nf, enc_size, crate::encoder::NUM_HEXES, crate::encoder::NUM_NODE_FEATURES)
     }
 
     // -- Phase 4: Connectivity, Tile, Token, Routing --
@@ -1609,15 +2756,14 @@ impl BaseGame {
 
     /// Calculate optimal routes and revenue for a corporation.
     /// Returns (routes_as_dicts, total_revenue).
-    fn calculate_routes(&self, corp_sym: &str) -> (Vec<HashMap<String, String>>, i32) {
-        let ci = match self.corp_idx.get(corp_sym) {
+    fn calculate_routes(&mut self, corp_sym: String) -> (Vec<HashMap<String, String>>, i32) {
+        let ci = match self.corp_idx.get(corp_sym.as_str()) {
             Some(&i) => i,
             None => return (Vec::new(), 0),
         };
-        let corp = &self.corporations[ci];
 
         // Get token nodes
-        let token_positions = self.corp_token_positions(corp_sym);
+        let token_positions = self.corp_token_positions(&corp_sym);
         let token_nodes: Vec<NodeId> = token_positions
             .iter()
             .map(|(hex_id, city_idx)| NodeId {
@@ -1627,10 +2773,32 @@ impl BaseGame {
             })
             .collect();
 
-        // Get trains
-        let trains: Vec<(u32, bool)> = corp
+        // Get all connected revenue nodes (cities/towns/offboards) from graph
+        let reservations = self.home_reservations();
+        let graph = self.graph_cache.get_or_compute(
+            &corp_sym,
+            &self.hexes,
+            &self.hex_idx,
+            &self.hex_adjacency,
+            &token_positions,
+            &reservations,
+        );
+        let connected_nodes: Vec<NodeId> = graph
+            .connected_nodes
+            .iter()
+            .filter(|n| {
+                n.node_type == NodeType::City
+                    || n.node_type == NodeType::Town
+                    || n.node_type == NodeType::Offboard
+            })
+            .cloned()
+            .collect();
+
+        // Get trains (only non-operated)
+        let trains: Vec<(u32, bool)> = self.corporations[ci]
             .trains
             .iter()
+            .filter(|t| !t.operated)
             .map(|t| (t.distance, t.name == "D"))
             .collect();
 
@@ -1639,7 +2807,10 @@ impl BaseGame {
             &self.hex_idx,
             &self.hex_adjacency,
             &token_nodes,
+            &connected_nodes,
             &trains,
+            &self.phase.tiles,
+            &corp_sym,
         );
 
         // Convert to Python-friendly format
@@ -1654,6 +2825,31 @@ impl BaseGame {
                     .map(|n| format!("{}:{:?}:{}", n.hex_id, n.node_type, n.index))
                     .collect();
                 d.insert("nodes".to_string(), nodes_str.join(","));
+                // Node signatures matching Python's format: "hex_id-city_index"
+                let node_sigs: Vec<String> = r
+                    .nodes
+                    .iter()
+                    .map(|n| format!("{}-{}", n.hex_id, n.index))
+                    .collect();
+                d.insert("node_signatures".to_string(), node_sigs.join(","));
+                // Connection hex chains: each chain is comma-separated hex IDs,
+                // chains separated by "|"
+                let conn_str: Vec<String> = r
+                    .connections
+                    .iter()
+                    .map(|chain| chain.join(","))
+                    .collect();
+                d.insert("connections".to_string(), conn_str.join("|"));
+                // All hex IDs in the route (for Python's Route constructor)
+                let mut all_hexes: Vec<String> = r
+                    .connections
+                    .iter()
+                    .flat_map(|chain| chain.iter().cloned())
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                all_hexes.sort();
+                d.insert("hexes".to_string(), all_hexes.join(","));
                 d
             })
             .collect();
@@ -1675,6 +2871,23 @@ impl BaseGame {
             &reservations,
         );
         graph.route_available
+    }
+
+    /// Whether the corp must buy a train: no trains, depot has trains, and
+    /// 2+ mandatory (city) nodes reachable. Matches Python's must_buy_train
+    /// which checks graph.route_info(entity)["route_train_purchase"].
+    fn must_buy_train(&mut self, corp_sym: &str) -> bool {
+        let token_positions = self.corp_token_positions(corp_sym);
+        let reservations = self.home_reservations();
+        let graph = self.graph_cache.get_or_compute(
+            corp_sym,
+            &self.hexes,
+            &self.hex_idx,
+            &self.hex_adjacency,
+            &token_positions,
+            &reservations,
+        );
+        graph.route_train_purchase
     }
 
     pub(crate) fn can_place_token(&mut self, corp_sym: &str) -> bool {

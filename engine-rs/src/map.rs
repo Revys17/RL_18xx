@@ -47,6 +47,10 @@ pub struct CorpGraph {
     /// True if any token walk found at least one additional revenue node
     /// beyond the starting token city (valid route exists).
     pub route_available: bool,
+    /// True if the corp can purchase a train: 2+ mandatory nodes (cities)
+    /// are reachable. This is stricter than route_available which also counts
+    /// optional nodes (towns). Mirrors Python's route_train_purchase.
+    pub route_train_purchase: bool,
 }
 
 /// Full graph cache holding per-corporation data.
@@ -116,6 +120,7 @@ fn compute_corp_graph(
     let mut visited_nodes = HashSet::new();
     let mut visited_hexes: HashMap<String, HashSet<u8>> = HashMap::new();
     let mut route_available = false;
+    let mut route_train_purchase = false;
 
     // Each token walk gets its own visited_paths (matching Python's per-token
     // fresh visited_paths dict).  The visited_nodes set for each walk is
@@ -190,6 +195,19 @@ fn compute_corp_graph(
             });
             if has_optional || reached_other_token {
                 route_available = true;
+            }
+            // route_train_purchase: 2+ mandatory (city) nodes.
+            // Start node is 1 mandatory. Any other city reachable (not in pre-seed
+            // unless actually visited via track) is another mandatory.
+            if !route_train_purchase {
+                let other_mandatory = all_found.iter().any(|n| {
+                    n.node_type == NodeType::City
+                        && **n != start_node
+                        && (!pre_seed.contains(n) || local_visited_hexes.contains_key(&n.hex_id))
+                });
+                if other_mandatory {
+                    route_train_purchase = true;
+                }
             }
         }
 
@@ -271,6 +289,7 @@ fn compute_corp_graph(
         connected_nodes: visited_nodes,
         tokenable_cities: tokenable,
         route_available,
+        route_train_purchase,
     }
 }
 

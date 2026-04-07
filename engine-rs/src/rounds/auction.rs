@@ -207,6 +207,7 @@ impl BaseGame {
             // Placement phase: bid on a company
             if state.may_purchase(company_idx) {
                 // Direct purchase of cheapest company
+                new_state.last_purchaser_id = Some(player_id);
                 self.auction_buy_company(&mut new_state, company_idx, player_id, price)?;
                 self.auction_resolve_bids(&mut new_state)?;
                 new_state.advance_entity();
@@ -252,6 +253,8 @@ impl BaseGame {
                     let winner_id = bids[0].player_id;
                     let winning_price = bids[0].price;
                     new_state.auctioning = None;
+                    // Note: do NOT set last_purchaser_id here — Python's last_to_act
+                    // is only set for direct purchases, not competitive auction wins.
                     self.auction_buy_company(
                         &mut new_state,
                         auction_company,
@@ -288,6 +291,8 @@ impl BaseGame {
                             // Give to current entity for free
                             new_state.advance_entity();
                             let buyer_id = new_state.current_player_id();
+                            // Note: do NOT set last_purchaser_id — Python's last_to_act
+                            // is only set for direct purchases via placement_bid.
                             self.auction_buy_company(&mut new_state, cheapest_idx, buyer_id, 0)?;
                             self.auction_resolve_bids(&mut new_state)?;
                         }
@@ -406,6 +411,8 @@ impl BaseGame {
                 let winner_id = bids[0].player_id;
                 let winning_price = bids[0].price;
                 state.auctioning = None;
+                // Note: do NOT set last_purchaser_id — Python's last_to_act
+                // is only set for direct purchases via placement_bid.
                 self.auction_buy_company(state, cheapest, winner_id, winning_price)?;
                 // Continue loop to check next cheapest
             } else if bids.len() > 1 {

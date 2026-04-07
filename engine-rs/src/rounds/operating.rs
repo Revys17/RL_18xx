@@ -148,8 +148,18 @@ impl BaseGame {
                 self.clear_graph_cache();
 
                 // Remove from pending_tokens
+                let was_home_token = if let crate::rounds::Round::Operating(ref s) = self.round {
+                    // Home/pre-step token: no tiles laid yet in this corp's turn
+                    s.num_laid_track == 0
+                } else {
+                    false
+                };
                 if let crate::rounds::Round::Operating(ref mut s) = self.round {
                     s.pending_tokens.remove(0);
+                    // Home token: reset to LayTile for normal operating turn
+                    if was_home_token && s.pending_tokens.is_empty() {
+                        s.step = OperatingStep::LayTile;
+                    }
                 }
                 self.update_round_state();
 
@@ -426,7 +436,7 @@ impl BaseGame {
         // Return the old tile to the supply (if it's a placed tile, not a preprinted one)
         let old_tile_name = self.hexes[hex_idx].tile.name.clone();
         let old_base = old_tile_name.split('-').next().unwrap_or(&old_tile_name);
-        if !old_base.starts_with("preprinted") {
+        if !old_base.starts_with("preprinted") && !old_base.is_empty() && old_base != hex_id {
             *self
                 .tile_counts_remaining
                 .entry(old_base.to_string())
@@ -1282,28 +1292,35 @@ impl BaseGame {
         // Clear graph cache (tile/token state may have changed since last corp)
         self.clear_graph_cache();
 
-        // Place home token if the corp hasn't placed one yet.
-        // For E11 (ERIE's home, an OO hex), if the tile has been upgraded
-        // the player must choose which city. For all other hexes, auto-place.
+        // Place home token if the corp hasn't placed one yet (tokens[0] unused).
         if !self.corporations[ci].tokens.is_empty()
             && !self.corporations[ci].tokens[0].used
         {
+            // Python's place_home_token blocks (pending_tokens) when:
+            //   tile.reserved_by(corporation) AND any(tile.paths)
+            // In 1830, only E11 has a tile-level reservation (ERIE). All other
+            // corps use city-level reservations which don't trigger tile.reserved_by.
+            // So we block only when: home hex is E11, tile has paths (upgraded),
+            // and the tile has multiple cities (choice is meaningful).
             let corp_defs = crate::title::g1830::corporations();
             let mut needs_choice = false;
             if let Some(cd) = corp_defs.iter().find(|cd| cd.sym == sym) {
-                // E11 is the only OO hex that requires explicit choice after upgrade
-                if cd.home_hex == "E11" {
+                let has_tile_reservation = cd.home_hex == "E11";
+                if has_tile_reservation {
                     if let Some(&hi) = self.hex_idx.get(cd.home_hex) {
                         let tile = &self.hexes[hi].tile;
-                        let is_upgraded = tile.name != cd.home_hex;
-                        if is_upgraded && tile.cities.len() > 1 {
+                        let has_paths = !tile.paths.is_empty();
+                        if has_paths && tile.cities.len() > 1 {
                             needs_choice = true;
                         }
                     }
                 }
             }
             if needs_choice {
+                // Add to pending_tokens AND set step to PlaceToken.
+                // This mirrors Python's HomeToken step which runs before Track.
                 if let crate::rounds::Round::Operating(ref mut s) = self.round {
+                    s.pending_tokens.push((sym.clone(), 0));
                     s.step = OperatingStep::PlaceToken;
                 }
             } else {
