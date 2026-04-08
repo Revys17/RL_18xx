@@ -206,6 +206,10 @@ class AlphaZeroGNNModel(AlphaZeroModel):
     def __init__(self, config: ModelConfig):
         super(AlphaZeroGNNModel, self).__init__()
         self.config = config
+        # PyTorch Geometric scatter ops don't support MPS — fall back to CPU
+        if config.device and config.device.type == "mps":
+            LOGGER.warning("GNN model: MPS not supported by PyTorch Geometric scatter ops, falling back to CPU")
+            config.device = torch.device("cpu")
         self.device = config.device
         self.encoder = Encoder_1830.get_encoder_for_model(self)
         self.init_model()

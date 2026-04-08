@@ -28,6 +28,17 @@ SELF_PLAY_GAMES_STATUS_PATH = Path("self_play_games_status")
 SELF_PLAY_GAMES_STATUS_PATH.mkdir(parents=True, exist_ok=True)
 
 
+def _get_autocast_device() -> str | None:
+    """Return the device string for torch.amp.autocast, or None if unavailable.
+
+    Note: MPS autocast (FP16) is currently slower than FP32 for small models
+    due to type-casting overhead, so we only enable it for CUDA.
+    """
+    if torch.cuda.is_available():
+        return "cuda"
+    return None
+
+
 class MCTSPlayer(Agent):
     def __init__(self, config: SelfPlayConfig):
         self.config = config
@@ -113,25 +124,31 @@ class MCTSPlayer(Agent):
 
         Highest N is most robust indicator. In the early stage of the game, pick
         a move weighted by visit count (temperature=1.0); later on, pick the
-        absolute max (equivalent to temperature→0)."""
+        absolute max (equivalent to temperature→0).
+
+        Works on compressed arrays (only legal actions) to avoid allocating
+        full 26,535-element arrays on every move.
+        """
         if self.root.game_object.move_number >= self.config.softpick_move_cutoff:
             return self.root.best_child()
 
         if self.root.num_legal_actions == 1:
             return self.root.legal_action_indices[0]
 
-        pi = self.root.children_as_pi(temperature=1.0)
-        cdf = pi.cumsum()
-        selection = random.random()
-        action_index = cdf.searchsorted(selection)
-        if action_index >= len(pi):
-            LOGGER.error(f"Action index {action_index} is out of bounds. Root children_as_pi: {pi}")
-            raise ValueError(f"Action index {action_index} is out of bounds. Root children_as_pi: {pi}")
+        # Use compressed visit counts directly
+        visit_counts = self.root.child_N_compressed.astype(np.float64)
+        total = visit_counts.sum()
+        if total == 0:
+            # No visits — fall back to uniform over legal actions
+            compressed_idx = random.randrange(self.root.num_legal_actions)
+            return self.root.legal_action_indices[compressed_idx]
 
-        if self.root.child_N[action_index] == 0:
-            LOGGER.error(f"Action index {action_index} has no visits. Root children_as_pi: {pi}")
-            raise ValueError(f"Action index {action_index} has no visits. Root children_as_pi: {pi}")
-        return action_index
+        probs = visit_counts / total
+        cdf = probs.cumsum()
+        selection = random.random()
+        compressed_idx = cdf.searchsorted(selection)
+        compressed_idx = min(compressed_idx, self.root.num_legal_actions - 1)
+        return self.root.legal_action_indices[compressed_idx]
 
     def tree_search(self, parallel_readouts=None):
         if parallel_readouts is None:
@@ -178,9 +195,10 @@ class MCTSPlayer(Agent):
             run_network_start = time.time()
             for leaf in leaves:
                 leaf.ensure_encoded()
-            # Phase 6.5: FP16 inference for ~2x GPU throughput
-            if self.config.use_fp16_inference and torch.cuda.is_available():
-                with torch.no_grad(), torch.amp.autocast("cuda"):
+            # Phase 6.5: FP16 inference for ~2x GPU throughput (CUDA or MPS)
+            autocast_device = _get_autocast_device() if self.config.use_fp16_inference else None
+            if autocast_device:
+                with torch.no_grad(), torch.amp.autocast(autocast_device):
                     move_probs, _, values = self.network.run_many_encoded(
                         [leaf.encoded_game_state for leaf in leaves]
                     )
@@ -419,8 +437,9 @@ class SelfPlay:
         # Must run this once at the start to expand the root node.
         first_node = player.root.select_leaf()
         first_node.ensure_encoded()
-        if self.config.use_fp16_inference and torch.cuda.is_available():
-            with torch.no_grad(), torch.amp.autocast("cuda"):
+        autocast_device = _get_autocast_device() if self.config.use_fp16_inference else None
+        if autocast_device:
+            with torch.no_grad(), torch.amp.autocast(autocast_device):
                 probs, _, val = self.config.network.run_encoded(first_node.encoded_game_state)
         else:
             with torch.no_grad():

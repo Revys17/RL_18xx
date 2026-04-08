@@ -27,6 +27,7 @@ def cmd_train(args):
         gate_games=args.gate_games,
         gate_threshold=args.gate_threshold,
         no_gate=args.no_gate,
+        model_type=args.model_type,
     )
 
 
@@ -109,6 +110,10 @@ def build_parser():
     p.add_argument("--gate-games", type=int, default=10, help="Arena games for model gating (default: 10)")
     p.add_argument("--gate-threshold", type=float, default=0.55, help="Min win rate to promote (default: 0.55)")
     p.add_argument("--no-gate", action="store_true", help="Disable model gating (always promote)")
+    p.add_argument(
+        "--model-type", type=str, default="v2", choices=["v1", "v2"],
+        help="Model architecture for initial checkpoint (default: v2)"
+    )
 
     # pretrain
     p = sub.add_parser("pretrain", help="Pre-train model from human game data")

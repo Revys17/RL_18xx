@@ -1,5 +1,5 @@
 import numpy as np
-from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
+from rl18xx.agent.alphazero.model import AlphaZeroModel
 from rl18xx.agent.alphazero.config import TrainingConfig
 from rl18xx.agent.alphazero.dataset import SelfPlayDataset
 from rl18xx.agent.alphazero.checkpointer import get_latest_model, save_model
@@ -40,7 +40,7 @@ class TrainingMetrics:
     batch_numbers: list = field(default_factory=list)
 
 
-def train(config: TrainingConfig, model: AlphaZeroGNNModel, graph: bool = False) -> TrainingMetrics:
+def train(config: TrainingConfig, model: AlphaZeroModel, graph: bool = False) -> TrainingMetrics:
     if not config.train_dir.exists():
         LOGGER.warning(f"Training directory {config.train_dir} does not exist. Aborting training.")
         return model, TrainingMetrics()
@@ -64,7 +64,7 @@ def train(config: TrainingConfig, model: AlphaZeroGNNModel, graph: bool = False)
 
 
 def train_model(
-    model: AlphaZeroGNNModel,
+    model: AlphaZeroModel,
     train_dataset: Dataset,
     config: TrainingConfig,
     graph: bool = False,

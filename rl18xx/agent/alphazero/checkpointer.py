@@ -1,5 +1,5 @@
-from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
-from rl18xx.agent.alphazero.config import ModelConfig
+from rl18xx.agent.alphazero.model import AlphaZeroGNNModel, AlphaZeroModel
+from rl18xx.agent.alphazero.config import ModelConfig, ModelV2Config
 from pathlib import Path
 from datetime import datetime
 import json
@@ -8,7 +8,22 @@ import logging
 LOGGER = logging.getLogger(__name__)
 
 
-def get_latest_model(model_checkpoint_dir: str) -> AlphaZeroGNNModel:
+def _load_model_from_config(config_data: dict, checkpoint_path: str) -> AlphaZeroModel:
+    """Load the appropriate model type based on config contents."""
+    # Detect v2 config by presence of v2-specific fields
+    if "d_entity" in config_data or "hex_transformer_layers" in config_data:
+        from rl18xx.agent.alphazero.model_v2 import AlphaZeroV2Model
+
+        config = ModelV2Config.from_json(config_data)
+        config.model_checkpoint_file = checkpoint_path
+        return AlphaZeroV2Model(config)
+    else:
+        config = ModelConfig.from_json(config_data)
+        config.model_checkpoint_file = checkpoint_path
+        return AlphaZeroGNNModel(config)
+
+
+def get_latest_model(model_checkpoint_dir: str) -> AlphaZeroModel:
     # Get the directory within model_checkpoint_dir with the latest timestamp in its name
     p = Path(model_checkpoint_dir)
     if not p.exists() or not p.is_dir():
@@ -40,33 +55,29 @@ def get_latest_model(model_checkpoint_dir: str) -> AlphaZeroGNNModel:
 
     with open(config_path, "r") as f:
         config_data = json.load(f)
-        config = ModelConfig.from_json(config_data)
 
-    config.model_checkpoint_file = str(checkpoint_path)
-    model = AlphaZeroGNNModel(config)
-    # The model's __init__ method already loads weights if model_checkpoint_file is set
+    model = _load_model_from_config(config_data, str(checkpoint_path))
     LOGGER.info(f"Loaded most recent model: {model.get_name()}")
     return model
 
-def get_model_from_path(model_checkpoint_path: str) -> AlphaZeroGNNModel:
+
+def get_model_from_path(model_checkpoint_path: str) -> AlphaZeroModel:
     p = Path(model_checkpoint_path)
     if not p.exists() or not p.is_dir():
         raise FileNotFoundError(f"Model checkpoint directory not found: {model_checkpoint_path}")
-    
+
     config_path = p / "config.json"
     checkpoint_path = p / "checkpoint.pth"
-    
+
     with open(config_path, "r") as f:
         config_data = json.load(f)
-        config = ModelConfig.from_json(config_data)
 
-    config.model_checkpoint_file = str(checkpoint_path)
-    model = AlphaZeroGNNModel(config)
-    # The model's __init__ method already loads weights if model_checkpoint_file is set
+    model = _load_model_from_config(config_data, str(checkpoint_path))
     LOGGER.info(f"Loaded model from path {model_checkpoint_path}: {model.get_name()}")
     return model
 
-def save_model(model: AlphaZeroGNNModel, model_checkpoint_dir: str, new=True):
+
+def save_model(model: AlphaZeroModel, model_checkpoint_dir: str, new=True):
     if new:
         model.config.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
