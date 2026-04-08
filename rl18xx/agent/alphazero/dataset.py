@@ -41,7 +41,8 @@ class SelfPlayDataset(Dataset_1830):
 
         state, legal_actions, pi, value = torch.load(buffer, map_location=torch.device('cpu'))
         legal_action_mask = torch.from_numpy(self.action_mapper.convert_indices_to_mask(legal_actions))
-        game_state_data, node_data, edge_index, edge_attr = state
+        # Encoder returns (game_state, node_data, edge_index, edge_attr, [round_type_idx, active_player_idx])
+        game_state_data, node_data, edge_index, edge_attr = state[0], state[1], state[2], state[3]
 
         data = Data(x=node_data, edge_index=edge_index, edge_attr=edge_attr)
         return game_state_data, data, legal_action_mask, pi, value

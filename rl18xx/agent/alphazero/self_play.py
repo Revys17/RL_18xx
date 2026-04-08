@@ -96,6 +96,9 @@ class MCTSPlayer(Agent):
         self.result = np.zeros(len(game_state.players))
         self.result_string = None
         self.searches_pi = []
+        # Track action dicts for replay in extract_data.
+        # Seed with any actions already in the game state (e.g., from a terminal_game_state test fixture).
+        self.played_actions = list(game_state.raw_actions) if hasattr(game_state, "raw_actions") else []
         LOGGER.info(f"Initialized game. Root node N: {self.root.N}")
 
     def play_move(self, action_index):
@@ -108,6 +111,10 @@ class MCTSPlayer(Agent):
         self.log_memory_usage(stage_name="MCTSPlayer.play_move")
         temperature = 1.0 if self.root.game_object.move_number < self.config.softpick_move_cutoff else 0.0
         self.searches_pi.append(self.root.children_as_pi(temperature=temperature))
+
+        # Capture the action dict before advancing (pickle_clone strips action history)
+        action_obj = self.root.action_mapper.map_index_to_action(action_index, self.root.game_object)
+        self.played_actions.append(action_obj.to_dict() if hasattr(action_obj, "to_dict") else action_obj)
 
         self.root = self.root.maybe_add_child(action_index)
         # Prune the tree
@@ -262,8 +269,8 @@ class MCTSPlayer(Agent):
 
     def extract_data(self) -> Generator[Tuple[BaseGame, torch.Tensor, torch.Tensor, torch.Tensor], None, None]:
         assert (
-            len(self.searches_pi) == self.root.game_object.move_number
-        ), f"searches_pi length {len(self.searches_pi)} != move_number {self.root.game_object.move_number}"
+            len(self.searches_pi) == len(self.played_actions)
+        ), f"searches_pi length {len(self.searches_pi)} != played_actions length {len(self.played_actions)}"
         assert not np.array_equal(self.result, [0.0, 0.0, 0.0, 0.0]), f"result {self.result} is 0"
 
         result = torch.tensor(self.result)
@@ -275,7 +282,7 @@ class MCTSPlayer(Agent):
             game_class = game_map.game_by_title("1830")
             game_state = game_class({1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"})
         action_mapper = ActionMapper()
-        for i, action in enumerate(self.root.game_object.raw_actions):
+        for i, action in enumerate(self.played_actions):
             yield (
                 game_state,
                 torch.tensor(action_mapper.get_legal_action_indices(game_state)),
