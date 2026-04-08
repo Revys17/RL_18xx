@@ -118,8 +118,8 @@ class ModelV2Config:
 
     # Heads
     value_head_layers: int = 3
-    aux_loss_weight: float = 0.1
-    phase_aux_loss_weight: float = 0.05
+    aux_loss_weight: float = 0.01
+    phase_aux_loss_weight: float = 0.01
 
     model_checkpoint_file: Optional[str] = None
     timestamp: Optional[str] = None
@@ -150,7 +150,7 @@ class TrainingConfig:
     shuffle_examples: bool = True
     value_loss_weight: float = 1.0
     entropy_weight: float = 0.01  # Phase 6.6: policy entropy bonus weight
-    gradient_accumulation_steps: int = 4  # Phase 6.7: accumulate gradients over N mini-batches
+    gradient_accumulation_steps: int = 1  # gradient accumulation steps (1 = no accumulation)
     max_training_window: int = 0  # 0 means no windowing (use all data)
 
     def __post_init__(self):

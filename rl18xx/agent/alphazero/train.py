@@ -79,7 +79,7 @@ def train_model(
         return metrics
 
     train_loader = DataLoader(
-        train_dataset, batch_size=config.batch_size, shuffle=config.shuffle_examples, num_workers=2, pin_memory=False
+        train_dataset, batch_size=config.batch_size, shuffle=config.shuffle_examples, num_workers=0, pin_memory=False
     )
 
     total_steps = len(train_loader) * config.num_epochs
@@ -117,22 +117,24 @@ def train_model(
             global_batch_number += 1
             game_state_data, batch_data, legal_action_mask, pi, value = batch
             # DataLoader adds an extra dimension
-            game_state_data = game_state_data.to(device, non_blocking=True).squeeze(1)
+            game_state_data = game_state_data.squeeze(1).float().to(device, non_blocking=True)
             batch_data = batch_data.to(device, non_blocking=True)
-            legal_action_mask = legal_action_mask.to(device, non_blocking=True)
-            pi = pi.to(device, non_blocking=True)
-            value = value.to(device, non_blocking=True)
+            legal_action_mask = legal_action_mask.float().to(device, non_blocking=True)
+            pi = pi.float().to(device, non_blocking=True)
+            value = value.float().to(device, non_blocking=True)
 
             policy_logits, value_pred, aux_action_count_pred = model(game_state_data, batch_data)
 
             # Cross-entropy loss for policy with proper illegal-action masking
             masked_logits = policy_logits.masked_fill(legal_action_mask == 0, float("-inf"))
             log_probs = F.log_softmax(masked_logits, dim=1)
-            policy_loss = -torch.sum(pi * log_probs, dim=1).mean()
+            # Replace -inf with 0 in log_probs to avoid 0 * -inf = NaN in backward pass
+            safe_log_probs = log_probs.masked_fill(legal_action_mask == 0, 0.0)
+            policy_loss = -torch.sum(pi * safe_log_probs, dim=1).mean()
 
             # Phase 6.6: Policy entropy bonus to prevent premature collapse
             policy_probs = F.softmax(masked_logits, dim=1)
-            entropy = -(policy_probs * log_probs).sum(dim=1).mean()
+            entropy = -torch.sum(policy_probs * safe_log_probs, dim=1).mean()
 
             # Value loss — supports both score fractions and legacy win/loss targets
             # Score fractions: values are in [0, 1] summing to 1 → use KL divergence
@@ -153,7 +155,9 @@ def train_model(
             # Auxiliary loss: predict log(legal_action_count) (Phase 5.4)
             legal_action_count = legal_action_mask.sum(dim=1)
             aux_target = torch.log(legal_action_count.float().clamp(min=1))
-            aux_loss = F.mse_loss(aux_action_count_pred.squeeze(1), aux_target)
+            # Clamp prediction to prevent huge MSE from untrained aux head
+            aux_pred_clamped = aux_action_count_pred.squeeze(1).clamp(-10, 10)
+            aux_loss = F.mse_loss(aux_pred_clamped, aux_target)
 
             total_loss = (
                 policy_loss
@@ -161,6 +165,16 @@ def train_model(
                 + model.config.aux_loss_weight * aux_loss
                 - config.entropy_weight * entropy
             )
+
+            # Skip batches with NaN/Inf loss to prevent poisoning model weights
+            if not torch.isfinite(total_loss):
+                LOGGER.warning(
+                    f"Non-finite loss at batch {batch_idx}: total={total_loss.item():.4f}, "
+                    f"policy={policy_loss.item():.4f}, value={value_loss.item():.4f}, "
+                    f"aux={aux_loss.item():.4f}, entropy={entropy.item():.4f}. Skipping batch."
+                )
+                optimizer.zero_grad()
+                continue
 
             # Phase 6.7: Gradient accumulation for larger effective batch size
             (total_loss / accum_steps).backward()

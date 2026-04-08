@@ -479,6 +479,8 @@ class MCTSNode:
         When temperature=1.0, returns visit counts normalized to a probability distribution.
         When temperature<1.0, sharpens toward the most-visited action (temperature→0 = argmax).
         When temperature>1.0, flattens (more exploratory).
+
+        Returns a full-size (POLICY_SIZE,) array for training data compatibility.
         """
         if temperature < 1e-8:
             # Temperature → 0: deterministic argmax
@@ -490,6 +492,9 @@ class MCTSNode:
             probs = probs ** (1.0 / temperature)
         sum_probs = np.sum(probs)
         if sum_probs == 0:
+            # No visits — uniform over legal actions to avoid NaN in training
+            probs = np.zeros(POLICY_SIZE, dtype=np.float64)
+            probs[self.legal_action_indices] = 1.0 / self.num_legal_actions
             return probs
         return probs / sum_probs
 
