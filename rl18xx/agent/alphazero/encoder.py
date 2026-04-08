@@ -64,6 +64,8 @@ class Encoder_1830:
             return Encoder_GNN()
         elif model.encoder_type() == "SSME":
             return Encoder_SSME()
+        elif model.encoder_type() == "V2":
+            return Encoder_V2()
         else:
             raise ValueError(f"Unknown model name: {model.encoder_type()}")
 
@@ -1681,3 +1683,22 @@ class Encoder_SSME(Encoder_1830, metaclass=Singleton):
     def hex_coord_to_sequence_idx(self, hex_coord: str) -> int:
         """Convert hex coordinate to sequence index."""
         return self.hex_coord_to_idx[hex_coord]
+
+
+class Encoder_V2(Encoder_GNN):
+    """Encoder for the v2 model architecture (Hex Transformer).
+
+    Reuses Encoder_GNN for game state and node feature encoding, but returns
+    node features as a (N, F) tensor instead of PyG graph data. The v2 model
+    doesn't need edge_index/edge_attr since it uses a Transformer (not GNN).
+
+    The encoded tuple format is:
+    (game_state_tensor, node_features_tensor, edge_index, edge_attr, round_type_idx, active_player_idx)
+
+    The edge_index and edge_attr are still included for backward compatibility with
+    the data storage format and DataLoader, but the v2 model ignores them.
+    """
+
+    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, int]:
+        """Encode game state for v2 model. Same format as GNN encoder for compatibility."""
+        return super().encode(game)

@@ -19,6 +19,8 @@ import psutil
 import atexit
 import random
 
+MODEL_CHECKPOINT_DIR = "model_checkpoints"
+
 LOGGER = logging.getLogger(__name__)
 LOOP_LOCK_FILE = Path("loop.lock")
 LOOP_CONFIG_PATH = Path("loop_config.json")
@@ -363,6 +365,28 @@ def evaluate_candidate(
     return win_rate
 
 
+def ensure_seed_model(model_type: str = "v2"):
+    """Create an initial model checkpoint if none exists."""
+    p = Path(MODEL_CHECKPOINT_DIR)
+    if p.exists() and any(p.iterdir()):
+        return  # checkpoints already exist
+
+    LOGGER.info(f"No model checkpoints found. Creating fresh {model_type} model...")
+    if model_type == "v2":
+        from rl18xx.agent.alphazero.config import ModelV2Config
+        from rl18xx.agent.alphazero.model_v2 import AlphaZeroV2Model
+
+        model = AlphaZeroV2Model(ModelV2Config())
+    else:
+        from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
+        from rl18xx.agent.alphazero.config import ModelConfig
+
+        model = AlphaZeroGNNModel(ModelConfig())
+
+    save_model(model, MODEL_CHECKPOINT_DIR)
+    LOGGER.info(f"Saved initial {model_type} model to {MODEL_CHECKPOINT_DIR}/{model.get_name()}")
+
+
 def main(
     num_loop_iterations: int,
     num_games_per_iteration: int,
@@ -374,6 +398,7 @@ def main(
     gate_games: int = 10,
     gate_threshold: float = 0.55,
     no_gate: bool = False,
+    model_type: str = "v2",
 ):
     if cleanup:
         cleanup_files()
@@ -385,6 +410,8 @@ def main(
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     setup_logging(logging.INFO, f"logs/loop/loop_{timestamp}.log", console=True)
+
+    ensure_seed_model(model_type)
 
     tb_log_dir = os.path.join(TENSORBOARD_LOG_DIR_BASE, f"experiment_{timestamp}")
     metrics = Metrics(tb_log_dir)
@@ -514,7 +541,7 @@ def main(
 
             # Get the model and train it, capturing metrics
             model = get_latest_model("model_checkpoints")
-            training_config.train_dir = f"training_examples/selfplay/{model.get_name()}"
+            training_config.train_dir = Path(f"training_examples/selfplay/{model.get_name()}")
 
             # Train the model and capture metrics
             _, train_metrics = train(training_config, model)
@@ -525,7 +552,7 @@ def main(
                     LOGGER.info("First iteration — skipping gating, saving model directly.")
                 else:
                     LOGGER.info("Gating disabled (--no-gate) — saving model directly.")
-                save_model(model, training_config.model_checkpoint_dir)
+                save_model(model, MODEL_CHECKPOINT_DIR)
             else:
                 status["status_message"] = f"Running gating evaluation ({gate_games} games)..."
                 update_loop_status(status)
@@ -542,7 +569,7 @@ def main(
 
                 if win_rate >= gate_threshold:
                     LOGGER.info(f"Model promoted! Win rate: {win_rate:.1%} >= {gate_threshold:.1%}")
-                    save_model(model, training_config.model_checkpoint_dir)
+                    save_model(model, MODEL_CHECKPOINT_DIR)
                 else:
                     LOGGER.info(f"Model rejected. Win rate: {win_rate:.1%} < {gate_threshold:.1%}")
 

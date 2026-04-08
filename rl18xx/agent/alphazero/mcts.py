@@ -383,14 +383,14 @@ class MCTSNode:
         if isinstance(value, torch.Tensor):
             value = value.cpu().numpy()
 
-        # Zero out illegal moves.
-        move_probs = move_probabilities * self.legal_action_mask
-        scale = sum(move_probs)
+        # Extract only legal action probabilities (avoids allocating full 26,535-elem arrays)
+        legal_probs = move_probabilities[self.legal_action_indices]
+        scale = legal_probs.sum()
         if scale > 0:
-            # Re-normalize move_probabilities.
-            move_probs /= scale
+            legal_probs /= scale
 
-        self.original_prior = self.child_prior = move_probs
+        self.original_prior_compressed = legal_probs.copy()
+        self.child_prior_compressed = legal_probs
         # Standard AlphaZero: initialize child W to zeros rather than seeding
         # with the parent's value. Seeding biases Q estimates toward the parent's
         # evaluation and can prevent proper exploration of moves that significantly
@@ -494,8 +494,9 @@ class MCTSNode:
         return probs / sum_probs
 
     def best_child(self) -> int:
-        # Sort by child_N tie break with action score.
-        return np.argmax(self.child_N + self.child_action_score / 10000)
+        # Pick by visit count, tie-break with action score. Works on compressed arrays.
+        scores = self.child_N_compressed + self.child_action_score_compressed / 10000
+        return self.legal_action_indices[np.argmax(scores)]
 
     def most_visited_path_nodes(self) -> list[MCTSNode]:
         node = self

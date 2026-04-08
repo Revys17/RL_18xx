@@ -10,6 +10,15 @@ from torch.utils.tensorboard import SummaryWriter
 from rl18xx.agent.alphazero.metrics import Metrics
 
 
+def _select_best_device() -> torch.device:
+    """Select the best available device: CUDA > MPS > CPU."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 @dataclass
 class ModelConfig:
     device: Optional[torch.device] = None
@@ -37,10 +46,7 @@ class ModelConfig:
 
     def __post_init__(self):
         if self.device is None:
-            if torch.cuda.is_available():
-                self.device = torch.device("cuda")
-            else:
-                self.device = torch.device("cpu")
+            self.device = _select_best_device()
 
         if self.timestamp is None:
             self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -68,6 +74,65 @@ class ModelConfig:
             "aux_loss_weight": self.aux_loss_weight,
             "timestamp": self.timestamp,
         }
+
+    @classmethod
+    def from_json(cls, json_data):
+        return cls(**json_data)
+
+
+@dataclass
+class ModelV2Config:
+    """Configuration for the v2 architecture (Hex Transformer + Economic Transformer)."""
+
+    device: Optional[torch.device] = None
+    game_state_size: int = 390
+    map_node_features: int = 50
+    policy_size: int = 26535
+    value_size: int = 4  # number of players
+    num_hexes: int = 93
+    num_tiles: int = 46
+    num_rotations: int = 6
+
+    # Economic State Transformer
+    d_entity: int = 128
+    econ_transformer_layers: int = 2
+    econ_transformer_heads: int = 4
+    econ_transformer_ff_dim: int = 256  # d_entity * 2
+
+    # Hex Map Transformer
+    d_map: int = 256
+    hex_transformer_layers: int = 4
+    hex_transformer_heads: int = 8
+    hex_transformer_ff_dim: int = 512  # d_map * 2
+    max_hex_distance: int = 12
+
+    # Cross-modal Fusion
+    cross_attn_heads: int = 4
+
+    # Phase-conditioned Trunk
+    d_trunk: int = 512
+    num_res_blocks: int = 6
+    film_embed_dim: int = 32
+    num_round_types: int = 3  # Stock, Operating, Auction
+    num_game_phases: int = 7  # for aux phase predictor
+
+    # Heads
+    value_head_layers: int = 3
+    aux_loss_weight: float = 0.1
+    phase_aux_loss_weight: float = 0.05
+
+    model_checkpoint_file: Optional[str] = None
+    timestamp: Optional[str] = None
+
+    def __post_init__(self):
+        if self.device is None:
+            self.device = _select_best_device()
+
+        if self.timestamp is None:
+            self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    def to_json(self):
+        return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in ("device", "model_checkpoint_file")}
 
     @classmethod
     def from_json(cls, json_data):

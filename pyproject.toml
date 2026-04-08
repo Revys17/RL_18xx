@@ -46,4 +46,5 @@ line-length = 120
 [dependency-groups]
 dev = [
     "maturin>=1.12.6",
+    "pytest>=9.0.3",
 ]
