@@ -344,7 +344,7 @@ class EconomicStateTransformer(nn.Module):
             norm_first=True,
             activation="gelu",
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers, enable_nested_tensor=False)
         self.output_ln = nn.LayerNorm(d_entity)
 
         # Precompute entity type/id tensors
@@ -810,8 +810,8 @@ class AlphaZeroV2Model(AlphaZeroModel):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
-    def get_name(self):
-        return f"AlphaZeroV2Model_{self.config.timestamp}"
+    def architecture_name(self) -> str:
+        return "AlphaZeroV2"
 
     def _extract_round_type(self, game_state_data: Tensor) -> Tensor:
         """Extract round type index from game state vector (offset 16, normalized by MAX_ROUND_TYPE_IDX=2)."""

@@ -180,8 +180,15 @@ class AlphaZeroModel(nn.Module):
         except Exception as e:
             LOGGER.error(f"Error saving weights to {save_file}: {e}")
 
-    def get_name(self):
+    def architecture_name(self) -> str:
         raise NotImplementedError("Subclasses must implement this method")
+
+    def get_name(self) -> str:
+        """Session identifier used for training data directories."""
+        seed = getattr(self.config, "seed", None)
+        if seed is None:
+            seed = "unknown"
+        return f"{self.architecture_name()}_{self.config.timestamp}_{seed}"
 
     def run(self, game_state: BaseGame) -> Tuple[Tensor, Tensor, Tensor]:
         raise NotImplementedError("Subclasses must implement this method")
@@ -325,8 +332,8 @@ class AlphaZeroGNNModel(AlphaZeroModel):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
-    def get_name(self):
-        return f"AlphaZeroModel_{self.config.timestamp}"
+    def architecture_name(self) -> str:
+        return "AlphaZeroGNN"
 
     def run(self, game_state: BaseGame) -> Tuple[Tensor, Tensor, Tensor]:
         probs, log_probs, values = self.run_many([game_state])
@@ -506,8 +513,8 @@ class AlphaZeroSSMEModel(AlphaZeroModel):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
-    def get_name(self):
-        return f"AlphaZeroSSMEModel_{self.config.timestamp}"
+    def architecture_name(self) -> str:
+        return "AlphaZeroSSME"
 
     def run(self, game_state: BaseGame) -> Tuple[Tensor, Tensor, Tensor]:
         probs, log_probs, values = self.run_many([game_state])

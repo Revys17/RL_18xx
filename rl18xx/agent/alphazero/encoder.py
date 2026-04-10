@@ -270,6 +270,70 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
 
             self.initialized = True
 
+
+    def get_player_rotation_plan(self) -> list:
+        """Compute the rotation plan for player-perspective canonicalization.
+
+        Returns a list of (type, offset, ...) tuples describing which sections of the
+        game state vector contain player-indexed data that should be rotated.
+        """
+        if not self.initialized:
+            raise ValueError('Encoder not initialized. Call initialize() first.')
+
+        plan = []
+        offset = 0
+        n = self.num_players
+        nc = self.NUM_CORPORATIONS
+        np_ = self.NUM_PRIVATES
+
+        for section_name in self.GAME_STATE_ENCODING_STRUCTURE:
+            size = self._get_section_size(section_name)
+
+            if section_name == 'active_entity':
+                plan.append(('simple', offset, n))
+            elif section_name in ('active_president', 'priority_deal_player', 'player_certs_remaining',
+                                  'player_cash', 'player_turn_order'):
+                plan.append(('simple', offset, n))
+            elif section_name == 'player_shares':
+                plan.append(('block', offset, nc, n))
+            elif section_name == 'private_ownership':
+                block_size = n + nc
+                for p_idx in range(np_):
+                    plan.append(('simple', offset + p_idx * block_size, n))
+            elif section_name == 'auction_bids':
+                for p_idx in range(np_):
+                    plan.append(('simple', offset + p_idx * n, n))
+
+            offset += size
+
+        return plan
+
+    def canonicalize_perspective(self, game_state: np.ndarray, active_player_idx: int) -> np.ndarray:
+        """Rotate player-indexed sections so active_player_idx becomes position 0.
+
+        Returns the input unchanged if active_player_idx == 0, otherwise returns a new array.
+        """
+        if active_player_idx == 0:
+            return game_state
+
+        result = game_state.copy()
+        shift = -active_player_idx
+        plan = self.get_player_rotation_plan()
+
+        for entry in plan:
+            if entry[0] == 'simple':
+                _, start, length = entry
+                result[start:start + length] = np.roll(game_state[start:start + length], shift)
+            elif entry[0] == 'block':
+                _, start, stride, num_blocks = entry
+                for i in range(num_blocks):
+                    src_block = (i - shift) % num_blocks
+                    result[start + i * stride:start + (i + 1) * stride] = (
+                        game_state[start + src_block * stride:start + (src_block + 1) * stride]
+                    )
+
+        return result
+
     def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, int]:
         start_time = time.perf_counter()
 

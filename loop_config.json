@@ -1,7 +1,7 @@
 {
-    "num_loop_iterations": 2,
-    "num_games_per_iteration": 2,
-    "num_threads": 1,
+    "num_loop_iterations": 0,
+    "num_games_per_iteration": 50,
+    "num_threads": 8,
     "training_config": {
         "train_dir": null,
         "val_dir": null,
@@ -15,5 +15,6 @@
         "gradient_accumulation_steps": 1,
         "max_training_window": 0
     },
-    "num_readouts": 50
+    "num_readouts": 200,
+    "target_experiences": 50000
 }

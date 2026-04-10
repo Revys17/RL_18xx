@@ -77,9 +77,21 @@ class TrainingExampleProcessor:
         examples = []
         for game_state, legal_actions, searches_pi, result in data_extracts:
             encoded_state = self.encoder.encode(game_state)
-            pi = searches_pi
+            # encoded_state = (game_state_tensor, node_features, edge_index, edge_attr, round_type_idx, active_player_idx)
+            game_state_tensor, node_features, edge_index, edge_attr, round_type_idx, active_player_idx = encoded_state
+
+            # Canonicalize: rotate player-indexed data so active player is always at position 0
+            gs_numpy = game_state_tensor.squeeze(0).numpy()  # (1, N) -> (N,)
+            gs_canonical = self.encoder.canonicalize_perspective(gs_numpy, active_player_idx)
+            game_state_tensor = torch.from_numpy(gs_canonical).unsqueeze(0)  # (N,) -> (1, N)
+
+            # Rotate value target to match (active player's value moves to position 0)
             value = result
-            examples.append((encoded_state, legal_actions, pi, value))
+            if active_player_idx != 0:
+                value = torch.roll(result, shifts=-active_player_idx, dims=0)
+
+            canonical_state = (game_state_tensor, node_features, edge_index, edge_attr, round_type_idx, 0)
+            examples.append((canonical_state, legal_actions, searches_pi, value))
         return examples
 
     def write_samples(self, samples, lmdb_path: Union[Path, str], map_size=1e12):
