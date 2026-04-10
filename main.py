@@ -19,7 +19,6 @@ def cmd_train(args):
 
     loop_main(
         num_loop_iterations=args.iterations,
-        num_games_per_iteration=args.games,
         num_threads=args.threads,
         cleanup=not args.keep_old_files,
         num_readouts=args.readouts,
@@ -28,6 +27,8 @@ def cmd_train(args):
         gate_threshold=args.gate_threshold,
         no_gate=args.no_gate,
         model_type=args.model_type,
+        fresh=args.fresh,
+        target_experiences=args.target_experiences,
     )
 
 
@@ -98,8 +99,11 @@ def build_parser():
 
     # train
     p = sub.add_parser("train", help="Run the AlphaZero training loop")
-    p.add_argument("--iterations", type=int, default=5, help="Training loop iterations (default: 5)")
-    p.add_argument("--games", type=int, default=25, help="Self-play games per iteration (default: 25)")
+    p.add_argument("--iterations", type=int, default=0, help="Training loop iterations (0 = run indefinitely, default: 0)")
+    p.add_argument(
+        "--target-experiences", type=int, default=10000,
+        help="Target experience count per iteration (default: 10000)"
+    )
     p.add_argument("--threads", type=int, default=2, help="Parallel self-play threads (default: 2)")
     p.add_argument("--readouts", type=int, default=64, help="MCTS readouts per move (default: 64)")
     p.add_argument("--keep-old-files", action="store_true", help="Keep files from previous runs")
@@ -113,6 +117,10 @@ def build_parser():
     p.add_argument(
         "--model-type", type=str, default="v2", choices=["v1", "v2"],
         help="Model architecture for initial checkpoint (default: v2)"
+    )
+    p.add_argument(
+        "--fresh", action="store_true",
+        help="Clear all model checkpoints and training data to start from scratch"
     )
 
     # pretrain

@@ -6,7 +6,7 @@ import gc
 import shutil
 from datetime import datetime
 from dataclasses import dataclass, asdict
-from rl18xx.agent.alphazero.checkpointer import get_latest_model, save_model
+from rl18xx.agent.alphazero.checkpointer import get_latest_model, save_model, save_optimizer_state
 from rl18xx.agent.alphazero.config import SelfPlayConfig, TrainingConfig
 from rl18xx.agent.alphazero.metrics import Metrics
 from rl18xx.agent.alphazero.self_play import MCTSPlayer, SelfPlay, SELF_PLAY_GAMES_STATUS_PATH
@@ -57,6 +57,7 @@ class LoopConfig:
     num_threads: int
     training_config: TrainingConfig
     num_readouts: int
+    target_experiences: int = 0  # 0 = use num_games_per_iteration instead
 
 
 @dataclass
@@ -91,43 +92,38 @@ def load_loop_config(
     num_threads: int,
     default_training_config: TrainingConfig,
     num_readouts: int,
+    target_experiences: int = 0,
 ) -> LoopConfig:
-    try:
-        if not LOOP_CONFIG_PATH.exists():
-            loop_config = LoopConfig(
-                num_loop_iterations=num_loop_iterations,
-                num_games_per_iteration=num_games_per_iteration,
-                num_threads=num_threads,
-                training_config=default_training_config.to_json(),
-                num_readouts=num_readouts,
-            )
+    """Load loop config. CLI args always take precedence. File values are used as defaults
+    for training_config fields only (batch_size, lr, etc.) and can be hot-reloaded mid-run."""
+    training_config = default_training_config
 
-            with open(LOOP_CONFIG_PATH, "w") as f:
-                json.dump(asdict(loop_config), f, indent=4)
+    # If config file exists, merge training hyperparams from it (hot-reload support)
+    if LOOP_CONFIG_PATH.exists():
+        try:
+            with open(LOOP_CONFIG_PATH, "r") as f:
+                file_config = json.load(f)
+            if "training_config" in file_config:
+                training_config = TrainingConfig.from_json(file_config["training_config"])
+        except Exception as e:
+            LOGGER.warning(f"Error reading loop config file: {e}. Using CLI defaults.")
 
-            loop_config.training_config = default_training_config
-            return loop_config
+    loop_config = LoopConfig(
+        num_loop_iterations=num_loop_iterations,
+        num_games_per_iteration=num_games_per_iteration,
+        num_threads=num_threads,
+        training_config=training_config,
+        num_readouts=num_readouts,
+        target_experiences=target_experiences,
+    )
 
-        with open(LOOP_CONFIG_PATH, "r") as f:
-            loop_config_json = json.load(f)
-        training_config = TrainingConfig.from_json(loop_config_json["training_config"])
-        loop_config = LoopConfig(
-            num_loop_iterations=loop_config_json["num_loop_iterations"],
-            num_games_per_iteration=loop_config_json["num_games_per_iteration"],
-            num_threads=loop_config_json["num_threads"],
-            training_config=training_config,
-            num_readouts=loop_config_json["num_readouts"],
-        )
-        return loop_config
-    except Exception as e:
-        LOGGER.error(f"Error loading loop config: {e}. Using default config.")
-        return LoopConfig(
-            num_loop_iterations=num_loop_iterations,
-            num_games_per_iteration=num_games_per_iteration,
-            num_threads=num_threads,
-            training_config=default_training_config,
-            num_readouts=num_readouts,
-        )
+    # Write current config to file for visibility / hot-reload editing
+    serializable = asdict(loop_config)
+    serializable["training_config"] = training_config.to_json()
+    with open(LOOP_CONFIG_PATH, "w") as f:
+        json.dump(serializable, f, indent=4)
+
+    return loop_config
 
 
 def update_loop_status(status_data: dict):
@@ -368,28 +364,59 @@ def evaluate_candidate(
 def ensure_seed_model(model_type: str = "v2"):
     """Create an initial model checkpoint if none exists."""
     p = Path(MODEL_CHECKPOINT_DIR)
-    if p.exists() and any(p.iterdir()):
-        return  # checkpoints already exist
+    # Check for any session directories (new format: <arch>/<session>/)
+    has_checkpoints = False
+    if p.exists():
+        for arch_dir in p.iterdir():
+            if arch_dir.is_dir() and any(arch_dir.iterdir()):
+                has_checkpoints = True
+                break
+
+    if has_checkpoints:
+        return
 
     LOGGER.info(f"No model checkpoints found. Creating fresh {model_type} model...")
     if model_type == "v2":
         from rl18xx.agent.alphazero.config import ModelV2Config
         from rl18xx.agent.alphazero.model_v2 import AlphaZeroV2Model
+        import torch
 
-        model = AlphaZeroV2Model(ModelV2Config())
+        config = ModelV2Config()
+        torch.manual_seed(config.seed)
+        LOGGER.info(f"Seeding model initialization with seed={config.seed}")
+        model = AlphaZeroV2Model(config)
     else:
         from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
         from rl18xx.agent.alphazero.config import ModelConfig
+        import torch
 
-        model = AlphaZeroGNNModel(ModelConfig())
+        config = ModelConfig()
+        torch.manual_seed(config.seed)
+        LOGGER.info(f"Seeding model initialization with seed={config.seed}")
+        model = AlphaZeroGNNModel(config)
 
-    save_model(model, MODEL_CHECKPOINT_DIR)
-    LOGGER.info(f"Saved initial {model_type} model to {MODEL_CHECKPOINT_DIR}/{model.get_name()}")
+    checkpoint_num = save_model(model, MODEL_CHECKPOINT_DIR)
+    LOGGER.info(f"Saved initial {model_type} model: {model.get_name()} (checkpoint {checkpoint_num})")
+
+
+def cleanup_model_and_data():
+    """Remove all model checkpoints and training data for a fresh start."""
+    checkpoint_dir = Path(MODEL_CHECKPOINT_DIR)
+    if checkpoint_dir.exists():
+        shutil.rmtree(checkpoint_dir)
+        LOGGER.info(f"Removed {checkpoint_dir}")
+
+    training_dir = Path("training_examples")
+    if training_dir.exists():
+        shutil.rmtree(training_dir)
+        LOGGER.info(f"Removed {training_dir}")
+
+
+ESTIMATED_MOVES_PER_GAME = 1000
 
 
 def main(
     num_loop_iterations: int,
-    num_games_per_iteration: int,
     num_threads: int,
     cleanup: bool,
     num_readouts: int,
@@ -399,6 +426,8 @@ def main(
     gate_threshold: float = 0.55,
     no_gate: bool = False,
     model_type: str = "v2",
+    fresh: bool = False,
+    target_experiences: int = 10000,
 ):
     if cleanup:
         cleanup_files()
@@ -410,6 +439,10 @@ def main(
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     setup_logging(logging.INFO, f"logs/loop/loop_{timestamp}.log", console=True)
+
+    if fresh:
+        LOGGER.info("Fresh start requested. Clearing model checkpoints and training data.")
+        cleanup_model_and_data()
 
     ensure_seed_model(model_type)
 
@@ -432,14 +465,19 @@ def main(
     try:
         while True:
             LOGGER.info(f"--- Starting loop {loop+1}/{num_loop_iterations} ---")
+            num_games_estimate = max(1, target_experiences // ESTIMATED_MOVES_PER_GAME)
             loop_config = load_loop_config(
-                num_loop_iterations, num_games_per_iteration, num_threads, default_training_config, num_readouts
+                num_loop_iterations, num_games_estimate, num_threads,
+                default_training_config, num_readouts, target_experiences,
             )
 
-            if loop >= loop_config.num_loop_iterations:
+            if loop_config.num_loop_iterations > 0 and loop >= loop_config.num_loop_iterations:
                 break
 
-            LOGGER.info(f"Loop {loop+1}: Using {loop_config.num_games_per_iteration} games per iteration.")
+            LOGGER.info(
+                f"Loop {loop+1}: Targeting {loop_config.target_experiences} experiences "
+                f"(~{num_games_estimate} games)."
+            )
             LOGGER.info(f"Loop {loop+1}: Using training params: {loop_config.training_config}")
             LOGGER.info(f"Loop {loop+1}: Using {loop_config.num_threads} processes for self-play.")
             loop_metrics.loop_iteration = loop
@@ -468,64 +506,94 @@ def main(
             }
             update_loop_status(status)
 
-            # Create the directory for self-play logs once per run, if not already handled by cleanup
-
             games_completed_count = 0
-            game_results = []  # Track results for win rate calculation
             game_lengths_this_iteration = []
-            executor = ProcessPoolExecutor(max_workers=loop_config.num_threads)
+            experiences_this_iteration = 0
+            game_idx = 0
 
             LOGGER.info(
-                f"Loop {loop+1}: Starting {loop_config.num_games_per_iteration} self-play games across {loop_config.num_threads} processes..."
+                f"Loop {loop+1}: Running self-play until {loop_config.target_experiences} experiences "
+                f"using {loop_config.num_threads} processes..."
             )
+            executor = ProcessPoolExecutor(max_workers=loop_config.num_threads)
             try:
-                futures = [
-                    executor.submit(run_self_play, i, tb_log_dir, timestamp, loop, loop_config.num_readouts)
-                    for i in range(loop_config.num_games_per_iteration)
-                ]
-                for i, future in enumerate(as_completed(futures)):
+                pending_futures = {}
+                # Submit initial batch
+                for _ in range(loop_config.num_threads):
+                    f = executor.submit(run_self_play, game_idx, tb_log_dir, timestamp, loop, loop_config.num_readouts)
+                    pending_futures[f] = game_idx
+                    game_idx += 1
+
+                while experiences_this_iteration < loop_config.target_experiences and pending_futures:
+                    done_futures = []
+                    for f in list(pending_futures.keys()):
+                        if f.done():
+                            done_futures.append(f)
+
+                    if not done_futures:
+                        import concurrent.futures
+                        completed, _ = concurrent.futures.wait(
+                            pending_futures.keys(), return_when=concurrent.futures.FIRST_COMPLETED
+                        )
+                        done_futures = list(completed)
+
+                    for f in done_futures:
+                        gidx = pending_futures.pop(f)
+                        try:
+                            f.result()
+                            games_completed_count += 1
+                            game_file = SELF_PLAY_GAMES_STATUS_PATH / f"L{loop}_G{gidx}.json"
+                            if game_file.exists():
+                                with open(game_file, "r") as gf:
+                                    gdata = json.load(gf)
+                                moves = gdata.get("moves_played", 0)
+                                experiences_this_iteration += moves
+                                game_lengths_this_iteration.append(moves)
+                                loop_metrics.game_lengths.append(moves)
+
+                            LOGGER.info(
+                                f"Loop {loop+1}: Game {games_completed_count} completed. "
+                                f"Experiences: {experiences_this_iteration}/{loop_config.target_experiences}"
+                            )
+                        except Exception as e:
+                            LOGGER.error(f"Error in self-play game {gidx}: {e}", exc_info=True)
+
+                        # Submit another game if we haven't reached target
+                        if experiences_this_iteration < loop_config.target_experiences:
+                            f_new = executor.submit(
+                                run_self_play, game_idx, tb_log_dir, timestamp, loop, loop_config.num_readouts
+                            )
+                            pending_futures[f_new] = game_idx
+                            game_idx += 1
+
+                # Wait for any remaining in-flight games
+                for f in list(pending_futures.keys()):
                     try:
-                        future.result()  # Wait for game to complete and raise exceptions if any
+                        f.result()
+                        gidx = pending_futures[f]
                         games_completed_count += 1
-                        LOGGER.info(
-                            f"Loop {loop+1}: Self-play game {games_completed_count}/{loop_config.num_games_per_iteration} completed."
-                        )
-                        status["games_completed_this_iteration"] = games_completed_count
-                        status[
-                            "status_message"
-                        ] = f"Self-play: {games_completed_count}/{loop_config.num_games_per_iteration} games completed."
-                        update_loop_status(status)
-                        metrics.add_scalar(
-                            "SelfPlay/Progress_in_Iteration",
-                            (games_completed_count / loop_config.num_games_per_iteration) * 100,
-                            loop,
-                        )
+                        game_file = SELF_PLAY_GAMES_STATUS_PATH / f"L{loop}_G{gidx}.json"
+                        if game_file.exists():
+                            with open(game_file, "r") as gf:
+                                gdata = json.load(gf)
+                            moves = gdata.get("moves_played", 0)
+                            experiences_this_iteration += moves
+                            game_lengths_this_iteration.append(moves)
+                            loop_metrics.game_lengths.append(moves)
                     except Exception as e:
-                        LOGGER.error(f"Error in self-play game {i+1}: {e}", exc_info=True)
-                        status["status_message"] = f"Error in self-play game {i+1}. Check logs."
-                        update_loop_status(status)
+                        LOGGER.error(f"Error in trailing self-play game: {e}", exc_info=True)
             finally:
                 executor.shutdown(wait=True)
 
             metrics.add_scalar("SelfPlay/Completed_Games_Total_for_Iteration", games_completed_count, loop)
             loop_metrics.games_played_total += games_completed_count
 
-            # Collect game statistics from status files
-            try:
-                for game_file in SELF_PLAY_GAMES_STATUS_PATH.glob(f"L{loop}_G*.json"):
-                    with open(game_file, "r") as f:
-                        game_data = json.load(f)
-                    if game_data.get("status") == "Completed":
-                        game_lengths_this_iteration.append(game_data.get("moves_played", 0))
-                        loop_metrics.game_lengths.append(game_data.get("moves_played", 0))
-
-                # Calculate average game length for this iteration
-                if game_lengths_this_iteration:
-                    avg_game_length = sum(game_lengths_this_iteration) / len(game_lengths_this_iteration)
-                    metrics.add_scalar("SelfPlay/Avg_Game_Length", avg_game_length, loop)
-                    LOGGER.info(f"Loop {loop+1}: Average game length: {avg_game_length:.1f} moves")
-            except Exception as e:
-                LOGGER.error(f"Error collecting game statistics: {e}")
+            if game_lengths_this_iteration:
+                avg_game_length = sum(game_lengths_this_iteration) / len(game_lengths_this_iteration)
+                metrics.add_scalar("SelfPlay/Avg_Game_Length", avg_game_length, loop)
+                LOGGER.info(f"Loop {loop+1}: Average game length: {avg_game_length:.1f} moves")
+            metrics.add_scalar("SelfPlay/Experiences_This_Iteration", experiences_this_iteration, loop)
+            LOGGER.info(f"Loop {loop+1}: Total experiences this iteration: {experiences_this_iteration}")
 
             status["status_message"] = "Self-play phase completed. Starting training."
             update_loop_status(status)
@@ -544,7 +612,7 @@ def main(
             training_config.train_dir = Path(f"training_examples/selfplay/{model.get_name()}")
 
             # Train the model and capture metrics
-            _, train_metrics = train(training_config, model)
+            _, train_metrics = train(training_config, model, model_checkpoint_dir=MODEL_CHECKPOINT_DIR)
 
             # Model gating: evaluate candidate before promoting
             if no_gate or loop == 0:
@@ -576,21 +644,59 @@ def main(
             # Update loop metrics with training results
             if train_metrics and train_metrics.epochs_trained > 0:
                 loop_metrics.training_losses.append(train_metrics.avg_total_loss)
-                metrics.add_scalar("Training/Total_Loss", train_metrics.avg_total_loss, loop)
-
                 loop_metrics.policy_losses.append(train_metrics.avg_policy_loss)
-                metrics.add_scalar("Training/Policy_Loss", train_metrics.avg_policy_loss, loop)
-
                 loop_metrics.value_losses.append(train_metrics.avg_value_loss)
-                metrics.add_scalar("Training/Value_Loss", train_metrics.avg_value_loss, loop)
+                loop_metrics.training_examples_total += train_metrics.training_examples
 
-                # Log per-epoch metrics
+                # Core losses
+                metrics.add_scalar("Training/Total_Loss", train_metrics.avg_total_loss, loop)
+                metrics.add_scalar("Training/Policy_Loss", train_metrics.avg_policy_loss, loop)
+                metrics.add_scalar("Training/Value_Loss", train_metrics.avg_value_loss, loop)
+                metrics.add_scalar("Training/Examples_This_Iteration", train_metrics.training_examples, loop)
+                metrics.add_scalar("Training/Examples_Total", loop_metrics.training_examples_total, loop)
+
+                # Per-epoch losses
                 for epoch_idx, epoch_loss in enumerate(train_metrics.epoch_losses):
                     metrics.add_scalar(f"Training/Epoch_Loss/Loop{loop}", epoch_loss, epoch_idx)
 
-                loop_metrics.training_examples_total += train_metrics.training_examples
-                metrics.add_scalar("Training/Examples_This_Iteration", train_metrics.training_examples, loop)
-                metrics.add_scalar("Training/Examples_Total", loop_metrics.training_examples_total, loop)
+                # Log comprehensive metrics (last epoch values for per-loop TensorBoard)
+                def _last(lst, default=0.0):
+                    return lst[-1] if lst else default
+
+                # Loss components
+                metrics.add_scalar("Training/Entropy", _last(train_metrics.epoch_entropy), loop)
+                metrics.add_scalar("Training/Aux_Loss", _last(train_metrics.epoch_aux_losses), loop)
+
+                # Policy diagnostics
+                metrics.add_scalar("Policy/Top1_Accuracy", _last(train_metrics.epoch_top1_accuracy), loop)
+                metrics.add_scalar("Policy/Top5_Accuracy", _last(train_metrics.epoch_top5_accuracy), loop)
+                metrics.add_scalar("Policy/Network_Entropy", _last(train_metrics.epoch_policy_entropy), loop)
+                metrics.add_scalar("Policy/MCTS_Target_Entropy", _last(train_metrics.epoch_target_entropy), loop)
+                metrics.add_scalar("Policy/Max_Prob_Concentration", _last(train_metrics.epoch_legal_move_concentration), loop)
+                metrics.add_scalar("Policy/Mean_Legal_Actions", _last(train_metrics.epoch_mean_legal_actions), loop)
+
+                # Value diagnostics
+                metrics.add_scalar("Value/Explained_Variance", _last(train_metrics.epoch_value_explained_variance), loop)
+                metrics.add_scalar("Value/Correlation", _last(train_metrics.epoch_value_correlation), loop)
+                metrics.add_scalar("Value/MAE", _last(train_metrics.epoch_value_mae), loop)
+                metrics.add_scalar("Value/Pred_Mean", _last(train_metrics.epoch_value_pred_mean), loop)
+                metrics.add_scalar("Value/Pred_Std", _last(train_metrics.epoch_value_pred_std), loop)
+                metrics.add_scalar("Value/Target_Mean", _last(train_metrics.epoch_value_target_mean), loop)
+                metrics.add_scalar("Value/Target_Std", _last(train_metrics.epoch_value_target_std), loop)
+
+                # Gradient norms
+                metrics.add_scalar("Gradients/Total_Norm", _last(train_metrics.epoch_grad_norm_total), loop)
+                metrics.add_scalar("Gradients/Policy_Head_Norm", _last(train_metrics.epoch_grad_norm_policy_head), loop)
+                metrics.add_scalar("Gradients/Value_Head_Norm", _last(train_metrics.epoch_grad_norm_value_head), loop)
+                metrics.add_scalar("Gradients/Trunk_Norm", _last(train_metrics.epoch_grad_norm_trunk), loop)
+
+                # Learning rate
+                metrics.add_scalar("Training/Learning_Rate", _last(train_metrics.epoch_lr), loop)
+
+                # Aux diagnostics
+                metrics.add_scalar("Aux/Pred_Mean", _last(train_metrics.epoch_aux_pred_mean), loop)
+                metrics.add_scalar("Aux/Target_Mean", _last(train_metrics.epoch_aux_target_mean), loop)
+                metrics.add_scalar("Aux/Correlation", _last(train_metrics.epoch_aux_correlation), loop)
 
                 LOGGER.info(
                     f"Loop {loop+1} training metrics - Total Loss: {train_metrics.avg_total_loss:.4f}, "
@@ -611,7 +717,8 @@ def main(
                 }
             )
             update_loop_status(status)
-            metrics.add_scalar("Loop/Progress", (loop + 1) / num_loop_iterations * 100, loop)
+            if num_loop_iterations > 0:
+                metrics.add_scalar("Loop/Progress", (loop + 1) / num_loop_iterations * 100, loop)
 
             # Save loop metrics after each iteration
             save_loop_metrics(loop_metrics, loop_metrics_path)

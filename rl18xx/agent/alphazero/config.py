@@ -1,5 +1,6 @@
 from typing import Optional, Any, Union
 import uuid
+import random
 from torch import device
 import torch
 from datetime import datetime
@@ -43,6 +44,7 @@ class ModelConfig:
     aux_loss_weight: float = 0.1
     model_checkpoint_file: Optional[str] = None
     timestamp: Optional[str] = None
+    seed: Optional[int] = None
 
     def __post_init__(self):
         if self.device is None:
@@ -50,6 +52,9 @@ class ModelConfig:
 
         if self.timestamp is None:
             self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        if self.seed is None:
+            self.seed = random.randint(0, 2**31 - 1)
 
     def to_json(self):
         return {
@@ -73,11 +78,13 @@ class ModelConfig:
             "value_head_layers": self.value_head_layers,
             "aux_loss_weight": self.aux_loss_weight,
             "timestamp": self.timestamp,
+            "seed": self.seed,
         }
 
     @classmethod
     def from_json(cls, json_data):
-        return cls(**json_data)
+        filtered = {k: v for k, v in json_data.items() if k in {f.name for f in fields(cls)} and k != "device"}
+        return cls(**filtered)
 
 
 @dataclass
@@ -123,6 +130,7 @@ class ModelV2Config:
 
     model_checkpoint_file: Optional[str] = None
     timestamp: Optional[str] = None
+    seed: Optional[int] = None
 
     def __post_init__(self):
         if self.device is None:
@@ -131,12 +139,16 @@ class ModelV2Config:
         if self.timestamp is None:
             self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+        if self.seed is None:
+            self.seed = random.randint(0, 2**31 - 1)
+
     def to_json(self):
         return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in ("device", "model_checkpoint_file")}
 
     @classmethod
     def from_json(cls, json_data):
-        return cls(**json_data)
+        filtered = {k: v for k, v in json_data.items() if k in {f.name for f in fields(cls)} and k != "device"}
+        return cls(**filtered)
 
 
 @dataclass
