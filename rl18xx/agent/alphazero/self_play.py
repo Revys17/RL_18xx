@@ -7,8 +7,8 @@ import socket
 import time
 from torch.utils.tensorboard import SummaryWriter
 import rl18xx.agent.alphazero.mcts as mcts
-from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
-from rl18xx.agent.alphazero.config import SelfPlayConfig, ModelConfig
+from rl18xx.agent.alphazero.model_v2 import AlphaZeroV2Model
+from rl18xx.agent.alphazero.config import SelfPlayConfig, ModelV2Config
 from rl18xx.agent.alphazero.checkpointer import get_latest_model
 from rl18xx.agent.alphazero.dataset import TrainingExampleProcessor
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
@@ -313,12 +313,6 @@ class MCTSPlayer(Agent):
             game_state = game_state.pickle_clone()
             game_state.process_action(action)
 
-    def get_num_readouts(self):
-        return self.num_readouts
-
-    def set_num_readouts(self, readouts):
-        self.num_readouts = readouts
-
     def _recursive_clear_references(self, node: mcts.MCTSNode, stats: Optional[dict] = None):
         """
         Recursively clears parent and children references to help with garbage collection.
@@ -380,11 +374,11 @@ class MCTSPlayer(Agent):
 
 
 class SelfPlay:
-    def __init__(self, config: SelfPlayConfig, model_config: Optional[ModelConfig] = None):
+    def __init__(self, config: SelfPlayConfig, model_config: Optional[ModelV2Config] = None):
         self.config = config
         assert config.network is not None or model_config is not None, "Network must be provided"
         if model_config is not None:
-            self.config.network = AlphaZeroGNNModel(model_config)
+            self.config.network = AlphaZeroV2Model(model_config)
         self.config.network.eval()
 
     def add_metric(self, name, value):

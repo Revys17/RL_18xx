@@ -10,6 +10,7 @@ Usage:
 """
 
 import time
+import pytest
 import torch
 import numpy as np
 from dataclasses import dataclass, field
@@ -20,6 +21,8 @@ from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
 from rl18xx.agent.alphazero.model_v2 import AlphaZeroV2Model
 from rl18xx.agent.alphazero.self_play import MCTSPlayer
 import rl18xx.agent.alphazero.mcts as mcts
+
+pytestmark = pytest.mark.benchmark
 
 
 @dataclass

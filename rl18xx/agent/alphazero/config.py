@@ -1,14 +1,22 @@
 from typing import Optional, Any, Union
 import uuid
 import random
+import warnings
 from torch import device
 import torch
 from datetime import datetime
 from pathlib import Path
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from torch.utils.tensorboard import SummaryWriter
 
 from rl18xx.agent.alphazero.metrics import Metrics
+
+_V1_CONFIG_DEPRECATION_MESSAGE = (
+    "ModelConfig is deprecated; it configures the legacy GNN AlphaZeroGNNModel "
+    "(v1). Use ModelV2Config with AlphaZeroV2Model — the transformer "
+    "architecture is the default. ModelConfig is kept only for loading legacy "
+    "checkpoints."
+)
 
 
 def _select_best_device() -> torch.device:
@@ -47,6 +55,7 @@ class ModelConfig:
     seed: Optional[int] = None
 
     def __post_init__(self):
+        warnings.warn(_V1_CONFIG_DEPRECATION_MESSAGE, DeprecationWarning, stacklevel=3)
         if self.device is None:
             self.device = _select_best_device()
 
@@ -195,43 +204,113 @@ class TrainingConfig:
         return cls(**json_data)
 
 
-@dataclass
-class SelfPlayConfig:
+def _default_c_puct_by_round() -> dict:
+    return {
+        "Auction": 1.5,
+        "WaterfallAuction": 1.5,
+        "Stock": 1.25,
+        "Operating": 1.0,
+    }
+
+
+@dataclass(frozen=True)
+class SelfPlayHyperparams:
+    """Immutable MCTS/self-play hyperparameters.
+
+    These describe *how* self-play runs and never change for the lifetime of a
+    SelfPlayConfig. Mutable runtime state (network, metrics, game id) lives on
+    SelfPlayRuntime instead.
+    """
+
     max_game_length: int = 1000
     c_puct_base: float = 19652
     c_puct_init: float = 1.25
-    c_puct_by_round: Optional[dict] = None  # Phase 6.2: per-round-type c_puct overrides
-    dirichlet_noise_alpha: float = 0.03  # Kept for backward compatibility; inject_noise() now uses 10/num_legal_actions
+    c_puct_by_round: dict = field(default_factory=_default_c_puct_by_round)
+    dirichlet_noise_alpha: float = 0.03
     dirichlet_noise_weight: float = 0.25
     softpick_move_cutoff: int = 500
     num_readouts: int = 200
     min_readouts: int = 50
     parallel_readouts: int = 32
-    backup_discount: float = 0.995  # Phase 6.1: depth-discounted value backup
-    pw_c: float = 1.0  # Phase 6.3: progressive widening constant
-    pw_alpha: float = 0.5  # Phase 6.3: progressive widening exponent
-    use_score_values: bool = True  # Phase 6.4: use normalized score fractions instead of win/loss
-    use_fp16_inference: bool = True  # Phase 6.5: FP16 inference during self-play
+    backup_discount: float = 0.995
+    pw_c: float = 1.0
+    pw_alpha: float = 0.5
+    use_score_values: bool = True
+    use_fp16_inference: bool = True
+    adaptive_readout_threshold: int = 5
+
+    def __post_init__(self):
+        assert self.softpick_move_cutoff % 2 == 0
+        assert self.num_readouts > 0
+
+
+@dataclass
+class SelfPlayRuntime:
+    """Mutable runtime state attached to a self-play session.
+
+    Lives alongside SelfPlayHyperparams inside a SelfPlayConfig bundle.
+    """
+
     network: Any = None
     metrics: Optional[Metrics] = None
     global_step: int = 0
     game_idx_in_iteration: int = 0
     game_id: Optional[str] = None
-    selfplay_dir: str = "selfplay"
-    adaptive_readout_threshold: int = 5  # positions with <= this many legal actions use min_readouts
+    selfplay_dir: Any = "selfplay"
 
     def __post_init__(self):
-        assert self.softpick_move_cutoff % 2 == 0
-        assert self.num_readouts > 0
         if self.game_id is None:
             self.game_id = str(uuid.uuid4())
-        if self.c_puct_by_round is None:
-            self.c_puct_by_round = {
-                "Auction": 1.5,
-                "WaterfallAuction": 1.5,
-                "Stock": 1.25,
-                "Operating": 1.0,
-            }
+        if isinstance(self.selfplay_dir, str):
+            self.selfplay_dir = Path("training_examples") / self.selfplay_dir
 
-        root_dir = Path("training_examples")
-        self.selfplay_dir = root_dir / self.selfplay_dir
+
+_HYPER_FIELDS = frozenset(f.name for f in fields(SelfPlayHyperparams))
+_RUNTIME_FIELDS = frozenset(f.name for f in fields(SelfPlayRuntime))
+
+
+class SelfPlayConfig:
+    """Bundle of immutable hyperparams and mutable runtime context for self-play.
+
+    Hyperparameters live on ``config.hyperparams`` (frozen); runtime fields
+    (``network``, ``metrics``, ``global_step``, ``game_idx_in_iteration``,
+    ``game_id``, ``selfplay_dir``) live on ``config.runtime`` and are
+    individually mutable.
+
+    For source compatibility, the hyperparameter and runtime names are also
+    accessible as flat attributes on the config itself (e.g.
+    ``config.num_readouts`` and ``config.network``). Writing to a runtime
+    attribute mutates the runtime object; hyperparameter attributes are
+    read-only via this proxy (the frozen dataclass enforces immutability).
+    """
+
+    __slots__ = ("hyperparams", "runtime")
+
+    def __init__(self, **kwargs):
+        hyper_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in _HYPER_FIELDS}
+        runtime_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in _RUNTIME_FIELDS}
+        if kwargs:
+            raise TypeError(f"Unknown SelfPlayConfig kwargs: {sorted(kwargs)}")
+        object.__setattr__(self, "hyperparams", SelfPlayHyperparams(**hyper_kwargs))
+        object.__setattr__(self, "runtime", SelfPlayRuntime(**runtime_kwargs))
+
+    def __getattr__(self, name):
+        # Only called when normal lookup fails (i.e., name is not in __slots__).
+        if name in _HYPER_FIELDS:
+            return getattr(self.hyperparams, name)
+        if name in _RUNTIME_FIELDS:
+            return getattr(self.runtime, name)
+        raise AttributeError(f"SelfPlayConfig has no attribute {name!r}")
+
+    def __setattr__(self, name, value):
+        if name in _RUNTIME_FIELDS:
+            setattr(self.runtime, name, value)
+        elif name in _HYPER_FIELDS:
+            raise AttributeError(
+                f"Cannot set hyperparameter {name!r} after construction — "
+                f"SelfPlayHyperparams is frozen."
+            )
+        elif name in ("hyperparams", "runtime"):
+            object.__setattr__(self, name, value)
+        else:
+            raise AttributeError(f"SelfPlayConfig has no attribute {name!r}")

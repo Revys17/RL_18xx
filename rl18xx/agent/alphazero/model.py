@@ -1,4 +1,5 @@
 import logging
+import warnings
 from torch import Tensor
 import torch
 import torch.nn as nn
@@ -12,6 +13,13 @@ from rl18xx.agent.alphazero.encoder import Encoder_1830
 from rl18xx.agent.alphazero.config import ModelConfig
 
 LOGGER = logging.getLogger(__name__)
+
+_GNN_MODEL_DEPRECATION_MESSAGE = (
+    "AlphaZeroGNNModel (v1) is deprecated. Use AlphaZeroV2Model from "
+    "rl18xx.agent.alphazero.model_v2 with ModelV2Config — the transformer "
+    "architecture is the default. The GNN definition is kept for "
+    "backward-compatible checkpoint loading and benchmarks only."
+)
 
 
 class ResBlock(nn.Module):
@@ -190,27 +198,56 @@ class AlphaZeroModel(nn.Module):
             seed = "unknown"
         return f"{self.architecture_name()}_{self.config.timestamp}_{seed}"
 
-    def run(self, game_state: BaseGame) -> Tuple[Tensor, Tensor, Tensor]:
-        raise NotImplementedError("Subclasses must implement this method")
+    # ------------------------------------------------------------------
+    # Inference plumbing (shared by all subclasses).
+    #
+    # Subclasses only need to implement `_forward_encoded_batch`, which is the
+    # architecture-specific bit: take a list of encoded game-state tuples,
+    # assemble them into batched tensors for the network, run forward(), and
+    # return raw (policy_logits, value_logits, aux_pred). The base class
+    # handles single-vs-batch dispatch and the final softmax / log_softmax.
+    # ------------------------------------------------------------------
 
-    def run_encoded(self, encoded_game_state: Tuple[Tensor, Tensor, Tensor, Tensor]) -> Tuple[Tensor, Tensor, Tensor]:
-        raise NotImplementedError("Subclasses must implement this method")
+    def _forward_encoded_batch(
+        self, encoded_game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]]
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        raise NotImplementedError("Subclasses must implement _forward_encoded_batch")
+
+    def run(self, game_state: BaseGame) -> Tuple[Tensor, Tensor, Tensor]:
+        probs, log_probs, values = self.run_many([game_state])
+        return probs[0], log_probs[0], values[0]
+
+    def run_encoded(
+        self, encoded_game_state: Tuple[Tensor, Tensor, Tensor, Tensor]
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        probs, log_probs, values = self.run_many_encoded([encoded_game_state])
+        return probs[0], log_probs[0], values[0]
 
     def run_many(self, game_states: List[BaseGame]) -> Tuple[Tensor, Tensor, Tensor]:
-        raise NotImplementedError("Subclasses must implement this method")
+        encoded_game_states = [self.encoder.encode(game_state) for game_state in game_states]
+        return self.run_many_encoded(encoded_game_states)
 
     def run_many_encoded(
-        self, game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]]
+        self, encoded_game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]]
     ) -> Tuple[Tensor, Tensor, Tensor]:
-        raise NotImplementedError("Subclasses must implement this method")
+        if len(encoded_game_states) == 0:
+            raise ValueError("Received no game states to run.")
+        policy_logits, value_logits, _ = self._forward_encoded_batch(encoded_game_states)
+        probabilities = F.softmax(policy_logits, dim=1)
+        log_probs = F.log_softmax(policy_logits, dim=1)
+        return probabilities, log_probs, value_logits
 
 
 class AlphaZeroGNNModel(AlphaZeroModel):
-    """
-    Neural Network model for an 18xx AlphaZero agent, incorporating a GNN for map data.
+    """Deprecated GNN-based AlphaZero model (v1).
+
+    Kept for loading legacy checkpoints and for the v1/v2 comparison benchmarks.
+    New code should use AlphaZeroV2Model (transformer) from
+    rl18xx.agent.alphazero.model_v2.
     """
 
     def __init__(self, config: ModelConfig):
+        warnings.warn(_GNN_MODEL_DEPRECATION_MESSAGE, DeprecationWarning, stacklevel=2)
         super(AlphaZeroGNNModel, self).__init__()
         self.config = config
         # PyTorch Geometric scatter ops don't support MPS — fall back to CPU
@@ -335,35 +372,19 @@ class AlphaZeroGNNModel(AlphaZeroModel):
     def architecture_name(self) -> str:
         return "AlphaZeroGNN"
 
-    def run(self, game_state: BaseGame) -> Tuple[Tensor, Tensor, Tensor]:
-        probs, log_probs, values = self.run_many([game_state])
-        return probs[0], log_probs[0], values[0]
-
-    def run_encoded(self, encoded_game_state: Tuple[Tensor, Tensor, Tensor, Tensor]) -> Tuple[Tensor, Tensor, Tensor]:
-        probs, log_probs, values = self.run_many_encoded([encoded_game_state])
-        return probs[0], log_probs[0], values[0]
-
-    def run_many(self, game_states: List[BaseGame]) -> Tuple[Tensor, Tensor, Tensor]:
-        encoded_game_states = [self.encoder.encode(game_state) for game_state in game_states]
-        return self.run_many_encoded(encoded_game_states)
-
-    def run_many_encoded(
-        self, game_states: List[tuple]
+    def _forward_encoded_batch(
+        self, encoded_game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]]
     ) -> Tuple[Tensor, Tensor, Tensor]:
-        batch_size = len(game_states)
-
-        if batch_size == 0:
-            raise ValueError("Received no game states to run.")
-
-        base_edge_index = game_states[0][2]
-        base_edge_attributes = game_states[0][3]
+        batch_size = len(encoded_game_states)
+        base_edge_index = encoded_game_states[0][2]
+        base_edge_attributes = encoded_game_states[0][3]
 
         game_state_tensors = []
         graph_data_list = []
         round_type_indices = []
         active_player_indices = []
         for i in range(batch_size):
-            gs = game_states[i]
+            gs = encoded_game_states[i]
             game_state_tensor, node_data = gs[0], gs[1]
             round_type_idx = gs[4] if len(gs) > 4 else 0
             active_player_idx = gs[5] if len(gs) > 5 else 0
@@ -380,14 +401,9 @@ class AlphaZeroGNNModel(AlphaZeroModel):
         round_type_tensor = torch.tensor(round_type_indices, dtype=torch.long, device=self.device)
         active_player_tensor = torch.tensor(active_player_indices, dtype=torch.long, device=self.device)
 
-        policy_logits, value_logits, _ = self.forward(
+        return self.forward(
             batched_game_state_tensor, graph_batch, round_type_tensor, active_player_tensor
         )
-
-        # MCTS callers expect (probabilities, log_probs, value_logits)
-        probabilities = F.softmax(policy_logits, dim=1)
-        log_probs = F.log_softmax(policy_logits, dim=1)
-        return probabilities, log_probs, value_logits
 
     def forward(
         self,
@@ -476,75 +492,3 @@ class AlphaZeroGNNModel(AlphaZeroModel):
         aux_action_count_pred = self.aux_action_count_head(current_features)
 
         return policy_logits, value_logits, aux_action_count_pred
-
-
-class AlphaZeroSSMEModel(AlphaZeroModel):
-    """
-    Neural Network model for an 18xx AlphaZero agent, incorporating a SSME for map data.
-    """
-
-    def __init__(self, config: ModelConfig):
-        super(AlphaZeroSSMEModel, self).__init__()
-        self.config = config
-        self.device = config.device
-        self.encoder = Encoder_1830.get_encoder_for_model(self)
-        self.init_model()
-        self.to(self.device)
-
-    def encoder_type(self):
-        return "SSME"
-
-    def init_model(self):
-        pass
-
-        if self.config.model_checkpoint_file:
-            self.load_weights(self.config.model_checkpoint_file)
-        else:
-            self.initialize_weights()
-
-    def initialize_weights(self):
-        """Initializes weights using Kaiming He initialization for GELU-activated layers."""
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="leaky_relu")
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, (nn.BatchNorm1d, nn.LayerNorm)):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-
-    def architecture_name(self) -> str:
-        return "AlphaZeroSSME"
-
-    def run(self, game_state: BaseGame) -> Tuple[Tensor, Tensor, Tensor]:
-        probs, log_probs, values = self.run_many([game_state])
-        return probs[0], log_probs[0], values[0]
-
-    def run_encoded(self, encoded_game_state: Tuple[Tensor, Tensor, Tensor, Tensor]) -> Tuple[Tensor, Tensor, Tensor]:
-        probs, log_probs, values = self.run_many_encoded([encoded_game_state])
-        return probs[0], log_probs[0], values[0]
-
-    def run_many(self, game_states: List[BaseGame]) -> Tuple[Tensor, Tensor, Tensor]:
-        encoded_game_states = [self.encoder.encode(game_state) for game_state in game_states]
-        return self.run_many_encoded(encoded_game_states)
-
-    def run_many_encoded(
-        self, game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]]
-    ) -> Tuple[Tensor, Tensor, Tensor]:
-        batch_size = len(game_states)
-
-        if batch_size == 0:
-            raise ValueError("Received no game states to run.")
-
-        pass
-
-        # Run the model
-        policy_logits, value_logits = self.forward(batched_game_state_tensor, graph_batch)
-
-        # MCTS callers expect (probabilities, log_probs, value_logits)
-        probabilities = F.softmax(policy_logits, dim=1)
-        log_probs = F.log_softmax(policy_logits, dim=1)
-        return probabilities, log_probs, value_logits
-
-    def forward(self, game_state_data: Tensor, map_data: Batch) -> tuple[Tensor, Tensor]:
-        raise NotImplementedError("SSME model forward pass not yet implemented")

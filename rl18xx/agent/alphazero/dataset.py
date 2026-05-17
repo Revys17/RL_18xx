@@ -1,5 +1,4 @@
 from rl18xx.agent.alphazero.encoder import Encoder_1830
-from rl18xx.agent.alphazero.model import AlphaZeroGNNModel, AlphaZeroModel
 from rl18xx.game.engine.game import BaseGame
 import lmdb
 import torch

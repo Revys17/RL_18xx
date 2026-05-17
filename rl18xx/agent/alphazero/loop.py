@@ -440,6 +440,13 @@ def ensure_seed_model(model_type: str = "v2"):
         LOGGER.info(f"Seeding model initialization with seed={config.seed}")
         model = AlphaZeroV2Model(config)
     else:
+        import warnings
+        warnings.warn(
+            "model_type='v1' (AlphaZeroGNNModel) is deprecated. The transformer "
+            "model (v2) is the default and recommended architecture.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
         from rl18xx.agent.alphazero.config import ModelConfig
         import torch
@@ -467,6 +474,523 @@ def cleanup_model_and_data():
 
 
 ESTIMATED_MOVES_PER_GAME = 1000
+
+
+@dataclass
+class SelfPlayIterationResult:
+    games_completed: int
+    game_lengths: list
+    experiences: int
+    wall_time: float
+
+
+@dataclass
+class SelfPlayAggregateStats:
+    avg_game_length: float
+    min_game_length: int
+    max_game_length: int
+    games_per_hour: float
+    moves_per_second: float
+    phase_move_counts: dict
+    timing_avgs: dict
+
+
+@dataclass
+class TrainingIterationResult:
+    model: object  # AlphaZeroModel
+    train_metrics: object  # TrainingMetrics or None
+    wall_time: float
+
+
+@dataclass
+class GatingIterationResult:
+    win_rate: object  # Optional[float]
+    promoted: bool
+    checkpoint_num: object  # Optional[int]
+    wall_time: float
+
+
+_SELFPLAY_TIMING_KEYS = [
+    "total_game_s", "tree_search_s", "inference_s", "encoding_s",
+    "leaf_selection_s", "backup_s", "pick_move_s", "play_move_s",
+    "data_extraction_s",
+]
+
+
+def _submit_selfplay_game(executor, game_idx, tb_log_dir, timestamp, loop, num_readouts, max_game_length):
+    """Submit a single self-play game to the executor."""
+    return executor.submit(
+        run_self_play, game_idx, tb_log_dir, timestamp, loop, num_readouts, max_game_length
+    )
+
+
+def _ingest_completed_selfplay_game(
+    future, game_idx, loop, games_completed_count, experiences_this_iteration,
+    game_lengths_this_iteration, loop_metrics, target_experiences,
+):
+    """Block on a finished self-play future, harvest its game-stats JSON, mutate counters.
+
+    Returns (games_completed_count, experiences_this_iteration). Logs on failure
+    so a single crashed game doesn't take down the iteration.
+    """
+    try:
+        future.result()
+        games_completed_count += 1
+        game_file = SELF_PLAY_GAMES_STATUS_PATH / f"L{loop}_G{game_idx}.json"
+        gdata = _safe_read_json(game_file) if game_file.exists() else None
+        if gdata:
+            moves = gdata.get("moves_played", 0)
+            experiences_this_iteration += moves
+            game_lengths_this_iteration.append(moves)
+            loop_metrics.game_lengths.append(moves)
+        LOGGER.info(
+            f"Loop {loop+1}: Game {games_completed_count} completed. "
+            f"Experiences: {experiences_this_iteration}/{target_experiences}"
+        )
+    except Exception as e:
+        LOGGER.error(f"Error in self-play game {game_idx}: {e}", exc_info=True)
+    return games_completed_count, experiences_this_iteration
+
+
+def _run_selfplay_iteration(
+    loop: int,
+    loop_config: "LoopConfig",
+    scheduled_game_length: int,
+    tb_log_dir: str,
+    timestamp: str,
+    loop_metrics: "LoopMetrics",
+) -> SelfPlayIterationResult:
+    """Drive the process-pool self-play phase until target experiences are reached."""
+    import concurrent.futures
+
+    games_completed_count = 0
+    game_lengths_this_iteration: list[int] = []
+    experiences_this_iteration = 0
+    game_idx = 0
+    selfplay_start_time = time.time()
+
+    LOGGER.info(
+        f"Loop {loop+1}: Running self-play until {loop_config.target_experiences} experiences "
+        f"using {loop_config.num_threads} processes..."
+    )
+
+    executor = ProcessPoolExecutor(max_workers=loop_config.num_threads)
+    try:
+        pending_futures: dict = {}
+        for _ in range(loop_config.num_threads):
+            f = _submit_selfplay_game(
+                executor, game_idx, tb_log_dir, timestamp, loop,
+                loop_config.num_readouts, scheduled_game_length,
+            )
+            pending_futures[f] = game_idx
+            game_idx += 1
+
+        while experiences_this_iteration < loop_config.target_experiences and pending_futures:
+            done_futures = [f for f in pending_futures if f.done()]
+            if not done_futures:
+                completed, _ = concurrent.futures.wait(
+                    pending_futures.keys(), return_when=concurrent.futures.FIRST_COMPLETED
+                )
+                done_futures = list(completed)
+
+            for f in done_futures:
+                gidx = pending_futures.pop(f)
+                games_completed_count, experiences_this_iteration = _ingest_completed_selfplay_game(
+                    f, gidx, loop, games_completed_count, experiences_this_iteration,
+                    game_lengths_this_iteration, loop_metrics, loop_config.target_experiences,
+                )
+                if experiences_this_iteration < loop_config.target_experiences:
+                    f_new = _submit_selfplay_game(
+                        executor, game_idx, tb_log_dir, timestamp, loop,
+                        loop_config.num_readouts, scheduled_game_length,
+                    )
+                    pending_futures[f_new] = game_idx
+                    game_idx += 1
+
+        # Drain any in-flight games left over after we hit the target.
+        for f in list(pending_futures.keys()):
+            gidx = pending_futures[f]
+            games_completed_count, experiences_this_iteration = _ingest_completed_selfplay_game(
+                f, gidx, loop, games_completed_count, experiences_this_iteration,
+                game_lengths_this_iteration, loop_metrics, loop_config.target_experiences,
+            )
+    finally:
+        executor.shutdown(wait=True)
+
+    return SelfPlayIterationResult(
+        games_completed=games_completed_count,
+        game_lengths=game_lengths_this_iteration,
+        experiences=experiences_this_iteration,
+        wall_time=time.time() - selfplay_start_time,
+    )
+
+
+def _aggregate_selfplay_stats(
+    loop: int,
+    sp: SelfPlayIterationResult,
+    metrics: Metrics,
+    loop_metrics: "LoopMetrics",
+) -> SelfPlayAggregateStats:
+    """Compute aggregate stats from per-game JSONs and emit basic self-play TensorBoard scalars."""
+    metrics.add_scalar("SelfPlay/Completed_Games_Total_for_Iteration", sp.games_completed, loop)
+    loop_metrics.games_played_total += sp.games_completed
+
+    avg_game_length = 0.0
+    if sp.game_lengths:
+        avg_game_length = sum(sp.game_lengths) / len(sp.game_lengths)
+        metrics.add_scalar("SelfPlay/Avg_Game_Length", avg_game_length, loop)
+        LOGGER.info(f"Loop {loop+1}: Average game length: {avg_game_length:.1f} moves")
+    metrics.add_scalar("SelfPlay/Experiences_This_Iteration", sp.experiences, loop)
+    LOGGER.info(f"Loop {loop+1}: Total experiences this iteration: {sp.experiences}")
+
+    phase_counts = {"Auction": 0, "WaterfallAuction": 0, "Stock": 0, "Operating": 0, "Other": 0}
+    for status_file in SELF_PLAY_GAMES_STATUS_PATH.glob(f"L{loop}_G*.json"):
+        status_json = _safe_read_json(status_file)
+        if status_json:
+            for phase, count in status_json.get("phase_move_counts", {}).items():
+                phase_counts[phase] = phase_counts.get(phase, 0) + count
+    for phase, count in phase_counts.items():
+        metrics.add_scalar(f"SelfPlay/Phase_Moves/{phase}", count, loop)
+    LOGGER.info(f"Loop {loop+1}: Phase move counts: {phase_counts}")
+
+    timing_sums = {k: 0.0 for k in _SELFPLAY_TIMING_KEYS}
+    timing_count = 0
+    total_sims = 0
+    for game_file in SELF_PLAY_GAMES_STATUS_PATH.glob("*.json"):
+        gdata = _safe_read_json(game_file)
+        if not gdata:
+            continue
+        timing = gdata.get("timing")
+        if timing and gdata.get("status") == "Completed":
+            for k in _SELFPLAY_TIMING_KEYS:
+                timing_sums[k] += timing.get(k, 0.0)
+            total_sims += timing.get("total_sims", 0)
+            timing_count += 1
+
+    timing_avgs: dict = {}
+    if timing_count > 0:
+        for k in _SELFPLAY_TIMING_KEYS:
+            timing_avgs[f"avg_{k}"] = round(timing_sums[k] / timing_count, 3)
+        timing_avgs["avg_sims_per_game"] = round(total_sims / timing_count, 1)
+
+    moves_per_second = sp.experiences / sp.wall_time if sp.wall_time > 0 else 0
+    games_per_hour = sp.games_completed / (sp.wall_time / 3600) if sp.wall_time > 0 else 0
+
+    return SelfPlayAggregateStats(
+        avg_game_length=avg_game_length,
+        min_game_length=min(sp.game_lengths) if sp.game_lengths else 0,
+        max_game_length=max(sp.game_lengths) if sp.game_lengths else 0,
+        games_per_hour=games_per_hour,
+        moves_per_second=moves_per_second,
+        phase_move_counts=phase_counts,
+        timing_avgs=timing_avgs,
+    )
+
+
+def _run_training_iteration(
+    loop: int,
+    loop_config: "LoopConfig",
+    metrics: Metrics,
+) -> TrainingIterationResult:
+    """Train the latest model on the current self-play data."""
+    training_config = loop_config.training_config
+    if not isinstance(training_config, TrainingConfig):
+        LOGGER.error(f"FIX THIS: Training config is not a TrainingConfig: {training_config}")
+        training_config = TrainingConfig.from_json(training_config)
+
+    training_config.metrics = metrics
+    training_config.global_step = loop
+
+    model = get_latest_model(MODEL_CHECKPOINT_DIR)
+    training_config.train_dir = Path(f"training_examples/selfplay/{model.get_name()}")
+
+    training_start_time = time.time()
+    _, train_metrics = train(training_config, model, model_checkpoint_dir=MODEL_CHECKPOINT_DIR)
+    return TrainingIterationResult(
+        model=model,
+        train_metrics=train_metrics,
+        wall_time=time.time() - training_start_time,
+    )
+
+
+def _run_gating_iteration(
+    loop: int,
+    model,
+    no_gate: bool,
+    gate_games: int,
+    gate_threshold: float,
+    num_readouts: int,
+    status: dict,
+    metrics: Metrics,
+) -> GatingIterationResult:
+    """Either skip gating (first iteration / --no-gate) or run an arena evaluation; append history record."""
+    gating_start_time = time.time()
+    gate_win_rate = None
+    if no_gate or loop == 0:
+        if loop == 0:
+            LOGGER.info("First iteration; skipping gating, saving model directly.")
+            reason = "first_iteration"
+        else:
+            LOGGER.info("Gating disabled (--no-gate); saving model directly.")
+            reason = "gating_disabled"
+        checkpoint_num = save_model(model, MODEL_CHECKPOINT_DIR)
+        promoted = True
+        append_model_history({
+            "loop": loop + 1,
+            "timestamp": datetime.now().isoformat(),
+            "checkpoint_num": checkpoint_num,
+            "architecture": model.architecture_name(),
+            "session": model.get_name(),
+            "promoted": True,
+            "win_rate": None,
+            "gate_games": 0,
+            "reason": reason,
+        })
+    else:
+        status["status_message"] = f"Running gating evaluation ({gate_games} games)..."
+        update_loop_status(status)
+
+        current_best_model = get_latest_model(MODEL_CHECKPOINT_DIR)
+        gate_win_rate = evaluate_candidate(
+            candidate_model=model,
+            current_best_model=current_best_model,
+            num_games=gate_games,
+            num_readouts=min(num_readouts, 50),
+        )
+        metrics.add_scalar("Gating/Win_Rate", gate_win_rate, loop)
+        metrics.add_scalar("Gating/Promoted", 1.0 if gate_win_rate >= gate_threshold else 0.0, loop)
+
+        if gate_win_rate >= gate_threshold:
+            LOGGER.info(f"Model promoted! Win rate: {gate_win_rate:.1%} >= {gate_threshold:.1%}")
+            checkpoint_num = save_model(model, MODEL_CHECKPOINT_DIR)
+            promoted = True
+        else:
+            LOGGER.info(f"Model rejected. Win rate: {gate_win_rate:.1%} < {gate_threshold:.1%}")
+            checkpoint_num = None
+            promoted = False
+
+        append_model_history({
+            "loop": loop + 1,
+            "timestamp": datetime.now().isoformat(),
+            "checkpoint_num": checkpoint_num,
+            "architecture": model.architecture_name(),
+            "session": model.get_name(),
+            "promoted": promoted,
+            "win_rate": gate_win_rate,
+            "gate_games": gate_games,
+            "reason": "gating",
+        })
+
+    return GatingIterationResult(
+        win_rate=gate_win_rate,
+        promoted=promoted,
+        checkpoint_num=checkpoint_num,
+        wall_time=time.time() - gating_start_time,
+    )
+
+
+def _last_or(lst, default=0.0):
+    return lst[-1] if lst else default
+
+
+def _emit_tensorboard_metrics(
+    loop: int,
+    sp_stats: SelfPlayAggregateStats,
+    sp: SelfPlayIterationResult,
+    training_wall_time: float,
+    gating_wall_time: float,
+    train_metrics,
+    loop_metrics: "LoopMetrics",
+    metrics: Metrics,
+):
+    """Write timing + training TensorBoard scalars for the iteration."""
+    iteration_wall_time = sp.wall_time + training_wall_time + gating_wall_time
+
+    LOGGER.info(
+        f"Loop {loop+1} timing breakdown:\n"
+        f"  Self-play:  {sp.wall_time:.1f}s ({sp.wall_time/iteration_wall_time*100:.0f}%)\n"
+        f"  Training:   {training_wall_time:.1f}s ({training_wall_time/iteration_wall_time*100:.0f}%)\n"
+        f"  Gating:     {gating_wall_time:.1f}s ({gating_wall_time/iteration_wall_time*100:.0f}%)\n"
+        f"  Total:      {iteration_wall_time:.1f}s"
+    )
+    if sp_stats.timing_avgs:
+        ta = sp_stats.timing_avgs
+        LOGGER.info(
+            f"Loop {loop+1} self-play timing (avg per game):\n"
+            f"  Tree search:     {ta.get('avg_tree_search_s', 0):.1f}s\n"
+            f"    Inference:     {ta.get('avg_inference_s', 0):.1f}s\n"
+            f"    Encoding:      {ta.get('avg_encoding_s', 0):.1f}s\n"
+            f"    Leaf select:   {ta.get('avg_leaf_selection_s', 0):.1f}s\n"
+            f"    Backup:        {ta.get('avg_backup_s', 0):.1f}s\n"
+            f"  Pick move:       {ta.get('avg_pick_move_s', 0):.1f}s\n"
+            f"  Play move:       {ta.get('avg_play_move_s', 0):.1f}s\n"
+            f"  Data extraction: {ta.get('avg_data_extraction_s', 0):.1f}s\n"
+            f"  Total game:      {ta.get('avg_total_game_s', 0):.1f}s\n"
+            f"  Avg sims/game:   {ta.get('avg_sims_per_game', 0):.0f}\n"
+            f"  Moves/sec:       {sp_stats.moves_per_second:.1f}"
+        )
+
+    metrics.add_scalar("Timing/Selfplay_Wall_Time_s", sp.wall_time, loop)
+    metrics.add_scalar("Timing/Training_Wall_Time_s", training_wall_time, loop)
+    metrics.add_scalar("Timing/Gating_Wall_Time_s", gating_wall_time, loop)
+    metrics.add_scalar("Timing/Total_Iteration_s", iteration_wall_time, loop)
+    metrics.add_scalar("Timing/Moves_Per_Second", sp_stats.moves_per_second, loop)
+    for k, v in sp_stats.timing_avgs.items():
+        metrics.add_scalar(f"Timing/SelfPlay_{k}", v, loop)
+
+    if not (train_metrics and train_metrics.epochs_trained > 0):
+        return
+
+    loop_metrics.training_losses.append(train_metrics.avg_total_loss)
+    loop_metrics.policy_losses.append(train_metrics.avg_policy_loss)
+    loop_metrics.value_losses.append(train_metrics.avg_value_loss)
+    loop_metrics.training_examples_total += train_metrics.training_examples
+
+    metrics.add_scalar("Training/Total_Loss", train_metrics.avg_total_loss, loop)
+    metrics.add_scalar("Training/Policy_Loss", train_metrics.avg_policy_loss, loop)
+    metrics.add_scalar("Training/Value_Loss", train_metrics.avg_value_loss, loop)
+    metrics.add_scalar("Training/Examples_This_Iteration", train_metrics.training_examples, loop)
+    metrics.add_scalar("Training/Examples_Total", loop_metrics.training_examples_total, loop)
+
+    for epoch_idx, epoch_loss in enumerate(train_metrics.epoch_losses):
+        metrics.add_scalar(f"Training/Epoch_Loss/Loop{loop}", epoch_loss, epoch_idx)
+
+    metrics.add_scalar("Training/Entropy", _last_or(train_metrics.epoch_entropy), loop)
+    metrics.add_scalar("Training/Aux_Loss", _last_or(train_metrics.epoch_aux_losses), loop)
+
+    metrics.add_scalar("Policy/Top1_Accuracy", _last_or(train_metrics.epoch_top1_accuracy), loop)
+    metrics.add_scalar("Policy/Top5_Accuracy", _last_or(train_metrics.epoch_top5_accuracy), loop)
+    metrics.add_scalar("Policy/KL_Divergence", _last_or(train_metrics.epoch_policy_kl), loop)
+    metrics.add_scalar("Policy/Network_Entropy", _last_or(train_metrics.epoch_policy_entropy), loop)
+    metrics.add_scalar("Policy/MCTS_Target_Entropy", _last_or(train_metrics.epoch_target_entropy), loop)
+    metrics.add_scalar("Policy/Max_Prob_Concentration", _last_or(train_metrics.epoch_legal_move_concentration), loop)
+    metrics.add_scalar("Policy/Mean_Legal_Actions", _last_or(train_metrics.epoch_mean_legal_actions), loop)
+
+    metrics.add_scalar("Value/Explained_Variance", _last_or(train_metrics.epoch_value_explained_variance), loop)
+    metrics.add_scalar("Value/Correlation", _last_or(train_metrics.epoch_value_correlation), loop)
+    metrics.add_scalar("Value/MAE", _last_or(train_metrics.epoch_value_mae), loop)
+    metrics.add_scalar("Value/MSE", _last_or(train_metrics.epoch_value_mse), loop)
+    metrics.add_scalar("Value/Pred_Mean", _last_or(train_metrics.epoch_value_pred_mean), loop)
+    metrics.add_scalar("Value/Pred_Std", _last_or(train_metrics.epoch_value_pred_std), loop)
+    metrics.add_scalar("Value/Pred_Min", _last_or(train_metrics.epoch_value_pred_min), loop)
+    metrics.add_scalar("Value/Pred_Max", _last_or(train_metrics.epoch_value_pred_max), loop)
+    metrics.add_scalar("Value/Target_Mean", _last_or(train_metrics.epoch_value_target_mean), loop)
+    metrics.add_scalar("Value/Target_Std", _last_or(train_metrics.epoch_value_target_std), loop)
+    metrics.add_scalar("Value/Target_Min", _last_or(train_metrics.epoch_value_target_min), loop)
+    metrics.add_scalar("Value/Target_Max", _last_or(train_metrics.epoch_value_target_max), loop)
+
+    metrics.add_scalar("Gradients/Total_Norm", _last_or(train_metrics.epoch_grad_norm_total), loop)
+    metrics.add_scalar("Gradients/Policy_Head_Norm", _last_or(train_metrics.epoch_grad_norm_policy_head), loop)
+    metrics.add_scalar("Gradients/Value_Head_Norm", _last_or(train_metrics.epoch_grad_norm_value_head), loop)
+    metrics.add_scalar("Gradients/Trunk_Norm", _last_or(train_metrics.epoch_grad_norm_trunk), loop)
+    metrics.add_scalar("Gradients/CV", _last_or(train_metrics.epoch_grad_norm_cv), loop)
+
+    metrics.add_scalar("Training/Learning_Rate", _last_or(train_metrics.epoch_lr), loop)
+    metrics.add_scalar("Aux/Pred_Mean", _last_or(train_metrics.epoch_aux_pred_mean), loop)
+    metrics.add_scalar("Aux/Target_Mean", _last_or(train_metrics.epoch_aux_target_mean), loop)
+    metrics.add_scalar("Aux/Correlation", _last_or(train_metrics.epoch_aux_correlation), loop)
+
+    LOGGER.info(
+        f"Loop {loop+1} training metrics - Total Loss: {train_metrics.avg_total_loss:.4f}, "
+        f"Policy Loss: {train_metrics.avg_policy_loss:.4f}, Value Loss: {train_metrics.avg_value_loss:.4f}, "
+        f"Examples: {train_metrics.training_examples}"
+    )
+
+
+def _build_history_record(
+    loop: int,
+    model,
+    train_metrics,
+    sp: SelfPlayIterationResult,
+    sp_stats: SelfPlayAggregateStats,
+    gating: GatingIterationResult,
+    loop_config: "LoopConfig",
+    scheduled_game_length: int,
+    scheduled_readouts: int,
+    checkpoint_count: int,
+    gate_games: int,
+    loop_metrics: "LoopMetrics",
+    training_wall_time: float,
+) -> dict:
+    """Build the dashboard history JSONL record for an iteration."""
+    iteration_wall_time = sp.wall_time + training_wall_time + gating.wall_time
+    has_train = bool(train_metrics and train_metrics.epochs_trained > 0)
+    return {
+        "loop": loop + 1,
+        "timestamp": datetime.now().isoformat(),
+        "model_session": model.get_name(),
+        "model_architecture": model.architecture_name(),
+        "promoted": gating.promoted,
+        # Losses
+        "total_loss": train_metrics.avg_total_loss if has_train else None,
+        "policy_loss": train_metrics.avg_policy_loss if has_train else None,
+        "value_loss": train_metrics.avg_value_loss if has_train else None,
+        "entropy": _last_or(train_metrics.epoch_entropy) if train_metrics else 0.0,
+        "aux_loss": _last_or(train_metrics.epoch_aux_losses) if train_metrics else 0.0,
+        # Per-epoch granularity
+        "epoch_losses": list(train_metrics.epoch_losses) if train_metrics else [],
+        "epoch_policy_losses": list(train_metrics.epoch_policy_losses) if train_metrics else [],
+        "epoch_value_losses": list(train_metrics.epoch_value_losses) if train_metrics else [],
+        # Policy health
+        "top1_accuracy": _last_or(train_metrics.epoch_top1_accuracy) if train_metrics else 0.0,
+        "top5_accuracy": _last_or(train_metrics.epoch_top5_accuracy) if train_metrics else 0.0,
+        "policy_entropy": _last_or(train_metrics.epoch_policy_entropy) if train_metrics else 0.0,
+        "mcts_target_entropy": _last_or(train_metrics.epoch_target_entropy) if train_metrics else 0.0,
+        "policy_kl": _last_or(train_metrics.epoch_policy_kl) if train_metrics else 0.0,
+        "max_prob_concentration": _last_or(train_metrics.epoch_legal_move_concentration) if train_metrics else 0.0,
+        "mean_legal_actions": _last_or(train_metrics.epoch_mean_legal_actions) if train_metrics else 0.0,
+        # Value health
+        "value_explained_variance": _last_or(train_metrics.epoch_value_explained_variance) if train_metrics else 0.0,
+        "value_correlation": _last_or(train_metrics.epoch_value_correlation) if train_metrics else 0.0,
+        "value_mae": _last_or(train_metrics.epoch_value_mae) if train_metrics else 0.0,
+        "value_mse": _last_or(train_metrics.epoch_value_mse) if train_metrics else 0.0,
+        "value_pred_mean": _last_or(train_metrics.epoch_value_pred_mean) if train_metrics else 0.0,
+        "value_pred_std": _last_or(train_metrics.epoch_value_pred_std) if train_metrics else 0.0,
+        "value_pred_min": _last_or(train_metrics.epoch_value_pred_min) if train_metrics else 0.0,
+        "value_pred_max": _last_or(train_metrics.epoch_value_pred_max) if train_metrics else 0.0,
+        "value_target_mean": _last_or(train_metrics.epoch_value_target_mean) if train_metrics else 0.0,
+        "value_target_std": _last_or(train_metrics.epoch_value_target_std) if train_metrics else 0.0,
+        "value_target_min": _last_or(train_metrics.epoch_value_target_min) if train_metrics else 0.0,
+        "value_target_max": _last_or(train_metrics.epoch_value_target_max) if train_metrics else 0.0,
+        # Gradients
+        "grad_norm_total": _last_or(train_metrics.epoch_grad_norm_total) if train_metrics else 0.0,
+        "grad_norm_policy": _last_or(train_metrics.epoch_grad_norm_policy_head) if train_metrics else 0.0,
+        "grad_norm_value": _last_or(train_metrics.epoch_grad_norm_value_head) if train_metrics else 0.0,
+        "grad_norm_trunk": _last_or(train_metrics.epoch_grad_norm_trunk) if train_metrics else 0.0,
+        "grad_norm_cv": _last_or(train_metrics.epoch_grad_norm_cv) if train_metrics else 0.0,
+        # Self-play
+        "games_played": sp.games_completed,
+        "experiences": sp.experiences,
+        "avg_game_length": sp_stats.avg_game_length,
+        "min_game_length": sp_stats.min_game_length,
+        "max_game_length": sp_stats.max_game_length,
+        "total_experiences_cumulative": loop_metrics.training_examples_total,
+        "selfplay_wall_time_seconds": round(sp.wall_time, 1),
+        "selfplay_games_per_hour": round(sp_stats.games_per_hour, 1),
+        "phase_move_counts": sp_stats.phase_move_counts,
+        # Gating
+        "gate_win_rate": gating.win_rate,
+        "gate_games_played": gate_games if gating.win_rate is not None else 0,
+        # Training config snapshot
+        "learning_rate": _last_or(train_metrics.epoch_lr) if train_metrics else loop_config.training_config.lr,
+        "batch_size": loop_config.training_config.batch_size,
+        "num_epochs": loop_config.training_config.num_epochs,
+        "num_readouts": scheduled_readouts,
+        "scheduled_max_game_length": scheduled_game_length,
+        "checkpoint_count": checkpoint_count,
+        "training_examples": train_metrics.training_examples if train_metrics else 0,
+        # Aux diagnostics
+        "aux_pred_mean": _last_or(train_metrics.epoch_aux_pred_mean) if train_metrics else 0.0,
+        "aux_target_mean": _last_or(train_metrics.epoch_aux_target_mean) if train_metrics else 0.0,
+        "aux_correlation": _last_or(train_metrics.epoch_aux_correlation) if train_metrics else 0.0,
+        # Performance timing
+        "training_wall_time_seconds": round(training_wall_time, 1),
+        "gating_wall_time_seconds": round(gating.wall_time, 1),
+        "total_iteration_time_seconds": round(iteration_wall_time, 1),
+        "selfplay_moves_per_second": round(sp_stats.moves_per_second, 1),
+        # Self-play timing breakdown (avg per game)
+        **{f"selfplay_{k}": v for k, v in sp_stats.timing_avgs.items()},
+    }
 
 
 def main(
@@ -577,431 +1101,36 @@ def main(
             }
             update_loop_status(status)
 
-            games_completed_count = 0
-            game_lengths_this_iteration = []
-            experiences_this_iteration = 0
-            game_idx = 0
-            selfplay_start_time = time.time()
-
-            LOGGER.info(
-                f"Loop {loop+1}: Running self-play until {loop_config.target_experiences} experiences "
-                f"using {loop_config.num_threads} processes..."
+            sp = _run_selfplay_iteration(
+                loop, loop_config, scheduled_game_length, tb_log_dir, timestamp, loop_metrics,
             )
-            executor = ProcessPoolExecutor(max_workers=loop_config.num_threads)
-            try:
-                pending_futures = {}
-                # Submit initial batch
-                for _ in range(loop_config.num_threads):
-                    f = executor.submit(run_self_play, game_idx, tb_log_dir, timestamp, loop, loop_config.num_readouts, scheduled_game_length)
-                    pending_futures[f] = game_idx
-                    game_idx += 1
-
-                while experiences_this_iteration < loop_config.target_experiences and pending_futures:
-                    done_futures = []
-                    for f in list(pending_futures.keys()):
-                        if f.done():
-                            done_futures.append(f)
-
-                    if not done_futures:
-                        import concurrent.futures
-
-                        completed, _ = concurrent.futures.wait(
-                            pending_futures.keys(), return_when=concurrent.futures.FIRST_COMPLETED
-                        )
-                        done_futures = list(completed)
-
-                    for f in done_futures:
-                        gidx = pending_futures.pop(f)
-                        try:
-                            f.result()
-                            games_completed_count += 1
-                            game_file = SELF_PLAY_GAMES_STATUS_PATH / f"L{loop}_G{gidx}.json"
-                            gdata = _safe_read_json(game_file) if game_file.exists() else None
-                            if gdata:
-                                moves = gdata.get("moves_played", 0)
-                                experiences_this_iteration += moves
-                                game_lengths_this_iteration.append(moves)
-                                loop_metrics.game_lengths.append(moves)
-
-                            LOGGER.info(
-                                f"Loop {loop+1}: Game {games_completed_count} completed. "
-                                f"Experiences: {experiences_this_iteration}/{loop_config.target_experiences}"
-                            )
-                        except Exception as e:
-                            LOGGER.error(f"Error in self-play game {gidx}: {e}", exc_info=True)
-
-                        # Submit another game if we haven't reached target
-                        if experiences_this_iteration < loop_config.target_experiences:
-                            f_new = executor.submit(
-                                run_self_play, game_idx, tb_log_dir, timestamp, loop, loop_config.num_readouts, scheduled_game_length
-                            )
-                            pending_futures[f_new] = game_idx
-                            game_idx += 1
-
-                # Wait for any remaining in-flight games
-                for f in list(pending_futures.keys()):
-                    try:
-                        f.result()
-                        gidx = pending_futures[f]
-                        games_completed_count += 1
-                        game_file = SELF_PLAY_GAMES_STATUS_PATH / f"L{loop}_G{gidx}.json"
-                        gdata = _safe_read_json(game_file) if game_file.exists() else None
-                        if gdata:
-                            moves = gdata.get("moves_played", 0)
-                            experiences_this_iteration += moves
-                            game_lengths_this_iteration.append(moves)
-                            loop_metrics.game_lengths.append(moves)
-                    except Exception as e:
-                        LOGGER.error(f"Error in trailing self-play game: {e}", exc_info=True)
-            finally:
-                executor.shutdown(wait=True)
-
-            selfplay_wall_time = time.time() - selfplay_start_time
-
-            metrics.add_scalar("SelfPlay/Completed_Games_Total_for_Iteration", games_completed_count, loop)
-            loop_metrics.games_played_total += games_completed_count
-
-            avg_game_length = 0.0
-            if game_lengths_this_iteration:
-                avg_game_length = sum(game_lengths_this_iteration) / len(game_lengths_this_iteration)
-                metrics.add_scalar("SelfPlay/Avg_Game_Length", avg_game_length, loop)
-                LOGGER.info(f"Loop {loop+1}: Average game length: {avg_game_length:.1f} moves")
-            metrics.add_scalar("SelfPlay/Experiences_This_Iteration", experiences_this_iteration, loop)
-            LOGGER.info(f"Loop {loop+1}: Total experiences this iteration: {experiences_this_iteration}")
-
-            # Aggregate phase move counts across games (Item 6)
-            aggregated_phase_counts = {"Auction": 0, "WaterfallAuction": 0, "Stock": 0, "Operating": 0, "Other": 0}
-            for status_file in SELF_PLAY_GAMES_STATUS_PATH.glob(f"L{loop}_G*.json"):
-                status_json = _safe_read_json(status_file)
-                if status_json:
-                    for phase, count in status_json.get("phase_move_counts", {}).items():
-                        aggregated_phase_counts[phase] = aggregated_phase_counts.get(phase, 0) + count
-            for phase, count in aggregated_phase_counts.items():
-                metrics.add_scalar(f"SelfPlay/Phase_Moves/{phase}", count, loop)
-            LOGGER.info(f"Loop {loop+1}: Phase move counts: {aggregated_phase_counts}")
-
-            # Collect aggregate self-play stats from game JSONs
-            selfplay_min_game_length = min(game_lengths_this_iteration) if game_lengths_this_iteration else 0
-            selfplay_max_game_length = max(game_lengths_this_iteration) if game_lengths_this_iteration else 0
-            selfplay_games_per_hour = (
-                games_completed_count / (selfplay_wall_time / 3600) if selfplay_wall_time > 0 else 0
-            )
-
-            # Aggregate per-game timing data from status JSONs
-            selfplay_timing_keys = [
-                "total_game_s", "tree_search_s", "inference_s", "encoding_s",
-                "leaf_selection_s", "backup_s", "pick_move_s", "play_move_s",
-                "data_extraction_s",
-            ]
-            selfplay_timing_sums = {k: 0.0 for k in selfplay_timing_keys}
-            selfplay_timing_count = 0
-            selfplay_total_sims = 0
-            for game_file in SELF_PLAY_GAMES_STATUS_PATH.glob("*.json"):
-                gdata = _safe_read_json(game_file)
-                if not gdata:
-                    continue
-                timing = gdata.get("timing")
-                if timing and gdata.get("status") == "Completed":
-                    for k in selfplay_timing_keys:
-                        selfplay_timing_sums[k] += timing.get(k, 0.0)
-                    selfplay_total_sims += timing.get("total_sims", 0)
-                    selfplay_timing_count += 1
-
-            selfplay_timing_avgs = {}
-            if selfplay_timing_count > 0:
-                for k in selfplay_timing_keys:
-                    selfplay_timing_avgs[f"avg_{k}"] = round(selfplay_timing_sums[k] / selfplay_timing_count, 3)
-                selfplay_timing_avgs["avg_sims_per_game"] = round(selfplay_total_sims / selfplay_timing_count, 1)
-            selfplay_moves_per_second = (
-                experiences_this_iteration / selfplay_wall_time if selfplay_wall_time > 0 else 0
-            )
+            sp_stats = _aggregate_selfplay_stats(loop, sp, metrics, loop_metrics)
 
             status["status_message"] = "Self-play phase completed. Starting training."
             update_loop_status(status)
-            LOGGER.info(f"--- Starting training on self-play data ({games_completed_count} games) ---")
-            training_config = loop_config.training_config
+            LOGGER.info(f"--- Starting training on self-play data ({sp.games_completed} games) ---")
 
-            if not isinstance(training_config, TrainingConfig):
-                LOGGER.error(f"FIX THIS: Training config is not a TrainingConfig: {training_config}")
-                training_config = TrainingConfig.from_json(training_config)
+            train_result = _run_training_iteration(loop, loop_config, metrics)
+            model = train_result.model
+            train_metrics = train_result.train_metrics
+            training_wall_time = train_result.wall_time
 
-            training_config.metrics = metrics
-            training_config.global_step = loop
-
-            # Get the model and train it, capturing metrics
-            model = get_latest_model("model_checkpoints")
-            training_config.train_dir = Path(f"training_examples/selfplay/{model.get_name()}")
-
-            # Train the model and capture metrics
-            training_start_time = time.time()
-            _, train_metrics = train(training_config, model, model_checkpoint_dir=MODEL_CHECKPOINT_DIR)
-            training_wall_time = time.time() - training_start_time
-
-            # Model gating: evaluate candidate before promoting
-            gate_win_rate = None
-            gate_promoted = None
-            gating_start_time = time.time()
-            if no_gate or loop == 0:
-                if loop == 0:
-                    LOGGER.info("First iteration; skipping gating, saving model directly.")
-                else:
-                    LOGGER.info("Gating disabled (--no-gate); saving model directly.")
-                checkpoint_num = save_model(model, MODEL_CHECKPOINT_DIR)
-                gate_promoted = True
-                append_model_history(
-                    {
-                        "loop": loop + 1,
-                        "timestamp": datetime.now().isoformat(),
-                        "checkpoint_num": checkpoint_num,
-                        "architecture": model.architecture_name(),
-                        "session": model.get_name(),
-                        "promoted": True,
-                        "win_rate": None,
-                        "gate_games": 0,
-                        "reason": "first_iteration" if loop == 0 else "gating_disabled",
-                    }
-                )
-            else:
-                status["status_message"] = f"Running gating evaluation ({gate_games} games)..."
-                update_loop_status(status)
-
-                current_best_model = get_latest_model("model_checkpoints")
-                win_rate = evaluate_candidate(
-                    candidate_model=model,
-                    current_best_model=current_best_model,
-                    num_games=gate_games,
-                    num_readouts=min(num_readouts, 50),
-                )
-                gate_win_rate = win_rate
-                metrics.add_scalar("Gating/Win_Rate", win_rate, loop)
-                metrics.add_scalar("Gating/Promoted", 1.0 if win_rate >= gate_threshold else 0.0, loop)
-
-                if win_rate >= gate_threshold:
-                    LOGGER.info(f"Model promoted! Win rate: {win_rate:.1%} >= {gate_threshold:.1%}")
-                    checkpoint_num = save_model(model, MODEL_CHECKPOINT_DIR)
-                    gate_promoted = True
-                else:
-                    LOGGER.info(f"Model rejected. Win rate: {win_rate:.1%} < {gate_threshold:.1%}")
-                    checkpoint_num = None
-                    gate_promoted = False
-
-                append_model_history(
-                    {
-                        "loop": loop + 1,
-                        "timestamp": datetime.now().isoformat(),
-                        "checkpoint_num": checkpoint_num,
-                        "architecture": model.architecture_name(),
-                        "session": model.get_name(),
-                        "promoted": gate_promoted,
-                        "win_rate": win_rate,
-                        "gate_games": gate_games,
-                        "reason": "gating",
-                    }
-                )
-
-            gating_wall_time = time.time() - gating_start_time
-            iteration_wall_time = selfplay_wall_time + training_wall_time + gating_wall_time
-
-            # Log performance timing summary
-            LOGGER.info(
-                f"Loop {loop+1} timing breakdown:\n"
-                f"  Self-play:  {selfplay_wall_time:.1f}s ({selfplay_wall_time/iteration_wall_time*100:.0f}%)\n"
-                f"  Training:   {training_wall_time:.1f}s ({training_wall_time/iteration_wall_time*100:.0f}%)\n"
-                f"  Gating:     {gating_wall_time:.1f}s ({gating_wall_time/iteration_wall_time*100:.0f}%)\n"
-                f"  Total:      {iteration_wall_time:.1f}s"
+            gating = _run_gating_iteration(
+                loop, model, no_gate, gate_games, gate_threshold, num_readouts, status, metrics,
             )
-            if selfplay_timing_avgs:
-                LOGGER.info(
-                    f"Loop {loop+1} self-play timing (avg per game):\n"
-                    f"  Tree search:     {selfplay_timing_avgs.get('avg_tree_search_s', 0):.1f}s\n"
-                    f"    Inference:     {selfplay_timing_avgs.get('avg_inference_s', 0):.1f}s\n"
-                    f"    Encoding:      {selfplay_timing_avgs.get('avg_encoding_s', 0):.1f}s\n"
-                    f"    Leaf select:   {selfplay_timing_avgs.get('avg_leaf_selection_s', 0):.1f}s\n"
-                    f"    Backup:        {selfplay_timing_avgs.get('avg_backup_s', 0):.1f}s\n"
-                    f"  Pick move:       {selfplay_timing_avgs.get('avg_pick_move_s', 0):.1f}s\n"
-                    f"  Play move:       {selfplay_timing_avgs.get('avg_play_move_s', 0):.1f}s\n"
-                    f"  Data extraction: {selfplay_timing_avgs.get('avg_data_extraction_s', 0):.1f}s\n"
-                    f"  Total game:      {selfplay_timing_avgs.get('avg_total_game_s', 0):.1f}s\n"
-                    f"  Avg sims/game:   {selfplay_timing_avgs.get('avg_sims_per_game', 0):.0f}\n"
-                    f"  Moves/sec:       {selfplay_moves_per_second:.1f}"
-                )
 
-            # Write timing metrics to TensorBoard
-            metrics.add_scalar("Timing/Selfplay_Wall_Time_s", selfplay_wall_time, loop)
-            metrics.add_scalar("Timing/Training_Wall_Time_s", training_wall_time, loop)
-            metrics.add_scalar("Timing/Gating_Wall_Time_s", gating_wall_time, loop)
-            metrics.add_scalar("Timing/Total_Iteration_s", iteration_wall_time, loop)
-            metrics.add_scalar("Timing/Moves_Per_Second", selfplay_moves_per_second, loop)
-            if selfplay_timing_avgs:
-                for k, v in selfplay_timing_avgs.items():
-                    metrics.add_scalar(f"Timing/SelfPlay_{k}", v, loop)
-
-            # Update loop metrics with training results
-            if train_metrics and train_metrics.epochs_trained > 0:
-                loop_metrics.training_losses.append(train_metrics.avg_total_loss)
-                loop_metrics.policy_losses.append(train_metrics.avg_policy_loss)
-                loop_metrics.value_losses.append(train_metrics.avg_value_loss)
-                loop_metrics.training_examples_total += train_metrics.training_examples
-
-                # Core losses
-                metrics.add_scalar("Training/Total_Loss", train_metrics.avg_total_loss, loop)
-                metrics.add_scalar("Training/Policy_Loss", train_metrics.avg_policy_loss, loop)
-                metrics.add_scalar("Training/Value_Loss", train_metrics.avg_value_loss, loop)
-                metrics.add_scalar("Training/Examples_This_Iteration", train_metrics.training_examples, loop)
-                metrics.add_scalar("Training/Examples_Total", loop_metrics.training_examples_total, loop)
-
-                # Per-epoch losses
-                for epoch_idx, epoch_loss in enumerate(train_metrics.epoch_losses):
-                    metrics.add_scalar(f"Training/Epoch_Loss/Loop{loop}", epoch_loss, epoch_idx)
-
-                # Last-epoch values for per-loop TensorBoard scalars
-                def _last(lst, default=0.0):
-                    return lst[-1] if lst else default
-
-                # Loss components
-                metrics.add_scalar("Training/Entropy", _last(train_metrics.epoch_entropy), loop)
-                metrics.add_scalar("Training/Aux_Loss", _last(train_metrics.epoch_aux_losses), loop)
-
-                # Policy diagnostics
-                metrics.add_scalar("Policy/Top1_Accuracy", _last(train_metrics.epoch_top1_accuracy), loop)
-                metrics.add_scalar("Policy/Top5_Accuracy", _last(train_metrics.epoch_top5_accuracy), loop)
-                metrics.add_scalar("Policy/KL_Divergence", _last(train_metrics.epoch_policy_kl), loop)
-                metrics.add_scalar("Policy/Network_Entropy", _last(train_metrics.epoch_policy_entropy), loop)
-                metrics.add_scalar("Policy/MCTS_Target_Entropy", _last(train_metrics.epoch_target_entropy), loop)
-                metrics.add_scalar(
-                    "Policy/Max_Prob_Concentration", _last(train_metrics.epoch_legal_move_concentration), loop
-                )
-                metrics.add_scalar("Policy/Mean_Legal_Actions", _last(train_metrics.epoch_mean_legal_actions), loop)
-
-                # Value diagnostics
-                metrics.add_scalar(
-                    "Value/Explained_Variance", _last(train_metrics.epoch_value_explained_variance), loop
-                )
-                metrics.add_scalar("Value/Correlation", _last(train_metrics.epoch_value_correlation), loop)
-                metrics.add_scalar("Value/MAE", _last(train_metrics.epoch_value_mae), loop)
-                metrics.add_scalar("Value/MSE", _last(train_metrics.epoch_value_mse), loop)
-                metrics.add_scalar("Value/Pred_Mean", _last(train_metrics.epoch_value_pred_mean), loop)
-                metrics.add_scalar("Value/Pred_Std", _last(train_metrics.epoch_value_pred_std), loop)
-                metrics.add_scalar("Value/Pred_Min", _last(train_metrics.epoch_value_pred_min), loop)
-                metrics.add_scalar("Value/Pred_Max", _last(train_metrics.epoch_value_pred_max), loop)
-                metrics.add_scalar("Value/Target_Mean", _last(train_metrics.epoch_value_target_mean), loop)
-                metrics.add_scalar("Value/Target_Std", _last(train_metrics.epoch_value_target_std), loop)
-                metrics.add_scalar("Value/Target_Min", _last(train_metrics.epoch_value_target_min), loop)
-                metrics.add_scalar("Value/Target_Max", _last(train_metrics.epoch_value_target_max), loop)
-
-                # Gradient norms
-                metrics.add_scalar("Gradients/Total_Norm", _last(train_metrics.epoch_grad_norm_total), loop)
-                metrics.add_scalar("Gradients/Policy_Head_Norm", _last(train_metrics.epoch_grad_norm_policy_head), loop)
-                metrics.add_scalar("Gradients/Value_Head_Norm", _last(train_metrics.epoch_grad_norm_value_head), loop)
-                metrics.add_scalar("Gradients/Trunk_Norm", _last(train_metrics.epoch_grad_norm_trunk), loop)
-                metrics.add_scalar("Gradients/CV", _last(train_metrics.epoch_grad_norm_cv), loop)
-
-                # Learning rate
-                metrics.add_scalar("Training/Learning_Rate", _last(train_metrics.epoch_lr), loop)
-
-                # Aux diagnostics
-                metrics.add_scalar("Aux/Pred_Mean", _last(train_metrics.epoch_aux_pred_mean), loop)
-                metrics.add_scalar("Aux/Target_Mean", _last(train_metrics.epoch_aux_target_mean), loop)
-                metrics.add_scalar("Aux/Correlation", _last(train_metrics.epoch_aux_correlation), loop)
-
-                LOGGER.info(
-                    f"Loop {loop+1} training metrics - Total Loss: {train_metrics.avg_total_loss:.4f}, "
-                    f"Policy Loss: {train_metrics.avg_policy_loss:.4f}, Value Loss: {train_metrics.avg_value_loss:.4f}, "
-                    f"Examples: {train_metrics.training_examples}"
-                )
+            _emit_tensorboard_metrics(
+                loop, sp_stats, sp, training_wall_time, gating.wall_time,
+                train_metrics, loop_metrics, metrics,
+            )
 
             LOGGER.info(f"--- Finished training on self-play data ---")
 
-            # Append metrics history record for the dashboard
-            def _last_or(lst, default=0.0):
-                return lst[-1] if lst else default
-
-            history_record = {
-                "loop": loop + 1,
-                "timestamp": datetime.now().isoformat(),
-                "model_session": model.get_name(),
-                "model_architecture": model.architecture_name(),
-                "promoted": gate_promoted,
-                # Losses
-                "total_loss": train_metrics.avg_total_loss
-                if train_metrics and train_metrics.epochs_trained > 0
-                else None,
-                "policy_loss": train_metrics.avg_policy_loss
-                if train_metrics and train_metrics.epochs_trained > 0
-                else None,
-                "value_loss": train_metrics.avg_value_loss
-                if train_metrics and train_metrics.epochs_trained > 0
-                else None,
-                "entropy": _last_or(train_metrics.epoch_entropy) if train_metrics else 0.0,
-                "aux_loss": _last_or(train_metrics.epoch_aux_losses) if train_metrics else 0.0,
-                # Per-epoch granularity
-                "epoch_losses": list(train_metrics.epoch_losses) if train_metrics else [],
-                "epoch_policy_losses": list(train_metrics.epoch_policy_losses) if train_metrics else [],
-                "epoch_value_losses": list(train_metrics.epoch_value_losses) if train_metrics else [],
-                # Policy health
-                "top1_accuracy": _last_or(train_metrics.epoch_top1_accuracy) if train_metrics else 0.0,
-                "top5_accuracy": _last_or(train_metrics.epoch_top5_accuracy) if train_metrics else 0.0,
-                "policy_entropy": _last_or(train_metrics.epoch_policy_entropy) if train_metrics else 0.0,
-                "mcts_target_entropy": _last_or(train_metrics.epoch_target_entropy) if train_metrics else 0.0,
-                "policy_kl": _last_or(train_metrics.epoch_policy_kl) if train_metrics else 0.0,
-                "max_prob_concentration": _last_or(train_metrics.epoch_legal_move_concentration)
-                if train_metrics
-                else 0.0,
-                "mean_legal_actions": _last_or(train_metrics.epoch_mean_legal_actions) if train_metrics else 0.0,
-                # Value health
-                "value_explained_variance": _last_or(train_metrics.epoch_value_explained_variance)
-                if train_metrics
-                else 0.0,
-                "value_correlation": _last_or(train_metrics.epoch_value_correlation) if train_metrics else 0.0,
-                "value_mae": _last_or(train_metrics.epoch_value_mae) if train_metrics else 0.0,
-                "value_mse": _last_or(train_metrics.epoch_value_mse) if train_metrics else 0.0,
-                "value_pred_mean": _last_or(train_metrics.epoch_value_pred_mean) if train_metrics else 0.0,
-                "value_pred_std": _last_or(train_metrics.epoch_value_pred_std) if train_metrics else 0.0,
-                "value_pred_min": _last_or(train_metrics.epoch_value_pred_min) if train_metrics else 0.0,
-                "value_pred_max": _last_or(train_metrics.epoch_value_pred_max) if train_metrics else 0.0,
-                "value_target_mean": _last_or(train_metrics.epoch_value_target_mean) if train_metrics else 0.0,
-                "value_target_std": _last_or(train_metrics.epoch_value_target_std) if train_metrics else 0.0,
-                "value_target_min": _last_or(train_metrics.epoch_value_target_min) if train_metrics else 0.0,
-                "value_target_max": _last_or(train_metrics.epoch_value_target_max) if train_metrics else 0.0,
-                # Gradients
-                "grad_norm_total": _last_or(train_metrics.epoch_grad_norm_total) if train_metrics else 0.0,
-                "grad_norm_policy": _last_or(train_metrics.epoch_grad_norm_policy_head) if train_metrics else 0.0,
-                "grad_norm_value": _last_or(train_metrics.epoch_grad_norm_value_head) if train_metrics else 0.0,
-                "grad_norm_trunk": _last_or(train_metrics.epoch_grad_norm_trunk) if train_metrics else 0.0,
-                "grad_norm_cv": _last_or(train_metrics.epoch_grad_norm_cv) if train_metrics else 0.0,
-                # Self-play
-                "games_played": games_completed_count,
-                "experiences": experiences_this_iteration,
-                "avg_game_length": avg_game_length,
-                "min_game_length": selfplay_min_game_length,
-                "max_game_length": selfplay_max_game_length,
-                "total_experiences_cumulative": loop_metrics.training_examples_total,
-                "selfplay_wall_time_seconds": round(selfplay_wall_time, 1),
-                "selfplay_games_per_hour": round(selfplay_games_per_hour, 1),
-                "phase_move_counts": aggregated_phase_counts,
-                # Gating
-                "gate_win_rate": gate_win_rate,
-                "gate_games_played": gate_games if gate_win_rate is not None else 0,
-                # Training config snapshot
-                "learning_rate": _last_or(train_metrics.epoch_lr) if train_metrics else loop_config.training_config.lr,
-                "batch_size": loop_config.training_config.batch_size,
-                "num_epochs": loop_config.training_config.num_epochs,
-                "num_readouts": scheduled_readouts,
-                "scheduled_max_game_length": scheduled_game_length,
-                "checkpoint_count": checkpoint_count,
-                "training_examples": train_metrics.training_examples if train_metrics else 0,
-                # Aux diagnostics
-                "aux_pred_mean": _last_or(train_metrics.epoch_aux_pred_mean) if train_metrics else 0.0,
-                "aux_target_mean": _last_or(train_metrics.epoch_aux_target_mean) if train_metrics else 0.0,
-                "aux_correlation": _last_or(train_metrics.epoch_aux_correlation) if train_metrics else 0.0,
-                # Performance timing
-                "training_wall_time_seconds": round(training_wall_time, 1),
-                "gating_wall_time_seconds": round(gating_wall_time, 1),
-                "total_iteration_time_seconds": round(iteration_wall_time, 1),
-                "selfplay_moves_per_second": round(selfplay_moves_per_second, 1),
-                # Self-play timing breakdown (avg per game)
-                **{f"selfplay_{k}": v for k, v in selfplay_timing_avgs.items()},
-            }
+            history_record = _build_history_record(
+                loop, model, train_metrics, sp, sp_stats, gating,
+                loop_config, scheduled_game_length, scheduled_readouts,
+                checkpoint_count, gate_games, loop_metrics, training_wall_time,
+            )
             append_metrics_history(history_record)
 
             status["status_message"] = f"Loop {loop+1} training complete. Preparing for next loop."
