@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
-from rl18xx.agent.alphazero.checkpointer import get_model_from_path
+from rl18xx.agent.alphazero.checkpointer import get_model_from_path, get_latest_model
 from rl18xx.agent.alphazero.config import TrainingConfig
 from rl18xx.agent.alphazero.encoder import Encoder_1830, Encoder_GNN, Encoder_SSME
 from rl18xx.agent.alphazero.model import AlphaZeroModel
@@ -612,7 +612,7 @@ def make_encoded_gnn_game_state_model_friendly(
         # with these new values.
         # With all of this in mind, the changes to the game state encoding object are as follows:
         # First, all existing company bids must be consecutive multiples of 5.
-        encoded_game_data, a, b, c = encoded_game_state
+        encoded_game_data, *rest = encoded_game_state
         bids_offset = 335  # Magic number
         min_bid_offset = 359
         encoded_game_data = encoded_game_data.squeeze(0)
@@ -668,7 +668,7 @@ def make_encoded_gnn_game_state_model_friendly(
             encoded_game_data[min_bid_offset + priv_idx] = float(min_bid_val) / encoder.starting_cash
 
         encoded_game_data = encoded_game_data.unsqueeze(0)
-        return encoded_game_data, a, b, c
+        return (encoded_game_data, *rest)
 
 
 def make_encoded_ssme_game_state_model_friendly(
@@ -730,45 +730,125 @@ def convert_game_to_training_data(game: BaseGame, encoder: Encoder_1830) -> Tupl
 
 def convert_games_to_training_dataset(
     game_data_dir: str, encoder: Encoder_1830, save_path: Union[str, Path]
-) -> HumanPlayDataset:
+):
     save_path = Path(save_path)
     save_path.mkdir(parents=True, exist_ok=True)
-    games = load_games_from_json(game_data_dir)
-    processor = TrainingExampleProcessor(encoder)
-    for game in tqdm(games, desc="Converting games to training data"):
-        if game.get("status") == "error":
-            LOGGER.debug(f"Skipping game {game['id']} because it has status error")
-            continue
-        with open(save_path / "progress.json", "r") as f:
+    progress_file = save_path / "progress.json"
+
+    # Load or create progress tracker (supports resume)
+    if progress_file.exists():
+        with open(progress_file, "r") as f:
             progress = json.load(f)
+    else:
+        progress = {}
+
+    games = load_games_from_json(game_data_dir)
+    games = [g for g in games if g.get("status") != "error" and "title" in g]
+    LOGGER.info(f"Found {len(games)} valid games to convert")
+
+    processor = TrainingExampleProcessor(encoder)
+    converted = 0
+    skipped = 0
+    errors = 0
+    for game in tqdm(games, desc="Converting games to training data"):
         if game["id"] in progress:
-            LOGGER.debug(f"Skipping game {game['id']} because it has already been converted")
+            skipped += 1
             continue
 
-        LOGGER.info(f"Converting game {game['id']}")
-        game_obj = BaseGame.load(game)
-        train, val = convert_game_to_training_data(game_obj, encoder)
-        if train:
-            dest = save_path / "training"
-            processor.write_samples(train, dest)
-        if val:
-            dest = save_path / "validation"
-            processor.write_samples(val, dest)
+        try:
+            game_obj = BaseGame.load(game)
+            train, val = convert_game_to_training_data(game_obj, encoder)
+            if train:
+                dest = save_path / "training"
+                processor.write_samples(train, dest)
+            if val:
+                dest = save_path / "validation"
+                processor.write_samples(val, dest)
+            converted += 1
+        except Exception as e:
+            LOGGER.warning(f"Error converting game {game['id']}: {e}")
+            errors += 1
 
         progress[game["id"]] = True
-        with open(save_path / "progress.json", "w") as f:
-            json.dump(progress, f, indent=4)
-        LOGGER.info(f"Converted game {game['id']}")
+        with open(progress_file, "w") as f:
+            json.dump(progress, f)
+
+    LOGGER.info(f"Conversion complete: {converted} converted, {skipped} already done, {errors} errors")
 
 
 def do_pretraining(model_dir: str, game_data_dir: str, config: TrainingConfig) -> TrainingMetrics:
-    # Assume the data has been pre-cleaned using the other methods in this file.
-    model = get_model_from_path(model_dir)
-    games = load_games_from_json(game_data_dir)
-    games = [BaseGame.load(game) for game in games if game.get("status") != "error"]
+    """Pre-train from human game data.
+
+    game_data_dir can be either:
+      - A directory of raw game JSON files (will be converted on the fly)
+      - A path to pre-converted LMDB data (e.g. human_games/lmdb/training)
+    """
+    from rl18xx.agent.alphazero.dataset import SelfPlayDataset
+
+    # Try the hierarchical loader first (arch/session/ layout), fall back to flat path.
+    try:
+        model = get_latest_model(model_dir)
+    except FileNotFoundError:
+        model = get_model_from_path(model_dir)
+
+    data_path = Path(game_data_dir)
+
+    def _try_load_lmdb(lmdb_dir: Path):
+        """Load LMDB dataset, validating shape compatibility with the model."""
+        ds = SelfPlayDataset(lmdb_dir)
+        if len(ds) == 0:
+            LOGGER.warning(f"LMDB at {lmdb_dir} is empty, skipping")
+            ds.env.close()
+            return None
+        sample = ds[0]
+        gs_dim = sample[0].shape[-1]
+        expected_dim = model.config.game_state_size
+        if gs_dim != expected_dim:
+            LOGGER.warning(
+                f"LMDB data has game_state_size={gs_dim} but model expects {expected_dim}. "
+                f"Skipping stale LMDB; will re-convert from raw JSON."
+            )
+            ds.env.close()
+            return None
+        return ds
+
+    # If the path contains an LMDB database, load directly (much faster)
+    if (data_path / "data.mdb").exists():
+        LOGGER.info(f"Loading pre-converted LMDB data from {data_path}")
+        train_dataset = _try_load_lmdb(data_path)
+        if train_dataset is not None:
+            LOGGER.info(f"Loaded {len(train_dataset)} training examples from LMDB")
+            return train_model(model, train_dataset, config)
+
+    # Check for lmdb subdirectories (multiple naming conventions)
+    for lmdb_subdir in ["lmdb_v2/training", "lmdb/training"]:
+        lmdb_training = data_path / lmdb_subdir
+        if (lmdb_training / "data.mdb").exists():
+            LOGGER.info(f"Loading pre-converted LMDB data from {lmdb_training}")
+            train_dataset = _try_load_lmdb(lmdb_training)
+            if train_dataset is not None:
+                LOGGER.info(f"Loaded {len(train_dataset)} training examples from LMDB")
+                return train_model(model, train_dataset, config)
+
+    # Fall back to raw JSON conversion; resolve the actual game JSON directory.
+    json_dir = data_path
+    if not list(json_dir.glob("*.json")):
+        # Check common subdirectory names
+        for subdir in ["1830_clean", "1830"]:
+            candidate = data_path / subdir
+            if candidate.exists() and list(candidate.glob("*.json")):
+                json_dir = candidate
+                break
+
+    LOGGER.info(f"No compatible LMDB data found, converting from raw game JSON files in {json_dir}")
+    games = load_games_from_json(str(json_dir))
+    games = [g for g in games if g.get("status") != "error" and "title" in g]
+    LOGGER.info(f"Filtered to {len(games)} valid games")
+    games = [BaseGame.load(game) for game in games]
+    encoder = Encoder_1830.get_encoder_for_model(model)
     training_data, validation_data = [], []
     for game in tqdm(games, desc="Converting games to training data"):
-        train, val = convert_game_to_training_data(game, model)
+        train, val = convert_game_to_training_data(game, encoder)
         training_data.extend(train)
         validation_data.extend(val)
 

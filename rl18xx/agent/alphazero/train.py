@@ -45,7 +45,7 @@ class TrainingMetrics:
     epoch_aux_losses: list = field(default_factory=list)
 
     # Policy diagnostics
-    epoch_policy_kl: list = field(default_factory=list)  # KL divergence between old and new policy
+    epoch_policy_kl: list = field(default_factory=list)  # KL(MCTS target || network output)
     epoch_top1_accuracy: list = field(default_factory=list)  # fraction where argmax(pi) == argmax(logits)
     epoch_top5_accuracy: list = field(default_factory=list)
     epoch_policy_entropy: list = field(default_factory=list)  # entropy of network policy
@@ -60,13 +60,19 @@ class TrainingMetrics:
     epoch_value_target_mean: list = field(default_factory=list)
     epoch_value_target_std: list = field(default_factory=list)
     epoch_value_mae: list = field(default_factory=list)  # mean absolute error
+    epoch_value_mse: list = field(default_factory=list)  # mean squared error
     epoch_value_correlation: list = field(default_factory=list)  # correlation between pred and target
+    epoch_value_pred_min: list = field(default_factory=list)
+    epoch_value_pred_max: list = field(default_factory=list)
+    epoch_value_target_min: list = field(default_factory=list)
+    epoch_value_target_max: list = field(default_factory=list)
 
     # Gradient diagnostics
     epoch_grad_norm_total: list = field(default_factory=list)
     epoch_grad_norm_policy_head: list = field(default_factory=list)
     epoch_grad_norm_value_head: list = field(default_factory=list)
     epoch_grad_norm_trunk: list = field(default_factory=list)
+    epoch_grad_norm_cv: list = field(default_factory=list)  # coefficient of variation of total grad norm
 
     # Learning rate
     epoch_lr: list = field(default_factory=list)
@@ -143,8 +149,22 @@ def train_model(
     graph: bool = False,
     model_checkpoint_dir: str = "model_checkpoints",
 ) -> TrainingMetrics:
+    # Separate learning rate for value head (Item 5)
+    value_head_params = []
+    other_params = []
+    for name, param in model.named_parameters():
+        if "value_head" in name:
+            value_head_params.append(param)
+        else:
+            other_params.append(param)
     optimizer = optim.Adam(
-        model.parameters(), lr=config.lr, weight_decay=config.weight_decay, betas=(0.9, 0.999), eps=1e-8
+        [
+            {"params": other_params, "lr": config.lr},
+            {"params": value_head_params, "lr": config.lr * config.value_lr_multiplier},
+        ],
+        weight_decay=config.weight_decay,
+        betas=(0.9, 0.999),
+        eps=1e-8,
     )
     metrics = TrainingMetrics()
 
@@ -158,16 +178,31 @@ def train_model(
 
     total_steps = len(train_loader) * config.num_epochs
     warmup_steps = min(total_steps // 20, 200)  # 5% of first iteration, capped at 200 steps
-    # Linear warmup then constant LR — simple and stable for indefinite training
+    # Linear warmup then constant LR (stable for indefinite training).
     scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_steps)
 
-    # Try to load optimizer state from previous iteration (warmup already completed → LR stays at config.lr)
-    loaded = load_optimizer_state(optimizer, scheduler, model_checkpoint_dir, model)
-    if loaded:
-        LOGGER.info(f"Resumed optimizer state. Current LR: {optimizer.param_groups[0]['lr']:.2e}")
+    # Try to load optimizer state from a previous iteration. Param-group structure may have changed
+    # (e.g. value-head LR split), so tolerate a mismatch and start fresh in that case.
+    try:
+        loaded = load_optimizer_state(optimizer, scheduler, model_checkpoint_dir, model)
+        if loaded:
+            LOGGER.info(f"Resumed optimizer state. Current LR: {optimizer.param_groups[0]['lr']:.2e}")
+    except (ValueError, RuntimeError, KeyError) as e:
+        LOGGER.warning(
+            f"Could not load optimizer state (likely parameter group mismatch): {e}. "
+            f"Continuing with fresh optimizer."
+        )
 
     metrics.training_examples = len(train_dataset)
     device = model.device
+
+    # FP16 mixed-precision training (Item 7)
+    use_amp = config.use_fp16_training and device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda") if use_amp else None
+    if use_amp:
+        LOGGER.info("FP16 mixed-precision training enabled (CUDA).")
+    else:
+        LOGGER.info(f"FP16 training disabled (device={device.type}, config={config.use_fp16_training}).")
 
     if graph:
         plt.ion()
@@ -185,7 +220,7 @@ def train_model(
         train_losses = []
         train_policy_losses = []
         train_value_losses = []
-        # Per-epoch accumulators for comprehensive metrics
+        # Per-epoch metric accumulators.
         epoch_entropies = []
         epoch_aux_losses_batch = []
         epoch_top1_correct = 0
@@ -200,6 +235,7 @@ def train_model(
         epoch_grad_norms = []
         epoch_policy_entropies = []
         epoch_target_entropies = []
+        epoch_policy_kl_values = []
 
         optimizer.zero_grad()
         train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config.num_epochs} [Train]", leave=False)
@@ -213,42 +249,43 @@ def train_model(
             pi = pi.float().to(device, non_blocking=True)
             value = value.float().to(device, non_blocking=True)
 
-            policy_logits, value_pred, aux_action_count_pred = model(game_state_data, batch_data)
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                policy_logits, value_pred, aux_action_count_pred = model(game_state_data, batch_data)
 
-            # --- Policy loss ---
-            masked_logits = policy_logits.masked_fill(legal_action_mask == 0, float("-inf"))
-            log_probs = F.log_softmax(masked_logits, dim=1)
-            safe_log_probs = log_probs.masked_fill(legal_action_mask == 0, 0.0)
-            policy_loss = -torch.sum(pi * safe_log_probs, dim=1).mean()
+                # --- Policy loss ---
+                masked_logits = policy_logits.masked_fill(legal_action_mask == 0, float("-inf"))
+                log_probs = F.log_softmax(masked_logits, dim=1)
+                safe_log_probs = log_probs.masked_fill(legal_action_mask == 0, 0.0)
+                policy_loss = -torch.sum(pi * safe_log_probs, dim=1).mean()
 
-            # --- Policy entropy ---
-            policy_probs = F.softmax(masked_logits, dim=1)
-            entropy = -torch.sum(policy_probs * safe_log_probs, dim=1).mean()
+                # --- Policy entropy ---
+                policy_probs = F.softmax(masked_logits, dim=1)
+                entropy = -torch.sum(policy_probs * safe_log_probs, dim=1).mean()
 
-            # --- Value loss ---
-            is_score_values = (value >= 0).all()
-            if is_score_values:
-                value_log_probs = F.log_softmax(value_pred, dim=1)
-                value_loss = F.kl_div(value_log_probs, value, reduction="batchmean")
-            else:
-                winners_mask = (value > -0.5).float()
-                num_winners = winners_mask.sum(dim=1, keepdim=True).clamp(min=1)
-                value_target_probs = winners_mask / num_winners
-                value_log_probs = F.log_softmax(value_pred, dim=1)
-                value_loss = -(value_target_probs * value_log_probs).sum(dim=1).mean()
+                # --- Value loss ---
+                is_score_values = (value >= 0).all()
+                if is_score_values:
+                    value_log_probs = F.log_softmax(value_pred, dim=1)
+                    value_loss = F.kl_div(value_log_probs, value, reduction="batchmean")
+                else:
+                    winners_mask = (value > -0.5).float()
+                    num_winners = winners_mask.sum(dim=1, keepdim=True).clamp(min=1)
+                    value_target_probs = winners_mask / num_winners
+                    value_log_probs = F.log_softmax(value_pred, dim=1)
+                    value_loss = -(value_target_probs * value_log_probs).sum(dim=1).mean()
 
-            # --- Auxiliary loss ---
-            legal_action_count = legal_action_mask.sum(dim=1)
-            aux_target = torch.log(legal_action_count.float().clamp(min=1))
-            aux_pred_clamped = aux_action_count_pred.squeeze(1).clamp(-10, 10)
-            aux_loss = F.mse_loss(aux_pred_clamped, aux_target)
+                # --- Auxiliary loss ---
+                legal_action_count = legal_action_mask.sum(dim=1)
+                aux_target = torch.log(legal_action_count.float().clamp(min=1))
+                aux_pred = aux_action_count_pred.squeeze(1)
+                aux_loss = F.mse_loss(aux_pred, aux_target)
 
-            total_loss = (
-                policy_loss
-                + config.value_loss_weight * value_loss
-                + model.config.aux_loss_weight * aux_loss
-                - config.entropy_weight * entropy
-            )
+                total_loss = (
+                    policy_loss
+                    + config.value_loss_weight * value_loss
+                    + model.config.aux_loss_weight * aux_loss
+                    - config.entropy_weight * entropy
+                )
 
             if not torch.isfinite(total_loss):
                 LOGGER.warning(
@@ -260,17 +297,32 @@ def train_model(
                 continue
 
             # --- Gradient step ---
-            (total_loss / accum_steps).backward()
-            if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(train_loader):
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-                # Compute gradient norms before optimizer step
-                grad_norms = _compute_grad_norms(model)
-                epoch_grad_norms.append(grad_norms)
-
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad()
+            if scaler is not None:
+                scaler.scale(total_loss / accum_steps).backward()
+                if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(train_loader):
+                    scaler.unscale_(optimizer)
+                    # Check for inf/nan gradients before computing norms (GradScaler may produce these)
+                    found_inf = any(
+                        torch.isinf(p.grad).any() or torch.isnan(p.grad).any()
+                        for p in model.parameters() if p.grad is not None
+                    )
+                    if not found_inf:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                        grad_norms = _compute_grad_norms(model)
+                        epoch_grad_norms.append(grad_norms)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    scheduler.step()
+                    optimizer.zero_grad()
+            else:
+                (total_loss / accum_steps).backward()
+                if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(train_loader):
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    grad_norms = _compute_grad_norms(model)
+                    epoch_grad_norms.append(grad_norms)
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad()
 
             # --- Accumulate batch-level metrics ---
             train_losses.append(total_loss.item())
@@ -314,13 +366,18 @@ def train_model(
                 target_ent = -torch.sum(pi * torch.log(safe_pi), dim=1)
                 epoch_target_entropies.extend(target_ent.cpu().tolist())
 
+                # KL divergence: KL(MCTS target || network output)
+                # = sum(pi * (log(pi) - log(policy_probs)))
+                kl_per_sample = torch.sum(pi * (torch.log(safe_pi) - safe_log_probs), dim=1)
+                epoch_policy_kl_values.extend(kl_per_sample.cpu().tolist())
+
                 # Value statistics
                 value_pred_probs = F.softmax(value_pred, dim=1)
                 epoch_value_preds_all.append(value_pred_probs.cpu())
                 epoch_value_targets_all.append(value.cpu())
 
                 # Aux statistics
-                epoch_aux_preds_all.append(aux_pred_clamped.cpu())
+                epoch_aux_preds_all.append(aux_pred.cpu())
                 epoch_aux_targets_all.append(aux_target.cpu())
 
             train_pbar.set_postfix(
@@ -354,6 +411,7 @@ def train_model(
         metrics.epoch_target_entropy.append(np.mean(epoch_target_entropies) if epoch_target_entropies else 0.0)
         metrics.epoch_legal_move_concentration.append(np.mean(epoch_policy_max_probs) if epoch_policy_max_probs else 0.0)
         metrics.epoch_mean_legal_actions.append(np.mean(epoch_legal_action_counts) if epoch_legal_action_counts else 0.0)
+        metrics.epoch_policy_kl.append(np.mean(epoch_policy_kl_values) if epoch_policy_kl_values else 0.0)
 
         # Value diagnostics
         if epoch_value_preds_all:
@@ -364,29 +422,48 @@ def train_model(
             metrics.epoch_value_target_mean.append(all_targets.mean().item())
             metrics.epoch_value_target_std.append(all_targets.std().item())
             metrics.epoch_value_mae.append((all_preds - all_targets).abs().mean().item())
-            metrics.epoch_value_correlation.append(_safe_correlation(all_preds, all_targets))
+            metrics.epoch_value_mse.append(((all_preds - all_targets) ** 2).mean().item())
+            # Per-player correlation and explained variance (averaged across players).
+            # Computing over flattened (N, 4) tensors is misleading because both preds
+            # and targets are probability distributions clustered around 0.25.
+            per_player_corr = []
+            per_player_ev = []
+            for p in range(all_preds.shape[1]):
+                per_player_corr.append(_safe_correlation(all_preds[:, p], all_targets[:, p]))
+                target_var = all_targets[:, p].var().item()
+                residual_var = (all_targets[:, p] - all_preds[:, p]).var().item()
+                per_player_ev.append(1.0 - residual_var / max(target_var, 1e-8))
+            metrics.epoch_value_correlation.append(np.mean(per_player_corr))
+            metrics.epoch_value_explained_variance.append(np.mean(per_player_ev))
 
-            # Explained variance: 1 - Var(target - pred) / Var(target)
-            residual_var = (all_targets - all_preds).var().item()
-            target_var = all_targets.var().item()
-            ev = 1.0 - residual_var / max(target_var, 1e-8)
-            metrics.epoch_value_explained_variance.append(ev)
+            metrics.epoch_value_pred_min.append(all_preds.min().item())
+            metrics.epoch_value_pred_max.append(all_preds.max().item())
+            metrics.epoch_value_target_min.append(all_targets.min().item())
+            metrics.epoch_value_target_max.append(all_targets.max().item())
         else:
             for lst in [metrics.epoch_value_pred_mean, metrics.epoch_value_pred_std,
                         metrics.epoch_value_target_mean, metrics.epoch_value_target_std,
-                        metrics.epoch_value_mae, metrics.epoch_value_correlation,
-                        metrics.epoch_value_explained_variance]:
+                        metrics.epoch_value_mae, metrics.epoch_value_mse, metrics.epoch_value_correlation,
+                        metrics.epoch_value_explained_variance, metrics.epoch_value_pred_min,
+                        metrics.epoch_value_pred_max, metrics.epoch_value_target_min,
+                        metrics.epoch_value_target_max]:
                 lst.append(0.0)
 
         # Gradient norms (average across steps in epoch)
         if epoch_grad_norms:
-            metrics.epoch_grad_norm_total.append(np.mean([g["total"] for g in epoch_grad_norms]))
+            total_norms = [g["total"] for g in epoch_grad_norms]
+            metrics.epoch_grad_norm_total.append(np.mean(total_norms))
             metrics.epoch_grad_norm_policy_head.append(np.mean([g["policy_head"] for g in epoch_grad_norms]))
             metrics.epoch_grad_norm_value_head.append(np.mean([g["value_head"] for g in epoch_grad_norms]))
             metrics.epoch_grad_norm_trunk.append(np.mean([g["trunk"] for g in epoch_grad_norms]))
+            # Coefficient of variation: std / mean (measures gradient stability)
+            mean_norm = np.mean(total_norms)
+            std_norm = np.std(total_norms)
+            metrics.epoch_grad_norm_cv.append(std_norm / max(mean_norm, 1e-8))
         else:
             for lst in [metrics.epoch_grad_norm_total, metrics.epoch_grad_norm_policy_head,
-                        metrics.epoch_grad_norm_value_head, metrics.epoch_grad_norm_trunk]:
+                        metrics.epoch_grad_norm_value_head, metrics.epoch_grad_norm_trunk,
+                        metrics.epoch_grad_norm_cv]:
                 lst.append(0.0)
 
         # Learning rate
@@ -412,16 +489,19 @@ def train_model(
             f"Aux: {metrics.epoch_aux_losses[-1]:.4f}\n"
             f"  Policy  - Top1: {metrics.epoch_top1_accuracy[-1]:.3f}, "
             f"Top5: {metrics.epoch_top5_accuracy[-1]:.3f}, "
+            f"KL: {metrics.epoch_policy_kl[-1]:.4f}, "
             f"NetEntropy: {metrics.epoch_policy_entropy[-1]:.3f}, "
             f"MCTSEntropy: {metrics.epoch_target_entropy[-1]:.3f}, "
             f"MaxProb: {metrics.epoch_legal_move_concentration[-1]:.3f}\n"
             f"  Value   - ExplVar: {metrics.epoch_value_explained_variance[-1]:.3f}, "
             f"Corr: {metrics.epoch_value_correlation[-1]:.3f}, "
-            f"MAE: {metrics.epoch_value_mae[-1]:.4f}\n"
+            f"MAE: {metrics.epoch_value_mae[-1]:.4f}, "
+            f"MSE: {metrics.epoch_value_mse[-1]:.4f}\n"
             f"  Grads   - Total: {metrics.epoch_grad_norm_total[-1]:.3f}, "
             f"Policy: {metrics.epoch_grad_norm_policy_head[-1]:.3f}, "
             f"Value: {metrics.epoch_grad_norm_value_head[-1]:.3f}, "
-            f"Trunk: {metrics.epoch_grad_norm_trunk[-1]:.3f}\n"
+            f"Trunk: {metrics.epoch_grad_norm_trunk[-1]:.3f}, "
+            f"CV: {metrics.epoch_grad_norm_cv[-1]:.3f}\n"
             f"  LR: {metrics.epoch_lr[-1]:.2e}, "
             f"Avg Legal Actions: {metrics.epoch_mean_legal_actions[-1]:.1f}"
         )

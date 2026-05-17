@@ -43,6 +43,11 @@ class MCTSPlayer(Agent):
     def __init__(self, config: SelfPlayConfig):
         self.config = config
         self.network = config.network
+        # Cumulative timing accumulators (seconds); populated during tree_search.
+        self.cumulative_inference_time = 0.0
+        self.cumulative_encoding_time = 0.0
+        self.cumulative_leaf_selection_time = 0.0
+        self.cumulative_backup_time = 0.0
         self.initialize_game()
 
     def __str__(self):
@@ -146,7 +151,7 @@ class MCTSPlayer(Agent):
         visit_counts = self.root.child_N_compressed.astype(np.float64)
         total = visit_counts.sum()
         if total == 0:
-            # No visits — fall back to uniform over legal actions
+            # No visits; fall back to uniform over legal actions.
             compressed_idx = random.randrange(self.root.num_legal_actions)
             return self.root.legal_action_indices[compressed_idx]
 
@@ -187,7 +192,9 @@ class MCTSPlayer(Agent):
             leaves.append(leaf)
         select_leaves_end = time.time()
 
-        self.add_metric("MCTS/Select_Leaf_Time", select_leaves_end - select_leaves_start)
+        leaf_selection_duration = select_leaves_end - select_leaves_start
+        self.cumulative_leaf_selection_time += leaf_selection_duration
+        self.add_metric("MCTS/Select_Leaf_Time", leaf_selection_duration)
         self.add_metric("MCTS/Select_Leaf_Attempts", select_leaf_attempts)
         self.add_metric("MCTS/Max_Select_Leaf_Attempts", max_select_leaf_attempts)
         self.add_metric("MCTS/Leaves_Found", len(leaves))
@@ -199,10 +206,15 @@ class MCTSPlayer(Agent):
             self.add_metric("MCTS/Failsafe_Triggered", 1)
 
         if leaves:
-            run_network_start = time.time()
+            # Encoding (separate from inference for profiling)
+            encode_start = time.time()
             for leaf in leaves:
                 leaf.ensure_encoded()
+            encode_duration = time.time() - encode_start
+            self.cumulative_encoding_time += encode_duration
+
             # Phase 6.5: FP16 inference for ~2x GPU throughput (CUDA or MPS)
+            inference_start = time.time()
             autocast_device = _get_autocast_device() if self.config.use_fp16_inference else None
             if autocast_device:
                 with torch.no_grad(), torch.amp.autocast(autocast_device):
@@ -214,7 +226,11 @@ class MCTSPlayer(Agent):
                     move_probs, _, values = self.network.run_many_encoded(
                         [leaf.encoded_game_state for leaf in leaves]
                     )
-            run_network_duration = time.time() - run_network_start
+            inference_duration = time.time() - inference_start
+            self.cumulative_inference_time += inference_duration
+
+            # Combined for backward-compat metric
+            run_network_duration = encode_duration + inference_duration
 
             revert_and_incorporate_start = time.time()
             for i, (leaf, move_prob, value) in enumerate(zip(leaves, move_probs, values)):
@@ -228,36 +244,39 @@ class MCTSPlayer(Agent):
                     normalized_prior_compressed = leaf.child_prior_compressed / np.sum(leaf.child_prior_compressed)
                     leaf_prior_entropies_collected.append(mcts.calculate_entropy(normalized_prior_compressed))
             revert_and_incorporate_duration = time.time() - revert_and_incorporate_start
+            self.cumulative_backup_time += revert_and_incorporate_duration
             self.add_histogram("MCTS_Player/TreeSearch_Leaf_Depths", np.array(leaf_depths_collected))
             self.add_histogram("MCTS_Player/TreeSearch_Leaf_Initial_Network_Q", np.array(leaf_initial_qs_collected))
             self.add_histogram("MCTS_Player/TreeSearch_Leaf_Prior_Entropies", np.array(leaf_prior_entropies_collected))
         else:
             run_network_duration = 0
+            encode_duration = 0
+            inference_duration = 0
             revert_and_incorporate_duration = 0
 
         self.add_metric("MCTS/Run_Network_Time", run_network_duration)
+        self.add_metric("MCTS/Encode_Time", encode_duration)
+        self.add_metric("MCTS/Inference_Time", inference_duration)
         self.add_metric("MCTS/Revert_And_Incorporate_Time", revert_and_incorporate_duration)
         return leaves
 
-    def suggest_move(self):
+    def adaptive_readouts(self) -> int:
+        """Scale readouts by position complexity. Low-branching nodes use min_readouts."""
+        if self.root.num_legal_actions <= self.config.adaptive_readout_threshold:
+            return self.config.min_readouts
+        return self.config.num_readouts
+
+    def suggest_move(self, override_readouts: int = None):
         if self.root.num_legal_actions == 1:
             return self.pick_move()
 
-        current_readouts = self.root.N
-        n_legal = self.root.num_legal_actions
-        if n_legal <= 5:
-            readouts = max(self.config.min_readouts, self.config.num_readouts // 4)
-        elif n_legal <= 20:
-            readouts = max(self.config.min_readouts, self.config.num_readouts // 2)
-        else:
-            readouts = self.config.num_readouts
-        target_readouts_for_move = current_readouts + readouts
+        readouts = override_readouts if override_readouts is not None else self.adaptive_readouts()
+        target_readouts_for_move = self.root.N + readouts
 
         while self.root.N < target_readouts_for_move:
             self.tree_search()
 
-        move = self.pick_move()
-        return move
+        return self.pick_move()
 
     def is_done(self):
         return self.result != [0.0, 0.0, 0.0, 0.0] or self.root.is_done()
@@ -390,6 +409,8 @@ class SelfPlay:
         last_action: str,
         game_start_time_unix: float,
         status: str,
+        timing: Optional[dict] = None,
+        phase_move_counts: Optional[dict] = None,
     ):
         file = SELF_PLAY_GAMES_STATUS_PATH / f"{game_id}.json"
         status_data = {
@@ -403,9 +424,16 @@ class SelfPlay:
             "start_time_unix": game_start_time_unix,
             "last_update_unix": time.time(),
         }
+        if timing is not None:
+            status_data["timing"] = timing
+        if phase_move_counts is not None:
+            status_data["phase_move_counts"] = phase_move_counts
         try:
-            with open(file, "w") as f:
+            # Atomic write: write to temp file, then rename to avoid partial reads
+            tmp_file = file.with_suffix(".json.tmp")
+            with open(tmp_file, "w") as f:
                 json.dump(status_data, f, indent=4)
+            tmp_file.rename(file)
         except IOError as e:
             LOGGER.error(f"Error writing to {SELF_PLAY_GAMES_STATUS_PATH}: {e}")
         except Exception as e:  # Catch any other unexpected error during file write
@@ -441,6 +469,9 @@ class SelfPlay:
         num_mcts_moves_in_game = 0
         total_sims_for_mcts_moves = 0
 
+        # Phase move counts (Item 6)
+        phase_move_counts = {"Auction": 0, "WaterfallAuction": 0, "Stock": 0, "Operating": 0, "Other": 0}
+
         # Must run this once at the start to expand the root node.
         first_node = player.root.select_leaf()
         first_node.ensure_encoded()
@@ -470,18 +501,8 @@ class SelfPlay:
                 else:
                     num_mcts_moves_in_game += 1
                     current_readouts = player.root.N
+                    target_readouts_for_move = current_readouts + player.adaptive_readouts()
 
-                    # Adaptive readouts: scale by position complexity
-                    n_legal = player.root.num_legal_actions
-                    if n_legal <= 5:
-                        readouts = max(self.config.min_readouts, self.config.num_readouts // 4)
-                    elif n_legal <= 20:
-                        readouts = max(self.config.min_readouts, self.config.num_readouts // 2)
-                    else:
-                        readouts = self.config.num_readouts
-                    target_readouts_for_move = current_readouts + readouts
-
-                    # MCTS simulation loop
                     tree_search_start = time.time()
                     while player.root.N < target_readouts_for_move:
                         player.tree_search()
@@ -500,6 +521,14 @@ class SelfPlay:
                 play_move_duration_this_move = time.time() - play_move_start_time
                 total_play_move_time_for_game += play_move_duration_this_move
                 move_counter += 1
+
+                # Track phase move counts (Item 6)
+                round_class_name = player.root.game_object.round.__class__.__name__
+                if round_class_name in phase_move_counts:
+                    phase_move_counts[round_class_name] += 1
+                else:
+                    phase_move_counts["Other"] += 1
+
                 self.update_self_play_game_progress(
                     game_id=self.config.game_id,
                     loop_number=self.config.global_step,
@@ -510,6 +539,7 @@ class SelfPlay:
                     last_action=player.root.game_object.actions[-1].description(),
                     game_start_time_unix=game_start_time,
                     status="In Progress",
+                    phase_move_counts=phase_move_counts,
                 )
 
                 move_time_this_move = time.time() - start_time_for_move_processing
@@ -533,6 +563,20 @@ class SelfPlay:
                         f"Game finished after {move_counter} moves. Result: {player.root.game_object.result()}, mapped to: {player.result} via {player.root.player_mapping}"
                     )
 
+                    game_timing = {
+                        "total_game_s": round(total_move_time_for_game, 3),
+                        "tree_search_s": round(total_tree_search_time_for_game, 3),
+                        "inference_s": round(player.cumulative_inference_time, 3),
+                        "encoding_s": round(player.cumulative_encoding_time, 3),
+                        "leaf_selection_s": round(player.cumulative_leaf_selection_time, 3),
+                        "backup_s": round(player.cumulative_backup_time, 3),
+                        "pick_move_s": round(total_pick_move_time_for_game, 3),
+                        "play_move_s": round(total_play_move_time_for_game, 3),
+                        "num_mcts_moves": num_mcts_moves_in_game,
+                        "num_forced_moves": num_forced_moves_in_game,
+                        "total_sims": total_sims_for_mcts_moves,
+                    }
+
                     self.update_self_play_game_progress(
                         game_id=self.config.game_id,
                         loop_number=self.config.global_step,
@@ -543,6 +587,8 @@ class SelfPlay:
                         last_action=player.root.game_object.actions[-1].description(),
                         game_start_time_unix=game_start_time,
                         status="Completed",
+                        timing=game_timing,
+                        phase_move_counts=phase_move_counts,
                     )
                     break
 
@@ -603,6 +649,7 @@ class SelfPlay:
             self.add_metric("SelfPlay/Games_Skipped_No_Result", 1)
             return
 
+        extraction_start = time.time()
         game_data = player.extract_data()
 
         if self.config.selfplay_dir is not None:
@@ -610,6 +657,22 @@ class SelfPlay:
 
             processor = TrainingExampleProcessor(self.config.network.encoder)
             processor.write_lmdb(game_data, save_path)
+        extraction_duration = time.time() - extraction_start
+
+        # Update game status with extraction timing (atomic write)
+        game_file = SELF_PLAY_GAMES_STATUS_PATH / f"{self.config.game_id}.json"
+        if game_file.exists():
+            try:
+                with open(game_file, "r") as f:
+                    status_data = json.load(f)
+                if "timing" in status_data:
+                    status_data["timing"]["data_extraction_s"] = round(extraction_duration, 3)
+                    tmp_file = game_file.with_suffix(".json.tmp")
+                    with open(tmp_file, "w") as f:
+                        json.dump(status_data, f, indent=4)
+                    tmp_file.rename(game_file)
+            except Exception as e:
+                LOGGER.warning(f"Failed to update timing with extraction data: {e}")
 
         # Explicitly delete large objects and collect garbage
         del player

@@ -3,6 +3,7 @@
 Usage:
     python main.py train              Run the AlphaZero training loop (self-play + training)
     python main.py pretrain            Pre-train from human game data
+    python main.py convert             Encode cleaned game JSONs to LMDB for pretraining
     python main.py arena               Run an arena match between agents
     python main.py dashboard           Start the training dashboard web server
     python main.py replay <log_file>   Replay a game from a log file in the browser
@@ -29,6 +30,9 @@ def cmd_train(args):
         model_type=args.model_type,
         fresh=args.fresh,
         target_experiences=args.target_experiences,
+        batch_size=args.batch_size,
+        game_length_schedule=tuple(args.game_length_schedule),
+        readout_schedule=tuple(args.readout_schedule),
     )
 
 
@@ -44,6 +48,20 @@ def cmd_pretrain(args):
         model_dir=args.model_dir,
         game_data_dir=args.data_dir,
         config=config,
+    )
+
+
+def cmd_convert(args):
+    from rl18xx.agent.alphazero.pretraining import convert_games_to_training_dataset
+    from rl18xx.agent.alphazero.encoder import Encoder_1830
+    from rl18xx.agent.alphazero.checkpointer import get_latest_model
+
+    model = get_latest_model(args.model_dir)
+    encoder = Encoder_1830.get_encoder_for_model(model)
+    convert_games_to_training_dataset(
+        game_data_dir=args.data_dir,
+        encoder=encoder,
+        save_path=args.output,
     )
 
 
@@ -108,8 +126,8 @@ def build_parser():
     p.add_argument("--readouts", type=int, default=64, help="MCTS readouts per move (default: 64)")
     p.add_argument("--keep-old-files", action="store_true", help="Keep files from previous runs")
     p.add_argument(
-        "--max-training-window", type=int, default=0,
-        help="Max training examples to use (0 = all data, default: 0)"
+        "--max-training-window", type=int, default=100000,
+        help="Max training examples to use (0 = all data, default: 100000)"
     )
     p.add_argument("--gate-games", type=int, default=10, help="Arena games for model gating (default: 10)")
     p.add_argument("--gate-threshold", type=float, default=0.55, help="Min win rate to promote (default: 0.55)")
@@ -122,13 +140,30 @@ def build_parser():
         "--fresh", action="store_true",
         help="Clear all model checkpoints and training data to start from scratch"
     )
+    p.add_argument("--batch-size", type=int, default=256, help="Training batch size (default: 256)")
+    p.add_argument(
+        "--game-length-schedule", type=int, nargs=3, metavar=("START", "END", "RAMP"),
+        default=[150, 1000, 150],
+        help="Game length schedule: start end ramp_checkpoints (default: 150 1000 150)"
+    )
+    p.add_argument(
+        "--readout-schedule", type=int, nargs=3, metavar=("START", "END", "RAMP"),
+        default=[64, 200, 150],
+        help="MCTS readout schedule: start end ramp_checkpoints (default: 64 200 150)"
+    )
 
     # pretrain
     p = sub.add_parser("pretrain", help="Pre-train model from human game data")
-    p.add_argument("--data-dir", type=str, default="human_games", help="Directory with game JSON files")
+    p.add_argument("--data-dir", type=str, default="human_games", help="Directory with game JSON files or LMDB path")
     p.add_argument("--model-dir", type=str, default="model_checkpoints", help="Model checkpoint directory")
     p.add_argument("--epochs", type=int, default=10, help="Training epochs (default: 10)")
     p.add_argument("--batch-size", type=int, default=256, help="Batch size (default: 256)")
+
+    # convert (encode games to LMDB for pretraining)
+    p = sub.add_parser("convert", help="Convert cleaned game JSONs to LMDB training data")
+    p.add_argument("--data-dir", type=str, default="human_games/1830_clean", help="Directory with cleaned game JSON files")
+    p.add_argument("--output", type=str, default="human_games/lmdb_v2", help="Output directory for LMDB data")
+    p.add_argument("--model-dir", type=str, default="model_checkpoints", help="Model checkpoint (determines encoder)")
 
     # arena
     p = sub.add_parser("arena", help="Run a match between agents")
@@ -166,6 +201,7 @@ if __name__ == "__main__":
     commands = {
         "train": cmd_train,
         "pretrain": cmd_pretrain,
+        "convert": cmd_convert,
         "arena": cmd_arena,
         "dashboard": cmd_dashboard,
         "replay": cmd_replay,

@@ -164,6 +164,8 @@ class TrainingConfig:
     entropy_weight: float = 0.01  # Phase 6.6: policy entropy bonus weight
     gradient_accumulation_steps: int = 1  # gradient accumulation steps (1 = no accumulation)
     max_training_window: int = 0  # 0 means no windowing (use all data)
+    value_lr_multiplier: float = 3.0  # multiplier for value head learning rate relative to config.lr
+    use_fp16_training: bool = True  # use mixed-precision (FP16) training on CUDA
 
     def __post_init__(self):
         if self.train_dir is not None:
@@ -184,6 +186,8 @@ class TrainingConfig:
             "entropy_weight": self.entropy_weight,
             "gradient_accumulation_steps": self.gradient_accumulation_steps,
             "max_training_window": self.max_training_window,
+            "value_lr_multiplier": self.value_lr_multiplier,
+            "use_fp16_training": self.use_fp16_training,
         }
 
     @classmethod
@@ -214,6 +218,7 @@ class SelfPlayConfig:
     game_idx_in_iteration: int = 0
     game_id: Optional[str] = None
     selfplay_dir: str = "selfplay"
+    adaptive_readout_threshold: int = 5  # positions with <= this many legal actions use min_readouts
 
     def __post_init__(self):
         assert self.softpick_move_cutoff % 2 == 0
