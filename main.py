@@ -68,15 +68,15 @@ def cmd_convert(args):
 def cmd_arena(args):
     from rl18xx.agent.arena import Arena
     from rl18xx.agent.alphazero.self_play import MCTSPlayer
-    from rl18xx.agent.alphazero.config import SelfPlayConfig, ModelConfig
-    from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
+    from rl18xx.agent.alphazero.config import SelfPlayConfig, ModelV2Config
+    from rl18xx.agent.alphazero.model_v2 import AlphaZeroV2Model
     from rl18xx.agent.alphazero.checkpointer import get_latest_model
     from rl18xx.agent.random.random_agent import RandomPlayer
 
     if args.model_dir:
         model = get_latest_model(args.model_dir)
     else:
-        model = AlphaZeroGNNModel(ModelConfig())
+        model = AlphaZeroV2Model(ModelV2Config())
     model.eval()
 
     config = SelfPlayConfig(network=model, num_readouts=args.readouts)

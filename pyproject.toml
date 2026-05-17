@@ -26,6 +26,12 @@ dependencies = [
 filterwarnings = [
     "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
 ]
+markers = [
+    "benchmark: slow performance benchmarks (run with `pytest -m benchmark`)",
+]
+# Skip benchmark-tagged tests by default. Run them explicitly with
+#   uv run pytest -m benchmark tests/agent/alphazero/bench_mcts_game.py
+addopts = "-m 'not benchmark'"
 
 [build-system]
 requires = ["maturin>=1.12.6"]

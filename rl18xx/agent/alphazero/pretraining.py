@@ -9,7 +9,7 @@ from tqdm import tqdm
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.alphazero.checkpointer import get_model_from_path, get_latest_model
 from rl18xx.agent.alphazero.config import TrainingConfig
-from rl18xx.agent.alphazero.encoder import Encoder_1830, Encoder_GNN, Encoder_SSME
+from rl18xx.agent.alphazero.encoder import Encoder_1830, Encoder_GNN
 from rl18xx.agent.alphazero.model import AlphaZeroModel
 from rl18xx.agent.alphazero.train import TrainingMetrics, train_model
 from rl18xx.game.action_helper import ActionHelper
@@ -584,8 +584,6 @@ def make_encoded_game_state_model_friendly(
 
     if isinstance(encoder, Encoder_GNN):
         return make_encoded_gnn_game_state_model_friendly(encoder, encoded_game_state, action, game_state)
-    if isinstance(encoder, Encoder_SSME):
-        return make_encoded_ssme_game_state_model_friendly(encoder, encoded_game_state, action, game_state)
 
     raise ValueError(f"Unknown encoder type: {type(encoder)}")
 
@@ -669,14 +667,6 @@ def make_encoded_gnn_game_state_model_friendly(
 
         encoded_game_data = encoded_game_data.unsqueeze(0)
         return (encoded_game_data, *rest)
-
-
-def make_encoded_ssme_game_state_model_friendly(
-    encoded_game_state: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
-    action: dict,
-    game_state: BaseGame,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    pass
 
 
 def convert_game_to_training_data(game: BaseGame, encoder: Encoder_1830) -> Tuple[list[Any], list[Any]]:

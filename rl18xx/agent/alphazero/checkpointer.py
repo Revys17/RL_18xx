@@ -8,19 +8,59 @@ import torch
 
 LOGGER = logging.getLogger(__name__)
 
+# Saved config.json files include this discriminator field so the loader can
+# pick the right (Config, Model) classes without sniffing other keys.
+ARCHITECTURE_KEY = "architecture"
+
+
+def _build_v2_model(config_data: dict, checkpoint_path: str) -> AlphaZeroModel:
+    from rl18xx.agent.alphazero.model_v2 import AlphaZeroV2Model
+
+    config = ModelV2Config.from_json(config_data)
+    config.model_checkpoint_file = checkpoint_path
+    return AlphaZeroV2Model(config)
+
+
+def _build_v1_model(config_data: dict, checkpoint_path: str) -> AlphaZeroModel:
+    config = ModelConfig.from_json(config_data)
+    config.model_checkpoint_file = checkpoint_path
+    return AlphaZeroGNNModel(config)
+
+
+# Maps architecture_name() -> factory. New architectures register here.
+_ARCHITECTURE_REGISTRY = {
+    "AlphaZeroV2": _build_v2_model,
+    "AlphaZeroGNN": _build_v1_model,
+}
+
+
+def _infer_legacy_architecture(config_data: dict) -> str:
+    """Best-effort guess for checkpoints saved before ARCHITECTURE_KEY was written.
+
+    V2 configs uniquely have d_entity / hex_transformer_layers; everything else
+    is treated as V1.
+    """
+    if "d_entity" in config_data or "hex_transformer_layers" in config_data:
+        return "AlphaZeroV2"
+    return "AlphaZeroGNN"
+
 
 def _load_model_from_config(config_data: dict, checkpoint_path: str) -> AlphaZeroModel:
-    """Load the appropriate model type based on config contents."""
-    if "d_entity" in config_data or "hex_transformer_layers" in config_data:
-        from rl18xx.agent.alphazero.model_v2 import AlphaZeroV2Model
-
-        config = ModelV2Config.from_json(config_data)
-        config.model_checkpoint_file = checkpoint_path
-        return AlphaZeroV2Model(config)
-    else:
-        config = ModelConfig.from_json(config_data)
-        config.model_checkpoint_file = checkpoint_path
-        return AlphaZeroGNNModel(config)
+    """Construct a model from a saved config dict using its architecture field."""
+    arch = config_data.get(ARCHITECTURE_KEY)
+    if arch is None:
+        arch = _infer_legacy_architecture(config_data)
+        LOGGER.warning(
+            f"Checkpoint config has no '{ARCHITECTURE_KEY}' field; inferred {arch!r} "
+            f"from config shape. Re-save the model to write an explicit field."
+        )
+    try:
+        factory = _ARCHITECTURE_REGISTRY[arch]
+    except KeyError:
+        raise ValueError(
+            f"Unknown model architecture {arch!r}. Known: {sorted(_ARCHITECTURE_REGISTRY)}"
+        ) from None
+    return factory(config_data, checkpoint_path)
 
 
 def _get_session_dir(model: AlphaZeroModel, checkpoint_dir: str) -> Path:
@@ -147,8 +187,10 @@ def save_model(model: AlphaZeroModel, model_checkpoint_dir: str) -> int:
     model.save_weights(str(checkpoint_path))
 
     config_path = session_dir / "config.json"
+    config_payload = model.config.to_json()
+    config_payload[ARCHITECTURE_KEY] = model.architecture_name()
     with open(config_path, "w") as f:
-        json.dump(model.config.to_json(), f, indent=4)
+        json.dump(config_payload, f, indent=4)
 
     return checkpoint_num
 

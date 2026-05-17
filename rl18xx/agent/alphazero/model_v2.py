@@ -21,6 +21,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from rl18xx.agent.alphazero.config import ModelV2Config
+from rl18xx.agent.alphazero.encoder import Encoder_GNN
 from rl18xx.agent.alphazero.model import AlphaZeroModel
 
 LOGGER = logging.getLogger(__name__)
@@ -49,46 +50,22 @@ def hex_coord_to_axial(coord_str: str) -> tuple[float, float]:
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Entity group index definitions for 4-player 1830 (390-dim game state vector)
+#
+# The flat game-state vector layout (section name -> (offset, size)) is owned by
+# Encoder_GNN.compute_section_layout. We derive `_OFF` and `_SIZE` from it so the
+# model can never drift from the encoder; if the encoder layout changes, these
+# regenerate automatically and the build_*_indices helpers below see new offsets.
 # ──────────────────────────────────────────────────────────────────────────────
 
 NUM_PLAYERS = 4
-NUM_CORPORATIONS = 8
-NUM_PRIVATES = 6
-NUM_TRAIN_TYPES = 6
-NUM_TILE_IDS = 46
+NUM_CORPORATIONS = Encoder_GNN.NUM_CORPORATIONS
+NUM_PRIVATES = Encoder_GNN.NUM_PRIVATES
+NUM_TRAIN_TYPES = Encoder_GNN.NUM_TRAIN_TYPES
+NUM_TILE_IDS = Encoder_GNN.NUM_TILE_IDS
 
-# Offsets in the 390-dim game state vector (for 4 players):
-_OFF = {
-    "active_entity": 0,  # size 12 (4 players + 8 corps)
-    "active_president": 12,  # size 4
-    "round_type": 16,  # size 1
-    "game_phase": 17,  # size 1
-    "priority_deal": 18,  # size 4
-    "bank_cash": 22,  # size 1
-    "player_certs": 23,  # size 4
-    "player_cash": 27,  # size 4
-    "player_shares": 31,  # size 32 (4*8)
-    "private_ownership": 63,  # size 72 (6*12)
-    "private_revenue": 135,  # size 6
-    "corp_floated": 141,  # size 8
-    "corp_cash": 149,  # size 8
-    "corp_trains": 157,  # size 48 (8*6)
-    "corp_tokens": 205,  # size 8
-    "corp_share_price": 213,  # size 16 (8*2)
-    "corp_shares": 229,  # size 16 (8*2)
-    "corp_market_zone": 245,  # size 32 (8*4)
-    "depot_trains": 277,  # size 6
-    "market_pool_trains": 283,  # size 6
-    "depot_tiles": 289,  # size 46
-    "auction_bids": 335,  # size 24 (6*4)
-    "auction_min_bid": 359,  # size 6
-    "auction_available": 365,  # size 6
-    "auction_face_value": 371,  # size 6
-    "or_structure": 377,  # size 2
-    "train_limit": 379,  # size 1
-    "private_closed": 380,  # size 6
-    "player_turn_order": 386,  # size 4
-}
+_LAYOUT, _GAME_STATE_SIZE = Encoder_GNN.compute_section_layout(NUM_PLAYERS)
+_OFF = {name: offset for name, (offset, _size) in _LAYOUT.items()}
+_SIZE = {name: size for name, (_offset, size) in _LAYOUT.items()}
 
 
 def _build_player_indices() -> list[list[int]]:
@@ -98,8 +75,8 @@ def _build_player_indices() -> list[list[int]]:
         idx = [
             _OFF["active_entity"] + i,
             _OFF["active_president"] + i,
-            _OFF["priority_deal"] + i,
-            _OFF["player_certs"] + i,
+            _OFF["priority_deal_player"] + i,
+            _OFF["player_certs_remaining"] + i,
             _OFF["player_cash"] + i,
         ]
         idx.extend(range(_OFF["player_shares"] + i * NUM_CORPORATIONS, _OFF["player_shares"] + (i + 1) * NUM_CORPORATIONS))
@@ -118,7 +95,7 @@ def _build_corp_indices() -> list[list[int]]:
             _OFF["corp_cash"] + j,
         ]
         idx.extend(range(_OFF["corp_trains"] + j * NUM_TRAIN_TYPES, _OFF["corp_trains"] + (j + 1) * NUM_TRAIN_TYPES))
-        idx.append(_OFF["corp_tokens"] + j)
+        idx.append(_OFF["corp_tokens_remaining"] + j)
         idx.extend(range(_OFF["corp_share_price"] + j * 2, _OFF["corp_share_price"] + (j + 1) * 2))
         idx.extend(range(_OFF["corp_shares"] + j * 2, _OFF["corp_shares"] + (j + 1) * 2))
         idx.extend(range(_OFF["corp_market_zone"] + j * 4, _OFF["corp_market_zone"] + (j + 1) * 4))
@@ -821,31 +798,15 @@ class AlphaZeroV2Model(AlphaZeroModel):
         """Extract active player index from game state vector (one-hot at offsets 0-3)."""
         return game_state_data[:, :NUM_PLAYERS].argmax(dim=1)
 
-    # --- External interface (same as v1) ---
+    # --- Architecture-specific batch assembly (run/run_many live on AlphaZeroModel) ---
 
-    def run(self, game_state) -> Tuple[Tensor, Tensor, Tensor]:
-        probs, log_probs, values = self.run_many([game_state])
-        return probs[0], log_probs[0], values[0]
-
-    def run_encoded(self, encoded_game_state) -> Tuple[Tensor, Tensor, Tensor]:
-        probs, log_probs, values = self.run_many_encoded([encoded_game_state])
-        return probs[0], log_probs[0], values[0]
-
-    def run_many(self, game_states) -> Tuple[Tensor, Tensor, Tensor]:
-        encoded_game_states = [self.encoder.encode(gs) for gs in game_states]
-        return self.run_many_encoded(encoded_game_states)
-
-    def run_many_encoded(self, game_states: list) -> Tuple[Tensor, Tensor, Tensor]:
-        batch_size = len(game_states)
-        if batch_size == 0:
-            raise ValueError("Received no game states to run.")
-
+    def _forward_encoded_batch(self, encoded_game_states: list) -> Tuple[Tensor, Tensor, Tensor]:
         game_state_tensors = []
         node_features_list = []
         round_type_indices = []
         active_player_indices = []
 
-        for gs in game_states:
+        for gs in encoded_game_states:
             game_state_tensor = gs[0].to(self.device)
             node_data = gs[1].to(self.device)
             round_type_idx = gs[4] if len(gs) > 4 else 0
@@ -861,13 +822,7 @@ class AlphaZeroV2Model(AlphaZeroModel):
         round_type_tensor = torch.tensor(round_type_indices, dtype=torch.long, device=self.device)
         active_player_tensor = torch.tensor(active_player_indices, dtype=torch.long, device=self.device)
 
-        policy_logits, value_logits, _ = self.forward(
-            batched_gs, batched_nodes, round_type_tensor, active_player_tensor
-        )
-
-        probabilities = F.softmax(policy_logits, dim=1)
-        log_probs = F.log_softmax(policy_logits, dim=1)
-        return probabilities, log_probs, value_logits
+        return self.forward(batched_gs, batched_nodes, round_type_tensor, active_player_tensor)
 
     def forward(
         self,
