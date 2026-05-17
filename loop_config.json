@@ -1,11 +1,11 @@
 {
     "num_loop_iterations": 0,
-    "num_games_per_iteration": 50,
+    "num_games_per_iteration": 229,
     "num_threads": 8,
     "training_config": {
         "train_dir": null,
         "val_dir": null,
-        "batch_size": 256,
+        "batch_size": 512,
         "lr": 0.001,
         "num_epochs": 3,
         "weight_decay": 0.0001,
@@ -13,8 +13,10 @@
         "value_loss_weight": 1.0,
         "entropy_weight": 0.01,
         "gradient_accumulation_steps": 1,
-        "max_training_window": 0
+        "max_training_window": 100000,
+        "value_lr_multiplier": 3.0,
+        "use_fp16_training": true
     },
-    "num_readouts": 200,
+    "num_readouts": 74,
     "target_experiences": 50000
 }
