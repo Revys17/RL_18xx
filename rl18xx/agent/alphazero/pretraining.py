@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
-from rl18xx.agent.alphazero.checkpointer import get_model_from_path, get_latest_model
+from rl18xx.agent.alphazero.checkpointer import get_latest_model
 from rl18xx.agent.alphazero.config import TrainingConfig
 from rl18xx.agent.alphazero.encoder import Encoder_1830, Encoder_GNN
 from rl18xx.agent.alphazero.model import AlphaZeroModel
@@ -775,11 +775,7 @@ def do_pretraining(model_dir: str, game_data_dir: str, config: TrainingConfig) -
     """
     from rl18xx.agent.alphazero.dataset import SelfPlayDataset
 
-    # Try the hierarchical loader first (arch/session/ layout), fall back to flat path.
-    try:
-        model = get_latest_model(model_dir)
-    except FileNotFoundError:
-        model = get_model_from_path(model_dir)
+    model = get_latest_model(model_dir)
 
     data_path = Path(game_data_dir)
 
@@ -811,7 +807,7 @@ def do_pretraining(model_dir: str, game_data_dir: str, config: TrainingConfig) -
             return train_model(model, train_dataset, config)
 
     # Check for lmdb subdirectories (multiple naming conventions)
-    for lmdb_subdir in ["lmdb_v2/training", "lmdb/training"]:
+    for lmdb_subdir in ["lmdb_transformer/training", "lmdb/training"]:
         lmdb_training = data_path / lmdb_subdir
         if (lmdb_training / "data.mdb").exists():
             LOGGER.info(f"Loading pre-converted LMDB data from {lmdb_training}")

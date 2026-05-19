@@ -1,4 +1,4 @@
-"""Test that the v2 model can train stably on both CPU and MPS."""
+"""Test that the Transformer model can train stably on both CPU and MPS."""
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -7,9 +7,9 @@ import pytest
 
 
 def _train_n_batches(device_name: str, n_batches: int = 8):
-    """Train the v2 model for n_batches on the given device and return losses."""
-    from rl18xx.agent.alphazero.config import ModelV2Config
-    from rl18xx.agent.alphazero.model_v2 import AlphaZeroV2Model
+    """Train the Transformer model for n_batches on the given device and return losses."""
+    from rl18xx.agent.alphazero.config import ModelTransformerConfig
+    from rl18xx.agent.alphazero.model_transformer import AlphaZeroTransformerModel
 
     # Create synthetic training data that mimics real self-play data
     B = 64
@@ -31,8 +31,8 @@ def _train_n_batches(device_name: str, n_batches: int = 8):
         value = torch.softmax(torch.randn(4), dim=0)
         dataset.append((gs, nf, mask, pi, value))
 
-    config = ModelV2Config(device=torch.device(device_name))
-    model = AlphaZeroV2Model(config)
+    config = ModelTransformerConfig(device=torch.device(device_name))
+    model = AlphaZeroTransformerModel(config)
     model.train()
     device = config.device
 
@@ -80,7 +80,7 @@ def _train_n_batches(device_name: str, n_batches: int = 8):
     return losses, None
 
 
-def test_v2_training_stable_cpu():
+def test_transformer_training_stable_cpu():
     losses, error = _train_n_batches("cpu", n_batches=8)
     assert error is None, f"Training failed on CPU: {error}. Losses: {losses}"
     assert len(losses) == 8
@@ -88,7 +88,7 @@ def test_v2_training_stable_cpu():
 
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
-def test_v2_training_stable_mps():
+def test_transformer_training_stable_mps():
     losses, error = _train_n_batches("mps", n_batches=8)
     assert error is None, f"Training failed on MPS: {error}. Losses: {losses}"
     assert len(losses) == 8

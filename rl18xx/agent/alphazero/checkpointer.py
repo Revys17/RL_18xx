@@ -1,7 +1,6 @@
 from rl18xx.agent.alphazero.model import AlphaZeroGNNModel, AlphaZeroModel
-from rl18xx.agent.alphazero.config import ModelConfig, ModelV2Config
+from rl18xx.agent.alphazero.config import ModelGNNConfig, ModelTransformerConfig
 from pathlib import Path
-from datetime import datetime
 import json
 import logging
 import torch
@@ -13,35 +12,35 @@ LOGGER = logging.getLogger(__name__)
 ARCHITECTURE_KEY = "architecture"
 
 
-def _build_v2_model(config_data: dict, checkpoint_path: str) -> AlphaZeroModel:
-    from rl18xx.agent.alphazero.model_v2 import AlphaZeroV2Model
+def _build_transformer_model(config_data: dict, checkpoint_path: str) -> AlphaZeroModel:
+    from rl18xx.agent.alphazero.model_transformer import AlphaZeroTransformerModel
 
-    config = ModelV2Config.from_json(config_data)
+    config = ModelTransformerConfig.from_json(config_data)
     config.model_checkpoint_file = checkpoint_path
-    return AlphaZeroV2Model(config)
+    return AlphaZeroTransformerModel(config)
 
 
-def _build_v1_model(config_data: dict, checkpoint_path: str) -> AlphaZeroModel:
-    config = ModelConfig.from_json(config_data)
+def _build_gnn_model(config_data: dict, checkpoint_path: str) -> AlphaZeroModel:
+    config = ModelGNNConfig.from_json(config_data)
     config.model_checkpoint_file = checkpoint_path
     return AlphaZeroGNNModel(config)
 
 
 # Maps architecture_name() -> factory. New architectures register here.
 _ARCHITECTURE_REGISTRY = {
-    "AlphaZeroV2": _build_v2_model,
-    "AlphaZeroGNN": _build_v1_model,
+    "AlphaZeroTransformer": _build_transformer_model,
+    "AlphaZeroGNN": _build_gnn_model,
 }
 
 
 def _infer_legacy_architecture(config_data: dict) -> str:
     """Best-effort guess for checkpoints saved before ARCHITECTURE_KEY was written.
 
-    V2 configs uniquely have d_entity / hex_transformer_layers; everything else
-    is treated as V1.
+    Transformer configs uniquely have d_entity / hex_transformer_layers; everything
+    else is treated as GNN.
     """
     if "d_entity" in config_data or "hex_transformer_layers" in config_data:
-        return "AlphaZeroV2"
+        return "AlphaZeroTransformer"
     return "AlphaZeroGNN"
 
 

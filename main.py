@@ -68,15 +68,15 @@ def cmd_convert(args):
 def cmd_arena(args):
     from rl18xx.agent.arena import Arena
     from rl18xx.agent.alphazero.self_play import MCTSPlayer
-    from rl18xx.agent.alphazero.config import SelfPlayConfig, ModelV2Config
-    from rl18xx.agent.alphazero.model_v2 import AlphaZeroV2Model
+    from rl18xx.agent.alphazero.config import SelfPlayConfig, ModelTransformerConfig
+    from rl18xx.agent.alphazero.model_transformer import AlphaZeroTransformerModel
     from rl18xx.agent.alphazero.checkpointer import get_latest_model
     from rl18xx.agent.random.random_agent import RandomPlayer
 
     if args.model_dir:
         model = get_latest_model(args.model_dir)
     else:
-        model = AlphaZeroV2Model(ModelV2Config())
+        model = AlphaZeroTransformerModel(ModelTransformerConfig())
     model.eval()
 
     config = SelfPlayConfig(network=model, num_readouts=args.readouts)
@@ -133,7 +133,7 @@ def build_parser():
     p.add_argument("--gate-threshold", type=float, default=0.55, help="Min win rate to promote (default: 0.55)")
     p.add_argument("--no-gate", action="store_true", help="Disable model gating (always promote)")
     p.add_argument(
-        "--model-type", type=str, default="v2", choices=["v1", "v2"],
+        "--model-type", type=str, default="transformer", choices=["gnn", "transformer"],
         help="Model architecture for initial checkpoint (default: v2)"
     )
     p.add_argument(
