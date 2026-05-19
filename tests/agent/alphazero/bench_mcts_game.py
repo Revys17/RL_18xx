@@ -1,5 +1,5 @@
 """
-Benchmark: full self-play game with MCTS using v1 (GNN) and v2 (Hex Transformer) models.
+Benchmark: full self-play game with MCTS using GNN and Transformer (Hex) models.
 
 Runs a complete 1830 game with typical self-play settings (200 readouts) and reports
 per-move and per-component timing.
@@ -16,9 +16,9 @@ import numpy as np
 from dataclasses import dataclass, field
 
 from rl18xx.game.gamemap import GameMap
-from rl18xx.agent.alphazero.config import ModelConfig, ModelV2Config, SelfPlayConfig
+from rl18xx.agent.alphazero.config import ModelGNNConfig, ModelTransformerConfig, SelfPlayConfig
 from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
-from rl18xx.agent.alphazero.model_v2 import AlphaZeroV2Model
+from rl18xx.agent.alphazero.model_transformer import AlphaZeroTransformerModel
 from rl18xx.agent.alphazero.self_play import MCTSPlayer
 import rl18xx.agent.alphazero.mcts as mcts
 
@@ -224,62 +224,62 @@ def _run_selfplay_game(model, model_name: str, num_readouts: int = 200, max_move
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def test_bench_v1_mcts_game():
-    """Benchmark: full self-play game with v1 (GNN) model, 200 readouts."""
-    model = AlphaZeroGNNModel(ModelConfig())
-    stats = _run_selfplay_game(model, "v1 (GNN)", num_readouts=200, max_moves=50)
+def test_bench_gnn_mcts_game():
+    """Benchmark: full self-play game with GNN model, 200 readouts."""
+    model = AlphaZeroGNNModel(ModelGNNConfig())
+    stats = _run_selfplay_game(model, "GNN", num_readouts=200, max_moves=50)
     print(stats.summary())
     assert stats.total_moves > 0
 
 
-def test_bench_v2_mcts_game():
-    """Benchmark: full self-play game with v2 (Hex Transformer) model, 200 readouts."""
-    model = AlphaZeroV2Model(ModelV2Config())
-    stats = _run_selfplay_game(model, "v2 (Hex Transformer)", num_readouts=200, max_moves=50)
+def test_bench_transformer_mcts_game():
+    """Benchmark: full self-play game with Transformer (Hex) model, 200 readouts."""
+    model = AlphaZeroTransformerModel(ModelTransformerConfig())
+    stats = _run_selfplay_game(model, "Transformer (Hex)", num_readouts=200, max_moves=50)
     print(stats.summary())
     assert stats.total_moves > 0
 
 
-def test_bench_v1_vs_v2_comparison():
-    """Side-by-side comparison of v1 and v2 performance for 20 moves."""
+def test_bench_gnn_vs_transformer_comparison():
+    """Side-by-side comparison of GNN and Transformer performance for 20 moves."""
     NUM_MOVES = 20
 
     print("\n\n" + "=" * 70)
-    print("  V1 vs V2 Performance Comparison")
+    print("  GNN vs Transformer Performance Comparison")
     print("=" * 70)
 
-    v1_model = AlphaZeroGNNModel(ModelConfig())
-    v1_stats = _run_selfplay_game(v1_model, "v1 (GNN)", num_readouts=200, max_moves=NUM_MOVES)
+    gnn_model = AlphaZeroGNNModel(ModelGNNConfig())
+    gnn_stats = _run_selfplay_game(gnn_model, "GNN", num_readouts=200, max_moves=NUM_MOVES)
 
-    v2_model = AlphaZeroV2Model(ModelV2Config())
-    v2_stats = _run_selfplay_game(v2_model, "v2 (Hex Transformer)", num_readouts=200, max_moves=NUM_MOVES)
+    transformer_model = AlphaZeroTransformerModel(ModelTransformerConfig())
+    transformer_stats = _run_selfplay_game(transformer_model, "Transformer (Hex)", num_readouts=200, max_moves=NUM_MOVES)
 
-    print(v1_stats.summary())
-    print(v2_stats.summary())
+    print(gnn_stats.summary())
+    print(transformer_stats.summary())
 
     # Comparison
-    v1_avg = np.mean(v1_stats.move_times) * 1000
-    v2_avg = np.mean(v2_stats.move_times) * 1000
-    ratio = v2_avg / v1_avg if v1_avg > 0 else float("inf")
+    gnn_avg = np.mean(gnn_stats.move_times) * 1000
+    transformer_avg = np.mean(transformer_stats.move_times) * 1000
+    ratio = transformer_avg / gnn_avg if gnn_avg > 0 else float("inf")
 
-    v1_params = sum(p.numel() for p in v1_model.parameters())
-    v2_params = sum(p.numel() for p in v2_model.parameters())
+    gnn_params = sum(p.numel() for p in gnn_model.parameters())
+    transformer_params = sum(p.numel() for p in transformer_model.parameters())
 
     print(f"\n  --- Comparison ---")
-    print(f"  V1 params: {v1_params:,}   V2 params: {v2_params:,}   Ratio: {v2_params/v1_params:.2f}x")
-    print(f"  V1 avg move: {v1_avg:.1f}ms   V2 avg move: {v2_avg:.1f}ms   Ratio: {ratio:.2f}x")
+    print(f"  GNN params: {gnn_params:,}   Transformer params: {transformer_params:,}   Ratio: {transformer_params/gnn_params:.2f}x")
+    print(f"  GNN avg move: {gnn_avg:.1f}ms   Transformer avg move: {transformer_avg:.1f}ms   Ratio: {ratio:.2f}x")
 
-    if v1_stats.network_times and v2_stats.network_times:
-        v1_net = np.mean(v1_stats.network_times) * 1000
-        v2_net = np.mean(v2_stats.network_times) * 1000
-        print(f"  V1 avg network: {v1_net:.2f}ms   V2 avg network: {v2_net:.2f}ms   Ratio: {v2_net/v1_net:.2f}x")
+    if gnn_stats.network_times and transformer_stats.network_times:
+        gnn_net = np.mean(gnn_stats.network_times) * 1000
+        transformer_net = np.mean(transformer_stats.network_times) * 1000
+        print(f"  GNN avg network: {gnn_net:.2f}ms   Transformer avg network: {transformer_net:.2f}ms   Ratio: {transformer_net/gnn_net:.2f}x")
 
-    if v1_stats.encode_times and v2_stats.encode_times:
-        v1_enc = np.mean(v1_stats.encode_times) * 1000
-        v2_enc = np.mean(v2_stats.encode_times) * 1000
-        print(f"  V1 avg encode: {v1_enc:.2f}ms   V2 avg encode: {v2_enc:.2f}ms   Ratio: {v2_enc/v1_enc:.2f}x")
+    if gnn_stats.encode_times and transformer_stats.encode_times:
+        gnn_enc = np.mean(gnn_stats.encode_times) * 1000
+        transformer_enc = np.mean(transformer_stats.encode_times) * 1000
+        print(f"  GNN avg encode: {gnn_enc:.2f}ms   Transformer avg encode: {transformer_enc:.2f}ms   Ratio: {transformer_enc/gnn_enc:.2f}x")
 
     print()
 
-    assert v1_stats.total_moves > 0
-    assert v2_stats.total_moves > 0
+    assert gnn_stats.total_moves > 0
+    assert transformer_stats.total_moves > 0

@@ -62,8 +62,8 @@ class Encoder_1830:
             raise ValueError("Model does not have an encoder_type attribute")
         if model.encoder_type() == "GNN":
             return Encoder_GNN()
-        elif model.encoder_type() == "V2":
-            return Encoder_V2()
+        elif model.encoder_type() == "Transformer":
+            return Encoder_Transformer()
         else:
             raise ValueError(f"Unknown model name: {model.encoder_type()}")
 
@@ -965,7 +965,7 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
         return from_numpy(node_features).float()
 
 
-class Encoder_V2(Encoder_GNN):
+class Encoder_Transformer(Encoder_GNN):
     """Encoder for the v2 model architecture (Hex Transformer).
 
     Reuses Encoder_GNN for game state and node feature encoding, but returns

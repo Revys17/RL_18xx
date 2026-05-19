@@ -1,12 +1,12 @@
 """
-AlphaZero v2 Model Architecture for 1830.
+AlphaZero Transformer Model Architecture for 1830.
 
-Replaces the GNN-based v1 with:
+An alternative to the GNN-based variant, built around:
 - Hex Map Transformer (global attention over 93 hexes with structural bias)
 - Economic State Transformer (entity-group attention over players/corps/privates)
 - Cross-modal fusion (economic entities attend to map nodes)
 - FiLM-inside residual trunk (phase conditioning inside blocks)
-- Simplified policy head (outer-sum factoring, ~500K vs 18.8M params)
+- Simplified policy head (outer-sum factoring, ~500K vs ~18.8M params)
 
 See docs/network_architecture_v2.md for full design rationale.
 """
@@ -20,7 +20,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from rl18xx.agent.alphazero.config import ModelV2Config
+from rl18xx.agent.alphazero.config import ModelTransformerConfig
 from rl18xx.agent.alphazero.encoder import Encoder_GNN
 from rl18xx.agent.alphazero.model import AlphaZeroModel
 
@@ -469,11 +469,11 @@ class FiLMResBlock(nn.Module):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# v2 Policy Head (outer-sum factoring + structured sub-heads)
+# Policy Head (outer-sum factoring + structured sub-heads)
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-class V2PolicyHead(nn.Module):
+class TransformerPolicyHead(nn.Module):
     """Simplified policy head with outer-sum factoring for LayTile actions.
 
     LayTile logit(h,t,r) = hex_score(h) + tile_logit(t) + rot_logit(r)
@@ -616,17 +616,17 @@ class TrackConnectivityComputer(nn.Module):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Full v2 Model
+# Full Transformer Model
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-class AlphaZeroV2Model(AlphaZeroModel):
-    """v2 AlphaZero model: Hex Transformer + Economic Transformer + FiLM trunk.
+class AlphaZeroTransformerModel(AlphaZeroModel):
+    """Transformer AlphaZero model: Hex Transformer + Economic Transformer + FiLM trunk.
 
     ~7.3M parameters with the default config.
     """
 
-    def __init__(self, config: ModelV2Config):
+    def __init__(self, config: ModelTransformerConfig):
         super().__init__()
         self.config = config
         self.device = config.device
@@ -636,7 +636,7 @@ class AlphaZeroV2Model(AlphaZeroModel):
         self.to(self.device)
 
     def encoder_type(self):
-        return "V2"
+        return "Transformer"
 
     def _init_structural_data(self):
         """Precompute static hex grid structural matrices."""
@@ -752,7 +752,7 @@ class AlphaZeroV2Model(AlphaZeroModel):
 
         action_mapper = ActionMapper()
         lay_tile_info = action_mapper.get_lay_tile_index_info()
-        self.policy_head = V2PolicyHead(c.d_trunk, c.d_map, c.policy_size, lay_tile_info)
+        self.policy_head = TransformerPolicyHead(c.d_trunk, c.d_map, c.policy_size, lay_tile_info)
 
         # 6. Value Head (per-player with active-player signal, LayerNorm)
         head_hidden = c.d_trunk // 2
@@ -788,7 +788,7 @@ class AlphaZeroV2Model(AlphaZeroModel):
                 nn.init.constant_(m.bias, 0)
 
     def architecture_name(self) -> str:
-        return "AlphaZeroV2"
+        return "AlphaZeroTransformer"
 
     def _extract_round_type(self, game_state_data: Tensor) -> Tensor:
         """Extract round type index from game state vector (offset 16, normalized by MAX_ROUND_TYPE_IDX=2)."""
@@ -832,7 +832,7 @@ class AlphaZeroV2Model(AlphaZeroModel):
         active_player_idx: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """
-        Forward pass of the v2 model.
+        Forward pass of the Transformer model.
 
         Args:
             game_state_data: (B, 390) game state vectors

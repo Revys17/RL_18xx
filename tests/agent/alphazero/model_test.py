@@ -2,7 +2,7 @@ import os
 import tempfile
 import torch
 from rl18xx.game.gamemap import GameMap
-from rl18xx.agent.alphazero.config import ModelConfig
+from rl18xx.agent.alphazero.config import ModelGNNConfig
 from rl18xx.agent.alphazero.model import AlphaZeroGNNModel, FactoredPolicyHead
 
 # --- Define constants based on your model's expected inputs/outputs ---
@@ -35,7 +35,7 @@ def get_fresh_game_state():
 
 
 def get_model():
-    return AlphaZeroGNNModel(ModelConfig())
+    return AlphaZeroGNNModel(ModelGNNConfig())
 
 
 def test_run_single():

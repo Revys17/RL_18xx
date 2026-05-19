@@ -415,7 +415,7 @@ def evaluate_candidate(
     return win_rate
 
 
-def ensure_seed_model(model_type: str = "v2"):
+def ensure_seed_model(model_type: str = "transformer"):
     """Create an initial model checkpoint if none exists."""
     p = Path(MODEL_CHECKPOINT_DIR)
     # Check for any session directories (new format: <arch>/<session>/)
@@ -430,15 +430,15 @@ def ensure_seed_model(model_type: str = "v2"):
         return
 
     LOGGER.info(f"No model checkpoints found. Creating fresh {model_type} model...")
-    if model_type == "v2":
-        from rl18xx.agent.alphazero.config import ModelV2Config
-        from rl18xx.agent.alphazero.model_v2 import AlphaZeroV2Model
+    if model_type == "transformer":
+        from rl18xx.agent.alphazero.config import ModelTransformerConfig
+        from rl18xx.agent.alphazero.model_transformer import AlphaZeroTransformerModel
         import torch
 
-        config = ModelV2Config()
+        config = ModelTransformerConfig()
         torch.manual_seed(config.seed)
         LOGGER.info(f"Seeding model initialization with seed={config.seed}")
-        model = AlphaZeroV2Model(config)
+        model = AlphaZeroTransformerModel(config)
     else:
         import warnings
         warnings.warn(
@@ -448,10 +448,10 @@ def ensure_seed_model(model_type: str = "v2"):
             stacklevel=2,
         )
         from rl18xx.agent.alphazero.model import AlphaZeroGNNModel
-        from rl18xx.agent.alphazero.config import ModelConfig
+        from rl18xx.agent.alphazero.config import ModelGNNConfig
         import torch
 
-        config = ModelConfig()
+        config = ModelGNNConfig()
         torch.manual_seed(config.seed)
         LOGGER.info(f"Seeding model initialization with seed={config.seed}")
         model = AlphaZeroGNNModel(config)
@@ -1003,7 +1003,7 @@ def main(
     gate_games: int = 10,
     gate_threshold: float = 0.55,
     no_gate: bool = False,
-    model_type: str = "v2",
+    model_type: str = "transformer",
     fresh: bool = False,
     target_experiences: int = 10000,
     batch_size: int = 256,

@@ -10,15 +10,15 @@ from typing import Optional, List, Tuple
 
 from rl18xx.game.engine.game.base import BaseGame
 from rl18xx.agent.alphazero.encoder import Encoder_1830
-from rl18xx.agent.alphazero.config import ModelConfig
+from rl18xx.agent.alphazero.config import ModelGNNConfig
 
 LOGGER = logging.getLogger(__name__)
 
 _GNN_MODEL_DEPRECATION_MESSAGE = (
-    "AlphaZeroGNNModel (v1) is deprecated. Use AlphaZeroV2Model from "
-    "rl18xx.agent.alphazero.model_v2 with ModelV2Config — the transformer "
-    "architecture is the default. The GNN definition is kept for "
-    "backward-compatible checkpoint loading and benchmarks only."
+    "AlphaZeroGNNModel is the legacy architecture. Use AlphaZeroTransformerModel "
+    "from rl18xx.agent.alphazero.model_transformer with ModelTransformerConfig "
+    "for new training runs. The GNN definition is kept for backward-compatible "
+    "checkpoint loading and benchmarks only."
 )
 
 
@@ -242,11 +242,11 @@ class AlphaZeroGNNModel(AlphaZeroModel):
     """Deprecated GNN-based AlphaZero model (v1).
 
     Kept for loading legacy checkpoints and for the v1/v2 comparison benchmarks.
-    New code should use AlphaZeroV2Model (transformer) from
-    rl18xx.agent.alphazero.model_v2.
+    New code should use AlphaZeroTransformerModel from
+    rl18xx.agent.alphazero.model_transformer.
     """
 
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: ModelGNNConfig):
         warnings.warn(_GNN_MODEL_DEPRECATION_MESSAGE, DeprecationWarning, stacklevel=2)
         super(AlphaZeroGNNModel, self).__init__()
         self.config = config

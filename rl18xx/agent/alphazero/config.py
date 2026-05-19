@@ -11,11 +11,11 @@ from torch.utils.tensorboard import SummaryWriter
 
 from rl18xx.agent.alphazero.metrics import Metrics
 
-_V1_CONFIG_DEPRECATION_MESSAGE = (
-    "ModelConfig is deprecated; it configures the legacy GNN AlphaZeroGNNModel "
-    "(v1). Use ModelV2Config with AlphaZeroV2Model — the transformer "
-    "architecture is the default. ModelConfig is kept only for loading legacy "
-    "checkpoints."
+_GNN_CONFIG_DEPRECATION_MESSAGE = (
+    "ModelGNNConfig configures the legacy AlphaZeroGNNModel. Use "
+    "ModelTransformerConfig with AlphaZeroTransformerModel for new training "
+    "runs. ModelGNNConfig is kept only for loading legacy checkpoints and "
+    "for the GNN-vs-Transformer benchmarks."
 )
 
 
@@ -29,7 +29,7 @@ def _select_best_device() -> torch.device:
 
 
 @dataclass
-class ModelConfig:
+class ModelGNNConfig:
     device: Optional[torch.device] = None
     game_state_size: int = 390
     map_node_features: int = 50
@@ -55,7 +55,7 @@ class ModelConfig:
     seed: Optional[int] = None
 
     def __post_init__(self):
-        warnings.warn(_V1_CONFIG_DEPRECATION_MESSAGE, DeprecationWarning, stacklevel=3)
+        warnings.warn(_GNN_CONFIG_DEPRECATION_MESSAGE, DeprecationWarning, stacklevel=3)
         if self.device is None:
             self.device = _select_best_device()
 
@@ -97,8 +97,8 @@ class ModelConfig:
 
 
 @dataclass
-class ModelV2Config:
-    """Configuration for the v2 architecture (Hex Transformer + Economic Transformer)."""
+class ModelTransformerConfig:
+    """Configuration for the Transformer architecture (Hex Transformer + Economic Transformer)."""
 
     device: Optional[torch.device] = None
     game_state_size: int = 390

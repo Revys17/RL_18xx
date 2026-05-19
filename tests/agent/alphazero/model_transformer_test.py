@@ -1,13 +1,13 @@
 import torch
 from rl18xx.game.gamemap import GameMap
-from rl18xx.agent.alphazero.config import ModelV2Config
-from rl18xx.agent.alphazero.model_v2 import (
-    AlphaZeroV2Model,
+from rl18xx.agent.alphazero.config import ModelTransformerConfig
+from rl18xx.agent.alphazero.model_transformer import (
+    AlphaZeroTransformerModel,
     EconomicStateTransformer,
     HexMapTransformer,
     CrossModalFusion,
     FiLMResBlock,
-    V2PolicyHead,
+    TransformerPolicyHead,
     TrackConnectivityComputer,
     PLAYER_FEAT_SIZE,
     CORP_FEAT_SIZE,
@@ -29,8 +29,8 @@ def get_fresh_game_state():
     return game_class(players)
 
 
-def get_v2_model():
-    return AlphaZeroV2Model(ModelV2Config())
+def get_transformer_model():
+    return AlphaZeroTransformerModel(ModelTransformerConfig())
 
 
 def test_economic_transformer_shapes():
@@ -112,7 +112,7 @@ def test_v2_policy_head_shapes():
     lay_tile_info = action_mapper.get_lay_tile_index_info()
 
     d_trunk, d_map = 256, 128
-    head = V2PolicyHead(d_trunk, d_map, POLICY_OUTPUT_SIZE, lay_tile_info)
+    head = TransformerPolicyHead(d_trunk, d_map, POLICY_OUTPUT_SIZE, lay_tile_info)
     head.eval()
 
     B = 2
@@ -126,7 +126,7 @@ def test_v2_policy_head_shapes():
 
 def test_v2_model_forward_synthetic():
     """Full v2 model forward pass with synthetic data."""
-    config = ModelV2Config(
+    config = ModelTransformerConfig(
         d_entity=64,
         econ_transformer_layers=1,
         econ_transformer_heads=2,
@@ -138,7 +138,7 @@ def test_v2_model_forward_synthetic():
         d_trunk=128,
         num_res_blocks=2,
     )
-    model = AlphaZeroV2Model(config)
+    model = AlphaZeroTransformerModel(config)
     model.eval()
     device = config.device
 
@@ -162,7 +162,7 @@ def test_v2_model_forward_synthetic():
 
 def test_v2_model_run_from_game():
     """Full v2 model run from a real game state (end-to-end)."""
-    model = get_v2_model()
+    model = get_transformer_model()
     model.eval()
     game = get_fresh_game_state()
 
@@ -177,7 +177,7 @@ def test_v2_model_run_from_game():
 
 def test_v2_model_run_batch_encoded():
     """V2 model batch inference with encoded game states."""
-    model = get_v2_model()
+    model = get_transformer_model()
     model.eval()
     games = [get_fresh_game_state() for _ in range(3)]
 
@@ -195,7 +195,7 @@ def test_v2_model_run_batch_encoded():
 
 def test_v2_model_parameter_count():
     """V2 model with default config should be approximately 7.3M parameters."""
-    model = get_v2_model()
+    model = get_transformer_model()
     param_count = sum(p.numel() for p in model.parameters())
     print(f"V2 model parameter count: {param_count:,}")
     # Should be roughly 7-8M with default config
