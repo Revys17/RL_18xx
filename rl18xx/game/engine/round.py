@@ -2765,7 +2765,16 @@ class Dividend(BaseStep):
         return 1
 
     def process_dividend(self, action):
-        entity = action.entity
+        # Use the round's current operator rather than ``action.entity``.
+        # Ruby's action log can mis-record ``entity`` when a player
+        # accidentally undoes into another corp's turn and re-issues the
+        # previous corp's final action under their own corp's name
+        # (essentially an unmarked master-mode action). The current operator
+        # is who actually ran the routes whose revenue is on the round, and
+        # is the corp whose shareholders should be paid out / whose share
+        # price should move. See ``docs/rust_engine_bugs.md`` (game 54156)
+        # for the concrete repro.
+        entity = self.current_entity
         revenue = self.total_revenue()
         kind = action.kind
         payout = self.dividend_options(entity)[kind]

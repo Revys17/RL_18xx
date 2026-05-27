@@ -26,7 +26,7 @@ If we only land a handful of these before retraining, do these:
 
 1. **Pretraining never persists its output** (a-HIGH, b-HIGH). `do_pretraining` returns the in-memory model and exits — the warm-started weights are discarded. Add `save_model(model, model_dir)` at the end of `do_pretraining`.
 2. **Train / inference distribution mismatch via canonicalization** (d-HIGH). Training canonicalizes the active player to slot 0 (incl. value target); inference uses the raw active player slot. The model sees `one_hot(0)` for the player indicator at training, `one_hot(0..3)` at inference. Either canonicalize at inference too, or remove canonicalization.
-3. **Value head is a classifier in training, a regressor in MCTS** (d-HIGH). `train.py` does KL-div on softmax(value); `mcts.py` accumulates raw logits as Q. Pick one convention. Cleanest: apply softmax in `run_many_encoded` so Q is in `[0, 1]`.
+3. ~~**Value head is a classifier in training, a regressor in MCTS** (d-HIGH). `train.py` does KL-div on softmax(value); `mcts.py` accumulates raw logits as Q. Pick one convention. Cleanest: apply softmax in `run_many_encoded` so Q is in `[0, 1]`.~~ **RESOLVED** — `run_many_encoded` now applies `F.softmax(value_logits, dim=-1)` before returning, so MCTS sees per-player probabilities in `[0, 1]` summing to ~1 (matches training-target units and the score-fraction terminal encoding).
 4. **Gating evaluation is deterministic** (c-HIGH). `gate_games=10` gives at best 2 statistically-distinct trajectories (one per seat permutation). Promotion noise is enormous. Add small Dirichlet noise or `softpick_move_cutoff > 0` during gating.
 5. **Pretraining mis-dispatches the V2 encoder** (b-HIGH). `Encoder_V2(Encoder_GNN)` so `isinstance(encoder, Encoder_GNN)` matches V2 and routes through V1's magic offsets (335, 359) — silently corrupts the V2 state vector. Make the dispatch `type(encoder) is Encoder_GNN`, add a V2 branch, or move this onto the encoder class as a method.
 6. **`get_model_from_path` only walks one level** (a-HIGH). New layout is `<dir>/<arch>/<session>/...` (two levels). The fallback picks the alphabetically-greatest arch and dies on missing config. Delete `get_model_from_path` and migrate the one remaining caller (`arena.py:85`) to `get_latest_model`.
@@ -286,7 +286,7 @@ Fix: add a docstring on `value_loss` describing the two branches, and assert in 
 On a crash mid-iteration (`loop.py:728-732`), `LOOP_STATUS_PATH` gets an error message but partial self-play games' LMDB writes are NOT rolled back. Training next iteration includes whatever made it to disk before the crash — could include unfinished or corrupt-result games if a worker died mid-write. `run_game` already returns early if `player.result is None or all zero` (lines 599-604), good. But if `play()` crashes after some `played_actions` but before `set_result`, the result is unset and the function returns without writing data — correct. Crash-during-LMDB-write would corrupt the env. Document the recovery story or add an LMDB consistency check at startup.
 
 ### [LOW] Hardcoded magic numbers
-`mcts.py:16` `POLICY_SIZE = 26535` (also `ActionMapper.action_encoding_size` — duplicated, hardcoded). `mcts.py:17` `VALUE_SIZE = 4`. `mcts.py:468` `alpha_value = 10.0 / num_legal_actions` (the "10" is a hyperparameter not exposed in config). `loop.py:298` `if game_state.move_number >= 1000:` — hardcoded gating-eval move cap, should mirror `max_game_length`. `loop.py:415 ESTIMATED_MOVES_PER_GAME = 1000`. Hoist into `SelfPlayConfig` / a constants module.
+`mcts.py:16` `POLICY_SIZE = 26535` (also `ActionMapper.action_encoding_size` — duplicated, hardcoded). `mcts.py:16` `VALUE_SIZE = 6` (bumped from 4 during the variable-N refactor; mirrors `MAX_PLAYERS` and the model's `max_players` layout — see `_pad_state_to_max_players`). `mcts.py:468` `alpha_value = 10.0 / num_legal_actions` (the "10" is a hyperparameter not exposed in config). `loop.py:298` `if game_state.move_number >= 1000:` — hardcoded gating-eval move cap, should mirror `max_game_length`. `loop.py:415 ESTIMATED_MOVES_PER_GAME = 1000`. Hoist into `SelfPlayConfig` / a constants module.
 
 ### [LOW] `inject_noise` alpha derivation diverges from `dirichlet_noise_alpha` config field
 `SelfPlayConfig.dirichlet_noise_alpha=0.03` (config.py:200) is declared "kept for backward compatibility" but `inject_noise` actually uses `10.0 / num_legal_actions`. Two sources of truth confuse future readers. Either remove the unused field or have `inject_noise` use a `max(config.dirichlet_noise_alpha, 10/n)` style fallback.
@@ -314,8 +314,10 @@ On a crash mid-iteration (`loop.py:728-732`), `LOOP_STATUS_PATH` gets an error m
 ### [HIGH] Canonicalization inverts the active-player signal at training but not inference
 `Encoder_GNN.canonicalize_perspective` (`encoder.py:311-335`) is applied in `dataset.py:85-93` so that the active player is rotated to slot 0 and `active_player_idx` is stored as 0. At inference (`model.py:369`, `model_v2.py:851`) the encoder's raw `gs[5]` (true active player index, 0–3) is used uncanonicalized. The value head receives `F.one_hot(active_player_idx, num_classes=4)` (`model.py:471`, `model_v2.py:933`). Training therefore always sees `one_hot(0)` for canonical states, while inference sees `one_hot(0..3)` for raw states — and per-player value slots are also rotated only during training. **The model is trained on a different distribution than it sees at inference, and on the player indicator never observes anything other than position 0.** This is silent and severe. **Fix**: canonicalize at encode-time (apply rotation in `encode`, set `gs[5]=0` always), or remove canonicalization. The one-hot indicator becomes dead input either way.
 
-### [HIGH] v1 value head trained as classifier, used as regressor in MCTS
+### [HIGH] ~~v1 value head trained as classifier, used as regressor in MCTS~~ **RESOLVED**
 `train.py:230-238` treats `value_pred` as logits of a softmax distribution over players (KL-divergence loss to the player-share target). At MCTS time (`mcts.py:219`: `child_Q_compressed[:, self.active_player_index]`) and in `run_many_encoded` (`model.py:390`) the **raw logits** are stored as Q, accumulated by `backup_value`, and used directly in PUCT scoring. There is no softmax/normalization on the MCTS path. A logit pair like `(5, -5)` represents probability `(0.999, 0.001)` to training but is treated as `(5, -5)` to MCTS — completely inconsistent units. Backed-up Q values grow with depth (no bounded range), and the c_puct constants in `SelfPlayConfig` (≈1.0–1.5) are calibrated to AlphaZero-style values in `[-1, 1]`. **Fix**: apply softmax inside `run_many_encoded` before returning so Q is in `[0,1]`, OR change the training loss to MSE/cross-entropy on a regression target.
+
+**Fixed**: `AlphaZeroModel.run_many_encoded` (shared base class used by both `AlphaZeroGNNModel` and `AlphaZeroTransformerModel`) now applies `F.softmax(value_logits, dim=-1)` to the value head output before returning. MCTS now backs up per-player probabilities in `[0, 1]` that sum to ~1, matching both the training-time soft target and the default `use_score_values=True` terminal encoding from `game_result`. Smoke test (run on the latest checkpoint) shows `values.shape=[4], sum=1.0, range≈[1e-6, 0.55]`.
 
 ### [HIGH] v2 HexMapTransformer uses only sample-0 track connectivity for the whole batch
 `HexMapTransformer.forward` (`model_v2.py:292-294`):
@@ -482,7 +484,7 @@ Walking through the older roadmap against current code:
 | 2.1 Masked-logits policy loss | ✅ done | train.py:219 (`masked_fill(~legal_mask, -inf)`) |
 | 3.1 GNN residual connections | ✅ done | model.py:255, 435-441 |
 | 3.2 Kaiming `leaky_relu` init | ✅ done | model.py:328 |
-| **3.3 Autoregressive `FactoredPolicyHead`** | **❌ not done** | New design below — apply to Transformer only |
+| **3.3 Autoregressive `FactoredPolicyHead`** | **✅ done** | `HierarchicalPolicyHead` in `model_transformer.py` — autoregressive `P(h)·P(t|h)·P(r|h,t)` for LayTile, `P(h)·P(slot|h)` for PlaceToken, flat softmax everywhere else. Decomposed CE loss in `train._compute_decomposed_policy_loss`. |
 | 4.1 Lazy MCTS-node encoding | ✅ done | mcts.py:154-165 |
 | 4.2 `parallel_readouts = 32` | ✅ done | config.py:205 |
 | 4.3 Adaptive readouts by complexity | ✅ done | self_play.py:247-251, 475-479 |
@@ -889,13 +891,15 @@ Self-play infrastructure needs to support 2-6 player games:
 
 Enabled by the Transformer model's variable-length entity sequences.
 
-### Forced-move chaining inside MCTS
+### Forced-move chaining inside MCTS — DONE
 
 Today, the outer `MCTSPlayer.play()` skips MCTS for `num_legal_actions == 1`, but inside the tree, forced-move nodes are expanded and evaluated like any other. Long forced sequences (BuyTrain pass cascades, certain end-of-OR sequences) waste tree depth and visit budget.
 
 **Decision**: add forced-move chaining inside `MCTSNode.maybe_add_child`. When the resulting node has `num_legal_actions == 1`, auto-advance through the forced action and store the *post-cascade* state as the actual child. The cascade is invisible to MCTS — it sees only nodes with real decisions. Visit counts and values are recorded only on the chain-terminating node.
 
 Expected impact: 10-30% tree-depth savings on game positions with frequent forced passes.
+
+**Implemented**: `MCTSNode.maybe_add_child` (`mcts.py`) now loops after the chosen action, automatically applying any state with exactly 1 legal action until either >1 actions or the game terminates. The applied indices are recorded on `child.forced_action_chain` for traceability; `MCTSPlayer.played_actions` is unchanged (intermediate forced actions are deterministic functions of engine state and don't generate training examples). Tested in `tests/agent/alphazero/mcts_test.py` — no-chain, chain-collapse, and visit-count accumulation.
 
 ### Self-play league composition (deferred)
 
@@ -956,12 +960,15 @@ Today `parallel_readouts=32` is constant. High-branching positions (LayTile with
 Today the MCTS code has dual paths: Rust adapter when the game state happens to be a `RustGameAdapter`, Python `BaseGame` otherwise. `_create_fresh_game()` in `loop.py:243` currently returns a Python `GameMap` game; `self_play.py:281-282` has a Python fallback. So MCTS effectively uses the Python engine by default.
 
 **Decision**: MCTS uses `RustGameAdapter` exclusively. Changes:
-- `loop.py:_create_fresh_game()` returns `RustGameAdapter(RustGame(players))`.
-- Remove the Python `GameMap` fallback in `self_play.py:86-87, 281-282`.
-- The `isinstance(self.root.game_object, RustGameAdapter)` check in `mcts.py:154` becomes unconditional.
+- `loop.py:_create_fresh_game()` returns `RustGameAdapter(RustGame(players))`. **[DONE]**
+- Remove the Python `GameMap` fallback in `self_play.py:86-87, 281-282`. **[DONE]**
+- The `isinstance(self.root.game_object, RustGameAdapter)` check in `mcts.py:154` becomes unconditional. **[DONE]** — the check is gone; MCTS encodes via the Rust-native path directly (`mcts.py:_rust_encode`).
 - `Encoder_1830.encode(game)` keeps both paths (used elsewhere — pretraining, action-helper testing), but MCTS only takes the Rust path.
 
 Python engine stays in the repo for replay tooling, action-helper enumeration (where used), and as a reference implementation. The training loop never touches it.
+
+**Status: partially complete.** `loop.py` + `self_play.py` are Rust-only. `mcts.py` cleanup pending.
+Note: `tests/agent/alphazero/self_play_test.py::test_extract_data_normal_end` now fails because the test's `terminal_game_state()` fixture constructs a Python-engine game while `extract_data()` now unconditionally creates a `RustGameAdapter` replay state. The fixture needs to migrate to a Rust-engine equivalent as part of the follow-up.
 
 ## Pretraining redesign (consolidated from the model + self-play changes)
 
@@ -1182,12 +1189,18 @@ The network's continuous price head consumes the range:
 
 Implementation phases:
 
-1. **Python `FactoredActionHelper` reference**: clean-room implementation in Python, validated against the existing `ActionHelper` for categorical equivalence (modulo price dimension collapsing). Lives in `rl18xx/game/factored_action_helper.py`.
-2. **Rust `FactoredActionHelper`**: each `step` in `engine-rs/src/rounds/*.rs` implements `get_factored_choices(&Game) -> Vec<LegalAction>`. Engine validates the categorical equivalence via parity tests against the Python reference (similar to existing `tests/test_rust_action_parity.py`).
-3. **`RustGameAdapter.get_factored_choices(game)`** in `rust_adapter.py` exposes the Rust implementation through a Python-friendly interface.
-4. **Migrate consumers**: pretraining (`convert_game_to_training_data`), MCTS (`MCTSNode.legal_action_indices`), action_mapper to consume `FactoredActionHelper` output. Drop the existing `get_all_choices_limited` usage.
+1. **Python `FactoredActionHelper` reference** — **DONE**. Clean-room implementation in Python, validated against the existing `ActionHelper` for categorical equivalence (modulo price dimension collapsing). Lives in `rl18xx/game/factored_action_helper.py`.
+2. **Rust `FactoredActionHelper`** — **DONE**. Each `step` in `engine-rs/src/rounds/*.rs` implements `get_factored_choices(&Game) -> Vec<LegalAction>`. Engine validates the categorical equivalence via parity tests against the Python reference (`tests/test_factored_action_helper_rust_parity.py`).
+3. **`RustGameAdapter.get_factored_choices(game)`** — **DONE**. Exposed via `rl18xx/rust_adapter.py:RustGameAdapter.get_factored_choices`; returns `LegalAction` dataclass instances.
+4. **Migrate consumers** — **DONE** for action_mapper, MCTS, self-play, and pretraining. The price head is fully wired through the LMDB schema and consumed by `train._compute_price_nll_loss`. See the "Deferred follow-ups status" section below for the implementation breakdown.
+   - `action_mapper.py`: `get_legal_action_indices` now delegates to `FactoredActionHelper` via the new `get_legal_actions_factored(state) -> (indices, price_ranges_by_idx, action_types_by_idx)` method. Price-bearing types collapse to a single canonical flat-policy slot per (type, entity) — the price head + MCTS PW recover the price. New helpers `canonical_index_for_action`, `price_head_slot_for_action`, `index_for_factored`, and `map_index_to_action_with_price` support the pretraining + MCTS expansion paths.
+   - `mcts.py`: `MCTSNode` stores `price_ranges_by_idx` and `action_types_by_idx`; `maybe_add_child` samples a price for price-bearing slots via `_sample_price_for_slot` (which reads the network's `ContinuousPriceHead` outputs if attached via `incorporate_results(..., price_components=...)`, otherwise falls back to a wide-Normal prior on the legal range). The sampled price is snapped to the action-type grid (`PRICE_GRID`) and threaded through `map_index_to_action_with_price`. Multi-grandchild PW (multiple price children per categorical slot) is deferred — the current implementation uses one sampled price per categorical expansion. The forced-move chain inside `maybe_add_child` was likewise updated to sample legal prices for forced price-bearing actions.
+   - `pretraining.py`: `make_action_model_friendly` and `make_encoded_game_state_model_friendly` (plus the GNN bid-ladder rewriter) are **deleted**. `convert_game_to_training_data` now uses `action_mapper.canonical_index_for_action` for the categorical pi target (price-collapsed one-hot on the (type, entity) slot) and computes a `price_target` tuple per price-bearing action via `action_mapper.price_head_slot_for_action`. Price targets are logged but not yet plumbed through the LMDB schema — `dataset.py` was out of scope for this pass, so the price NLL loss in `train.py:_compute_price_nll_loss` is still wired but unused at training time.
 
-Effort estimate: ~3-5 days. Python reference is a few hundred lines; Rust port is similar; parity tests are mechanical.
+Deferred follow-ups status:
+- **self_play.py plumbing of `price_components` to MCTS leaves** — **DONE**. `self_play.tree_search` slices `network.last_price_components` per-leaf via `_slice_price_components` and threads it into `incorporate_results(..., price_components=...)`. MCTS `_sample_price_for_slot` now reads the head's `(μ, log σ)` Normal directly.
+- **dataset.py LMDB schema** extension for `price_targets` — **DONE for both pretraining and self-play**. The schema is a 5-tuple `(state, legal_actions, pi, value, price_targets)` where `price_targets` is a list of `(slot_idx, price, weight, price_min, price_max)`. Pretraining writes a single observed-price entry per move; self-play emits a visit-weighted distribution across MCTS price grandchildren via `MCTSPlayer._extract_price_targets` (see `self_play.play_move`).
+- **Multi-grandchild PW**: **DONE**. Two-level tree structure is implemented — `MCTSNode.price_children[fmove][snapped_price]` holds independent grandchildren, `price_child_N` / `price_child_W` carry their per-price stats, and `_select_or_expand_price_child` does PUCT-over-grandchildren when the slot has reached its `pw_target_children` cap. Backups mirror into the parent's categorical compressed arrays so categorical PUCT integrates over all grandchildren. Test coverage: `tests/agent/alphazero/mcts_test.py::test_pw_*`.
 
 Pretraining replay still runs through `BaseGame.process_action` or `RustGameAdapter.process_action` — engines unchanged for the game-state side. Only the choice-enumeration side is replaced.
 

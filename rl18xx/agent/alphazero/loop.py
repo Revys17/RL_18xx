@@ -7,18 +7,27 @@ import shutil
 import time
 from datetime import datetime
 from dataclasses import dataclass, asdict
-from rl18xx.agent.alphazero.checkpointer import get_latest_model, save_model, save_optimizer_state
+from rl18xx.agent.alphazero.checkpointer import (
+    get_latest_model,
+    save_model,
+    save_optimizer_state,
+    session_name_for,
+    set_current_best,
+)
 from rl18xx.agent.alphazero.config import SelfPlayConfig, TrainingConfig
 from rl18xx.agent.alphazero.metrics import Metrics
 from rl18xx.agent.alphazero.self_play import MCTSPlayer, SelfPlay, SELF_PLAY_GAMES_STATUS_PATH
 from rl18xx.agent.alphazero.train import train
-from rl18xx.game.gamemap import GameMap
+from rl18xx.shared.atomic_io import atomic_write_json
 from pathlib import Path
+from typing import Optional
 import signal
 import sys
 import psutil
 import atexit
 import random
+import numpy as np
+import torch
 
 MODEL_CHECKPOINT_DIR = "model_checkpoints"
 
@@ -91,6 +100,12 @@ class LoopConfig:
     training_config: TrainingConfig
     num_readouts: int
     target_experiences: int = 0  # 0 = use num_games_per_iteration instead
+    # Variable player count support: each self-play game samples its player
+    # count from this distribution. ``None`` (the default) falls back to
+    # SelfPlayHyperparams' default — 4-player-heavy mix that still exposes
+    # the model to 2-, 3-, 5-, and 6-player games. Override per run via the
+    # loop config file.
+    player_count_distribution: Optional[dict] = None
 
 
 @dataclass
@@ -130,6 +145,7 @@ def load_loop_config(
     """Load loop config. CLI args always take precedence. File values are used as defaults
     for training_config fields only (batch_size, lr, etc.) and can be hot-reloaded mid-run."""
     training_config = default_training_config
+    player_count_distribution: Optional[dict] = None
 
     # If config file exists, merge training hyperparams from it (hot-reload support)
     if LOOP_CONFIG_PATH.exists():
@@ -138,6 +154,10 @@ def load_loop_config(
                 file_config = json.load(f)
             if "training_config" in file_config:
                 training_config = TrainingConfig.from_json(file_config["training_config"])
+            if "player_count_distribution" in file_config and file_config["player_count_distribution"]:
+                # JSON serializes int keys as strings — convert back.
+                raw = file_config["player_count_distribution"]
+                player_count_distribution = {int(k): float(v) for k, v in raw.items()}
         except Exception as e:
             LOGGER.warning(f"Error reading loop config file: {e}. Using CLI defaults.")
 
@@ -148,13 +168,13 @@ def load_loop_config(
         training_config=training_config,
         num_readouts=num_readouts,
         target_experiences=target_experiences,
+        player_count_distribution=player_count_distribution,
     )
 
     # Write current config to file for visibility / hot-reload editing
     serializable = asdict(loop_config)
     serializable["training_config"] = training_config.to_json()
-    with open(LOOP_CONFIG_PATH, "w") as f:
-        json.dump(serializable, f, indent=4)
+    atomic_write_json(LOOP_CONFIG_PATH, serializable, indent=4)
 
     return loop_config
 
@@ -162,8 +182,7 @@ def load_loop_config(
 def update_loop_status(status_data: dict):
     """Writes the current loop status to a JSON file."""
     try:
-        with open(LOOP_STATUS_PATH, "w") as f:
-            json.dump(status_data, f, indent=4, default=str)
+        atomic_write_json(LOOP_STATUS_PATH, status_data, indent=4, default=str)
     except Exception as e:
         LOGGER.error(f"Error writing to {LOOP_STATUS_PATH}: {e}")
 
@@ -172,8 +191,7 @@ def save_loop_metrics(metrics: LoopMetrics, filepath: Path):
     """Saves the loop metrics to a JSON file."""
     try:
         metrics_dict = asdict(metrics)
-        with open(filepath, "w") as f:
-            json.dump(metrics_dict, f, indent=4)
+        atomic_write_json(filepath, metrics_dict, indent=4)
     except Exception as e:
         LOGGER.error(f"Error saving loop metrics: {e}")
 
@@ -217,21 +235,32 @@ def cleanup_files():
         LOOP_STATUS_PATH.unlink()
     if LOOP_LOCK_FILE.exists():
         LOOP_LOCK_FILE.unlink()
-    for item in TENSORBOARD_LOG_DIR_BASE.iterdir():
-        if item.is_dir():
-            shutil.rmtree(item)
-        else:
-            item.unlink()
-    for item in SELF_PLAY_GAMES_STATUS_PATH.iterdir():
-        if item.is_dir():
-            shutil.rmtree(item)
-        else:
-            item.unlink()
+    if TENSORBOARD_LOG_DIR_BASE.exists():
+        for item in TENSORBOARD_LOG_DIR_BASE.iterdir():
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+    if SELF_PLAY_GAMES_STATUS_PATH.exists():
+        for item in SELF_PLAY_GAMES_STATUS_PATH.iterdir():
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
 
 
-def run_self_play(game_idx_in_iteration: int, tb_log_dir: str, timestamp: str, loop: int, num_readouts: int = 32, max_game_length: int = 1000):
+def run_self_play(
+    game_idx_in_iteration: int,
+    tb_log_dir: str,
+    timestamp: str,
+    loop: int,
+    num_readouts: int = 32,
+    max_game_length: int = 1000,
+    num_players: int = 4,
+):
     process_root_logger = logging.getLogger()
     random.seed(os.getpid())
+    np.random.seed(os.getpid() ^ int(time.time()))
     for handler in process_root_logger.handlers[:]:
         process_root_logger.removeHandler(handler)
         handler.close()
@@ -241,7 +270,10 @@ def run_self_play(game_idx_in_iteration: int, tb_log_dir: str, timestamp: str, l
     log_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(log_formatter)
     process_root_logger.addHandler(file_handler)
-    logging.info(f"Self-play process started for L{loop}/G{game_idx_in_iteration}. Logging to {game_log_file}")
+    logging.info(
+        f"Self-play process started for L{loop}/G{game_idx_in_iteration} "
+        f"({num_players}-player). Logging to {game_log_file}"
+    )
 
     model = get_latest_model("model_checkpoints")
     try:
@@ -254,6 +286,10 @@ def run_self_play(game_idx_in_iteration: int, tb_log_dir: str, timestamp: str, l
             game_id=f"L{loop}_G{game_idx_in_iteration}",
             num_readouts=num_readouts,
             max_game_length=max_game_length,
+            # Lock the worker to the sampled count by collapsing the distribution
+            # to a singleton — the child SelfPlay only ever opens one game and
+            # we want it to use the seat count chosen by the parent process.
+            player_count_distribution={num_players: 1.0},
         )
         selfplay = SelfPlay(self_play_config)
         selfplay.run_game()
@@ -294,54 +330,104 @@ def cleanup_and_exit(signum=None, frame=None):
         LOOP_LOCK_FILE.unlink()
 
 
-def _create_fresh_game():
-    """Create a new 4-player 1830 game instance."""
-    game_map = GameMap()
-    game_class = game_map.game_by_title("1830")
-    players = {1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"}
-    return game_class(players)
+def _create_fresh_game(num_players: int = 4):
+    """Create a new ``num_players``-player 1830 game instance.
+
+    Players are always named ``"Player 1"``..``"Player N"`` so the encoder's
+    canonical ``player_id_to_idx`` mapping stays deterministic regardless of
+    how this game arose (self-play sampler, gate game, or pretraining replay).
+    Player count must be in 2..6 (1830 rules).
+
+    The training loop runs exclusively on the Rust engine; the Python engine is
+    not used here. If the Rust engine isn't installed, this raises ImportError.
+    """
+    assert 2 <= num_players <= 6, f"num_players must be 2..6, got {num_players}"
+    from engine_rs import BaseGame as RustGame
+    from rl18xx.rust_adapter import RustGameAdapter
+    players = {i + 1: f"Player {i + 1}" for i in range(num_players)}
+    return RustGameAdapter(RustGame(players))
 
 
-def _play_gate_game(candidate_model, current_best_model, game_index: int, num_readouts: int) -> dict:
+def _sample_player_count(distribution: dict[int, float] | None) -> int:
+    """Sample a player count from ``distribution``.
+
+    ``distribution`` maps ``num_players -> weight``. Weights need not sum to 1.
+    If ``distribution`` is ``None`` or empty, falls back to a 4-player game
+    (the legacy default).
+    """
+    if not distribution:
+        return 4
+    counts = list(distribution.keys())
+    weights = [distribution[c] for c in counts]
+    total = sum(weights)
+    if total <= 0:
+        return 4
+    return random.choices(counts, weights=weights, k=1)[0]
+
+
+# Small Dirichlet noise weight injected during gating so each game produces a
+# distinct trajectory. With deterministic priors and argmax move selection, gate
+# games would otherwise be identical given the same seat assignment, collapsing
+# `gate_games=N` to at most `num_seats` distinct outcomes. See
+# docs/step1_review.md "Improved gating mechanics".
+GATING_DIRICHLET_NOISE_WEIGHT = 0.1
+
+
+def _gate_seat_assignment(game_index: int, num_seats: int = 4) -> list[bool]:
+    """Return ``is_candidate[seat]`` for each seat in the given gate game.
+
+    Candidate cycles through every seat as ``game_index`` advances:
+    game 0 -> seat 0, game 1 -> seat 1, ..., game ``num_seats-1`` -> seat
+    ``num_seats-1``, then wraps. ``current_best`` fills the other seats. With
+    ``gate_games`` a multiple of ``num_seats``, each seat configuration is
+    sampled the same number of times, controlling for priority-deal advantages.
+    """
+    candidate_seat = game_index % num_seats
+    return [seat == candidate_seat for seat in range(num_seats)]
+
+
+def _play_gate_game(
+    candidate_model,
+    current_best_model,
+    game_index: int,
+    num_readouts: int,
+    num_players: int = 4,
+) -> dict:
     """Play a single gating arena game and return result info.
 
-    Even-indexed games: candidate gets seats 0,1; best gets seats 2,3.
-    Odd-indexed games: best gets seats 0,1; candidate gets seats 2,3.
+    Seat rotation: candidate occupies a single seat
+    (``game_index % num_players``); ``current_best`` fills the remaining
+    seats. With ``gate_games`` a multiple of ``num_players``, every seat is
+    sampled equally.
 
-    Returns a dict with 'candidate_seats', 'winner_seat', and 'scores',
-    or None if the game crashed.
+    A small Dirichlet noise weight (``GATING_DIRICHLET_NOISE_WEIGHT``) is
+    injected on the root prior so each game produces a distinct trajectory.
+    ``softpick_move_cutoff=0`` (argmax move selection) is kept — trajectory
+    diversity comes from the noised root prior, not random move selection.
+
+    Returns a dict with 'candidate_seats', 'winner_seat', and 'scores'.
     """
     eval_config_candidate = SelfPlayConfig(
         softpick_move_cutoff=0,
-        dirichlet_noise_weight=0,
+        dirichlet_noise_weight=GATING_DIRICHLET_NOISE_WEIGHT,
         num_readouts=num_readouts,
         network=candidate_model,
     )
     eval_config_best = SelfPlayConfig(
         softpick_move_cutoff=0,
-        dirichlet_noise_weight=0,
+        dirichlet_noise_weight=GATING_DIRICHLET_NOISE_WEIGHT,
         num_readouts=num_readouts,
         network=current_best_model,
     )
 
-    if game_index % 2 == 0:
-        agents = [
-            MCTSPlayer(eval_config_candidate),
-            MCTSPlayer(eval_config_candidate),
-            MCTSPlayer(eval_config_best),
-            MCTSPlayer(eval_config_best),
-        ]
-        candidate_seats = {0, 1}
-    else:
-        agents = [
-            MCTSPlayer(eval_config_best),
-            MCTSPlayer(eval_config_best),
-            MCTSPlayer(eval_config_candidate),
-            MCTSPlayer(eval_config_candidate),
-        ]
-        candidate_seats = {2, 3}
+    is_candidate_by_seat = _gate_seat_assignment(game_index, num_seats=num_players)
+    agents = [
+        MCTSPlayer(eval_config_candidate if is_cand else eval_config_best)
+        for is_cand in is_candidate_by_seat
+    ]
+    candidate_seats = {seat for seat, is_cand in enumerate(is_candidate_by_seat) if is_cand}
 
-    game_state = _create_fresh_game()
+    game_state = _create_fresh_game(num_players=num_players)
     for agent in agents:
         agent.initialize_game(game_state)
 
@@ -378,10 +464,19 @@ def evaluate_candidate(
 ) -> float:
     """Play candidate vs current_best in arena games, return candidate win rate.
 
-    Each game has 4 players: 2 with the candidate model, 2 with the current best.
-    Positions alternate between games. A win is counted when the overall game
-    winner occupies a candidate seat.
+    Each game has 4 players: 1 with the candidate model, 3 with the current
+    best. The candidate's seat rotates through all four seats across games
+    (see ``_gate_seat_assignment``), controlling for priority-deal advantages.
+    A small Dirichlet noise weight is injected on the root prior to ensure
+    each game produces a distinct trajectory (without it, deterministic priors
+    + argmax move selection collapse all gate games at a given seat assignment
+    onto an identical trajectory).
 
+    To disable gating entirely once training is stable, pass ``--no-gate``
+    to the loop; that's the AlphaZero / AlphaGo Zero approach (always promote
+    the latest trained model).
+
+    A win is counted when the overall game winner occupies the candidate seat.
     Games that crash are skipped and not counted toward the total.
     """
     candidate_wins = 0
@@ -457,6 +552,14 @@ def ensure_seed_model(model_type: str = "transformer"):
         model = AlphaZeroGNNModel(config)
 
     checkpoint_num = save_model(model, MODEL_CHECKPOINT_DIR)
+    # Bootstrap the current_best pointer so self-play workers can find the seed
+    # via the same code path as the steady-state (pointer-based) load.
+    set_current_best(
+        MODEL_CHECKPOINT_DIR,
+        model.architecture_name(),
+        session_name_for(model),
+        checkpoint_num,
+    )
     LOGGER.info(f"Saved initial {model_type} model: {model.get_name()} (checkpoint {checkpoint_num})")
 
 
@@ -517,10 +620,19 @@ _SELFPLAY_TIMING_KEYS = [
 ]
 
 
-def _submit_selfplay_game(executor, game_idx, tb_log_dir, timestamp, loop, num_readouts, max_game_length):
+def _submit_selfplay_game(
+    executor, game_idx, tb_log_dir, timestamp, loop, num_readouts, max_game_length, num_players=4
+):
     """Submit a single self-play game to the executor."""
     return executor.submit(
-        run_self_play, game_idx, tb_log_dir, timestamp, loop, num_readouts, max_game_length
+        run_self_play,
+        game_idx,
+        tb_log_dir,
+        timestamp,
+        loop,
+        num_readouts,
+        max_game_length,
+        num_players,
     )
 
 
@@ -574,13 +686,17 @@ def _run_selfplay_iteration(
         f"using {loop_config.num_threads} processes..."
     )
 
+    # Sample a player count per game. ``None`` falls back to legacy 4-player.
+    player_count_distribution = loop_config.player_count_distribution
+
     executor = ProcessPoolExecutor(max_workers=loop_config.num_threads)
     try:
         pending_futures: dict = {}
         for _ in range(loop_config.num_threads):
+            num_players = _sample_player_count(player_count_distribution)
             f = _submit_selfplay_game(
                 executor, game_idx, tb_log_dir, timestamp, loop,
-                loop_config.num_readouts, scheduled_game_length,
+                loop_config.num_readouts, scheduled_game_length, num_players,
             )
             pending_futures[f] = game_idx
             game_idx += 1
@@ -600,9 +716,10 @@ def _run_selfplay_iteration(
                     game_lengths_this_iteration, loop_metrics, loop_config.target_experiences,
                 )
                 if experiences_this_iteration < loop_config.target_experiences:
+                    num_players = _sample_player_count(player_count_distribution)
                     f_new = _submit_selfplay_game(
                         executor, game_idx, tb_log_dir, timestamp, loop,
-                        loop_config.num_readouts, scheduled_game_length,
+                        loop_config.num_readouts, scheduled_game_length, num_players,
                     )
                     pending_futures[f_new] = game_idx
                     game_idx += 1
@@ -692,7 +809,13 @@ def _run_training_iteration(
     loop_config: "LoopConfig",
     metrics: Metrics,
 ) -> TrainingIterationResult:
-    """Train the latest model on the current self-play data."""
+    """Train the current-best model on the current self-play data.
+
+    `train_model` now always saves a numbered checkpoint at the end of the run
+    (regardless of gating outcome). The candidate's `checkpoint_num` is on
+    `train_metrics.checkpoint_num` and gets passed to gating below; gating is
+    responsible for moving the `current_best` pointer if the candidate wins.
+    """
     training_config = loop_config.training_config
     if not isinstance(training_config, TrainingConfig):
         LOGGER.error(f"FIX THIS: Training config is not a TrainingConfig: {training_config}")
@@ -716,6 +839,7 @@ def _run_training_iteration(
 def _run_gating_iteration(
     loop: int,
     model,
+    candidate_checkpoint_num,
     no_gate: bool,
     gate_games: int,
     gate_threshold: float,
@@ -723,24 +847,43 @@ def _run_gating_iteration(
     status: dict,
     metrics: Metrics,
 ) -> GatingIterationResult:
-    """Either skip gating (first iteration / --no-gate) or run an arena evaluation; append history record."""
+    """Evaluate the freshly-trained candidate and (maybe) promote it.
+
+    The candidate checkpoint has already been written to disk by `train_model`
+    (`candidate_checkpoint_num`). Gating's only side effect on disk is updating
+    the per-arch `current_best.json` pointer — never `save_model`. A rejected
+    candidate still lives on disk for later analysis but is not loaded by
+    self-play workers because the pointer doesn't move.
+
+    On the first iteration there is no incumbent to compare against, so we
+    unconditionally promote to bootstrap the pointer. `--no-gate` does the
+    same on every iteration.
+    """
     gating_start_time = time.time()
     gate_win_rate = None
+    arch = model.architecture_name()
+    # The on-disk session directory is `<arch>/<timestamp>_<seed>/`; the pointer
+    # records that name (not `model.get_name()`, which is the arch-prefixed form).
+    session = session_name_for(model)
+
     if no_gate or loop == 0:
         if loop == 0:
-            LOGGER.info("First iteration; skipping gating, saving model directly.")
+            LOGGER.info("First iteration; skipping gating, promoting candidate to current_best.")
             reason = "first_iteration"
         else:
-            LOGGER.info("Gating disabled (--no-gate); saving model directly.")
+            LOGGER.info("Gating disabled (--no-gate); promoting candidate to current_best.")
             reason = "gating_disabled"
-        checkpoint_num = save_model(model, MODEL_CHECKPOINT_DIR)
         promoted = True
+        if candidate_checkpoint_num is not None:
+            set_current_best(MODEL_CHECKPOINT_DIR, arch, session, candidate_checkpoint_num)
+        else:
+            LOGGER.warning("No candidate checkpoint to promote (train_model did not save).")
         append_model_history({
             "loop": loop + 1,
             "timestamp": datetime.now().isoformat(),
-            "checkpoint_num": checkpoint_num,
-            "architecture": model.architecture_name(),
-            "session": model.get_name(),
+            "checkpoint_num": candidate_checkpoint_num,
+            "architecture": arch,
+            "session": session,
             "promoted": True,
             "win_rate": None,
             "gate_games": 0,
@@ -750,6 +893,9 @@ def _run_gating_iteration(
         status["status_message"] = f"Running gating evaluation ({gate_games} games)..."
         update_loop_status(status)
 
+        # The current-best pointer points to the prior winner; the freshly
+        # trained candidate sits at `candidate_checkpoint_num` in the same
+        # session, but it is NOT pointed to yet.
         current_best_model = get_latest_model(MODEL_CHECKPOINT_DIR)
         gate_win_rate = evaluate_candidate(
             candidate_model=model,
@@ -762,19 +908,25 @@ def _run_gating_iteration(
 
         if gate_win_rate >= gate_threshold:
             LOGGER.info(f"Model promoted! Win rate: {gate_win_rate:.1%} >= {gate_threshold:.1%}")
-            checkpoint_num = save_model(model, MODEL_CHECKPOINT_DIR)
+            if candidate_checkpoint_num is not None:
+                set_current_best(MODEL_CHECKPOINT_DIR, arch, session, candidate_checkpoint_num)
+            else:
+                LOGGER.warning("Gating passed but no candidate checkpoint to promote.")
             promoted = True
         else:
-            LOGGER.info(f"Model rejected. Win rate: {gate_win_rate:.1%} < {gate_threshold:.1%}")
-            checkpoint_num = None
+            LOGGER.info(
+                f"Model rejected. Win rate: {gate_win_rate:.1%} < {gate_threshold:.1%}. "
+                f"Candidate checkpoint {candidate_checkpoint_num} remains on disk; "
+                f"current_best pointer unchanged."
+            )
             promoted = False
 
         append_model_history({
             "loop": loop + 1,
             "timestamp": datetime.now().isoformat(),
-            "checkpoint_num": checkpoint_num,
-            "architecture": model.architecture_name(),
-            "session": model.get_name(),
+            "checkpoint_num": candidate_checkpoint_num,
+            "architecture": arch,
+            "session": session,
             "promoted": promoted,
             "win_rate": gate_win_rate,
             "gate_games": gate_games,
@@ -784,13 +936,33 @@ def _run_gating_iteration(
     return GatingIterationResult(
         win_rate=gate_win_rate,
         promoted=promoted,
-        checkpoint_num=checkpoint_num,
+        checkpoint_num=candidate_checkpoint_num,
         wall_time=time.time() - gating_start_time,
     )
 
 
 def _last_or(lst, default=0.0):
     return lst[-1] if lst else default
+
+
+def _oldest_training_example_age_minutes() -> float:
+    """Wall-clock age (minutes) of the oldest LMDB ``data.mdb`` in the rolling
+    self-play training window. Returns 0.0 if no LMDB files are found.
+
+    Uses file mtime as a cheap proxy for "age of the oldest example". The LMDB
+    is rewritten as new self-play games land in it, so its mtime tracks the
+    most-recent write — the *minimum* mtime across all session LMDBs is the
+    closest cheap proxy for the oldest data currently in the training window.
+    """
+    train_root = Path("training_examples/selfplay")
+    if not train_root.exists():
+        return 0.0
+    mdb_files = list(train_root.rglob("data.mdb"))
+    if not mdb_files:
+        return 0.0
+    now = time.time()
+    oldest_mtime = min(f.stat().st_mtime for f in mdb_files)
+    return max(0.0, (now - oldest_mtime) / 60.0)
 
 
 def _emit_tensorboard_metrics(
@@ -837,6 +1009,21 @@ def _emit_tensorboard_metrics(
     metrics.add_scalar("Timing/Moves_Per_Second", sp_stats.moves_per_second, loop)
     for k, v in sp_stats.timing_avgs.items():
         metrics.add_scalar(f"Timing/SelfPlay_{k}", v, loop)
+
+    # System / GPU + training-data freshness
+    gpu_memory_allocated_mb = (
+        torch.cuda.memory_allocated() / 1e6 if torch.cuda.is_available() else 0
+    )
+    gpu_max_memory_mb = (
+        torch.cuda.max_memory_allocated() / 1e6 if torch.cuda.is_available() else 0
+    )
+    metrics.add_scalar("system/gpu_memory_allocated_mb", gpu_memory_allocated_mb, loop)
+    metrics.add_scalar("system/gpu_max_memory_mb", gpu_max_memory_mb, loop)
+    metrics.add_scalar(
+        "training/oldest_example_age_minutes",
+        _oldest_training_example_age_minutes(),
+        loop,
+    )
 
     if not (train_metrics and train_metrics.epochs_trained > 0):
         return
@@ -1114,9 +1301,13 @@ def main(
             model = train_result.model
             train_metrics = train_result.train_metrics
             training_wall_time = train_result.wall_time
+            candidate_checkpoint_num = (
+                train_metrics.checkpoint_num if train_metrics is not None else None
+            )
 
             gating = _run_gating_iteration(
-                loop, model, no_gate, gate_games, gate_threshold, num_readouts, status, metrics,
+                loop, model, candidate_checkpoint_num, no_gate, gate_games, gate_threshold,
+                num_readouts, status, metrics,
             )
 
             _emit_tensorboard_metrics(
@@ -1193,7 +1384,8 @@ if __name__ == "__main__":
         "--num_loop_iterations", type=int, default=5, help="Number of iterations of the full training loop"
     )
     parser.add_argument(
-        "--num_games_per_iteration", type=int, default=25, help="Number of self-play games to run per iteration"
+        "--target_experiences", type=int, default=10000,
+        help="Target experience count per iteration (default: 10000)"
     )
     parser.add_argument("--num_threads", type=int, default=2, help="Number of threads to use for self-play")
     parser.add_argument(
@@ -1214,22 +1406,28 @@ if __name__ == "__main__":
         "--gate-threshold", type=float, default=0.55, help="Minimum win rate to promote model (default: 0.55)"
     )
     parser.add_argument("--no-gate", action="store_true", help="Disable model gating (always promote)")
+    parser.add_argument(
+        "--model-type", type=str, default="transformer", choices=["gnn", "transformer"],
+        help="Model architecture for initial checkpoint (default: transformer)"
+    )
+    parser.add_argument(
+        "--fresh", action="store_true",
+        help="Clear all model checkpoints and training data to start from scratch"
+    )
     args = parser.parse_args()
 
-    num_loop_iterations = args.num_loop_iterations
-    num_games_per_iteration = args.num_games_per_iteration
-    num_threads = args.num_threads
-    cleanup = not args.keep_old_files
     main(
-        num_loop_iterations,
-        num_games_per_iteration,
-        num_threads,
-        cleanup,
-        args.num_readouts,
+        num_loop_iterations=args.num_loop_iterations,
+        num_threads=args.num_threads,
+        cleanup=not args.keep_old_files,
+        num_readouts=args.num_readouts,
         num_epochs=args.num_epochs,
         max_training_window=args.max_training_window,
         gate_games=args.gate_games,
         gate_threshold=args.gate_threshold,
         no_gate=args.no_gate,
+        model_type=args.model_type,
+        fresh=args.fresh,
+        target_experiences=args.target_experiences,
         batch_size=args.batch_size,
     )

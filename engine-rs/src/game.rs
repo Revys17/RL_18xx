@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 
 use crate::actions::{Action, GameError};
 use crate::core::{Phase, StockMarket};
@@ -12,6 +12,98 @@ use crate::map::{GraphCache, NodeId, NodeType};
 use crate::rounds::Round;
 use crate::tiles::{self, TileColor, TileDef};
 use crate::title::g1830::{self, HexType};
+
+// ---------------------------------------------------------------------------
+// Python <-> serde_json conversion helpers
+// ---------------------------------------------------------------------------
+
+/// Convert a Python value into a `serde_json::Value`.
+///
+/// Handles ``None``, ``bool``, ``int``, ``float``, ``str``, ``list``/``tuple``
+/// and ``dict``. Anything else falls back to its ``repr()`` string so we do not
+/// silently drop fields when logging unknown payloads.
+fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    if value.is_none() {
+        return Ok(serde_json::Value::Null);
+    }
+    if let Ok(b) = value.downcast::<PyBool>() {
+        return Ok(serde_json::Value::Bool(b.is_true()));
+    }
+    if let Ok(i) = value.downcast::<PyInt>() {
+        if let Ok(v) = i.extract::<i64>() {
+            return Ok(serde_json::Value::from(v));
+        }
+        if let Ok(v) = i.extract::<u64>() {
+            return Ok(serde_json::Value::from(v));
+        }
+    }
+    if let Ok(f) = value.downcast::<PyFloat>() {
+        let v: f64 = f.extract()?;
+        return Ok(serde_json::Number::from_f64(v)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null));
+    }
+    if let Ok(s) = value.downcast::<PyString>() {
+        return Ok(serde_json::Value::String(s.to_str()?.to_string()));
+    }
+    if let Ok(d) = value.downcast::<PyDict>() {
+        let mut map = serde_json::Map::new();
+        for (k, v) in d.iter() {
+            let key: String = k.extract().unwrap_or_else(|_| k.to_string());
+            map.insert(key, py_to_json(&v)?);
+        }
+        return Ok(serde_json::Value::Object(map));
+    }
+    if let Ok(l) = value.downcast::<PyList>() {
+        let mut out = Vec::with_capacity(l.len());
+        for item in l.iter() {
+            out.push(py_to_json(&item)?);
+        }
+        return Ok(serde_json::Value::Array(out));
+    }
+    if let Ok(t) = value.downcast::<PyTuple>() {
+        let mut out = Vec::with_capacity(t.len());
+        for item in t.iter() {
+            out.push(py_to_json(&item)?);
+        }
+        return Ok(serde_json::Value::Array(out));
+    }
+    // Fallback: stringify
+    Ok(serde_json::Value::String(value.to_string()))
+}
+
+/// Convert a `serde_json::Value` into a Python object.
+fn json_to_py_obj(py: Python<'_>, v: &serde_json::Value) -> PyResult<PyObject> {
+    use pyo3::IntoPyObject;
+    Ok(match v {
+        serde_json::Value::Null => py.None(),
+        serde_json::Value::Bool(b) => (*b).into_pyobject(py)?.to_owned().into(),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.into_pyobject(py)?.into()
+            } else if let Some(u) = n.as_u64() {
+                u.into_pyobject(py)?.into()
+            } else if let Some(f) = n.as_f64() {
+                f.into_pyobject(py)?.into_any().into()
+            } else {
+                py.None()
+            }
+        }
+        serde_json::Value::String(s) => s.as_str().into_pyobject(py)?.into_any().into(),
+        serde_json::Value::Array(arr) => {
+            let list: Vec<PyObject> =
+                arr.iter().map(|x| json_to_py_obj(py, x)).collect::<PyResult<Vec<_>>>()?;
+            list.into_pyobject(py)?.into_any().into()
+        }
+        serde_json::Value::Object(obj) => {
+            let d = PyDict::new(py);
+            for (k, val) in obj {
+                d.set_item(k, json_to_py_obj(py, val)?)?;
+            }
+            d.into_any().into()
+        }
+    })
+}
 
 // ---------------------------------------------------------------------------
 // RoundState
@@ -112,12 +204,58 @@ pub struct BaseGame {
     /// Used by ActionHelper to check if last 3 players all passed (auction round).
     pub(crate) recent_actions: Vec<(String, String)>,
 
+    /// Full action log: every action dict processed, in order.
+    /// Matches Python `BaseGame.raw_actions` semantics — the complete action
+    /// history including process'd action dicts.
+    pub(crate) action_log: Vec<serde_json::Value>,
+
     // Game end tracking
     pub(crate) game_end_triggered: bool,
     /// The player order for the current game (ids, in seating order).
     pub(crate) player_order: Vec<u32>,
     /// Priority deal player id.
     pub(crate) priority_deal_player: u32,
+}
+
+// crate-visible wrappers that forward to the (private) PyO3-exposed methods
+// below. Used by `crate::factored` to enumerate legal actions.
+impl BaseGame {
+    pub(crate) fn legal_action_types_for_factored(&mut self) -> Vec<String> {
+        self.legal_action_types()
+    }
+    pub(crate) fn buyable_shares_for_factored(
+        &self,
+        pid: u32,
+    ) -> Vec<(String, String, usize, i32)> {
+        self.buyable_shares(pid)
+    }
+    pub(crate) fn sellable_bundles_for_factored(
+        &self,
+        pid: u32,
+    ) -> Vec<(String, usize, u8)> {
+        self.sellable_bundles(pid)
+    }
+    pub(crate) fn tokenable_cities_for_factored(
+        &mut self,
+        corp_sym: &str,
+    ) -> Vec<(String, usize)> {
+        self.tokenable_cities_for(corp_sym)
+    }
+    pub(crate) fn connected_hexes_for_factored(
+        &mut self,
+        corp_sym: &str,
+    ) -> std::collections::HashMap<String, Vec<u8>> {
+        self.connected_hexes(corp_sym)
+    }
+    pub(crate) fn buyable_trains_for_factored(
+        &self,
+        corp_sym: &str,
+    ) -> Vec<(String, String, i32, String)> {
+        self.buyable_trains_for(corp_sym)
+    }
+    pub(crate) fn president_may_contribute_pub(&mut self, corp_sym: &str) -> bool {
+        self.president_may_contribute(corp_sym)
+    }
 }
 
 impl BaseGame {
@@ -216,6 +354,7 @@ impl BaseGame {
             } else {
                 self.recent_actions.clone()
             },
+            action_log: self.action_log.clone(),
             game_end_triggered: self.game_end_triggered,
             player_order: self.player_order.clone(),
             priority_deal_player: self.priority_deal_player,
@@ -250,6 +389,35 @@ impl BaseGame {
         // These can happen in any round and bypass normal round dispatch.
         if self.try_process_company_exchange(action)? {
             self.move_number += 1;
+            // If we're in an Operating round, the exchange may have
+            // happened during the operating corp's final blocking step
+            // (e.g., the MH owner's corp is in BuyCompany with no useful
+            // purchase available). Python's ``Operating.after_process``
+            // machinery would call ``skip_steps`` and advance to the next
+            // corp when the current corp is done. Mirror that here so
+            // exchanges during the operator's turn don't leave the OR
+            // stuck on a finished corp.
+            if matches!(&self.round, crate::rounds::Round::Operating(_)) {
+                self.skip_steps();
+                let is_done = matches!(
+                    &self.round,
+                    crate::rounds::Round::Operating(s) if !s.finished && s.step == crate::rounds::OperatingStep::Done
+                );
+                if is_done {
+                    if let crate::rounds::Round::Operating(ref mut s) = self.round {
+                        s.advance_to_next_corp();
+                    }
+                    if !matches!(&self.round, crate::rounds::Round::Operating(s) if s.finished) {
+                        self.start_operating();
+                    }
+                }
+                // If the OR has completely finished (last corp's last step
+                // wrapped up via MH-triggered advance), transition to the
+                // next round so the next action lands in a valid round.
+                if matches!(&self.round, crate::rounds::Round::Operating(s) if s.finished) {
+                    self.transition_to_next_round();
+                }
+            }
             self.check_game_end();
             return Ok(());
         }
@@ -555,7 +723,10 @@ impl BaseGame {
                 self.close_all_companies();
             }
 
-            // Check for corps over the new train limit (they must discard)
+            // Check for corps over the new train limit (they must discard).
+            // Match Python's iteration order: ``minors + corporations`` in
+            // definition order (base.py:2443) — NOT operating order. The
+            // ``self.corporations`` Vec mirrors this.
             let train_limit = phase_def.train_limit as usize;
             let crowded: Vec<String> = self
                 .corporations
@@ -680,6 +851,13 @@ impl BaseGame {
 
         // Check float
         self.check_float(corp_idx);
+
+        // The exchanged share may have given the receiving player more of
+        // ``corp`` than the current president, which means the presidency
+        // should transfer. Mirrors Python (Stock.process_buy_shares calls
+        // through to ``share_pool.buy_shares`` which calls
+        // ``check_president_change``).
+        self.check_president_change(corp_idx);
 
         Ok(true)
     }
@@ -1081,6 +1259,40 @@ impl BaseGame {
         });
         corps.into_iter().map(|(sym, ..)| sym).collect()
     }
+
+    /// Re-sort the not-yet-operated tail of the current OR's operating_order.
+    ///
+    /// Mirrors Python's ``Operating.recalculate_order`` (round.py:5667). When
+    /// a mid-OR action changes a floated corp's share price (emergency
+    /// sale, corporate sell, bankruptcy sale), corps that haven't operated
+    /// yet may need to swap places in the OR sequence. The already-operated
+    /// prefix (``operating_order[..=entity_index]``) is preserved.
+    pub fn recalculate_operating_order(&mut self) {
+        // Compute the freshly-sorted full order, then splice only the
+        // unoperated tail back into the round state.
+        let fresh = self.compute_operating_order();
+        if let crate::rounds::Round::Operating(ref mut s) = self.round {
+            if s.finished || s.operating_order.is_empty() {
+                return;
+            }
+            let tail_start = s.entity_index + 1;
+            if tail_start >= s.operating_order.len() {
+                return;
+            }
+            let tail_syms: std::collections::HashSet<String> =
+                s.operating_order[tail_start..].iter().cloned().collect();
+            let resorted_tail: Vec<String> = fresh
+                .into_iter()
+                .filter(|sym| tail_syms.contains(sym))
+                .collect();
+            // Only overwrite if every tail entry is present in the resorted
+            // list (e.g., a floated-status change could cause mismatches —
+            // play it safe and leave the order alone in that case).
+            if resorted_tail.len() == tail_syms.len() {
+                s.operating_order.splice(tail_start.., resorted_tail);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1353,6 +1565,7 @@ impl BaseGame {
             move_number: 0,
             turn: 1, // Start at 1 (Auction round is turn 1, first Stock round is still turn 1)
             recent_actions: Vec::new(),
+            action_log: Vec::new(),
             game_end_triggered: false,
             player_order: player_ids.clone(),
             priority_deal_player: first_player_id,
@@ -1427,6 +1640,29 @@ impl BaseGame {
                 ("Operating".into(), s.round_num, step, corp)
             }
         }
+    }
+
+    /// Diagnostic: live operating_order + entity_index for the current OR.
+    /// Returns ``([], 0)`` if not in an Operating round.
+    fn debug_operating_order(&self) -> (Vec<String>, usize) {
+        if let crate::rounds::Round::Operating(s) = &self.round {
+            (s.operating_order.clone(), s.entity_index)
+        } else {
+            (Vec::new(), 0)
+        }
+    }
+
+    /// Diagnostic: dump corps at a given market cell in their tracked order.
+    fn debug_cell_corps(&self, row: u8, col: u8) -> Vec<String> {
+        self.market_cell_corps
+            .get(&(row, col))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Diagnostic: dump player_order (seating order used for president tiebreaker).
+    fn debug_player_order(&self) -> Vec<u32> {
+        self.player_order.clone()
     }
 
     /// Unplaced tiles as a list (for encoder's depot_tiles feature).
@@ -1512,7 +1748,13 @@ impl BaseGame {
     /// The dict should have at minimum a "type" and "entity" key.
     fn process_action(&mut self, action_dict: &Bound<'_, PyDict>) -> PyResult<()> {
         let action = Action::from_py_dict(action_dict)?;
+        // Snapshot the input dict (as JSON) before mutating state so failures
+        // don't leave a partial entry behind.
+        let logged = py_to_json(action_dict.as_any())?;
         self.process_action_internal(&action)?;
+        // Append to the full action log only after successful processing,
+        // matching Python's net effect for actions that complete cleanly.
+        self.action_log.push(logged);
         Ok(())
     }
 
@@ -1929,10 +2171,23 @@ impl BaseGame {
             .map_or(0, |&i| self.corporations[i].cash)
     }
 
-    /// Recent actions as list of {entity, type} dicts (most recent last).
-    /// Used by ActionHelper to check if last 3 players all passed.
+    /// Full action history: every action dict processed, in order.
+    ///
+    /// Mirrors Python `BaseGame.raw_actions` — each entry is the action dict
+    /// that was processed (with at minimum ``type`` and ``entity`` keys).
     #[getter]
-    fn raw_actions(&self) -> Vec<HashMap<String, String>> {
+    fn raw_actions(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        self.action_log
+            .iter()
+            .map(|v| json_to_py_obj(py, v))
+            .collect()
+    }
+
+    /// Sliding window of recent actions as ``[{"entity", "type"}, ...]`` dicts.
+    ///
+    /// Retained for the ActionHelper "last 3 players all passed" check.
+    #[getter]
+    fn recent_actions_summary(&self) -> Vec<HashMap<String, String>> {
         self.recent_actions
             .iter()
             .map(|(eid, atype)| {
@@ -2228,25 +2483,30 @@ impl BaseGame {
             }
         }
 
-        // Other-corp trains (same president only in 1830)
+        // Other-corp trains (same president only in 1830). Collect cross-corp
+        // trains into a separate vector and sort by train ID so the action
+        // helper's per-corp dedup picks a deterministic train when multiple
+        // same-named trains live on the seller (e.g. B&O holding 5-1 and 5-2).
+        // Python's depot iterates trains in creation order (alphabetical by
+        // id for our numbering scheme) which is why sorting here keeps both
+        // engines' dedup pick consistent. See game 28908.
         if let Some(pres_id) = president_id {
+            let mut cross: Vec<(String, String, i32, String)> = Vec::new();
             for other_corp in &self.corporations {
                 if other_corp.sym == *corp_sym {
                     continue;
                 }
-                // Same president check
                 if other_corp.president_id() != Some(pres_id) {
                     continue;
                 }
                 for t in &other_corp.trains {
-                    // Min price for other-corp trains is 1
                     let max_price = if must_buy {
                         total_cash.min(t.price)
                     } else {
                         corp_cash.min(t.price)
                     };
                     if max_price >= 1 {
-                        result.push((
+                        cross.push((
                             t.id.clone(),
                             t.name.clone(),
                             max_price,
@@ -2255,6 +2515,8 @@ impl BaseGame {
                     }
                 }
             }
+            cross.sort_by(|a, b| a.0.cmp(&b.0));
+            result.extend(cross);
         }
 
         result
@@ -2407,6 +2669,25 @@ impl BaseGame {
         }
     }
 
+    /// Stock: whether current player has bought from IPO this turn.
+    /// Used by the cleaning pipeline's ``can_buy_shares`` mirror to detect
+    /// the ``multiple_buy_only_from_market`` restriction (player can't buy
+    /// from IPO after already buying from IPO/market this turn).
+    fn stock_bought_from_ipo(&self) -> bool {
+        match &self.round {
+            Round::Stock(s) => s.bought_from_ipo,
+            _ => false,
+        }
+    }
+
+    /// Stock: corp symbol the current player bought this turn, if any.
+    fn stock_bought_corp_this_turn(&self) -> Option<String> {
+        match &self.round {
+            Round::Stock(s) => s.bought_corp_this_turn.clone(),
+            _ => None,
+        }
+    }
+
     /// Debug: check home_token_ever_placed for a corp.
     fn debug_home_token(&self, corp_sym: &str) -> bool {
         self.corp_idx
@@ -2549,10 +2830,10 @@ impl BaseGame {
     /// Returns list of (corp_sym, num_shares, percent) tuples.
     /// Each tuple represents a sellable bundle (cumulative prefix of shares).
     fn sellable_bundles(&self, player_id: u32) -> Vec<(String, usize, u8)> {
-        let stock_state = match &self.round {
-            Round::Stock(s) => s,
-            _ => return Vec::new(),
-        };
+        // Must be in Stock round.
+        if !matches!(&self.round, Round::Stock(_)) {
+            return Vec::new();
+        }
 
         // 1830 SELL_BUY_ORDER = "sell_buy_sell": selling is always allowed
         // regardless of whether the player has already bought this turn.
@@ -2601,12 +2882,10 @@ impl BaseGame {
 
             // Build cumulative bundles
             let mut cum_percent: u8 = 0;
-            let mut cum_count: usize = 0;
             let mut includes_president = false;
 
             for (_, share) in &player_shares {
                 cum_percent += share.percent;
-                cum_count += 1;
                 if share.president {
                     includes_president = true;
                 }
@@ -2639,7 +2918,12 @@ impl BaseGame {
                     }
                 }
 
-                result.push((corp.sym.clone(), cum_count, cum_percent));
+                // Bundle's "num_shares" matches Python's ``ShareBundle.num_shares()``
+                // which is ``ceil(percent / corp.share_percent)`` (== ``percent / 10``
+                // in 1830). The president share at 20% counts as 2 "share-equivalents",
+                // so a (president,) bundle reports count=2 not count=1.
+                let bundle_shares = (cum_percent as usize + 9) / 10;
+                result.push((corp.sym.clone(), bundle_shares, cum_percent));
             }
 
             // Partial president bundles: if the last share is the president share,
@@ -2662,7 +2946,9 @@ impl BaseGame {
                         .max()
                         .unwrap_or(0);
                     if max_other >= presidents_pct {
-                        result.push((corp.sym.clone(), cum_count, partial_pct));
+                        // Same num_shares convention as the main loop.
+                        let partial_shares = (partial_pct as usize + 9) / 10;
+                        result.push((corp.sym.clone(), partial_shares, partial_pct));
                     }
                 }
             }

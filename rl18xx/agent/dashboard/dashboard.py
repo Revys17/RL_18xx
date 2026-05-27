@@ -3,6 +3,7 @@ import json
 import os
 from dataclasses import fields
 from rl18xx.agent.alphazero.config import TrainingConfig
+from rl18xx.shared.atomic_io import atomic_write_json
 import datetime
 import time
 from pathlib import Path
@@ -16,15 +17,16 @@ EDITABLE_TRAINING_PARAMS = [field.name for field in fields(TrainingConfig) if fi
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev_secret_key_change_me")  # Use env var for production
 
-# Resolve paths relative to the project root (3 levels up from this file).
-# This works regardless of CWD -- both `main.py dashboard` and gunicorn --chdir.
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# Resolve paths relative to the project root.
+# dashboard.py -> dashboard/ -> agent/ -> rl18xx/ -> repo root == parents[3].
+# This works regardless of CWD (both `main.py dashboard` and gunicorn --chdir).
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
-LOOP_CONFIG_FILE_PATH = _PROJECT_ROOT / "loop_config.json"
-LOOP_STATUS_PATH = _PROJECT_ROOT / "loop_status.json"
-SELF_PLAY_GAMES_STATUS_PATH = _PROJECT_ROOT / "self_play_games_status"
-METRICS_HISTORY_PATH = _PROJECT_ROOT / "logs" / "loop" / "metrics_history.jsonl"
-MODEL_HISTORY_PATH = _PROJECT_ROOT / "logs" / "loop" / "model_history.jsonl"
+LOOP_CONFIG_FILE_PATH = REPO_ROOT / "loop_config.json"
+LOOP_STATUS_PATH = REPO_ROOT / "loop_status.json"
+SELF_PLAY_GAMES_STATUS_PATH = REPO_ROOT / "self_play_games_status"
+METRICS_HISTORY_PATH = REPO_ROOT / "logs" / "loop" / "metrics_history.jsonl"
+MODEL_HISTORY_PATH = REPO_ROOT / "logs" / "loop" / "model_history.jsonl"
 TENSORBOARD_URL_PATH = "http://localhost:6006"
 
 
@@ -91,20 +93,22 @@ def get_current_loop_config():
 def save_loop_config(config_data_to_save):
     """Saves the provided configuration data to loop_config.json."""
     try:
-        with open(LOOP_CONFIG_FILE_PATH, "w") as f:
-            json.dump(config_data_to_save, f, indent=4)
+        atomic_write_json(LOOP_CONFIG_FILE_PATH, config_data_to_save, indent=4)
         flash("Loop configuration updated. Changes will apply on the next loop iteration.", "success")
     except Exception as e:
         flash(f"Error saving loop config: {e}", "error")
 
 
-def get_games_in_progress():
+def get_games_in_progress(loop=None):
     if not SELF_PLAY_GAMES_STATUS_PATH.exists():
         return {"error": "Self-play games status file not found."}
 
     games_data = []
     try:
-        all_games = SELF_PLAY_GAMES_STATUS_PATH.glob("*.json")
+        if loop is None:
+            all_games = SELF_PLAY_GAMES_STATUS_PATH.glob("*.json")
+        else:
+            all_games = SELF_PLAY_GAMES_STATUS_PATH.glob(f"L{loop}_G*.json")
         for game_file in all_games:
             with open(game_file, "r") as f:
                 content = f.read()
@@ -160,33 +164,34 @@ def api_loop_config_handler():
         if not data:
             return jsonify({"error": "Invalid JSON payload"}), 400
 
-        # Basic validation (can be expanded)
-        required_keys = [
-            "num_loop_iterations",
-            "num_games_per_iteration",
-            "num_threads",
-            "training_config",
-            "num_readouts",
-        ]
-        if not all(key in data for key in required_keys):
-            return (
-                jsonify({"error": "Missing required keys in configuration data.", "required_keys": required_keys}),
-                400,
-            )
+        # Type checks (only for the fields actually present — partial updates allowed)
+        type_specs = {
+            "num_loop_iterations": int,
+            "num_games_per_iteration": int,
+            "num_threads": int,
+            "training_config": dict,
+            "num_readouts": int,
+        }
+        for key, expected_type in type_specs.items():
+            if key in data and not isinstance(data[key], expected_type):
+                return jsonify({"error": f"Invalid type for '{key}': expected {expected_type.__name__}."}), 400
 
-        # Type checks (example)
-        if (
-            not isinstance(data.get("num_loop_iterations"), int)
-            or not isinstance(data.get("num_games_per_iteration"), int)
-            or not isinstance(data.get("num_threads"), int)
-            or not isinstance(data.get("training_config"), dict)
-            or not isinstance(data.get("num_readouts"), int)
-        ):
-            return jsonify({"error": "Invalid data types in configuration."}), 400
+        # Load existing on-disk config and merge the POST body on top, so the
+        # caller can do a partial update without dropping fields like
+        # ``target_experiences`` or ``endAfterCurrentLoop`` that aren't in the body.
+        merged = {}
+        if LOOP_CONFIG_FILE_PATH.exists():
+            try:
+                with open(LOOP_CONFIG_FILE_PATH, "r") as f:
+                    merged = json.load(f)
+            except json.JSONDecodeError:
+                merged = {}
+            except Exception as e:
+                return jsonify({"error": f"Failed to read existing loop configuration: {e}"}), 500
+        merged.update(data)
 
         try:
-            with open(LOOP_CONFIG_FILE_PATH, "w") as f:
-                json.dump(data, f, indent=4)
+            atomic_write_json(LOOP_CONFIG_FILE_PATH, merged, indent=4)
             return jsonify({"message": "Loop configuration updated successfully."}), 200
         except Exception as e:
             return jsonify({"error": f"Failed to write loop configuration: {e}"}), 500
@@ -194,8 +199,9 @@ def api_loop_config_handler():
 
 @app.route("/api/games_status")
 def api_games_status():
-    games_data = get_games_in_progress()
-    if "error" in games_data:
+    loop = request.args.get("loop", type=int)
+    games_data = get_games_in_progress(loop=loop)
+    if isinstance(games_data, dict) and "error" in games_data:
         return jsonify(games_data), 500
     return jsonify(games_data)
 
@@ -253,7 +259,22 @@ def api_system_metrics():
         memory = psutil.virtual_memory()
         memory_percent = memory.percent
 
-        return jsonify({"cpu_percent": round(cpu_percent, 1), "memory_percent": round(memory_percent, 1)})
+        response = {
+            "cpu_percent": round(cpu_percent, 1),
+            "memory_percent": round(memory_percent, 1),
+        }
+
+        # GPU memory (only when CUDA is available in this process)
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                response["gpu_memory_mb"] = round(torch.cuda.memory_allocated() / 1e6, 1)
+                response["gpu_max_memory_mb"] = round(torch.cuda.max_memory_allocated() / 1e6, 1)
+        except ImportError:
+            pass
+
+        return jsonify(response)
     except Exception as e:
         return jsonify({"error": f"Failed to get system metrics: {e}"}), 500
 

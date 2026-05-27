@@ -204,13 +204,14 @@ class AlphaZeroModel(nn.Module):
     # Subclasses only need to implement `_forward_encoded_batch`, which is the
     # architecture-specific bit: take a list of encoded game-state tuples,
     # assemble them into batched tensors for the network, run forward(), and
-    # return raw (policy_logits, value_logits, aux_pred). The base class
-    # handles single-vs-batch dispatch and the final softmax / log_softmax.
+    # return raw (policy_logits, win_loss_logits, score_pred, aux_pred). The
+    # base class handles single-vs-batch dispatch and the final softmax /
+    # log_softmax conversions for inference consumers.
     # ------------------------------------------------------------------
 
     def _forward_encoded_batch(
         self, encoded_game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]]
-    ) -> Tuple[Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         raise NotImplementedError("Subclasses must implement _forward_encoded_batch")
 
     def run(self, game_state: BaseGame) -> Tuple[Tensor, Tensor, Tensor]:
@@ -230,12 +231,28 @@ class AlphaZeroModel(nn.Module):
     def run_many_encoded(
         self, encoded_game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]]
     ) -> Tuple[Tensor, Tensor, Tensor]:
+        """Run the network for inference and return (probabilities, log_probs, values).
+
+        With the KataGo-style dual value head, the network emits two value
+        outputs: ``win_loss_logits`` (softmaxed here to give the per-player
+        win probability distribution MCTS backs up) and ``score_pred``
+        (continuous normalized net-worth fractions). MCTS reads only the
+        win-loss output — the score head is an auxiliary signal used during
+        training to give the trunk a dense per-game gradient. The score
+        prediction is therefore discarded here; callers that want it should
+        use ``_forward_encoded_batch`` directly.
+        """
         if len(encoded_game_states) == 0:
             raise ValueError("Received no game states to run.")
-        policy_logits, value_logits, _ = self._forward_encoded_batch(encoded_game_states)
+        policy_logits, win_loss_logits, _score_pred, _aux = self._forward_encoded_batch(encoded_game_states)
         probabilities = F.softmax(policy_logits, dim=1)
         log_probs = F.log_softmax(policy_logits, dim=1)
-        return probabilities, log_probs, value_logits
+        # Training treats the win-loss head as a classifier over players
+        # (softmax + KL-div in train.py), so inference returns calibrated
+        # per-player probabilities in [0, 1] rather than raw logits. MCTS
+        # backs these up into child_W / child_Q directly.
+        values = F.softmax(win_loss_logits, dim=-1)
+        return probabilities, log_probs, values
 
 
 class AlphaZeroGNNModel(AlphaZeroModel):
@@ -340,14 +357,20 @@ class AlphaZeroGNNModel(AlphaZeroModel):
             lay_tile_info,
         )
 
-        # Deeper value head with active-player signal (Phase 5.2 + 5.3)
-        head_hidden = self.config.shared_trunk_hidden_dim // 2
-        value_input_dim = self.config.shared_trunk_hidden_dim + self.config.value_size  # trunk + one-hot player
-        value_layers = [nn.Linear(value_input_dim, head_hidden), nn.GELU()]
-        for _ in range(self.config.value_head_layers - 2):
-            value_layers.extend([nn.Linear(head_hidden, head_hidden), nn.GELU()])
-        value_layers.append(nn.Linear(head_hidden, self.config.value_size))
-        self.value_head = nn.Sequential(*value_layers)
+        # Dual value head (KataGo-style) — no player one-hot indicator. The
+        # encoder canonicalizes the game state so the active player is always
+        # at slot 0, which means the indicator would always be one_hot(0) and
+        # carries no information. Both heads share the same trunk input and
+        # MLP topology; they differ only in their training targets and loss
+        # functions:
+        #
+        # - win_loss_head: trained against share-of-winners (KL-div). MCTS
+        #   reads this head and backs it up through the tree.
+        # - score_head:    trained against normalized net-worth fractions
+        #   (MSE). Auxiliary — provides a dense gradient signal to the trunk;
+        #   not consumed by MCTS.
+        self.win_loss_head = self._build_value_head_mlp()
+        self.score_head = self._build_value_head_mlp()
 
         # Auxiliary head: predict log(legal_action_count) (Phase 5.4)
         self.aux_action_count_head = nn.Linear(self.config.shared_trunk_hidden_dim, 1)
@@ -356,6 +379,16 @@ class AlphaZeroGNNModel(AlphaZeroModel):
             self.load_weights(self.config.model_checkpoint_file)
         else:
             self.initialize_weights()
+
+    def _build_value_head_mlp(self) -> nn.Sequential:
+        """Build the shared MLP topology used by both win-loss and score heads."""
+        head_hidden = self.config.shared_trunk_hidden_dim // 2
+        value_input_dim = self.config.shared_trunk_hidden_dim
+        layers = [nn.Linear(value_input_dim, head_hidden), nn.GELU()]
+        for _ in range(self.config.value_head_layers - 2):
+            layers.extend([nn.Linear(head_hidden, head_hidden), nn.GELU()])
+        layers.append(nn.Linear(head_hidden, self.config.num_players))
+        return nn.Sequential(*layers)
 
     def initialize_weights(self):
         """Initializes weights using Kaiming He initialization for GELU-activated layers.
@@ -374,7 +407,7 @@ class AlphaZeroGNNModel(AlphaZeroModel):
 
     def _forward_encoded_batch(
         self, encoded_game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]]
-    ) -> Tuple[Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         batch_size = len(encoded_game_states)
         base_edge_index = encoded_game_states[0][2]
         base_edge_attributes = encoded_game_states[0][3]
@@ -411,25 +444,30 @@ class AlphaZeroGNNModel(AlphaZeroModel):
         map_data: Batch,
         round_type_idx: Optional[Tensor] = None,
         active_player_idx: Optional[Tensor] = None,
-    ) -> tuple[Tensor, Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         """
         Performs the forward pass of the network.
-        Returns (policy_logits, value_logits, aux_action_count_pred).
+        Returns ``(policy_logits, win_loss_logits, score_pred, aux_action_count_pred)``.
+
+        The win-loss and score heads are the two halves of the KataGo-style
+        dual value head — see ``_build_value_head_mlp`` and the head
+        construction in ``init_model``.
 
         Args:
-            game_state_data: (B, game_state_size) game state vectors
+            game_state_data: (B, game_state_size) game state vectors. These are assumed
+                to be canonicalized (active player at slot 0).
             map_data: PyG Batch of graph data
             round_type_idx: (B,) integer tensor of round type indices (0=Stock, 1=Operating, 2=Auction).
                 If None, defaults to 0 (Stock) for all samples.
-            active_player_idx: (B,) integer tensor of active player indices (0-3).
-                If None, defaults to 0 for all samples.
+            active_player_idx: kept for API compatibility but unused — the value head no
+                longer takes an active-player one-hot indicator (canonicalization makes
+                it always one_hot(0)).
         """
+        del active_player_idx  # unused — canonicalized states have active player at slot 0
         batch_size = game_state_data.shape[0]
 
         if round_type_idx is None:
             round_type_idx = torch.zeros(batch_size, dtype=torch.long, device=game_state_data.device)
-        if active_player_idx is None:
-            active_player_idx = torch.zeros(batch_size, dtype=torch.long, device=game_state_data.device)
 
         # --- 1. Game State Embedding ---
         gs_embed = F.gelu(self.bn_game_state1(self.fc_game_state1(game_state_data.float())))
@@ -483,12 +521,15 @@ class AlphaZeroGNNModel(AlphaZeroModel):
         # Phase 5.6: pass per-node GNN embeddings for attention-based hex scoring
         policy_logits = self.policy_head(current_features, node_repr_proj, map_data.batch)
 
-        # Value head with active-player indicator (Phase 5.2)
-        player_indicator = F.one_hot(active_player_idx, num_classes=self.config.value_size).float()
-        value_input = torch.cat([current_features, player_indicator], dim=1)
-        value_logits = self.value_head(value_input)
+        # Dual value heads (KataGo-style). Both take the canonicalized trunk
+        # (active player at slot 0), no one-hot indicator. ``win_loss_logits``
+        # is softmaxed by MCTS into a per-player win distribution and backed
+        # up through the tree; ``score_pred`` is auxiliary (MSE-trained on
+        # normalized net-worth fractions) and discarded by MCTS.
+        win_loss_logits = self.win_loss_head(current_features)
+        score_pred = self.score_head(current_features)
 
         # Auxiliary head: predict log(legal_action_count) (Phase 5.4)
         aux_action_count_pred = self.aux_action_count_head(current_features)
 
-        return policy_logits, value_logits, aux_action_count_pred
+        return policy_logits, win_loss_logits, score_pred, aux_action_count_pred

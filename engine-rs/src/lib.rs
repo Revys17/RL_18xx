@@ -4,6 +4,7 @@ pub mod actions;
 pub mod core;
 pub mod encoder;
 pub mod entities;
+pub mod factored;
 pub mod game;
 pub mod graph;
 pub mod map;

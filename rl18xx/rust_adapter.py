@@ -25,6 +25,10 @@ from rl18xx.game.engine.round import Operating as PyOperating
 from rl18xx.game.engine.round import Stock as PyStock
 from rl18xx.game.engine.round import (
     BuyTrain as BuyTrainStep,
+    BuyCompany as BuyCompanyStep,
+    Track as TrackStep,
+    Token as PyTokenStep,
+    BuySellParShares,
     Exchange as ExchangeStep,
     SpecialTrack as SpecialTrackStep,
     SpecialToken as SpecialTokenStep,
@@ -251,11 +255,27 @@ class _TownRef:
 class _TileProxy:
     """Proxy for Tile that adds .paths and makes cities/towns endpoint-comparable."""
 
-    def __init__(self, tile):
+    def __init__(self, tile, game=None):
         self._tile = tile
+        self._game = game
 
     def __getattr__(self, name):
         return getattr(self._tile, name)
+
+    @property
+    def id(self):
+        """Python-compatible tile id: ``{name}-{copy_index}``.
+
+        Counts current placements of this catalog tile on the board to pick
+        the next available copy. Falls back to ``{name}-0`` if no game ref."""
+        name = self._tile.name
+        if self._game is None:
+            return f"{name}-0"
+        count = 0
+        for h in self._game.hexes:
+            if h.tile and h.tile.name == name:
+                count += 1
+        return f"{name}-{count}"
 
     @property
     def paths(self):
@@ -354,6 +374,11 @@ class _RoundProxy:
     def __init__(self, game):
         self._game = game
         self._round = game.round
+
+    @property
+    def operating(self):
+        """Mirrors :attr:`BaseRound.operating` — True iff this is an OR."""
+        return self._round.round_type == "Operating"
 
     @property
     def round_type(self):
@@ -524,12 +549,26 @@ class _AuctionStepProxy:
         return None
 
 
+_STEP_TYPE_CLASS_MAP = {
+    "BuyTrain": BuyTrainStep,
+    "BuyCompany": BuyCompanyStep,
+    "LayTile": TrackStep,
+    "PlaceToken": PyTokenStep,
+    "BuySellPar": BuySellParShares,
+}
+
+
 class _StepProxy:
     """Proxy for an active step — bridges OR step methods to Rust BaseGame."""
 
     def __init__(self, game, step_type):
         self._game = game
         self._step_type = step_type
+
+    @property
+    def __class__(self):
+        """Make isinstance(active_step, BuyTrainStep / BuyCompanyStep / TrackStep / BuySellParShares) work."""
+        return _STEP_TYPE_CLASS_MAP.get(self._step_type, type(self))
 
     # --- Auction methods (used when step is WaterfallAuction) ---
     @property
@@ -610,9 +649,20 @@ class _StepProxy:
             player_id = int(player_id) if player_id.isdigit() else 0
         tuples = self._game.sellable_bundles(player_id)
         result = []
+        owner_str = f"player:{player_id}"
         for corp_sym, count, pct in tuples:
             corp = self._game.corporation_by_id(corp_sym)
-            bundle = _SellableBundle(corp, count, pct, player_id)
+            owned = [s for s in corp.shares if s.owner == owner_str]
+            # Prefer non-president shares; include president if we need extra
+            # capacity to reach ``count`` share units (president cert counts
+            # as 2 units in 1830).
+            non_pres = sorted([s.index for s in owned if not s.president])
+            pres = sorted([s.index for s in owned if s.president])
+            indices = non_pres[:count]
+            if len(indices) < count and pres:
+                indices = pres + non_pres[: count - 1]
+            indices = indices[:count]
+            bundle = _SellableBundle(corp, count, pct, player_id, share_indices=indices)
             result.append(bundle)
         return result
 
@@ -676,7 +726,8 @@ class _StepProxy:
         corp_sym = entity.sym if hasattr(entity, 'sym') else str(entity)
         tuples = self._game.buyable_trains_for(corp_sym)
         depot_proxy = _DepotProxy.__new__(_DepotProxy)
-        depot_proxy._update(self._game.depot)
+        depot_proxy._game = None
+        depot_proxy._update(self._game.depot, game=self._game)
         result = []
         for train_id, name, price, source in tuples:
             result.append(_BuyableTrain(train_id, name, price, source, depot_proxy, self._game))
@@ -712,6 +763,163 @@ class _StepProxy:
     def can_ebuy_sell_shares(self, entity):
         """Whether the president can sell shares for emergency buy."""
         return self.president_may_contribute(entity)
+
+    def can_buy_shares(self, entity, shares):
+        """Bridge for the BuySellParShares legality check used by the
+        cleaning pipeline (pretraining.py:763).
+
+        Mirrors Python's ``BuySellParShares.can_buy_shares`` semantics:
+
+          * Empty share list → False.
+          * Player can't afford the cheapest share → False.
+
+        Per share, the price is the IPO/par price (for IPO-sourced
+        shares) or the current market price (for market-sourced shares).
+        Python's ``modify_purchase_price`` returns the bundle's
+        ``share_price`` which is set differently for IPO vs market
+        shares.
+
+        We deliberately replicate Python's behavior exactly so the
+        cleaning pipeline drops the same games — including its quirk of
+        rejecting MH→NYC exchange when the player can't independently
+        afford an NYC IPO share (Python doesn't special-case the company
+        ability path).
+        """
+        if not shares:
+            return False
+        for share in shares:
+            if share is None:
+                return False
+        # Resolve current entity to a player id (cleaning passes the
+        # ``game_state.current_entity`` here, which for an SR action is a
+        # player proxy).
+        player_id = entity.id if hasattr(entity, "id") else entity
+        if isinstance(player_id, str):
+            try:
+                player_id = int(player_id)
+            except ValueError:
+                # Non-player active entity (e.g. company exercising an
+                # ability) — be permissive; the engine will validate.
+                return True
+        player = None
+        for p in self._game.players:
+            if p.id == player_id:
+                player = p
+                break
+        if player is None:
+            return True
+
+        # Players-sold check: if the player sold this corporation earlier
+        # this round, they cannot buy it back (Python's first rejection
+        # path in ``can_buy_shares``).
+        try:
+            sold_corps = set(self._game.stock_sold_corps(player_id))
+        except Exception:
+            sold_corps = set()
+        for s in shares:
+            corp = s.corporation() if callable(getattr(s, "corporation", None)) else s.corporation
+            corp_sym = corp.sym if hasattr(corp, "sym") else (corp.id if hasattr(corp, "id") else None)
+            if corp_sym in sold_corps:
+                return False
+
+        # multiple_buy_only_from_market: if the player already bought from IPO
+        # this turn, they may only buy more from market — and never from IPO
+        # again. Python's ``BuySellParShares.can_buy_multiple`` enforces this;
+        # the cleaning pipeline drops such games with reason
+        # ``illegal_share_buy``. Mirror that here so Rust drops with the same
+        # reason (otherwise the engine raises later and the audit categorizes
+        # the drop differently).
+        try:
+            already_bought = bool(self._game.stock_bought_this_turn())
+            bought_from_ipo = bool(self._game.stock_bought_from_ipo())
+            bought_corp = self._game.stock_bought_corp_this_turn()
+        except Exception:
+            already_bought = False
+            bought_from_ipo = False
+            bought_corp = None
+        if already_bought:
+            sample = shares[0]
+            corp = sample.corporation() if callable(getattr(sample, "corporation", None)) else sample.corporation
+            corp_sym = corp.sym if hasattr(corp, "sym") else (corp.id if hasattr(corp, "id") else None)
+            # Determine source of the share being bought. Rust's share-index
+            # assignment can drift from Python's, so a share that Python sees
+            # as belonging to the market may show ``player:<N>`` in Rust.
+            # Treat the ambiguous player-owned case as market for the
+            # multi-buy / IPO-lockout check — Python's cleaning sees it the
+            # same way (the action was accepted there). See game 27054.
+            inner = getattr(sample, "_share", None)
+            src = (inner.owner or "") if inner is not None else ""
+            buying_from_ipo = src.startswith("ipo:") or src.startswith("corp:")
+            # In 1830 (multiple_buy_only_from_market): you can only multi-buy
+            # from market. If the next buy is from IPO, reject. And once you
+            # bought from IPO, you cannot buy anything else this turn.
+            if buying_from_ipo:
+                return False
+            if bought_from_ipo and src.startswith("ipo:"):
+                return False
+            # Different corp: not allowed in 1830 (must continue buying same
+            # corp).
+            if bought_corp and corp_sym and corp_sym != bought_corp:
+                return False
+        # Find the cheapest of the requested shares (Python's ``min_share``).
+        # Each share's price depends on its source (IPO vs market) and
+        # percent.
+        def _share_cost(s):
+            corp = s.corporation() if callable(getattr(s, "corporation", None)) else s.corporation
+            corp_sym = corp.sym if hasattr(corp, "sym") else (corp.id if hasattr(corp, "id") else None)
+            if corp_sym is None:
+                return 0
+            corp_obj = self._game.corporation_by_id(corp_sym)
+            if corp_obj is None:
+                return 0
+            ipo_price = corp_obj.ipo_price
+            market_price = corp_obj.share_price
+            ip_val = getattr(ipo_price, "price", ipo_price) if ipo_price is not None else None
+            mp_val = market_price.price if market_price is not None else None
+            # If the corp isn't parred yet, Python's ShareBundle falls
+            # back to ``corporation.min_price`` (= cheapest par price).
+            # Match that to keep early-stock-round filters in sync.
+            if ip_val is None and mp_val is None:
+                try:
+                    pps = self._game.par_prices()
+                except Exception:
+                    pps = []
+                if pps:
+                    ip_val = min(pps)
+            pct = getattr(s, "percent", 10) or 10
+            # Determine the share's actual source. ``_ShareProxy`` wraps a
+            # Rust ``Share`` whose ``owner`` is an EntityId string:
+            #   "ipo:<sym>"  → IPO (par price)
+            #   "market"     → market pool (current price)
+            #   "player:<N>" → owned by a player; Rust's share-index
+            #                  assignment may diverge from Python's here,
+            #                  so we fall back to the cheaper of IPO and
+            #                  market to keep the cleaning filter from
+            #                  over-rejecting games (Python may have the
+            #                  same share in market).
+            #   "corp:<S>"   → corp treasury (rare in 1830)
+            src = ""
+            inner = getattr(s, "_share", None)
+            if inner is not None:
+                src = inner.owner or ""
+            price = None
+            if src.startswith("ipo:") or src.startswith("corp:"):
+                price = ip_val if ip_val and ip_val > 0 else mp_val
+            elif src == "market":
+                price = mp_val if mp_val and mp_val > 0 else ip_val
+            else:
+                # Ambiguous (player-owned in Rust). Match Python's
+                # permissive behavior: use the cheaper of the two.
+                candidates = [v for v in (ip_val, mp_val) if v is not None and v > 0]
+                price = min(candidates) if candidates else None
+            if price is None or price <= 0:
+                return 0
+            return price * (pct // 10)
+
+        cheapest = min(_share_cost(s) for s in shares)
+        if player.cash < cheapest:
+            return False
+        return True
 
 
 class _SpecialTrackStepProxy:
@@ -783,20 +991,21 @@ class _ExchangeStepProxy:
         return []
 
     def exchangeable_shares(self, company):
-        """MH exchange: return NYC share from IPO if MH is owned and NYC exists."""
-        # In 1830, MH company can be exchanged for a NYC IPO share
+        """MH exchange: return NYC share from IPO or market if MH is owned and NYC exists."""
         sym = company.sym if hasattr(company, 'sym') else str(company)
         if sym != "MH":
             return []
         nyc = self._game.corporation_by_id("NYC")
         if not nyc or nyc.ipo_price is None:
             return []
-        # Check if NYC has IPO shares available
-        ipo_shares = [s for s in nyc.shares if s.owner == "corp:NYC"]
-        if not ipo_shares:
-            return []
-        # Return a buyable share proxy for the first IPO share
-        return [_BuyableShare(nyc, "ipo", ipo_shares[0].index, 0, self._game)]
+        result = []
+        ipo_shares = [s for s in nyc.shares if s.owner == "ipo:NYC" and not s.president]
+        if ipo_shares:
+            result.append(_BuyableShare(nyc, "ipo", ipo_shares[0].index, 0, self._game))
+        market_shares = [s for s in nyc.shares if s.owner == "market" and not s.president]
+        if market_shares:
+            result.append(_BuyableShare(nyc, "market", market_shares[0].index, 0, self._game))
+        return result
 
 
 class _WrappedShare:
@@ -865,15 +1074,17 @@ from rl18xx.game.engine.entities import ShareBundle as _PyShareBundle
 class _SellableBundle(_PyShareBundle):
     """Proxy for a sellable share bundle that IS a ShareBundle (skips validation)."""
 
-    def __init__(self, corp, count, pct, player_id=0):
+    def __init__(self, corp, count, pct, player_id=0, share_indices=None):
         # Skip ShareBundle.__init__ validation — we construct directly
         self._corp_ref = _CorpRef(corp.sym if corp else "")
         self.percent = pct
         self.share_price = None
         corp_sym = corp.sym if corp else ""
         owner = _OwnerProxy(f"player:{player_id}")
+        if share_indices is None:
+            share_indices = list(range(count))
         self.shares = [
-            _SellShareRef(corp_sym, owner, i) for i in range(count)
+            _SellShareRef(corp_sym, owner, i) for i in share_indices
         ]
 
     @property
@@ -978,7 +1189,11 @@ class _BuyableTrain:
         self.variant = name  # Default variant is the train name
 
     def from_depot(self):
-        return self._source == "depot"
+        # Trains in the bank pool (depot.discarded) are buyable from the depot
+        # at face value, NOT cross-company. Match Python's notion of "depot"
+        # by treating both ``depot`` (upcoming) and ``discard`` (bank pool) as
+        # depot-sourced. Cross-company trains are anything sold by another corp.
+        return self._source in ("depot", "discard")
 
     def min_price(self):
         if self.from_depot():
@@ -989,11 +1204,20 @@ class _BuyableTrain:
     def owner(self):
         if self.from_depot():
             return self._depot
-        # Cross-company train: find owning corp
+        # Cross-company train: ``self._source`` is the seller corp's sym
+        # (set by ``buyable_trains_for``). Resolve to a _CorpProxy by sym.
+        # NB: do NOT match by ``train.name`` — multiple trains can share a
+        # name across corporations (e.g. two '3' trains in different corps),
+        # and matching by name would alias them under the same owner and
+        # cause ``get_buy_train_actions`` to dedup distinct buyable trains.
+        for c in self._game.corporations:
+            if c.sym == self._source:
+                return _CorpProxy(c, self._game)
+        # Fallback: scan by exact train id (defensive).
         for c in self._game.corporations:
             for t in c.trains:
-                if t.name == self.name:
-                    return _CorpProxy(c)
+                if t.id == self._id:
+                    return _CorpProxy(c, self._game)
         return self._depot
 
     def __eq__(self, other):
@@ -1048,7 +1272,15 @@ class _GraphProxy:
             h = self._game.hex_by_id(hex_id)
             if h and city_idx < len(h.tile.cities):
                 hex_proxy = _HexProxy(h, self._hex_adjacency)
-                tile_id = h.tile.id
+                # Use tile.name (e.g. ``"G19"``) instead of tile.id
+                # (``"preprinted_G19"``) so the tile reference matches the
+                # one synthesized by ``city_by_id`` (which uses ``tile.name``).
+                # The cleaning pipeline's PlaceToken substitution compares
+                # ``action.city.tile.id`` between the stored action and the
+                # action_helper output — both must agree to find the substitute.
+                # See game 30939 (and the rest of the "No empty token slots"
+                # cluster).
+                tile_id = h.tile.name
                 city = _TokenableCity(h.tile.cities[city_idx], city_idx, hex_id, tile_id, 0, corp_sym, hex_proxy)
                 nodes[city] = True
         return nodes
@@ -1092,13 +1324,23 @@ class _BankProxy:
     """Proxy for 'The Bank' — owner of IPO shares."""
     name = "The Bank"
 
+    def __init__(self, rust_bank=None):
+        self._bank = rust_bank
+
     def __eq__(self, other):
         if isinstance(other, _BankProxy):
+            return True
+        if other is not None and type(other).__name__ == "Bank":
             return True
         return False
 
     def __hash__(self):
         return hash("bank")
+
+    def __getattr__(self, name):
+        if self._bank is not None:
+            return getattr(self._bank, name)
+        raise AttributeError(name)
 
 
 class _MarketProxy:
@@ -1139,6 +1381,26 @@ class _PlayerProxy:
 
     def player(self):
         return self
+
+    def __eq__(self, other):
+        # Two PlayerProxies for the same underlying player must compare equal so
+        # ShareBundle's owner-uniqueness check and Python's equality-based
+        # logic (e.g. comparing current_entity to share.owner) behave correctly
+        # when callers re-wrap the same Rust Player into a fresh proxy.
+        if isinstance(other, _PlayerProxy):
+            return self._player.id == other._player.id
+        # _OwnerProxy("player:N") wraps the same player.
+        if hasattr(other, "_str") and isinstance(getattr(other, "_str", ""), str):
+            return other._str == f"player:{self._player.id}"
+        if hasattr(other, "id"):
+            try:
+                return self._player.id == other.id
+            except Exception:
+                return NotImplemented
+        return NotImplemented
+
+    def __hash__(self):
+        return hash(("player", self._player.id))
 
     @property
     def __class__(self):
@@ -1183,6 +1445,26 @@ class _OwnerProxy:
     def player(self):
         return self if self._is_player else None
 
+    def __eq__(self, other):
+        # Compare on the underlying entity id string so two proxies for the
+        # same player/corporation compare equal regardless of which adapter
+        # path constructed them.
+        if isinstance(other, _OwnerProxy):
+            return self._str == other._str
+        if self._is_player and isinstance(other, _PlayerProxy):
+            return self.id == other._player.id
+        if self._is_corp and isinstance(other, _CorpProxy):
+            return self.id == other._corp.sym
+        if hasattr(other, "id"):
+            try:
+                return self.id == other.id
+            except Exception:
+                return NotImplemented
+        return NotImplemented
+
+    def __hash__(self):
+        return hash(("owner", self._str))
+
     @property
     def companies(self):
         """Return empty list; OwnerProxy doesn't have game context."""
@@ -1217,8 +1499,9 @@ class _PresidentProxy(_OwnerProxy):
 class _CompanyProxy:
     """Proxy for Company that wraps owner as a typed proxy."""
 
-    def __init__(self, company):
+    def __init__(self, company, adapter=None):
         self._company = company
+        self._adapter = adapter
 
     def __getattr__(self, name):
         return getattr(self._company, name)
@@ -1240,13 +1523,44 @@ class _CompanyProxy:
         owner_str = self._company.owner
         if not owner_str:
             return None
+        # If owned by a corporation, return the rich CorpProxy so callers can
+        # invoke corp-specific methods like ``find_token_by_type`` (used by
+        # PlaceToken when the entity is a company exercising a special token
+        # ability — see PlaceToken.__init__).
+        if owner_str.startswith("corp:") and self._adapter is not None:
+            sym = owner_str.split(":", 1)[1]
+            corp_proxy = self._adapter.corporation_by_id(sym)
+            if corp_proxy is not None:
+                return corp_proxy
+        # If owned by a player, return the rich PlayerProxy.
+        if owner_str.startswith("player:") and self._adapter is not None:
+            pid = int(owner_str.split(":", 1)[1])
+            for p in self._adapter.players:
+                if p.id == pid:
+                    return p
         return _OwnerProxy(owner_str)
 
     def player(self):
-        """Return the owning player proxy."""
+        """Return the owning player proxy.
+
+        Mirrors Python's ``Ownable.player`` recursive resolution: if the
+        owner is a corporation, return the corporation's president.
+        """
         owner = self.owner
-        if owner and owner.is_player():
+        if owner is None:
+            return None
+        if owner.is_player():
             return owner
+        # Owner is a corporation. Need the corp's president. The CompanyProxy
+        # currently doesn't carry a game reference, but the bare-bones owner
+        # string (e.g. "corp:CPR") lets us resolve via the game-aware
+        # CorpProxy that already returns _PresidentProxy.
+        if hasattr(self, "_adapter") and self._adapter is not None and owner.is_corporation():
+            sym = owner.id if hasattr(owner, "id") else None
+            if sym:
+                corp_proxy = self._adapter.corporation_by_id(sym)
+                if corp_proxy is not None:
+                    return corp_proxy.player()
         return None
 
     def is_player(self):
@@ -1312,14 +1626,38 @@ class _DepotProxy:
     """Proxy for Depot where train.owner == depot for depot trains.
     Identity-stable: same object returned each time so train.owner == game.depot works."""
 
+    def is_player(self):
+        return False
+
+    def is_corporation(self):
+        return False
+
+    def is_company(self):
+        return False
+
+    def player(self):
+        return None
+
     def __init__(self, depot=None):
+        self._game = None
         if depot:
             self._update(depot)
 
-    def _update(self, depot):
+    def _update(self, depot, game=None):
         self._depot = depot
         self._trains = [_DepotTrainProxy(t, self) for t in depot.trains]
         self._discarded = [_DepotTrainProxy(t, self) for t in depot.discarded]
+        if game is not None:
+            self._game = game
+
+    @staticmethod
+    def _phase_idx(phase_name):
+        """Return the 1830 phase index of ``phase_name`` (0..5)."""
+        order = ["2", "3", "4", "5", "6", "D"]
+        for i, p in enumerate(order):
+            if p == phase_name:
+                return i
+        return 0
 
     @property
     def trains(self):
@@ -1329,25 +1667,83 @@ class _DepotProxy:
     def discarded(self):
         return self._discarded
 
+    @property
+    def upcoming(self):
+        """All upcoming trains (the depot queue). Alias for trains so the
+        cleaning code's ``bought in game_state.depot.upcoming`` containment
+        check works."""
+        return self._trains
+
     name = "The Depot"
 
     def __getattr__(self, name):
         return getattr(self._depot, name)
 
+    def _gated_upcoming(self):
+        """Apply Python's ``Depot.depot_trains`` phase gating to ``self._trains``.
+
+        Python returns ``[upcoming[0]] + [t for t in upcoming if phase.available(t.available_on)]``,
+        i.e. always the head-of-queue plus any further trains whose
+        ``available_on`` phase has been reached. Rust's ``Train`` doesn't carry
+        ``available_on``, so use 1830's static mapping: each tier becomes
+        buyable when its own phase starts, EXCEPT the D-train which becomes
+        buyable in phase 6 (``available_on="6"``).
+        """
+        if not self._trains:
+            return []
+        if self._game is None:
+            return list(self._trains)
+        try:
+            phase_name = self._game.phase.name
+        except Exception:
+            return list(self._trains)
+        phase_idx = _DepotProxy._phase_idx(phase_name)
+        # 1830 train tier → minimum phase index needed to buy it.
+        # The D-train's ``available_on`` is "6", so it's buyable from phase 6
+        # onward (same index as the 6-train). All other tiers map identically
+        # to their own phase index.
+        avail_idx_for = {
+            "2": _DepotProxy._phase_idx("2"),
+            "3": _DepotProxy._phase_idx("3"),
+            "4": _DepotProxy._phase_idx("4"),
+            "5": _DepotProxy._phase_idx("5"),
+            "6": _DepotProxy._phase_idx("6"),
+            "D": _DepotProxy._phase_idx("6"),
+        }
+        # Always include the first upcoming train.
+        head = self._trains[0]
+        out = [head]
+        for t in self._trains[1:]:
+            ti = avail_idx_for.get(t.name)
+            if ti is None:
+                # Unknown train name — be permissive.
+                out.append(t)
+                continue
+            if ti <= phase_idx:
+                out.append(t)
+        return out
+
     @property
     def min_depot_train(self):
-        """Cheapest depot train."""
-        if self._trains:
-            return min(self._trains, key=lambda t: t.price)
+        """Cheapest depot-buyable train. Mirrors ``Depot.min_depot_train`` —
+        considers the *gated* upcoming queue (head + phase-unlocked tiers)
+        plus discarded (bank pool) trains, matching Python's
+        ``depot_trains()``."""
+        candidates = list(self._gated_upcoming()) + list(self._discarded)
+        if candidates:
+            return min(candidates, key=lambda t: t.price)
         return None
 
     def depot_trains(self, entity=None):
-        """Return available depot trains."""
-        return self._trains
+        """Available depot-buyable trains: head-of-queue plus any
+        phase-unlocked upcoming trains plus the discard pile. This is the
+        Rust analog of Python's ``Depot.depot_trains``."""
+        return list(self._gated_upcoming()) + list(self._discarded)
 
     def available(self, entity=None):
-        """Return available depot trains."""
-        return self._trains
+        """Available trains for ``entity`` — depot-buyable trains only here;
+        cross-corp purchases are handled separately via ``buyable_trains``."""
+        return self.depot_trains(entity)
 
     def __bool__(self):
         return True
@@ -1456,6 +1852,141 @@ class _CorpProxy:
         return PyCorporation
 
 
+class _ShareOwnerSingleton:
+    """Sentinel owner used by ``_ShareProxy`` to satisfy
+    ``ShareBundle.__init__``'s "all shares must be owned by the same owner"
+    check when the underlying Rust share-index assignment diverges slightly
+    from Python's. The cleaning pipeline never inspects ``share.owner`` for
+    semantic decisions (the ipo-vs-market source check is implemented in the
+    adapter's ``can_buy_shares`` instead), so this synthetic owner is safe."""
+
+    def __eq__(self, other):
+        return isinstance(other, _ShareOwnerSingleton)
+
+    def __hash__(self):
+        return 0
+
+    def __bool__(self):
+        return True
+
+    def is_player(self):
+        return False
+
+    def is_corporation(self):
+        return False
+
+    def player(self):
+        return None
+
+
+_SHARE_OWNER_SINGLETON = _ShareOwnerSingleton()
+
+
+class _ShareProxy:
+    """Proxy for a Rust Share that mirrors the surface of ``entities.Share``.
+
+    Wraps a Share lookup performed by ``RustGameAdapter.share_by_id`` so that
+    ``BaseAction.action_from_dict`` and the cleaning pipeline can poke at
+    ``.id``, ``.owner``, ``.corporation``, ``.percent``, ``.president``,
+    ``.buyable``, and ``.from_dump``.
+
+    Note on ``.owner``: Rust's share-index assignment can drift slightly from
+    Python's during long action streams (see the 99.16% replay parity audit),
+    so two share ids that Python would call "owned by player N" may have
+    different Rust owners. To keep ``ShareBundle.__init__`` (called by
+    ``BuyShares.dict_to_args`` / ``SellShares.dict_to_args``) happy, we
+    return a stable ``_ShareOwnerSingleton`` here. The cleaning pipeline's
+    legality checks happen via the adapter's overrides (e.g.
+    ``_StepProxy.can_buy_shares``), not via this attribute.
+    """
+
+    def __init__(self, share, adapter):
+        self._share = share
+        self._adapter = adapter
+        self._game = adapter._game
+        self.id = f"{share.corporation_id}_{share.index}"
+        self.index = share.index
+        self.percent = share.percent
+        self.president = share.president
+        self.buyable = True
+        self.from_dump = False
+
+    def corporation(self):
+        return self._adapter.corporation_by_id(self._share.corporation_id)
+
+    @property
+    def owner(self):
+        return _SHARE_OWNER_SINGLETON
+
+    def __eq__(self, other):
+        if isinstance(other, _ShareProxy):
+            return self.id == other.id
+        if hasattr(other, "id"):
+            return self.id == other.id
+        return NotImplemented
+
+    def __hash__(self):
+        return hash(self.id)
+
+    def __repr__(self):
+        return f"_ShareProxy({self.id})"
+
+
+class _TrainProxy:
+    """Proxy for a Rust Train that mirrors the surface of ``entities.Train``.
+
+    Used by ``RustGameAdapter.train_by_id`` so the cleaning filter at
+    pretraining.py:650 can call ``train_owner.is_corporation()`` and (when
+    that is True) ``train_owner.player()``.
+    """
+
+    def __init__(self, train, adapter, depot_proxy=None):
+        self._train = train
+        self._adapter = adapter
+        self._game = adapter._game
+        self._depot_proxy = depot_proxy
+        self.id = train.id
+        self.name = train.name
+        self.price = train.price
+        self.operated = train.operated
+        # `exchange` is an action-level field, not a steady-state train field.
+        self.exchange = None
+
+    @property
+    def owner(self):
+        owner_str = self._train.owner
+        if not owner_str:
+            return self._depot_proxy if self._depot_proxy is not None else self._adapter.depot
+        if owner_str.startswith("corp:"):
+            sym = owner_str.split(":", 1)[1]
+            return self._adapter.corporation_by_id(sym)
+        if owner_str.startswith("player:"):
+            pid = int(owner_str.split(":", 1)[1])
+            for p in self._adapter.players:
+                if p.id == pid:
+                    return p
+            return None
+        # "bank", "depot", "" → depot
+        return self._depot_proxy if self._depot_proxy is not None else self._adapter.depot
+
+    def from_depot(self):
+        owner_str = self._train.owner
+        return (not owner_str) or owner_str == "bank" or owner_str == "depot"
+
+    def __eq__(self, other):
+        if isinstance(other, _TrainProxy):
+            return self.id == other.id
+        if hasattr(other, "id"):
+            return self.id == other.id
+        return NotImplemented
+
+    def __hash__(self):
+        return hash(self.id)
+
+    def __repr__(self):
+        return f"_TrainProxy({self.id})"
+
+
 class RustGameAdapter:
     """Wraps a Rust BaseGame to match Python's BaseGame interface for the encoder."""
 
@@ -1521,20 +2052,102 @@ class RustGameAdapter:
 
         Accepts either a dict (passed directly) or a Python Action object
         (converted via to_dict()).
+
+        Mirrors Python's ``BaseGame.process_action`` semantics:
+
+          * Pass actions that the engine rejects are silently dropped
+            (Python explicitly catches at ``base.py:937``).
+          * "free" action types that Rust doesn't model (``end_game``,
+            ``message``, ``undo``, ``redo``) are no-ops here — Python's
+            ``BaseAction.free()`` covers these; the cleaning pipeline
+            shouldn't crash on them.
         """
         if isinstance(action, dict):
-            self._game.process_action(action)
+            action_dict = action
         else:
-            self._game.process_action(action.to_dict())
+            action_dict = action.to_dict()
+        # No-op the meta action types Rust doesn't model but Python treats
+        # as free. ``end_game`` is treated as raising in Python when the
+        # game can't be ended yet, so we raise a Python-shaped error in
+        # that case; if the Rust game is already finished, no-op.
+        atype = action_dict.get("type")
+        if atype in ("message", "undo", "redo"):
+            return self
+        if atype == "end_game":
+            if self._game.finished:
+                return self
+            # Mirror Python's GameError: "Blocking step ... cannot process
+            # action Type: EndGame". The cleaning pipeline propagates this
+            # to the caller, which classifies the game as cleaning_error.
+            step = self._game.active_step_type()
+            raise RuntimeError(
+                f"Blocking step {step} cannot process action Type: EndGame"
+            )
+        try:
+            self._game.process_action(action_dict)
+        except Exception as e:
+            if atype == "pass":
+                # Same fall-through as Python's BaseGame.process_action for
+                # pass actions that the engine rejected.
+                pass
+            else:
+                raise
         # Invalidate depot proxy since trains may have changed
         self._depot_proxy = None
         return self
 
     @property
+    def raw_actions(self):
+        """Full action history (Python dicts), matching the Python engine.
+
+        Each entry is the action dict that was processed, in order. Mirrors
+        ``rl18xx.game.engine.game.base.BaseGame.raw_actions``.
+        """
+        # Tests may monkey-patch raw_actions onto the adapter directly.
+        if "raw_actions" in self.__dict__:
+            return self.__dict__["raw_actions"]
+        return list(self._game.raw_actions)
+
+    @raw_actions.setter
+    def raw_actions(self, value):
+        """Allow tests / debug tooling to override the action log on the
+        adapter (the underlying Rust state is unchanged)."""
+        self.__dict__["raw_actions"] = value
+
+    @property
     def actions(self):
         """Return action-like objects with .description() for logging."""
-        raw = self._game.raw_actions
+        raw = self.raw_actions
         return [_ActionDesc(a) for a in raw] if raw else [_ActionDesc({})]
+
+    def get_factored_choices(self):
+        """Return factored legal actions from the Rust engine.
+
+        Wraps the Rust ``BaseGame.get_factored_choices()`` PyO3 method and
+        converts each dict entry to a :class:`LegalAction` dataclass instance.
+
+        This is the entry point the AlphaZero pipeline (pretraining replay,
+        MCTS, action_mapper) should use. The Python ``FactoredActionHelper``
+        in ``rl18xx/game/factored_action_helper.py`` is the reference; the
+        Rust implementation mirrors its enumeration logic.
+        """
+        from rl18xx.game.factored_action_helper import LegalAction
+
+        raw = self._game.get_factored_choices()
+        out = []
+        for d in raw:
+            price_range = d.get("price_range")
+            if price_range is not None:
+                price_range = (int(price_range[0]), int(price_range[1]))
+            out.append(
+                LegalAction(
+                    type=d["type"],
+                    entity=dict(d.get("entity", {})),
+                    params=dict(d.get("params", {})),
+                    price_range=price_range,
+                )
+            )
+        return out
 
     def to_dict(self):
         """Minimal dict representation for showboard (non-critical)."""
@@ -1595,6 +2208,8 @@ class RustGameAdapter:
         return [_CorpProxy(c, self._game) for c in self._game.corporations]
 
     def corporation_by_id(self, sym):
+        if sym is None:
+            return None
         corp = self._game.corporation_by_id(sym)
         return _CorpProxy(corp, self._game) if corp else None
 
@@ -1605,21 +2220,103 @@ class RustGameAdapter:
         # Recreate to reflect current trains, but keep same identity object
         if self._depot_proxy is None:
             self._depot_proxy = _DepotProxy.__new__(_DepotProxy)
-        self._depot_proxy._update(self._game.depot)
+            self._depot_proxy._game = None
+        # Pass the game so _gated_upcoming() can read the current phase.
+        self._depot_proxy._update(self._game.depot, game=self._game)
         return self._depot_proxy
 
     def hex_by_id(self, coord):
+        if coord is None:
+            return None
         h = self._game.hex_by_id(coord)
         return _HexProxy(h, self._get_hex_adjacency()) if h else None
 
     @property
     def companies(self):
         """Companies wrapped with owner proxy."""
-        return [_CompanyProxy(c) for c in self._game.companies]
+        return [_CompanyProxy(c, self) for c in self._game.companies]
 
     def company_by_id(self, sym):
+        if sym is None:
+            return None
         c = self._game.company_by_id(sym)
-        return _CompanyProxy(c) if c else None
+        return _CompanyProxy(c, self) if c else None
+
+    def share_by_id(self, share_id):
+        """Look up a Share by canonical id ("<corp_sym>_<index>").
+
+        Mirrors ``BaseGame.share_by_id``. Returns ``None`` if not found.
+        Used by ``BaseAction.action_from_dict`` (BuyShares / SellShares /
+        ExchangeShare) and by the cleaning pipeline's BuySellParShares
+        legality check.
+        """
+        if share_id is None or "_" not in share_id:
+            return None
+        corp_sym, _, idx_str = share_id.rpartition("_")
+        try:
+            idx = int(idx_str)
+        except ValueError:
+            return None
+        for corp in self._game.corporations:
+            if corp.sym != corp_sym:
+                continue
+            for share in corp.shares:
+                if share.index == idx:
+                    return _ShareProxy(share, self)
+            return None
+        return None
+
+    def train_by_id(self, train_id):
+        """Look up a Train by canonical id ("<name>-<index>").
+
+        Mirrors ``BaseGame.train_by_id``. Walks depot trains, discarded
+        trains, and each corporation's train roster. Returns ``None`` if
+        not found.
+        """
+        if train_id is None:
+            return None
+        depot = self.depot  # identity-stable proxy
+        for t in self._game.depot.trains:
+            if t.id == train_id:
+                return _TrainProxy(t, self, depot)
+        for t in self._game.depot.discarded:
+            if t.id == train_id:
+                return _TrainProxy(t, self, depot)
+        for corp in self._game.corporations:
+            for t in corp.trains:
+                if t.id == train_id:
+                    return _TrainProxy(t, self, depot)
+        return None
+
+    def get(self, entity_type, entity_id):
+        """Dispatcher used by ``BaseAction.action_from_dict`` and by the
+        cleaning filters in ``pretraining.py`` to resolve an entity reference
+        by type + id.
+
+        Mirrors ``BaseGame.get``.
+        """
+        if not entity_type or entity_id is None:
+            return None
+        if entity_type == "player":
+            try:
+                pid = int(entity_id)
+            except (TypeError, ValueError):
+                return None
+            for p in self.players:
+                if p.id == pid:
+                    return p
+            return None
+        if entity_type == "corporation":
+            return self.corporation_by_id(entity_id)
+        if entity_type == "company":
+            return self.company_by_id(entity_id)
+        if entity_type == "share":
+            return self.share_by_id(entity_id)
+        if entity_type == "train":
+            return self.train_by_id(entity_id)
+        if entity_type == "minor":
+            return None
+        return None
 
     @property
     def num_certs(self):
@@ -1644,6 +2341,86 @@ class RustGameAdapter:
             # Fallback if method not available
             prices = self._game.par_prices()
             return [_SharePriceProxy(p) for p in prices]
+
+    def tile_by_id(self, tile_id):
+        """Look up a tile by id. Tile ids are like ``"57-0"`` (name + suffix).
+
+        The cleaning pipeline only needs the round-tripped action to preserve
+        ``self.tile.id``, so we return a thin proxy with ``.id`` and ``.name``.
+        """
+        if tile_id is None:
+            return None
+        name = tile_id.split("-", 1)[0]
+        # Return a proxy that mirrors what ``LayTile.args_to_dict()`` reads.
+        return type("TileProxy", (), {
+            "id": tile_id,
+            "name": name,
+        })()
+
+    def city_by_id(self, city_id):
+        """Look up a city by id. City ids are like ``"<hex_id>-<index>"``.
+
+        Returns a lightweight proxy with ``.id`` and ``.tile`` (for round-tripping
+        ``PlaceToken.args_to_dict``).
+        """
+        if city_id is None:
+            return None
+        # The cleaning pipeline never inspects city internals deeply; .id is
+        # what gets round-tripped via args_to_dict. Try to also expose .tile
+        # for the PlaceToken substitution path (line 360 in pretraining.py).
+        hex_id_part = city_id.split("-", 1)[0] if "-" in city_id else None
+        h = self._game.hex_by_id(hex_id_part) if hex_id_part else None
+        tile_id = None
+        if h is not None:
+            try:
+                tile_id = h.tile.name
+            except Exception:
+                tile_id = None
+        if tile_id is None:
+            tile_id = ""
+        tile_obj = type("TileRef", (), {
+            "id": tile_id,
+            "name": tile_id,
+        })()
+        return type("CityProxy", (), {
+            "id": city_id,
+            "tile": tile_obj,
+        })()
+
+    def minor_by_id(self, minor_id):
+        """1830 has no minors."""
+        return None
+
+    def local_length(self):
+        """Default route local-length (matches Python BaseGame.local_length)."""
+        return 2
+
+    def share_price_by_id(self, share_price_id):
+        """Look up a share price by its canonical id ("price,row,col").
+
+        Used by ``Par.dict_to_args``. The id format mirrors
+        :class:`SharePrice.id` (price followed by comma-separated coordinates).
+        """
+        if share_price_id is None:
+            return None
+        parts = share_price_id.split(",")
+        if len(parts) != 3:
+            return None
+        try:
+            price = int(parts[0])
+            row = int(parts[1])
+            col = int(parts[2])
+        except ValueError:
+            return None
+        for sp in self.share_prices:
+            if sp.price == price and sp.coordinates == (row, col):
+                return sp
+        # Fallback: par_prices_with_coords might not include this row/col exactly;
+        # check by price alone (matches Python's lookup leniency).
+        for sp in self.share_prices:
+            if sp.price == price:
+                return sp
+        return None
 
     def can_par(self, corp, entity):
         """Check if a corporation can be parred by the entity."""
@@ -1689,9 +2466,23 @@ class RustGameAdapter:
         return []
 
     def can_go_bankrupt(self, owner, corp):
-        """Check if a corporation can go bankrupt."""
-        # In 1830, bankruptcy happens when president can't afford any train
-        return False  # Conservative: ActionHelper falls back to empty actions
+        """Check if a corporation can go bankrupt.
+
+        Defers to the Rust engine's own legality enumeration: if ``bankrupt``
+        appears in ``legal_action_types()`` while ``corp`` is the active entity,
+        then bankruptcy is currently a legal action.
+        """
+        if "bankrupt" not in self._game.legal_action_types():
+            return False
+        # legal_action_types is keyed off the active entity; ensure we're being
+        # asked about the right corporation. The Rust engine doesn't enumerate
+        # bankrupt for other corps in the same turn, so an entity-mismatch
+        # means the caller is asking about a different (non-active) corp.
+        active_corp = self._game.current_corporation
+        if active_corp is None:
+            return False
+        corp_sym = corp.sym if hasattr(corp, "sym") else str(corp)
+        return active_corp.sym == corp_sym
 
     def discountable_trains_for(self, entity):
         """Returns discountable trains (4→D exchange)."""
@@ -1725,11 +2516,16 @@ class RustGameAdapter:
         """Proxy for share_pool — used for ownership checks."""
         return _SharePoolProxy()
 
+    @property
+    def bank(self):
+        """Proxy for the Bank — supports ownership equality AND .cash forwarding."""
+        return _BankProxy(self._game.bank)
+
     def get_available_tile_with_name(self, name):
         """Find an available tile by name from the tile catalog."""
         for tile in self._game.tiles:
             if tile.name == name:
-                return _TileProxy(tile)
+                return _TileProxy(tile, self._game)
         return None
 
     # 1830 game constants

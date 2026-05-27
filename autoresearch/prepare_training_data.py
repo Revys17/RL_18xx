@@ -22,10 +22,6 @@ from tqdm import tqdm
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.alphazero.encoder import Encoder_GNN
 from rl18xx.agent.alphazero.dataset import TrainingExampleProcessor
-from rl18xx.agent.alphazero.pretraining import (
-    make_action_model_friendly,
-    make_encoded_game_state_model_friendly,
-)
 from rl18xx.game.engine.actions import BaseAction
 from rl18xx.game.engine.game import BaseGame
 from rl18xx.game.gamemap import GameMap
@@ -70,14 +66,13 @@ def convert_game_to_samples(game_dict: dict, encoder: Encoder_GNN, action_mapper
 
     for action in game_obj.raw_actions:
         try:
-            updated_action = make_action_model_friendly(fresh_game_state, action.copy())
             encoded_game_state = encoder.encode(fresh_game_state)
-            updated_encoded_game_state = make_encoded_game_state_model_friendly(
-                encoder, encoded_game_state, updated_action, fresh_game_state
-            )
-            action_index = action_mapper.get_index_for_action(
-                BaseAction.action_from_dict(updated_action, fresh_game_state), fresh_game_state
-            )
+            # ``canonical_index_for_action`` collapses price-bearing actions
+            # (Bid / BuyTrain / BuyCompany) to a single canonical flat-policy
+            # slot per (type, entity) — the GNN baseline has no continuous
+            # price head, so price granularity is dropped here.
+            base_action = BaseAction.action_from_dict(action, fresh_game_state)
+            action_index = action_mapper.canonical_index_for_action(base_action, fresh_game_state)
             legal_action_indices = action_mapper.get_legal_action_indices(fresh_game_state)
 
             # Smoothed one-hot policy target
@@ -85,7 +80,7 @@ def convert_game_to_samples(game_dict: dict, encoder: Encoder_GNN, action_mapper
             pi[legal_action_indices] += epsilon / len(legal_action_indices)
             pi[action_index] = 1.0 - epsilon
 
-            samples.append((updated_encoded_game_state, legal_action_indices, pi, actual_value))
+            samples.append((encoded_game_state, legal_action_indices, pi, actual_value))
 
             fresh_game_state.process_action(action)
         except Exception as e:

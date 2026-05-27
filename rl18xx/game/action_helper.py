@@ -407,25 +407,37 @@ class ActionHelper(metaclass=Singleton):
         step = game.round.active_step()
         pres_may_contribute = step.president_may_contribute(game.current_entity)
 
-        # When president must contribute (emergency buy) and EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST,
-        # only the cheapest depot train variant is allowed.
-        ebuy_cheapest_only = pres_may_contribute and game.EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST
+        # When president must contribute (emergency buy) AND
+        # EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST, only the cheapest depot train
+        # variant is allowed. This mirrors the engine's
+        # ``check_for_cheapest_train`` check, which only fires when the
+        # corp's cash is less than the train price (``remaining > 0``).
+        # When the corp can afford the train on its own (no emergency for
+        # this specific train), any depot train is buyable.
         cheapest_depot_names = None
-        if ebuy_cheapest_only:
+        if pres_may_contribute and game.EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST:
             cheapest_depot_train = game.depot.min_depot_train
             if cheapest_depot_train:
                 cheapest_depot_names = step.names_of_cheapest_variants(cheapest_depot_train)
 
+        entity_buying_power = game.buying_power(game.current_entity)
+
         for train in unique_train_list:
             if train.from_depot():
                 LOGGER.debug(f"Train {train.name} from depot")
-                # In emergency buy, only the cheapest depot train is allowed
-                if ebuy_cheapest_only and cheapest_depot_names and train.name not in cheapest_depot_names:
+                # Cheapest-only restriction applies only to trains the corp
+                # can't afford on its own (would require president help).
+                requires_pres_help = train.min_price() > entity_buying_power
+                if (
+                    requires_pres_help
+                    and cheapest_depot_names
+                    and train.name not in cheapest_depot_names
+                ):
                     LOGGER.debug(f"Skipping {train.name}: not cheapest depot train during emergency buy")
                     continue
-                if train.min_price() <= game.buying_power(game.current_entity) or (
+                if train.min_price() <= entity_buying_power or (
                     pres_may_contribute and
-                    train.min_price() <= game.buying_power(game.current_entity.owner) + game.buying_power(game.current_entity)
+                    train.min_price() <= game.buying_power(game.current_entity.owner) + entity_buying_power
                 ):
                     LOGGER.debug(f"Adding train {train.name} with price {train.min_price()}")
                     options.append((train, train.min_price()))
@@ -502,10 +514,23 @@ class ActionHelper(metaclass=Singleton):
                 train_name = rd.get("train", "")
                 hexes_str = rd.get("hexes", "")
                 revenue_val = int(rd.get("revenue", "0"))
+                hex_ids = hexes_str.split(",") if hexes_str else []
+                hex_objs = [type("HexRef", (), {"id": h, "name": h})() for h in hex_ids]
+                # ``revenue`` must be a method (``args_to_dict`` calls
+                # ``route.revenue()``). Lambdas stored as class attributes are
+                # treated as unbound methods, so the first positional arg
+                # receives ``self`` — declare it explicitly to preserve the
+                # captured int default.
                 routes.append(type("Route", (), {
-                    "train": type("TrainRef", (), {"name": train_name})(),
-                    "hexes": hexes_str.split(",") if hexes_str else [],
-                    "revenue": revenue_val,
+                    "train": type("TrainRef", (), {"name": train_name, "id": train_name})(),
+                    "hexes": hex_objs,
+                    "connection_hexes": [hex_ids],  # nested list per route per the Action shape
+                    "revenue": lambda self, v=revenue_val: v,
+                    "revenue_str": str(revenue_val),
+                    "subsidy": 0,
+                    "halts": None,
+                    "abilities": None,
+                    "node_signatures": None,
                 })())
             return [RunRoutes(game.current_entity, routes)]
 
