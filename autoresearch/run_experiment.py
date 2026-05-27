@@ -127,7 +127,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmpdir:
         from rl18xx.agent.alphazero.checkpointer import save_model
 
-        save_model(model, tmpdir, new=False)
+        save_model(model, tmpdir)
 
         eval_result = subprocess.run(
             [

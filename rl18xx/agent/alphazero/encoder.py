@@ -4,9 +4,10 @@ from rl18xx.game.engine.entities import Player, Corporation, Company, Bank, Depo
 from rl18xx.game.engine.game.title.g1830 import Game as Game_1830, Entities as Entities_1830, Map as Map_1830
 from rl18xx.game.engine.graph import Hex, Tile, Edge, City
 from rl18xx.shared.singleton import Singleton
+from rl18xx.rust_adapter import RustGameAdapter
 from torch import Tensor, from_numpy
 import numpy as np
-from typing import Any, Dict, List, Tuple, Optional, Set
+from typing import Any, Dict, List, Tuple, Optional, Set, Union
 import logging
 import time
 import re
@@ -67,7 +68,7 @@ class Encoder_1830:
         else:
             raise ValueError(f"Unknown model name: {model.encoder_type()}")
 
-    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, int]:
+    def encode(self, game: Union[BaseGame, RustGameAdapter]) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, int, int, int]:
         raise NotImplementedError("Subclasses must implement this method")
 
 
@@ -265,7 +266,17 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
         return offset
 
     def initialize(self, game: BaseGame):
-        if not self.initialized:
+        # Variable player count: re-initialize whenever the game's player
+        # count differs from what the encoder was previously bound to.
+        # ``_initialize_game_specifics`` rebuilds ``GAME_STATE_ENCODING_SIZE``
+        # and section sizes from the new count, and ``_initialize_player_map``
+        # rebuilds ``player_id_to_idx`` for the new players. (The hex
+        # adjacency is player-count-invariant for 1830, but we recompute it
+        # to stay defensive in case the engine is ever used with a different
+        # title that has variable maps.)
+        player_count = len(game.players)
+        needs_init = (not self.initialized) or (player_count != self.initialized_for_player_count)
+        if needs_init:
             try:
                 self._initialize_game_specifics(game)
                 self._precompute_adjacency(game)
@@ -343,7 +354,28 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
 
         return result
 
-    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, int]:
+    def encode(self, game: Union[BaseGame, RustGameAdapter]) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, int, int, int]:
+        """Encode a game state into network inputs in **canonical** form.
+
+        Canonicalization rotates player-indexed sections of the flat game-state vector
+        so the active player always sits at slot 0. The resulting tuple's
+        ``active_player_idx`` is therefore always 0; the original (absolute) active
+        player index is returned as ``rotation``. MCTS uses ``rotation`` to unrotate
+        network value outputs back to absolute player order before backing them up
+        into ancestor nodes.
+
+        The trailing ``num_players`` element exposes the game's actual player count
+        (in [2, 6]) so that the consuming model can pad the variable-length
+        player feature regions to its ``max_players`` layout and mask out the
+        unused slots in attention.
+
+        Returns:
+            (game_state_tensor, node_features_tensor, edge_index, edge_attr,
+             round_type_idx, active_player_idx, rotation, num_players)
+            where ``active_player_idx`` is always 0, ``rotation`` is the absolute
+            active player index used for canonicalization, and ``num_players``
+            is ``len(game.players)``.
+        """
         start_time = time.perf_counter()
 
         self.initialize(game)
@@ -354,7 +386,14 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
 
         round_name = game.round.__class__.__name__
         round_type_idx = ROUND_TYPE_MAP.get(round_name, 0)
-        active_player_idx = self.player_id_to_idx.get(game.active_players()[0].id, 0)
+        rotation = self.player_id_to_idx.get(game.active_players()[0].id, 0)
+
+        # Canonicalize: rotate player-indexed sections so the active player sits at
+        # slot 0. After this step ``active_player_idx`` is, by construction, 0.
+        if rotation != 0:
+            gs_numpy = game_state_tensor.squeeze(0).numpy()
+            gs_canonical = self.canonicalize_perspective(gs_numpy, rotation)
+            game_state_tensor = from_numpy(gs_canonical).unsqueeze(0)
 
         end_time = time.perf_counter()
         duration_ms = (end_time - start_time) * 1000
@@ -365,7 +404,9 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
             base_edge_index_tensor,
             base_edge_attributes_tensor,
             round_type_idx,
-            active_player_idx,
+            0,  # active_player_idx is always 0 after canonicalization
+            rotation,
+            self.num_players,  # game's actual player count; model pads to max_players
         )
 
     def encode_game_state(self, game: BaseGame) -> Tensor:
@@ -973,12 +1014,20 @@ class Encoder_Transformer(Encoder_GNN):
     doesn't need edge_index/edge_attr since it uses a Transformer (not GNN).
 
     The encoded tuple format is:
-    (game_state_tensor, node_features_tensor, edge_index, edge_attr, round_type_idx, active_player_idx)
+    (game_state_tensor, node_features_tensor, edge_index, edge_attr,
+     round_type_idx, active_player_idx, rotation, num_players)
 
     The edge_index and edge_attr are still included for backward compatibility with
     the data storage format and DataLoader, but the v2 model ignores them.
+
+    ``active_player_idx`` is always 0 (game state is canonicalized to put the active
+    player at slot 0). ``rotation`` is the original absolute active player index
+    used for canonicalization; MCTS uses it to unrotate values for tree backup.
+    ``num_players`` is ``len(game.players)`` and is consumed by the Transformer
+    model to pad the variable-length player feature regions to its ``max_players``
+    layout.
     """
 
-    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, int]:
+    def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, int, int, int]:
         """Encode game state for v2 model. Same format as GNN encoder for compatibility."""
         return super().encode(game)

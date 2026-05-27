@@ -719,7 +719,7 @@ def test_auction(initial_game_state):
         )
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     assert mask[0] == 1.0
     assert mask[1] == 1.0
@@ -750,7 +750,7 @@ def test_auction(initial_game_state):
         )
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     assert mask[0] == 1.0
     assert mask[1] == 0.0
@@ -778,7 +778,7 @@ def test_auction(initial_game_state):
         )
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     assert mask[0] == 1.0
     assert mask[5] == 1.0
@@ -794,7 +794,7 @@ def test_auction(initial_game_state):
         )
 
     mask = action_mapper.get_legal_action_mask(initial_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     assert mask[25] == 1.0
     assert mask[26] == 1.0
@@ -827,7 +827,7 @@ def test_stock_round_1_game_state(stock_round_1_game_state):
     print(stock_round_1_game_state.log)
     mask = action_mapper.get_legal_action_mask(stock_round_1_game_state)
     print(mask[:10])
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     assert mask[0] == 1.0
     # Par PRR
@@ -950,7 +950,7 @@ def test_stock_round_1_game_state(stock_round_1_game_state):
         )
 
     mask = action_mapper.get_legal_action_mask(stock_round_1_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     assert mask[0] == 1.0
     # Buy NYC (ipo only)
@@ -984,7 +984,7 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     assert mask[0] == 1.0
 
@@ -1044,7 +1044,7 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     assert mask[0] == 1.0
     token_idx = action_mapper.action_offsets["PlaceToken"] + action_mapper.city_offsets[("H10", 0)]
@@ -1070,7 +1070,7 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     assert mask[0] == 0.0
     train_idx = action_mapper.action_offsets["BuyTrain"] + action_mapper.train_type_offsets["2"]
@@ -1095,7 +1095,7 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     assert mask[0] == 1.0
     train_idx = action_mapper.action_offsets["BuyTrain"] + action_mapper.train_type_offsets["2"]
@@ -1124,7 +1124,7 @@ def test_operating_round_1_game_state(operating_round_1_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_1_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     assert mask[0] == 1.0
 
@@ -1169,7 +1169,7 @@ def test_stock_round_2_game_state(stock_round_2_game_state):
         )
 
     mask = action_mapper.get_legal_action_mask(stock_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     # Legal actions: Pass, Sell NYC (1-5), Buy C%O IPO
     assert mask[0] == 1.0
@@ -1204,7 +1204,7 @@ def test_stock_round_2_game_state(stock_round_2_game_state):
         )
 
     mask = action_mapper.get_legal_action_mask(stock_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     # Legal actions: Pass, Sell NYC (1-3), Buy C&O IPO
     assert mask[0] == 1.0
@@ -1275,7 +1275,7 @@ def test_stock_round_2_game_state(stock_round_2_game_state):
         )
 
     mask = action_mapper.get_legal_action_mask(stock_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     # Legal actions: Pass, Sell NYC (1-3), Buy C&O IPO
     assert mask[0] == 1.0
@@ -1346,7 +1346,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     # Legal actions: Pass, Lay tile on F20, Exchange MH
     assert mask[0] == 1.0
@@ -1433,7 +1433,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     # Legal actions: Pay out or withhold
 
@@ -1479,7 +1479,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     # Legal actions: Pass, Buy 3 train
     assert mask[0] == 1.0
@@ -1509,20 +1509,22 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     # Legal actions: Buy
+    # Price-collapsed (FactoredActionHelper): one canonical BuyCompany slot
+    # per (entity, company) regardless of price; MCTS PW samples the price.
     assert mask[0] == 1.0
     buy_company_idx = action_mapper.action_offsets["BuyCompany"]
     assert (
         mask[buy_company_idx + action_mapper.company_offsets["DH"] * len(action_mapper.buy_company_price_offsets)]
         == 1.0
-    )  # min
+    )  # canonical (single) slot
     assert (
         mask[buy_company_idx + action_mapper.company_offsets["DH"] * len(action_mapper.buy_company_price_offsets) + 1]
-        == 1.0
-    )  # max
-    assert sum(mask) == 3.0
+        == 0.0
+    )  # the "max" sub-slot is no longer surfaced
+    assert sum(mask) == 2.0
 
     # Check the other direction
     indices = [i for i, mask in enumerate(mask) if mask == 1.0]
@@ -1579,23 +1581,22 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
-    # Legal actions:
-    # Buy SV min/max,
-    # Buy NYC 2 at all prices up to 500 (and all-but-one and all),
-    # Buy NYC 3 at all prices up to 500 (and all-but-one and all),
-    # Pass
+    # Legal actions (price-collapsed):
+    #   Pass, Buy SV (single slot), Buy NYC 2 (single slot), Buy NYC 3 (single slot).
+    # MCTS PW samples the price for the price-bearing slots from the
+    # ContinuousPriceHead's truncated Normal.
     assert mask[0] == 1.0
     buy_company_idx = action_mapper.action_offsets["BuyCompany"]
     assert (
         mask[buy_company_idx + action_mapper.company_offsets["SV"] * len(action_mapper.buy_company_price_offsets)]
         == 1.0
-    )  # min
+    )  # canonical single slot
     assert (
         mask[buy_company_idx + action_mapper.company_offsets["SV"] * len(action_mapper.buy_company_price_offsets) + 1]
-        == 1.0
-    )  # max
+        == 0.0
+    )  # the "max" sub-slot is no longer surfaced
 
     buy_train_idx = (
         action_mapper.action_offsets["BuyTrain"]
@@ -1607,30 +1608,21 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     )
     assert mask[buy_train_idx] == 1.0
 
+    # Cross-corp BuyTrain: only the canonical (price="1") slot is surfaced;
+    # all other price sub-slots collapse into the same categorical decision.
     buy_2_train_idx = buy_train_idx + action_mapper.train_type_offsets["2"] * len(action_mapper.train_price_offsets)
     assert mask[buy_2_train_idx + action_mapper.train_price_offsets["1"]] == 1.0
-    assert mask[buy_2_train_idx + action_mapper.train_price_offsets["20"]] == 1.0
-    assert mask[buy_2_train_idx + action_mapper.train_price_offsets["50"]] == 1.0
-    assert mask[buy_2_train_idx + action_mapper.train_price_offsets["100"]] == 1.0
-    assert mask[buy_2_train_idx + action_mapper.train_price_offsets["200"]] == 1.0
-    assert mask[buy_2_train_idx + action_mapper.train_price_offsets["300"]] == 1.0
-    assert mask[buy_2_train_idx + action_mapper.train_price_offsets["400"]] == 1.0
-    assert mask[buy_2_train_idx + action_mapper.train_price_offsets["500"]] == 1.0
-    assert mask[buy_2_train_idx + action_mapper.train_price_offsets["all-but-one"]] == 1.0
-    assert mask[buy_2_train_idx + action_mapper.train_price_offsets["all"]] == 1.0
+    for p in ("20", "50", "100", "200", "300", "400", "500", "all-but-one", "all"):
+        assert mask[buy_2_train_idx + action_mapper.train_price_offsets[p]] == 0.0
 
     buy_3_train_idx = buy_train_idx + action_mapper.train_type_offsets["3"] * len(action_mapper.train_price_offsets)
     assert mask[buy_3_train_idx + action_mapper.train_price_offsets["1"]] == 1.0
-    assert mask[buy_3_train_idx + action_mapper.train_price_offsets["20"]] == 1.0
-    assert mask[buy_3_train_idx + action_mapper.train_price_offsets["50"]] == 1.0
-    assert mask[buy_3_train_idx + action_mapper.train_price_offsets["100"]] == 1.0
-    assert mask[buy_3_train_idx + action_mapper.train_price_offsets["200"]] == 1.0
-    assert mask[buy_3_train_idx + action_mapper.train_price_offsets["300"]] == 1.0
-    assert mask[buy_3_train_idx + action_mapper.train_price_offsets["400"]] == 1.0
-    assert mask[buy_3_train_idx + action_mapper.train_price_offsets["500"]] == 1.0
-    assert mask[buy_3_train_idx + action_mapper.train_price_offsets["all-but-one"]] == 1.0
-    assert mask[buy_3_train_idx + action_mapper.train_price_offsets["all"]] == 1.0
-    assert sum(mask) == 24.0
+    for p in ("20", "50", "100", "200", "300", "400", "500", "all-but-one", "all"):
+        assert mask[buy_3_train_idx + action_mapper.train_price_offsets[p]] == 0.0
+    # Pass + Buy SV (1) + Buy NYC 2 (1) + Buy NYC 3 (1) + BuyTrain depot (1) = 5
+    # (Depot still has a 4-train available at fixed face price.)
+    assert mask[action_mapper.action_offsets["BuyTrain"]] == 1.0
+    assert sum(mask) == 5.0
 
     # Check the other direction
     indices = [i for i, mask in enumerate(mask) if mask == 1.0]
@@ -1668,7 +1660,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     # Legal actions:
     # Buy MH min/max,
@@ -1682,11 +1674,11 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     assert (
         mask[buy_company_idx + action_mapper.company_offsets["MH"] * len(action_mapper.buy_company_price_offsets)]
         == 1.0
-    )  # min
+    )  # canonical (single) slot
     assert (
         mask[buy_company_idx + action_mapper.company_offsets["MH"] * len(action_mapper.buy_company_price_offsets) + 1]
-        == 1.0
-    )  # max
+        == 0.0
+    )  # the "max" sub-slot is no longer surfaced (price-collapsed)
 
     exchange_mh_idx = action_mapper.action_offsets["CompanyBuyShares"]
     assert mask[exchange_mh_idx + action_mapper.share_location_offsets["ipo"]] == 1.0
@@ -1712,7 +1704,8 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     assert mask[tile_58_idx + 4] == 1.0
     assert mask[tile_58_idx + 5] == 1.0
 
-    assert sum(mask) == 18.0
+    # Pass + BuyCompany MH (1) + 2 exchanges + 1 depot BuyTrain + 12 company tile lays = 17
+    assert sum(mask) == 17.0
 
     # Check the other direction
     indices = [i for i, mask in enumerate(mask) if mask == 1.0]
@@ -1738,7 +1731,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     # Legal actions:
     # Lay tile 16, 19, 23, 25, 28, 29 on G3
@@ -1808,7 +1801,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     # Legal actions:
     # DH Place token F16
@@ -1841,7 +1834,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     # Legal actions:
     # Buy SV min/max,
@@ -1856,11 +1849,11 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     assert (
         mask[buy_company_idx + action_mapper.company_offsets["SV"] * len(action_mapper.buy_company_price_offsets)]
         == 1.0
-    )  # min
+    )  # canonical (single) slot
     assert (
         mask[buy_company_idx + action_mapper.company_offsets["SV"] * len(action_mapper.buy_company_price_offsets) + 1]
-        == 1.0
-    )  # max
+        == 0.0
+    )  # the "max" sub-slot is no longer surfaced (price-collapsed)
 
     lay_tile_idx = action_mapper.action_offsets["LayTile"]
     hex_d20_idx = lay_tile_idx + action_mapper.hex_offsets["D20"] * len(action_mapper.tile_offsets) * 6
@@ -1893,7 +1886,8 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
 
     assert mask[hex_g19_idx + action_mapper.tile_offsets["54"] * 6 + 0] == 1.0
 
-    assert sum(mask) == 25.0
+    # Pass + BuyCompany SV (1 slot, price-collapsed) + 23 tile lays = 25
+    assert sum(mask) == 25.0 - 1.0
 
     operating_round_2_game_state.process_action(
         action_helper.get_all_choices(operating_round_2_game_state)[54]
@@ -1950,7 +1944,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     # Legal actions:
     # Discard a 3 train
@@ -1971,7 +1965,7 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
         ) == get_expected_index_for_action(action_mapper, action)
 
     mask = action_mapper.get_legal_action_mask(operating_round_2_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     # Legal actions:
     # Buy MH min
@@ -1984,11 +1978,11 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     assert (
         mask[buy_company_idx + action_mapper.company_offsets["MH"] * len(action_mapper.buy_company_price_offsets)]
         == 1.0
-    )  # min
+    )  # canonical (single) slot
     assert (
         mask[buy_company_idx + action_mapper.company_offsets["MH"] * len(action_mapper.buy_company_price_offsets) + 1]
-        == 1.0
-    )  # max
+        == 0.0
+    )  # the "max" sub-slot is no longer surfaced (price-collapsed)
 
     exchange_mh_idx = action_mapper.action_offsets["CompanyBuyShares"]
     assert mask[exchange_mh_idx + action_mapper.share_location_offsets["ipo"]] == 1.0
@@ -1997,7 +1991,8 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     buy_train_idx = action_mapper.action_offsets["BuyTrain"]
     assert mask[buy_train_idx + 1 + action_mapper.train_type_offsets["3"]] == 1.0
 
-    assert sum(mask) == 6.0
+    # Pass + BuyCompany MH (1) + 2 MH exchanges + Buy 3 train from market = 5
+    assert sum(mask) == 5.0
 
 
 def test_bankruptcy_game_state(bankruptcy_game_state):
@@ -2012,7 +2007,7 @@ def test_bankruptcy_game_state(bankruptcy_game_state):
         )
 
     mask = action_mapper.get_legal_action_mask(bankruptcy_game_state)
-    assert mask.shape == (26535,)
+    assert mask.shape == (26537,)
     assert mask.dtype == np.float32
     assert mask[action_mapper.action_offsets["Bankrupt"]] == 1.0
     assert sum(mask) == 1.0

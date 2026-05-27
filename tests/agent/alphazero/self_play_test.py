@@ -1,11 +1,15 @@
+import pytest
 import torch
 
 from unittest import mock
 import numpy as np
 from rl18xx.agent.alphazero.self_play import MCTSPlayer
 from rl18xx.agent.alphazero.config import SelfPlayConfig
+from rl18xx.agent.alphazero.mcts import VALUE_SIZE
 from rl18xx.game.gamemap import GameMap
 from rl18xx.game.action_helper import ActionHelper
+from rl18xx.rust_adapter import RustGameAdapter
+from engine_rs import BaseGame as RustGame
 
 # Fixtures
 
@@ -13,11 +17,11 @@ from rl18xx.game.action_helper import ActionHelper
 class DummyNet:
     def __init__(self, fake_priors=None, fake_log_priors=None, fake_value=None):
         if fake_priors is None:
-            fake_priors = torch.ones(26535, dtype=torch.float32) / 26535
+            fake_priors = torch.ones(26537, dtype=torch.float32) / 26537
         if fake_log_priors is None:
             fake_log_priors = torch.log(fake_priors)
         if fake_value is None:
-            fake_value = torch.tensor([0.0, 0.0, 0.0, 0.0], dtype=torch.float32)
+            fake_value = torch.zeros(VALUE_SIZE, dtype=torch.float32)
         self.fake_priors = fake_priors
         self.fake_log_priors = fake_log_priors
         self.fake_value = fake_value
@@ -48,16 +52,56 @@ class DummyNet:
         )
 
 
+_PLAYER_NAMES = {1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"}
+
+
+def _new_rust_game():
+    """Construct a fresh ``RustGameAdapter`` for replay/test use."""
+    return RustGameAdapter(RustGame(_PLAYER_NAMES))
+
+
+def _replay_on_rust(py_game):
+    """Build a ``RustGameAdapter`` and replay ``py_game.raw_actions`` on it.
+
+    The fixture below constructs the desired game state using the Python engine
+    (because the Python engine's ``ActionHelper.get_all_choices`` enumerates
+    actions the way the original index-based fixture expects). Once the desired
+    state is reached, we replay the action history on a fresh Rust engine —
+    the tests that consume the fixture (``test_extract_data_normal_end`` and
+    the parallel-tree-search tests) all exercise paths that now require a
+    ``RustGameAdapter``. Replay is a faithful, decoupled translation: action
+    dicts are engine-agnostic, and both engines accept them.
+    """
+    rust_game = _new_rust_game()
+    for action in py_game.raw_actions:
+        d = action if isinstance(action, dict) else action.to_dict()
+        # ``created_at`` is a wall-clock timestamp that has no semantic effect on
+        # game state and the Rust engine is happy without it.
+        d = {k: v for k, v in d.items() if k != "created_at"}
+        rust_game.process_action(d)
+    return rust_game
+
+
 def get_fresh_game_state():
-    game_map = GameMap()
-    game_class = game_map.game_by_title("1830")
-    players = {1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"}
-    game_instance = game_class(players)
-    return game_instance
+    """A fresh empty 4-player 1830 ``RustGameAdapter`` (the engine the rest of
+    the AlphaZero pipeline runs on)."""
+    return _new_rust_game()
 
 
-def get_almost_done_game_state():
-    g = get_fresh_game_state()
+def _get_fresh_python_game():
+    """Internal: Python-engine fixture used only by ``get_almost_done_game_state``
+    / ``terminal_game_state`` to step through the move sequence by action index.
+    See ``_replay_on_rust`` for the rationale on the hybrid approach."""
+    game_class = GameMap().game_by_title("1830")
+    return game_class(_PLAYER_NAMES)
+
+
+def _build_almost_done_python_game():
+    """Build the 'almost done' game state on the Python engine and return it
+    without converting to Rust. Used both by ``get_almost_done_game_state``
+    (which wraps the result in a Rust adapter) and by ``terminal_game_state``
+    (which continues stepping with the Python engine before its own wrap)."""
+    g = _get_fresh_python_game()
     action_helper = ActionHelper()
     # action_helper.print_enabled = True
 
@@ -308,8 +352,15 @@ def get_almost_done_game_state():
     return g
 
 
+def get_almost_done_game_state():
+    """Public fixture: same game state as ``_build_almost_done_python_game``,
+    but returned as a ``RustGameAdapter`` so downstream consumers (MCTS, the
+    encoder, ``extract_data``) run on the Rust engine."""
+    return _replay_on_rust(_build_almost_done_python_game())
+
+
 def terminal_game_state():
-    game_state = get_almost_done_game_state()
+    game_state = _build_almost_done_python_game()
     action_helper = ActionHelper()
     # [23:35] Player 4 has priority deal
     # [23:35] -- Operating Round 2.1 (of 1) --
@@ -363,7 +414,7 @@ def terminal_game_state():
     # [23:36] B&O does not run
     # [23:36] B&O's share price moves left from 20
     # game_state.process_action(action_helper.get_all_choices(game_state)[0])  # [23:36] Player bankrupts
-    return game_state
+    return _replay_on_rust(game_state)
 
 
 def initialize_basic_player(game_state=None):
@@ -378,7 +429,7 @@ def initialize_basic_player(game_state=None):
 
 
 def initialize_almost_done_player():
-    probs = torch.tensor([0.001] * 26535)
+    probs = torch.tensor([0.001] * 26537)
     probs[2:5] = 0.2  # some legal moves along the top.
     probs[-1] = 0.2  # passing is also ok
     net = DummyNet(fake_priors=probs)
@@ -415,7 +466,7 @@ def test_inject_noise():
 
     # With dirichlet noise, majority of density should be in one node.
     max_p = np.max(player.root.child_prior)
-    assert max_p > 3.0 / 26535
+    assert max_p > 3.0 / 26537
 
 
 def test_pick_moves():
@@ -474,7 +525,7 @@ def test_ridiculously_parallel_tree_search():
 
 def test_cold_start_parallel_tree_search():
     # Test that parallel tree search doesn't trip on an empty tree
-    player = MCTSPlayer(SelfPlayConfig(network=DummyNet(fake_value=torch.tensor([0.17, 0.0, 0.0, 0.0]))))
+    player = MCTSPlayer(SelfPlayConfig(network=DummyNet(fake_value=torch.tensor([0.17, 0.0, 0.0, 0.0, 0.0, 0.0]))))
     player.initialize_game()
     assert player.root.N == 0
     assert not player.root.is_expanded
@@ -483,17 +534,79 @@ def test_cold_start_parallel_tree_search():
     assert player.root == leaves[0]
 
     assert_no_pending_virtual_losses(player.root)
-    # Even though the root gets selected 4 times by tree search, its
-    # final visit count should just be 1.
-    assert player.root.N == 1
-    # 0.085 = average(0, 0.17), since 0 is the prior on the root.
-    assert np.isclose(0.085, player.root.Q_perspective)
+    # The root is selected 4 times in the parallel batch. The first visit
+    # expands the node; the duplicates still back up their network value so
+    # information from each evaluation is not lost. Therefore N==4 and W is
+    # the sum of the 4 backed-up values.
+    assert player.root.N == 4
+    # Q = W / (1 + N); each of the 4 backups contributed 0.17 to W[0].
+    # 0.17 * 4 / (1 + 4) = 0.136
+    assert np.isclose(0.136, player.root.Q_perspective)
+
+
+def test_extract_price_targets_categorical_only_is_empty():
+    """A categorical move (no price range) should produce an empty
+    ``price_targets`` entry — pretraining handles only its own observed
+    price; self-play's MCTS-visit aggregation kicks in only for PW slots."""
+    player = initialize_basic_player()
+    # The root's first legal action in the initial game (auction phase) is a
+    # categorical-only ``Pass``/``Bid`` — pass is categorical, the bid for
+    # a non-private-with-min-bid is, but the very first action in our default
+    # game tree is categorical (pass). Pick any legal index; pass will be in
+    # the legal set, ``_extract_price_targets`` returns ``[]`` whenever the
+    # ``price_range`` is missing or degenerate.
+    targets = player._extract_price_targets(
+        action_obj=None,
+        action_index=player.root.legal_action_indices[0],
+        price_range=None,
+    )
+    assert targets == []
+
+
+def test_extract_price_targets_pw_slot_aggregates_visits():
+    """Synthetic price grandchildren under a PW slot should appear in the
+    output as visit-weighted ``(slot_idx, price, weight, min, max)`` tuples."""
+    from unittest.mock import MagicMock
+
+    player = initialize_basic_player()
+    action_index = player.root.legal_action_indices[0]
+
+    # Fake out the slot resolver so we don't rely on a concrete action.
+    fake_action_obj = object()
+    player.root.action_mapper = MagicMock()
+    player.root.action_mapper.price_head_slot_for_action.return_value = (
+        "Bid", 7, 100, 50, 500,
+    )
+
+    # Synthesize two visited price grandchildren.
+    def _gc(price, visits):
+        gc = MagicMock()
+        gc.sampled_price = price
+        gc.N = visits
+        return gc
+
+    player.root.price_children = {action_index: {100: _gc(100, 3), 200: _gc(200, 1)}}
+
+    targets = player._extract_price_targets(
+        action_obj=fake_action_obj,
+        action_index=action_index,
+        price_range=(50, 500),
+    )
+    # Two entries, visit-weighted, with bounds from slot_info.
+    assert len(targets) == 2
+    slots, prices, weights, mins, maxs = zip(*targets)
+    assert all(s == 7 for s in slots)
+    assert sorted(prices) == [100.0, 200.0]
+    # Weights sum to 1 (3/4 + 1/4)
+    assert abs(sum(weights) - 1.0) < 1e-6
+    assert all(m == 50.0 for m in mins)
+    assert all(m == 500.0 for m in maxs)
 
 
 def test_extract_data_normal_end():
     player = initialize_basic_player(terminal_game_state())
 
-    player.searches_pi = [np.zeros(26535)] * 87
+    player.searches_pi = [np.zeros(26537)] * 87
     player.tree_search()
     player.play_move(player.pick_move())  # only one legal move
     assert player.root.is_done()
@@ -501,12 +614,15 @@ def test_extract_data_normal_end():
 
     data = list(player.extract_data())
     assert len(data) == 88
-    game_state, _, _, result = data[-1]
-    assert np.array_equal(result, [-1.0, -1.0, 1.0, -1.0])
+    game_state, _, _, result, _price_targets = data[-1]
+    # Max-N value vector: 4 real player slots + 2 padded slots. Legacy
+    # win/loss uses -1.0 padding so the dual-target derivation's
+    # ``value > -0.5`` winner detection excludes phantom slots.
+    assert np.array_equal(result, [-1.0, -1.0, 1.0, -1.0, -1.0, -1.0])
     assert len(game_state.raw_actions) == 87
 
     expected_actions = terminal_game_state().raw_actions
-    for i, (game_state, _, _, _) in enumerate(data):
+    for i, (game_state, _, _, _, _price_targets) in enumerate(data):
         assert len(game_state.raw_actions) == i
         if i == 0:
             continue
@@ -518,6 +634,115 @@ def test_extract_data_normal_end():
         if not isinstance(actual_action, dict):
             actual_action = actual_action.args_to_dict()
 
-        del expected_action["created_at"]
-        del actual_action["created_at"]
+        # ``created_at`` is a wall-clock timestamp (set only by the Python
+        # engine); strip it so the comparison is engine-agnostic.
+        expected_action = {k: v for k, v in expected_action.items() if k != "created_at"}
+        actual_action = {k: v for k, v in actual_action.items() if k != "created_at"}
         assert expected_action == actual_action, f"{i}: {expected_action} != {actual_action}"
+
+
+# ---------------------------------------------------------------------------
+# Additional _extract_price_targets edge cases
+# ---------------------------------------------------------------------------
+
+
+def _gc_mock(price, visits):
+    """Helper: build a fake price grandchild with given (price, visit count)."""
+    from unittest.mock import MagicMock
+
+    gc = MagicMock()
+    gc.sampled_price = price
+    gc.N = visits
+    return gc
+
+
+def test_extract_price_targets_excludes_zero_visit_grandchildren():
+    """Price grandchildren that were sampled but never visited (N == 0)
+    must not appear in the output — they would otherwise dilute the
+    visit-weighted price target with un-evaluated samples."""
+    from unittest.mock import MagicMock
+
+    player = initialize_basic_player()
+    action_index = player.root.legal_action_indices[0]
+
+    player.root.action_mapper = MagicMock()
+    player.root.action_mapper.price_head_slot_for_action.return_value = (
+        "Bid", 3, 100, 50, 500,
+    )
+    # Three grandchildren: 100 and 200 visited; 300 sampled but never visited.
+    player.root.price_children = {
+        action_index: {
+            100: _gc_mock(100, 3),
+            200: _gc_mock(200, 1),
+            300: _gc_mock(300, 0),  # zero visits — must be excluded
+        }
+    }
+
+    targets = player._extract_price_targets(
+        action_obj=object(),
+        action_index=action_index,
+        price_range=(50, 500),
+    )
+
+    prices = [p for _, p, *_ in targets]
+    assert 300 not in prices, "zero-visit grandchild leaked into targets"
+    assert sorted(prices) == [100.0, 200.0]
+    # Weights still sum to 1 (zero-visit ignored in numerator AND denominator? —
+    # denominator uses *all* grandchildren; verify the behaviour).
+    weights = [w for _, _, w, _, _ in targets]
+    # total_visits = 3 + 1 + 0 = 4 → weights are 3/4 and 1/4.
+    assert abs(sum(weights) - 1.0) < 1e-6
+    assert sorted(weights) == [0.25, 0.75]
+
+
+def test_extract_price_targets_degenerate_range_returns_empty():
+    """A degenerate ``price_range`` (lo == hi) is a fixed-price slot; no
+    progressive widening, no price target."""
+    player = initialize_basic_player()
+    action_index = player.root.legal_action_indices[0]
+    targets = player._extract_price_targets(
+        action_obj=object(),
+        action_index=action_index,
+        price_range=(100, 100),
+    )
+    assert targets == []
+
+
+def test_extract_price_targets_multiple_grandchildren_visit_weighted():
+    """Three visited grandchildren with distinct visit counts should be
+    reported as visit-weighted entries (each one's weight == N_i / sum_N)."""
+    from unittest.mock import MagicMock
+
+    player = initialize_basic_player()
+    action_index = player.root.legal_action_indices[0]
+
+    player.root.action_mapper = MagicMock()
+    player.root.action_mapper.price_head_slot_for_action.return_value = (
+        "BuyTrain", 12, 150, 10, 900,
+    )
+    player.root.price_children = {
+        action_index: {
+            100: _gc_mock(100, 2),
+            200: _gc_mock(200, 5),
+            300: _gc_mock(300, 3),
+        }
+    }
+
+    targets = player._extract_price_targets(
+        action_obj=object(),
+        action_index=action_index,
+        price_range=(10, 900),
+    )
+
+    assert len(targets) == 3
+    # Map price -> weight for stable assertions.
+    by_price = {p: w for _, p, w, _, _ in targets}
+    # total visits = 2 + 5 + 3 = 10
+    assert by_price[100.0] == pytest.approx(0.2)
+    assert by_price[200.0] == pytest.approx(0.5)
+    assert by_price[300.0] == pytest.approx(0.3)
+    # All entries report the same slot, min, and max from slot_info.
+    for slot, _price, _weight, lo, hi in targets:
+        assert slot == 12
+        assert lo == 10.0
+        assert hi == 900.0

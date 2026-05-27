@@ -38,6 +38,27 @@ def get_section_slice(encoder: Encoder_GNN, section_name: str, current_offset: i
     return section_slice, next_offset
 
 
+def encode_absolute(encoder: Encoder_GNN, game) -> tuple:
+    """Return encoder output in **absolute** player order (undoing canonicalization).
+
+    Encoder.encode() canonicalizes player-indexed sections so the active player sits
+    at slot 0. Many tests in this file were written against the absolute (raw)
+    layout; this helper inverts the rotation so they keep working without rewriting
+    every assertion.
+    """
+    result = encoder.encode(game)
+    rotation = result[6]
+    if rotation == 0:
+        return result
+    gs_canonical = result[0].squeeze(0).numpy()
+    # canonicalize_perspective rotates by ``-rotation``; passing
+    # ``-rotation mod N`` undoes it.
+    n = encoder.num_players
+    gs_absolute = encoder.canonicalize_perspective(gs_canonical, (-rotation) % n)
+    gs_tensor = torch.from_numpy(gs_absolute).unsqueeze(0)
+    return (gs_tensor, *result[1:5], rotation, 0)
+
+
 # Helper to get map feature index by name
 def get_feature_index(encoder: Encoder_GNN, feature_name: str) -> int:
     try:
@@ -482,7 +503,9 @@ def test_encoding_after_bid(encoder_1830: Encoder_GNN, test_game_1830_4p):
 
     g.process_action(bid_action)
 
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(g)
+    # Use absolute-order encoding for legacy test assertions (encoder canonicalizes
+    # to active-player-at-slot-0; this helper inverts that rotation).
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encode_absolute(encoder_1830, g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     player_map = encoder_1830.player_id_to_idx
@@ -595,7 +618,8 @@ def test_encoding_after_purchase(encoder_1830: Encoder_GNN, test_game_1830_4p):
     assert buy_action_p2 is not None, "Could not find buy action for P2 on SV"
     g.process_action(buy_action_p2)
 
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(g)
+    # Use absolute-order encoding for legacy test assertions.
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encode_absolute(encoder_1830, g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     player_map = encoder_1830.player_id_to_idx
@@ -960,8 +984,8 @@ def test_encoding_after_par(encoder_1830: Encoder_GNN, test_game_1830_4p):
     # Process the action
     g.process_action(par_action)
 
-    # Encode the new state
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(g)
+    # Encode the new state (absolute order for legacy test assertions).
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encode_absolute(encoder_1830, g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
     player_map = encoder_1830.player_id_to_idx
@@ -1198,7 +1222,7 @@ def test_encoding_after_par(encoder_1830: Encoder_GNN, test_game_1830_4p):
     g.process_action(action_helper.get_all_choices_limited(g)[-1])
     g.process_action(action_helper.get_all_choices_limited(g)[-1])
 
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encode_absolute(encoder_1830, g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
 
@@ -1406,7 +1430,7 @@ def test_encoding_after_par(encoder_1830: Encoder_GNN, test_game_1830_4p):
     g.process_action(action_helper.get_all_choices_limited(g)[0])
     g.process_action(action_helper.get_all_choices_limited(g)[-1])
 
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(g)
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encode_absolute(encoder_1830, g)
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
 
@@ -1651,9 +1675,9 @@ def test_operating_round_2_encoding(
 ):
     operating_round_2_game_state, action_helper = operating_round_2_game_state
 
-    # Test initial encoding
-    game_state_tensor, node_features_tensor, edge_index_tensor, edge_attributes_tensor, *_ = encoder_1830.encode(
-        operating_round_2_game_state
+    # Test initial encoding (absolute order for legacy assertions).
+    game_state_tensor, node_features_tensor, edge_index_tensor, edge_attributes_tensor, *_ = encode_absolute(
+        encoder_1830, operating_round_2_game_state
     )
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
@@ -2201,9 +2225,9 @@ def test_operating_round_2_encoding(
         action_helper.get_all_choices(operating_round_2_game_state)[-2]
     )  # buy a 3 train
 
-    # Test that a 3 has been purchased
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(
-        operating_round_2_game_state
+    # Test that a 3 has been purchased (absolute order for legacy assertions).
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encode_absolute(
+        encoder_1830, operating_round_2_game_state
     )
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
@@ -2589,9 +2613,9 @@ def test_operating_round_2_encoding(
         action_helper.get_all_choices(operating_round_2_game_state)[2]
     )  # [17:13] C&O (DH) places a token on F16 (Scranton)
 
-    # Check post-company action encoding
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(
-        operating_round_2_game_state
+    # Check post-company action encoding (absolute order for legacy assertions).
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encode_absolute(
+        encoder_1830, operating_round_2_game_state
     )
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
@@ -2961,9 +2985,9 @@ def test_operating_round_2_encoding(
         action_helper.get_all_choices(operating_round_2_game_state)[-1]
     )  # NYC discard train
 
-    # Check upgraded tile and discarded train encodings
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(
-        operating_round_2_game_state
+    # Check upgraded tile and discarded train encodings (absolute order for legacy assertions).
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encode_absolute(
+        encoder_1830, operating_round_2_game_state
     )
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0
@@ -3348,9 +3372,9 @@ def test_operating_round_2_encoding(
         action_helper.get_all_choices(operating_round_2_game_state)[-2]
     )  # Buy discarded train
 
-    # Check final state
-    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encoder_1830.encode(
-        operating_round_2_game_state
+    # Check final state (absolute order for legacy assertions).
+    game_state_tensor, node_features_tensor, edge_index, edge_attributes, *_ = encode_absolute(
+        encoder_1830, operating_round_2_game_state
     )
     encoding = game_state_tensor.squeeze(0).numpy()
     offset = 0

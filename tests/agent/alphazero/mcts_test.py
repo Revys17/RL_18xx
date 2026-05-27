@@ -9,7 +9,7 @@ from rl18xx.game.engine.game.base import BaseGame
 from rl18xx.game.gamemap import GameMap
 from rl18xx.game.action_helper import ActionHelper
 
-from rl18xx.agent.alphazero.mcts import MCTSNode, POLICY_SIZE
+from rl18xx.agent.alphazero.mcts import MCTSNode, POLICY_SIZE, VALUE_SIZE
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.alphazero.config import SelfPlayConfig
 
@@ -23,8 +23,9 @@ class DummyNet:
 
     def run_many_encoded(self, encoded_game_states):
         n = len(encoded_game_states)
-        priors = torch.ones(26535, dtype=torch.float32) / 26535
-        value = torch.tensor([0.0, 0.0, 0.0, 0.0], dtype=torch.float32)
+        priors = torch.ones(26537, dtype=torch.float32) / 26537
+        # Max-N value vector: 4 real players + 2 zero-padded slots.
+        value = torch.zeros(VALUE_SIZE, dtype=torch.float32)
         return [priors] * n, [torch.log(priors)] * n, [value] * n
 
 
@@ -374,6 +375,16 @@ def assertNoPendingVirtualLosses(root):
         queue.extend(current.children.values())
 
 
+def _find_pw_slot_action_index(game_instance, action_mapper):
+    """Return a flat action index for the first PW slot in ``game_instance``."""
+    legal_indices, price_ranges, _ = action_mapper.get_legal_actions_factored(game_instance)
+    for idx in legal_indices:
+        rng = price_ranges.get(idx)
+        if rng is not None and rng[0] != rng[1]:
+            return idx, rng
+    raise AssertionError("No PW slot found in initial game state")
+
+
 # Tests
 
 
@@ -384,7 +395,7 @@ def test_upper_bound_confidence(game_objects, mcts_config: SelfPlayConfig):
     root = MCTSNode(game_instance, config=mcts_config)
     leaf = root.select_leaf()
     assert root == leaf
-    value = np.array([0.5, 0.0, 0.0, 0.0])
+    value = np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0])
     leaf.incorporate_results(probs, value, root)
 
     num_legal_actions = len(action_helper.get_all_choices_limited(game_instance))
@@ -425,7 +436,7 @@ def test_upper_bound_confidence(game_objects, mcts_config: SelfPlayConfig):
     assert leaf2 not in (root, leaf)
 
     leaf.revert_virtual_loss(up_to=root)
-    value = np.array([0.3, 0.0, 0.0, 0.0])
+    value = np.array([0.3, 0.0, 0.0, 0.0, 0.0, 0.0])
     leaf.incorporate_results(probs, value, root)
     leaf2.incorporate_results(probs, value, root)
 
@@ -443,7 +454,7 @@ def test_select_leaf(game_objects, mcts_config: SelfPlayConfig):
     probs = np.array([0.02] * POLICY_SIZE)
     probs[flattened] = 0.4
     root = MCTSNode(game_instance, config=mcts_config)
-    value = np.array([0.0, 0.0, 0.0, 0.0])
+    value = np.zeros(VALUE_SIZE, dtype=np.float32)
     root.select_leaf().incorporate_results(probs, value, root)
 
     assert root.active_player_index == root.player_mapping[game_instance.active_players()[0].id]
@@ -455,11 +466,12 @@ def test_backup_incorporate_results(game_objects, mcts_config):
 
     probs = np.array([0.02] * POLICY_SIZE)
     root = MCTSNode(game_instance, config=mcts_config)
-    value = np.array([0.0, 0.0, 0.0, 0.0])
+    value = np.zeros(VALUE_SIZE, dtype=np.float32)
     root.select_leaf().incorporate_results(probs, value, root)
 
     leaf = root.select_leaf()
-    value = np.array([1.0, -1.0, -1.0, -1.0])
+    # 4 real players + 2 zero-padded slots (max_players=6).
+    value = np.array([1.0, -1.0, -1.0, -1.0, 0.0, 0.0])
     leaf.incorporate_results(probs, value, root)  # P2 wins!
 
     # Root was visited twice: first at the root, then at this child.
@@ -469,10 +481,10 @@ def test_backup_incorporate_results(game_objects, mcts_config):
     # Leaf should have one visit
     assert root.child_N[leaf.fmove] == 1
     assert leaf.N == 1
-    # Child W starts at zero; with one backup of [1,-1,-1,-1], Q = W/(1+N)
-    # = [1,-1,-1,-1] / (1+1) = [0.5, -0.5, -0.5, -0.5]
-    assert np.allclose(root.child_Q[leaf.fmove], np.array([0.5, -0.5, -0.5, -0.5]))
-    assert np.allclose(leaf.Q, np.array([0.5, -0.5, -0.5, -0.5]))
+    # Child W starts at zero; with one backup of [1,-1,-1,-1,0,0], Q = W/(1+N)
+    # = [1,-1,-1,-1,0,0] / (1+1) = [0.5, -0.5, -0.5, -0.5, 0, 0]
+    assert np.allclose(root.child_Q[leaf.fmove], np.array([0.5, -0.5, -0.5, -0.5, 0.0, 0.0]))
+    assert np.allclose(leaf.Q, np.array([0.5, -0.5, -0.5, -0.5, 0.0, 0.0]))
 
     # We're assuming that select_leaf() returns a leaf like:
     #   root
@@ -483,33 +495,33 @@ def test_backup_incorporate_results(game_objects, mcts_config):
     # which happens in this test because root is W to play and leaf was a W win.
     assert root.active_player_index == root.player_mapping[game_instance.active_players()[0].id]
     leaf2 = root.select_leaf()
-    value = np.array([0.2, -0.2, -0.2, -0.2])
+    value = np.array([0.2, -0.2, -0.2, -0.2, 0.0, 0.0])
     leaf2.incorporate_results(probs, value, root)  # another white semi-win
     assert root.N == 3
-    # average of 0, 0, -1, -0.2
-    assert np.allclose(root.Q, np.array([0.3, -0.3, -0.3, -0.3]))
+    # average of 0, 0, -1, -0.2 (padding slots remain 0)
+    assert np.allclose(root.Q, np.array([0.3, -0.3, -0.3, -0.3, 0.0, 0.0]))
 
     assert leaf.N == 2
     assert leaf2.N == 1
     # average of 0, -1, -0.2
     assert np.allclose(root.child_Q[leaf.fmove], leaf.Q)
-    assert np.allclose(leaf.Q, np.array([0.4, -0.4, -0.4, -0.4]))
+    assert np.allclose(leaf.Q, np.array([0.4, -0.4, -0.4, -0.4, 0.0, 0.0]))
     # Child W is initialized to zeros (standard AlphaZero), so leaf2's Q
-    # is just its single backup value [0.2, -0.2, -0.2, -0.2] / (1 + 1)
-    assert np.allclose(leaf.child_Q[leaf2.fmove], np.array([0.1, -0.1, -0.1, -0.1]))
-    assert np.allclose(leaf2.Q, np.array([0.1, -0.1, -0.1, -0.1]))
+    # is just its single backup value [0.2, -0.2, -0.2, -0.2, 0, 0] / (1 + 1)
+    assert np.allclose(leaf.child_Q[leaf2.fmove], np.array([0.1, -0.1, -0.1, -0.1, 0.0, 0.0]))
+    assert np.allclose(leaf2.Q, np.array([0.1, -0.1, -0.1, -0.1, 0.0, 0.0]))
 
 
 def test_do_not_explore_past_finish(near_terminal_game_objects, mcts_config):
     game_instance, action_helper, action_mapper = near_terminal_game_objects
     probs = np.array([0.02] * POLICY_SIZE, dtype=np.float32)
     root = MCTSNode(game_instance, config=mcts_config)
-    value = np.array([0.0, 0.0, 0.0, 0.0])
+    value = np.zeros(VALUE_SIZE, dtype=np.float32)
     root.select_leaf().incorporate_results(probs, value, root)
     action_index = action_mapper.get_index_for_action(action_helper.get_all_choices(game_instance)[-1], game_instance)
     end_game_action = root.maybe_add_child(action_index)  # Only choice is bankrupt
     with pytest.raises(AssertionError):
-        value = np.array([0.0, 0.0, 0.0, 0.0])
+        value = np.zeros(VALUE_SIZE, dtype=np.float32)
         end_game_action.incorporate_results(probs, value, root)
     node_to_explore = end_game_action.select_leaf()
     # should just stop exploring at the end position.
@@ -546,7 +558,7 @@ def test_never_select_illegal_moves(game_objects, mcts_config):
     # let's say the NN were to accidentally put a high weight on an illegal move
     probs[9999] = 0.99
     root = MCTSNode(game_instance, config=mcts_config)
-    value = np.array([0.0, 0.0, 0.0, 0.0])
+    value = np.zeros(VALUE_SIZE, dtype=np.float32)
     root.incorporate_results(probs, value, root)
     # and let's say the root were visited a lot of times, which pumps up the
     # action score for unvisited moves...
@@ -573,7 +585,7 @@ def test_dont_pick_unexpanded_child(game_objects, mcts_config):
     # even with a virtual loss
     probs[0] = 0.999
     root = MCTSNode(game_instance, config=mcts_config)
-    value = np.array([0.0, 0.0, 0.0, 0.0])
+    value = np.zeros(VALUE_SIZE, dtype=np.float32)
     root.incorporate_results(probs, value, root)
     root.N = 5
     leaf1 = root.select_leaf()
@@ -592,7 +604,7 @@ def test_normalize_policy(game_objects, mcts_config):
     probs = np.array([2.0] * POLICY_SIZE)
 
     root = MCTSNode(game_instance, config=mcts_config)
-    value = np.array([0.0, 0.0, 0.0, 0.0])
+    value = np.zeros(VALUE_SIZE, dtype=np.float32)
     root.incorporate_results(probs, value, root)
     root.N = 0
 
@@ -609,7 +621,7 @@ def test_inject_noise_only_legal_moves(game_objects, mcts_config):
 
     probs = np.array([0.02] * POLICY_SIZE)
     root = MCTSNode(game_instance, config=mcts_config)
-    value = np.array([0.0, 0.0, 0.0, 0.0])
+    value = np.zeros(VALUE_SIZE, dtype=np.float32)
     root.incorporate_results(probs, value, root)
     root.N = 0
 
@@ -650,3 +662,312 @@ def test_inject_noise_only_legal_moves(game_objects, mcts_config):
     # Policy sums to 1.0, only legal moves have non-zero values.
     assert np.isclose(1.0, sum(root.child_prior), rtol=1e-6)
     assert 0 == sum(root.child_prior * (1 - root.legal_action_mask))
+
+
+# --- Forced-move chaining tests ---
+
+def test_maybe_add_child_no_forced_chain(game_objects, mcts_config):
+    """When the post-action state has >1 legal actions, no chain collapse occurs."""
+    game_instance, action_helper, action_mapper = game_objects
+
+    root = MCTSNode(game_instance, config=mcts_config)
+    action_index = action_mapper.get_index_for_action(action_helper.get_all_choices(game_instance)[0], game_instance)
+    child = root.maybe_add_child(action_index)
+
+    # Child reflects exactly one action applied; no forced cascade was needed
+    assert child.forced_action_chain == []
+    assert child.game_object.move_number == game_instance.move_number + 1
+
+
+def test_maybe_add_child_collapses_forced_chain(game_objects, mcts_config, monkeypatch):
+    """A forced sub-sequence (states with exactly one legal action) is collapsed into
+    a single MCTSNode whose game_object reflects the post-cascade state."""
+    from rl18xx.agent.alphazero import mcts as mcts_module
+
+    game_instance, action_helper, real_action_mapper = game_objects
+
+    # Pre-compute the legal action indices we expect to traverse: from the initial
+    # state, take action[0]; from there, take whatever is at index 0; from there,
+    # take whatever is at index 0; etc. We'll force the next 2 states to have a
+    # single legal action.
+    real_indices_at_root = real_action_mapper.get_legal_action_indices(game_instance)
+    chosen_first_action = real_indices_at_root[0]
+
+    # Determine what the engine would do next naturally (two real steps after our chosen action)
+    probe = game_instance.pickle_clone()
+    probe.process_action(real_action_mapper.map_index_to_action(chosen_first_action, probe))
+    forced_a = real_action_mapper.get_legal_action_indices(probe)[0]
+    probe.process_action(real_action_mapper.map_index_to_action(forced_a, probe))
+    forced_b = real_action_mapper.get_legal_action_indices(probe)[0]
+    probe.process_action(real_action_mapper.map_index_to_action(forced_b, probe))
+    expected_post_cascade_move_number = probe.move_number
+
+    # Wrap action_mapper: report exactly 1 legal action for the two intermediate states,
+    # full set for everything else. We identify intermediate states by move_number.
+    real_mover = game_instance.move_number
+    forced_state_move_numbers = {real_mover + 1, real_mover + 2}
+
+    class ChainingActionMapper:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def get_legal_action_indices(self, state):
+            indices = self._inner.get_legal_action_indices(state)
+            if state.move_number in forced_state_move_numbers:
+                return [indices[0]]
+            return indices
+
+        def get_legal_actions_factored(self, state):
+            indices, price_ranges, action_types = self._inner.get_legal_actions_factored(state)
+            if state.move_number in forced_state_move_numbers:
+                kept = indices[0]
+                pr = {kept: price_ranges[kept]} if kept in price_ranges else {}
+                at = {kept: action_types[kept]} if kept in action_types else {}
+                return [kept], pr, at
+            return indices, price_ranges, action_types
+
+        def map_index_to_action(self, index, state):
+            return self._inner.map_index_to_action(index, state)
+
+        def map_index_to_action_with_price(self, index, state, price):
+            return self._inner.map_index_to_action_with_price(index, state, price)
+
+        def get_index_for_action(self, action, state):
+            return self._inner.get_index_for_action(action, state)
+
+        @property
+        def action_offsets(self):
+            return self._inner.action_offsets
+
+        @property
+        def company_offsets(self):
+            return self._inner.company_offsets
+
+        @property
+        def corporation_offsets(self):
+            return self._inner.corporation_offsets
+
+        @property
+        def train_type_offsets(self):
+            return self._inner.train_type_offsets
+
+        @property
+        def train_price_offsets(self):
+            return self._inner.train_price_offsets
+
+        @property
+        def buy_company_price_offsets(self):
+            return self._inner.buy_company_price_offsets
+
+    chaining_mapper = ChainingActionMapper(real_action_mapper)
+    monkeypatch.setattr(mcts_module, "_cached_action_mapper", chaining_mapper)
+
+    root = MCTSNode(game_instance, config=mcts_config)
+    # Root itself uses the patched mapper; in the initial position there should be many
+    # legal actions, so no collapse on root.
+    assert root.num_legal_actions == len(real_indices_at_root)
+
+    child = root.maybe_add_child(chosen_first_action)
+
+    # The child's stored fmove is the user-chosen action index
+    assert child.fmove == chosen_first_action
+    # Two intermediate forced actions were auto-applied
+    assert child.forced_action_chain == [forced_a, forced_b]
+    # The child's game_object is at the post-cascade state
+    assert child.game_object.move_number == expected_post_cascade_move_number
+    # The child has the real (non-forced) action set; num_legal_actions came from the
+    # post-cascade state, not the immediate-after-chosen-action state
+    assert child.num_legal_actions > 1
+
+
+def test_forced_chain_visits_accumulate_on_terminating_node(game_objects, mcts_config, monkeypatch):
+    """Visit counts and Q values are recorded on the chain-terminating node, since the
+    intermediate forced-states no longer exist as separate MCTSNodes."""
+    from rl18xx.agent.alphazero import mcts as mcts_module
+
+    game_instance, action_helper, real_action_mapper = game_objects
+
+    real_indices_at_root = real_action_mapper.get_legal_action_indices(game_instance)
+    chosen_first_action = real_indices_at_root[0]
+
+    real_mover = game_instance.move_number
+    forced_state_move_numbers = {real_mover + 1}
+
+    class ChainingActionMapper:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def get_legal_action_indices(self, state):
+            indices = self._inner.get_legal_action_indices(state)
+            if state.move_number in forced_state_move_numbers:
+                return [indices[0]]
+            return indices
+
+        def get_legal_actions_factored(self, state):
+            indices, price_ranges, action_types = self._inner.get_legal_actions_factored(state)
+            if state.move_number in forced_state_move_numbers:
+                kept = indices[0]
+                pr = {kept: price_ranges[kept]} if kept in price_ranges else {}
+                at = {kept: action_types[kept]} if kept in action_types else {}
+                return [kept], pr, at
+            return indices, price_ranges, action_types
+
+        def map_index_to_action(self, index, state):
+            return self._inner.map_index_to_action(index, state)
+
+        def map_index_to_action_with_price(self, index, state, price):
+            return self._inner.map_index_to_action_with_price(index, state, price)
+
+        def get_index_for_action(self, action, state):
+            return self._inner.get_index_for_action(action, state)
+
+        @property
+        def action_offsets(self):
+            return self._inner.action_offsets
+
+        @property
+        def company_offsets(self):
+            return self._inner.company_offsets
+
+        @property
+        def corporation_offsets(self):
+            return self._inner.corporation_offsets
+
+        @property
+        def train_type_offsets(self):
+            return self._inner.train_type_offsets
+
+        @property
+        def train_price_offsets(self):
+            return self._inner.train_price_offsets
+
+        @property
+        def buy_company_price_offsets(self):
+            return self._inner.buy_company_price_offsets
+
+    monkeypatch.setattr(mcts_module, "_cached_action_mapper", ChainingActionMapper(real_action_mapper))
+
+    root = MCTSNode(game_instance, config=mcts_config)
+    probs = np.array([0.02] * POLICY_SIZE, dtype=np.float32)
+    value = np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    root.incorporate_results(probs, value, root)
+    assert root.N == 1
+
+    child = root.maybe_add_child(chosen_first_action)
+    assert len(child.forced_action_chain) == 1
+
+    # Back up a value: visit/W should land on the chain-terminating child node.
+    backup_value = np.array([0.5, -0.5, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    child.incorporate_results(probs, backup_value, root)
+
+    # Child got exactly 1 visit; parent gained 1 (root went from 1 to 2)
+    assert child.N == 1
+    assert root.N == 2
+    # Q stored on child reflects the propagated value
+    assert np.allclose(child.W, backup_value)
+
+
+# --- Progressive widening (PW) multi-grandchild invariants ---
+
+
+def test_pw_multiple_grandchildren_have_independent_stats(game_objects, mcts_config):
+    """Two grandchildren expanded under the same PW slot must accumulate
+    visit counts and W vectors independently while their categorical parent
+    sees the *sum* (so PUCT at the categorical level integrates over all
+    grandchildren).
+    """
+    game_instance, _action_helper, action_mapper = game_objects
+
+    root = MCTSNode(game_instance, config=mcts_config)
+    probs = np.array([0.02] * POLICY_SIZE, dtype=np.float32)
+    value = np.zeros(VALUE_SIZE, dtype=np.float32)
+    root.incorporate_results(probs, value, root)
+
+    pw_action_index, price_range = _find_pw_slot_action_index(game_instance, action_mapper)
+    low, high = int(price_range[0]), int(price_range[1])
+
+    # Expand two distinct grandchildren under the same slot with concrete prices.
+    gc_a = root.maybe_add_child(pw_action_index, price=low)
+    gc_b = root.maybe_add_child(pw_action_index, price=high)
+    assert gc_a is not gc_b
+    assert gc_a.sampled_price != gc_b.sampled_price
+
+    # Back up different values into each.
+    v_a = np.array([1.0, -1.0, -1.0, -1.0, 0.0, 0.0], dtype=np.float32)
+    v_b = np.array([-1.0, 1.0, -1.0, -1.0, 0.0, 0.0], dtype=np.float32)
+    gc_a.incorporate_results(probs, v_a, root)
+    gc_b.incorporate_results(probs, v_b, root)
+
+    # Independent per-grandchild stats
+    assert gc_a.N == 1 and gc_b.N == 1
+    assert np.allclose(gc_a.W, v_a)
+    assert np.allclose(gc_b.W, v_b)
+
+    # Categorical-slot stats are the *sum* across grandchildren so PUCT at
+    # the categorical level still aggregates evidence.
+    slot_idx = root._index_for(pw_action_index)
+    assert root.child_N_compressed[slot_idx] == 2
+    assert np.allclose(root.child_W_compressed[slot_idx], v_a + v_b)
+
+
+def test_pw_virtual_loss_propagates_to_grandchild_and_slot(game_objects, mcts_config):
+    """Virtual loss applied to a price grandchild must:
+    1. record the loss on the grandchild's own W (per-grandchild storage)
+    2. mirror the W penalty into the parent's categorical slot so PUCT at
+       the categorical level also sees the in-flight penalty
+    3. revert cleanly via ``revert_virtual_loss``.
+
+    Note that this MCTS implementation deliberately leaves ``N`` untouched
+    during virtual loss — the discouragement comes entirely from the W
+    movement (one fewer "win" for the parent's active player).
+    """
+    game_instance, _action_helper, action_mapper = game_objects
+
+    root = MCTSNode(game_instance, config=mcts_config)
+    probs = np.array([0.02] * POLICY_SIZE, dtype=np.float32)
+    value = np.zeros(VALUE_SIZE, dtype=np.float32)
+    root.incorporate_results(probs, value, root)
+
+    pw_action_index, price_range = _find_pw_slot_action_index(game_instance, action_mapper)
+    gc = root.maybe_add_child(pw_action_index, price=int(price_range[0]))
+    slot_idx = root._index_for(pw_action_index)
+    prev_player = root.active_player_index
+
+    initial_gc_W = gc.W.copy()
+    initial_slot_W = root.child_W_compressed[slot_idx].copy()
+
+    gc.add_virtual_loss(up_to=root)
+    # Grandchild's own W moved against the parent's active player.
+    assert gc.losses_applied == 1
+    assert gc.W[prev_player] == initial_gc_W[prev_player] - 1
+    # And the categorical slot's W mirrors the same penalty.
+    assert root.child_W_compressed[slot_idx, prev_player] == initial_slot_W[prev_player] - 1
+
+    gc.revert_virtual_loss(up_to=root)
+    assert gc.losses_applied == 0
+    assert np.allclose(gc.W, initial_gc_W)
+    assert np.allclose(root.child_W_compressed[slot_idx], initial_slot_W)
+
+
+def test_pw_select_leaf_descends_into_grandchild(game_objects, mcts_config):
+    """``select_leaf`` from a categorical PW slot should land on a price
+    grandchild, not on the slot itself. Verifies the categorical→price
+    descent split actually selects the right kind of node."""
+    game_instance, _action_helper, action_mapper = game_objects
+
+    root = MCTSNode(game_instance, config=mcts_config)
+    probs = np.array([0.001] * POLICY_SIZE, dtype=np.float32)
+    pw_action_index, _ = _find_pw_slot_action_index(game_instance, action_mapper)
+    # Concentrate prior mass on the PW slot so PUCT prefers it.
+    probs[pw_action_index] = 0.99
+    value = np.zeros(VALUE_SIZE, dtype=np.float32)
+    root.incorporate_results(probs, value, root)
+
+    leaf = root.select_leaf()
+    # The selected leaf must be the price grandchild — not the categorical
+    # slot. It carries a concrete ``sampled_price`` and lives under
+    # ``root.price_children[pw_action_index]``.
+    assert leaf is not root
+    assert leaf.fmove == pw_action_index
+    assert leaf.sampled_price is not None
+    assert leaf.sampled_price in root.price_children.get(pw_action_index, {})

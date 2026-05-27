@@ -251,16 +251,56 @@ fn compute_corp_graph(
                         .any(|t| t.as_ref().is_some_and(|tok| tok.corporation_id == corp_sym))
                 });
                 if !corp_already_in_hex {
-                    // Reservation blocking:
-                    // - Tile-level reservations (city_index=usize::MAX) use
-                    //   "always" blocking: any city on the hex is blocked.
-                    // - City-level reservations: slot-level blocking on the
-                    //   specific city.
-                    let tile_level_blocked = reservations.iter().any(|(rh, rc, rsym)| {
+                    // Reservation blocking, matching Python
+                    // ``Tile.token_blocked_by_reservation``:
+                    //
+                    //   * Tile-level reservations (city_index=usize::MAX) on a
+                    //     single-city tile use "always" blocking — block all
+                    //     other corps from tokening the tile.
+                    //   * Tile-level reservations on a multi-city tile (the OO
+                    //     tiles like ERIE's E11 / H18 home) just need ONE slot
+                    //     somewhere on the tile to remain open; other corps may
+                    //     token any other slot. Fall through to slot-counting
+                    //     across the whole tile.
+                    //   * City-level reservations: slot-level blocking on the
+                    //     specific city.
+                    let tile_level_other = reservations.iter().any(|(rh, rc, rsym)| {
                         rh == &node.hex_id && *rc == usize::MAX && rsym != corp_sym
                     });
-                    let blocked = if tile_level_blocked {
+                    let num_cities = hexes[hi].tile.cities.len();
+                    let blocked = if tile_level_other && num_cities <= 1 {
                         true
+                    } else if tile_level_other {
+                        // Multi-city tile with tile-level reservation: total
+                        // free slots across the whole tile must remain >
+                        // number of other corps' tile-level reservations
+                        // (slot-counting). Mirrors Python's else branch which
+                        // uses ``city.available_slots`` summed across cities.
+                        let total_slots: usize =
+                            hexes[hi].tile.cities.iter().map(|c| c.tokens.len()).sum();
+                        let total_tokens: usize = hexes[hi]
+                            .tile
+                            .cities
+                            .iter()
+                            .map(|c| c.tokens.iter().filter(|t| t.is_some()).count())
+                            .sum();
+                        let other_tile_reservations = reservations
+                            .iter()
+                            .filter(|(rh, rc, rsym)| {
+                                rh == &node.hex_id && *rc == usize::MAX && rsym != corp_sym
+                            })
+                            .count();
+                        // Also account for other corps' city-level reservations
+                        // on this tile so the slot bookkeeping matches Python.
+                        let other_city_reservations = reservations
+                            .iter()
+                            .filter(|(rh, rc, rsym)| {
+                                rh == &node.hex_id && *rc != usize::MAX && rsym != corp_sym
+                            })
+                            .count();
+                        total_slots
+                            .saturating_sub(total_tokens + other_tile_reservations + other_city_reservations)
+                            == 0
                     } else {
                         // City-level: slot-level blocking
                         let num_tokens = city.tokens.iter().filter(|t| t.is_some()).count();

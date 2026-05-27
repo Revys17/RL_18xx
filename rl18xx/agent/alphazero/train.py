@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from rl18xx.agent.alphazero.model import AlphaZeroModel
 from rl18xx.agent.alphazero.config import TrainingConfig
@@ -12,6 +13,7 @@ from torch_geometric.loader import DataLoader
 from tqdm.auto import tqdm
 import logging
 from dataclasses import dataclass, field
+from typing import Tuple
 from IPython.display import display, clear_output, HTML
 import matplotlib.pyplot as plt
 import warnings
@@ -31,6 +33,9 @@ class TrainingMetrics:
     avg_value_loss: float = 0.0
     training_examples: int = 0
     epochs_trained: int = 0
+    # Checkpoint number that train_model wrote out (None if training was skipped,
+    # e.g. empty dataset). Set by train_model after the final save_model call.
+    checkpoint_num: int = None
     epoch_losses: list = field(default_factory=list)
     epoch_policy_losses: list = field(default_factory=list)
     epoch_value_losses: list = field(default_factory=list)
@@ -84,7 +89,12 @@ class TrainingMetrics:
 
 
 def _compute_grad_norms(model: AlphaZeroModel) -> dict:
-    """Compute gradient norms for different model components."""
+    """Compute gradient norms for different model components.
+
+    The dual value head splits the legacy ``value_head`` into ``win_loss_head``
+    + ``score_head``; both contribute to the aggregate ``value_head`` bucket so
+    metrics stay comparable with pre-dual-head runs.
+    """
     norms = {"total": 0.0, "policy_head": 0.0, "value_head": 0.0, "trunk": 0.0}
     for name, param in model.named_parameters():
         if param.grad is not None:
@@ -92,12 +102,55 @@ def _compute_grad_norms(model: AlphaZeroModel) -> dict:
             norms["total"] += grad_norm
             if "policy" in name:
                 norms["policy_head"] += grad_norm
-            elif "value_head" in name:
+            elif "win_loss_head" in name or "score_head" in name:
                 norms["value_head"] += grad_norm
             else:
                 norms["trunk"] += grad_norm
     norms = {k: v**0.5 for k, v in norms.items()}
     return norms
+
+
+def _derive_dual_value_targets(value: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Derive ``(win_loss_target, score_target)`` from the stored per-example value.
+
+    The stored ``value`` tensor on each training example can be in one of two
+    legacy formats depending on ``SelfPlayConfig.use_score_values``:
+
+    1. **Score fractions** (``use_score_values=True``, the default): all entries
+       are non-negative and sum to 1; each entry is that player's share of
+       total end-of-game net worth. This is already the natural target for the
+       score head, and the win-loss target is the share-of-winners
+       distribution derived from it (one mass on the argmax player, split
+       evenly across ties).
+
+    2. **Win/loss vector** (``use_score_values=False``, legacy): entries are
+       in {-1, 0, +1}. We synthesize both heads' targets from it: the win-loss
+       head gets the standard share-of-winners distribution and the score head
+       falls back to the same target (cheap backward-compat — no real signal,
+       but keeps the loss finite without forcing a data regeneration).
+
+    Detection mirrors the auto-detect already in ``compute_losses``: a value
+    tensor that is everywhere ``>= 0`` is treated as score fractions.
+    """
+    is_score_values = (value >= 0).all()
+    if is_score_values:
+        score_target = value
+        # Share-of-winners derived from the score fractions. We threshold by
+        # the per-row max instead of comparing for equality so ties (which
+        # land on identical floats here because the encoder normalizes by
+        # sum) get even mass.
+        row_max = value.max(dim=1, keepdim=True).values
+        winners_mask = (value >= row_max - 1e-6).float()
+        num_winners = winners_mask.sum(dim=1, keepdim=True).clamp(min=1)
+        win_loss_target = winners_mask / num_winners
+    else:
+        winners_mask = (value > -0.5).float()
+        num_winners = winners_mask.sum(dim=1, keepdim=True).clamp(min=1)
+        win_loss_target = winners_mask / num_winners
+        # No independent score signal in this legacy encoding; use the win/loss
+        # distribution so the score head sees a finite, sensible target.
+        score_target = win_loss_target
+    return win_loss_target, score_target
 
 
 def _safe_correlation(x: torch.Tensor, y: torch.Tensor) -> float:
@@ -112,6 +165,380 @@ def _safe_correlation(x: torch.Tensor, y: torch.Tensor) -> float:
     if denom < 1e-8:
         return 0.0
     return (vx @ vy / denom).item()
+
+
+def _compute_decomposed_policy_loss(
+    components: dict,
+    pi: torch.Tensor,
+    legal_action_mask: torch.Tensor,
+) -> Tuple[torch.Tensor, dict]:
+    """Decomposed cross-entropy loss for the hierarchical policy head.
+
+    For each autoregressive level (LayTile: hex / tile|hex / rot|hex,tile;
+    PlaceToken: hex / slot|hex) we project the flat MCTS visit-count target
+    ``pi`` onto that level's marginal and compute a standard cross-entropy
+    against the sub-head's ``log_softmax``. Each sub-head's gradient is
+    automatically weighted by the visit mass that passed through its level
+    of the joint (this falls out of the marginalization — no manual scaling
+    needed).
+
+    For the parallel-factored "other" block (everything outside LayTile +
+    PlaceToken), we do a standard masked CE on the compact ``log_p_other``
+    head, with the legal-action mask routed through the same
+    ``other_indices`` gather.
+
+    Returns ``(total_policy_loss, diagnostics)`` where ``diagnostics`` carries
+    the per-sub-head loss tensors (useful for TensorBoard).
+    """
+    # ---- Layout ----
+    H = components["num_hexes"]
+    T = components["num_tiles"]
+    R = components["num_rotations"]
+    S = components["max_city_slots"]
+    lt_start = components["lay_tile_offset"]
+    lt_end = components["lay_tile_end"]
+    pt_start = components["place_token_offset"]
+    pt_end = components["place_token_end"]
+    other_indices = components["other_indices"]
+    pt_to_hex = components["place_token_to_mapper_hex"]
+    pt_to_slot = components["place_token_to_slot"]
+
+    B = pi.shape[0]
+    eps = 1e-8
+
+    # ---- LayTile decomposition ----
+    pi_lay = pi[:, lt_start:lt_end].view(B, H, T, R)  # (B, H, T, R)
+    pi_hex_marginal = pi_lay.sum(dim=(2, 3))  # (B, H)
+    pi_tile_marginal = pi_lay.sum(dim=3)  # (B, H, T)  joint over (hex, tile)
+
+    log_p_hex = F.log_softmax(components["hex_logits"], dim=-1)  # (B, H)
+    log_p_tile = F.log_softmax(components["tile_logits"], dim=-1)  # (B, H, T)
+    log_p_rot = F.log_softmax(components["rotation_logits"], dim=-1)  # (B, H, T, R)
+
+    # Three CE losses, one per autoregressive level. Each level's loss is
+    # naturally weighted by the visit mass that flows through it (the
+    # marginal-target shape encodes the weighting).
+    loss_hex = -(pi_hex_marginal * log_p_hex).sum(dim=-1).mean()
+    loss_tile = -(pi_tile_marginal * log_p_tile).sum(dim=(-1, -2)).mean()
+    loss_rot = -(pi_lay * log_p_rot).sum(dim=(-1, -2, -3)).mean()
+
+    # ---- PlaceToken decomposition ----
+    pi_pt_flat = pi[:, pt_start:pt_end]  # (B, place_token_block_size)
+    # Scatter the flat PlaceToken target into the (H, S) grid using the
+    # precomputed (hex, slot) lookup so the per-hex / per-slot losses index
+    # the same physical layout the sub-heads emit.
+    pi_pt_grid = pi.new_zeros(B, H, S)
+    pi_pt_grid[:, pt_to_hex, pt_to_slot] = pi_pt_flat
+    pi_pt_hex_marginal = pi_pt_grid.sum(dim=-1)  # (B, H)
+
+    log_p_pt_hex = F.log_softmax(components["place_token_hex_logits"], dim=-1)  # (B, H)
+    log_p_pt_slot = F.log_softmax(components["place_token_slot_logits"], dim=-1)  # (B, H, S)
+
+    loss_pt_hex = -(pi_pt_hex_marginal * log_p_pt_hex).sum(dim=-1).mean()
+    loss_pt_slot = -(pi_pt_grid * log_p_pt_slot).sum(dim=(-1, -2)).mean()
+
+    # ---- Other-action CE ----
+    pi_other = pi[:, other_indices]  # (B, num_other)
+    other_logits = components["other_logits"]  # (B, num_other)
+    legal_other_mask = legal_action_mask[:, other_indices]  # (B, num_other)
+    masked_other_logits = other_logits.masked_fill(legal_other_mask == 0, float("-inf"))
+    log_p_other = F.log_softmax(masked_other_logits, dim=-1)
+    safe_log_p_other = log_p_other.masked_fill(legal_other_mask == 0, 0.0)
+    # If a sample has no legal "other" slots at all, ``masked_other_logits`` is
+    # entirely -inf and ``log_softmax`` returns NaNs. Such samples also have
+    # ``pi_other == 0`` along that row, so we zero out the safe-log to avoid
+    # 0 * NaN.
+    no_legal_other = (legal_other_mask.sum(dim=-1) == 0).unsqueeze(-1)
+    safe_log_p_other = torch.where(no_legal_other, torch.zeros_like(safe_log_p_other), safe_log_p_other)
+    loss_other = -(pi_other * safe_log_p_other).sum(dim=-1).mean()
+
+    total = loss_hex + loss_tile + loss_rot + loss_pt_hex + loss_pt_slot + loss_other
+    diagnostics = {
+        "loss_lay_tile_hex": loss_hex,
+        "loss_lay_tile_tile": loss_tile,
+        "loss_lay_tile_rot": loss_rot,
+        "loss_place_token_hex": loss_pt_hex,
+        "loss_place_token_slot": loss_pt_slot,
+        "loss_other": loss_other,
+    }
+    return total, diagnostics
+
+
+def _compute_price_nll_loss(
+    price_components: dict,
+    price_targets: list,
+) -> Tuple[torch.Tensor, dict]:
+    """Continuous-price NLL on the network's ``Normal(mean, exp(log_std))`` head.
+
+    ``price_targets`` is a per-example list of ``[(slot_idx, price, weight,
+    price_min, price_max), ...]`` tuples. Each tuple says "this example had a
+    target observation of ``price`` for the (action_type, entity) corresponding
+    to ``slot_idx``, contributing ``weight`` mass to the loss; the legal price
+    range is ``[price_min, price_max]``." Weight is typically 1.0 for
+    pretraining (one observed action per state) and visit-fraction for
+    self-play (multiple sampled prices per categorical child node).
+
+    The truncated-Normal correction (subtracting ``log(Φ((max-μ)/σ) -
+    Φ((min-μ)/σ))``) is implemented so the head's reported NLL reflects the
+    actual truncated distribution MCTS samples from. Skipping it would
+    over-penalize ``μ`` predictions outside the legal range — the gradient
+    direction is the same but the magnitudes drift.
+
+    Returns ``(price_loss, diagnostics)``. ``price_loss`` is the weighted
+    average NLL across all (example, target) pairs; if there are no price
+    targets in the batch it is a zero tensor on the same device as the head.
+    ``diagnostics`` carries the per-action-type breakdown for TensorBoard.
+    """
+    mean = price_components["price_mean"]  # (B, num_slots)
+    log_std = price_components["price_log_std"]  # (B, num_slots)
+    device = mean.device
+    dtype = mean.dtype
+
+    # Flatten the per-example target lists into batched index tensors so the
+    # NLL computation is a single vectorized operation.
+    batch_idx: list = []
+    slot_idx: list = []
+    prices: list = []
+    weights: list = []
+    p_min: list = []
+    p_max: list = []
+    for b, targets in enumerate(price_targets or []):
+        if not targets:
+            continue
+        for entry in targets:
+            slot, price, w, pmn, pmx = entry
+            batch_idx.append(b)
+            slot_idx.append(slot)
+            prices.append(float(price))
+            weights.append(float(w))
+            p_min.append(float(pmn))
+            p_max.append(float(pmx))
+
+    if not slot_idx:
+        zero = torch.tensor(0.0, device=device, dtype=dtype)
+        return zero, {"price_count": 0}
+
+    bi = torch.tensor(batch_idx, device=device, dtype=torch.long)
+    si = torch.tensor(slot_idx, device=device, dtype=torch.long)
+    px = torch.tensor(prices, device=device, dtype=dtype)
+    wt = torch.tensor(weights, device=device, dtype=dtype)
+    lo = torch.tensor(p_min, device=device, dtype=dtype)
+    hi = torch.tensor(p_max, device=device, dtype=dtype)
+
+    mu = mean[bi, si]
+    log_sigma = log_std[bi, si]
+    # Numerical-safety clamp on log_std so the gradient stays finite even if
+    # the head emits an extreme prediction; matches the clamp MCTS uses when
+    # sampling. The bounds are roughly ``[$0.5, $5000]`` in raw price space.
+    log_sigma = log_sigma.clamp(min=-1.0, max=8.5)
+    sigma = log_sigma.exp()
+
+    # Untruncated Normal log-pdf:  -0.5*((x-μ)/σ)² - log(σ) - 0.5*log(2π)
+    log2pi = math.log(2.0 * math.pi)
+    z = (px - mu) / sigma
+    untruncated_log_prob = -0.5 * z * z - log_sigma - 0.5 * log2pi
+
+    # Truncation correction: subtract log(Φ((hi-μ)/σ) - Φ((lo-μ)/σ)).
+    # When ``hi == lo`` (fixed-price actions like depot trains shouldn't reach
+    # this head, but we defend against it) treat the correction as 0 so the
+    # NLL collapses to the untruncated log-pdf.
+    inv_sqrt2 = 1.0 / math.sqrt(2.0)
+    norm_cdf_hi = 0.5 * (1.0 + torch.erf((hi - mu) * inv_sqrt2 / sigma))
+    norm_cdf_lo = 0.5 * (1.0 + torch.erf((lo - mu) * inv_sqrt2 / sigma))
+    truncation_mass = (norm_cdf_hi - norm_cdf_lo).clamp(min=1e-8)
+    fixed_price = (hi - lo).abs() < 1e-6
+    log_trunc_correction = torch.where(
+        fixed_price,
+        torch.zeros_like(truncation_mass),
+        torch.log(truncation_mass),
+    )
+
+    log_prob = untruncated_log_prob - log_trunc_correction
+    nll = -log_prob  # (num_targets,)
+
+    weighted = nll * wt
+    total_weight = wt.sum().clamp(min=1e-8)
+    price_loss = weighted.sum() / total_weight
+
+    diagnostics = {
+        "price_count": int(si.numel()),
+        "price_nll_mean": price_loss.detach(),
+        "price_mu_mean": mu.detach().mean(),
+        "price_log_std_mean": log_sigma.detach().mean(),
+    }
+    return price_loss, diagnostics
+
+
+def compute_losses(
+    model: AlphaZeroModel,
+    game_state_data: torch.Tensor,
+    batch_data,
+    legal_action_mask: torch.Tensor,
+    pi: torch.Tensor,
+    value: torch.Tensor,
+    config: TrainingConfig,
+    price_targets: list = None,
+) -> dict:
+    """Forward pass + loss computation shared between RL training and SL pretraining.
+
+    KataGo-style dual value head: the network emits two value outputs from
+    parallel heads on the same trunk — ``win_loss_logits`` (share-of-winners,
+    KL-div trained) and ``score_pred`` (normalized net-worth fractions,
+    MSE-trained). MCTS reads only the win-loss head; the score head provides
+    a dense gradient signal to the trunk. Both targets are derived from the
+    stored per-example ``value`` via ``_derive_dual_value_targets`` (which
+    transparently handles the legacy win/loss-only encoding).
+
+    Policy loss is computed via the autoregressive decomposition when the
+    model exposes ``last_policy_components`` (the new HierarchicalPolicyHead);
+    otherwise it falls back to the legacy masked-CE on the flat policy
+    logits. This lets the GNN model — which still uses the outer-sum
+    FactoredPolicyHead — share this helper without rewiring its loss path.
+
+    Returns a dict containing:
+        - "total_loss", "policy_loss", "value_loss", "score_loss", "aux_loss", "entropy"
+        - "policy_logits", "policy_probs", "log_probs", "safe_log_probs"
+        - "value_pred" (== ``win_loss_logits``, kept for backward compat),
+          "win_loss_logits", "score_pred"
+        - "win_loss_target", "score_target"
+        - "aux_pred", "aux_target"
+        - "policy_loss_breakdown" (dict of per-sub-head losses, only present
+          when the hierarchical head is in use)
+    The caller is responsible for backward, gradient clipping, and optimizer
+    steps. Computing-side concerns (KL formulation, masking, FiLM, aux head)
+    are intentionally identical to keep RL/SL gradient flow comparable; the
+    only difference between train_model and pretrain_model is in optimizer
+    construction, scheduler, validation, and checkpointing.
+    """
+    policy_logits, win_loss_logits, score_pred, aux_action_count_pred = model(game_state_data, batch_data)
+
+    # --- Policy loss ---
+    # Prefer the decomposed loss when the model exposes the hierarchical
+    # policy components (current Transformer architecture). Fall back to the
+    # legacy masked-CE on the flat policy logits for the GNN model and any
+    # checkpoints that pre-date the hierarchical head.
+    policy_components = getattr(model, "last_policy_components", None)
+    masked_logits = policy_logits.masked_fill(legal_action_mask == 0, float("-inf"))
+    log_probs = F.log_softmax(masked_logits, dim=1)
+    safe_log_probs = log_probs.masked_fill(legal_action_mask == 0, 0.0)
+    if policy_components is not None:
+        policy_loss, policy_loss_breakdown = _compute_decomposed_policy_loss(
+            policy_components, pi, legal_action_mask
+        )
+    else:
+        policy_loss = -torch.sum(pi * safe_log_probs, dim=1).mean()
+        policy_loss_breakdown = None
+
+    # --- Policy entropy (network-output entropy over legal actions; same
+    # quantity regardless of which loss formulation we used).
+    policy_probs = F.softmax(masked_logits, dim=1)
+    entropy = -torch.sum(policy_probs * safe_log_probs, dim=1).mean()
+
+    # --- Dual value targets derived from the stored value tensor ---
+    win_loss_target, score_target = _derive_dual_value_targets(value)
+
+    # Variable-N: the model always outputs (B, max_players=6); the stored target
+    # has dim=num_players for the source game. Pad target with zeros on the
+    # right so the loss can broadcast — padded slots correspond to non-existent
+    # players (zero win-share, zero net-worth fraction), which is semantically
+    # correct.
+    max_n = win_loss_logits.shape[1]
+    if win_loss_target.shape[1] < max_n:
+        pad = max_n - win_loss_target.shape[1]
+        win_loss_target = F.pad(win_loss_target, (0, pad), value=0.0)
+        score_target = F.pad(score_target, (0, pad), value=0.0)
+
+    # --- Win-loss loss (KL-div on softmax distribution) ---
+    win_loss_log_probs = F.log_softmax(win_loss_logits, dim=1)
+    win_loss_loss = -(win_loss_target * win_loss_log_probs).sum(dim=1).mean()
+
+    # --- Score loss (MSE on raw per-player predictions) ---
+    score_loss = F.mse_loss(score_pred, score_target)
+
+    # --- Auxiliary loss ---
+    legal_action_count = legal_action_mask.sum(dim=1)
+    aux_target = torch.log(legal_action_count.float().clamp(min=1))
+    aux_pred = aux_action_count_pred.squeeze(1)
+    aux_loss = F.mse_loss(aux_pred, aux_target)
+
+    # --- Continuous price NLL ---
+    # The price head is consumed only when the model exposes
+    # ``last_price_components`` (current Transformer architecture) AND the
+    # caller has supplied per-example price targets. Both conditions are
+    # currently absent for the legacy GNN training path and for self-play /
+    # pretraining batches that haven't been migrated to carry price targets
+    # yet — in those cases the price loss is exactly zero and contributes
+    # neither gradient nor noise to the total loss.
+    price_components = getattr(model, "last_price_components", None)
+    price_loss_value = torch.tensor(0.0, device=policy_loss.device, dtype=policy_loss.dtype)
+    price_diagnostics = {"price_count": 0}
+    if price_components is not None and price_targets is not None:
+        price_loss_value, price_diagnostics = _compute_price_nll_loss(
+            price_components, price_targets
+        )
+
+    total_loss = (
+        policy_loss
+        + config.value_loss_weight * win_loss_loss
+        + config.score_loss_weight * score_loss
+        + config.price_loss_weight * price_loss_value
+        + model.config.aux_loss_weight * aux_loss
+        - config.entropy_weight * entropy
+    )
+
+    return {
+        "total_loss": total_loss,
+        "policy_loss": policy_loss,
+        # "value_loss" retains its historical meaning (the loss consumed by
+        # MCTS-relevant supervision) so the metrics/logging path stays stable.
+        "value_loss": win_loss_loss,
+        "win_loss_loss": win_loss_loss,
+        "score_loss": score_loss,
+        "aux_loss": aux_loss,
+        "entropy": entropy,
+        "policy_logits": policy_logits,
+        "policy_probs": policy_probs,
+        "log_probs": log_probs,
+        "safe_log_probs": safe_log_probs,
+        # Keep "value_pred" pointing at the win-loss logits for callers that
+        # historically used it for diagnostics (e.g. value-MSE-vs-target).
+        "value_pred": win_loss_logits,
+        "win_loss_logits": win_loss_logits,
+        "score_pred": score_pred,
+        "win_loss_target": win_loss_target,
+        "score_target": score_target,
+        "aux_pred": aux_pred,
+        "aux_target": aux_target,
+        "legal_action_count": legal_action_count,
+        "policy_loss_breakdown": policy_loss_breakdown,
+        "price_loss": price_loss_value,
+        "price_diagnostics": price_diagnostics,
+    }
+
+
+def move_batch_to_device(batch, device):
+    """Shared batch unpacking + device transfer used by both train and pretrain loops.
+
+    The dataset emits a 6-tuple ``(game_state_data, batch_data,
+    legal_action_mask, pi, value, price_targets)``. ``price_targets`` is a
+    per-example list (one entry per item in the batch); each entry is either
+    ``None`` or a list of ``(slot_idx, price, weight, price_min, price_max)``
+    tuples — kept on CPU as Python objects because ``_compute_price_nll_loss``
+    rebuilds the dense index/value tensors inside the loss helper. Legacy
+    5-tuple batches (no price-target column) are tolerated and surfaced as
+    ``price_targets=None`` for the caller.
+    """
+    if len(batch) == 6:
+        game_state_data, batch_data, legal_action_mask, pi, value, price_targets = batch
+    else:
+        game_state_data, batch_data, legal_action_mask, pi, value = batch
+        price_targets = None
+    game_state_data = game_state_data.squeeze(1).float().to(device, non_blocking=True)
+    batch_data = batch_data.to(device, non_blocking=True)
+    legal_action_mask = legal_action_mask.float().to(device, non_blocking=True)
+    pi = pi.float().to(device, non_blocking=True)
+    value = value.float().to(device, non_blocking=True)
+    return game_state_data, batch_data, legal_action_mask, pi, value, price_targets
 
 
 def train(
@@ -149,11 +576,14 @@ def train_model(
     graph: bool = False,
     model_checkpoint_dir: str = "model_checkpoints",
 ) -> TrainingMetrics:
-    # Separate learning rate for value head (Item 5)
+    # Separate learning rate for value heads (Item 5). With the KataGo-style
+    # dual head, both ``win_loss_head`` and ``score_head`` use the elevated LR
+    # — they replace the legacy ``value_head`` and the rationale (small final
+    # MLP, slower than policy/trunk to specialize) applies to both.
     value_head_params = []
     other_params = []
     for name, param in model.named_parameters():
-        if "value_head" in name:
+        if "win_loss_head" in name or "score_head" in name:
             value_head_params.append(param)
         else:
             other_params.append(param)
@@ -242,7 +672,14 @@ def train_model(
 
         for batch_idx, batch in enumerate(train_pbar):
             global_batch_number += 1
-            game_state_data, batch_data, legal_action_mask, pi, value = batch
+            # 6-tuple batches carry per-example ``price_targets``; tolerate
+            # legacy 5-tuple batches by defaulting that field to None (the
+            # price head simply contributes zero loss in that case).
+            if len(batch) == 6:
+                game_state_data, batch_data, legal_action_mask, pi, value, price_targets = batch
+            else:
+                game_state_data, batch_data, legal_action_mask, pi, value = batch
+                price_targets = None
             game_state_data = game_state_data.squeeze(1).float().to(device, non_blocking=True)
             batch_data = batch_data.to(device, non_blocking=True)
             legal_action_mask = legal_action_mask.float().to(device, non_blocking=True)
@@ -250,29 +687,38 @@ def train_model(
             value = value.float().to(device, non_blocking=True)
 
             with torch.amp.autocast("cuda", enabled=use_amp):
-                policy_logits, value_pred, aux_action_count_pred = model(game_state_data, batch_data)
+                policy_logits, win_loss_logits, score_pred, aux_action_count_pred = model(
+                    game_state_data, batch_data
+                )
 
                 # --- Policy loss ---
+                # Decomposed CE per autoregressive level when the
+                # hierarchical head is in use (Transformer model); legacy
+                # masked-CE fallback for the GNN model.
+                policy_components = getattr(model, "last_policy_components", None)
                 masked_logits = policy_logits.masked_fill(legal_action_mask == 0, float("-inf"))
                 log_probs = F.log_softmax(masked_logits, dim=1)
                 safe_log_probs = log_probs.masked_fill(legal_action_mask == 0, 0.0)
-                policy_loss = -torch.sum(pi * safe_log_probs, dim=1).mean()
+                if policy_components is not None:
+                    policy_loss, _ = _compute_decomposed_policy_loss(
+                        policy_components, pi, legal_action_mask
+                    )
+                else:
+                    policy_loss = -torch.sum(pi * safe_log_probs, dim=1).mean()
 
                 # --- Policy entropy ---
                 policy_probs = F.softmax(masked_logits, dim=1)
                 entropy = -torch.sum(policy_probs * safe_log_probs, dim=1).mean()
 
-                # --- Value loss ---
-                is_score_values = (value >= 0).all()
-                if is_score_values:
-                    value_log_probs = F.log_softmax(value_pred, dim=1)
-                    value_loss = F.kl_div(value_log_probs, value, reduction="batchmean")
-                else:
-                    winners_mask = (value > -0.5).float()
-                    num_winners = winners_mask.sum(dim=1, keepdim=True).clamp(min=1)
-                    value_target_probs = winners_mask / num_winners
-                    value_log_probs = F.log_softmax(value_pred, dim=1)
-                    value_loss = -(value_target_probs * value_log_probs).sum(dim=1).mean()
+                # --- Dual value targets derived from the stored value tensor ---
+                win_loss_target, score_target = _derive_dual_value_targets(value)
+
+                # --- Win-loss loss (KL-div on share-of-winners distribution) ---
+                win_loss_log_probs = F.log_softmax(win_loss_logits, dim=1)
+                value_loss = -(win_loss_target * win_loss_log_probs).sum(dim=1).mean()
+
+                # --- Score loss (MSE on normalized net-worth fractions) ---
+                score_loss = F.mse_loss(score_pred, score_target)
 
                 # --- Auxiliary loss ---
                 legal_action_count = legal_action_mask.sum(dim=1)
@@ -280,12 +726,35 @@ def train_model(
                 aux_pred = aux_action_count_pred.squeeze(1)
                 aux_loss = F.mse_loss(aux_pred, aux_target)
 
+                # --- Continuous price NLL ---
+                # The price head only contributes when the model exposes
+                # ``last_price_components`` (Transformer architecture) AND the
+                # current batch has price targets. Self-play batches today
+                # don't carry price targets so ``price_loss_value`` stays at
+                # zero in that case; pretraining batches do carry them and
+                # this is the path that wires them into the optimizer.
+                price_components = getattr(model, "last_price_components", None)
+                price_loss_value = torch.tensor(
+                    0.0, device=policy_loss.device, dtype=policy_loss.dtype
+                )
+                if price_components is not None and price_targets is not None:
+                    price_loss_value, _ = _compute_price_nll_loss(
+                        price_components, price_targets
+                    )
+
                 total_loss = (
                     policy_loss
                     + config.value_loss_weight * value_loss
+                    + config.score_loss_weight * score_loss
+                    + config.price_loss_weight * price_loss_value
                     + model.config.aux_loss_weight * aux_loss
                     - config.entropy_weight * entropy
                 )
+
+            # Keep ``value_pred`` as an alias for ``win_loss_logits`` so the
+            # diagnostics block below (top-1 softmax stats, explained variance,
+            # …) doesn't need rewriting — it always meant "the head MCTS reads".
+            value_pred = win_loss_logits
 
             if not torch.isfinite(total_loss):
                 LOGGER.warning(
@@ -371,10 +840,12 @@ def train_model(
                 kl_per_sample = torch.sum(pi * (torch.log(safe_pi) - safe_log_probs), dim=1)
                 epoch_policy_kl_values.extend(kl_per_sample.cpu().tolist())
 
-                # Value statistics
+                # Value statistics — both pred and target are share-of-winners
+                # distributions (softmax of the win-loss head vs. the derived
+                # win-loss target), so MAE / MSE / correlation are meaningful.
                 value_pred_probs = F.softmax(value_pred, dim=1)
                 epoch_value_preds_all.append(value_pred_probs.cpu())
-                epoch_value_targets_all.append(value.cpu())
+                epoch_value_targets_all.append(win_loss_target.cpu())
 
                 # Aux statistics
                 epoch_aux_preds_all.append(aux_pred.cpu())
@@ -511,6 +982,15 @@ def train_model(
 
     # Save optimizer state for next iteration
     save_optimizer_state(optimizer, scheduler, model_checkpoint_dir, model)
+
+    # Always emit a numbered checkpoint so the trained candidate survives a
+    # crash between training and gating. Promotion (i.e. updating the
+    # current_best pointer) is the caller's responsibility — see loop.py's
+    # _run_gating_iteration. Pretraining wrappers should likewise update the
+    # pointer themselves once they've decided the run was successful.
+    checkpoint_num = save_model(model, model_checkpoint_dir)
+    metrics.checkpoint_num = checkpoint_num
+    LOGGER.info(f"Saved trained model as checkpoint {checkpoint_num} (not yet promoted).")
 
     # Calculate final average metrics across all epochs
     metrics.epochs_trained = config.num_epochs

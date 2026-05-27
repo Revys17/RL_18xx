@@ -787,8 +787,22 @@ impl BaseGame {
     }
 
     /// After stock round: corps with no shares in IPO or market get price increase.
+    ///
+    /// Iterates corps in *operating-order* (matches Python's
+    /// ``Stock.finish_round`` at round.py:5734 which sorts ``corporations``
+    /// before iterating). The iteration order matters: when two corps move
+    /// up into the same destination cell, the order they're added to
+    /// ``market_cell_corps`` determines the tiebreak in subsequent
+    /// operating-order computations.
     pub(crate) fn check_sold_out_price_increases(&mut self) {
-        for corp_idx in 0..self.corporations.len() {
+        // Compute operating order over *all* floated corps (the property is
+        // ``share_price.coordinates``-based — same key as ``compute_operating_order``).
+        let order = self.compute_operating_order();
+        for sym in &order {
+            let corp_idx = match self.corp_idx.get(sym.as_str()) {
+                Some(&idx) => idx,
+                None => continue,
+            };
             let corp = &self.corporations[corp_idx];
             if !corp.floated {
                 continue;

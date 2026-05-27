@@ -39,6 +39,11 @@ def cmd_train(args):
 def cmd_pretrain(args):
     from rl18xx.agent.alphazero.pretraining import do_pretraining
     from rl18xx.agent.alphazero.config import TrainingConfig
+    from rl18xx.agent.alphazero.loop import ensure_seed_model
+
+    # Seed the model directory so do_pretraining's get_latest_model() call
+    # works on a fresh checkout (it would otherwise FileNotFoundError).
+    ensure_seed_model(model_type=args.model_type)
 
     config = TrainingConfig(
         num_epochs=args.epochs,
@@ -158,6 +163,10 @@ def build_parser():
     p.add_argument("--model-dir", type=str, default="model_checkpoints", help="Model checkpoint directory")
     p.add_argument("--epochs", type=int, default=10, help="Training epochs (default: 10)")
     p.add_argument("--batch-size", type=int, default=256, help="Batch size (default: 256)")
+    p.add_argument(
+        "--model-type", type=str, default="transformer", choices=["gnn", "transformer"],
+        help="Model architecture if no seed checkpoint exists (default: transformer)",
+    )
 
     # convert (encode games to LMDB for pretraining)
     p = sub.add_parser("convert", help="Convert cleaned game JSONs to LMDB training data")

@@ -27,24 +27,26 @@ impl BaseGame {
         };
 
         // If a corp is crowded (over train limit after phase change), it MUST
-        // discard before anything else happens. Only accept discard_train from
-        // the first crowded corp; reject all other actions.
-        let crowded_corp = match &self.round {
+        // discard before anything else happens. Accept discard_train from any
+        // corp in the crowded list (Python's DiscardTrain step accepts the
+        // action from any entity in ``crowded_corps``, not just the first —
+        // round.py:2686). Reject all non-discard actions while crowded.
+        let crowded_list: Vec<String> = match &self.round {
             crate::rounds::Round::Operating(s) if !s.crowded_corps.is_empty() => {
-                Some(s.crowded_corps[0].clone())
+                s.crowded_corps.clone()
             }
-            _ => None,
+            _ => Vec::new(),
         };
-        if let Some(ref required_corp) = crowded_corp {
+        if !crowded_list.is_empty() {
             if let Action::DiscardTrain {
                 entity_id,
                 train_name,
             } = action
             {
-                if entity_id != required_corp {
+                if !crowded_list.iter().any(|c| c == entity_id) {
                     return Err(GameError::new(format!(
-                        "Expected discard_train from {} (crowded), got {}",
-                        required_corp, entity_id
+                        "Expected discard_train from one of {:?} (crowded), got {}",
+                        crowded_list, entity_id
                     )));
                 }
                 self.or_process_discard_train(&state, entity_id, train_name)?;
@@ -79,8 +81,8 @@ impl BaseGame {
                 return Ok(());
             } else {
                 return Err(GameError::new(format!(
-                    "{} must discard a train (over train limit)",
-                    required_corp
+                    "{:?} must discard a train (over train limit)",
+                    crowded_list
                 )));
             }
         }
@@ -283,9 +285,16 @@ impl BaseGame {
             }
         }
 
-        // Emergency sell: president sells shares during BuyTrain step to fund
-        // a forced train purchase. Accepted when a player entity sells shares
-        // while the OR is at BuyTrain step.
+        // Emergency sell: president sells shares during an OR step to fund
+        // a forced train purchase. Normally fires at BuyTrain, but some
+        // human game streams record the sell_shares early (before the
+        // Track / Token steps have been explicitly skipped). Accept the
+        // sell at any OR step when the cleaning pipeline hasn't yet
+        // advanced the engine past the blocking step — the seller is the
+        // president of the operating corp and the sell is functionally an
+        // emergency. Mirrors Python's behaviour, which routes the action
+        // through ``BuySellParShares`` regardless of the OR step the
+        // cleaning happens to be at when ``should_add_pass`` runs.
         if let Action::SellShares {
             entity_id,
             corporation_sym,
@@ -293,9 +302,7 @@ impl BaseGame {
             ..
         } = action
         {
-            if state.step == OperatingStep::BuyTrain {
-                return self.or_emergency_sell(&state, entity_id, corporation_sym, *percent);
-            }
+            return self.or_emergency_sell(&state, entity_id, corporation_sym, *percent);
         }
 
         // Process the action. BuyCompany is accepted at any step (non-blocking),
@@ -375,7 +382,7 @@ impl BaseGame {
     fn or_process_lay_tile(
         &mut self,
         state: &OperatingState,
-        _entity_id: &str,
+        entity_id: &str,
         hex_id: &str,
         tile_id: &str,
         rotation: u8,
@@ -384,6 +391,18 @@ impl BaseGame {
 
         if new_state.step != OperatingStep::LayTile {
             return Err(GameError::new("Not in LayTile step"));
+        }
+
+        // Match Python's strict dispatch: action.entity must equal the
+        // current operating corporation (round.py BaseStep). Catches
+        // Ruby-engine quirks where an action records a non-operator entity
+        // (master-mode actions, mis-recorded undo / redo sequences, etc.).
+        let cur = new_state.current_corp_sym().ok_or_else(|| GameError::new("No current corp"))?;
+        if entity_id != cur {
+            return Err(GameError::new(format!(
+                "lay_tile entity {} does not match current operator {}",
+                entity_id, cur
+            )));
         }
 
         if new_state.num_laid_track >= 1 {
@@ -623,7 +642,7 @@ impl BaseGame {
     fn or_process_place_token(
         &mut self,
         state: &OperatingState,
-        _entity_id: &str,
+        entity_id: &str,
         hex_id: &str,
         city_index: u8,
     ) -> Result<(), GameError> {
@@ -631,6 +650,17 @@ impl BaseGame {
 
         if new_state.step != OperatingStep::PlaceToken {
             return Err(GameError::new("Not in PlaceToken step"));
+        }
+
+        // Strict dispatch (see or_process_lay_tile). The operating corp
+        // places its own token (or a displaced corp's token via OO upgrade —
+        // either way action.entity is the operating corp per Python).
+        let cur = new_state.current_corp_sym().ok_or_else(|| GameError::new("No current corp"))?;
+        if entity_id != cur {
+            return Err(GameError::new(format!(
+                "place_token entity {} does not match current operator {}",
+                entity_id, cur
+            )));
         }
 
         if new_state.num_placed_token >= 1 {
@@ -725,11 +755,20 @@ impl BaseGame {
     fn or_process_run_routes(
         &mut self,
         state: &OperatingState,
-        _entity_id: &str,
+        entity_id: &str,
         routes: &[RouteData],
         extra_revenue: i32,
     ) -> Result<(), GameError> {
         let mut new_state = state.clone();
+
+        // Strict dispatch — action.entity must match current operator.
+        let cur = new_state.current_corp_sym().ok_or_else(|| GameError::new("No current corp"))?;
+        if entity_id != cur {
+            return Err(GameError::new(format!(
+                "run_routes entity {} does not match current operator {}",
+                entity_id, cur
+            )));
+        }
 
         // Accept routes (route validation is Phase 4)
         let total_revenue: i32 = routes.iter().map(|r| r.revenue).sum::<i32>() + extra_revenue;
@@ -746,7 +785,7 @@ impl BaseGame {
     fn or_process_dividend(
         &mut self,
         state: &OperatingState,
-        _entity_id: &str,
+        entity_id: &str,
         kind: &DividendKind,
     ) -> Result<(), GameError> {
         let mut new_state = state.clone();
@@ -759,6 +798,16 @@ impl BaseGame {
             .current_corp_sym()
             .ok_or_else(|| GameError::new("No current corp"))?
             .to_string();
+
+        // Strict dispatch — action.entity must match current operator. Same
+        // logic as Python's process_dividend (which now uses
+        // self.current_entity instead of action.entity).
+        if entity_id != corp_sym {
+            return Err(GameError::new(format!(
+                "dividend entity {} does not match current operator {}",
+                entity_id, corp_sym
+            )));
+        }
         let corp_idx = self.corp_idx[&corp_sym];
         let revenue = new_state.revenue;
 
@@ -839,7 +888,7 @@ impl BaseGame {
     fn or_process_buy_train(
         &mut self,
         state: &OperatingState,
-        _entity_id: &str,
+        entity_id: &str,
         train_name: &str,
         price: i32,
         from: &str,
@@ -849,6 +898,16 @@ impl BaseGame {
 
         if new_state.step != OperatingStep::BuyTrain {
             return Err(GameError::new("Not in BuyTrain step"));
+        }
+
+        // Strict dispatch — action.entity (the buying corp) must match the
+        // current operator.
+        let cur = new_state.current_corp_sym().ok_or_else(|| GameError::new("No current corp"))?;
+        if entity_id != cur {
+            return Err(GameError::new(format!(
+                "buy_train entity {} does not match current operator {}",
+                entity_id, cur
+            )));
         }
 
         let corp_sym = new_state
@@ -875,37 +934,30 @@ impl BaseGame {
                 .find(|t| t.name == base_name)
                 .map(|t| t.price);
 
-            // Source detection priority:
-            // 1. Exact train ID in discard → depot (definitive)
-            // 2. Exact train ID on another corp → inter-corp (definitive)
-            // 3. Base name in discard → depot
-            // 4. Base name in depot at matching price → depot
-            // 5. Base name on another corp → inter-corp
-            let inter_corp = self
+            // Source detection priority (mirrors Python's ``train.owner``
+            // semantics — the train's actual owner determines the source,
+            // regardless of action.price):
+            // 1. Exact train ID in depot.trains → depot (definitive)
+            // 2. Exact train ID in depot.discarded → depot (definitive)
+            // 3. Exact train ID on another corp → inter-corp (definitive)
+            // 4. Base name in depot.discarded → depot
+            // 5. Base name in depot.trains → depot
+            // 6. Base name on another corp → inter-corp
+            let in_depot_by_id = self.depot.trains.iter().any(|t| t.id == train_name);
+            let in_discard_by_id = self.depot.discarded.iter().any(|t| t.id == train_name);
+            let inter_corp_by_id = self
                 .corporations
                 .iter()
                 .find(|c| c.sym != corp_sym && c.trains.iter().any(|t| t.id == train_name));
-
-            let in_discard_by_id = self.depot.discarded.iter().any(|t| t.id == train_name);
+            let in_depot_by_name = self.depot.trains.iter().any(|t| t.name == base_name);
             let in_discard_by_name = self.depot.discarded.iter().any(|t| t.name == base_name);
 
-            if in_discard_by_id {
+            if in_depot_by_id || in_discard_by_id {
                 "depot".to_string()
-            } else if let Some(seller) = inter_corp {
-                // Exact train ID match on a corporation — definitive inter-corp source.
+            } else if let Some(seller) = inter_corp_by_id {
                 seller.sym.clone()
-            } else if in_discard_by_name {
+            } else if in_discard_by_name || in_depot_by_name {
                 "depot".to_string()
-            } else if let Some(dp) = depot_price {
-                if price == dp {
-                    "depot".to_string()
-                } else {
-                    self.corporations
-                        .iter()
-                        .find(|c| c.sym != corp_sym && c.trains.iter().any(|t| t.name == base_name))
-                        .map(|c| c.sym.clone())
-                        .unwrap_or_else(|| "depot".to_string())
-                }
             } else {
                 self.corporations
                     .iter()
@@ -958,22 +1010,20 @@ impl BaseGame {
                             exchange_name, corp_sym
                         ))
                     })?;
-                let old_train = self.corporations[corp_idx].trains.remove(ex_idx);
+                let mut old_train = self.corporations[corp_idx].trains.remove(ex_idx);
+                // Reset ownership when train returns to the bank pool — otherwise
+                // ``train.owner`` still reports the previous corporation, which breaks
+                // the cleaning pipeline's cross-player check (it sees the discarded
+                // train as still owned by the old corp).
+                old_train.owner = EntityId::none();
                 self.depot.discarded.push(old_train);
             }
 
-            // When exchanging, the action price is the discounted price.
-            // Otherwise, must pay full depot/discard price.
-            let train_source = if from_discarded {
-                &self.depot.discarded
-            } else {
-                &self.depot.trains
-            };
-            let actual_price = if exchange.is_some() {
-                price
-            } else {
-                train_source[train_idx].price
-            };
+            // Use the action's price — Python honors ``action.price`` for
+            // all depot purchases, matching what the human game recorded.
+            // Depot trains normally sell at face value, but the recorded
+            // action's ``price`` is the source of truth.
+            let actual_price = price;
 
             // Check if corp can afford; if not, president contributes
             let corp_pays = self.corporations[corp_idx].cash.min(actual_price);
@@ -1120,15 +1170,57 @@ impl BaseGame {
         let market_eid = crate::entities::EntityId::market();
         let player_idx = self.player_index(player_id).unwrap();
 
-        // Transfer shares to market
+        // Determine if the president share is being dumped — same condition
+        // as the stock-round sell logic: player has the president and would
+        // be left with < 20% after the sale.
+        let player_total = self.corporations[corp_idx].percent_owned_by(&player_eid);
+        let remaining_after = player_total.saturating_sub(percent);
+        let includes_president = self.corporations[corp_idx]
+            .shares
+            .iter()
+            .any(|s| s.president && s.owner == player_eid)
+            && remaining_after < 20;
+
+        // Transfer shares to market. When dumping the president, transfer the
+        // non-president portion (= percent - president_face_value, i.e.
+        // percent - 20 in 1830) first, then move the 20% president share to
+        // market. ``check_president_change`` below will then route the
+        // president to the new president and balance with two of their
+        // normal shares moving to market.
         let mut transferred_pct = 0u8;
-        for share in &mut self.corporations[corp_idx].shares {
-            if transferred_pct >= percent {
-                break;
+        if includes_president {
+            let pres_pct: u8 = self.corporations[corp_idx]
+                .shares
+                .iter()
+                .find(|s| s.president)
+                .map(|s| s.percent)
+                .unwrap_or(20);
+            let non_pres_to_sell = percent.saturating_sub(pres_pct);
+            for share in &mut self.corporations[corp_idx].shares {
+                if transferred_pct >= non_pres_to_sell {
+                    break;
+                }
+                if share.owner == player_eid && !share.president {
+                    share.owner = market_eid.clone();
+                    transferred_pct += share.percent;
+                }
             }
-            if share.owner == player_eid && !share.president {
-                share.owner = market_eid.clone();
-                transferred_pct += share.percent;
+            // Now move the president share to market.
+            for share in &mut self.corporations[corp_idx].shares {
+                if share.owner == player_eid && share.president {
+                    share.owner = market_eid.clone();
+                    break;
+                }
+            }
+        } else {
+            for share in &mut self.corporations[corp_idx].shares {
+                if transferred_pct >= percent {
+                    break;
+                }
+                if share.owner == player_eid && !share.president {
+                    share.owner = market_eid.clone();
+                    transferred_pct += share.percent;
+                }
             }
         }
 
@@ -1156,8 +1248,37 @@ impl BaseGame {
             );
         }
 
-        // Check president change
-        self.check_president_change(corp_idx);
+        // Check president change — pass the seller as previous_president so
+        // the clockwise-from-prev tiebreaker works (mirrors stock.rs:457).
+        self.check_president_change_with_prev(corp_idx, Some(player_id));
+
+        // Handle partial bundles: when selling a partial president bundle
+        // (percent < president face value), the seller keeps the leftover
+        // half-president as a normal share. Mirrors stock.rs:461-480.
+        if includes_president {
+            let actual_pct = self.corporations[corp_idx].percent_owned_by(&player_eid);
+            let target_pct = remaining_after;
+            if actual_pct < target_pct {
+                let deficit = target_pct - actual_pct;
+                let shares_to_return = deficit / 10;
+                let mut returned = 0u8;
+                for share in &mut self.corporations[corp_idx].shares {
+                    if returned >= shares_to_return {
+                        break;
+                    }
+                    if share.owner == market_eid && !share.president {
+                        share.owner = player_eid.clone();
+                        returned += 1;
+                    }
+                }
+            }
+        }
+
+        // Emergency sale dropped a (possibly future-operating) corp's share
+        // price. Mirror Python's ``Operating.recalculate_order`` so the
+        // not-yet-operated tail of operating_order is resorted by current
+        // price (round.py:5667).
+        self.recalculate_operating_order();
 
         self.update_round_state();
         Ok(())
@@ -1179,16 +1300,29 @@ impl BaseGame {
             .get(&corp_sym)
             .ok_or_else(|| GameError::new(format!("Unknown corporation: {}", corp_sym)))?;
 
+        // Match by full ID first (e.g., "3-4") so the right specific train is
+        // discarded when the corp owns multiple of the same type. Fall back to
+        // base name (e.g., "3") for backwards compat with actions that only
+        // record the train type.
         let base_name = train_name.split('-').next().unwrap_or(train_name);
         let train_idx = self.corporations[corp_idx]
             .trains
             .iter()
-            .position(|t| t.name == base_name)
+            .position(|t| t.id == train_name)
+            .or_else(|| {
+                self.corporations[corp_idx]
+                    .trains
+                    .iter()
+                    .position(|t| t.name == base_name)
+            })
             .ok_or_else(|| {
                 GameError::new(format!("Train {} not owned by {}", train_name, corp_sym))
             })?;
 
-        let train = self.corporations[corp_idx].trains.remove(train_idx);
+        let mut train = self.corporations[corp_idx].trains.remove(train_idx);
+        // Reset ownership: discarded trains are owned by the bank pool, not the
+        // corp that discarded them. See discussion at the exchange-discard path.
+        train.owner = EntityId::none();
         self.depot.discarded.push(train);
 
         // Remove this corp from crowded_corps if it's now within the limit
@@ -1205,7 +1339,7 @@ impl BaseGame {
     fn or_process_buy_company(
         &mut self,
         state: &OperatingState,
-        _entity_id: &str,
+        entity_id: &str,
         company_sym: &str,
         price: i32,
     ) -> Result<(), GameError> {
@@ -1216,6 +1350,15 @@ impl BaseGame {
             .ok_or_else(|| GameError::new("No current corp"))?
             .to_string();
         let corp_idx = self.corp_idx[&corp_sym];
+
+        // Strict dispatch — action.entity (the buying corp) must match
+        // current operator.
+        if entity_id != corp_sym {
+            return Err(GameError::new(format!(
+                "buy_company entity {} does not match current operator {}",
+                entity_id, corp_sym
+            )));
+        }
 
         let company_idx = *self
             .company_idx
@@ -1584,9 +1727,18 @@ impl BaseGame {
     fn or_process_pass(
         &mut self,
         state: &OperatingState,
-        _entity_id: &str,
+        entity_id: &str,
     ) -> Result<(), GameError> {
         let mut new_state = state.clone();
+
+        // Strict dispatch — pass action must come from the current operator.
+        let cur = new_state.current_corp_sym().ok_or_else(|| GameError::new("No current corp"))?;
+        if entity_id != cur {
+            return Err(GameError::new(format!(
+                "pass entity {} does not match current operator {}",
+                entity_id, cur
+            )));
+        }
 
         if new_state.step == OperatingStep::BuyCompany {
             // Pass from final BuyCompany ends the corp's turn

@@ -1,11 +1,17 @@
 from rl18xx.agent.agent import Agent
 from rl18xx.agent.alphazero.config import SelfPlayConfig
 from rl18xx.game.gamemap import GameMap
+import json
 import logging
+from pathlib import Path
 from rl18xx.agent.alphazero.self_play import MCTSPlayer
 from rl18xx.agent.random.random_agent import RandomPlayer
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
-from rl18xx.agent.alphazero.checkpointer import get_latest_model, get_model_from_path
+from rl18xx.agent.alphazero.checkpointer import (
+    get_latest_model,
+    _find_latest_checkpoint,
+    _load_model_from_config,
+)
 from rl18xx.client.game_sync import GameSync
 
 LOGGER = logging.getLogger(__name__)
@@ -77,12 +83,24 @@ def test_mcts_agent_against_random_agent(browser: bool = False):
     LOGGER.info(f"Winner: {winner}")
     return final_game_state, agent_mapping, agent_scores, winner
 
+def _load_model_from_session_dir(session_dir: str):
+    """Load a model from an explicit session directory (`<dir>/<arch>/<session>/`)."""
+    session_path = Path(session_dir)
+    checkpoint_path = _find_latest_checkpoint(session_path)
+    config_path = session_path / "config.json"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    with open(config_path, "r") as f:
+        config_data = json.load(f)
+    return _load_model_from_config(config_data, str(checkpoint_path))
+
+
 def test_mcts_versions(checkpoint_dirs: list[str], browser: bool = False):
     assert len(checkpoint_dirs) == 4, "Must provide 4 checkpoint directories"
 
     agents = []
     for checkpoint_dir in checkpoint_dirs:
-        model = get_model_from_path(checkpoint_dir)
+        model = _load_model_from_session_dir(checkpoint_dir)
         config = SelfPlayConfig(softpick_move_cutoff=0, dirichlet_noise_weight=0, network=model)
         agent = MCTSPlayer(config)
         agents.append(agent)
