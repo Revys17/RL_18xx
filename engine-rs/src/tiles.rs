@@ -262,9 +262,46 @@ impl TileDef {
         true
     }
 
+    /// Return per-(city|town) edges. For each node, the set of hex edges that
+    /// have a path ending at that node. Used to validate multi-city upgrades.
+    /// Index ordering: cities first, then towns (matching path endpoint refs).
+    pub fn city_town_edges(&self) -> Vec<std::collections::HashSet<u8>> {
+        let mut out: Vec<std::collections::HashSet<u8>> =
+            (0..self.cities.len() + self.towns.len())
+                .map(|_| std::collections::HashSet::new())
+                .collect();
+        for p in &self.paths {
+            let mut endpoints = vec![&p.a, &p.b];
+            // For each endpoint, if it is City/Town, the OTHER endpoint may be
+            // an Edge — record that edge for this node.
+            for _ in 0..2 {
+                let ep = endpoints.remove(0);
+                let other = endpoints[0];
+                let node_idx = match ep {
+                    PathEndpoint::City(i) => Some(*i),
+                    PathEndpoint::Town(i) => Some(self.cities.len() + *i),
+                    _ => None,
+                };
+                if let (Some(idx), PathEndpoint::Edge(e)) = (node_idx, other) {
+                    if idx < out.len() {
+                        out[idx].insert(*e);
+                    }
+                }
+                endpoints.push(ep);
+            }
+        }
+        out
+    }
+
     /// Find all rotations (0-5) at which `self` maintains all old paths.
     pub fn legal_rotations_for(&self, old: &TileDef, valid_exits: &[u8]) -> Vec<u8> {
         let mut rotations = Vec::new();
+        let multi_city_upgrade = self.cities.len() > 1 && old.cities.len() > 1;
+        let old_ct_edges_full = if multi_city_upgrade {
+            Some(old.city_town_edges())
+        } else {
+            None
+        };
         for rotation in 0..6u8 {
             let rotated = self.rotated(rotation);
 
@@ -276,6 +313,63 @@ impl TileDef {
             // All new exits must be valid hex edges (have neighbors)
             if !rotated.edges.iter().all(|e| valid_exits.contains(e)) {
                 continue;
+            }
+
+            // For multi-city upgrades (e.g. OO/NY tiles): each NEW city
+            // can absorb at most ONE old city's edges. Mirrors a stricter
+            // interpretation of Python's per-city mapping — two old cities
+            // both mapping to the same new city means the upgrade collapses
+            // them, which Python's ``Hex.city_map_for`` does not allow when
+            // they are distinct cities.
+            if let Some(ref old_edges) = old_ct_edges_full {
+                let new_edges = rotated.city_town_edges();
+                let n_cities_old = old.cities.len();
+                let n_cities_new = rotated.cities.len();
+                // Build per-old-city candidate new cities.
+                // Use bipartite matching: try to assign each old city to a
+                // distinct new city whose edges are a superset.
+                let mut candidates: Vec<Vec<usize>> = Vec::new();
+                for i in 0..n_cities_old {
+                    let oe = &old_edges[i];
+                    if oe.is_empty() {
+                        // Old city without exits — anything goes; skip from
+                        // matching to be permissive.
+                        candidates.push((0..n_cities_new).collect());
+                        continue;
+                    }
+                    let mut cands: Vec<usize> = Vec::new();
+                    for j in 0..n_cities_new {
+                        let ne = &new_edges[j];
+                        if oe.is_subset(ne) {
+                            cands.push(j);
+                        }
+                    }
+                    candidates.push(cands);
+                }
+                // Greedy with backtracking (sizes are tiny — up to ~3).
+                fn assign(
+                    i: usize,
+                    cands: &Vec<Vec<usize>>,
+                    used: &mut Vec<bool>,
+                ) -> bool {
+                    if i == cands.len() {
+                        return true;
+                    }
+                    for &j in &cands[i] {
+                        if j < used.len() && !used[j] {
+                            used[j] = true;
+                            if assign(i + 1, cands, used) {
+                                return true;
+                            }
+                            used[j] = false;
+                        }
+                    }
+                    false
+                }
+                let mut used = vec![false; n_cities_new];
+                if !assign(0, &candidates, &mut used) {
+                    continue;
+                }
             }
 
             rotations.push(rotation);

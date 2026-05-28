@@ -121,15 +121,18 @@ impl BaseGame {
 
         // Initialize all unowned shares as IPO
         let ipo_eid = EntityId::ipo(corporation_sym);
-        for share in &mut self.corporations[corp_idx].shares {
-            if share.owner.is_none() {
-                share.owner = ipo_eid.clone();
+        let n = self.corporations[corp_idx].shares.len();
+        for i in 0..n {
+            if self.corporations[corp_idx].shares[i].owner.is_none() {
+                self.corporations[corp_idx]
+                    .set_share_owner(i, ipo_eid.clone());
             }
         }
 
         // Transfer president share to player
         let player_eid = EntityId::player(player_id);
-        self.corporations[corp_idx].shares[0].owner = player_eid.clone();
+        self.corporations[corp_idx]
+            .set_share_owner(0, player_eid.clone());
 
         // Player pays
         self.players[player_idx].cash -= cost;
@@ -241,7 +244,15 @@ impl BaseGame {
 
         let effective_source = inferred_source.unwrap_or(source);
 
-        let (share_idx, actual_source) = if effective_source == "ipo" {
+        // If the action specifies a share index whose Rust-side owner matches
+        // the effective source, use that EXACT index. This keeps Rust's share
+        // assignments aligned with Python's (Python honors the share_id in
+        // the action when moving shares). Fall back to `position(...)` when
+        // the index is unusable.
+        let (share_idx, actual_source) = if let (Some(src), false) = (inferred_source, share_indices.is_empty()) {
+            let idx = share_indices[0];
+            (idx, src)
+        } else if effective_source == "ipo" {
             self.corporations[corp_idx]
                 .shares
                 .iter()
@@ -324,8 +335,18 @@ impl BaseGame {
             )));
         }
 
+        // Snapshot pre-action owners of every share in this corporation. This
+        // mirrors Python's insertion-order semantics for `shares_for_presidency_swap`:
+        // when a buy triggers a president change, the swap picks the new president's
+        // OLDEST shares (i.e. ones owned BEFORE the buy), not the just-bought one.
+        let pre_action_owners: Vec<EntityId> = self.corporations[corp_idx]
+            .shares
+            .iter()
+            .map(|s| s.owner.clone())
+            .collect();
+
         // Transfer
-        self.corporations[corp_idx].shares[share_idx].owner = player_eid;
+        self.corporations[corp_idx].set_share_owner(share_idx, player_eid.clone());
         self.players[player_idx].cash -= price;
         self.bank.cash += price;
 
@@ -333,7 +354,7 @@ impl BaseGame {
         self.check_float(corp_idx);
 
         // Check president change
-        self.check_president_change(corp_idx);
+        self.check_president_change_with_snapshot(corp_idx, None, pre_action_owners);
 
         new_state.bought_this_turn = true;
         new_state.bought_corp_this_turn = Some(corporation_sym.to_string());
@@ -385,6 +406,27 @@ impl BaseGame {
             .any(|s| s.president && s.owner == player_eid)
             && remaining_after < 20;
 
+        // Snapshot pre-action owners of every share. This is used in two places:
+        //   1. `handle_partial`: pick shares that were ALREADY in market before
+        //      this sell (oldest market shares) — matches Python's
+        //      `share_pool.shares_of(corp)[0]` semantics.
+        //   2. President swap (when the seller dumps the pres cert): pick the new
+        //      president's pre-existing shares for swap — matches Python's
+        //      `shares_for_presidency_swap`.
+        let pre_action_owners: Vec<EntityId> = self.corporations[corp_idx]
+            .shares
+            .iter()
+            .map(|s| s.owner.clone())
+            .collect();
+        let pre_existing_market: Vec<usize> = pre_action_owners
+            .iter()
+            .enumerate()
+            .filter(|(idx, owner)| {
+                owner.is_market() && !self.corporations[corp_idx].shares[*idx].president
+            })
+            .map(|(i, _)| i)
+            .collect();
+
         // Transfer shares to market.
         // Note: share_indices are NOT used for sells because specific share positions
         // may diverge between Python and Rust. We use the owner-based logic instead.
@@ -392,30 +434,45 @@ impl BaseGame {
             let mut transferred_pct = 0u8;
             if includes_president {
                 let non_pres_to_sell = percent.saturating_sub(10);
-                for share in &mut self.corporations[corp_idx].shares {
+                let mut to_market: Vec<usize> = Vec::new();
+                let mut pres_idx_opt: Option<usize> = None;
+                for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                     if transferred_pct >= non_pres_to_sell {
                         break;
                     }
                     if share.owner == player_eid && !share.president {
-                        share.owner = market_eid.clone();
+                        to_market.push(i);
                         transferred_pct += share.percent;
                     }
                 }
-                for share in &mut self.corporations[corp_idx].shares {
+                for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                     if share.owner == player_eid && share.president {
-                        share.owner = market_eid.clone();
+                        pres_idx_opt = Some(i);
                         break;
                     }
                 }
+                for i in to_market {
+                    self.corporations[corp_idx]
+                        .set_share_owner(i, market_eid.clone());
+                }
+                if let Some(i) = pres_idx_opt {
+                    self.corporations[corp_idx]
+                        .set_share_owner(i, market_eid.clone());
+                }
             } else {
-                for share in &mut self.corporations[corp_idx].shares {
+                let mut to_market: Vec<usize> = Vec::new();
+                for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                     if transferred_pct >= percent {
                         break;
                     }
                     if share.owner == player_eid && !share.president {
-                        share.owner = market_eid.clone();
+                        to_market.push(i);
                         transferred_pct += share.percent;
                     }
+                }
+                for i in to_market {
+                    self.corporations[corp_idx]
+                        .set_share_owner(i, market_eid.clone());
                 }
             }
         }
@@ -454,10 +511,15 @@ impl BaseGame {
 
         // Check president change — pass the seller as previous president
         // so the tiebreaker works correctly when the president share is in the market.
-        self.check_president_change_with_prev(corp_idx, Some(player_id));
+        // Pass the pre-action owners snapshot so that swap picks the new president's
+        // OLDEST (pre-action) shares first (matches Python's insertion-order).
+        self.check_president_change_with_snapshot(corp_idx, Some(player_id), pre_action_owners);
 
         // Handle partial bundles: when selling with president share, the face value
         // of certs transferred exceeds the bundle percent. Move excess shares back.
+        // Python's ``handle_partial`` picks ``share_pool.shares_of(corp)[0]`` —
+        // the OLDEST market share by insertion order. We mirror that via the
+        // corporation's ``market_order`` queue.
         if includes_president {
             let player_eid_check = EntityId::player(player_id);
             let actual_pct = self.corporations[corp_idx].percent_owned_by(&player_eid_check);
@@ -465,15 +527,17 @@ impl BaseGame {
             if actual_pct < target_pct {
                 let deficit = target_pct - actual_pct;
                 let shares_to_return = deficit / 10;
-                let market_eid_check = EntityId::market();
                 let mut returned = 0u8;
-                for share in &mut self.corporations[corp_idx].shares {
-                    if returned >= shares_to_return {
-                        break;
-                    }
-                    if share.owner == market_eid_check && !share.president {
-                        share.owner = player_eid_check.clone();
-                        returned += 1;
+
+                while returned < shares_to_return {
+                    let oldest = self.corporations[corp_idx].oldest_market_share_index();
+                    match oldest {
+                        Some(idx) => {
+                            self.corporations[corp_idx]
+                                .set_share_owner(idx, player_eid_check.clone());
+                            returned += 1;
+                        }
+                        None => break,
                     }
                 }
             }
@@ -654,10 +718,35 @@ impl BaseGame {
     /// In 1830, the current president keeps the certificate on ties —
     /// a new president is only assigned when another player has STRICTLY more shares.
     pub(crate) fn check_president_change(&mut self, corp_idx: usize) {
-        self.check_president_change_with_prev(corp_idx, None);
+        self.check_president_change_inner(corp_idx, None, None);
     }
 
     pub(crate) fn check_president_change_with_prev(&mut self, corp_idx: usize, previous_president: Option<u32>) {
+        self.check_president_change_inner(corp_idx, previous_president, None);
+    }
+
+    /// Like `check_president_change_with_prev`, but accepts a `pre_action_owners`
+    /// snapshot: for each share index in this corp, the EntityId that owned it
+    /// before the current action started. When the president changes and we need
+    /// to pick 2 shares from the new president to swap, we prefer shares that
+    /// the new president already owned (filtered through this snapshot) — this
+    /// matches Python's insertion-order semantics
+    /// (`shares_for_presidency_swap(P.shares_of(corp)[:2])`).
+    pub(crate) fn check_president_change_with_snapshot(
+        &mut self,
+        corp_idx: usize,
+        previous_president: Option<u32>,
+        pre_action_owners: Vec<EntityId>,
+    ) {
+        self.check_president_change_inner(corp_idx, previous_president, Some(pre_action_owners));
+    }
+
+    fn check_president_change_inner(
+        &mut self,
+        corp_idx: usize,
+        previous_president: Option<u32>,
+        pre_action_owners: Option<Vec<EntityId>>,
+    ) {
         let corp = &self.corporations[corp_idx];
         let current_president = corp.president_id().or(previous_president);
 
@@ -733,25 +822,65 @@ impl BaseGame {
             .iter()
             .any(|s| s.president && s.owner.is_market());
 
+        // Build preferred swap list (share indices the new president owned BEFORE
+        // this action), if a pre-action snapshot was provided. Sort by
+        // ``acquired_seq`` so the OLDEST acquisitions are picked first,
+        // matching Python's ``possible_reorder(president.shares_of(corporation))``
+        // which returns shares in per-owner insertion order.
+        let new_pres_eid_calc = EntityId::player(new_pres);
+        let preferred_swap: Option<Vec<usize>> = pre_action_owners.as_ref().map(|owners| {
+            let mut idxs: Vec<usize> = owners
+                .iter()
+                .enumerate()
+                .filter(|(idx, owner)| {
+                    **owner == new_pres_eid_calc
+                        && *idx < self.corporations[corp_idx].shares.len()
+                        && !self.corporations[corp_idx].shares[*idx].president
+                })
+                .map(|(idx, _)| idx)
+                .collect();
+            idxs.sort_by_key(|&i| self.corporations[corp_idx].shares[i].acquired_seq);
+            idxs
+        });
+
         if pres_share_in_market {
             let new_pres_eid = EntityId::player(new_pres);
             let market_eid = EntityId::market();
 
             // Give president share to new president
             if let Some(pres_idx) = self.corporations[corp_idx].president_share_index() {
-                self.corporations[corp_idx].shares[pres_idx].owner = new_pres_eid.clone();
+                self.corporations[corp_idx]
+                    .set_share_owner(pres_idx, new_pres_eid.clone());
             }
 
-            // Move 2 normal shares from new president to market
-            let mut swapped = 0;
-            for share in &mut self.corporations[corp_idx].shares {
-                if swapped >= 2 {
-                    break;
+            // Move 2 normal shares from new president to market.
+            // To match Python's insertion-order semantics, prefer shares that the
+            // new president owned BEFORE this action (oldest first).
+            let mut to_swap: Vec<usize> = Vec::new();
+            if let Some(ref preferred) = preferred_swap {
+                for &idx in preferred {
+                    if to_swap.len() >= 2 {
+                        break;
+                    }
+                    let share = &self.corporations[corp_idx].shares[idx];
+                    if share.owner == new_pres_eid && !share.president {
+                        to_swap.push(idx);
+                    }
                 }
-                if share.owner == new_pres_eid && !share.president {
-                    share.owner = market_eid.clone();
-                    swapped += 1;
+            }
+            if to_swap.len() < 2 {
+                for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
+                    if to_swap.len() >= 2 {
+                        break;
+                    }
+                    if share.owner == new_pres_eid && !share.president && !to_swap.contains(&i) {
+                        to_swap.push(i);
+                    }
                 }
+            }
+            for idx in to_swap {
+                self.corporations[corp_idx]
+                    .set_share_owner(idx, market_eid.clone());
             }
 
             self.corporations[corp_idx].owner_id = new_pres_eid;
@@ -766,19 +895,36 @@ impl BaseGame {
 
                 // Give president share to new president
                 if let Some(pres_idx) = self.corporations[corp_idx].president_share_index() {
-                    self.corporations[corp_idx].shares[pres_idx].owner = new_pres_eid.clone();
+                    self.corporations[corp_idx]
+                        .set_share_owner(pres_idx, new_pres_eid.clone());
                 }
 
-                // Swap 2 normal shares from new president to old president
-                let mut swapped = 0;
-                for share in &mut self.corporations[corp_idx].shares {
-                    if swapped >= 2 {
+                // Swap 2 normal shares from new president to old president.
+                // To match Python's insertion-order semantics, prefer shares that the
+                // new president owned BEFORE this action (oldest first).
+                let mut to_swap: Vec<usize> = Vec::new();
+                if let Some(ref preferred) = preferred_swap {
+                    for &idx in preferred {
+                        if to_swap.len() >= 2 {
+                            break;
+                        }
+                        let share = &self.corporations[corp_idx].shares[idx];
+                        if share.owner == new_pres_eid && !share.president {
+                            to_swap.push(idx);
+                        }
+                    }
+                }
+                for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
+                    if to_swap.len() >= 2 {
                         break;
                     }
-                    if share.owner == new_pres_eid && !share.president {
-                        share.owner = old_pres_eid.clone();
-                        swapped += 1;
+                    if share.owner == new_pres_eid && !share.president && !to_swap.contains(&i) {
+                        to_swap.push(i);
                     }
+                }
+                for idx in to_swap {
+                    self.corporations[corp_idx]
+                        .set_share_owner(idx, old_pres_eid.clone());
                 }
 
                 self.corporations[corp_idx].owner_id = EntityId::player(new_pres);

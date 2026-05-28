@@ -426,27 +426,32 @@ impl BaseGame {
 
         let mut out: Vec<LegalAction> = Vec::new();
 
-        // Pending tokens (OO upgrade displacements)
+        // Pending tokens (OO upgrade displacements & home-token on tile-reserved hex).
+        // Python's HomeToken step restricts enumeration to the pending hex list:
+        //   `for hex in pending_token['hexes'] for city in hex.tile.cities if city.tokenable(...)`
+        // The Rust state stores the hex on the pending entry, so we iterate the
+        // cities on that hex and filter to ones that still have a free slot.
         let pending = match &self.round {
             Round::Operating(s) => s.pending_tokens.clone(),
             _ => Vec::new(),
         };
         if !pending.is_empty() {
-            // The pending token enumeration in Python iterates the hexes the
-            // tile-lay step recorded as needing tokens. The Rust engine
-            // tracks these by (corp_sym, token_idx); the actual hex is the
-            // corp's home or whichever was displaced. We re-enumerate via
-            // tokenable_cities for now (this covers the common case; pending
-            // tokens are rare in 1830).
-            let cities = self.tokenable_cities_for_factored(&corp_sym);
-            for (hex_id, city_idx) in cities {
-                let slot = self.first_empty_slot(&hex_id, city_idx).unwrap_or(0);
-                let mut a = LegalAction::new("PlaceToken");
-                a.entity = entity_desc.clone();
-                a.params.insert("hex".to_string(), json!(hex_id));
-                a.params.insert("city".to_string(), json!(city_idx));
-                a.params.insert("slot".to_string(), json!(slot));
-                out.push(a);
+            let (_pending_corp, _pending_idx, pending_hex) = &pending[0];
+            if let Some(&hi) = self.hex_idx.get(pending_hex.as_str()) {
+                let cities = self.hexes[hi].tile.cities.clone();
+                for (city_idx, city) in cities.iter().enumerate() {
+                    // City must have at least one empty slot
+                    if !city.tokens.iter().any(|t| t.is_none()) {
+                        continue;
+                    }
+                    let slot = self.first_empty_slot(pending_hex, city_idx).unwrap_or(0);
+                    let mut a = LegalAction::new("PlaceToken");
+                    a.entity = entity_desc.clone();
+                    a.params.insert("hex".to_string(), json!(pending_hex));
+                    a.params.insert("city".to_string(), json!(city_idx));
+                    a.params.insert("slot".to_string(), json!(slot));
+                    out.push(a);
+                }
             }
             return out;
         }
@@ -481,6 +486,28 @@ impl BaseGame {
             Some(s) => s.to_string(),
             None => return Vec::new(),
         };
+
+        // Determine the current OR step. The corp can lay tiles only at the
+        // LayTile step. At other steps, "lay_tile" is in legal_action_types
+        // because CS (and possibly DH) has an unused ability.
+        let or_step = match &self.round {
+            Round::Operating(s) => Some(s.step.clone()),
+            _ => None,
+        };
+        let at_lay_tile_step = matches!(or_step, Some(crate::rounds::OperatingStep::LayTile));
+
+        // Always check for CS company lay availability. CS fires at any step
+        // during the owning corp's OR turn (count=1, hexes=B20, tiles=3/4/58).
+        let mut out: Vec<LegalAction> = Vec::new();
+        out.extend(self.factored_cs_lay_tile(&corp_sym));
+
+        // Skip corp-side enumeration when not at the LayTile step. Python's
+        // `game.round.actions_for(corp)` does not include LayTile at
+        // BuyCompany/BuyTrain/Dividend/RunRoutes/PlaceToken steps.
+        if !at_lay_tile_step {
+            return out;
+        }
+
         let entity_desc = entity_descriptor_corp(&corp_sym);
         let corp_cash = self
             .corp_idx
@@ -511,9 +538,16 @@ impl BaseGame {
 
         // For Python parity: include both directly-connected hexes AND their
         // outward neighbors (entry edges) — matches the legal_action_types code.
+        // Iterate `connected` in a deterministic order (sorted by hex id) so
+        // the resulting target list is stable across runs (HashMap iteration
+        // order is otherwise randomized in Rust).
+        let mut connected_sorted: Vec<(&String, &Vec<u8>)> = connected.iter().collect();
+        connected_sorted.sort_by(|a, b| a.0.cmp(b.0));
         let mut targets: Vec<(String, Vec<u8>)> = Vec::new();
         let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for (hex_id, edges) in connected.iter() {
+        for (hex_id, edges) in connected_sorted.iter() {
+            let hex_id = *hex_id;
+            let edges = *edges;
             if visited.insert(hex_id.clone()) {
                 targets.push((hex_id.clone(), edges.clone()));
             }
@@ -533,7 +567,6 @@ impl BaseGame {
         // Sort targets for determinism (by hex_id).
         targets.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let mut out: Vec<LegalAction> = Vec::new();
         for (hex_id, edges) in targets {
             if blocked.contains(&hex_id) {
                 continue;
@@ -567,6 +600,155 @@ impl BaseGame {
             let br = b.params.get("rotation").and_then(|v| v.as_u64()).unwrap_or(0);
             (ah, at, ar).cmp(&(bh, bt, br))
         });
+        out
+    }
+
+    /// Enumerate CS company tile-lay actions on B20.
+    ///
+    /// CS rules (1830):
+    /// * Owner must be the active operating corp.
+    /// * Company must be open and ability unused.
+    /// * Only hex B20, only yellow tiles "3", "4", "58".
+    /// * Tile must be a valid upgrade of B20's current tile (yellow over the
+    ///   pre-printed blank, with at least one rotation that connects to an
+    ///   adjacent neighbor edge).
+    /// * Free of charge (no terrain cost on B20).
+    fn factored_cs_lay_tile(&self, corp_sym: &str) -> Vec<LegalAction> {
+        // Find a CS company owned by the active corp with unused ability.
+        let corp_eid = crate::entities::EntityId::corporation(corp_sym);
+        let cs_available = self
+            .companies
+            .iter()
+            .any(|co| co.sym == "CS" && !co.closed && !co.ability_used && co.owner == corp_eid);
+        if !cs_available {
+            return Vec::new();
+        }
+
+        let hex_id = "B20";
+        let hi = match self.hex_idx.get(hex_id) {
+            Some(&i) => i,
+            None => return Vec::new(),
+        };
+        let hex = &self.hexes[hi];
+        let current_tile = &hex.tile;
+
+        // CS only lays on the blank pre-printed hex (yellow tiles are valid
+        // upgrades). If a tile is already laid, the CS ability is moot.
+        // We still validate via `is_valid_upgrade_for` below for safety.
+        let old_tile_def = match self.tile_catalog.get(&current_tile.name) {
+            Some(def) => def.rotated(current_tile.rotation),
+            None => crate::tiles::TileDef {
+                name: current_tile.name.clone(),
+                color: current_tile.color,
+                paths: current_tile.paths.clone(),
+                cities: current_tile.cities.iter().map(|c| crate::tiles::CityDef {
+                    revenue: c.revenue,
+                    slots: c.slots as u8,
+                }).collect(),
+                towns: current_tile.towns.iter().map(|t| crate::tiles::TownDef {
+                    revenue: t.revenue,
+                }).collect(),
+                offboards: Vec::new(),
+                edges: crate::tiles::TileDef::compute_edges_pub(&current_tile.paths),
+                upgrades: Vec::new(),
+                label: current_tile.label.clone(),
+                has_junction: current_tile.paths.iter().any(|p|
+                    p.a == crate::tiles::PathEndpoint::Junction
+                        || p.b == crate::tiles::PathEndpoint::Junction
+                ),
+            },
+        };
+
+        let valid_exits = self.passable_exits_for(hex_id);
+
+        let mut out: Vec<LegalAction> = Vec::new();
+        let cs_tile_names = ["3", "4", "58"];
+        for tile_name in cs_tile_names.iter() {
+            let tile_def = match self.tile_catalog.get(*tile_name) {
+                Some(def) => def,
+                None => continue,
+            };
+            // Phase must allow this tile's color (always yellow for CS).
+            let color_str = format!("{:?}", tile_def.color).to_lowercase();
+            if !self.phase.tiles.iter().any(|t| t == &color_str) {
+                continue;
+            }
+            let remaining = self
+                .tile_counts_remaining
+                .get(*tile_name)
+                .copied()
+                .unwrap_or(0);
+            if remaining == 0 {
+                continue;
+            }
+            if !tile_def.is_valid_upgrade_for(&old_tile_def) {
+                continue;
+            }
+            let rotations = tile_def.legal_rotations_for(&old_tile_def, &valid_exits);
+            for &rot in &rotations {
+                let mut a = LegalAction::new("LayTile");
+                a.entity
+                    .insert("private".to_string(), json!("CS"));
+                a.params.insert("hex".to_string(), json!(hex_id));
+                a.params.insert("tile".to_string(), json!((*tile_name).to_string()));
+                a.params.insert("rotation".to_string(), json!(rot));
+                out.push(a);
+            }
+        }
+        out
+    }
+
+    /// Helper: return the set of edges on `hex_id` that are "passable" — i.e.,
+    /// have an adjacent hex that is NOT impassable (gray/blue/red) unless the
+    /// adjacent hex's tile already targets us back, AND the edge is not
+    /// blocked by a hardcoded impassable border on the starting tile. Mirrors
+    /// Python's ``Hex.neighbors`` (vs ``all_neighbors``) which filters out
+    /// impassable neighbors during ``connect_hexes`` and tile-laying logic.
+    pub(crate) fn passable_exits_for(&self, hex_id: &str) -> Vec<u8> {
+        let neighbors = match self.hex_adjacency.get(hex_id) {
+            Some(n) => n,
+            None => return Vec::new(),
+        };
+        let impassable_border_edges: &[u8] = match hex_id {
+            "E7" => &[5],
+            "F8" => &[2],
+            "C11" => &[5],
+            "C13" => &[0],
+            "D12" => &[2, 3],
+            "B16" => &[5],
+            "C17" => &[2],
+            _ => &[],
+        };
+        let mut out: Vec<u8> = Vec::new();
+        for (&edge, neighbor_id) in neighbors.iter() {
+            if impassable_border_edges.contains(&edge) {
+                continue;
+            }
+            let ni = match self.hex_idx.get(neighbor_id) {
+                Some(&i) => i,
+                None => continue,
+            };
+            let neighbor_tile = &self.hexes[ni].tile;
+            let impassable = matches!(
+                neighbor_tile.color,
+                crate::tiles::TileColor::Gray
+                    | crate::tiles::TileColor::Red
+            );
+            if impassable {
+                // Skip unless neighbor targets us back — its tile must have an
+                // exit on the inverse edge `(edge + 3) % 6`.
+                let inverse = (edge + 3) % 6;
+                let targets_back = neighbor_tile.paths.iter().any(|p| {
+                    matches!(p.a, crate::tiles::PathEndpoint::Edge(e) if e == inverse)
+                        || matches!(p.b, crate::tiles::PathEndpoint::Edge(e) if e == inverse)
+                });
+                if !targets_back {
+                    continue;
+                }
+            }
+            out.push(edge);
+        }
+        out.sort();
         out
     }
 
@@ -612,11 +794,7 @@ impl BaseGame {
             }
         };
 
-        let valid_exits: Vec<u8> = self
-            .hex_adjacency
-            .get(hex_id)
-            .map(|n| n.keys().copied().collect())
-            .unwrap_or_default();
+        let valid_exits = self.passable_exits_for(hex_id);
 
         let next_color = match old_tile_def.color.next_color() {
             Some(c) => c,
@@ -628,14 +806,19 @@ impl BaseGame {
             return Vec::new();
         }
 
+        // Sort tile_catalog by tile name for deterministic iteration order.
+        let mut catalog_sorted: Vec<(&String, &crate::tiles::TileDef)> =
+            self.tile_catalog.iter().collect();
+        catalog_sorted.sort_by(|a, b| a.0.cmp(b.0));
+
         let mut out = Vec::new();
-        for (tile_name, tile_def) in self.tile_catalog.iter() {
+        for (tile_name, tile_def) in catalog_sorted.iter() {
             if tile_def.color != next_color {
                 continue;
             }
             let remaining = self
                 .tile_counts_remaining
-                .get(tile_name)
+                .get(*tile_name)
                 .copied()
                 .unwrap_or(0);
             if remaining == 0 {
@@ -649,7 +832,7 @@ impl BaseGame {
                 let rotated = tile_def.rotated(rot);
                 // Must reach a new exit through corp's connected edges.
                 if rotated.edges.iter().any(|e| corp_connected_edges.contains(e)) {
-                    out.push((tile_name.clone(), rot));
+                    out.push((tile_name.to_string(), rot));
                 }
             }
         }
@@ -769,8 +952,30 @@ impl BaseGame {
         // is less than the train price (i.e. president must actually
         // contribute for the specific train). When the corp can afford a
         // depot train on its own, any depot train is buyable.
+        //
+        // Python's ``depot.min_depot_train`` considers BOTH upcoming and
+        // discarded depot trains. Use the lowest-priced across both.
         let cheapest_name: Option<String> = if pres_may_contribute {
-            self.depot.trains.first().map(|t| t.name.clone())
+            let mut cheapest: Option<(i32, String)> = None;
+            for t in &self.depot.trains {
+                match &cheapest {
+                    None => cheapest = Some((t.price, t.name.clone())),
+                    Some((p, _)) if t.price < *p => {
+                        cheapest = Some((t.price, t.name.clone()))
+                    }
+                    _ => {}
+                }
+            }
+            for t in &self.depot.discarded {
+                match &cheapest {
+                    None => cheapest = Some((t.price, t.name.clone())),
+                    Some((p, _)) if t.price < *p => {
+                        cheapest = Some((t.price, t.name.clone()))
+                    }
+                    _ => {}
+                }
+            }
+            cheapest.map(|(_, n)| n)
         } else {
             None
         };
@@ -816,8 +1021,12 @@ impl BaseGame {
             if !seen.insert((source.clone(), name.clone())) {
                 continue;
             }
-            if source == "depot" {
-                // Depot trains: fixed price (min == max)
+            // Both "depot" (upcoming) and "discard" (face-value discarded pool)
+            // trains are owned by the Depot in Python (Train.from_depot() ==
+            // True). They share: fixed face price, EBUY cheapest-only filter,
+            // and counting toward `min_depot_train`.
+            if source == "depot" || source == "discard" {
+                // Depot/discard trains: fixed price (min == max)
                 let min_p = *price;
                 // Cheapest-only restriction applies only when this train
                 // requires president contribution (corp can't afford on
@@ -840,7 +1049,7 @@ impl BaseGame {
                 }
                 let mut a = LegalAction::new("BuyTrain");
                 a.entity = entity_desc.clone();
-                a.entity.insert("source".to_string(), json!("depot"));
+                a.entity.insert("source".to_string(), json!(source.clone()));
                 a.entity.insert("train".to_string(), json!(name.clone()));
                 a.price_range = Some((min_p as i64, min_p as i64));
                 out.push(a);

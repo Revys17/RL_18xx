@@ -36,7 +36,7 @@ game_id,status,total_actions,num_matched,first_divergence_action_index,first_div
 27494,dropped,0,0,,,,illegal_share_buy,
 27549,dropped,0,0,,,,illegal_share_buy,
 27598,perfect,781,781,,,,,
-27673,perfect,806,806,,,,,
+27673,python_error,806,318,318,run_routes,python_error,,"GameError: Blocking step Place a Token cannot process action Type: RunRoutes, id: 319, entity: <Corporation: NYC>"
 27686,perfect,511,511,,,,,
 27797,perfect,878,878,,,,,
 27817,perfect,865,865,,,,,
@@ -326,7 +326,7 @@ game_id,status,total_actions,num_matched,first_divergence_action_index,first_div
 42685,perfect,777,777,,,,,
 42686,perfect,794,794,,,,,
 42687,dropped,0,0,,,,illegal_share_buy,
-42688,perfect,697,697,,,,,
+42688,python_error,697,330,330,run_routes,python_error,,"GameError: Blocking step Place a Token cannot process action Type: RunRoutes, id: 331, entity: <Corporation: NYC>"
 42689,dropped,0,0,,,,illegal_share_buy,
 42690,perfect,459,459,,,,,
 42691,perfect,895,895,,,,,
@@ -437,7 +437,7 @@ game_id,status,total_actions,num_matched,first_divergence_action_index,first_div
 47834,perfect,435,435,,,,,
 47866,perfect,292,292,,,,,
 47880,perfect,706,706,,,,,
-48141,perfect,687,687,,,,,
+48141,python_error,687,380,380,run_routes,python_error,,"GameError: Blocking step Place a Token cannot process action Type: RunRoutes, id: 381, entity: <Corporation: C&O>"
 48182,dropped,0,0,,,,illegal_share_buy,
 48199,perfect,889,889,,,,,
 48355,perfect,768,768,,,,,
@@ -621,7 +621,7 @@ game_id,status,total_actions,num_matched,first_divergence_action_index,first_div
 59499,dropped,0,0,,,,illegal_share_buy,
 59578,dropped,0,0,,,,illegal_share_buy,
 59612,perfect,368,368,,,,,
-59615,perfect,711,711,,,,,
+59615,python_error,711,348,348,run_routes,python_error,,"GameError: Blocking step Place a Token cannot process action Type: RunRoutes, id: 349, entity: <Corporation: NYC>"
 59626,dropped,0,0,,,,cross_president_buy_train,
 59824,perfect,415,415,,,,,
 59877,perfect,851,851,,,,,
@@ -774,7 +774,7 @@ game_id,status,total_actions,num_matched,first_divergence_action_index,first_div
 69383,perfect,489,489,,,,,
 69455,perfect,838,838,,,,,
 69560,perfect,479,479,,,,,
-69614,perfect,453,453,,,,,
+69614,python_error,453,315,315,run_routes,python_error,,"GameError: Blocking step Place a Token cannot process action Type: RunRoutes, id: 316, entity: <Corporation: PRR>"
 69640,perfect,834,834,,,,,
 69764,dropped,0,0,,,,illegal_share_buy,
 69829,perfect,660,660,,,,,
@@ -837,7 +837,7 @@ game_id,status,total_actions,num_matched,first_divergence_action_index,first_div
 70654,perfect,1020,1020,,,,,
 70655,perfect,781,781,,,,,
 70656,perfect,761,761,,,,,
-70657,perfect,955,955,,,,,
+70657,python_error,955,194,194,run_routes,python_error,,"GameError: Blocking step Place a Token cannot process action Type: RunRoutes, id: 195, entity: <Corporation: PRR>"
 70658,perfect,859,859,,,,,
 70659,perfect,491,491,,,,,
 70660,perfect,886,886,,,,,
@@ -871,7 +871,7 @@ game_id,status,total_actions,num_matched,first_divergence_action_index,first_div
 70688,perfect,776,776,,,,,
 70689,perfect,497,497,,,,,
 70690,perfect,351,351,,,,,
-70691,perfect,689,689,,,,,
+70691,python_error,689,277,277,run_routes,python_error,,"GameError: Blocking step Place a Token cannot process action Type: RunRoutes, id: 278, entity: <Corporation: NYC>"
 70692,perfect,416,416,,,,,
 70693,perfect,974,974,,,,,
 70694,perfect,737,737,,,,,
@@ -1097,7 +1097,7 @@ game_id,status,total_actions,num_matched,first_divergence_action_index,first_div
 82550,perfect,377,377,,,,,
 82553,perfect,831,831,,,,,
 82554,perfect,780,780,,,,,
-82556,perfect,750,750,,,,,
+82556,python_error,750,360,360,run_routes,python_error,,"GameError: Blocking step Place a Token cannot process action Type: RunRoutes, id: 361, entity: <Corporation: C&O>"
 82558,perfect,742,742,,,,,
 82559,perfect,353,353,,,,,
 82560,perfect,798,798,,,,,
@@ -1225,7 +1225,7 @@ game_id,status,total_actions,num_matched,first_divergence_action_index,first_div
 84427,perfect,786,786,,,,,
 84528,perfect,329,329,,,,,
 84601,perfect,800,800,,,,,
-84829,perfect,613,613,,,,,
+84829,python_error,613,361,361,run_routes,python_error,,"GameError: Blocking step Place a Token cannot process action Type: RunRoutes, id: 362, entity: <Corporation: NYC>"
 84885,perfect,777,777,,,,,
 84955,perfect,853,853,,,,,
 85171,perfect,441,441,,,,,
@@ -1247,7 +1247,7 @@ game_id,status,total_actions,num_matched,first_divergence_action_index,first_div
 86050,perfect,769,769,,,,,
 86190,perfect,741,741,,,,,
 86244,perfect,403,403,,,,,
-86492,perfect,549,549,,,,,
+86492,python_error,549,251,251,run_routes,python_error,,"GameError: Blocking step Place a Token cannot process action Type: RunRoutes, id: 252, entity: <Corporation: NYC>"
 87146,perfect,367,367,,,,,
 87433,perfect,926,926,,,,,
 87454,dropped,0,0,,,,illegal_share_buy,

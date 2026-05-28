@@ -99,15 +99,18 @@ impl BaseGame {
 
         // Initialize all shares as IPO
         let ipo_eid = EntityId::ipo(corporation_sym);
-        for share in &mut self.corporations[corp_idx].shares {
-            if share.owner.is_none() {
-                share.owner = ipo_eid.clone();
+        let n = self.corporations[corp_idx].shares.len();
+        for i in 0..n {
+            if self.corporations[corp_idx].shares[i].owner.is_none() {
+                self.corporations[corp_idx]
+                    .set_share_owner(i, ipo_eid.clone());
             }
         }
 
         // Transfer president share to player for FREE (exchange="free" in Python)
         let player_eid = EntityId::player(player_id);
-        self.corporations[corp_idx].shares[0].owner = player_eid.clone();
+        self.corporations[corp_idx]
+            .set_share_owner(0, player_eid.clone());
         self.corporations[corp_idx].owner_id = player_eid;
 
         // Clear pending par
@@ -372,11 +375,16 @@ impl BaseGame {
                 if let Some(&corp_idx) = self.corp_idx.get(*corp_sym) {
                     // Find a non-president share (from IPO or uninitialized) and transfer it
                     let ipo_eid = EntityId::ipo(corp_sym);
-                    for share in &mut self.corporations[corp_idx].shares {
+                    let mut found_idx: Option<usize> = None;
+                    for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                         if !share.president && (share.owner == ipo_eid || share.owner.is_none()) {
-                            share.owner = player_eid;
+                            found_idx = Some(i);
                             break;
                         }
+                    }
+                    if let Some(i) = found_idx {
+                        self.corporations[corp_idx]
+                            .set_share_owner(i, player_eid);
                     }
                 }
             }

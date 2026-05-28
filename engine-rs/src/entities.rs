@@ -147,6 +147,11 @@ pub struct Share {
     #[pyo3(get)]
     pub index: usize,
     pub owner: EntityId,
+    /// Monotonic sequence number set each time the share's owner changes.
+    /// Used to order shares by acquisition time (mirrors Python's per-owner
+    /// ``shares_by_corporation[corp]`` insertion order).
+    #[serde(default)]
+    pub acquired_seq: u64,
 }
 
 impl std::fmt::Display for EntityId {
@@ -165,6 +170,7 @@ impl Share {
             president,
             index: 0,
             owner: EntityId::none(),
+            acquired_seq: 0,
         }
     }
 
@@ -251,6 +257,17 @@ pub struct Corporation {
     /// removed by tile upgrade). Used to determine if the home city reservation
     /// has been consumed.
     pub home_token_ever_placed: bool,
+    /// Share indices (into `shares`) in the order they entered the market pool.
+    /// Mirrors Python's ``share_pool.shares_by_corporation[corp]`` insertion
+    /// order. Maintained whenever a share's owner transitions to/from market.
+    #[serde(default)]
+    pub market_order: Vec<usize>,
+    /// Monotonic counter for share owner changes. Used to assign
+    /// ``Share.acquired_seq`` values and order shares within an owner by
+    /// acquisition time. Mirrors Python's per-owner ``shares_by_corporation``
+    /// insertion order.
+    #[serde(default)]
+    pub share_event_counter: u64,
 }
 
 #[pymethods]
@@ -270,6 +287,8 @@ impl Corporation {
             ipo_price: None,
             owner_id: EntityId::none(),
             home_token_ever_placed: false,
+            market_order: Vec::new(),
+            share_event_counter: 0,
         }
     }
 
@@ -347,6 +366,60 @@ impl Corporation {
 
     fn __repr__(&self) -> String {
         format!("Corporation(sym='{}', floated={})", self.sym, self.floated)
+    }
+}
+
+impl Corporation {
+    /// Move a share's owner, maintaining `market_order` and `acquired_seq`
+    /// so that share ordering mirrors Python's per-owner insertion order.
+    pub fn set_share_owner(&mut self, share_idx: usize, new_owner: EntityId) {
+        if share_idx >= self.shares.len() {
+            return;
+        }
+        let old_owner = self.shares[share_idx].owner.clone();
+        let was_market = old_owner.is_market();
+        let will_be_market = new_owner.is_market();
+        let owner_changed = old_owner != new_owner;
+        self.shares[share_idx].owner = new_owner;
+        if owner_changed {
+            self.share_event_counter += 1;
+            self.shares[share_idx].acquired_seq = self.share_event_counter;
+        }
+        if was_market && !will_be_market {
+            // Leaving market.
+            self.market_order.retain(|&i| i != share_idx);
+        } else if !was_market && will_be_market {
+            // Entering market — append.
+            if !self.market_order.contains(&share_idx) {
+                self.market_order.push(share_idx);
+            }
+        }
+    }
+
+    /// Return share indices owned by `owner`, sorted by acquisition time
+    /// (oldest first). Mirrors Python's ``owner.shares_of(corp)`` which
+    /// returns shares in insertion order into the player's per-corp list.
+    pub fn shares_owned_by_in_order(&self, owner: &EntityId) -> Vec<usize> {
+        let mut indices: Vec<usize> = self
+            .shares
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.owner == *owner)
+            .map(|(i, _)| i)
+            .collect();
+        indices.sort_by_key(|&i| self.shares[i].acquired_seq);
+        indices
+    }
+
+    /// Return the share index that has been in market the longest (Python
+    /// ``share_pool.shares_of(corp)[0]``), or None if no market shares.
+    pub fn oldest_market_share_index(&self) -> Option<usize> {
+        for &i in &self.market_order {
+            if i < self.shares.len() && self.shares[i].owner.is_market() {
+                return Some(i);
+            }
+        }
+        None
     }
 }
 

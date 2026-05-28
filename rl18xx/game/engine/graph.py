@@ -1263,9 +1263,16 @@ class Graph:
         self._tokenable_cities.clear()
         self.tokens.clear()
         self.cheater_tokens.clear()
-        to_delete = [key for key, route in self.routes.items() if not route.get("route_train_purchase")]
-        for key in to_delete:
-            del self.routes[key]
+        # Drop ALL cached route info. Previously this preserved entries with
+        # ``route_train_purchase=True`` as a "sticky" obligation marker, but
+        # that left a stale ``route_available`` flag for corps whose
+        # connectivity later changed (e.g. an opposing corp laid a tile
+        # that blocked the only path to the second city). The Rust engine
+        # always recomputes from scratch and never sees this; the Python
+        # cache was lying to ``can_run_route``. Recomputing on the next
+        # access reflects current connectivity for both ``route_available``
+        # and ``route_train_purchase``. See game 86319 (ERIE).
+        self.routes.clear()
 
     def clear_graph_for(self, corporation):
         self.clear()

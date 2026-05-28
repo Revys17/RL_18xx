@@ -302,6 +302,7 @@ class ActionHelper(metaclass=Singleton):
                     )
                     for hex in hexes
                     for city in hex._tile.cities
+                    if city.tokenable(game.current_entity)
                 ]
             )
 

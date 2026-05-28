@@ -1,6 +1,6 @@
 # Cleaning pipeline: Python vs. Rust engine parity audit
 
-Total games audited: **50**
+Total games audited: **100**
 
 Discrepancies: **0**
 
@@ -11,8 +11,8 @@ Match rate (cleaning outcome): **100.00%**
 
 | Category | Count |
 |----------|-------|
-| `both_ok` | 29 |
-| `skip_not_finished` | 19 |
+| `both_ok` | 62 |
+| `skip_not_finished` | 36 |
 | `both_dropped_same_reason` | 2 |
 
 ## Drop-reason cross-tab (both engines dropped)
