@@ -98,7 +98,7 @@ impl BaseGame {
             }
             _ => None,
         };
-        if let Some((ref pending_corp, pending_token_idx)) = pending_token {
+        if let Some((ref pending_corp, pending_token_idx, ref pending_hex)) = pending_token {
             if let Action::PlaceToken {
                 hex_id,
                 city_index,
@@ -121,6 +121,17 @@ impl BaseGame {
                 } else {
                     hex_id.clone()
                 };
+
+                // Validate the hex matches the pending token's expected hex.
+                // Python's HomeToken.process_place_token raises
+                // "Cannot place token on X as the hex is not available" when
+                // the chosen hex isn't in pending_token['hexes'].
+                if !pending_hex.is_empty() && resolved_hex_id != *pending_hex {
+                    return Err(GameError::new(format!(
+                        "Cannot place token on {} as the hex is not available",
+                        resolved_hex_id
+                    )));
+                }
 
                 let hex_idx = *self
                     .hex_idx
@@ -561,7 +572,7 @@ impl BaseGame {
 
         // Collect tokens displaced by OO upgrade (needs_token_choice) for
         // re-placement via pending_tokens. Must be done BEFORE resetting below.
-        let mut displaced_tokens: Vec<(String, usize)> = Vec::new();
+        let mut displaced_tokens: Vec<(String, usize, String)> = Vec::new();
         if needs_token_choice {
             for old_city in &old_cities {
                 for old_tok in old_city.tokens.iter().flatten() {
@@ -570,7 +581,7 @@ impl BaseGame {
                         // Find the token index in the corporation's token list
                         for (ti, ct) in self.corporations[ci].tokens.iter().enumerate() {
                             if ct.used && ct.city_hex_id == hex_id {
-                                displaced_tokens.push((corp_sym.clone(), ti));
+                                displaced_tokens.push((corp_sym.clone(), ti, hex_id.to_string()));
                                 break;
                             }
                         }
@@ -970,22 +981,36 @@ impl BaseGame {
         };
 
         if actual_from == "depot" {
-            // Check upcoming trains first, then discarded (bank pool).
-            // Discarded trains are available at face value.
-            let from_discarded = !self.depot.trains.iter().any(|t| t.name == base_name)
-                && self.depot.discarded.iter().any(|t| t.name == base_name);
+            // Prefer exact-id match (so the discarded train with id "5-0"
+            // is removed when the action specifies "5-0", matching Python's
+            // ``game.train_by_id(...)`` followed by ``remove_train`` which
+            // deletes that specific train from whichever depot list holds it).
+            // Fall back to name-based: only after checking ID, prefer
+            // discarded (Python's ``min_depot_train`` considers discarded as
+            // the cheaper alternative for a same-named train).
+            let id_in_trains = self.depot.trains.iter().position(|t| t.id == train_name);
+            let id_in_discard = self.depot.discarded.iter().position(|t| t.id == train_name);
+            let from_discarded = if id_in_discard.is_some() {
+                true
+            } else if id_in_trains.is_some() {
+                false
+            } else {
+                // No ID match — fall back to name. Prefer discarded if it
+                // has this name and depot doesn't (the only remaining
+                // legal source).
+                !self.depot.trains.iter().any(|t| t.name == base_name)
+                    && self.depot.discarded.iter().any(|t| t.name == base_name)
+            };
 
             let train_idx = if from_discarded {
-                self.depot
-                    .discarded
-                    .iter()
-                    .position(|t| t.name == base_name)
-                    .ok_or_else(|| GameError::new(format!("Train {} not in depot or discard", train_name)))?
+                id_in_discard
+                    .or_else(|| self.depot.discarded.iter().position(|t| t.name == base_name))
+                    .ok_or_else(|| {
+                        GameError::new(format!("Train {} not in depot or discard", train_name))
+                    })?
             } else {
-                self.depot
-                    .trains
-                    .iter()
-                    .position(|t| t.name == base_name)
+                id_in_trains
+                    .or_else(|| self.depot.trains.iter().position(|t| t.name == base_name))
                     .ok_or_else(|| GameError::new(format!("Train {} not in depot", train_name)))?
             };
 
@@ -1196,31 +1221,45 @@ impl BaseGame {
                 .map(|s| s.percent)
                 .unwrap_or(20);
             let non_pres_to_sell = percent.saturating_sub(pres_pct);
-            for share in &mut self.corporations[corp_idx].shares {
+            let mut to_market: Vec<usize> = Vec::new();
+            let mut pres_idx_opt: Option<usize> = None;
+            for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                 if transferred_pct >= non_pres_to_sell {
                     break;
                 }
                 if share.owner == player_eid && !share.president {
-                    share.owner = market_eid.clone();
+                    to_market.push(i);
                     transferred_pct += share.percent;
                 }
             }
-            // Now move the president share to market.
-            for share in &mut self.corporations[corp_idx].shares {
+            for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                 if share.owner == player_eid && share.president {
-                    share.owner = market_eid.clone();
+                    pres_idx_opt = Some(i);
                     break;
                 }
             }
+            for i in to_market {
+                self.corporations[corp_idx]
+                    .set_share_owner(i, market_eid.clone());
+            }
+            if let Some(i) = pres_idx_opt {
+                self.corporations[corp_idx]
+                    .set_share_owner(i, market_eid.clone());
+            }
         } else {
-            for share in &mut self.corporations[corp_idx].shares {
+            let mut to_market: Vec<usize> = Vec::new();
+            for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                 if transferred_pct >= percent {
                     break;
                 }
                 if share.owner == player_eid && !share.president {
-                    share.owner = market_eid.clone();
+                    to_market.push(i);
                     transferred_pct += share.percent;
                 }
+            }
+            for i in to_market {
+                self.corporations[corp_idx]
+                    .set_share_owner(i, market_eid.clone());
             }
         }
 
@@ -1255,6 +1294,8 @@ impl BaseGame {
         // Handle partial bundles: when selling a partial president bundle
         // (percent < president face value), the seller keeps the leftover
         // half-president as a normal share. Mirrors stock.rs:461-480.
+        // Uses the corporation's `market_order` (insertion order) so that the
+        // OLDEST market share is returned, matching Python.
         if includes_president {
             let actual_pct = self.corporations[corp_idx].percent_owned_by(&player_eid);
             let target_pct = remaining_after;
@@ -1262,13 +1303,15 @@ impl BaseGame {
                 let deficit = target_pct - actual_pct;
                 let shares_to_return = deficit / 10;
                 let mut returned = 0u8;
-                for share in &mut self.corporations[corp_idx].shares {
-                    if returned >= shares_to_return {
-                        break;
-                    }
-                    if share.owner == market_eid && !share.president {
-                        share.owner = player_eid.clone();
-                        returned += 1;
+                while returned < shares_to_return {
+                    let oldest = self.corporations[corp_idx].oldest_market_share_index();
+                    match oldest {
+                        Some(idx) => {
+                            self.corporations[corp_idx]
+                                .set_share_owner(idx, player_eid.clone());
+                            returned += 1;
+                        }
+                        None => break,
                     }
                 }
             }
@@ -1462,8 +1505,15 @@ impl BaseGame {
             if needs_choice {
                 // Add to pending_tokens AND set step to PlaceToken.
                 // This mirrors Python's HomeToken step which runs before Track.
+                // The hex_id is the corp's home hex (only E11 reaches this path
+                // in 1830 — ERIE's tile-reserved home).
+                let home_hex = corp_defs
+                    .iter()
+                    .find(|cd| cd.sym == sym)
+                    .map(|cd| cd.home_hex.to_string())
+                    .unwrap_or_default();
                 if let crate::rounds::Round::Operating(ref mut s) = self.round {
-                    s.pending_tokens.push((sym.clone(), 0));
+                    s.pending_tokens.push((sym.clone(), 0, home_hex));
                     s.step = OperatingStep::PlaceToken;
                 }
             } else {

@@ -114,8 +114,23 @@ class _TokenableCity:
 
     @property
     def id(self):
-        """Match Python's BasePart.id: tile_id-city_index."""
-        return f"{self.tile.id}-{self._city_index}"
+        """Match Python's BasePart.id format: ``{tile_id}-{city_index}``.
+
+        Python's preprinted tiles use tile.id ``"{hex_id}-0"`` (instance 0), so
+        the preprinted city's full ID is ``"{hex_id}-0-{city_index}"``. The
+        Rust adapter stores ``tile.name`` (e.g. ``"D14"``) here for parity with
+        ``city_by_id``'s tile lookup, so explicitly bridge to the 3-part Python
+        form for preprinted hexes. Laid tiles already have an instance suffix
+        in their name (e.g. ``"57-0"``), so the 2-part concat is already
+        Python-compatible.
+        """
+        tile_id = self.tile.id
+        # Preprinted tile.name is just the hex coord (e.g. "D14"); pad in the
+        # implicit "-0" instance segment so the city ID round-trips through
+        # Python's ``BasePart.id`` cache (game._cities keyed by "D14-0-0").
+        if tile_id and "-" not in tile_id:
+            return f"{tile_id}-0-{self._city_index}"
+        return f"{tile_id}-{self._city_index}"
 
     def tokenable(self, entity):
         """Always tokenable — Rust already filtered for this."""
@@ -190,8 +205,20 @@ class _CityRef:
 
     @property
     def id(self):
-        """Match Python's BasePart.id: tile_id-city_index."""
-        return f"{self._tile_id}-{self._index}" if self._tile_id else f"?-{self._index}"
+        """Match Python's BasePart.id: ``{tile.id}-{city_index}``.
+
+        Python's preprinted tiles get id ``"{hex_id}-0"`` (index 0), so the
+        preprinted city ID is ``"{hex_id}-0-{city_index}"``. Rust stores the
+        preprinted tile id as ``"preprinted_{hex_id}"`` — translate to the
+        Python form.
+        """
+        tile_id = self._tile_id
+        if tile_id is None:
+            return f"?-{self._index}"
+        if tile_id.startswith("preprinted_"):
+            hex_id = tile_id[len("preprinted_"):]
+            return f"{hex_id}-0-{self._index}"
+        return f"{tile_id}-{self._index}"
 
     @property
     def tokens(self):
@@ -266,16 +293,33 @@ class _TileProxy:
     def id(self):
         """Python-compatible tile id: ``{name}-{copy_index}``.
 
-        Counts current placements of this catalog tile on the board to pick
-        the next available copy. Falls back to ``{name}-0`` if no game ref."""
+        Mirrors Python's ``Tile.get_available_tile_with_name`` which returns
+        the lowest-index unused tile of that name. We scan the board for laid
+        tiles of this name (their ID encodes their index, e.g. "7-2") and
+        return the lowest index NOT currently on the board.
+        """
         name = self._tile.name
         if self._game is None:
             return f"{name}-0"
-        count = 0
+        prefix = f"{name}-"
+        laid_indices: set[int] = set()
         for h in self._game.hexes:
-            if h.tile and h.tile.name == name:
-                count += 1
-        return f"{name}-{count}"
+            if not h.tile:
+                continue
+            tname = h.tile.name
+            if tname == name:
+                laid_indices.add(0)
+                continue
+            if tname.startswith(prefix):
+                suffix = tname[len(prefix):]
+                try:
+                    laid_indices.add(int(suffix))
+                except ValueError:
+                    continue
+        idx = 0
+        while idx in laid_indices:
+            idx += 1
+        return f"{name}-{idx}"
 
     @property
     def paths(self):
@@ -1092,7 +1136,9 @@ class _SellableBundle(_PyShareBundle):
         return self._corp_ref
 
     def num_shares(self, ceil=True):
-        return len(self.shares)
+        import math
+        num = self.percent / 10
+        return math.ceil(num) if ceil else num
 
     @property
     def partial(self):
@@ -2018,9 +2064,26 @@ class RustGameAdapter:
         return self.graph
 
     def auto_routes_for(self, entity):
-        """Compute optimal routes using Rust router. Returns (routes_dicts, revenue)."""
+        """Compute optimal routes using Rust router. Returns (routes_dicts, revenue).
+
+        Augments each route dict with a ``train`` field (the corp's first
+        unoperated train) so ``auto_route_action`` can build a RunRoutes action
+        with a non-empty train id. Rust's calculate_routes returns the optimal
+        revenue but doesn't assign trains; we pick by route order.
+        """
         corp_sym = entity.sym if hasattr(entity, 'sym') else str(entity)
-        return self._game.calculate_routes(corp_sym)
+        route_dicts, revenue = self._game.calculate_routes(corp_sym)
+        ci = None
+        for i, c in enumerate(self._game.corporations):
+            if c.sym == corp_sym:
+                ci = i
+                break
+        if ci is not None:
+            unoperated = [t for t in self._game.corporations[ci].trains if not t.operated]
+            for rd, train in zip(route_dicts, unoperated):
+                if not rd.get("train"):
+                    rd["train"] = train.id
+        return route_dicts, revenue
 
     def token_graph_for_entity(self, entity):
         """Returns the graph proxy (same for all entities in 1830)."""
@@ -2101,12 +2164,24 @@ class RustGameAdapter:
         """Full action history (Python dicts), matching the Python engine.
 
         Each entry is the action dict that was processed, in order. Mirrors
-        ``rl18xx.game.engine.game.base.BaseGame.raw_actions``.
+        ``rl18xx.game.engine.game.base.BaseGame.raw_actions``. Injects a
+        sequential ``id`` field on any action missing one (synthetic passes
+        added by the cleaning pipeline), so the dict round-trips through
+        Python's ``BaseGame.load()`` which sorts/indexes actions by ``id``.
         """
         # Tests may monkey-patch raw_actions onto the adapter directly.
         if "raw_actions" in self.__dict__:
             return self.__dict__["raw_actions"]
-        return list(self._game.raw_actions)
+        out = list(self._game.raw_actions)
+        next_id = 1
+        for a in out:
+            if "id" in a and a["id"] is not None:
+                next_id = max(next_id, a["id"] + 1)
+        for a in out:
+            if "id" not in a or a["id"] is None:
+                a["id"] = next_id
+                next_id += 1
+        return out
 
     @raw_actions.setter
     def raw_actions(self, value):
@@ -2150,8 +2225,26 @@ class RustGameAdapter:
         return out
 
     def to_dict(self):
-        """Minimal dict representation for showboard (non-critical)."""
-        return {"move_number": self._game.move_number, "finished": self._game.finished}
+        """Full-fidelity dict mirroring Python's ``BaseGame.to_dict()``.
+
+        Emits the schema downstream tooling (``fix_online_games``,
+        ``convert_games_to_training_dataset``) expects: title, sorted players,
+        the action log, id/finished/move_number, and final result.
+        """
+        players = sorted(self._game.players, key=lambda p: p.id)
+        try:
+            result = self._game.result()
+        except Exception:
+            result = None
+        return {
+            "title": getattr(self._game, "title", "1830"),
+            "players": [{"id": p.id, "name": p.name} for p in players],
+            "actions": list(self.raw_actions),
+            "id": getattr(self._game, "id", None),
+            "finished": self._game.finished,
+            "move_number": self._game.move_number,
+            "result": result,
+        }
 
     def end_game(self):
         """Trigger end-game scoring in the Rust engine."""

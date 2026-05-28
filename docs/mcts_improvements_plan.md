@@ -4,7 +4,7 @@ Four self-contained improvements to the AlphaZero MCTS + self-play stack,
 in dependency order. Origin: comparison against
 https://github.com/ericjang/autogo plus 1830-specific adaptations.
 
-Status as of writing (2026-05-21):
+Status as of writing (2026-05-28):
 - Self-play workers run in separate processes via
   `ProcessPoolExecutor(max_workers=num_threads)` with `spawn` start method
   (loop.py:692, loop.py:1381). Each worker holds its own model copy.
@@ -12,12 +12,17 @@ Status as of writing (2026-05-21):
   `parallel_readouts` (default 32) with virtual loss and FP16 autocast
   (self_play.py:402–508). It does **not** batch across games.
 - Engine is Rust-native; self-play and MCTS already operate on
-  `RustGameAdapter`. Pretraining still has Python-engine entry points —
-  see `docs/pretraining_rust_migration.md`.
-- Action-mapper Rust migration is in progress: `engine-rs/src/factored.rs`,
-  `rl18xx/game/factored_action_helper.py`, and parity tests
-  (`tests/test_factored_action_helper_rust_parity.py`) exist but the full
-  cutover isn't complete.
+  `RustGameAdapter`. Pretraining migration is **complete**: `use_rust=True`
+  is the default for `get_game_object_for_game`; `RustGameAdapter.to_dict()`
+  emits the full Python schema; `fix_online_games → convert → pretrain`
+  runs end-to-end on Rust. Python engine is now only a parity reference.
+- Action-mapper Rust migration: Rust side (`engine-rs/src/factored.rs`) is
+  **feature-complete** — all action types enumerate correctly, the
+  500-seed random-walk test using Rust enumeration passes 100%, and the
+  parity tests (`tests/test_factored_action_helper_rust_parity.py`) cover
+  the surface. The remaining work is refactoring Python's `ActionMapper`
+  into a thin shim around the Rust output (slot layout, encode/decode,
+  and price-head logic still live in Python). See Phase 3.5.
 
 The four phases below are ordered so that each one buys debugging or
 benchmarking leverage for the next. Phase 4 has the largest scope and is
@@ -252,39 +257,49 @@ until parity is verified on a short training run.
 ## Phase 3.5 — Finish action-mapper Rust migration
 
 **Why this is a phase.** Phase 4 needs the action mapper to be callable
-from Rust without crossing FFI per child expansion. Migration is partly
-done (`engine-rs/src/factored.rs`, `rl18xx/game/factored_action_helper.py`,
-parity tests under `tests/test_factored_action_helper_rust_parity.py`)
-but not complete enough to remove the Python action mapper from the hot
-path.
+from Rust without crossing FFI per child expansion. The Rust-side
+implementation is now feature-complete; only the Python ActionMapper
+refactor remains.
 
-**Audit deliverable.** Before scoping the actual code work, run a
-read-only audit:
-- For every action type the Python `ActionMapper.get_legal_actions_factored`
-  enumerates, check whether `factored.rs` mirrors it (including
-  `price_range` and `action_type` metadata).
-- For every callsite of `map_index_to_action` /
-  `map_index_to_action_with_price` in `mcts.py` (lines 618, 625, 629,
-  658, 662, 666), confirm a Rust equivalent exists.
-- Inventory gaps and rank by usage frequency.
+**Audit status (updated 2026-05-28).** The audit was effectively
+conducted in the random-walk + replay parity push. Specific gaps
+identified and closed during that work:
 
-**Code work (post-audit).**
-1. Implement gaps identified by the audit.
-2. Expand `test_factored_action_helper_rust_parity.py` to cover the
-   full slot inventory (Bid, BuyTrain depot/market/cross-corp,
-   BuyCompany, etc.) and the snapped-price round-trip.
-3. Update `ActionMapper` to be Rust-backed: the Python class becomes a
-   thin shim around the Rust implementation. No callsite changes needed
-   in `mcts.py` — they continue calling Python methods that now
-   delegate to Rust.
-4. Run a full training corpus through the parity test to catch edge
-   cases.
+- CS LayTile emitted under `{"private": "CS"}` entity (was emitting under
+  corp)
+- SellShares with president-cert swap honoring Python's insertion-order
+  semantics (added `acquired_seq` / `market_order` tracking in
+  `engine-rs/src/entities.rs`)
+- Tile rotation legality with bipartite matching for multi-city upgrades
+  (OO tiles in `engine-rs/src/tiles.rs`)
+- `pending_tokens` carrying hex_id for OO upgrade displacement (so
+  factored PlaceToken restricts to the displaced hex)
+- EBUY cheapest-only filter applied to discard-source trains
+- Waterfall auction `discount` accumulator resets on company purchase
+- `route_train_purchase` counts Cities + Towns + Offboards as mandatory
+- D-train trade-in slots (4/5/6 → D at $800)
+- Preprinted city ID format (`{hex_id}-0-{city_idx}`)
 
-**Risk.** Moderate. Mostly a matter of completing in-flight work and
-hardening parity tests. Risk concentrated in price-bearing slot
-edge cases (snap behavior, range clamping).
+Validation: **500/500 Rust-helper random walks pass**, **3243-game
+per-step replay audit has 0 failures**, **cleaning outcome parity is 100%**.
 
-**Effort.** ~1 week, depending on audit findings.
+**Remaining work.**
+1. Refactor Python's `ActionMapper` (`rl18xx/agent/alphazero/action_mapper.py`)
+   into a thin shim around `state.get_factored_choices()`. The current
+   class still owns the slot layout (`self.actions`), encode (`get_index_for_action`,
+   `canonical_index_for_action`, `index_for_factored`), and decode
+   (`map_index_to_action`, `map_index_to_action_with_price`). After the
+   refactor, slot layout stays in Python (the model's policy head depends
+   on it being stable), but the per-call enumeration and price-range
+   metadata come from Rust verbatim.
+2. Confirm the parity tests still cover snapped-price round-trip and the
+   D-train trade-in slots.
+
+**Risk.** Low — the Rust side is proven correct via the random-walk and
+replay audits. The refactor is a code-organization change, not a
+behavior change.
+
+**Effort.** ~1–2 days.
 
 ---
 
@@ -342,10 +357,17 @@ PyO3 callback into the Phase 3 inference client).
   thin orchestrator.
 
 **Subtleties.**
-1. **Engine state cloning.** `pickle_clone()` is currently the single
-   most expensive thing in the tree. Rust calls the existing
-   `clone_for_search` directly (no Python overhead) — this is where the
-   bulk of the speedup comes from.
+1. **Engine state cloning.** `pickle_clone()` is a misleading name — it's
+   no longer a Python pickle round-trip. The method on `RustGameAdapter`
+   already delegates to Rust's native `clone_for_search` (see
+   `engine-rs/src/game.rs:pickle_clone`), and the Python pickle module
+   isn't involved. What remains is the FFI overhead of constructing a
+   new `RustGameAdapter` wrapper around the cloned Rust game per node
+   expansion. Moving MCTS into Rust eliminates that wrapper construction
+   per leaf — modest speedup, smaller than the original "pickle vs.
+   native" framing suggested. The big speedup from this phase comes from
+   keeping the search loop in Rust (no FFI per descent step) rather than
+   from replacing pickling.
 2. **`action_types_by_idx` / `price_ranges_by_idx`.** Comes from the
    action mapper. Phase 3.5 makes these callable directly from Rust.
 3. **Encoder canonicalization.** Either call back into Python

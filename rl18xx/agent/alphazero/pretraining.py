@@ -740,7 +740,7 @@ def should_add_pass(action, game_state):
     return False
 
 
-def get_game_object_for_game(game: dict, use_rust: bool = False) -> BaseGame:
+def get_game_object_for_game(game: dict, use_rust: bool = True) -> BaseGame:
     """Replay a recorded human game through the engine, filtering out
     illegal/redundant actions where possible.
 
@@ -756,7 +756,7 @@ def get_game_object_for_game(game: dict, use_rust: bool = False) -> BaseGame:
     return game_or_none
 
 
-def _get_game_object_for_game_with_reason(game: dict, use_rust: bool = False):
+def _get_game_object_for_game_with_reason(game: dict, use_rust: bool = True):
     """Internal: same as :func:`get_game_object_for_game` but additionally
     returns the drop reason (or ``None`` if the game cleaned successfully).
 

@@ -231,31 +231,67 @@ def compare_state(rust_game, py_game):
                 continue
 
             p_graph = py_game.token_graph_for_entity(pc)
-            # Clear stale cache — graph may not have been invalidated for this corp
+            # Clear stale cache — graph may not have been invalidated for this corp.
+            # Recomputation below mutates the graph's `routes` / cached
+            # connectivity dicts. The engine itself relies on these caches for
+            # downstream `can_run_route` / step.blocking logic, so we snapshot
+            # the corp's cached state, do the audit-side recompute, then
+            # restore the original state. Without this, calling compare_state
+            # mid-replay can flip `Route.blocking` from True to False and
+            # cause subsequent `process_action` calls to fail (game 86319).
+            cache_keys = (
+                "_connected_hexes",
+                "_connected_nodes",
+                "_connected_paths",
+                "_reachable_hexes",
+                "_connected_hexes_by_token",
+                "_connected_nodes_by_token",
+                "_connected_paths_by_token",
+                "_tokenable_cities",
+            )
+            saved_routes = p_graph.routes.get(pc)
+            saved_caches = {
+                k: getattr(p_graph, k).get(pc)
+                for k in cache_keys
+                if hasattr(p_graph, k)
+            }
             p_graph.clear_graph_for(pc)
 
-            # Connected nodes (revenue locations reachable from tokens).
-            # This is what matters for route running and token placement.
-            # connected_hexes differs because Python includes adjacent hexes
-            # that don't have matching exits (hex-level adjacency vs path-level).
-            p_node_hexes = set()
-            for n in p_graph.connected_nodes(pc):
-                if hasattr(n, 'hex'):
-                    p_node_hexes.add(n.hex.id)
-            r_node_hexes = set(rust_game.get_connected_hexes(rc.sym))
-            # Only flag if Rust is missing a hex that has a connected node
-            missing_in_rust = sorted(p_node_hexes - r_node_hexes)
-            if missing_in_rust:
-                errors.append(f"{rc.sym} connected_nodes missing in Rust: {missing_in_rust}")
+            try:
+                # Connected nodes (revenue locations reachable from tokens).
+                # This is what matters for route running and token placement.
+                # connected_hexes differs because Python includes adjacent hexes
+                # that don't have matching exits (hex-level adjacency vs path-level).
+                p_node_hexes = set()
+                for n in p_graph.connected_nodes(pc):
+                    if hasattr(n, 'hex'):
+                        p_node_hexes.add(n.hex.id)
+                r_node_hexes = set(rust_game.get_connected_hexes(rc.sym))
+                # Only flag if Rust is missing a hex that has a connected node
+                missing_in_rust = sorted(p_node_hexes - r_node_hexes)
+                if missing_in_rust:
+                    errors.append(f"{rc.sym} connected_nodes missing in Rust: {missing_in_rust}")
 
-            # Tokenable cities (only compare if corp has unplaced tokens)
-            has_unplaced_r = any(not t.used for t in rc.tokens)
-            has_unplaced_p = any(not t.used for t in pc.tokens)
-            if has_unplaced_r and has_unplaced_p:
-                r_tc = sorted(set(rust_game.get_tokenable_cities(rc.sym)))
-                p_tc = sorted(set((c.hex.id, c.index) for c in p_graph.tokenable_cities(pc)))
-                if r_tc != p_tc:
-                    errors.append(f"{rc.sym} tokenable_cities: Rust={r_tc} Python={p_tc}")
+                # Tokenable cities (only compare if corp has unplaced tokens)
+                has_unplaced_r = any(not t.used for t in rc.tokens)
+                has_unplaced_p = any(not t.used for t in pc.tokens)
+                if has_unplaced_r and has_unplaced_p:
+                    r_tc = sorted(set(rust_game.get_tokenable_cities(rc.sym)))
+                    p_tc = sorted(set((c.hex.id, c.index) for c in p_graph.tokenable_cities(pc)))
+                    if r_tc != p_tc:
+                        errors.append(f"{rc.sym} tokenable_cities: Rust={r_tc} Python={p_tc}")
+            finally:
+                # Restore the corp's cached graph state so the engine's
+                # downstream step / blocking logic sees the same data it had
+                # before compare_state ran.
+                p_graph.routes.pop(pc, None)
+                if saved_routes is not None:
+                    p_graph.routes[pc] = saved_routes
+                for k, v in saved_caches.items():
+                    cache = getattr(p_graph, k)
+                    cache.pop(pc, None)
+                    if v is not None:
+                        cache[pc] = v
 
     # ---- Phase ----
     r_phase = rust_game.phase.name

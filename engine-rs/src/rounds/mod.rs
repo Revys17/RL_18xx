@@ -214,6 +214,12 @@ impl AuctionState {
     pub fn remove_company(&mut self, company_idx: usize) {
         self.remaining_companies.retain(|&c| c != company_idx);
         self.bids.remove(&company_idx);
+        // The accumulated discount applies only to the company it was applied
+        // to. Once that company is bought, the next cheapest starts fresh.
+        // Python tracks per-company discount; we use a single accumulator so
+        // we must reset when the cheapest changes (i.e. when any company is
+        // bought, since buys can only remove the cheapest under waterfall).
+        self.discount = 0;
     }
 }
 
@@ -414,8 +420,11 @@ pub struct OperatingState {
     /// Corps that are over the train limit and must discard (set after phase change).
     pub crowded_corps: Vec<String>,
     /// Tokens displaced by OO tile upgrades, awaiting re-placement.
-    /// Each entry: (corporation_sym, token_index).
-    pub pending_tokens: Vec<(String, usize)>,
+    /// Each entry: (corporation_sym, token_index, hex_id).
+    /// `hex_id` is the hex on which the token must be re-placed (mirrors
+    /// Python's `pending_token['hexes']` list — currently always a single hex
+    /// in 1830 because every displacement source is a single-hex OO upgrade).
+    pub pending_tokens: Vec<(String, usize, String)>,
 }
 
 impl OperatingState {

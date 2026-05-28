@@ -982,6 +982,12 @@ class ActionMapper(metaclass=Singleton):
         source = la.entity.get("source")
         train_name = la.entity.get("train")
 
+        if source == "discard":
+            # Rust factored helper emits source="discard" for trains in the
+            # depot's discarded (face-value) pool. Route to the per-name market
+            # slot (which represents discarded depot trains).
+            return offset + 1 + self.train_type_offsets[train_name]
+
         if source == "depot":
             # Disambiguate fresh vs discarded by checking the depot. Use the
             # game.depot accessor; for RustGameAdapter the .depot proxy exposes

@@ -196,12 +196,16 @@ fn compute_corp_graph(
             if has_optional || reached_other_token {
                 route_available = true;
             }
-            // route_train_purchase: 2+ mandatory (city) nodes.
-            // Start node is 1 mandatory. Any other city reachable (not in pre-seed
-            // unless actually visited via track) is another mandatory.
+            // route_train_purchase: 2+ mandatory nodes. In 1830 Cities,
+            // Towns, and Offboards all count as mandatory revenue stops
+            // (Python's ``Node.route == "mandatory"`` covers all three).
+            // Start node counts as 1; any other City/Town/Offboard reached
+            // counts as another.
             if !route_train_purchase {
                 let other_mandatory = all_found.iter().any(|n| {
-                    n.node_type == NodeType::City
+                    (n.node_type == NodeType::City
+                        || n.node_type == NodeType::Town
+                        || n.node_type == NodeType::Offboard)
                         && **n != start_node
                         && (!pre_seed.contains(n) || local_visited_hexes.contains_key(&n.hex_id))
                 });

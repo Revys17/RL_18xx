@@ -803,39 +803,55 @@ impl BaseGame {
         if !share_indices.is_empty() {
             let idx = share_indices[0];
             if idx < self.corporations[corp_idx].shares.len() {
-                self.corporations[corp_idx].shares[idx].owner = player_eid.clone();
+                self.corporations[corp_idx]
+                    .set_share_owner(idx, player_eid.clone());
                 transferred = true;
             }
         }
 
         // Fallback: try IPO first
         if !transferred {
-            for share in &mut self.corporations[corp_idx].shares {
+            let mut found_idx: Option<usize> = None;
+            for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                 if !share.president && share.percent == percent && share.owner == ipo_eid {
-                    share.owner = player_eid.clone();
-                    transferred = true;
+                    found_idx = Some(i);
                     break;
                 }
+            }
+            if let Some(i) = found_idx {
+                self.corporations[corp_idx]
+                    .set_share_owner(i, player_eid.clone());
+                transferred = true;
             }
         }
         // Then market
         if !transferred {
-            for share in &mut self.corporations[corp_idx].shares {
+            let mut found_idx: Option<usize> = None;
+            for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                 if !share.president && share.percent == percent && share.owner == market_eid {
-                    share.owner = player_eid.clone();
-                    transferred = true;
+                    found_idx = Some(i);
                     break;
                 }
+            }
+            if let Some(i) = found_idx {
+                self.corporations[corp_idx]
+                    .set_share_owner(i, player_eid.clone());
+                transferred = true;
             }
         }
         // Then uninitialized (before corp is parred)
         if !transferred {
-            for share in &mut self.corporations[corp_idx].shares {
+            let mut found_idx: Option<usize> = None;
+            for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                 if !share.president && share.percent == percent && share.owner.is_none() {
-                    share.owner = player_eid.clone();
-                    transferred = true;
+                    found_idx = Some(i);
                     break;
                 }
+            }
+            if let Some(i) = found_idx {
+                self.corporations[corp_idx]
+                    .set_share_owner(i, player_eid.clone());
+                transferred = true;
             }
         }
 
@@ -2052,7 +2068,29 @@ impl BaseGame {
                         // must_buy uses route_train_purchase (2+ mandatory/city nodes),
                         // matching Python's must_buy_train.
                         let must_buy = no_trains && depot_has_trains && self.must_buy_train(&corp_sym);
-                        let cheapest_price = self.depot.trains.first().map_or(0, |t| t.price);
+                        // Python's ``depot.min_depot_price`` considers both upcoming and
+                        // discarded depot trains. Use the lowest across both so the
+                        // bankruptcy check matches Python's threshold.
+                        let cheapest_price = {
+                            let upcoming_min =
+                                self.depot.trains.iter().map(|t| t.price).min().unwrap_or(0);
+                            let discarded_min = self
+                                .depot
+                                .discarded
+                                .iter()
+                                .map(|t| t.price)
+                                .min()
+                                .unwrap_or(i32::MAX);
+                            if self.depot.trains.is_empty() && self.depot.discarded.is_empty() {
+                                0
+                            } else if self.depot.trains.is_empty() {
+                                discarded_min
+                            } else if self.depot.discarded.is_empty() {
+                                upcoming_min
+                            } else {
+                                upcoming_min.min(discarded_min)
+                            }
+                        };
 
                         // Check cheapest available train (depot OR sister corp at min price 1)
                         let pres_id = ci.and_then(|i| self.corporations[i].president_id());

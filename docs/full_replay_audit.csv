@@ -1,0 +1,3244 @@
+game_id,status,detail
+26822,PERFECT,18 actions matched
+26823,PERFECT,374 actions matched
+26825,PERFECT,489 actions matched
+26826,PERFECT,882 actions matched
+26827,DROPPED,not_finished (game status: archived)
+26828,PERFECT,761 actions matched
+26829,DROPPED,not_finished (game status: archived)
+26830,PERFECT,399 actions matched
+26831,PERFECT,660 actions matched
+26835,PERFECT,395 actions matched
+26836,PERFECT,386 actions matched
+26837,PERFECT,880 actions matched
+26838,PERFECT,669 actions matched
+26839,PERFECT,489 actions matched
+26840,PERFECT,0 actions matched
+26841,PERFECT,75 actions matched
+26843,DROPPED,not_finished (game status: archived)
+26844,PERFECT,900 actions matched
+26845,DROPPED,filtered by cleaning
+26846,DROPPED,filtered by cleaning
+26847,PERFECT,844 actions matched
+26852,DROPPED,not_finished (game status: archived)
+26854,DROPPED,not_finished (game status: active)
+26855,DROPPED,not_finished (game status: archived)
+26856,PERFECT,878 actions matched
+26857,PERFECT,808 actions matched
+26858,DROPPED,not_finished (game status: archived)
+26859,DROPPED,not_finished (game status: archived)
+26860,DROPPED,not_finished (game status: archived)
+26861,PERFECT,797 actions matched
+26862,PERFECT,922 actions matched
+26863,PERFECT,702 actions matched
+26866,DROPPED,not_finished (game status: active)
+26869,PERFECT,556 actions matched
+26873,PERFECT,448 actions matched
+26874,DROPPED,not_finished (game status: active)
+26877,DROPPED,not_finished (game status: active)
+26878,DROPPED,not_finished (game status: active)
+26879,DROPPED,not_finished (game status: active)
+26880,PERFECT,896 actions matched
+26881,DROPPED,not_finished (game status: archived)
+26882,PERFECT,483 actions matched
+26883,PERFECT,466 actions matched
+26887,DROPPED,not_finished (game status: active)
+26890,PERFECT,795 actions matched
+26891,DROPPED,not_finished (game status: archived)
+26893,DROPPED,not_finished (game status: archived)
+26896,PERFECT,514 actions matched
+26897,PERFECT,745 actions matched
+26898,DROPPED,not_finished (game status: archived)
+26903,PERFECT,598 actions matched
+26905,PERFECT,460 actions matched
+26908,DROPPED,not_finished (game status: active)
+26909,PERFECT,973 actions matched
+26911,DROPPED,not_finished (game status: active)
+26915,PERFECT,744 actions matched
+26919,PERFECT,1 actions matched
+26921,DROPPED,not_finished (game status: active)
+26926,DROPPED,not_finished (game status: active)
+26929,PERFECT,782 actions matched
+26932,DROPPED,not_finished (game status: archived)
+26933,PERFECT,380 actions matched
+26934,DROPPED,not_finished (game status: archived)
+26945,DROPPED,not_finished (game status: active)
+26947,DROPPED,not_finished (game status: archived)
+26949,PERFECT,858 actions matched
+26957,DROPPED,not_finished (game status: active)
+26960,PERFECT,755 actions matched
+26963,PERFECT,457 actions matched
+26965,DROPPED,not_finished (game status: archived)
+26972,PERFECT,374 actions matched
+26974,PERFECT,342 actions matched
+26975,PERFECT,771 actions matched
+26983,PERFECT,0 actions matched
+26987,PERFECT,983 actions matched
+26988,DROPPED,not_finished (game status: active)
+26989,PERFECT,444 actions matched
+26990,PERFECT,1069 actions matched
+26991,PERFECT,488 actions matched
+26993,DROPPED,not_finished (game status: archived)
+26998,PERFECT,840 actions matched
+27002,PERFECT,1 actions matched
+27009,PERFECT,932 actions matched
+27010,PERFECT,534 actions matched
+27014,DROPPED,not_finished (game status: active)
+27020,PERFECT,782 actions matched
+27022,PERFECT,31 actions matched
+27027,DROPPED,not_finished (game status: active)
+27030,PERFECT,790 actions matched
+27032,DROPPED,not_finished (game status: archived)
+27033,PERFECT,754 actions matched
+27049,PERFECT,341 actions matched
+27054,PERFECT,476 actions matched
+27131,PERFECT,471 actions matched
+27140,PERFECT,809 actions matched
+27143,DROPPED,not_finished (game status: archived)
+27146,PERFECT,506 actions matched
+27151,PERFECT,797 actions matched
+27178,DROPPED,not_finished (game status: active)
+27180,PERFECT,717 actions matched
+27182,PERFECT,390 actions matched
+27189,DROPPED,not_finished (game status: active)
+27192,PERFECT,531 actions matched
+27194,PERFECT,286 actions matched
+27196,PERFECT,454 actions matched
+27208,DROPPED,not_finished (game status: archived)
+27218,PERFECT,631 actions matched
+27223,DROPPED,filtered by cleaning
+27225,PERFECT,760 actions matched
+27233,PERFECT,754 actions matched
+27240,PERFECT,275 actions matched
+27261,PERFECT,360 actions matched
+27277,DROPPED,not_finished (game status: archived)
+27278,PERFECT,592 actions matched
+27286,PERFECT,598 actions matched
+27291,DROPPED,not_finished (game status: active)
+27314,PERFECT,2 actions matched
+27322,PERFECT,575 actions matched
+27328,PERFECT,576 actions matched
+27332,DROPPED,not_finished (game status: archived)
+27334,PERFECT,397 actions matched
+27340,PERFECT,51 actions matched
+27343,DROPPED,not_finished (game status: archived)
+27356,DROPPED,not_finished (game status: active)
+27376,PERFECT,397 actions matched
+27382,PERFECT,375 actions matched
+27393,PERFECT,411 actions matched
+27402,PERFECT,408 actions matched
+27414,PERFECT,481 actions matched
+27417,DROPPED,not_finished (game status: active)
+27438,PERFECT,582 actions matched
+27452,PERFECT,409 actions matched
+27469,PERFECT,355 actions matched
+27470,DROPPED,not_finished (game status: archived)
+27482,PERFECT,790 actions matched
+27488,PERFECT,501 actions matched
+27491,PERFECT,843 actions matched
+27494,PERFECT,463 actions matched
+27506,DROPPED,not_finished (game status: archived)
+27514,DROPPED,filtered by cleaning
+27520,DROPPED,not_finished (game status: active)
+27528,PERFECT,0 actions matched
+27532,PERFECT,498 actions matched
+27535,PERFECT,596 actions matched
+27547,PERFECT,836 actions matched
+27549,PERFECT,427 actions matched
+27562,DROPPED,not_finished (game status: archived)
+27575,PERFECT,758 actions matched
+27579,DROPPED,not_finished (game status: archived)
+27584,DROPPED,not_finished (game status: active)
+27598,PERFECT,781 actions matched
+27599,PERFECT,888 actions matched
+27604,PERFECT,556 actions matched
+27614,DROPPED,not_finished (game status: archived)
+27640,PERFECT,50 actions matched
+27641,DROPPED,not_finished (game status: archived)
+27645,PERFECT,404 actions matched
+27652,PERFECT,447 actions matched
+27673,PERFECT,807 actions matched
+27686,PERFECT,511 actions matched
+27687,PERFECT,500 actions matched
+27702,PERFECT,489 actions matched
+27707,DROPPED,not_finished (game status: active)
+27734,PERFECT,1 actions matched
+27766,DROPPED,not_finished (game status: active)
+27777,PERFECT,783 actions matched
+27782,DROPPED,not_finished (game status: active)
+27783,DROPPED,not_finished (game status: active)
+27797,PERFECT,878 actions matched
+27799,DROPPED,not_finished (game status: archived)
+27812,DROPPED,not_finished (game status: active)
+27817,PERFECT,865 actions matched
+27851,DROPPED,not_finished (game status: archived)
+27862,PERFECT,881 actions matched
+27869,PERFECT,809 actions matched
+27882,PERFECT,700 actions matched
+27886,DROPPED,not_finished (game status: active)
+27919,PERFECT,483 actions matched
+28034,PERFECT,471 actions matched
+28038,PERFECT,418 actions matched
+28056,PERFECT,894 actions matched
+28073,PERFECT,776 actions matched
+28076,PERFECT,701 actions matched
+28101,PERFECT,746 actions matched
+28119,PERFECT,759 actions matched
+28150,PERFECT,843 actions matched
+28171,PERFECT,820 actions matched
+28191,PERFECT,379 actions matched
+28211,PERFECT,478 actions matched
+28218,PERFECT,798 actions matched
+28226,PERFECT,696 actions matched
+28248,PERFECT,0 actions matched
+28251,PERFECT,285 actions matched
+28271,PERFECT,0 actions matched
+28289,PERFECT,640 actions matched
+28335,DROPPED,filtered by cleaning
+28398,DROPPED,not_finished (game status: archived)
+28403,PERFECT,457 actions matched
+28417,DROPPED,not_finished (game status: archived)
+28431,PERFECT,542 actions matched
+28433,PERFECT,688 actions matched
+28438,DROPPED,not_finished (game status: archived)
+28445,PERFECT,361 actions matched
+28484,DROPPED,not_finished (game status: active)
+28489,PERFECT,808 actions matched
+28514,DROPPED,not_finished (game status: active)
+28529,PERFECT,409 actions matched
+28555,PERFECT,0 actions matched
+28557,PERFECT,386 actions matched
+28565,DROPPED,not_finished (game status: active)
+28575,DROPPED,not_finished (game status: new)
+28576,PERFECT,466 actions matched
+28580,DROPPED,not_finished (game status: active)
+28599,PERFECT,527 actions matched
+28615,PERFECT,791 actions matched
+28619,DROPPED,not_finished (game status: archived)
+28844,PERFECT,632 actions matched
+28851,DROPPED,not_finished (game status: active)
+28856,PERFECT,732 actions matched
+28885,DROPPED,not_finished (game status: active)
+28888,DROPPED,not_finished (game status: archived)
+28893,DROPPED,not_finished (game status: active)
+28897,DROPPED,filtered by cleaning
+28908,PERFECT,690 actions matched
+28923,PERFECT,731 actions matched
+28968,PERFECT,4 actions matched
+28972,PERFECT,483 actions matched
+28977,DROPPED,not_finished (game status: archived)
+29000,PERFECT,767 actions matched
+29009,PERFECT,402 actions matched
+29019,PERFECT,870 actions matched
+29047,DROPPED,not_finished (game status: active)
+29052,DROPPED,not_finished (game status: archived)
+29072,PERFECT,613 actions matched
+29083,PERFECT,695 actions matched
+29096,PERFECT,881 actions matched
+29097,DROPPED,not_finished (game status: active)
+29119,DROPPED,not_finished (game status: archived)
+29120,DROPPED,filtered by cleaning
+29133,PERFECT,348 actions matched
+29135,DROPPED,not_finished (game status: active)
+29150,PERFECT,421 actions matched
+29168,PERFECT,376 actions matched
+29198,DROPPED,not_finished (game status: active)
+29211,DROPPED,not_finished (game status: active)
+29219,DROPPED,not_finished (game status: archived)
+29232,PERFECT,335 actions matched
+29233,PERFECT,469 actions matched
+29238,PERFECT,447 actions matched
+29266,PERFECT,744 actions matched
+29275,PERFECT,579 actions matched
+29290,PERFECT,97 actions matched
+29296,DROPPED,not_finished (game status: archived)
+29317,PERFECT,776 actions matched
+29322,PERFECT,775 actions matched
+29323,DROPPED,not_finished (game status: active)
+29329,PERFECT,329 actions matched
+29352,DROPPED,not_finished (game status: new)
+29355,PERFECT,195 actions matched
+29372,DROPPED,not_finished (game status: active)
+29389,PERFECT,1 actions matched
+29432,PERFECT,44 actions matched
+29491,PERFECT,350 actions matched
+29502,PERFECT,582 actions matched
+29521,DROPPED,not_finished (game status: archived)
+29524,PERFECT,835 actions matched
+29525,PERFECT,796 actions matched
+29554,PERFECT,435 actions matched
+29560,PERFECT,2 actions matched
+29586,DROPPED,not_finished (game status: active)
+29620,DROPPED,filtered by cleaning
+29639,PERFECT,1 actions matched
+29647,DROPPED,not_finished (game status: new)
+29652,DROPPED,not_finished (game status: active)
+29654,PERFECT,0 actions matched
+29663,DROPPED,not_finished (game status: archived)
+29671,DROPPED,not_finished (game status: active)
+29687,PERFECT,95 actions matched
+29703,PERFECT,414 actions matched
+29707,DROPPED,not_finished (game status: active)
+29727,PERFECT,537 actions matched
+29728,PERFECT,437 actions matched
+29756,PERFECT,227 actions matched
+29769,DROPPED,not_finished (game status: active)
+29774,PERFECT,789 actions matched
+29790,DROPPED,not_finished (game status: active)
+29796,PERFECT,882 actions matched
+29798,PERFECT,519 actions matched
+29808,PERFECT,661 actions matched
+29820,PERFECT,464 actions matched
+29828,PERFECT,26 actions matched
+29835,DROPPED,not_finished (game status: active)
+29842,PERFECT,34 actions matched
+29846,PERFECT,625 actions matched
+29852,PERFECT,689 actions matched
+29853,DROPPED,filtered by cleaning
+29860,DROPPED,not_finished (game status: archived)
+29867,PERFECT,0 actions matched
+29928,PERFECT,834 actions matched
+29932,DROPPED,not_finished (game status: active)
+29937,DROPPED,not_finished (game status: active)
+29940,DROPPED,not_finished (game status: active)
+29941,PERFECT,826 actions matched
+29947,PERFECT,849 actions matched
+29950,PERFECT,590 actions matched
+29951,DROPPED,not_finished (game status: archived)
+29954,PERFECT,399 actions matched
+29956,DROPPED,filtered by cleaning
+29957,DROPPED,not_finished (game status: archived)
+29959,PERFECT,426 actions matched
+29961,PERFECT,834 actions matched
+29965,PERFECT,578 actions matched
+29967,PERFECT,461 actions matched
+29998,PERFECT,384 actions matched
+30007,PERFECT,405 actions matched
+30008,PERFECT,789 actions matched
+30012,DROPPED,not_finished (game status: archived)
+30013,DROPPED,filtered by cleaning
+30016,PERFECT,754 actions matched
+30021,DROPPED,not_finished (game status: new)
+30033,DROPPED,not_finished (game status: active)
+30039,DROPPED,not_finished (game status: active)
+30040,DROPPED,not_finished (game status: active)
+30045,PERFECT,655 actions matched
+30049,DROPPED,not_finished (game status: active)
+30067,PERFECT,551 actions matched
+30088,PERFECT,81 actions matched
+30098,DROPPED,not_finished (game status: archived)
+30162,PERFECT,3 actions matched
+30168,PERFECT,787 actions matched
+30176,DROPPED,filtered by cleaning
+30185,DROPPED,not_finished (game status: active)
+30187,PERFECT,509 actions matched
+30189,PERFECT,572 actions matched
+30286,PERFECT,358 actions matched
+30325,PERFECT,505 actions matched
+30330,PERFECT,426 actions matched
+30349,DROPPED,not_finished (game status: active)
+30353,PERFECT,467 actions matched
+30359,DROPPED,not_finished (game status: active)
+30383,DROPPED,not_finished (game status: active)
+30404,DROPPED,not_finished (game status: active)
+30415,PERFECT,424 actions matched
+30438,PERFECT,493 actions matched
+30453,PERFECT,418 actions matched
+30474,DROPPED,not_finished (game status: archived)
+30507,PERFECT,492 actions matched
+30522,DROPPED,not_finished (game status: active)
+30523,DROPPED,not_finished (game status: active)
+30524,DROPPED,not_finished (game status: active)
+30525,DROPPED,not_finished (game status: active)
+30526,DROPPED,not_finished (game status: active)
+30527,DROPPED,not_finished (game status: active)
+30528,DROPPED,not_finished (game status: active)
+30529,DROPPED,not_finished (game status: active)
+30530,DROPPED,not_finished (game status: active)
+30531,DROPPED,not_finished (game status: active)
+30532,PERFECT,725 actions matched
+30533,DROPPED,not_finished (game status: active)
+30534,DROPPED,not_finished (game status: active)
+30535,DROPPED,not_finished (game status: active)
+30536,DROPPED,not_finished (game status: active)
+30537,DROPPED,not_finished (game status: active)
+30538,DROPPED,not_finished (game status: active)
+30539,DROPPED,not_finished (game status: active)
+30540,DROPPED,not_finished (game status: active)
+30541,DROPPED,not_finished (game status: active)
+30542,DROPPED,not_finished (game status: active)
+30543,DROPPED,not_finished (game status: active)
+30544,DROPPED,not_finished (game status: new)
+30545,PERFECT,374 actions matched
+30546,DROPPED,not_finished (game status: active)
+30547,DROPPED,not_finished (game status: active)
+30548,DROPPED,not_finished (game status: active)
+30549,DROPPED,not_finished (game status: active)
+30550,DROPPED,not_finished (game status: active)
+30551,DROPPED,not_finished (game status: active)
+30552,DROPPED,not_finished (game status: active)
+30553,PERFECT,382 actions matched
+30554,DROPPED,not_finished (game status: active)
+30555,DROPPED,not_finished (game status: active)
+30556,DROPPED,not_finished (game status: active)
+30557,DROPPED,not_finished (game status: active)
+30558,DROPPED,not_finished (game status: active)
+30559,DROPPED,not_finished (game status: active)
+30560,DROPPED,not_finished (game status: active)
+30561,DROPPED,not_finished (game status: active)
+30562,DROPPED,not_finished (game status: active)
+30563,DROPPED,not_finished (game status: active)
+30564,DROPPED,not_finished (game status: active)
+30565,DROPPED,not_finished (game status: active)
+30566,DROPPED,not_finished (game status: active)
+30567,PERFECT,455 actions matched
+30568,DROPPED,not_finished (game status: active)
+30569,DROPPED,not_finished (game status: active)
+30570,DROPPED,not_finished (game status: active)
+30571,DROPPED,not_finished (game status: active)
+30572,DROPPED,not_finished (game status: active)
+30573,DROPPED,not_finished (game status: active)
+30574,PERFECT,416 actions matched
+30575,DROPPED,not_finished (game status: active)
+30576,DROPPED,not_finished (game status: active)
+30577,DROPPED,not_finished (game status: active)
+30578,DROPPED,not_finished (game status: active)
+30579,DROPPED,not_finished (game status: active)
+30580,DROPPED,not_finished (game status: active)
+30581,DROPPED,not_finished (game status: active)
+30582,PERFECT,371 actions matched
+30583,DROPPED,not_finished (game status: active)
+30584,DROPPED,not_finished (game status: active)
+30585,DROPPED,filtered by cleaning
+30586,DROPPED,not_finished (game status: active)
+30587,DROPPED,not_finished (game status: active)
+30588,DROPPED,not_finished (game status: active)
+30589,DROPPED,not_finished (game status: active)
+30590,DROPPED,not_finished (game status: active)
+30591,DROPPED,not_finished (game status: active)
+30592,DROPPED,not_finished (game status: active)
+30593,PERFECT,767 actions matched
+30594,DROPPED,not_finished (game status: active)
+30595,DROPPED,not_finished (game status: active)
+30596,DROPPED,not_finished (game status: active)
+30597,DROPPED,not_finished (game status: active)
+30598,DROPPED,not_finished (game status: active)
+30599,DROPPED,not_finished (game status: active)
+30600,DROPPED,not_finished (game status: active)
+30601,DROPPED,not_finished (game status: active)
+30602,DROPPED,not_finished (game status: active)
+30603,DROPPED,not_finished (game status: active)
+30604,DROPPED,not_finished (game status: active)
+30605,PERFECT,482 actions matched
+30606,DROPPED,not_finished (game status: active)
+30607,DROPPED,not_finished (game status: active)
+30608,DROPPED,not_finished (game status: active)
+30609,DROPPED,not_finished (game status: active)
+30610,DROPPED,not_finished (game status: active)
+30611,DROPPED,not_finished (game status: active)
+30612,DROPPED,not_finished (game status: active)
+30613,DROPPED,not_finished (game status: archived)
+30614,DROPPED,not_finished (game status: active)
+30615,DROPPED,not_finished (game status: active)
+30616,DROPPED,not_finished (game status: active)
+30617,PERFECT,448 actions matched
+30618,DROPPED,not_finished (game status: active)
+30619,PERFECT,447 actions matched
+30620,DROPPED,not_finished (game status: active)
+30621,DROPPED,not_finished (game status: active)
+30622,DROPPED,not_finished (game status: active)
+30623,DROPPED,not_finished (game status: active)
+30624,PERFECT,326 actions matched
+30625,PERFECT,416 actions matched
+30626,DROPPED,not_finished (game status: active)
+30627,DROPPED,not_finished (game status: active)
+30628,DROPPED,not_finished (game status: active)
+30629,DROPPED,not_finished (game status: active)
+30630,DROPPED,not_finished (game status: active)
+30631,DROPPED,not_finished (game status: active)
+30632,DROPPED,not_finished (game status: active)
+30633,PERFECT,350 actions matched
+30634,DROPPED,not_finished (game status: active)
+30635,DROPPED,not_finished (game status: active)
+30636,PERFECT,275 actions matched
+30637,DROPPED,not_finished (game status: active)
+30638,DROPPED,not_finished (game status: active)
+30639,DROPPED,not_finished (game status: active)
+30640,DROPPED,not_finished (game status: active)
+30641,DROPPED,not_finished (game status: active)
+30642,DROPPED,not_finished (game status: active)
+30643,DROPPED,not_finished (game status: active)
+30644,DROPPED,not_finished (game status: active)
+30645,DROPPED,not_finished (game status: active)
+30646,DROPPED,not_finished (game status: active)
+30647,DROPPED,not_finished (game status: active)
+30648,DROPPED,not_finished (game status: active)
+30649,DROPPED,not_finished (game status: active)
+30650,DROPPED,not_finished (game status: active)
+30651,DROPPED,not_finished (game status: active)
+30652,DROPPED,not_finished (game status: active)
+30653,DROPPED,not_finished (game status: active)
+30654,DROPPED,not_finished (game status: active)
+30655,DROPPED,not_finished (game status: active)
+30656,DROPPED,not_finished (game status: active)
+30657,DROPPED,not_finished (game status: active)
+30658,DROPPED,not_finished (game status: active)
+30659,DROPPED,not_finished (game status: active)
+30660,DROPPED,not_finished (game status: active)
+30661,DROPPED,not_finished (game status: active)
+30662,DROPPED,not_finished (game status: active)
+30663,DROPPED,not_finished (game status: active)
+30664,DROPPED,not_finished (game status: active)
+30665,DROPPED,not_finished (game status: active)
+30666,DROPPED,not_finished (game status: active)
+30667,DROPPED,not_finished (game status: archived)
+30668,DROPPED,not_finished (game status: active)
+30669,DROPPED,not_finished (game status: active)
+30670,DROPPED,not_finished (game status: active)
+30671,DROPPED,not_finished (game status: active)
+30672,DROPPED,not_finished (game status: active)
+30673,DROPPED,not_finished (game status: active)
+30674,DROPPED,not_finished (game status: active)
+30675,DROPPED,not_finished (game status: active)
+30676,DROPPED,not_finished (game status: active)
+30677,DROPPED,not_finished (game status: active)
+30678,DROPPED,not_finished (game status: active)
+30679,DROPPED,not_finished (game status: active)
+30680,DROPPED,not_finished (game status: active)
+30681,DROPPED,not_finished (game status: active)
+30682,DROPPED,not_finished (game status: active)
+30683,DROPPED,not_finished (game status: active)
+30684,DROPPED,not_finished (game status: active)
+30685,DROPPED,not_finished (game status: active)
+30686,DROPPED,not_finished (game status: active)
+30687,DROPPED,not_finished (game status: active)
+30688,DROPPED,not_finished (game status: active)
+30689,DROPPED,not_finished (game status: active)
+30690,DROPPED,not_finished (game status: active)
+30691,DROPPED,not_finished (game status: active)
+30692,DROPPED,not_finished (game status: active)
+30693,DROPPED,not_finished (game status: active)
+30694,DROPPED,not_finished (game status: active)
+30695,DROPPED,not_finished (game status: active)
+30696,DROPPED,not_finished (game status: active)
+30697,DROPPED,not_finished (game status: active)
+30698,DROPPED,not_finished (game status: active)
+30699,DROPPED,not_finished (game status: active)
+30700,DROPPED,not_finished (game status: active)
+30701,DROPPED,not_finished (game status: active)
+30702,DROPPED,not_finished (game status: active)
+30703,DROPPED,not_finished (game status: active)
+30704,DROPPED,not_finished (game status: active)
+30705,DROPPED,not_finished (game status: active)
+30706,DROPPED,not_finished (game status: active)
+30707,DROPPED,filtered by cleaning
+30708,DROPPED,not_finished (game status: active)
+30709,DROPPED,not_finished (game status: active)
+30710,DROPPED,not_finished (game status: active)
+30711,DROPPED,not_finished (game status: active)
+30712,DROPPED,not_finished (game status: active)
+30713,DROPPED,not_finished (game status: active)
+30714,DROPPED,not_finished (game status: active)
+30715,DROPPED,not_finished (game status: active)
+30716,DROPPED,not_finished (game status: active)
+30717,DROPPED,not_finished (game status: active)
+30718,DROPPED,not_finished (game status: active)
+30719,DROPPED,not_finished (game status: active)
+30720,DROPPED,not_finished (game status: active)
+30721,DROPPED,not_finished (game status: active)
+30722,DROPPED,not_finished (game status: active)
+30723,DROPPED,not_finished (game status: active)
+30724,DROPPED,not_finished (game status: active)
+30725,DROPPED,not_finished (game status: active)
+30726,DROPPED,not_finished (game status: active)
+30727,DROPPED,not_finished (game status: active)
+30728,DROPPED,not_finished (game status: active)
+30729,DROPPED,not_finished (game status: active)
+30730,DROPPED,not_finished (game status: active)
+30731,DROPPED,not_finished (game status: active)
+30732,DROPPED,not_finished (game status: active)
+30733,DROPPED,not_finished (game status: active)
+30734,DROPPED,not_finished (game status: active)
+30735,DROPPED,not_finished (game status: active)
+30736,DROPPED,not_finished (game status: active)
+30737,DROPPED,not_finished (game status: active)
+30738,DROPPED,not_finished (game status: active)
+30739,DROPPED,not_finished (game status: active)
+30740,DROPPED,not_finished (game status: active)
+30741,DROPPED,not_finished (game status: active)
+30742,DROPPED,not_finished (game status: active)
+30743,PERFECT,392 actions matched
+30744,PERFECT,307 actions matched
+30745,DROPPED,not_finished (game status: active)
+30746,DROPPED,not_finished (game status: active)
+30747,DROPPED,not_finished (game status: active)
+30748,DROPPED,not_finished (game status: active)
+30749,DROPPED,not_finished (game status: active)
+30750,DROPPED,not_finished (game status: active)
+30751,DROPPED,not_finished (game status: active)
+30776,PERFECT,390 actions matched
+30795,PERFECT,816 actions matched
+30823,PERFECT,29 actions matched
+30830,DROPPED,not_finished (game status: active)
+30899,PERFECT,0 actions matched
+30902,PERFECT,469 actions matched
+30907,PERFECT,481 actions matched
+30912,PERFECT,510 actions matched
+30939,PERFECT,410 actions matched
+30947,DROPPED,not_finished (game status: active)
+30980,PERFECT,152 actions matched
+30994,PERFECT,68 actions matched
+31005,PERFECT,658 actions matched
+31028,DROPPED,not_finished (game status: active)
+31050,DROPPED,filtered by cleaning
+31090,DROPPED,not_finished (game status: active)
+31106,DROPPED,not_finished (game status: active)
+31120,DROPPED,not_finished (game status: active)
+31121,DROPPED,not_finished (game status: active)
+31122,DROPPED,not_finished (game status: active)
+31212,DROPPED,not_finished (game status: active)
+31224,DROPPED,not_finished (game status: active)
+31312,DROPPED,not_finished (game status: active)
+31330,PERFECT,479 actions matched
+31333,PERFECT,786 actions matched
+31342,PERFECT,531 actions matched
+31368,PERFECT,843 actions matched
+31398,DROPPED,not_finished (game status: active)
+31400,PERFECT,511 actions matched
+31405,PERFECT,339 actions matched
+31441,DROPPED,not_finished (game status: active)
+31447,DROPPED,not_finished (game status: active)
+31448,DROPPED,not_finished (game status: active)
+31455,DROPPED,not_finished (game status: archived)
+31478,DROPPED,not_finished (game status: active)
+31490,PERFECT,891 actions matched
+31519,PERFECT,898 actions matched
+31535,DROPPED,not_finished (game status: active)
+31545,PERFECT,1 actions matched
+31590,DROPPED,filtered by cleaning
+31604,PERFECT,667 actions matched
+31619,PERFECT,0 actions matched
+31630,PERFECT,391 actions matched
+31664,PERFECT,417 actions matched
+31695,DROPPED,not_finished (game status: active)
+31701,PERFECT,444 actions matched
+31724,PERFECT,482 actions matched
+31729,PERFECT,10 actions matched
+31777,PERFECT,761 actions matched
+31784,DROPPED,not_finished (game status: archived)
+31837,DROPPED,not_finished (game status: active)
+31850,PERFECT,455 actions matched
+31893,DROPPED,not_finished (game status: active)
+31914,DROPPED,not_finished (game status: active)
+31921,DROPPED,not_finished (game status: active)
+31929,PERFECT,413 actions matched
+31937,DROPPED,not_finished (game status: archived)
+31949,PERFECT,655 actions matched
+32018,PERFECT,0 actions matched
+32032,PERFECT,0 actions matched
+32034,PERFECT,472 actions matched
+32049,DROPPED,filtered by cleaning
+32060,PERFECT,798 actions matched
+32064,DROPPED,not_finished (game status: active)
+32078,DROPPED,not_finished (game status: active)
+32102,DROPPED,not_finished (game status: active)
+32124,DROPPED,not_finished (game status: active)
+32127,DROPPED,not_finished (game status: archived)
+32141,DROPPED,not_finished (game status: active)
+32149,DROPPED,not_finished (game status: active)
+32194,PERFECT,640 actions matched
+32240,PERFECT,732 actions matched
+32244,PERFECT,3 actions matched
+32277,DROPPED,not_finished (game status: archived)
+32306,DROPPED,not_finished (game status: active)
+32313,PERFECT,381 actions matched
+32329,DROPPED,not_finished (game status: active)
+32337,PERFECT,0 actions matched
+32343,PERFECT,8 actions matched
+32353,PERFECT,810 actions matched
+32355,DROPPED,not_finished (game status: active)
+32357,DROPPED,not_finished (game status: active)
+32372,DROPPED,not_finished (game status: active)
+32388,PERFECT,805 actions matched
+32390,DROPPED,not_finished (game status: active)
+32439,PERFECT,299 actions matched
+32440,DROPPED,not_finished (game status: active)
+32454,DROPPED,filtered by cleaning
+32740,DROPPED,not_finished (game status: active)
+32743,DROPPED,not_finished (game status: active)
+32755,DROPPED,not_finished (game status: active)
+32764,DROPPED,not_finished (game status: active)
+32765,DROPPED,not_finished (game status: active)
+32781,DROPPED,not_finished (game status: active)
+32916,DROPPED,not_finished (game status: active)
+32927,DROPPED,not_finished (game status: active)
+32951,DROPPED,not_finished (game status: active)
+32967,DROPPED,not_finished (game status: active)
+32972,DROPPED,not_finished (game status: active)
+32989,DROPPED,not_finished (game status: active)
+32992,DROPPED,not_finished (game status: active)
+33091,DROPPED,not_finished (game status: active)
+33101,DROPPED,not_finished (game status: active)
+33119,DROPPED,not_finished (game status: new)
+33152,DROPPED,not_finished (game status: active)
+33186,DROPPED,not_finished (game status: active)
+33197,PERFECT,737 actions matched
+33202,DROPPED,not_finished (game status: active)
+33246,DROPPED,not_finished (game status: active)
+33270,PERFECT,0 actions matched
+33292,DROPPED,not_finished (game status: active)
+33293,DROPPED,not_finished (game status: active)
+33294,DROPPED,not_finished (game status: active)
+33295,DROPPED,not_finished (game status: active)
+33316,DROPPED,not_finished (game status: active)
+33322,PERFECT,0 actions matched
+33324,PERFECT,815 actions matched
+33339,DROPPED,not_finished (game status: active)
+33361,DROPPED,not_finished (game status: active)
+33376,DROPPED,not_finished (game status: active)
+33404,DROPPED,not_finished (game status: active)
+33407,DROPPED,not_finished (game status: active)
+33410,DROPPED,not_finished (game status: new)
+33411,DROPPED,not_finished (game status: active)
+33431,DROPPED,not_finished (game status: active)
+33434,DROPPED,not_finished (game status: active)
+33516,PERFECT,433 actions matched
+33526,PERFECT,502 actions matched
+33529,DROPPED,not_finished (game status: active)
+33540,DROPPED,not_finished (game status: active)
+33579,PERFECT,814 actions matched
+33586,PERFECT,0 actions matched
+33625,PERFECT,397 actions matched
+33634,DROPPED,not_finished (game status: active)
+33640,DROPPED,not_finished (game status: active)
+33672,PERFECT,857 actions matched
+33721,DROPPED,not_finished (game status: active)
+33802,DROPPED,not_finished (game status: active)
+33837,DROPPED,not_finished (game status: active)
+33839,DROPPED,not_finished (game status: active)
+33913,DROPPED,not_finished (game status: active)
+33927,DROPPED,not_finished (game status: active)
+33937,DROPPED,not_finished (game status: active)
+33943,DROPPED,not_finished (game status: active)
+33946,DROPPED,not_finished (game status: new)
+34004,DROPPED,not_finished (game status: new)
+34011,DROPPED,not_finished (game status: new)
+34015,DROPPED,not_finished (game status: active)
+34020,DROPPED,not_finished (game status: active)
+34024,DROPPED,not_finished (game status: active)
+35035,PERFECT,712 actions matched
+35071,PERFECT,830 actions matched
+35083,PERFECT,0 actions matched
+35090,PERFECT,91 actions matched
+35092,DROPPED,not_finished (game status: active)
+35100,PERFECT,543 actions matched
+35124,PERFECT,740 actions matched
+35148,DROPPED,filtered by cleaning
+35210,PERFECT,321 actions matched
+35257,PERFECT,745 actions matched
+35272,PERFECT,446 actions matched
+35286,PERFECT,414 actions matched
+35293,PERFECT,3 actions matched
+35306,PERFECT,748 actions matched
+35415,PERFECT,942 actions matched
+35417,PERFECT,850 actions matched
+35472,DROPPED,not_finished (game status: active)
+35540,PERFECT,3 actions matched
+35562,PERFECT,704 actions matched
+35576,PERFECT,780 actions matched
+35583,PERFECT,821 actions matched
+35589,PERFECT,493 actions matched
+35593,PERFECT,426 actions matched
+35620,DROPPED,filtered by cleaning
+35654,PERFECT,779 actions matched
+35666,PERFECT,775 actions matched
+35736,PERFECT,446 actions matched
+35740,PERFECT,905 actions matched
+35796,PERFECT,3 actions matched
+35856,PERFECT,253 actions matched
+35857,PERFECT,685 actions matched
+35894,PERFECT,519 actions matched
+35913,PERFECT,560 actions matched
+35963,PERFECT,757 actions matched
+36022,PERFECT,842 actions matched
+36067,PERFECT,480 actions matched
+36115,PERFECT,445 actions matched
+36161,DROPPED,not_finished (game status: archived)
+36182,PERFECT,769 actions matched
+36502,DROPPED,filtered by cleaning
+36550,PERFECT,423 actions matched
+36551,PERFECT,745 actions matched
+36587,PERFECT,354 actions matched
+36588,DROPPED,not_finished (game status: archived)
+36594,PERFECT,437 actions matched
+36616,PERFECT,957 actions matched
+36627,PERFECT,880 actions matched
+36642,PERFECT,855 actions matched
+36655,PERFECT,622 actions matched
+36659,PERFECT,414 actions matched
+36701,PERFECT,872 actions matched
+36712,PERFECT,821 actions matched
+36727,PERFECT,522 actions matched
+36746,PERFECT,731 actions matched
+36749,PERFECT,946 actions matched
+36761,PERFECT,766 actions matched
+36830,PERFECT,930 actions matched
+36870,PERFECT,794 actions matched
+36914,PERFECT,385 actions matched
+36916,DROPPED,filtered by cleaning
+36941,DROPPED,not_finished (game status: archived)
+36959,PERFECT,767 actions matched
+37032,PERFECT,424 actions matched
+37034,PERFECT,787 actions matched
+37185,PERFECT,760 actions matched
+37231,PERFECT,553 actions matched
+37240,PERFECT,723 actions matched
+37245,PERFECT,2 actions matched
+37302,PERFECT,408 actions matched
+37319,PERFECT,97 actions matched
+37337,PERFECT,320 actions matched
+37355,PERFECT,1 actions matched
+37359,PERFECT,407 actions matched
+37366,DROPPED,filtered by cleaning
+37367,PERFECT,123 actions matched
+37371,PERFECT,477 actions matched
+37377,PERFECT,701 actions matched
+37383,PERFECT,27 actions matched
+37390,PERFECT,611 actions matched
+37403,PERFECT,936 actions matched
+37413,PERFECT,434 actions matched
+37455,PERFECT,658 actions matched
+37461,DROPPED,filtered by cleaning
+37468,PERFECT,550 actions matched
+37513,PERFECT,904 actions matched
+37528,PERFECT,848 actions matched
+37536,PERFECT,653 actions matched
+37541,PERFECT,797 actions matched
+37598,PERFECT,156 actions matched
+37601,PERFECT,428 actions matched
+37610,PERFECT,860 actions matched
+37711,PERFECT,731 actions matched
+37740,PERFECT,556 actions matched
+37755,DROPPED,filtered by cleaning
+37768,PERFECT,876 actions matched
+37774,PERFECT,797 actions matched
+37787,PERFECT,526 actions matched
+37802,PERFECT,935 actions matched
+37817,DROPPED,filtered by cleaning
+37829,PERFECT,936 actions matched
+37858,PERFECT,923 actions matched
+37895,PERFECT,712 actions matched
+37988,PERFECT,384 actions matched
+38018,PERFECT,853 actions matched
+38065,PERFECT,186 actions matched
+38084,PERFECT,676 actions matched
+38136,PERFECT,308 actions matched
+38138,PERFECT,817 actions matched
+38165,PERFECT,785 actions matched
+38188,PERFECT,790 actions matched
+38197,PERFECT,745 actions matched
+38206,PERFECT,804 actions matched
+38226,PERFECT,360 actions matched
+38229,PERFECT,475 actions matched
+38230,PERFECT,851 actions matched
+38268,PERFECT,2 actions matched
+38295,PERFECT,232 actions matched
+38330,PERFECT,762 actions matched
+38416,PERFECT,773 actions matched
+38442,PERFECT,986 actions matched
+38445,PERFECT,783 actions matched
+38469,PERFECT,473 actions matched
+38476,PERFECT,639 actions matched
+38486,PERFECT,869 actions matched
+38493,PERFECT,849 actions matched
+38499,PERFECT,823 actions matched
+38532,PERFECT,795 actions matched
+38560,PERFECT,469 actions matched
+38569,PERFECT,166 actions matched
+38588,PERFECT,721 actions matched
+38591,PERFECT,23 actions matched
+38604,PERFECT,754 actions matched
+38615,PERFECT,404 actions matched
+38620,PERFECT,465 actions matched
+38638,PERFECT,584 actions matched
+38642,PERFECT,739 actions matched
+38645,PERFECT,447 actions matched
+38646,PERFECT,764 actions matched
+38664,PERFECT,291 actions matched
+38701,PERFECT,910 actions matched
+38741,PERFECT,445 actions matched
+38742,PERFECT,292 actions matched
+38767,PERFECT,3 actions matched
+38781,PERFECT,415 actions matched
+38868,PERFECT,481 actions matched
+38962,DROPPED,filtered by cleaning
+38964,PERFECT,727 actions matched
+39003,PERFECT,784 actions matched
+39031,PERFECT,56 actions matched
+39035,DROPPED,filtered by cleaning
+39054,PERFECT,15 actions matched
+39065,PERFECT,894 actions matched
+39085,PERFECT,471 actions matched
+39100,PERFECT,958 actions matched
+39115,PERFECT,749 actions matched
+39124,DROPPED,filtered by cleaning
+39177,PERFECT,943 actions matched
+39180,PERFECT,430 actions matched
+39191,PERFECT,772 actions matched
+39204,PERFECT,956 actions matched
+39260,PERFECT,926 actions matched
+39263,DROPPED,filtered by cleaning
+39304,PERFECT,394 actions matched
+39309,PERFECT,11 actions matched
+39315,PERFECT,339 actions matched
+39350,DROPPED,filtered by cleaning
+39360,PERFECT,482 actions matched
+39397,PERFECT,585 actions matched
+39424,PERFECT,903 actions matched
+39438,PERFECT,359 actions matched
+39485,PERFECT,332 actions matched
+39515,PERFECT,891 actions matched
+39525,PERFECT,727 actions matched
+39543,DROPPED,filtered by cleaning
+39544,PERFECT,524 actions matched
+39575,PERFECT,1 actions matched
+39584,PERFECT,861 actions matched
+39586,PERFECT,763 actions matched
+39654,PERFECT,476 actions matched
+39693,DROPPED,filtered by cleaning
+39792,PERFECT,858 actions matched
+39824,DROPPED,filtered by cleaning
+39861,PERFECT,0 actions matched
+39863,DROPPED,filtered by cleaning
+39916,PERFECT,428 actions matched
+39984,PERFECT,765 actions matched
+40020,PERFECT,700 actions matched
+40034,PERFECT,288 actions matched
+40074,PERFECT,530 actions matched
+40081,PERFECT,444 actions matched
+40149,PERFECT,481 actions matched
+40160,DROPPED,filtered by cleaning
+40172,PERFECT,481 actions matched
+40212,PERFECT,941 actions matched
+40224,PERFECT,939 actions matched
+40241,PERFECT,800 actions matched
+40255,PERFECT,421 actions matched
+40277,PERFECT,2 actions matched
+40314,PERFECT,485 actions matched
+40366,PERFECT,706 actions matched
+40370,DROPPED,filtered by cleaning
+40392,PERFECT,486 actions matched
+40423,PERFECT,911 actions matched
+40453,DROPPED,filtered by cleaning
+40652,PERFECT,781 actions matched
+40676,PERFECT,797 actions matched
+40706,PERFECT,415 actions matched
+40716,PERFECT,113 actions matched
+40721,PERFECT,824 actions matched
+40734,PERFECT,932 actions matched
+40839,PERFECT,988 actions matched
+40847,PERFECT,549 actions matched
+40851,PERFECT,802 actions matched
+40862,PERFECT,983 actions matched
+40870,PERFECT,815 actions matched
+40892,PERFECT,482 actions matched
+40895,PERFECT,449 actions matched
+40911,PERFECT,543 actions matched
+40924,PERFECT,97 actions matched
+40930,PERFECT,894 actions matched
+40934,PERFECT,607 actions matched
+40977,PERFECT,887 actions matched
+41039,PERFECT,880 actions matched
+41059,PERFECT,731 actions matched
+41064,PERFECT,547 actions matched
+41084,DROPPED,filtered by cleaning
+41091,PERFECT,900 actions matched
+41106,PERFECT,45 actions matched
+41124,PERFECT,855 actions matched
+41130,PERFECT,327 actions matched
+41147,PERFECT,725 actions matched
+41190,PERFECT,870 actions matched
+41227,PERFECT,1 actions matched
+41261,PERFECT,0 actions matched
+41266,PERFECT,416 actions matched
+41274,DROPPED,filtered by cleaning
+41276,PERFECT,552 actions matched
+41277,PERFECT,523 actions matched
+41278,PERFECT,758 actions matched
+41298,PERFECT,695 actions matched
+41300,PERFECT,336 actions matched
+41301,PERFECT,396 actions matched
+41307,PERFECT,778 actions matched
+41319,PERFECT,633 actions matched
+41334,PERFECT,898 actions matched
+41372,DROPPED,filtered by cleaning
+41516,PERFECT,982 actions matched
+41523,PERFECT,462 actions matched
+41524,PERFECT,853 actions matched
+41530,PERFECT,558 actions matched
+41573,PERFECT,650 actions matched
+41597,PERFECT,778 actions matched
+41612,PERFECT,565 actions matched
+41634,PERFECT,538 actions matched
+41649,PERFECT,526 actions matched
+41659,PERFECT,433 actions matched
+41672,PERFECT,433 actions matched
+41682,PERFECT,749 actions matched
+41696,PERFECT,742 actions matched
+41746,PERFECT,318 actions matched
+41753,PERFECT,951 actions matched
+41757,PERFECT,637 actions matched
+41771,DROPPED,not_finished (game status: active)
+41775,PERFECT,384 actions matched
+41788,PERFECT,759 actions matched
+41808,PERFECT,499 actions matched
+41830,PERFECT,527 actions matched
+41832,PERFECT,738 actions matched
+41848,DROPPED,filtered by cleaning
+41880,PERFECT,686 actions matched
+41895,PERFECT,560 actions matched
+41952,PERFECT,577 actions matched
+42024,PERFECT,401 actions matched
+42052,PERFECT,209 actions matched
+42064,PERFECT,773 actions matched
+42065,PERFECT,530 actions matched
+42069,PERFECT,411 actions matched
+42098,PERFECT,691 actions matched
+42173,PERFECT,867 actions matched
+42213,PERFECT,362 actions matched
+42266,PERFECT,808 actions matched
+42281,PERFECT,577 actions matched
+42299,PERFECT,629 actions matched
+42302,DROPPED,not_finished (game status: active)
+42305,PERFECT,807 actions matched
+42393,PERFECT,22 actions matched
+42425,PERFECT,474 actions matched
+42457,PERFECT,394 actions matched
+42470,DROPPED,filtered by cleaning
+42504,PERFECT,414 actions matched
+42558,PERFECT,827 actions matched
+42562,PERFECT,876 actions matched
+42563,PERFECT,866 actions matched
+42564,PERFECT,355 actions matched
+42565,PERFECT,878 actions matched
+42566,PERFECT,789 actions matched
+42567,PERFECT,797 actions matched
+42568,PERFECT,382 actions matched
+42569,PERFECT,859 actions matched
+42570,PERFECT,353 actions matched
+42571,PERFECT,779 actions matched
+42572,PERFECT,945 actions matched
+42573,PERFECT,542 actions matched
+42574,DROPPED,not_finished (game status: archived)
+42575,PERFECT,887 actions matched
+42576,PERFECT,840 actions matched
+42577,PERFECT,797 actions matched
+42578,PERFECT,532 actions matched
+42581,PERFECT,950 actions matched
+42586,PERFECT,714 actions matched
+42587,PERFECT,954 actions matched
+42588,PERFECT,368 actions matched
+42589,PERFECT,783 actions matched
+42590,PERFECT,873 actions matched
+42591,PERFECT,497 actions matched
+42592,PERFECT,490 actions matched
+42593,PERFECT,928 actions matched
+42594,PERFECT,1028 actions matched
+42597,PERFECT,420 actions matched
+42598,PERFECT,825 actions matched
+42599,PERFECT,830 actions matched
+42600,PERFECT,761 actions matched
+42601,PERFECT,414 actions matched
+42604,PERFECT,496 actions matched
+42605,PERFECT,434 actions matched
+42606,PERFECT,362 actions matched
+42607,PERFECT,461 actions matched
+42608,PERFECT,490 actions matched
+42611,PERFECT,743 actions matched
+42612,PERFECT,768 actions matched
+42613,PERFECT,896 actions matched
+42614,PERFECT,989 actions matched
+42615,PERFECT,857 actions matched
+42616,PERFECT,741 actions matched
+42617,PERFECT,818 actions matched
+42618,PERFECT,806 actions matched
+42619,PERFECT,853 actions matched
+42620,PERFECT,717 actions matched
+42621,PERFECT,843 actions matched
+42622,PERFECT,407 actions matched
+42623,PERFECT,792 actions matched
+42624,PERFECT,771 actions matched
+42625,PERFECT,810 actions matched
+42626,PERFECT,810 actions matched
+42627,PERFECT,740 actions matched
+42628,PERFECT,789 actions matched
+42629,PERFECT,688 actions matched
+42630,PERFECT,392 actions matched
+42631,PERFECT,800 actions matched
+42632,PERFECT,396 actions matched
+42633,PERFECT,791 actions matched
+42634,PERFECT,426 actions matched
+42635,PERFECT,474 actions matched
+42636,PERFECT,884 actions matched
+42637,PERFECT,869 actions matched
+42638,PERFECT,441 actions matched
+42639,PERFECT,396 actions matched
+42643,PERFECT,467 actions matched
+42644,PERFECT,782 actions matched
+42646,PERFECT,622 actions matched
+42647,PERFECT,792 actions matched
+42648,PERFECT,755 actions matched
+42649,PERFECT,779 actions matched
+42650,PERFECT,887 actions matched
+42652,PERFECT,795 actions matched
+42654,PERFECT,334 actions matched
+42655,PERFECT,472 actions matched
+42657,PERFECT,415 actions matched
+42660,PERFECT,984 actions matched
+42661,PERFECT,423 actions matched
+42662,PERFECT,799 actions matched
+42663,PERFECT,829 actions matched
+42664,PERFECT,867 actions matched
+42665,PERFECT,453 actions matched
+42666,PERFECT,508 actions matched
+42667,PERFECT,701 actions matched
+42668,PERFECT,740 actions matched
+42669,PERFECT,697 actions matched
+42670,PERFECT,370 actions matched
+42671,PERFECT,845 actions matched
+42672,PERFECT,429 actions matched
+42673,PERFECT,776 actions matched
+42674,PERFECT,906 actions matched
+42675,PERFECT,885 actions matched
+42676,PERFECT,428 actions matched
+42677,PERFECT,867 actions matched
+42678,PERFECT,496 actions matched
+42679,PERFECT,396 actions matched
+42680,PERFECT,728 actions matched
+42681,PERFECT,818 actions matched
+42682,PERFECT,852 actions matched
+42683,PERFECT,723 actions matched
+42684,PERFECT,850 actions matched
+42685,PERFECT,777 actions matched
+42686,PERFECT,794 actions matched
+42687,PERFECT,952 actions matched
+42688,PERFECT,698 actions matched
+42689,PERFECT,376 actions matched
+42690,PERFECT,459 actions matched
+42691,PERFECT,895 actions matched
+42692,PERFECT,814 actions matched
+42693,PERFECT,791 actions matched
+42694,PERFECT,430 actions matched
+42695,PERFECT,844 actions matched
+42696,PERFECT,496 actions matched
+42697,PERFECT,884 actions matched
+42698,PERFECT,703 actions matched
+42699,PERFECT,707 actions matched
+42700,PERFECT,798 actions matched
+42701,PERFECT,421 actions matched
+42702,DROPPED,filtered by cleaning
+42703,PERFECT,874 actions matched
+42704,PERFECT,842 actions matched
+42705,PERFECT,351 actions matched
+42706,PERFECT,890 actions matched
+42707,PERFECT,574 actions matched
+42709,PERFECT,698 actions matched
+42710,PERFECT,581 actions matched
+42711,PERFECT,850 actions matched
+42712,PERFECT,863 actions matched
+42713,PERFECT,842 actions matched
+42714,PERFECT,681 actions matched
+42715,PERFECT,686 actions matched
+42716,PERFECT,459 actions matched
+42717,PERFECT,800 actions matched
+42718,PERFECT,337 actions matched
+42719,PERFECT,457 actions matched
+42720,PERFECT,499 actions matched
+42774,PERFECT,954 actions matched
+42790,PERFECT,891 actions matched
+42868,PERFECT,2 actions matched
+42940,PERFECT,341 actions matched
+42983,PERFECT,946 actions matched
+42985,PERFECT,572 actions matched
+42986,PERFECT,887 actions matched
+42997,PERFECT,1056 actions matched
+43022,PERFECT,857 actions matched
+43042,DROPPED,filtered by cleaning
+43158,PERFECT,611 actions matched
+43241,PERFECT,383 actions matched
+43267,PERFECT,885 actions matched
+43326,PERFECT,931 actions matched
+43374,PERFECT,670 actions matched
+43530,PERFECT,464 actions matched
+43589,PERFECT,267 actions matched
+43679,PERFECT,853 actions matched
+43732,PERFECT,939 actions matched
+43769,PERFECT,616 actions matched
+43771,PERFECT,871 actions matched
+43785,PERFECT,615 actions matched
+43806,DROPPED,not_finished (game status: active)
+43831,PERFECT,759 actions matched
+43855,PERFECT,470 actions matched
+43863,PERFECT,788 actions matched
+43902,PERFECT,835 actions matched
+43906,PERFECT,351 actions matched
+43910,PERFECT,741 actions matched
+43971,PERFECT,691 actions matched
+43976,PERFECT,714 actions matched
+43984,PERFECT,930 actions matched
+43985,DROPPED,not_finished (game status: archived)
+43994,PERFECT,674 actions matched
+44058,PERFECT,805 actions matched
+44059,PERFECT,508 actions matched
+44060,PERFECT,827 actions matched
+44061,PERFECT,326 actions matched
+44062,PERFECT,833 actions matched
+44063,PERFECT,775 actions matched
+44064,PERFECT,866 actions matched
+44065,PERFECT,662 actions matched
+44066,PERFECT,992 actions matched
+44067,PERFECT,807 actions matched
+44068,PERFECT,807 actions matched
+44069,PERFECT,249 actions matched
+44070,PERFECT,912 actions matched
+44071,PERFECT,475 actions matched
+44072,PERFECT,952 actions matched
+44073,PERFECT,906 actions matched
+44074,PERFECT,412 actions matched
+44075,PERFECT,809 actions matched
+44076,PERFECT,822 actions matched
+44077,PERFECT,417 actions matched
+44078,PERFECT,550 actions matched
+44079,PERFECT,750 actions matched
+44080,PERFECT,807 actions matched
+44081,PERFECT,815 actions matched
+44230,PERFECT,773 actions matched
+44240,PERFECT,617 actions matched
+44251,PERFECT,1005 actions matched
+44255,PERFECT,809 actions matched
+44260,PERFECT,80 actions matched
+44318,PERFECT,808 actions matched
+44320,PERFECT,815 actions matched
+44395,PERFECT,902 actions matched
+44458,PERFECT,554 actions matched
+44464,PERFECT,931 actions matched
+44521,DROPPED,filtered by cleaning
+44546,PERFECT,441 actions matched
+44571,PERFECT,904 actions matched
+44585,PERFECT,0 actions matched
+44586,DROPPED,filtered by cleaning
+44607,PERFECT,903 actions matched
+44616,PERFECT,508 actions matched
+44647,PERFECT,760 actions matched
+44661,PERFECT,865 actions matched
+44669,DROPPED,filtered by cleaning
+44710,PERFECT,396 actions matched
+44721,PERFECT,931 actions matched
+44781,DROPPED,filtered by cleaning
+44815,DROPPED,filtered by cleaning
+44896,PERFECT,410 actions matched
+44974,PERFECT,904 actions matched
+44996,DROPPED,filtered by cleaning
+45018,PERFECT,805 actions matched
+45321,PERFECT,528 actions matched
+45363,PERFECT,870 actions matched
+45387,PERFECT,387 actions matched
+45451,PERFECT,686 actions matched
+45536,PERFECT,743 actions matched
+45538,DROPPED,filtered by cleaning
+45564,PERFECT,96 actions matched
+45662,PERFECT,710 actions matched
+45675,PERFECT,878 actions matched
+45747,PERFECT,967 actions matched
+45876,PERFECT,371 actions matched
+45878,PERFECT,985 actions matched
+45880,PERFECT,746 actions matched
+45900,PERFECT,400 actions matched
+46028,DROPPED,filtered by cleaning
+46032,PERFECT,793 actions matched
+46036,PERFECT,854 actions matched
+46056,PERFECT,374 actions matched
+46075,PERFECT,423 actions matched
+46087,PERFECT,744 actions matched
+46097,PERFECT,470 actions matched
+46114,PERFECT,448 actions matched
+46142,PERFECT,475 actions matched
+46153,PERFECT,612 actions matched
+46166,PERFECT,792 actions matched
+46231,PERFECT,859 actions matched
+46246,PERFECT,771 actions matched
+46256,PERFECT,688 actions matched
+46412,PERFECT,528 actions matched
+46459,PERFECT,473 actions matched
+46511,PERFECT,970 actions matched
+46527,PERFECT,6 actions matched
+46531,PERFECT,828 actions matched
+46637,PERFECT,488 actions matched
+46648,PERFECT,791 actions matched
+46665,PERFECT,515 actions matched
+46713,PERFECT,344 actions matched
+46753,PERFECT,382 actions matched
+46849,PERFECT,233 actions matched
+46890,PERFECT,413 actions matched
+46929,PERFECT,715 actions matched
+46969,PERFECT,356 actions matched
+47058,PERFECT,814 actions matched
+47061,PERFECT,847 actions matched
+47075,PERFECT,742 actions matched
+47131,PERFECT,754 actions matched
+47140,PERFECT,485 actions matched
+47179,PERFECT,862 actions matched
+47202,DROPPED,not_finished (game status: archived)
+47233,PERFECT,846 actions matched
+47236,PERFECT,545 actions matched
+47274,DROPPED,not_finished (game status: archived)
+47381,DROPPED,filtered by cleaning
+47391,PERFECT,483 actions matched
+47414,PERFECT,796 actions matched
+47432,PERFECT,1019 actions matched
+47436,PERFECT,384 actions matched
+47499,PERFECT,339 actions matched
+47571,PERFECT,693 actions matched
+47643,PERFECT,902 actions matched
+47748,PERFECT,1083 actions matched
+47753,PERFECT,862 actions matched
+47805,PERFECT,363 actions matched
+47834,PERFECT,435 actions matched
+47866,PERFECT,292 actions matched
+47870,PERFECT,829 actions matched
+47880,PERFECT,706 actions matched
+48059,DROPPED,not_finished (game status: active)
+48129,PERFECT,638 actions matched
+48141,PERFECT,688 actions matched
+48181,PERFECT,715 actions matched
+48182,PERFECT,900 actions matched
+48186,PERFECT,641 actions matched
+48199,PERFECT,889 actions matched
+48224,PERFECT,642 actions matched
+48275,PERFECT,399 actions matched
+48276,PERFECT,8 actions matched
+48345,DROPPED,filtered by cleaning
+48355,PERFECT,768 actions matched
+48359,PERFECT,831 actions matched
+48362,PERFECT,797 actions matched
+48384,PERFECT,797 actions matched
+48398,DROPPED,filtered by cleaning
+48415,PERFECT,839 actions matched
+48431,PERFECT,33 actions matched
+48491,PERFECT,972 actions matched
+48499,DROPPED,filtered by cleaning
+48538,DROPPED,not_finished (game status: archived)
+48539,PERFECT,844 actions matched
+48554,PERFECT,750 actions matched
+48581,PERFECT,785 actions matched
+48596,PERFECT,873 actions matched
+48610,PERFECT,806 actions matched
+48611,PERFECT,758 actions matched
+48637,PERFECT,678 actions matched
+48675,DROPPED,filtered by cleaning
+48695,PERFECT,479 actions matched
+48746,PERFECT,811 actions matched
+48756,PERFECT,825 actions matched
+48775,PERFECT,433 actions matched
+48811,PERFECT,0 actions matched
+48825,PERFECT,518 actions matched
+48861,PERFECT,548 actions matched
+48896,PERFECT,434 actions matched
+48910,PERFECT,969 actions matched
+48925,PERFECT,402 actions matched
+48971,PERFECT,866 actions matched
+48978,DROPPED,not_finished (game status: active)
+48984,DROPPED,not_finished (game status: active)
+49022,PERFECT,660 actions matched
+49088,PERFECT,705 actions matched
+49143,PERFECT,325 actions matched
+49166,DROPPED,filtered by cleaning
+49216,PERFECT,503 actions matched
+49239,PERFECT,0 actions matched
+49243,PERFECT,746 actions matched
+49246,PERFECT,794 actions matched
+49249,PERFECT,844 actions matched
+49274,PERFECT,626 actions matched
+49323,PERFECT,433 actions matched
+49431,PERFECT,643 actions matched
+49451,PERFECT,483 actions matched
+49455,PERFECT,797 actions matched
+49523,DROPPED,not_finished (game status: archived)
+49526,PERFECT,691 actions matched
+49579,PERFECT,846 actions matched
+49669,DROPPED,filtered by cleaning
+49679,PERFECT,485 actions matched
+49760,PERFECT,147 actions matched
+49765,PERFECT,884 actions matched
+49800,PERFECT,358 actions matched
+49820,PERFECT,681 actions matched
+49846,PERFECT,705 actions matched
+49889,PERFECT,485 actions matched
+49897,PERFECT,0 actions matched
+49898,PERFECT,10 actions matched
+49902,DROPPED,filtered by cleaning
+49907,PERFECT,685 actions matched
+49955,PERFECT,813 actions matched
+49974,PERFECT,858 actions matched
+49984,PERFECT,945 actions matched
+50028,PERFECT,10 actions matched
+50029,PERFECT,872 actions matched
+50033,PERFECT,546 actions matched
+50049,PERFECT,756 actions matched
+50084,PERFECT,939 actions matched
+50143,PERFECT,816 actions matched
+50146,PERFECT,3 actions matched
+50165,PERFECT,677 actions matched
+50214,DROPPED,filtered by cleaning
+50238,PERFECT,490 actions matched
+50277,PERFECT,339 actions matched
+50354,PERFECT,404 actions matched
+50364,PERFECT,976 actions matched
+50365,PERFECT,456 actions matched
+50385,PERFECT,532 actions matched
+50395,PERFECT,484 actions matched
+50401,PERFECT,509 actions matched
+50402,PERFECT,788 actions matched
+50428,PERFECT,772 actions matched
+50453,PERFECT,70 actions matched
+50513,PERFECT,779 actions matched
+50539,DROPPED,filtered by cleaning
+50553,PERFECT,411 actions matched
+50574,PERFECT,739 actions matched
+50606,PERFECT,521 actions matched
+50612,PERFECT,362 actions matched
+50643,PERFECT,446 actions matched
+50669,PERFECT,703 actions matched
+50674,DROPPED,not_finished (game status: active)
+50717,PERFECT,708 actions matched
+50772,PERFECT,472 actions matched
+50823,PERFECT,458 actions matched
+50839,PERFECT,716 actions matched
+50848,PERFECT,371 actions matched
+50866,PERFECT,745 actions matched
+51002,PERFECT,852 actions matched
+51004,PERFECT,726 actions matched
+51092,PERFECT,334 actions matched
+51110,PERFECT,837 actions matched
+51111,PERFECT,382 actions matched
+51116,PERFECT,771 actions matched
+51120,PERFECT,397 actions matched
+51148,PERFECT,784 actions matched
+51153,PERFECT,946 actions matched
+51169,PERFECT,722 actions matched
+51247,PERFECT,459 actions matched
+51248,DROPPED,filtered by cleaning
+51257,PERFECT,0 actions matched
+51260,PERFECT,482 actions matched
+51278,PERFECT,759 actions matched
+51283,PERFECT,251 actions matched
+51304,PERFECT,536 actions matched
+51385,PERFECT,473 actions matched
+51475,DROPPED,filtered by cleaning
+51483,PERFECT,987 actions matched
+51500,PERFECT,253 actions matched
+51501,PERFECT,903 actions matched
+51510,PERFECT,721 actions matched
+51539,PERFECT,781 actions matched
+51632,PERFECT,343 actions matched
+51645,PERFECT,352 actions matched
+51682,PERFECT,365 actions matched
+51774,PERFECT,306 actions matched
+51817,PERFECT,203 actions matched
+51832,DROPPED,filtered by cleaning
+51841,PERFECT,750 actions matched
+51853,PERFECT,495 actions matched
+51948,PERFECT,503 actions matched
+51957,PERFECT,861 actions matched
+51978,PERFECT,430 actions matched
+52017,PERFECT,411 actions matched
+52028,PERFECT,109 actions matched
+52041,PERFECT,894 actions matched
+52043,PERFECT,297 actions matched
+52044,PERFECT,424 actions matched
+52290,PERFECT,451 actions matched
+52323,PERFECT,563 actions matched
+52324,DROPPED,filtered by cleaning
+52352,PERFECT,371 actions matched
+52353,PERFECT,784 actions matched
+52376,PERFECT,811 actions matched
+52458,PERFECT,929 actions matched
+52472,PERFECT,402 actions matched
+52477,PERFECT,565 actions matched
+52510,PERFECT,773 actions matched
+52521,PERFECT,394 actions matched
+52533,PERFECT,0 actions matched
+52571,PERFECT,620 actions matched
+52572,PERFECT,467 actions matched
+52615,PERFECT,346 actions matched
+52626,PERFECT,374 actions matched
+52640,PERFECT,415 actions matched
+52644,PERFECT,1000 actions matched
+52656,PERFECT,521 actions matched
+52673,PERFECT,524 actions matched
+52685,PERFECT,386 actions matched
+52726,PERFECT,185 actions matched
+52735,PERFECT,891 actions matched
+52752,PERFECT,671 actions matched
+52754,DROPPED,filtered by cleaning
+52771,PERFECT,34 actions matched
+52811,PERFECT,879 actions matched
+52838,DROPPED,filtered by cleaning
+52841,PERFECT,774 actions matched
+52855,PERFECT,854 actions matched
+52861,PERFECT,897 actions matched
+52863,PERFECT,0 actions matched
+52864,PERFECT,435 actions matched
+52872,DROPPED,filtered by cleaning
+52885,DROPPED,filtered by cleaning
+52893,PERFECT,967 actions matched
+52918,PERFECT,747 actions matched
+52935,PERFECT,853 actions matched
+52963,PERFECT,495 actions matched
+52965,PERFECT,879 actions matched
+52971,PERFECT,522 actions matched
+52978,DROPPED,not_finished (game status: active)
+52990,PERFECT,288 actions matched
+52992,PERFECT,641 actions matched
+52996,PERFECT,538 actions matched
+53016,PERFECT,490 actions matched
+53107,PERFECT,124 actions matched
+53126,PERFECT,726 actions matched
+53245,DROPPED,filtered by cleaning
+53252,PERFECT,777 actions matched
+53267,PERFECT,490 actions matched
+53268,PERFECT,498 actions matched
+53273,PERFECT,101 actions matched
+53274,PERFECT,109 actions matched
+53275,PERFECT,528 actions matched
+53290,PERFECT,740 actions matched
+53333,PERFECT,30 actions matched
+53342,PERFECT,882 actions matched
+53366,PERFECT,708 actions matched
+53396,PERFECT,596 actions matched
+53403,PERFECT,634 actions matched
+53413,DROPPED,filtered by cleaning
+53430,PERFECT,558 actions matched
+53436,PERFECT,798 actions matched
+53439,PERFECT,603 actions matched
+53485,PERFECT,771 actions matched
+53503,PERFECT,452 actions matched
+53507,PERFECT,477 actions matched
+53520,PERFECT,416 actions matched
+53536,PERFECT,50 actions matched
+53592,PERFECT,471 actions matched
+53607,PERFECT,494 actions matched
+53631,PERFECT,188 actions matched
+53643,PERFECT,758 actions matched
+53657,PERFECT,827 actions matched
+53685,PERFECT,553 actions matched
+53699,PERFECT,898 actions matched
+53744,PERFECT,892 actions matched
+53758,PERFECT,1 actions matched
+53771,PERFECT,1036 actions matched
+53808,PERFECT,875 actions matched
+53810,PERFECT,541 actions matched
+53828,PERFECT,335 actions matched
+53846,PERFECT,956 actions matched
+53898,PERFECT,0 actions matched
+53918,PERFECT,389 actions matched
+53936,PERFECT,863 actions matched
+53958,PERFECT,841 actions matched
+53967,PERFECT,768 actions matched
+54003,PERFECT,3 actions matched
+54010,PERFECT,315 actions matched
+54030,PERFECT,39 actions matched
+54033,DROPPED,filtered by cleaning
+54058,PERFECT,689 actions matched
+54080,DROPPED,filtered by cleaning
+54087,PERFECT,173 actions matched
+54108,PERFECT,564 actions matched
+54156,DROPPED,filtered by cleaning
+54163,PERFECT,714 actions matched
+54169,PERFECT,614 actions matched
+54172,PERFECT,737 actions matched
+54239,PERFECT,352 actions matched
+54240,DROPPED,filtered by cleaning
+54258,DROPPED,filtered by cleaning
+54267,PERFECT,818 actions matched
+54274,PERFECT,689 actions matched
+54311,PERFECT,6 actions matched
+54333,PERFECT,380 actions matched
+54433,PERFECT,509 actions matched
+54479,PERFECT,818 actions matched
+54480,PERFECT,466 actions matched
+54481,PERFECT,809 actions matched
+54482,PERFECT,484 actions matched
+54483,PERFECT,460 actions matched
+54484,PERFECT,889 actions matched
+54488,PERFECT,517 actions matched
+54504,DROPPED,not_finished (game status: active)
+54517,PERFECT,597 actions matched
+54533,PERFECT,412 actions matched
+54565,PERFECT,506 actions matched
+54576,PERFECT,226 actions matched
+54597,PERFECT,705 actions matched
+54598,PERFECT,258 actions matched
+54606,DROPPED,filtered by cleaning
+54618,PERFECT,927 actions matched
+54630,PERFECT,838 actions matched
+54634,PERFECT,2 actions matched
+54638,PERFECT,206 actions matched
+54689,PERFECT,344 actions matched
+54713,PERFECT,828 actions matched
+54715,PERFECT,384 actions matched
+54720,PERFECT,772 actions matched
+54786,PERFECT,707 actions matched
+54808,PERFECT,677 actions matched
+54845,PERFECT,554 actions matched
+54852,PERFECT,876 actions matched
+54858,DROPPED,filtered by cleaning
+54890,PERFECT,453 actions matched
+54897,PERFECT,860 actions matched
+54905,PERFECT,762 actions matched
+54922,PERFECT,90 actions matched
+54964,PERFECT,488 actions matched
+54976,PERFECT,444 actions matched
+54998,PERFECT,848 actions matched
+55016,PERFECT,903 actions matched
+55025,PERFECT,709 actions matched
+55026,PERFECT,640 actions matched
+55027,PERFECT,571 actions matched
+55031,PERFECT,590 actions matched
+55046,PERFECT,612 actions matched
+55064,PERFECT,727 actions matched
+55099,PERFECT,471 actions matched
+55109,PERFECT,184 actions matched
+55113,PERFECT,907 actions matched
+55115,PERFECT,734 actions matched
+55143,PERFECT,567 actions matched
+55165,DROPPED,not_finished (game status: archived)
+55222,PERFECT,871 actions matched
+55229,PERFECT,1111 actions matched
+55234,PERFECT,404 actions matched
+55294,PERFECT,854 actions matched
+55296,PERFECT,857 actions matched
+55298,PERFECT,801 actions matched
+55309,PERFECT,788 actions matched
+55329,PERFECT,402 actions matched
+55331,PERFECT,919 actions matched
+55338,PERFECT,458 actions matched
+55383,PERFECT,450 actions matched
+55387,PERFECT,977 actions matched
+55458,PERFECT,865 actions matched
+55461,PERFECT,922 actions matched
+55477,PERFECT,600 actions matched
+55505,PERFECT,459 actions matched
+55506,PERFECT,455 actions matched
+55521,PERFECT,818 actions matched
+55532,PERFECT,201 actions matched
+55610,PERFECT,847 actions matched
+55674,PERFECT,498 actions matched
+55677,PERFECT,830 actions matched
+55735,PERFECT,923 actions matched
+55738,DROPPED,not_finished (game status: active)
+55767,PERFECT,348 actions matched
+55816,PERFECT,387 actions matched
+55825,PERFECT,493 actions matched
+55829,PERFECT,793 actions matched
+55846,PERFECT,847 actions matched
+55853,PERFECT,682 actions matched
+55859,PERFECT,767 actions matched
+55891,PERFECT,756 actions matched
+55953,PERFECT,885 actions matched
+55967,PERFECT,1011 actions matched
+55986,PERFECT,928 actions matched
+56040,PERFECT,594 actions matched
+56045,PERFECT,925 actions matched
+56052,PERFECT,409 actions matched
+56059,PERFECT,737 actions matched
+56081,DROPPED,filtered by cleaning
+56082,PERFECT,788 actions matched
+56124,DROPPED,filtered by cleaning
+56141,PERFECT,411 actions matched
+56146,DROPPED,filtered by cleaning
+56188,PERFECT,830 actions matched
+56364,PERFECT,489 actions matched
+56406,PERFECT,260 actions matched
+56422,PERFECT,525 actions matched
+56439,PERFECT,9 actions matched
+56441,PERFECT,675 actions matched
+56454,PERFECT,938 actions matched
+56499,PERFECT,450 actions matched
+56506,PERFECT,0 actions matched
+56519,PERFECT,781 actions matched
+56530,PERFECT,706 actions matched
+56575,PERFECT,438 actions matched
+56604,PERFECT,256 actions matched
+56660,PERFECT,378 actions matched
+56713,PERFECT,641 actions matched
+56733,PERFECT,391 actions matched
+56737,DROPPED,filtered by cleaning
+56788,PERFECT,407 actions matched
+56795,PERFECT,302 actions matched
+56802,PERFECT,728 actions matched
+56805,PERFECT,664 actions matched
+56857,PERFECT,798 actions matched
+56866,PERFECT,98 actions matched
+56884,DROPPED,not_finished (game status: archived)
+56891,PERFECT,155 actions matched
+56985,PERFECT,877 actions matched
+56996,PERFECT,874 actions matched
+57008,PERFECT,163 actions matched
+57009,PERFECT,907 actions matched
+57092,PERFECT,418 actions matched
+57100,DROPPED,filtered by cleaning
+57127,PERFECT,715 actions matched
+57134,PERFECT,399 actions matched
+57143,PERFECT,627 actions matched
+57149,PERFECT,729 actions matched
+57156,PERFECT,2 actions matched
+57192,PERFECT,686 actions matched
+57211,PERFECT,692 actions matched
+57286,PERFECT,436 actions matched
+57332,PERFECT,843 actions matched
+57416,PERFECT,462 actions matched
+57479,PERFECT,715 actions matched
+57506,PERFECT,439 actions matched
+57507,PERFECT,15 actions matched
+57508,PERFECT,1127 actions matched
+57541,PERFECT,829 actions matched
+57546,PERFECT,46 actions matched
+57601,PERFECT,303 actions matched
+57613,PERFECT,341 actions matched
+57622,PERFECT,1010 actions matched
+57644,PERFECT,550 actions matched
+57652,PERFECT,498 actions matched
+57713,PERFECT,549 actions matched
+57742,PERFECT,452 actions matched
+57749,PERFECT,757 actions matched
+57778,PERFECT,906 actions matched
+57799,PERFECT,858 actions matched
+57801,DROPPED,filtered by cleaning
+57819,PERFECT,520 actions matched
+57820,PERFECT,753 actions matched
+57825,PERFECT,979 actions matched
+57837,DROPPED,filtered by cleaning
+57839,PERFECT,692 actions matched
+57849,PERFECT,756 actions matched
+57873,DROPPED,filtered by cleaning
+57898,PERFECT,773 actions matched
+57912,PERFECT,754 actions matched
+57948,PERFECT,858 actions matched
+57953,DROPPED,filtered by cleaning
+57971,PERFECT,102 actions matched
+57975,PERFECT,461 actions matched
+57980,DROPPED,filtered by cleaning
+57988,PERFECT,458 actions matched
+58007,PERFECT,840 actions matched
+58008,PERFECT,474 actions matched
+58039,PERFECT,939 actions matched
+58063,PERFECT,840 actions matched
+58120,PERFECT,728 actions matched
+58127,PERFECT,0 actions matched
+58203,PERFECT,1 actions matched
+58214,PERFECT,377 actions matched
+58215,PERFECT,832 actions matched
+58216,PERFECT,418 actions matched
+58217,DROPPED,filtered by cleaning
+58218,PERFECT,823 actions matched
+58260,PERFECT,830 actions matched
+58275,PERFECT,824 actions matched
+58309,PERFECT,348 actions matched
+58321,PERFECT,845 actions matched
+58324,PERFECT,904 actions matched
+58332,PERFECT,662 actions matched
+58367,PERFECT,703 actions matched
+58371,DROPPED,not_finished (game status: active)
+58435,PERFECT,854 actions matched
+58439,PERFECT,735 actions matched
+58443,PERFECT,885 actions matched
+58444,PERFECT,624 actions matched
+58456,DROPPED,filtered by cleaning
+58473,PERFECT,483 actions matched
+58491,PERFECT,335 actions matched
+58507,PERFECT,532 actions matched
+58550,PERFECT,745 actions matched
+58580,PERFECT,899 actions matched
+58605,PERFECT,358 actions matched
+58636,DROPPED,filtered by cleaning
+58657,PERFECT,738 actions matched
+58721,DROPPED,filtered by cleaning
+58744,PERFECT,920 actions matched
+58766,PERFECT,712 actions matched
+58771,PERFECT,352 actions matched
+58785,PERFECT,968 actions matched
+58844,PERFECT,0 actions matched
+58869,PERFECT,865 actions matched
+58939,DROPPED,filtered by cleaning
+59000,DROPPED,not_finished (game status: active)
+59045,PERFECT,870 actions matched
+59061,DROPPED,filtered by cleaning
+59065,PERFECT,440 actions matched
+59120,PERFECT,497 actions matched
+59130,PERFECT,560 actions matched
+59146,PERFECT,855 actions matched
+59153,PERFECT,849 actions matched
+59195,PERFECT,480 actions matched
+59200,PERFECT,61 actions matched
+59207,PERFECT,393 actions matched
+59217,DROPPED,filtered by cleaning
+59229,PERFECT,694 actions matched
+59241,PERFECT,827 actions matched
+59261,PERFECT,467 actions matched
+59313,PERFECT,817 actions matched
+59453,PERFECT,165 actions matched
+59480,PERFECT,818 actions matched
+59499,PERFECT,523 actions matched
+59526,PERFECT,434 actions matched
+59553,PERFECT,331 actions matched
+59566,PERFECT,847 actions matched
+59578,PERFECT,501 actions matched
+59611,PERFECT,512 actions matched
+59612,PERFECT,368 actions matched
+59615,PERFECT,712 actions matched
+59626,DROPPED,filtered by cleaning
+59675,PERFECT,170 actions matched
+59751,DROPPED,not_finished (game status: active)
+59778,PERFECT,808 actions matched
+59824,PERFECT,415 actions matched
+59839,PERFECT,742 actions matched
+59859,PERFECT,392 actions matched
+59862,PERFECT,653 actions matched
+59877,PERFECT,851 actions matched
+60001,PERFECT,462 actions matched
+60005,PERFECT,785 actions matched
+60026,PERFECT,763 actions matched
+60031,PERFECT,909 actions matched
+60115,PERFECT,608 actions matched
+60149,PERFECT,495 actions matched
+60152,PERFECT,43 actions matched
+60157,PERFECT,873 actions matched
+60177,PERFECT,495 actions matched
+60239,PERFECT,389 actions matched
+60251,PERFECT,430 actions matched
+60281,PERFECT,773 actions matched
+60297,PERFECT,4 actions matched
+60305,PERFECT,318 actions matched
+60309,DROPPED,not_finished (game status: active)
+60313,PERFECT,321 actions matched
+60419,DROPPED,filtered by cleaning
+60428,PERFECT,844 actions matched
+60439,PERFECT,783 actions matched
+60443,PERFECT,716 actions matched
+60518,PERFECT,909 actions matched
+60544,PERFECT,565 actions matched
+60551,PERFECT,573 actions matched
+60592,PERFECT,762 actions matched
+60600,PERFECT,430 actions matched
+60613,PERFECT,112 actions matched
+60631,PERFECT,966 actions matched
+60647,PERFECT,404 actions matched
+60672,PERFECT,687 actions matched
+60690,PERFECT,699 actions matched
+60726,PERFECT,472 actions matched
+60746,PERFECT,487 actions matched
+60786,DROPPED,filtered by cleaning
+60798,PERFECT,744 actions matched
+60805,PERFECT,960 actions matched
+60839,DROPPED,filtered by cleaning
+60842,PERFECT,347 actions matched
+60847,PERFECT,851 actions matched
+60855,PERFECT,879 actions matched
+60870,PERFECT,154 actions matched
+60874,PERFECT,657 actions matched
+60888,DROPPED,filtered by cleaning
+60890,PERFECT,690 actions matched
+60910,DROPPED,filtered by cleaning
+60927,PERFECT,709 actions matched
+60950,PERFECT,883 actions matched
+60952,PERFECT,389 actions matched
+60965,PERFECT,577 actions matched
+60981,PERFECT,156 actions matched
+60990,PERFECT,0 actions matched
+61010,PERFECT,912 actions matched
+61042,PERFECT,461 actions matched
+61058,PERFECT,786 actions matched
+61068,PERFECT,761 actions matched
+61098,PERFECT,493 actions matched
+61113,PERFECT,731 actions matched
+61115,PERFECT,602 actions matched
+61131,PERFECT,19 actions matched
+61133,PERFECT,920 actions matched
+61195,PERFECT,812 actions matched
+61213,DROPPED,filtered by cleaning
+61278,PERFECT,809 actions matched
+61302,PERFECT,690 actions matched
+61318,PERFECT,540 actions matched
+61321,PERFECT,873 actions matched
+61329,DROPPED,filtered by cleaning
+61340,PERFECT,985 actions matched
+61356,PERFECT,688 actions matched
+61397,PERFECT,478 actions matched
+61483,PERFECT,491 actions matched
+61520,PERFECT,563 actions matched
+61523,PERFECT,687 actions matched
+61540,PERFECT,453 actions matched
+61551,PERFECT,564 actions matched
+61561,PERFECT,858 actions matched
+61578,PERFECT,766 actions matched
+61591,PERFECT,700 actions matched
+61620,PERFECT,388 actions matched
+61630,PERFECT,730 actions matched
+61696,PERFECT,930 actions matched
+61721,PERFECT,832 actions matched
+61749,PERFECT,493 actions matched
+61781,PERFECT,903 actions matched
+61787,PERFECT,842 actions matched
+61812,PERFECT,645 actions matched
+61913,PERFECT,390 actions matched
+61937,PERFECT,762 actions matched
+61953,PERFECT,506 actions matched
+61966,DROPPED,filtered by cleaning
+61979,PERFECT,596 actions matched
+62024,PERFECT,381 actions matched
+62039,PERFECT,780 actions matched
+62078,PERFECT,513 actions matched
+62081,PERFECT,82 actions matched
+62084,PERFECT,12 actions matched
+62088,PERFECT,336 actions matched
+62093,DROPPED,filtered by cleaning
+62150,PERFECT,396 actions matched
+62197,PERFECT,740 actions matched
+62227,DROPPED,filtered by cleaning
+62239,DROPPED,filtered by cleaning
+62311,PERFECT,815 actions matched
+62361,PERFECT,850 actions matched
+62368,PERFECT,797 actions matched
+62373,PERFECT,720 actions matched
+62385,PERFECT,374 actions matched
+62394,PERFECT,513 actions matched
+62408,PERFECT,864 actions matched
+62415,PERFECT,492 actions matched
+62446,PERFECT,531 actions matched
+62470,PERFECT,535 actions matched
+62488,DROPPED,filtered by cleaning
+62567,PERFECT,679 actions matched
+62595,PERFECT,367 actions matched
+62606,PERFECT,542 actions matched
+62664,PERFECT,923 actions matched
+62673,PERFECT,342 actions matched
+62686,PERFECT,420 actions matched
+62749,PERFECT,759 actions matched
+62795,PERFECT,854 actions matched
+62835,PERFECT,3 actions matched
+62851,PERFECT,902 actions matched
+62923,DROPPED,filtered by cleaning
+62926,PERFECT,621 actions matched
+62947,PERFECT,358 actions matched
+62992,PERFECT,766 actions matched
+63009,PERFECT,815 actions matched
+63012,PERFECT,755 actions matched
+63018,PERFECT,247 actions matched
+63041,PERFECT,318 actions matched
+63078,PERFECT,2 actions matched
+63142,PERFECT,854 actions matched
+63148,PERFECT,715 actions matched
+63219,PERFECT,50 actions matched
+63229,PERFECT,753 actions matched
+63248,PERFECT,765 actions matched
+63322,PERFECT,855 actions matched
+63368,PERFECT,482 actions matched
+63401,PERFECT,387 actions matched
+63411,PERFECT,453 actions matched
+63417,PERFECT,451 actions matched
+63457,PERFECT,713 actions matched
+63550,PERFECT,882 actions matched
+63587,PERFECT,411 actions matched
+63593,PERFECT,850 actions matched
+63606,DROPPED,not_finished (game status: active)
+63609,PERFECT,578 actions matched
+63618,PERFECT,849 actions matched
+63626,PERFECT,954 actions matched
+63637,PERFECT,465 actions matched
+63685,PERFECT,996 actions matched
+63686,PERFECT,0 actions matched
+63690,PERFECT,682 actions matched
+63694,PERFECT,740 actions matched
+63696,PERFECT,404 actions matched
+63698,PERFECT,668 actions matched
+63718,PERFECT,536 actions matched
+63792,PERFECT,788 actions matched
+63809,PERFECT,83 actions matched
+63821,PERFECT,822 actions matched
+63845,PERFECT,782 actions matched
+63865,PERFECT,484 actions matched
+63880,PERFECT,637 actions matched
+63887,PERFECT,388 actions matched
+63926,PERFECT,704 actions matched
+63963,PERFECT,731 actions matched
+63999,PERFECT,887 actions matched
+64030,PERFECT,72 actions matched
+64040,PERFECT,984 actions matched
+64052,DROPPED,filtered by cleaning
+64068,PERFECT,834 actions matched
+64071,PERFECT,932 actions matched
+64113,PERFECT,523 actions matched
+64173,PERFECT,344 actions matched
+64174,PERFECT,943 actions matched
+64231,PERFECT,791 actions matched
+64283,PERFECT,867 actions matched
+64303,PERFECT,775 actions matched
+64339,PERFECT,539 actions matched
+64349,DROPPED,filtered by cleaning
+64351,PERFECT,773 actions matched
+64355,DROPPED,filtered by cleaning
+64386,PERFECT,861 actions matched
+64392,PERFECT,844 actions matched
+64418,PERFECT,434 actions matched
+64452,PERFECT,802 actions matched
+64539,PERFECT,727 actions matched
+64544,PERFECT,318 actions matched
+64545,PERFECT,547 actions matched
+64546,PERFECT,531 actions matched
+64615,PERFECT,144 actions matched
+64634,PERFECT,763 actions matched
+64640,PERFECT,592 actions matched
+64655,PERFECT,264 actions matched
+64673,PERFECT,399 actions matched
+64674,PERFECT,666 actions matched
+64675,DROPPED,not_finished (game status: active)
+64799,PERFECT,724 actions matched
+64807,PERFECT,506 actions matched
+64869,DROPPED,not_finished (game status: active)
+64872,DROPPED,not_finished (game status: active)
+64876,PERFECT,811 actions matched
+64893,PERFECT,358 actions matched
+64910,PERFECT,643 actions matched
+64912,PERFECT,278 actions matched
+64923,PERFECT,930 actions matched
+64935,PERFECT,908 actions matched
+64942,PERFECT,825 actions matched
+64962,PERFECT,601 actions matched
+64981,PERFECT,833 actions matched
+65044,PERFECT,368 actions matched
+65119,PERFECT,1 actions matched
+65120,PERFECT,1 actions matched
+65132,PERFECT,649 actions matched
+65141,PERFECT,787 actions matched
+65166,PERFECT,478 actions matched
+65176,PERFECT,400 actions matched
+65178,PERFECT,922 actions matched
+65192,PERFECT,507 actions matched
+65244,PERFECT,48 actions matched
+65259,PERFECT,733 actions matched
+65260,PERFECT,985 actions matched
+65263,DROPPED,filtered by cleaning
+65294,PERFECT,651 actions matched
+65301,PERFECT,464 actions matched
+65308,PERFECT,746 actions matched
+65321,DROPPED,filtered by cleaning
+65332,PERFECT,497 actions matched
+65336,PERFECT,708 actions matched
+65364,PERFECT,404 actions matched
+65371,PERFECT,759 actions matched
+65407,PERFECT,853 actions matched
+65426,PERFECT,883 actions matched
+65454,PERFECT,734 actions matched
+65459,PERFECT,987 actions matched
+65460,PERFECT,431 actions matched
+65471,PERFECT,507 actions matched
+65478,PERFECT,743 actions matched
+65481,PERFECT,99 actions matched
+65501,PERFECT,489 actions matched
+65504,PERFECT,803 actions matched
+65514,PERFECT,329 actions matched
+65515,PERFECT,721 actions matched
+65536,DROPPED,not_finished (game status: active)
+65538,PERFECT,410 actions matched
+65553,PERFECT,800 actions matched
+65554,PERFECT,872 actions matched
+65567,PERFECT,532 actions matched
+65572,PERFECT,494 actions matched
+65604,DROPPED,filtered by cleaning
+65624,PERFECT,766 actions matched
+65640,PERFECT,574 actions matched
+65645,PERFECT,609 actions matched
+65689,PERFECT,927 actions matched
+65696,PERFECT,795 actions matched
+65714,PERFECT,878 actions matched
+65717,DROPPED,filtered by cleaning
+65764,PERFECT,928 actions matched
+65777,PERFECT,675 actions matched
+65796,PERFECT,399 actions matched
+65801,PERFECT,585 actions matched
+65848,PERFECT,104 actions matched
+65870,PERFECT,787 actions matched
+65922,DROPPED,filtered by cleaning
+65952,PERFECT,663 actions matched
+65968,PERFECT,852 actions matched
+65969,PERFECT,341 actions matched
+65973,PERFECT,4 actions matched
+65981,PERFECT,467 actions matched
+66059,PERFECT,533 actions matched
+66077,PERFECT,517 actions matched
+66085,DROPPED,filtered by cleaning
+66092,PERFECT,658 actions matched
+66130,PERFECT,706 actions matched
+66162,PERFECT,8 actions matched
+66228,PERFECT,600 actions matched
+66241,PERFECT,630 actions matched
+66247,PERFECT,437 actions matched
+66261,PERFECT,40 actions matched
+66274,PERFECT,820 actions matched
+66295,PERFECT,692 actions matched
+66326,PERFECT,295 actions matched
+66327,PERFECT,441 actions matched
+66357,DROPPED,filtered by cleaning
+66373,PERFECT,474 actions matched
+66497,PERFECT,952 actions matched
+66502,PERFECT,994 actions matched
+66504,PERFECT,390 actions matched
+66526,PERFECT,822 actions matched
+66534,PERFECT,830 actions matched
+66545,PERFECT,959 actions matched
+66557,DROPPED,filtered by cleaning
+66579,PERFECT,577 actions matched
+66582,PERFECT,928 actions matched
+66597,PERFECT,477 actions matched
+66598,PERFECT,906 actions matched
+66630,PERFECT,0 actions matched
+66633,PERFECT,446 actions matched
+66662,PERFECT,652 actions matched
+66671,PERFECT,842 actions matched
+66692,DROPPED,filtered by cleaning
+66709,PERFECT,840 actions matched
+66730,PERFECT,334 actions matched
+66777,PERFECT,541 actions matched
+66797,PERFECT,551 actions matched
+66869,PERFECT,822 actions matched
+66924,PERFECT,834 actions matched
+66930,PERFECT,432 actions matched
+66940,PERFECT,535 actions matched
+66954,PERFECT,2 actions matched
+66959,PERFECT,486 actions matched
+66968,PERFECT,2 actions matched
+66980,PERFECT,757 actions matched
+67013,PERFECT,696 actions matched
+67035,PERFECT,741 actions matched
+67036,PERFECT,941 actions matched
+67062,PERFECT,525 actions matched
+67096,PERFECT,732 actions matched
+67100,PERFECT,1 actions matched
+67102,PERFECT,835 actions matched
+67116,PERFECT,888 actions matched
+67141,PERFECT,291 actions matched
+67145,PERFECT,639 actions matched
+67171,PERFECT,738 actions matched
+67205,PERFECT,986 actions matched
+67209,PERFECT,594 actions matched
+67236,PERFECT,0 actions matched
+67246,PERFECT,450 actions matched
+67313,PERFECT,413 actions matched
+67327,PERFECT,701 actions matched
+67340,PERFECT,530 actions matched
+67343,PERFECT,736 actions matched
+67367,PERFECT,659 actions matched
+67375,PERFECT,2 actions matched
+67383,DROPPED,not_finished (game status: active)
+67436,PERFECT,90 actions matched
+67458,PERFECT,638 actions matched
+67491,PERFECT,560 actions matched
+67560,PERFECT,798 actions matched
+67574,PERFECT,706 actions matched
+67591,DROPPED,filtered by cleaning
+67615,PERFECT,752 actions matched
+67623,PERFECT,810 actions matched
+67664,PERFECT,785 actions matched
+67678,PERFECT,750 actions matched
+67686,PERFECT,565 actions matched
+67721,DROPPED,filtered by cleaning
+67727,PERFECT,564 actions matched
+67729,PERFECT,739 actions matched
+67733,PERFECT,435 actions matched
+67757,DROPPED,filtered by cleaning
+67802,PERFECT,736 actions matched
+67803,PERFECT,531 actions matched
+67809,PERFECT,769 actions matched
+67845,DROPPED,not_finished (game status: active)
+67870,PERFECT,906 actions matched
+67872,PERFECT,992 actions matched
+67883,DROPPED,filtered by cleaning
+67890,PERFECT,787 actions matched
+67906,PERFECT,808 actions matched
+67931,PERFECT,490 actions matched
+68017,PERFECT,387 actions matched
+68026,PERFECT,822 actions matched
+68042,PERFECT,586 actions matched
+68162,PERFECT,190 actions matched
+68193,PERFECT,849 actions matched
+68245,PERFECT,514 actions matched
+68265,PERFECT,719 actions matched
+68286,PERFECT,855 actions matched
+68333,PERFECT,107 actions matched
+68340,PERFECT,710 actions matched
+68394,PERFECT,548 actions matched
+68466,PERFECT,817 actions matched
+68473,PERFECT,771 actions matched
+68480,PERFECT,876 actions matched
+68541,PERFECT,725 actions matched
+68543,PERFECT,360 actions matched
+68575,PERFECT,580 actions matched
+68632,PERFECT,4 actions matched
+68649,PERFECT,861 actions matched
+68680,PERFECT,745 actions matched
+68716,DROPPED,filtered by cleaning
+68722,PERFECT,849 actions matched
+68726,PERFECT,526 actions matched
+68735,PERFECT,87 actions matched
+68748,PERFECT,539 actions matched
+68779,PERFECT,417 actions matched
+68824,DROPPED,filtered by cleaning
+68853,PERFECT,464 actions matched
+68905,PERFECT,837 actions matched
+68925,PERFECT,335 actions matched
+68929,PERFECT,342 actions matched
+68955,PERFECT,874 actions matched
+68969,PERFECT,424 actions matched
+68984,PERFECT,986 actions matched
+68986,DROPPED,not_finished (game status: active)
+69027,PERFECT,587 actions matched
+69063,PERFECT,889 actions matched
+69107,DROPPED,filtered by cleaning
+69170,DROPPED,filtered by cleaning
+69198,PERFECT,849 actions matched
+69201,PERFECT,460 actions matched
+69218,DROPPED,filtered by cleaning
+69288,PERFECT,920 actions matched
+69294,PERFECT,454 actions matched
+69298,DROPPED,filtered by cleaning
+69383,PERFECT,489 actions matched
+69414,PERFECT,795 actions matched
+69420,PERFECT,839 actions matched
+69455,PERFECT,838 actions matched
+69496,DROPPED,filtered by cleaning
+69560,PERFECT,479 actions matched
+69614,PERFECT,454 actions matched
+69640,PERFECT,834 actions matched
+69688,PERFECT,455 actions matched
+69713,PERFECT,356 actions matched
+69764,PERFECT,873 actions matched
+69770,PERFECT,641 actions matched
+69829,PERFECT,660 actions matched
+69892,PERFECT,864 actions matched
+69977,PERFECT,735 actions matched
+69981,PERFECT,901 actions matched
+70131,PERFECT,382 actions matched
+70140,PERFECT,460 actions matched
+70146,PERFECT,937 actions matched
+70171,PERFECT,885 actions matched
+70201,PERFECT,807 actions matched
+70204,PERFECT,399 actions matched
+70221,PERFECT,463 actions matched
+70244,PERFECT,497 actions matched
+70287,PERFECT,742 actions matched
+70369,PERFECT,387 actions matched
+70396,PERFECT,65 actions matched
+70401,DROPPED,not_finished (game status: active)
+70414,PERFECT,773 actions matched
+70424,PERFECT,887 actions matched
+70473,PERFECT,396 actions matched
+70517,PERFECT,759 actions matched
+70555,PERFECT,710 actions matched
+70586,PERFECT,954 actions matched
+70606,PERFECT,839 actions matched
+70607,PERFECT,545 actions matched
+70608,DROPPED,filtered by cleaning
+70609,PERFECT,866 actions matched
+70610,PERFECT,1018 actions matched
+70611,PERFECT,536 actions matched
+70612,PERFECT,936 actions matched
+70613,PERFECT,495 actions matched
+70614,PERFECT,427 actions matched
+70615,PERFECT,883 actions matched
+70616,PERFECT,367 actions matched
+70617,PERFECT,376 actions matched
+70618,PERFECT,500 actions matched
+70619,PERFECT,382 actions matched
+70620,PERFECT,736 actions matched
+70621,PERFECT,683 actions matched
+70622,PERFECT,670 actions matched
+70623,PERFECT,837 actions matched
+70625,PERFECT,822 actions matched
+70626,PERFECT,484 actions matched
+70627,PERFECT,822 actions matched
+70628,PERFECT,819 actions matched
+70629,PERFECT,937 actions matched
+70630,PERFECT,385 actions matched
+70631,PERFECT,747 actions matched
+70632,PERFECT,798 actions matched
+70633,PERFECT,861 actions matched
+70634,PERFECT,961 actions matched
+70635,PERFECT,331 actions matched
+70636,PERFECT,1033 actions matched
+70637,PERFECT,765 actions matched
+70638,PERFECT,509 actions matched
+70639,PERFECT,823 actions matched
+70640,PERFECT,443 actions matched
+70641,PERFECT,468 actions matched
+70642,PERFECT,424 actions matched
+70643,PERFECT,790 actions matched
+70644,PERFECT,684 actions matched
+70645,PERFECT,882 actions matched
+70646,PERFECT,852 actions matched
+70647,PERFECT,780 actions matched
+70648,PERFECT,774 actions matched
+70649,PERFECT,550 actions matched
+70650,PERFECT,485 actions matched
+70651,PERFECT,889 actions matched
+70652,PERFECT,861 actions matched
+70653,PERFECT,826 actions matched
+70654,PERFECT,1020 actions matched
+70655,PERFECT,781 actions matched
+70656,PERFECT,761 actions matched
+70657,PERFECT,960 actions matched
+70658,PERFECT,859 actions matched
+70659,PERFECT,491 actions matched
+70660,PERFECT,886 actions matched
+70661,PERFECT,914 actions matched
+70662,PERFECT,757 actions matched
+70663,PERFECT,435 actions matched
+70664,PERFECT,381 actions matched
+70665,PERFECT,898 actions matched
+70666,PERFECT,818 actions matched
+70667,PERFECT,810 actions matched
+70668,PERFECT,388 actions matched
+70669,PERFECT,369 actions matched
+70670,PERFECT,494 actions matched
+70671,PERFECT,615 actions matched
+70672,PERFECT,992 actions matched
+70673,PERFECT,960 actions matched
+70674,DROPPED,filtered by cleaning
+70675,PERFECT,469 actions matched
+70676,PERFECT,411 actions matched
+70677,PERFECT,539 actions matched
+70678,PERFECT,921 actions matched
+70679,PERFECT,816 actions matched
+70680,PERFECT,926 actions matched
+70681,PERFECT,411 actions matched
+70682,PERFECT,739 actions matched
+70683,PERFECT,512 actions matched
+70684,PERFECT,388 actions matched
+70685,PERFECT,489 actions matched
+70686,PERFECT,338 actions matched
+70687,PERFECT,857 actions matched
+70688,PERFECT,776 actions matched
+70689,PERFECT,497 actions matched
+70690,PERFECT,351 actions matched
+70691,PERFECT,691 actions matched
+70692,PERFECT,416 actions matched
+70693,PERFECT,974 actions matched
+70694,PERFECT,737 actions matched
+70695,PERFECT,523 actions matched
+70696,PERFECT,508 actions matched
+70697,PERFECT,456 actions matched
+70698,PERFECT,884 actions matched
+70699,PERFECT,844 actions matched
+70700,PERFECT,490 actions matched
+70701,PERFECT,387 actions matched
+70702,PERFECT,457 actions matched
+70703,PERFECT,924 actions matched
+70704,PERFECT,908 actions matched
+70705,PERFECT,826 actions matched
+70706,PERFECT,464 actions matched
+70707,PERFECT,725 actions matched
+70708,PERFECT,834 actions matched
+70709,PERFECT,863 actions matched
+70710,PERFECT,558 actions matched
+70711,PERFECT,311 actions matched
+70712,PERFECT,814 actions matched
+70713,PERFECT,597 actions matched
+70714,PERFECT,855 actions matched
+70715,PERFECT,397 actions matched
+70716,PERFECT,399 actions matched
+70717,PERFECT,906 actions matched
+70718,PERFECT,941 actions matched
+70719,PERFECT,523 actions matched
+70720,PERFECT,759 actions matched
+70721,PERFECT,389 actions matched
+70722,PERFECT,458 actions matched
+70723,PERFECT,492 actions matched
+70724,PERFECT,861 actions matched
+70725,PERFECT,750 actions matched
+70726,PERFECT,953 actions matched
+70727,PERFECT,407 actions matched
+70728,PERFECT,412 actions matched
+70729,PERFECT,864 actions matched
+70730,PERFECT,863 actions matched
+70731,PERFECT,886 actions matched
+70732,PERFECT,328 actions matched
+70733,PERFECT,882 actions matched
+70734,PERFECT,477 actions matched
+70735,PERFECT,519 actions matched
+70736,PERFECT,501 actions matched
+70737,PERFECT,710 actions matched
+70738,PERFECT,709 actions matched
+70739,PERFECT,754 actions matched
+70740,PERFECT,410 actions matched
+70741,PERFECT,732 actions matched
+70820,DROPPED,not_finished (game status: archived)
+70846,DROPPED,not_finished (game status: active)
+70859,PERFECT,850 actions matched
+70870,PERFECT,825 actions matched
+70872,DROPPED,filtered by cleaning
+70887,PERFECT,149 actions matched
+70897,DROPPED,not_finished (game status: active)
+70911,DROPPED,filtered by cleaning
+70919,PERFECT,909 actions matched
+70941,PERFECT,1 actions matched
+70942,PERFECT,8 actions matched
+70943,PERFECT,436 actions matched
+71009,PERFECT,930 actions matched
+71025,PERFECT,403 actions matched
+71064,PERFECT,869 actions matched
+71067,PERFECT,835 actions matched
+71078,PERFECT,523 actions matched
+71123,PERFECT,892 actions matched
+71130,PERFECT,1076 actions matched
+71150,PERFECT,524 actions matched
+71221,PERFECT,86 actions matched
+71262,PERFECT,780 actions matched
+71302,PERFECT,955 actions matched
+71310,PERFECT,856 actions matched
+71333,DROPPED,not_finished (game status: active)
+71340,PERFECT,479 actions matched
+71481,PERFECT,452 actions matched
+71539,PERFECT,564 actions matched
+71542,PERFECT,903 actions matched
+71606,PERFECT,344 actions matched
+71632,PERFECT,914 actions matched
+71688,PERFECT,561 actions matched
+71730,PERFECT,484 actions matched
+71970,PERFECT,498 actions matched
+71972,PERFECT,754 actions matched
+71981,PERFECT,734 actions matched
+72008,PERFECT,673 actions matched
+72020,PERFECT,924 actions matched
+72029,PERFECT,827 actions matched
+72108,PERFECT,535 actions matched
+72224,DROPPED,filtered by cleaning
+72232,PERFECT,721 actions matched
+72256,PERFECT,460 actions matched
+72361,PERFECT,550 actions matched
+72397,PERFECT,50 actions matched
+72483,PERFECT,744 actions matched
+72546,PERFECT,845 actions matched
+72594,PERFECT,785 actions matched
+72613,PERFECT,386 actions matched
+72633,PERFECT,718 actions matched
+72664,PERFECT,341 actions matched
+72704,PERFECT,351 actions matched
+72757,PERFECT,627 actions matched
+72759,PERFECT,511 actions matched
+72818,PERFECT,534 actions matched
+72841,PERFECT,414 actions matched
+72848,PERFECT,714 actions matched
+72854,PERFECT,616 actions matched
+72861,PERFECT,905 actions matched
+72863,PERFECT,803 actions matched
+72864,PERFECT,702 actions matched
+72865,PERFECT,800 actions matched
+72872,PERFECT,841 actions matched
+72877,PERFECT,961 actions matched
+72886,PERFECT,843 actions matched
+72887,PERFECT,0 actions matched
+72888,PERFECT,761 actions matched
+72889,PERFECT,0 actions matched
+72895,PERFECT,416 actions matched
+72949,PERFECT,377 actions matched
+72950,PERFECT,988 actions matched
+72955,PERFECT,108 actions matched
+73014,PERFECT,805 actions matched
+73017,PERFECT,112 actions matched
+73020,DROPPED,filtered by cleaning
+73021,PERFECT,769 actions matched
+73023,PERFECT,876 actions matched
+73109,PERFECT,169 actions matched
+73116,PERFECT,526 actions matched
+73135,PERFECT,176 actions matched
+73175,PERFECT,599 actions matched
+73180,PERFECT,786 actions matched
+73181,PERFECT,624 actions matched
+73218,PERFECT,913 actions matched
+73219,PERFECT,474 actions matched
+73235,PERFECT,775 actions matched
+73299,PERFECT,416 actions matched
+73316,PERFECT,378 actions matched
+73382,DROPPED,filtered by cleaning
+73430,PERFECT,349 actions matched
+73451,DROPPED,filtered by cleaning
+73453,DROPPED,filtered by cleaning
+73482,DROPPED,filtered by cleaning
+73490,PERFECT,441 actions matched
+73511,PERFECT,68 actions matched
+73514,PERFECT,563 actions matched
+73515,PERFECT,745 actions matched
+73520,PERFECT,493 actions matched
+73528,PERFECT,523 actions matched
+73578,PERFECT,131 actions matched
+73594,PERFECT,689 actions matched
+73598,PERFECT,678 actions matched
+73602,PERFECT,0 actions matched
+73610,PERFECT,906 actions matched
+73677,PERFECT,823 actions matched
+73691,PERFECT,48 actions matched
+73692,PERFECT,818 actions matched
+73693,PERFECT,77 actions matched
+73698,PERFECT,623 actions matched
+73745,PERFECT,233 actions matched
+73757,PERFECT,753 actions matched
+73761,PERFECT,73 actions matched
+73767,PERFECT,776 actions matched
+73801,PERFECT,928 actions matched
+73839,PERFECT,0 actions matched
+73841,DROPPED,not_finished (game status: active)
+73854,PERFECT,427 actions matched
+73899,PERFECT,72 actions matched
+73921,PERFECT,1 actions matched
+73931,PERFECT,690 actions matched
+73991,PERFECT,365 actions matched
+73996,DROPPED,filtered by cleaning
+74019,PERFECT,448 actions matched
+74081,PERFECT,929 actions matched
+74198,PERFECT,740 actions matched
+74229,PERFECT,365 actions matched
+74268,PERFECT,688 actions matched
+74277,PERFECT,467 actions matched
+74334,DROPPED,filtered by cleaning
+74343,PERFECT,613 actions matched
+74382,PERFECT,573 actions matched
+74435,PERFECT,160 actions matched
+74461,PERFECT,714 actions matched
+74478,PERFECT,338 actions matched
+74485,PERFECT,497 actions matched
+74514,PERFECT,713 actions matched
+74524,PERFECT,439 actions matched
+74647,DROPPED,filtered by cleaning
+74671,PERFECT,0 actions matched
+74697,PERFECT,622 actions matched
+74705,PERFECT,346 actions matched
+74730,PERFECT,401 actions matched
+74788,PERFECT,451 actions matched
+74792,PERFECT,544 actions matched
+74805,DROPPED,not_finished (game status: active)
+74828,PERFECT,692 actions matched
+74846,PERFECT,348 actions matched
+74852,PERFECT,843 actions matched
+74859,PERFECT,180 actions matched
+74909,PERFECT,397 actions matched
+74960,PERFECT,92 actions matched
+74978,PERFECT,930 actions matched
+74984,PERFECT,455 actions matched
+74985,PERFECT,2 actions matched
+74998,DROPPED,filtered by cleaning
+75005,PERFECT,253 actions matched
+75010,PERFECT,735 actions matched
+75032,PERFECT,753 actions matched
+75055,PERFECT,904 actions matched
+75107,PERFECT,810 actions matched
+75128,PERFECT,537 actions matched
+75173,DROPPED,filtered by cleaning
+75201,PERFECT,848 actions matched
+75211,PERFECT,807 actions matched
+75229,DROPPED,not_finished (game status: active)
+75240,PERFECT,890 actions matched
+75254,PERFECT,733 actions matched
+75340,PERFECT,769 actions matched
+75355,DROPPED,not_finished (game status: archived)
+75361,PERFECT,847 actions matched
+75511,DROPPED,filtered by cleaning
+75608,PERFECT,645 actions matched
+75621,PERFECT,26 actions matched
+75720,PERFECT,570 actions matched
+75727,PERFECT,616 actions matched
+75736,PERFECT,354 actions matched
+75777,PERFECT,924 actions matched
+75780,PERFECT,974 actions matched
+75812,PERFECT,418 actions matched
+75976,DROPPED,filtered by cleaning
+75987,DROPPED,not_finished (game status: archived)
+76000,PERFECT,882 actions matched
+76010,PERFECT,746 actions matched
+76028,DROPPED,filtered by cleaning
+76105,PERFECT,537 actions matched
+76108,PERFECT,737 actions matched
+76125,PERFECT,850 actions matched
+76140,PERFECT,536 actions matched
+76160,PERFECT,3 actions matched
+76227,PERFECT,527 actions matched
+76264,PERFECT,592 actions matched
+76277,PERFECT,1 actions matched
+76280,DROPPED,not_finished (game status: active)
+76322,PERFECT,476 actions matched
+76333,PERFECT,730 actions matched
+76342,DROPPED,filtered by cleaning
+76384,PERFECT,817 actions matched
+76388,PERFECT,953 actions matched
+76391,PERFECT,743 actions matched
+76394,PERFECT,872 actions matched
+76450,PERFECT,791 actions matched
+76457,PERFECT,380 actions matched
+76465,DROPPED,filtered by cleaning
+76499,PERFECT,398 actions matched
+76555,PERFECT,703 actions matched
+76562,PERFECT,928 actions matched
+76590,PERFECT,619 actions matched
+76612,PERFECT,848 actions matched
+76632,PERFECT,510 actions matched
+76637,DROPPED,filtered by cleaning
+76640,PERFECT,717 actions matched
+76763,PERFECT,780 actions matched
+76770,PERFECT,294 actions matched
+76838,PERFECT,847 actions matched
+76855,PERFECT,769 actions matched
+76907,PERFECT,8 actions matched
+76915,PERFECT,832 actions matched
+76931,PERFECT,509 actions matched
+76998,PERFECT,1007 actions matched
+77011,PERFECT,927 actions matched
+77089,PERFECT,709 actions matched
+77102,PERFECT,794 actions matched
+77181,PERFECT,497 actions matched
+77190,PERFECT,655 actions matched
+77191,PERFECT,747 actions matched
+77207,DROPPED,not_finished (game status: active)
+77216,PERFECT,291 actions matched
+77231,PERFECT,521 actions matched
+77252,PERFECT,860 actions matched
+77265,DROPPED,filtered by cleaning
+77268,PERFECT,0 actions matched
+77272,DROPPED,filtered by cleaning
+77323,PERFECT,899 actions matched
+77392,PERFECT,840 actions matched
+77430,PERFECT,0 actions matched
+77431,PERFECT,479 actions matched
+77434,PERFECT,557 actions matched
+77513,PERFECT,935 actions matched
+77527,PERFECT,637 actions matched
+77535,PERFECT,525 actions matched
+77635,PERFECT,627 actions matched
+77644,DROPPED,not_finished (game status: archived)
+77660,DROPPED,not_finished (game status: active)
+77662,DROPPED,not_finished (game status: active)
+77669,PERFECT,360 actions matched
+77704,PERFECT,935 actions matched
+77757,PERFECT,668 actions matched
+77789,PERFECT,733 actions matched
+77794,PERFECT,489 actions matched
+77832,PERFECT,797 actions matched
+77974,DROPPED,filtered by cleaning
+77990,DROPPED,not_finished (game status: archived)
+77992,PERFECT,409 actions matched
+78094,PERFECT,146 actions matched
+78101,PERFECT,800 actions matched
+78106,PERFECT,922 actions matched
+78111,PERFECT,474 actions matched
+78112,PERFECT,78 actions matched
+78127,PERFECT,822 actions matched
+78146,PERFECT,872 actions matched
+78203,DROPPED,filtered by cleaning
+78211,PERFECT,597 actions matched
+78221,PERFECT,605 actions matched
+78246,PERFECT,464 actions matched
+78347,PERFECT,803 actions matched
+78404,PERFECT,384 actions matched
+78406,PERFECT,260 actions matched
+78413,PERFECT,628 actions matched
+78431,DROPPED,filtered by cleaning
+78462,PERFECT,808 actions matched
+78468,PERFECT,632 actions matched
+78604,PERFECT,775 actions matched
+78613,PERFECT,453 actions matched
+78644,PERFECT,930 actions matched
+78680,PERFECT,425 actions matched
+78689,PERFECT,696 actions matched
+78693,PERFECT,703 actions matched
+78785,PERFECT,453 actions matched
+78787,PERFECT,442 actions matched
+78805,PERFECT,340 actions matched
+78895,PERFECT,748 actions matched
+78920,PERFECT,783 actions matched
+78923,PERFECT,787 actions matched
+78981,PERFECT,778 actions matched
+78995,PERFECT,692 actions matched
+79004,DROPPED,not_finished (game status: archived)
+79019,PERFECT,827 actions matched
+79023,PERFECT,412 actions matched
+79029,PERFECT,428 actions matched
+79053,PERFECT,614 actions matched
+79054,PERFECT,487 actions matched
+79081,PERFECT,235 actions matched
+79092,PERFECT,781 actions matched
+79105,DROPPED,not_finished (game status: active)
+79107,PERFECT,510 actions matched
+79115,PERFECT,896 actions matched
+79159,PERFECT,794 actions matched
+79182,PERFECT,373 actions matched
+79188,PERFECT,950 actions matched
+79216,PERFECT,326 actions matched
+79245,PERFECT,750 actions matched
+79287,PERFECT,450 actions matched
+79335,PERFECT,753 actions matched
+79363,PERFECT,784 actions matched
+79377,PERFECT,854 actions matched
+79402,PERFECT,824 actions matched
+79458,PERFECT,503 actions matched
+79469,PERFECT,728 actions matched
+79484,PERFECT,457 actions matched
+79503,PERFECT,717 actions matched
+79548,PERFECT,687 actions matched
+79554,PERFECT,538 actions matched
+79584,PERFECT,629 actions matched
+79632,DROPPED,filtered by cleaning
+79710,PERFECT,579 actions matched
+79779,PERFECT,514 actions matched
+79795,PERFECT,891 actions matched
+79824,PERFECT,1001 actions matched
+79826,PERFECT,619 actions matched
+79934,PERFECT,718 actions matched
+80008,PERFECT,759 actions matched
+80201,PERFECT,944 actions matched
+80205,PERFECT,814 actions matched
+80228,PERFECT,176 actions matched
+80249,DROPPED,filtered by cleaning
+80251,PERFECT,839 actions matched
+80274,DROPPED,not_finished (game status: active)
+80308,DROPPED,not_finished (game status: active)
+80335,PERFECT,494 actions matched
+80350,PERFECT,435 actions matched
+80364,PERFECT,830 actions matched
+80431,PERFECT,775 actions matched
+80476,PERFECT,851 actions matched
+80502,PERFECT,502 actions matched
+80520,PERFECT,47 actions matched
+80531,PERFECT,320 actions matched
+80568,DROPPED,not_finished (game status: active)
+80592,PERFECT,814 actions matched
+80659,PERFECT,500 actions matched
+80685,DROPPED,filtered by cleaning
+80745,PERFECT,805 actions matched
+80791,PERFECT,211 actions matched
+80846,PERFECT,273 actions matched
+80883,DROPPED,not_finished (game status: active)
+80887,PERFECT,427 actions matched
+80894,PERFECT,789 actions matched
+80905,PERFECT,841 actions matched
+80909,PERFECT,845 actions matched
+80925,PERFECT,484 actions matched
+81062,PERFECT,712 actions matched
+81067,PERFECT,498 actions matched
+81079,PERFECT,1074 actions matched
+81083,PERFECT,461 actions matched
+81087,PERFECT,894 actions matched
+81093,PERFECT,382 actions matched
+81096,PERFECT,732 actions matched
+81100,PERFECT,949 actions matched
+81119,PERFECT,842 actions matched
+81183,DROPPED,filtered by cleaning
+81194,PERFECT,224 actions matched
+81229,PERFECT,492 actions matched
+81231,PERFECT,705 actions matched
+81242,DROPPED,not_finished (game status: active)
+81282,PERFECT,510 actions matched
+81291,PERFECT,868 actions matched
+81305,PERFECT,476 actions matched
+81328,PERFECT,1035 actions matched
+81332,PERFECT,534 actions matched
+81340,DROPPED,filtered by cleaning
+81376,PERFECT,439 actions matched
+81415,PERFECT,1 actions matched
+81460,PERFECT,830 actions matched
+81509,PERFECT,755 actions matched
+81526,PERFECT,334 actions matched
+81531,PERFECT,373 actions matched
+81554,PERFECT,902 actions matched
+81576,PERFECT,875 actions matched
+81582,PERFECT,485 actions matched
+81625,PERFECT,479 actions matched
+81632,PERFECT,696 actions matched
+81639,DROPPED,not_finished (game status: new)
+81664,PERFECT,745 actions matched
+81667,PERFECT,451 actions matched
+81679,PERFECT,359 actions matched
+81684,DROPPED,not_finished (game status: archived)
+81702,DROPPED,not_finished (game status: active)
+81711,PERFECT,709 actions matched
+81717,PERFECT,769 actions matched
+81722,PERFECT,425 actions matched
+81730,PERFECT,918 actions matched
+81777,PERFECT,206 actions matched
+81803,PERFECT,859 actions matched
+81806,PERFECT,428 actions matched
+81851,PERFECT,103 actions matched
+81863,PERFECT,809 actions matched
+81891,PERFECT,914 actions matched
+81901,PERFECT,204 actions matched
+81905,PERFECT,447 actions matched
+81911,DROPPED,not_finished (game status: active)
+82019,PERFECT,456 actions matched
+82031,PERFECT,572 actions matched
+82032,PERFECT,468 actions matched
+82065,PERFECT,955 actions matched
+82073,PERFECT,904 actions matched
+82086,PERFECT,411 actions matched
+82088,PERFECT,875 actions matched
+82094,PERFECT,134 actions matched
+82125,DROPPED,filtered by cleaning
+82127,PERFECT,799 actions matched
+82133,PERFECT,742 actions matched
+82200,PERFECT,447 actions matched
+82201,PERFECT,778 actions matched
+82205,PERFECT,0 actions matched
+82210,DROPPED,filtered by cleaning
+82256,PERFECT,491 actions matched
+82276,PERFECT,688 actions matched
+82292,PERFECT,544 actions matched
+82297,DROPPED,not_finished (game status: active)
+82307,PERFECT,937 actions matched
+82314,PERFECT,120 actions matched
+82335,PERFECT,557 actions matched
+82339,PERFECT,964 actions matched
+82343,PERFECT,774 actions matched
+82357,PERFECT,373 actions matched
+82362,PERFECT,49 actions matched
+82373,PERFECT,745 actions matched
+82384,PERFECT,846 actions matched
+82395,PERFECT,627 actions matched
+82416,PERFECT,45 actions matched
+82417,PERFECT,800 actions matched
+82419,PERFECT,435 actions matched
+82431,PERFECT,916 actions matched
+82437,PERFECT,810 actions matched
+82460,PERFECT,370 actions matched
+82538,PERFECT,59 actions matched
+82542,DROPPED,not_finished (game status: active)
+82543,DROPPED,not_finished (game status: active)
+82544,DROPPED,not_finished (game status: active)
+82545,DROPPED,not_finished (game status: active)
+82546,DROPPED,not_finished (game status: active)
+82547,DROPPED,not_finished (game status: active)
+82548,PERFECT,359 actions matched
+82549,PERFECT,808 actions matched
+82550,PERFECT,377 actions matched
+82551,DROPPED,not_finished (game status: active)
+82552,DROPPED,not_finished (game status: active)
+82553,PERFECT,831 actions matched
+82554,PERFECT,780 actions matched
+82555,DROPPED,not_finished (game status: active)
+82556,PERFECT,751 actions matched
+82557,DROPPED,not_finished (game status: active)
+82558,PERFECT,742 actions matched
+82559,PERFECT,353 actions matched
+82560,PERFECT,798 actions matched
+82561,PERFECT,870 actions matched
+82562,DROPPED,not_finished (game status: active)
+82563,PERFECT,1091 actions matched
+82564,PERFECT,810 actions matched
+82565,PERFECT,827 actions matched
+82566,DROPPED,not_finished (game status: archived)
+82567,DROPPED,not_finished (game status: active)
+82568,DROPPED,not_finished (game status: active)
+82569,DROPPED,not_finished (game status: active)
+82570,PERFECT,779 actions matched
+82571,PERFECT,870 actions matched
+82572,PERFECT,900 actions matched
+82573,DROPPED,not_finished (game status: active)
+82574,PERFECT,721 actions matched
+82575,PERFECT,625 actions matched
+82576,PERFECT,794 actions matched
+82577,PERFECT,829 actions matched
+82578,PERFECT,843 actions matched
+82579,PERFECT,380 actions matched
+82580,PERFECT,953 actions matched
+82581,PERFECT,312 actions matched
+82582,DROPPED,not_finished (game status: active)
+82583,PERFECT,415 actions matched
+82584,DROPPED,not_finished (game status: active)
+82585,PERFECT,704 actions matched
+82586,PERFECT,532 actions matched
+82587,PERFECT,477 actions matched
+82588,PERFECT,1026 actions matched
+82589,DROPPED,not_finished (game status: active)
+82590,PERFECT,886 actions matched
+82591,PERFECT,570 actions matched
+82592,PERFECT,850 actions matched
+82593,PERFECT,327 actions matched
+82594,PERFECT,492 actions matched
+82595,PERFECT,442 actions matched
+82596,DROPPED,not_finished (game status: active)
+82597,PERFECT,565 actions matched
+82598,PERFECT,779 actions matched
+82599,PERFECT,736 actions matched
+82600,PERFECT,888 actions matched
+82601,PERFECT,992 actions matched
+82602,PERFECT,340 actions matched
+82603,PERFECT,786 actions matched
+82604,PERFECT,799 actions matched
+82605,PERFECT,897 actions matched
+82606,PERFECT,395 actions matched
+82607,PERFECT,862 actions matched
+82608,PERFECT,720 actions matched
+82609,PERFECT,937 actions matched
+82610,PERFECT,876 actions matched
+82611,PERFECT,857 actions matched
+82612,PERFECT,872 actions matched
+82613,PERFECT,915 actions matched
+82614,PERFECT,437 actions matched
+82615,PERFECT,773 actions matched
+82616,PERFECT,699 actions matched
+82617,PERFECT,815 actions matched
+82618,PERFECT,864 actions matched
+82619,PERFECT,803 actions matched
+82620,PERFECT,857 actions matched
+82621,PERFECT,764 actions matched
+82622,PERFECT,902 actions matched
+82623,PERFECT,353 actions matched
+82624,PERFECT,879 actions matched
+82625,PERFECT,444 actions matched
+82626,PERFECT,820 actions matched
+82627,PERFECT,899 actions matched
+82628,PERFECT,525 actions matched
+82629,DROPPED,not_finished (game status: active)
+82630,PERFECT,762 actions matched
+82631,PERFECT,921 actions matched
+82632,PERFECT,856 actions matched
+82633,PERFECT,344 actions matched
+82634,PERFECT,852 actions matched
+82635,PERFECT,438 actions matched
+82636,PERFECT,746 actions matched
+82637,PERFECT,841 actions matched
+82638,PERFECT,915 actions matched
+82639,PERFECT,738 actions matched
+82640,DROPPED,not_finished (game status: active)
+82641,DROPPED,not_finished (game status: active)
+82642,PERFECT,730 actions matched
+82643,DROPPED,not_finished (game status: active)
+82644,DROPPED,not_finished (game status: active)
+82645,DROPPED,not_finished (game status: active)
+82646,PERFECT,448 actions matched
+82647,PERFECT,808 actions matched
+82648,PERFECT,727 actions matched
+82649,PERFECT,426 actions matched
+82650,PERFECT,952 actions matched
+82651,PERFECT,887 actions matched
+82652,PERFECT,407 actions matched
+82653,PERFECT,436 actions matched
+82654,PERFECT,1035 actions matched
+82655,PERFECT,362 actions matched
+82656,PERFECT,862 actions matched
+82657,PERFECT,519 actions matched
+82658,PERFECT,508 actions matched
+82659,PERFECT,870 actions matched
+82660,PERFECT,878 actions matched
+82661,PERFECT,787 actions matched
+82662,PERFECT,867 actions matched
+82663,PERFECT,855 actions matched
+82664,PERFECT,337 actions matched
+82665,PERFECT,811 actions matched
+82666,PERFECT,797 actions matched
+82667,PERFECT,410 actions matched
+82668,PERFECT,803 actions matched
+82669,PERFECT,362 actions matched
+82670,PERFECT,418 actions matched
+82671,PERFECT,722 actions matched
+82672,PERFECT,356 actions matched
+82673,PERFECT,301 actions matched
+82674,PERFECT,587 actions matched
+82675,PERFECT,879 actions matched
+82676,PERFECT,517 actions matched
+82687,PERFECT,426 actions matched
+82700,PERFECT,21 actions matched
+82708,DROPPED,not_finished (game status: active)
+82724,PERFECT,979 actions matched
+82728,PERFECT,785 actions matched
+82737,DROPPED,not_finished (game status: active)
+82770,PERFECT,354 actions matched
+82817,DROPPED,not_finished (game status: active)
+82863,PERFECT,955 actions matched
+82875,PERFECT,711 actions matched
+82922,DROPPED,not_finished (game status: active)
+82947,PERFECT,819 actions matched
+82980,DROPPED,not_finished (game status: new)
+82990,PERFECT,346 actions matched
+83008,PERFECT,426 actions matched
+83013,PERFECT,386 actions matched
+83023,PERFECT,909 actions matched
+83098,PERFECT,697 actions matched
+83129,PERFECT,600 actions matched
+83143,DROPPED,not_finished (game status: active)
+83156,PERFECT,862 actions matched
+83168,PERFECT,442 actions matched
+83172,PERFECT,540 actions matched
+83185,PERFECT,640 actions matched
+83207,PERFECT,414 actions matched
+83219,PERFECT,934 actions matched
+83228,PERFECT,425 actions matched
+83230,PERFECT,714 actions matched
+83231,PERFECT,0 actions matched
+83276,PERFECT,1003 actions matched
+83277,DROPPED,filtered by cleaning
+83278,PERFECT,532 actions matched
+83280,DROPPED,not_finished (game status: archived)
+83289,PERFECT,417 actions matched
+83307,PERFECT,354 actions matched
+83308,PERFECT,809 actions matched
+83319,DROPPED,not_finished (game status: active)
+83345,DROPPED,not_finished (game status: active)
+83366,PERFECT,790 actions matched
+83375,PERFECT,878 actions matched
+83401,PERFECT,406 actions matched
+83416,PERFECT,390 actions matched
+83454,DROPPED,not_finished (game status: active)
+83480,DROPPED,filtered by cleaning
+83524,PERFECT,456 actions matched
+83579,PERFECT,420 actions matched
+83605,PERFECT,201 actions matched
+83607,PERFECT,391 actions matched
+83619,DROPPED,not_finished (game status: active)
+83642,DROPPED,not_finished (game status: new)
+83665,PERFECT,892 actions matched
+83764,PERFECT,932 actions matched
+83785,DROPPED,filtered by cleaning
+83818,PERFECT,928 actions matched
+83822,PERFECT,473 actions matched
+83875,PERFECT,853 actions matched
+83891,PERFECT,865 actions matched
+83909,PERFECT,359 actions matched
+83915,DROPPED,filtered by cleaning
+84040,DROPPED,filtered by cleaning
+84041,DROPPED,not_finished (game status: active)
+84055,PERFECT,792 actions matched
+84099,PERFECT,176 actions matched
+84104,DROPPED,not_finished (game status: active)
+84170,DROPPED,not_finished (game status: active)
+84183,PERFECT,511 actions matched
+84191,DROPPED,filtered by cleaning
+84211,PERFECT,846 actions matched
+84212,PERFECT,908 actions matched
+84253,DROPPED,not_finished (game status: active)
+84308,PERFECT,202 actions matched
+84383,PERFECT,31 actions matched
+84398,PERFECT,649 actions matched
+84427,PERFECT,786 actions matched
+84528,PERFECT,329 actions matched
+84560,PERFECT,529 actions matched
+84601,PERFECT,800 actions matched
+84622,PERFECT,433 actions matched
+84658,DROPPED,not_finished (game status: active)
+84722,DROPPED,not_finished (game status: active)
+84748,PERFECT,691 actions matched
+84769,DROPPED,not_finished (game status: active)
+84774,DROPPED,filtered by cleaning
+84829,PERFECT,614 actions matched
+84845,PERFECT,146 actions matched
+84885,PERFECT,777 actions matched
+84931,DROPPED,not_finished (game status: active)
+84955,PERFECT,853 actions matched
+85162,DROPPED,not_finished (game status: active)
+85170,PERFECT,865 actions matched
+85171,PERFECT,441 actions matched
+85172,PERFECT,12 actions matched
+85173,PERFECT,477 actions matched
+85193,PERFECT,597 actions matched
+85203,PERFECT,0 actions matched
+85210,PERFECT,323 actions matched
+85215,PERFECT,459 actions matched
+85244,PERFECT,478 actions matched
+85254,PERFECT,399 actions matched
+85268,PERFECT,4 actions matched
+85290,PERFECT,990 actions matched
+85409,DROPPED,not_finished (game status: active)
+85429,PERFECT,454 actions matched
+85445,DROPPED,filtered by cleaning
+85472,PERFECT,366 actions matched
+85481,DROPPED,not_finished (game status: active)
+85502,PERFECT,233 actions matched
+85538,DROPPED,not_finished (game status: active)
+85562,PERFECT,139 actions matched
+85577,PERFECT,148 actions matched
+85586,PERFECT,790 actions matched
+85593,DROPPED,not_finished (game status: active)
+85604,PERFECT,679 actions matched
+85608,DROPPED,not_finished (game status: active)
+85610,PERFECT,508 actions matched
+85621,PERFECT,885 actions matched
+85623,PERFECT,494 actions matched
+85631,PERFECT,48 actions matched
+85657,PERFECT,524 actions matched
+85664,DROPPED,not_finished (game status: active)
+85670,PERFECT,831 actions matched
+85684,PERFECT,0 actions matched
+85700,PERFECT,408 actions matched
+85707,PERFECT,482 actions matched
+85778,PERFECT,533 actions matched
+85816,DROPPED,filtered by cleaning
+85835,PERFECT,866 actions matched
+85852,PERFECT,389 actions matched
+85859,DROPPED,not_finished (game status: active)
+85872,DROPPED,not_finished (game status: active)
+85886,PERFECT,477 actions matched
+85890,DROPPED,filtered by cleaning
+85891,PERFECT,594 actions matched
+85949,PERFECT,487 actions matched
+85953,DROPPED,not_finished (game status: active)
+85971,PERFECT,748 actions matched
+86016,PERFECT,485 actions matched
+86032,PERFECT,578 actions matched
+86048,DROPPED,not_finished (game status: active)
+86050,PERFECT,769 actions matched
+86051,DROPPED,not_finished (game status: active)
+86075,DROPPED,not_finished (game status: active)
+86081,PERFECT,659 actions matched
+86101,DROPPED,not_finished (game status: active)
+86138,DROPPED,not_finished (game status: active)
+86182,DROPPED,not_finished (game status: active)
+86189,PERFECT,781 actions matched
+86190,PERFECT,741 actions matched
+86220,DROPPED,not_finished (game status: active)
+86228,DROPPED,not_finished (game status: active)
+86231,DROPPED,not_finished (game status: active)
+86244,PERFECT,403 actions matched
+86277,DROPPED,not_finished (game status: active)
+86285,DROPPED,not_finished (game status: active)
+86319,PERFECT,529 actions matched
+86336,DROPPED,not_finished (game status: active)
+86340,DROPPED,not_finished (game status: active)
+86402,DROPPED,not_finished (game status: active)
+86403,DROPPED,not_finished (game status: active)
+86413,DROPPED,not_finished (game status: active)
+86432,DROPPED,filtered by cleaning
+86492,PERFECT,552 actions matched
+86504,DROPPED,not_finished (game status: active)
+86506,DROPPED,not_finished (game status: active)
+86604,DROPPED,not_finished (game status: active)
+86622,PERFECT,0 actions matched
+86641,DROPPED,not_finished (game status: active)
+86663,DROPPED,not_finished (game status: active)
+86713,DROPPED,not_finished (game status: active)
+86775,PERFECT,690 actions matched
+86776,DROPPED,not_finished (game status: active)
+86777,DROPPED,not_finished (game status: new)
+86798,DROPPED,not_finished (game status: active)
+87050,PERFECT,505 actions matched
+87056,PERFECT,497 actions matched
+87072,PERFECT,9 actions matched
+87098,PERFECT,272 actions matched
+87124,DROPPED,not_finished (game status: active)
+87140,DROPPED,not_finished (game status: active)
+87144,DROPPED,not_finished (game status: active)
+87146,PERFECT,367 actions matched
+87215,PERFECT,14 actions matched
+87289,DROPPED,not_finished (game status: active)
+87371,DROPPED,not_finished (game status: active)
+87384,PERFECT,512 actions matched
+87433,PERFECT,926 actions matched
+87454,DROPPED,filtered by cleaning
+87457,PERFECT,21 actions matched
+87510,DROPPED,not_finished (game status: active)
+87527,DROPPED,not_finished (game status: active)
+87543,PERFECT,645 actions matched
+87590,DROPPED,not_finished (game status: active)
+87595,PERFECT,6 actions matched
+87700,PERFECT,779 actions matched
+87716,DROPPED,not_finished (game status: active)
+87717,DROPPED,not_finished (game status: active)
+87764,PERFECT,368 actions matched
+87769,DROPPED,not_finished (game status: active)
+87785,PERFECT,4 actions matched
+87786,DROPPED,not_finished (game status: active)
+87796,DROPPED,not_finished (game status: active)
+87830,DROPPED,not_finished (game status: active)
+87845,PERFECT,460 actions matched
+87858,DROPPED,not_finished (game status: active)
+87890,DROPPED,not_finished (game status: active)
+87895,DROPPED,not_finished (game status: active)
+87952,DROPPED,not_finished (game status: active)
+87964,DROPPED,not_finished (game status: active)
+87974,DROPPED,not_finished (game status: active)
+87991,PERFECT,0 actions matched
+88002,PERFECT,0 actions matched
+88014,PERFECT,575 actions matched
+88067,DROPPED,not_finished (game status: active)
+88108,DROPPED,not_finished (game status: active)
+88113,PERFECT,419 actions matched
+88131,DROPPED,not_finished (game status: active)
+88150,DROPPED,not_finished (game status: active)
+88166,DROPPED,not_finished (game status: active)
+88305,PERFECT,273 actions matched
+88330,PERFECT,403 actions matched
+88335,DROPPED,not_finished (game status: active)
+88343,PERFECT,26 actions matched
+88355,DROPPED,not_finished (game status: active)
+88371,DROPPED,not_finished (game status: active)
+88375,DROPPED,not_finished (game status: active)
+88390,DROPPED,not_finished (game status: active)
+88394,DROPPED,not_finished (game status: active)
+88446,DROPPED,not_finished (game status: active)
+88457,PERFECT,3 actions matched
+88473,PERFECT,853 actions matched
+88481,DROPPED,not_finished (game status: active)
+88484,PERFECT,802 actions matched
+88612,DROPPED,not_finished (game status: active)
+88613,DROPPED,not_finished (game status: active)
+88620,PERFECT,525 actions matched
+88638,DROPPED,not_finished (game status: active)
+88639,DROPPED,not_finished (game status: active)
+88673,PERFECT,560 actions matched
+88723,PERFECT,0 actions matched
+88728,PERFECT,285 actions matched
+88734,DROPPED,not_finished (game status: active)
+88741,PERFECT,16 actions matched
+88744,PERFECT,395 actions matched
+88759,PERFECT,62 actions matched
+88767,PERFECT,872 actions matched
+88769,DROPPED,not_finished (game status: active)
+88803,DROPPED,not_finished (game status: active)
+88804,DROPPED,not_finished (game status: active)
+88806,DROPPED,not_finished (game status: active)
+88813,PERFECT,372 actions matched
+88814,DROPPED,not_finished (game status: active)
+88816,DROPPED,not_finished (game status: active)
+88819,DROPPED,not_finished (game status: active)
+88822,PERFECT,1 actions matched
+88832,PERFECT,779 actions matched
+88841,DROPPED,not_finished (game status: new)
+88861,DROPPED,not_finished (game status: active)
+88868,DROPPED,not_finished (game status: active)
+88869,DROPPED,not_finished (game status: active)
+88874,PERFECT,2 actions matched
+88879,DROPPED,not_finished (game status: active)
+88882,DROPPED,not_finished (game status: active)
+88883,DROPPED,not_finished (game status: active)
+88898,DROPPED,not_finished (game status: active)
+88909,DROPPED,not_finished (game status: active)
+88924,DROPPED,not_finished (game status: active)
+88928,DROPPED,not_finished (game status: active)
+88929,DROPPED,not_finished (game status: active)
+88930,DROPPED,not_finished (game status: active)
+88967,PERFECT,0 actions matched
+88968,PERFECT,867 actions matched
+88973,DROPPED,not_finished (game status: new)
+88979,DROPPED,not_finished (game status: active)
+88990,DROPPED,not_finished (game status: active)
+89022,DROPPED,not_finished (game status: active)
+89096,PERFECT,3 actions matched
+89107,DROPPED,not_finished (game status: active)
+89112,PERFECT,258 actions matched
+89144,DROPPED,not_finished (game status: active)
+89153,PERFECT,468 actions matched
+89173,DROPPED,not_finished (game status: active)
+89202,DROPPED,not_finished (game status: active)
+89208,DROPPED,not_finished (game status: active)
+89212,DROPPED,not_finished (game status: active)
+89217,PERFECT,1 actions matched
+89234,PERFECT,230 actions matched
+89251,DROPPED,not_finished (game status: active)
+89292,DROPPED,not_finished (game status: new)
+89335,DROPPED,not_finished (game status: new)
+89336,DROPPED,not_finished (game status: active)
+89358,DROPPED,not_finished (game status: new)
