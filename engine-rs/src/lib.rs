@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 
+pub mod action_index;
 pub mod actions;
 pub mod core;
 pub mod encoder;
@@ -8,6 +9,7 @@ pub mod factored;
 pub mod game;
 pub mod graph;
 pub mod map;
+pub mod mcts;
 pub mod rounds;
 pub mod router;
 pub mod tiles;
@@ -42,6 +44,12 @@ fn engine_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<graph::Offboard>()?;
     m.add_class::<graph::Edge>()?;
     m.add_class::<graph::Upgrade>()?;
+
+    // Rust MCTS (Phase 4a scaffold)
+    m.add_class::<mcts::RustMCTSPlayer>()?;
+    m.add_function(wrap_pyfunction!(action_index::action_offsets_py, m)?)?;
+    m.add_function(wrap_pyfunction!(action_index::policy_size_py, m)?)?;
+    m.add_function(wrap_pyfunction!(action_index::legal_action_to_index_py, m)?)?;
 
     Ok(())
 }

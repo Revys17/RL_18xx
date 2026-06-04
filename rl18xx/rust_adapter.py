@@ -1825,6 +1825,18 @@ class _CorpProxy:
     def name(self):
         return self._corp.name
 
+    @property
+    def share_percent(self):
+        """Percent each non-president share represents (10 for 1830).
+
+        Mirrors Python's ``Corporation.share_percent``. Read by
+        ``ShareBundle.num_shares()`` which the pretrain action mapper
+        invokes for ``SellShares`` encoding. Hardcoded to 10 because all
+        1830 corporations split 100% into ten 10%-shares (plus a 20%
+        president cert).
+        """
+        return 10
+
     def floated(self):
         """Callable version of floated (encoder calls corp.floated())."""
         return self._corp.floated
@@ -1962,6 +1974,43 @@ class _ShareProxy:
 
     @property
     def owner(self):
+        """Owner of this share.
+
+        ``ActionMapper.canonical_index_for_action`` (the pretrain encoding
+        path) inspects ``owner.name`` to decide IPO vs Market for
+        ``BuyShares``. Earlier this returned a generic singleton (a
+        stopgap from when Rust share-index assignment occasionally
+        diverged from Python). Now we read the underlying Rust share's
+        owner string and route to the right proxy:
+
+          - ``"ipo:<sym>"`` / ``"corp:<sym>"`` → ``_BankProxy`` (name="The Bank")
+          - ``"market"``                        → ``_MarketProxy`` (name="Market")
+          - ``"player:<id>"``                   → the player object via the adapter
+          - anything else                       → ``_SHARE_OWNER_SINGLETON``
+            (graceful fallback; ShareBundle's owner-uniqueness check still
+            passes because the singleton compares equal to itself).
+
+        ``_BankProxy`` / ``_MarketProxy`` already implement ``__eq__`` /
+        ``__hash__`` such that two fresh instances compare equal, so
+        ``ShareBundle.__init__``'s "all shares have the same owner"
+        invariant holds when multiple shares come from the same pool.
+        """
+        try:
+            raw_owner = getattr(self._share, "owner", None) or ""
+        except Exception:
+            raw_owner = ""
+        if raw_owner == "market":
+            return _MarketProxy()
+        if raw_owner.startswith("ipo:") or raw_owner.startswith("corp:"):
+            return _BankProxy()
+        if raw_owner.startswith("player:"):
+            try:
+                pid = int(raw_owner.split(":", 1)[1])
+                for p in self._adapter.players:
+                    if getattr(p, "id", None) == pid:
+                        return p
+            except (ValueError, AttributeError):
+                pass
         return _SHARE_OWNER_SINGLETON
 
     def __eq__(self, other):

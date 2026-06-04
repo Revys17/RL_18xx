@@ -306,6 +306,32 @@ def _default_c_puct_by_round() -> dict:
     }
 
 
+@dataclass(frozen=True)
+class TraceConfig:
+    """Configuration for Phase 1 PlayoutTrace instrumentation.
+
+    Defaults stay off (``trace_game_rate=0.0``). When enabled, ``MCTSPlayer``
+    decides at game start (via a single coin flip) whether to record traces
+    for the entire game — traces are whole games, not isolated moves with no
+    surrounding context. Within a traced game, ``trace_every_n_moves``
+    selects which moves get traced and ``traces_per_move`` caps the number
+    of leaves recorded per traced move.
+
+    Trace output is one JSONL file per traced game at
+    ``output_dir/{iteration}/{game_id}.jsonl`` with a header line carrying a
+    config snapshot + player ids.
+    """
+
+    trace_game_rate: float = 0.0
+    trace_every_n_moves: int = 1
+    traces_per_move: int = 4
+    output_dir: Path = field(default_factory=lambda: Path("traces"))
+
+
+def _default_trace_config() -> "TraceConfig":
+    return TraceConfig()
+
+
 def _default_player_count_distribution() -> dict:
     """Default sampling distribution over self-play player counts.
 
@@ -365,6 +391,43 @@ class SelfPlayHyperparams:
     # games (the legacy behaviour). Keys = player counts in 2..6; values =
     # weights normalized at sample time.
     player_count_distribution: dict = field(default_factory=_default_player_count_distribution)
+    # Phase 1 PlayoutTrace instrumentation (debug only — off by default).
+    trace: TraceConfig = field(default_factory=_default_trace_config)
+    # Phase 2 multiplayer consensus resign. End decisively-lost games early
+    # based on a rolling window of root Q vectors. See
+    # docs/mcts_improvements_plan.md "Phase 2 — Multiplayer consensus resign".
+    enable_resign: bool = True
+    # ``K`` in the spec — number of recent moves the leader/gap conditions
+    # must hold over.
+    resign_window: int = 8
+    # Minimum ``min_over_window(Q_leader)`` required to resign. Holdout
+    # calibration adjusts this between iterations.
+    resign_high_threshold: float = 0.65
+    # Minimum ``min_over_window(Q_leader - Q_second)`` required to resign.
+    # Held fixed by the calibration (margin, not confidence claim).
+    resign_gap_threshold: float = 0.30
+    # Fraction of games that are flagged as no-resign holdouts at game start.
+    # Holdouts play to completion regardless of resign signal; the would-have-
+    # resigned moment is recorded for false-positive-rate calibration.
+    noresign_holdout_rate: float = 0.10
+    # Lower clamp on auto-calibrated ``resign_high_threshold``.
+    resign_high_threshold_min: float = 0.45
+    # Phase 3 cross-process inference server. Defaults stay off — the
+    # legacy in-process inference path remains the production path until
+    # a real training run verifies the server's parity + GPU contention
+    # behaviour. When ``True``, ``MCTSPlayer`` routes both ``run_encoded``
+    # (first-node expansion) and ``run_many_encoded`` (tree_search batch)
+    # through ``SelfPlayConfig.inference_client`` instead of the local
+    # model. See docs/mcts_improvements_plan.md "Phase 3".
+    use_inference_server: bool = False
+    inference_batch_size: int = 64
+    inference_batch_timeout_ms: float = 2.0
+    # Phase 4b Rust MCTS. Defaults off until parity is verified on a full
+    # training run. When True, ``SelfPlay`` instantiates ``RustMCTSPlayer``
+    # from rust_mcts_player.py instead of the Python ``MCTSPlayer``.
+    # Categorical-only — Bid/BuyTrain/BuyCompany slots are treated as
+    # fixed-price at price_range[0]. PW + continuous prices land in 4c.
+    use_rust_mcts: bool = False
 
     def __post_init__(self):
         assert self.softpick_move_cutoff % 2 == 0
@@ -393,6 +456,9 @@ class SelfPlayRuntime:
     game_idx_in_iteration: int = 0
     game_id: Optional[str] = None
     selfplay_dir: Any = "selfplay"
+    # Phase 3 cross-process inference client. When set on a worker, MCTS
+    # routes inference through this object instead of ``network``.
+    inference_client: Any = None
 
     def __post_init__(self):
         if self.game_id is None:

@@ -146,6 +146,30 @@
             <div class="health-card neutral" id="card-iter-time"><div class="health-card-label">Iteration Time</div><div class="health-card-value">--</div><div class="health-card-delta delta-neutral"></div></div>
         </div>
 
+        <!-- Pretraining panel (hidden when no pretrain runs exist) -->
+        <div id="pretrain-section" style="display:none;">
+            <div class="charts-row" style="margin-bottom:6px;">
+                <div class="panel" style="padding:8px 14px;">
+                    <h2 style="margin:0 0 4px 0;">Pretraining
+                        <span id="pretrain-status" style="font-weight:normal;font-size:0.8em;margin-left:8px;color:#8b8fa3;">--</span>
+                    </h2>
+                    <div style="display:flex;gap:18px;font-size:0.85em;color:#8b8fa3;">
+                        <div><span style="color:#6c8cff;">Run:</span> <span id="pretrain-run">--</span></div>
+                        <div><span style="color:#6c8cff;">Epochs:</span> <span id="pretrain-epochs">--</span></div>
+                        <div><span style="color:#6c8cff;">Examples:</span> <span id="pretrain-examples">--</span></div>
+                        <div><span style="color:#6c8cff;">Top-1:</span> <span id="pretrain-top1">--</span></div>
+                        <div><span style="color:#6c8cff;">Top-5:</span> <span id="pretrain-top5">--</span></div>
+                        <div><span style="color:#6c8cff;">Best val:</span> <span id="pretrain-best-val">--</span></div>
+                    </div>
+                </div>
+            </div>
+            <div class="charts-row">
+                <div class="panel"><h2>Pretrain Loss (per epoch)</h2><div class="chart-container"><canvas id="c-pretrain-loss"></canvas></div></div>
+                <div class="panel"><h2>Pretrain Top-K Accuracy</h2><div class="chart-container"><canvas id="c-pretrain-acc"></canvas></div></div>
+            </div>
+        </div>
+
+        <h2 style="margin:18px 0 6px 0;border-bottom:1px solid #2a2e3a;padding-bottom:4px;">Self-Play / Training Loop</h2>
         <!-- Row 1 --><div class="charts-row">
             <div class="panel"><h2>Losses</h2><div class="chart-container"><canvas id="c-losses"></canvas></div></div>
             <div class="panel"><h2>Entropy &amp; KL</h2><div class="chart-container"><canvas id="c-entropy"></canvas></div></div>
@@ -306,7 +330,40 @@
         C.auxCorr=new Chart(document.getElementById('c-aux-corr'),{type:'line',data:{labels:[],datasets:[ds('Correlation','#a78bfa')]},options:opts('Correlation',{min:-1,max:1})});
         C.lr=new Chart(document.getElementById('c-lr'),{type:'line',data:{labels:[],datasets:[ds('Learning Rate','#6c8cff')]},options:opts('LR')});
         C.legalActions=new Chart(document.getElementById('c-legal-actions'),{type:'line',data:{labels:[],datasets:[ds('Mean Legal Actions','#4ade80')]},options:opts('Actions')});
+        C.pretrainLoss=new Chart(document.getElementById('c-pretrain-loss'),{type:'line',data:{labels:[],datasets:[ds('Total','#6c8cff'),ds('Policy','#4ade80'),ds('Value','#fb923c')]},options:opts('Loss')});
+        C.pretrainAcc=new Chart(document.getElementById('c-pretrain-acc'),{type:'line',data:{labels:[],datasets:[ds('Top-1','#4ade80'),ds('Top-5','#22d3ee')]},options:opts('Accuracy',{min:0,max:1})});
     }
+
+    function updatePretrainPanel(summary){
+        const section=document.getElementById('pretrain-section');
+        if(!summary||!summary.run_name){section.style.display='none';return;}
+        section.style.display='block';
+        document.getElementById('pretrain-run').textContent=summary.run_name;
+        const inProg=!!summary.in_progress;
+        document.getElementById('pretrain-status').textContent=inProg?'(in progress)':'(completed)';
+        document.getElementById('pretrain-status').style.color=inProg?'#fb923c':'#4ade80';
+        const planned=summary.epochs_planned||summary.epochs_trained||0;
+        document.getElementById('pretrain-epochs').textContent=(summary.epochs_trained||0)+'/'+planned;
+        document.getElementById('pretrain-examples').textContent=(summary.training_examples||0).toLocaleString();
+        const top1=summary.top1_accuracy;const top5=summary.top5_accuracy;
+        document.getElementById('pretrain-top1').textContent=top1!=null?(top1*100).toFixed(2)+'%':'--';
+        document.getElementById('pretrain-top5').textContent=top5!=null?(top5*100).toFixed(2)+'%':'--';
+        const bv=summary.best_val_loss;
+        document.getElementById('pretrain-best-val').textContent=bv!=null?bv.toFixed(4):'--';
+        // Chart updates.
+        const epochs=(summary.epoch_losses||[]).map((_,i)=>i+1);
+        C.pretrainLoss.data.labels=epochs;
+        C.pretrainLoss.data.datasets[0].data=summary.epoch_losses||[];
+        C.pretrainLoss.data.datasets[1].data=summary.epoch_policy_losses||[];
+        C.pretrainLoss.data.datasets[2].data=summary.epoch_value_losses||[];
+        C.pretrainLoss.update('none');
+        C.pretrainAcc.data.labels=epochs;
+        C.pretrainAcc.data.datasets[0].data=summary.epoch_top1_accuracy||[];
+        C.pretrainAcc.data.datasets[1].data=summary.epoch_top5_accuracy||[];
+        C.pretrainAcc.update('none');
+    }
+
+    function fetchPretrainSummary(){fetch('/api/pretrain_runs?latest=true').then(r=>r.json()).then(updatePretrainPanel).catch(()=>{});}
 
     function updateHealthCards(history){
         if(!history.length)return;
@@ -430,8 +487,8 @@
     function fetchStatus(){fetch('/api/current_status').then(r=>r.json()).then(s=>{updateHeaderStatus(s);}).catch(()=>{});}
 
     document.addEventListener('DOMContentLoaded',function(){
-        initCharts();fetchStatus();fetchGamesStatus();fetchMetricsHistory();fetchModelHistory();updateSystemMetrics();
-        setInterval(fetchGamesStatus,1000);setInterval(fetchStatus,2000);setInterval(updateSystemMetrics,3000);setInterval(fetchMetricsHistory,5000);setInterval(fetchModelHistory,10000);
+        initCharts();fetchStatus();fetchGamesStatus();fetchMetricsHistory();fetchModelHistory();fetchPretrainSummary();updateSystemMetrics();
+        setInterval(fetchGamesStatus,1000);setInterval(fetchStatus,2000);setInterval(updateSystemMetrics,3000);setInterval(fetchMetricsHistory,5000);setInterval(fetchModelHistory,10000);setInterval(fetchPretrainSummary,5000);
     });
     </script>
 </body>
