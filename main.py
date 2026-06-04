@@ -56,6 +56,27 @@ def cmd_pretrain(args):
     )
 
 
+def cmd_clean(args):
+    """Filter raw 18xx.games JSONs through the Rust cleaning pipeline.
+
+    Reads raw games from ``--data-dir`` (default ``human_games/1830``),
+    runs ``fix_online_games`` over each — which routes through the Rust
+    engine by default — and writes the cleaned JSON dicts to
+    ``--output``. Games rejected by cleaning (unfinished, unusable
+    optional rules, ...) get a stub ``{status: "error", reason: ...}``
+    record instead, so downstream pretraining can skip them.
+    """
+    import os
+    from rl18xx.agent.alphazero.pretraining import fix_online_games
+
+    os.makedirs(args.output, exist_ok=True)
+    fix_online_games(
+        game_data_dir=args.data_dir,
+        output_dir=args.output,
+        overwrite=args.overwrite,
+    )
+
+
 def cmd_convert(args):
     from rl18xx.agent.alphazero.pretraining import convert_games_to_training_dataset
     from rl18xx.agent.alphazero.encoder import Encoder_1830
@@ -168,6 +189,12 @@ def build_parser():
         help="Model architecture if no seed checkpoint exists (default: transformer)",
     )
 
+    # clean (Rust-engine filtering + cleaning of raw 18xx.games JSONs)
+    p = sub.add_parser("clean", help="Filter raw 18xx.games JSONs through the Rust cleaning pipeline")
+    p.add_argument("--data-dir", type=str, default="human_games/1830", help="Directory of raw game JSONs (default: human_games/1830)")
+    p.add_argument("--output", type=str, default="human_games/1830_clean", help="Output directory for cleaned JSONs (default: human_games/1830_clean)")
+    p.add_argument("--overwrite", action="store_true", help="Overwrite already-cleaned outputs (default: skip)")
+
     # convert (encode games to LMDB for pretraining)
     p = sub.add_parser("convert", help="Convert cleaned game JSONs to LMDB training data")
     p.add_argument("--data-dir", type=str, default="human_games/1830_clean", help="Directory with cleaned game JSON files")
@@ -210,6 +237,7 @@ if __name__ == "__main__":
     commands = {
         "train": cmd_train,
         "pretrain": cmd_pretrain,
+        "clean": cmd_clean,
         "convert": cmd_convert,
         "arena": cmd_arena,
         "dashboard": cmd_dashboard,

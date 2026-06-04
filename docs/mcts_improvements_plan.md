@@ -16,13 +16,68 @@ Status as of writing (2026-05-28):
   is the default for `get_game_object_for_game`; `RustGameAdapter.to_dict()`
   emits the full Python schema; `fix_online_games → convert → pretrain`
   runs end-to-end on Rust. Python engine is now only a parity reference.
-- Action-mapper Rust migration: Rust side (`engine-rs/src/factored.rs`) is
-  **feature-complete** — all action types enumerate correctly, the
-  500-seed random-walk test using Rust enumeration passes 100%, and the
-  parity tests (`tests/test_factored_action_helper_rust_parity.py`) cover
-  the surface. The remaining work is refactoring Python's `ActionMapper`
-  into a thin shim around the Rust output (slot layout, encode/decode,
-  and price-head logic still live in Python). See Phase 3.5.
+- **Phase 1 PlayoutTrace landed**: `mcts.PlayoutTrace`, `TraceConfig` on
+  `SelfPlayHyperparams`, game-level coin-flip wiring through
+  `MCTSPlayer.tree_search`, `dump_traces()` JSONL output, and a
+  `scripts/view_trace.py` renderer. Off by default
+  (`trace_game_rate=0.0`); 8 tests in
+  `tests/agent/alphazero/test_playout_trace.py`.
+- **Phase 2 consensus resign landed**: `MCTSPlayer.check_resign()` with
+  rolling Q window, holdout flag, would-have-resigned tracking; resign
+  hook in `SelfPlay.play()` between `pick_move` and `play_move` reusing
+  the truncation path; per-game `termination` ∈ {"finished" |
+  "max_length" | "resigned"} written to status JSON;
+  `loop.calibrate_resign_threshold()` AlphaGo-Zero schedule (tighten on
+  fp_rate>5%, loosen after 3 iters <2%, clamp at
+  `resign_high_threshold_min`); 15 tests in
+  `tests/agent/alphazero/test_resign.py`.
+- **Phase 3 inference server landed (behind feature flag)**:
+  `inference_server.py` with `InferenceServer`, `InferenceClient`,
+  control protocol (pause/reload/health/shutdown), state machine
+  (STARTING|ACCEPTING|DRAINING|IDLE|RELOADING), batched per-leaf
+  price-component slicing. `SelfPlayConfig.use_inference_server`
+  (default `False`); when on, `MCTSPlayer._select_inference_backend`
+  routes both `run_encoded` and `run_many_encoded` through the
+  per-worker `InferenceClient`. `loop.main_loop` spawns the server
+  before iterations, pauses on training, reloads after gating, tears
+  down in `finally`. 15 unit tests in
+  `tests/agent/alphazero/test_inference_server.py` (including an MCTS
+  integration round-trip through a stub server). Real-load training-run
+  verification + `parallel_readouts: 32 → 8` quality fix are deferred
+  to follow-up; the in-process inference path remains the production
+  default.
+- **Phase 4 Rust MCTS landed (behind feature flag)**: full Rust mirror
+  of `MCTSNode` semantics in `engine-rs/src/mcts.rs` (arena tree,
+  PUCT descent, forced-chain collapse, virtual loss, backup, PW
+  progressive widening, continuous-price grandchildren). Native Rust
+  `legal_action_to_index` in `engine-rs/src/action_index.rs`;
+  `index_to_action_dict` delegates to the Python `ActionMapper` shim
+  (decoder stays Python — same as Phase 3.5 scope). Python adapter
+  `rl18xx/agent/alphazero/rust_mcts_player.py` (`RustMCTSPlayer`)
+  implements the `SelfPlay.play()` surface with the same termination
+  / extract_data / forced-chain bookkeeping as the Python
+  `MCTSPlayer`. Feature flag `SelfPlayConfig.use_rust_mcts` (default
+  `False`). Parity tests: 3 in `test_rust_mcts_parity.py`, 2 in
+  `test_rust_mcts_parity_pw.py` (visit counts within tolerance, PW
+  grandchild grow + snapped prices), 3 in
+  `test_rust_mcts_player_e2e.py` (short-loop + 30-move +
+  resign-disabled invariants). Manual smoke: full 112-move 4-player
+  self-play game with `use_rust_mcts=True` and a freshly-seeded
+  transformer model — game ran end-to-end in ~40s wall, 112 LMDB
+  samples written, no crashes. Resign is disabled on the Rust path
+  for now (no per-player root-Q accessor yet); Phase 1 PlayoutTrace
+  recording is also no-op on the Rust path. Both can be added when
+  needed.
+- Action-mapper Rust migration: **complete** — Rust side
+  (`engine-rs/src/factored.rs`) enumerates all action types; Python
+  `ActionMapper.get_legal_actions_factored` is a thin shim over
+  `state.get_factored_choices()` with a once-per-process warning when the
+  Python fallback engages (so any production-path regression is visible
+  in logs); slot layout, encode (`index_for_factored`), and decode stay
+  in Python as the spec calls for. Parity validated by:
+  500-seed random-walk + 3243-game replay audit + dedicated thin-shim
+  tests in `tests/agent/alphazero/test_action_mapper_thin_shim.py`. See
+  Phase 3.5.
 
 The four phases below are ordered so that each one buys debugging or
 benchmarking leverage for the next. Phase 4 has the largest scope and is
@@ -158,7 +213,18 @@ then 2–3 iterations of empirical calibration tuning.
 
 ---
 
-## Phase 3 — Shared cross-process inference server
+## Phase 3 — Shared cross-process inference server 🟡 LANDED, NEEDS VERIFICATION
+
+**Status (2026-05-28).** Code landed behind `use_inference_server=False`
+(default in `SelfPlayHyperparams`). Full server / client / control
+protocol / state machine in `rl18xx/agent/alphazero/inference_server.py`;
+`MCTSPlayer._select_inference_backend` swaps between local-model and
+client backends transparently; `loop.main_loop` handles spawn / pause /
+reload / shutdown lifecycle. **Not yet enabled in production** — needs
+verification on a real training run (GPU contention, RELOADING latency,
+worker death recovery) before flipping the default. The
+`parallel_readouts: 32 → 8` quality fix is also deferred to that
+verification step (the two changes are intentionally coupled).
 
 **Motivation.** `parallel_readouts=32` widens MCTS via virtual loss
 beyond the point where exploration quality is good — the search is forced
@@ -254,12 +320,38 @@ until parity is verified on a short training run.
 
 ---
 
-## Phase 3.5 — Finish action-mapper Rust migration
+## Phase 3.5 — Finish action-mapper Rust migration ✅ COMPLETE
 
-**Why this is a phase.** Phase 4 needs the action mapper to be callable
+**Status (2026-05-28): closed.** The Rust side
+(`engine-rs/src/factored.rs`) is feature-complete, the Python
+`ActionMapper.get_legal_actions_factored` is a thin shim around
+`state.get_factored_choices()`, slot layout and encode/decode live in
+Python per spec, and parity is enforced by:
+
+- `tests/test_factored_action_helper_rust_parity.py` — random-walk parity
+- `tests/agent/alphazero/test_action_mapper_thin_shim.py` — same
+  `(indices, price_ranges, action_types)` output regardless of whether
+  the underlying state is `RustGameAdapter` (Rust enumeration) or
+  Python `BaseGame` (Python `FactoredActionHelper` fallback). Also
+  verifies the once-per-process warning fires when the Python fallback
+  engages (so any worker regression slipping back into Python is visible
+  in logs).
+- `tests/agent/alphazero/test_action_mapper_canonical.py` — snapped-price
+  canonical round-trip (price-bearing slots map back to the same
+  canonical index regardless of the sampled price)
+- `tests/agent/alphazero/test_d_train_encoding.py` — D-train trade-in
+  slot encode/decode
+
+The remaining Phase 4 work (a Rust-resident encode path that doesn't
+cross FFI per child expansion) belongs in Phase 4 itself, not here — by
+then the Rust MCTS will own the tree-search loop and the encode call
+will be Rust-local rather than a Python-side `index_for_factored`
+invocation.
+
+**Why this was a phase.** Phase 4 needs the action mapper to be callable
 from Rust without crossing FFI per child expansion. The Rust-side
 implementation is now feature-complete; only the Python ActionMapper
-refactor remains.
+refactor remained.
 
 **Audit status (updated 2026-05-28).** The audit was effectively
 conducted in the random-walk + replay parity push. Specific gaps
@@ -283,27 +375,89 @@ identified and closed during that work:
 Validation: **500/500 Rust-helper random walks pass**, **3243-game
 per-step replay audit has 0 failures**, **cleaning outcome parity is 100%**.
 
-**Remaining work.**
-1. Refactor Python's `ActionMapper` (`rl18xx/agent/alphazero/action_mapper.py`)
-   into a thin shim around `state.get_factored_choices()`. The current
-   class still owns the slot layout (`self.actions`), encode (`get_index_for_action`,
-   `canonical_index_for_action`, `index_for_factored`), and decode
-   (`map_index_to_action`, `map_index_to_action_with_price`). After the
-   refactor, slot layout stays in Python (the model's policy head depends
-   on it being stable), but the per-call enumeration and price-range
-   metadata come from Rust verbatim.
-2. Confirm the parity tests still cover snapped-price round-trip and the
-   D-train trade-in slots.
+**Remaining work.** *(All items closed.)*
+1. ~~Refactor Python's `ActionMapper`~~ — `get_legal_actions_factored`
+   already delegates per-call enumeration to the Rust
+   `state.get_factored_choices()` call; the post-processing loop
+   (encode via `index_for_factored`, dedupe by canonical index, merge
+   price-range unions for same-slot collisions) is the spec-allowed
+   Python-resident encode step. A once-per-process warning was added at
+   the Python-fallback boundary so any production-path regression is
+   visible in worker logs.
+2. ~~Confirm the parity tests still cover snapped-price round-trip and
+   the D-train trade-in slots~~ — see test list above.
 
 **Risk.** Low — the Rust side is proven correct via the random-walk and
-replay audits. The refactor is a code-organization change, not a
+replay audits. The refactor was a code-organization change, not a
 behavior change.
 
-**Effort.** ~1–2 days.
+**Effort.** ~1 session (mostly audit + tests; the heavy lifting already
+landed during the engine-parity push).
 
 ---
 
-## Phase 4 — Rust MCTS
+## Phase 4 — Rust MCTS ✅ LANDED (behind feature flag)
+
+**Status (2026-05-28).** All three sub-phases (4a, 4b, 4c) are landed
+behind `SelfPlayConfig.use_rust_mcts=False`. Real-load training-run
+verification + flipping the default to `True` are deferred — the
+in-process Python MCTS remains the production default.
+
+**What's in:**
+- `engine-rs/src/action_index.rs` — native Rust `legal_action_to_index`;
+  `index_to_action_dict` delegates to Python `ActionMapper` (decoder
+  stays Python — Phase 3.5 spec).
+- `engine-rs/src/mcts.rs` — `RustMCTSNode` arena tree +
+  `RustMCTSPlayer` PyO3 class. Categorical descent, forced-chain
+  collapse, virtual loss, backup, PW progressive widening,
+  continuous-price grandchildren with dual-mirror N/W backup,
+  network-driven `_sample_price_for_slot` via the slot index map.
+- `rl18xx/agent/alphazero/rust_mcts_player.py` — Python adapter
+  implementing the `SelfPlay.play()` surface (initialize_game,
+  tree_search, play_move, pick_move, extract_data, check_resign
+  disabled, dump_traces no-op). `.root` property returns a `_RootShim`
+  so `SelfPlay.play()`'s direct `player.root.*` accesses work
+  unchanged.
+- `rl18xx/agent/alphazero/self_play.py` branches in `SelfPlay.play()`:
+  `if config.use_rust_mcts: player = RustMCTSPlayer(config) else: MCTSPlayer(config)`.
+
+**Tests:**
+- `test_rust_mcts_parity.py` (3) — categorical visit counts within
+  tie-breaking jitter, single-leaf first descent, action-offsets
+  table parity.
+- `test_rust_mcts_parity_pw.py` (2) — PW visit-count totals within
+  K=readouts/10, PW grows multiple grandchildren with snapped prices.
+- `test_rust_mcts_player_e2e.py` (3) — short loop, 30-move game with
+  `extract_data`, resign-disabled invariant.
+
+**Manual verification:** full 112-move 4-player self-play game with
+`use_rust_mcts=True` ran end-to-end in ~40s wall with no crashes,
+producing 112 LMDB samples.
+
+**Now at full feature parity with the Python MCTS:**
+- ✅ Phase 2 consensus resign on the Rust path. ``RustMCTSPlayer.root_q_vector()``
+  exposes ``W / (1 + N)`` per player; the Python adapter ports
+  ``MCTSPlayer.check_resign`` verbatim (rolling Q window, stable
+  leader, decisive gap, holdout suppression, would-have-resigned
+  bookkeeping). 9 new tests in
+  ``tests/agent/alphazero/test_rust_mcts_resign_trace.py``.
+- ✅ Phase 1 PlayoutTrace recording on the Rust path.
+  ``RustMCTSPlayer.select_leaf_with_trace()`` returns the descent path
+  (action_path, pw_grandchild_path, forced_chain_lengths); the Python
+  adapter finalizes per-leaf nn_value / leaf_q_perspective /
+  leaf_prior_entropy after incorporate_results, and ``dump_traces``
+  writes the same JSONL header+rows shape as ``MCTSPlayer.dump_traces``
+  (with ``engine: "rust"`` in the header so traces from both backends
+  can coexist). 6 new tests in the same file.
+
+**Deferred (not blocking the feature flag):**
+- Real-load multi-iteration training verification.
+- Native Rust ``index_to_action_dict`` decoder (currently delegates to
+  Python ``ActionMapper``).
+
+---
+
+## Phase 4 — Rust MCTS (original spec retained below for reference)
 
 **Strategy.** Mirror the engine migration's incremental approach
 (`docs/pretraining_rust_migration.md` is precedent). Move the inner

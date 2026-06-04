@@ -27,6 +27,11 @@ LOOP_STATUS_PATH = REPO_ROOT / "loop_status.json"
 SELF_PLAY_GAMES_STATUS_PATH = REPO_ROOT / "self_play_games_status"
 METRICS_HISTORY_PATH = REPO_ROOT / "logs" / "loop" / "metrics_history.jsonl"
 MODEL_HISTORY_PATH = REPO_ROOT / "logs" / "loop" / "model_history.jsonl"
+# Pretraining writes per-run TensorBoard logs under runs/alphazero_runs/
+# (so the shared TensorBoard at :6006 sees them) and a JSON sidecar with
+# per-epoch loss + accuracy arrays. The dashboard surfaces those summaries
+# in a "Pretraining" panel distinct from the self-play "Current run" panel.
+PRETRAIN_RUNS_ROOT = REPO_ROOT / "runs" / "alphazero_runs"
 TENSORBOARD_URL_PATH = "http://localhost:6006"
 
 
@@ -143,6 +148,48 @@ def get_games_in_progress(loop=None):
     except Exception as e:
         return {"error": f"Error reading self-play games status: {e}"}
     return sorted(games_data, key=lambda x: x["start_time_unix"], reverse=False)
+
+
+def list_pretrain_runs():
+    """Return per-run pretrain summaries (newest first).
+
+    Each run directory is ``runs/alphazero_runs/pretrain_{ts}/`` and (if
+    pretraining wrote a sidecar) contains ``pretrain_summary.json`` with
+    per-epoch loss/accuracy arrays. Returns a list of summary dicts with
+    an extra ``run_name`` field. Runs without a sidecar are skipped.
+    """
+    if not PRETRAIN_RUNS_ROOT.exists():
+        return []
+    runs = []
+    for run_dir in sorted(PRETRAIN_RUNS_ROOT.glob("pretrain_*")):
+        if not run_dir.is_dir():
+            continue
+        sidecar = run_dir / "pretrain_summary.json"
+        if not sidecar.exists():
+            continue
+        try:
+            with open(sidecar, "r") as f:
+                summary = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        summary["run_name"] = run_dir.name
+        runs.append(summary)
+    # Newest first (directory names sort lexicographically by timestamp).
+    runs.reverse()
+    return runs
+
+
+@app.route("/api/pretrain_runs")
+def api_pretrain_runs():
+    """List all pretraining runs found under ``runs/alphazero_runs/pretrain_*``.
+
+    Returns the same per-epoch arrays the dashboard consumes for plotting.
+    Use ``?latest=true`` to get just the most-recent run as a single dict.
+    """
+    runs = list_pretrain_runs()
+    if request.args.get("latest", "").lower() in ("1", "true", "yes"):
+        return jsonify(runs[0] if runs else {})
+    return jsonify(runs)
 
 
 @app.route("/api/loop_config", methods=["GET", "POST"])

@@ -256,6 +256,44 @@ impl BaseGame {
     pub(crate) fn president_may_contribute_pub(&mut self, corp_sym: &str) -> bool {
         self.president_may_contribute(corp_sym)
     }
+
+    // Rust-internal accessors used by the in-process MCTS (`crate::mcts`).
+    // Keep these crate-visible so the MCTS arena can read engine state
+    // without rebuilding everything through PyO3.
+    pub(crate) fn is_finished_pub(&self) -> bool {
+        self.finished
+    }
+    #[allow(dead_code)]
+    pub(crate) fn move_number_pub(&self) -> usize {
+        self.move_number
+    }
+    pub(crate) fn active_players_pub(&self) -> Vec<crate::entities::Player> {
+        let active_id = &self.round_state.active_entity_id.0;
+        self.players
+            .iter()
+            .filter(|p| &crate::entities::EntityId::player(p.id).0 == active_id)
+            .cloned()
+            .collect()
+    }
+    pub(crate) fn players_for_factored(&self) -> &Vec<crate::entities::Player> {
+        &self.players
+    }
+    /// Process a Python action dict using the same path as the PyO3 method.
+    pub(crate) fn process_action_dict_inner(
+        &mut self,
+        py: pyo3::Python<'_>,
+        dict: &pyo3::Bound<'_, pyo3::types::PyDict>,
+    ) -> pyo3::PyResult<()> {
+        let _ = py;
+        let action = crate::actions::Action::from_py_dict(dict)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let logged = py_to_json(dict.as_any())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        self.process_action_internal(&action)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        self.action_log.push(logged);
+        Ok(())
+    }
 }
 
 impl BaseGame {

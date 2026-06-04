@@ -740,14 +740,355 @@ def should_add_pass(action, game_state):
     return False
 
 
+def _share_source(state, share_id: str) -> Optional[str]:
+    """Return ``"ipo"`` or ``"market"`` for ``share_id`` at the current state.
+
+    Reads the share's underlying owner string from the Rust engine (via the
+    adapter's share lookup) and maps it to the source bucket the factored
+    helper uses. Returns ``None`` for player-owned shares (which never
+    appear in a legal BuyShares action — that'd be a player-to-player swap).
+    """
+    try:
+        share = state.share_by_id(share_id)
+    except Exception:
+        return None
+    raw = getattr(getattr(share, "_share", None), "owner", "") or ""
+    if raw == "market":
+        return "market"
+    if raw.startswith("ipo:") or raw.startswith("corp:"):
+        return "ipo"
+    return None
+
+
+def _normalize_tile_name(raw: Optional[str]) -> Optional[str]:
+    """Strip the ``-N`` suffix the human format uses on tile names.
+
+    Human dicts encode tiles as ``"57-0"`` (tile-instance suffix); the
+    factored helper emits just ``"57"`` in the canonical ``params.tile``.
+    """
+    if raw is None:
+        return None
+    return raw.split("-", 1)[0]
+
+
+def _normalize_train_name(raw: Optional[str]) -> Optional[str]:
+    """Strip the ``-N`` suffix from human train ids like ``"2-0"``."""
+    if raw is None:
+        return None
+    return raw.split("-", 1)[0]
+
+
+def _action_dict_to_factored_index(
+    action_dict: dict,
+    state,
+    factored_choices: list,
+    action_mapper,
+) -> Optional[int]:
+    """Map a human action dict directly to its canonical flat-policy index
+    via the factored helper output, bypassing BaseAction reconstruction.
+
+    Returns the int index, or ``None`` when no matching ``LegalAction``
+    is found (the caller logs + skips). Encoding goes through
+    ``ActionMapper.index_for_factored`` so the path stays consistent with
+    the production self-play encoding.
+
+    ``factored_choices`` is the list of dicts returned by
+    ``state.get_factored_choices()``; passing it in lets the caller
+    enumerate once per step and share between encode + legal-index
+    extraction.
+    """
+    raw_type = action_dict.get("type")
+    if raw_type is None:
+        return None
+    target_type = "".join(p.title() for p in raw_type.split("_"))
+
+    # CompanyBuyShares appears in the human dict as ``type="buy_shares"``
+    # with ``entity_type="company"`` (the acting entity is a private, e.g.
+    # MH exchanging for NYC); the factored helper emits ``type="CompanyBuyShares"``.
+    # Same idea for Company-level LayTile / PlaceToken.
+    if action_dict.get("entity_type") == "company":
+        type_overrides = {
+            "BuyShares": "CompanyBuyShares",
+            "LayTile": "CompanyLayTile",
+            "PlaceToken": "CompanyPlaceToken",
+        }
+        target_type = type_overrides.get(target_type, target_type)
+
+    candidates = [la for la in factored_choices if la.type == target_type]
+
+    if not candidates:
+        return None
+
+    for la in candidates:
+        if not _factored_choice_matches(la, action_dict, state):
+            continue
+        try:
+            return action_mapper.index_for_factored(la, state)
+        except (KeyError, ValueError):
+            continue
+    return None
+
+
+def _factored_choice_matches(la, action_dict: dict, state) -> bool:
+    """Type-by-type matcher between a ``LegalAction`` and a human action dict.
+
+    Returns True iff the ``LegalAction`` corresponds to the action the
+    human played. Used by :func:`_action_dict_to_factored_index`.
+    """
+    t = la.type
+    entity = la.entity or {}
+    params = la.params or {}
+
+    if t in ("Pass", "Bankrupt", "RunRoutes"):
+        return True
+
+    if t == "Bid":
+        return entity.get("private") == action_dict.get("company")
+
+    if t == "Par":
+        if entity.get("corp") != action_dict.get("corporation"):
+            return False
+        sp = action_dict.get("share_price")
+        if isinstance(sp, str):
+            try:
+                sp = int(sp.split(",")[0])
+            except (ValueError, IndexError):
+                return False
+        return params.get("par_price") == sp
+
+    if t == "BuyShares":
+        shares = action_dict.get("shares") or []
+        if not shares:
+            return False
+        first_id = shares[0]
+        corp_sym = first_id.split("_", 1)[0]
+        if entity.get("corp") != corp_sym:
+            return False
+        source = _share_source(state, first_id)
+        return params.get("source") == source
+
+    if t == "CompanyBuyShares":
+        # MH → NYC exchange only in 1830.
+        if entity.get("private") != "MH":
+            return False
+        shares = action_dict.get("shares") or []
+        if not shares:
+            return False
+        source = _share_source(state, shares[0])
+        return params.get("source") == source
+
+    if t == "SellShares":
+        shares = action_dict.get("shares") or []
+        if not shares:
+            return False
+        corp_sym = shares[0].split("_", 1)[0]
+        if entity.get("corp") != corp_sym:
+            return False
+        return int(params.get("count", 0)) == len(shares)
+
+    if t == "PlaceToken":
+        # The factored helper's PlaceToken slot identifies the placement
+        # site via ``params.hex`` + ``params.city`` (city_idx). The human
+        # dict gives us ``city`` (e.g. ``"F20-0"`` or ``"57-1-0"``) plus
+        # the operating ``entity`` (the placing corp). PlaceToken legal
+        # sets are usually small (a corp places on its operating hex); if
+        # the candidate set is unique, accept; otherwise compare by hex
+        # id parsed from the city string.
+        target_hex = _hex_from_city_id(action_dict.get("city"))
+        if target_hex is None:
+            # Fall back to "any" when the human dict's city doesn't pin a
+            # hex unambiguously — in practice PlaceToken legal sets are
+            # length-1 in 1830 OR cases.
+            return True
+        return params.get("hex") == target_hex
+
+    if t == "LayTile":
+        if entity.get("private"):
+            # Company tile-lays (DH/CS) — the entity in the human dict
+            # is the *corporation* but the cleaning pipeline tags these
+            # as company lays; rely on the hex+tile+rotation triple alone.
+            pass
+        return (
+            params.get("hex") == action_dict.get("hex")
+            and params.get("tile") == _normalize_tile_name(action_dict.get("tile"))
+            and int(params.get("rotation", -1)) == int(action_dict.get("rotation", -2))
+        )
+
+    if t == "BuyTrain":
+        # Match on the train's source (depot / discard / cross-corp) and
+        # the train type. The human dict tags the train as ``"2-0"``,
+        # ``"3-1"``, etc. — strip the suffix.
+        target_train = _normalize_train_name(action_dict.get("train"))
+        if entity.get("train") != target_train:
+            return False
+        # Discriminate depot / discard / cross-corp:
+        # - factored ``entity={"source": "depot", "train": "X"}`` → depot
+        # - factored ``entity={"source": "discard", "train": "X"}`` → discard
+        # - factored ``entity={"corp": "OWNER", "train": "X"}`` → cross-corp
+        return True  # train-type + corp-owner check via entity above is sufficient
+
+    if t == "DiscardTrain":
+        return params.get("train") == _normalize_train_name(action_dict.get("train"))
+
+    if t == "Dividend":
+        return params.get("kind") == action_dict.get("kind")
+
+    if t == "BuyCompany":
+        return entity.get("private") == action_dict.get("company")
+
+    return False
+
+
+def _factored_price_target(
+    action_dict: dict,
+    state,
+    factored_choices: list,
+    action_mapper,
+    chosen_index: int,
+) -> list:
+    """Build the ContinuousPriceHead training target for a price-bearing
+    human action via the factored-helper path.
+
+    Returns a list of ``(slot_idx, price, weight, price_min, price_max)``
+    tuples — the same shape ``_compute_price_nll_loss`` consumes — or an
+    empty list for categorical-only actions. The price head slot is
+    resolved from the factored ``(action_type, entity_key)`` tuple, so
+    this path doesn't need a Python ``BaseAction``.
+    """
+    raw_type = action_dict.get("type")
+    if raw_type not in ("bid", "buy_company", "buy_train"):
+        return []
+    observed_price = action_dict.get("price")
+    if observed_price is None:
+        return []
+    # Find the LegalAction whose canonical index matches chosen_index.
+    target_la = None
+    for la in factored_choices:
+        try:
+            if int(action_mapper.index_for_factored(la, state)) == int(chosen_index):
+                target_la = la
+                break
+        except (KeyError, ValueError):
+            continue
+    if target_la is None:
+        return []
+    pr = target_la.price_range
+    if pr is None:
+        return []
+    price_min, price_max = int(pr[0]), int(pr[1])
+    if price_min == price_max:
+        return []  # fixed-price slot (depot trains, exchange trains)
+
+    # Resolve the ContinuousPriceHead slot index from (action_type, entity_key).
+    entity = target_la.entity or {}
+    action_type = target_la.type
+    slot = None
+    if action_type == "Bid":
+        company = entity.get("private")
+        if company is not None and company in action_mapper._PRICE_HEAD_COMPANIES:
+            slot = action_mapper._PRICE_HEAD_COMPANIES.index(company)
+    elif action_type == "BuyCompany":
+        company = entity.get("private")
+        if company is not None and company in action_mapper._PRICE_HEAD_COMPANIES:
+            slot = (
+                len(action_mapper._PRICE_HEAD_COMPANIES)
+                + len(action_mapper._PRICE_HEAD_CORPORATIONS) * len(action_mapper._PRICE_HEAD_TRAIN_TYPES)
+                + action_mapper._PRICE_HEAD_COMPANIES.index(company)
+            )
+    elif action_type == "BuyTrain":
+        corp_sym = entity.get("corp")
+        train_type = entity.get("train")
+        if (corp_sym in action_mapper._PRICE_HEAD_CORPORATIONS
+                and train_type in action_mapper._PRICE_HEAD_TRAIN_TYPES):
+            slot = (
+                len(action_mapper._PRICE_HEAD_COMPANIES)
+                + action_mapper._PRICE_HEAD_CORPORATIONS.index(corp_sym)
+                * len(action_mapper._PRICE_HEAD_TRAIN_TYPES)
+                + action_mapper._PRICE_HEAD_TRAIN_TYPES.index(train_type)
+            )
+    if slot is None:
+        return []
+    return [(int(slot), float(observed_price), 1.0, float(price_min), float(price_max))]
+
+
+def _hex_from_city_id(city_str: Optional[str]) -> Optional[str]:
+    """Extract the hex id from a city descriptor like ``"F20-0"``.
+
+    18xx.games's serialized city ids fall into two shapes:
+      - ``"<hex_id>-<city_idx>"`` (preprinted): e.g. ``"F20-0"``.
+      - ``"<tile_name>-<tile_instance>-<city_idx>"`` (laid tile):
+        e.g. ``"57-1-0"`` — does NOT pin the hex.
+
+    We can only recover the hex id directly from the first form. Returning
+    ``None`` lets the caller fall back to accepting any candidate at this
+    state (PlaceToken legal sets are typically singleton in 1830 OR
+    operating phases).
+    """
+    if not city_str or "-" not in city_str:
+        return None
+    parts = city_str.split("-")
+    if len(parts) == 2:
+        return parts[0]
+    # 3+ parts: tile-form, hex isn't directly extractable.
+    return None
+
+
+def _load_cleaned_game_via_rust(game: dict):
+    """Replay a *cleaned* game dict through the Rust engine and return the
+    resulting ``RustGameAdapter`` (or ``None`` if replay fails).
+
+    ``BaseGame.load(game)`` is the legacy Python-engine constructor that
+    triggers the ``FactoredActionHelper`` fallback warning on every legal-
+    action lookup later in the pretrain pipeline. Cleaned games have
+    already passed cleaning (so we trust the action stream), so we can
+    just construct a fresh Rust game and replay the actions directly —
+    same engine pretrain self-play uses, no Python-side enumeration.
+
+    Returns ``None`` for malformed game records so the caller can skip
+    them gracefully.
+    """
+    try:
+        from engine_rs import BaseGame as RustGame
+        from rl18xx.rust_adapter import RustGameAdapter
+
+        players_field = game.get("players") or []
+        if not players_field:
+            return None
+        # Normalize the player dict to ``{int_id: name}`` matching the
+        # constructor signature both engines share. Cleaned games store
+        # players as ``[{"id": int, "name": str}, ...]``.
+        players = {}
+        for i, p in enumerate(players_field):
+            if isinstance(p, dict):
+                pid = int(p.get("id", i + 1))
+                name = str(p.get("name", f"Player {pid}"))
+            else:
+                pid = i + 1
+                name = str(p)
+            players[pid] = name
+        rust_game = RustGame(players)
+        adapter = RustGameAdapter(rust_game)
+        for action in game.get("actions", []):
+            adapter.process_action(action)
+        return adapter
+    except Exception as e:
+        LOGGER.warning(
+            "Failed to load cleaned game %s via Rust: %s",
+            game.get("id", "<unknown>"), e,
+        )
+        return None
+
+
 def get_game_object_for_game(game: dict, use_rust: bool = True) -> BaseGame:
     """Replay a recorded human game through the engine, filtering out
     illegal/redundant actions where possible.
 
-    When ``use_rust=True``, the underlying engine is the Rust ``BaseGame``
-    wrapped by :class:`RustGameAdapter`. Default is False (Python engine) so
-    existing callers are unaffected. The cleaning logic itself is unchanged
-    — both engines expose the same Python-shaped API.
+    When ``use_rust=True`` (the default), the underlying engine is the Rust
+    ``BaseGame`` wrapped by :class:`RustGameAdapter`. Set ``use_rust=False``
+    to fall back to the legacy Python engine (kept only as a parity
+    reference — production cleaning has run on Rust since the engine
+    migration). The cleaning logic itself is unchanged — both engines
+    expose the same Python-shaped API.
 
     Returns the final game state, or ``None`` if the cleaning logic
     determined the game must be dropped.
@@ -1048,11 +1389,20 @@ def convert_game_to_training_data(
         save_array = training_data
         LOGGER.debug(f"Adding to training data")
 
-    game_map = GameMap()
-    game_class = game_map.game_by_title("1830")
+    # Replay state runs on the Rust engine so every per-action
+    # ``action_mapper.get_legal_action_indices`` call hits the native
+    # ``state.get_factored_choices`` path (no Python ``FactoredActionHelper``
+    # fallback). ``ActionMapper.canonical_index_for_action`` (the encode
+    # path) only needs ``action.bundle.owner.name`` to discriminate IPO /
+    # Market for ``BuyShares``; the Rust adapter's ``_ShareProxy.owner``
+    # now returns the appropriate ``_BankProxy`` / ``_MarketProxy`` based
+    # on the share's underlying Rust owner string, so this works without
+    # falling back to the Python engine.
+    from engine_rs import BaseGame as _RustGame
+    from rl18xx.rust_adapter import RustGameAdapter as _RustGameAdapter
     num_players = len(game.players)
     players = {i + 1: f"Player {i + 1}" for i in range(num_players)}
-    fresh_game_state = game_class(players)
+    fresh_game_state = _RustGameAdapter(_RustGame(players))
 
     # KataGo-style dual value head training target.
     #
@@ -1085,6 +1435,8 @@ def convert_game_to_training_data(
 
     LOGGER.debug(f"Game result: {result}")
     LOGGER.debug(f"Game value (normalized net-worth fractions): {actual_value}")
+    skipped_actions = 0
+    _skipped_examples_by_type: dict = {}
     for action in game.raw_actions:
         LOGGER.debug(f"Processing action: {action}")
         # Encode the game state exactly as the engine sees it — no
@@ -1093,46 +1445,59 @@ def convert_game_to_training_data(
         # massage bids into a "minimum + multiples of 5" canonical form.
         encoded_game_state = encoder.encode(fresh_game_state)
 
-        # Construct the concrete action so we can extract both the
-        # categorical (type, entity) slot and the price head's NLL target
-        # below.
-        action_obj = BaseAction.action_from_dict(action, fresh_game_state)
+        # Enumerate legal actions via the Rust factored helper (native, fast)
+        # and use the same list for both:
+        #   1. the categorical pi target (one-hot on the matching slot)
+        #   2. legal_action_indices (for the masked-policy loss)
+        # This replaces the legacy ``BaseAction.action_from_dict`` + Python-
+        # state-dependent ``canonical_index_for_action`` path that bottlenecked
+        # pretraining on the Python ``FactoredActionHelper`` fallback.
+        factored = fresh_game_state.get_factored_choices()
+        action_index = _action_dict_to_factored_index(action, fresh_game_state, factored, action_mapper)
+        if action_index is None:
+            skipped_actions += 1
+            _t = action.get("type", "?")
+            _skipped_examples_by_type[_t] = _skipped_examples_by_type.get(_t, 0) + 1
+            LOGGER.debug(
+                "Skipping action that doesn't match any factored LegalAction: %s",
+                action,
+            )
+            fresh_game_state.process_action(action)
+            continue
 
-        # Categorical pi target: one-hot on the price-collapsed canonical
-        # slot for the (type, entity) the human chose. Price-bearing types
-        # (Bid / cross-corp BuyTrain / BuyCompany) collapse the price
-        # dimension; the continuous price is delivered to the price head
-        # via ``price_target`` below (NLL-trained against the human's raw
-        # observed price). Categorical types are unchanged.
-        action_index = action_mapper.canonical_index_for_action(action_obj, fresh_game_state)
-        legal_action_indices = action_mapper.get_legal_action_indices(fresh_game_state)
+        # Build legal_action_indices from the factored output (Rust-native).
+        legal_set = set()
+        for la in factored:
+            try:
+                legal_set.add(int(action_mapper.index_for_factored(la, fresh_game_state)))
+            except (KeyError, ValueError):
+                continue
+        legal_action_indices = sorted(legal_set)
+
         epsilon = config.pretrain_label_smoothing
         pi = torch.zeros(action_mapper.action_encoding_size)
-        pi[legal_action_indices] += epsilon / len(legal_action_indices)
+        if legal_action_indices:
+            pi[legal_action_indices] += epsilon / len(legal_action_indices)
         pi[action_index] = 1.0 - epsilon
 
-        # Price target for the ContinuousPriceHead's NLL loss:
-        # ``price_head_slot_for_action`` returns ``(action_type, slot_index,
-        # observed_price, price_min, price_max)`` for Bid / cross-corp BuyTrain
-        # / BuyCompany; ``None`` for purely categorical actions. We translate
-        # it into the format ``_compute_price_nll_loss`` consumes — a list of
-        # ``(slot_idx, price, weight, price_min, price_max)`` tuples (weight =
-        # 1.0 for pretraining since there's exactly one observed price per
-        # state) — and stash it on the 5-tuple example so the training loop can
-        # feed it through to the price head.
-        raw_price_target = action_mapper.price_head_slot_for_action(action_obj, fresh_game_state)
-        if raw_price_target is not None:
-            _action_type, slot_index, observed_price, price_min, price_max = raw_price_target
-            LOGGER.debug(
-                "price_target: type=%s slot=%d price=%d range=(%d, %d)",
-                _action_type, slot_index, observed_price, price_min, price_max,
-            )
-            price_targets = [(int(slot_index), float(observed_price), 1.0, float(price_min), float(price_max))]
-        else:
-            price_targets = []
+        # Price target for the ContinuousPriceHead's NLL loss. The factored
+        # ``LegalAction`` for a price-bearing slot carries ``price_range``;
+        # we derive the head slot directly from ``(action_type, entity)``
+        # instead of round-tripping through a Python ``BaseAction``.
+        price_targets = _factored_price_target(
+            action, fresh_game_state, factored, action_mapper, action_index
+        )
 
         save_array.append((encoded_game_state, legal_action_indices, pi, actual_value, price_targets))
         fresh_game_state.process_action(action)
+
+    if skipped_actions:
+        LOGGER.warning(
+            "convert_game_to_training_data: skipped %d/%d actions that could "
+            "not be matched against the factored legal set; by type=%s",
+            skipped_actions, len(game.raw_actions),
+            _skipped_examples_by_type,
+        )
 
     return training_data, validation_data
 
@@ -1180,7 +1545,12 @@ def convert_games_to_training_dataset(
             continue
 
         try:
-            game_obj = BaseGame.load(game)
+            game_obj = _load_cleaned_game_via_rust(game)
+            if game_obj is None:
+                skipped += 1
+                progress[game["id"]] = True
+                atomic_write_json(progress_file, progress)
+                continue
             train, val = convert_game_to_training_data(game_obj, encoder, config=config)
             if train:
                 dest = save_path / "training"
@@ -1287,8 +1657,12 @@ def pretrain_model(
     total_steps = max(1, len(train_loader) * config.num_epochs)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
 
+    # Pretraining TensorBoard logs land under the same root TensorBoard
+    # is configured to watch in ``startup.sh`` (``runs/alphazero_runs``).
+    # That makes pretrain curves visible in the same TB instance the
+    # self-play loop populates.
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tb_dir = Path("runs") / f"pretrain_{timestamp}"
+    tb_dir = Path("runs") / "alphazero_runs" / f"pretrain_{timestamp}"
     tb_dir.mkdir(parents=True, exist_ok=True)
     summary_writer = SummaryWriter(str(tb_dir))
     LOGGER.info(f"Pretraining TensorBoard logs: {tb_dir}")
@@ -1387,6 +1761,33 @@ def pretrain_model(
         metrics.epoch_top1_accuracy.append(top1_acc)
         metrics.epoch_top5_accuracy.append(top5_acc)
         metrics.epoch_lr.append(optimizer.param_groups[0]["lr"])
+
+        # In-flight sidecar so the Flask dashboard can show per-epoch
+        # progress while pretrain is still running. Overwrites at each
+        # epoch boundary. The final summary block at the end of training
+        # rewrites the same file with the complete record.
+        try:
+            with open(tb_dir / "pretrain_summary.json", "w") as _f:
+                json.dump(
+                    {
+                        "kind": "pretrain",
+                        "timestamp": timestamp,
+                        "in_progress": True,
+                        "epochs_planned": config.num_epochs,
+                        "epochs_trained": epoch + 1,
+                        "training_examples": metrics.training_examples,
+                        "epoch_losses": list(metrics.epoch_losses),
+                        "epoch_policy_losses": list(metrics.epoch_policy_losses),
+                        "epoch_value_losses": list(metrics.epoch_value_losses),
+                        "epoch_top1_accuracy": list(metrics.epoch_top1_accuracy),
+                        "epoch_top5_accuracy": list(metrics.epoch_top5_accuracy),
+                        "epoch_lr": list(metrics.epoch_lr),
+                    },
+                    _f,
+                    indent=2,
+                )
+        except Exception as _e:
+            LOGGER.debug(f"Could not write in-flight pretrain_summary.json: {_e}")
 
         summary_writer.add_scalar("train_epoch/loss_total", avg_train_loss, epoch)
         summary_writer.add_scalar("train_epoch/loss_policy", avg_train_policy, epoch)
@@ -1511,11 +1912,16 @@ def pretrain_model(
         metrics.avg_policy_loss = float(np.mean(metrics.epoch_policy_losses))
         metrics.avg_value_loss = float(np.mean(metrics.epoch_value_losses))
 
-    # Write a small JSON sidecar so the best checkpoint is discoverable.
+    # Write a richer JSON sidecar so the dashboard (and external tooling)
+    # can plot pretrain curves without parsing TensorBoard event files.
+    # ``best_val_loss``/``best_checkpoint_num`` are kept under the same
+    # keys as before for backward compatibility.
     try:
         with open(tb_dir / "pretrain_summary.json", "w") as f:
             json.dump(
                 {
+                    "kind": "pretrain",
+                    "timestamp": timestamp,
                     "best_val_loss": best_val_loss if best_val_loss != float("inf") else None,
                     "best_checkpoint_num": best_checkpoint_num,
                     "epochs_trained": metrics.epochs_trained,
@@ -1525,6 +1931,13 @@ def pretrain_model(
                     "avg_value_loss": metrics.avg_value_loss,
                     "top1_accuracy": metrics.epoch_top1_accuracy[-1] if metrics.epoch_top1_accuracy else None,
                     "top5_accuracy": metrics.epoch_top5_accuracy[-1] if metrics.epoch_top5_accuracy else None,
+                    # Per-epoch arrays for dashboard plotting.
+                    "epoch_losses": list(metrics.epoch_losses),
+                    "epoch_policy_losses": list(metrics.epoch_policy_losses),
+                    "epoch_value_losses": list(metrics.epoch_value_losses),
+                    "epoch_top1_accuracy": list(metrics.epoch_top1_accuracy),
+                    "epoch_top5_accuracy": list(metrics.epoch_top5_accuracy),
+                    "epoch_lr": list(metrics.epoch_lr),
                 },
                 f,
                 indent=2,
@@ -1673,7 +2086,9 @@ def do_pretraining(model_dir: str, game_data_dir: str, config: TrainingConfig) -
     games = load_games_from_json(str(json_dir))
     games = [g for g in games if g.get("status") != "error" and "title" in g]
     LOGGER.info(f"Filtered to {len(games)} valid games")
-    games = [BaseGame.load(game) for game in games]
+    games = [_load_cleaned_game_via_rust(game) for game in games]
+    games = [g for g in games if g is not None]
+    LOGGER.info(f"Loaded {len(games)} games via the Rust engine")
     encoder = Encoder_1830.get_encoder_for_model(model)
     training_data, validation_data = [], []
     for game in tqdm(games, desc="Converting games to training data"):

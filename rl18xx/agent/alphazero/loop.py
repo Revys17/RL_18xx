@@ -106,6 +106,21 @@ class LoopConfig:
     # the model to 2-, 3-, 5-, and 6-player games. Override per run via the
     # loop config file.
     player_count_distribution: Optional[dict] = None
+    # Phase 2 consensus resign settings. The high threshold is the only one
+    # auto-calibrated between iterations; the rest are stable hyperparams.
+    enable_resign: bool = True
+    resign_window: int = 8
+    resign_high_threshold: float = 0.65
+    resign_gap_threshold: float = 0.30
+    noresign_holdout_rate: float = 0.10
+    resign_high_threshold_min: float = 0.45
+    # Phase 3 cross-process inference server. Default off — flip to True
+    # to route self-play workers' inference through a single GPU-bound
+    # server process (cross-game batching). Verify on a short training
+    # run before promoting.
+    use_inference_server: bool = False
+    inference_batch_size: int = 64
+    inference_batch_timeout_ms: float = 2.0
 
 
 @dataclass
@@ -120,6 +135,9 @@ class LoopMetrics:
     value_losses: list = None
     game_lengths: list = None
     win_rates_by_player: dict = None
+    # Phase 2 resign auto-calibration history (most recent first ~3
+    # iterations). Populated by ``calibrate_resign_threshold``.
+    recent_resign_fp_rates: list = None
 
     def __post_init__(self):
         if self.training_losses is None:
@@ -132,6 +150,8 @@ class LoopMetrics:
             self.game_lengths = []
         if self.win_rates_by_player is None:
             self.win_rates_by_player = {0: [], 1: [], 2: [], 3: []}
+        if self.recent_resign_fp_rates is None:
+            self.recent_resign_fp_rates = []
 
 
 def load_loop_config(
@@ -146,6 +166,7 @@ def load_loop_config(
     for training_config fields only (batch_size, lr, etc.) and can be hot-reloaded mid-run."""
     training_config = default_training_config
     player_count_distribution: Optional[dict] = None
+    resign_overrides: dict = {}
 
     # If config file exists, merge training hyperparams from it (hot-reload support)
     if LOOP_CONFIG_PATH.exists():
@@ -158,6 +179,18 @@ def load_loop_config(
                 # JSON serializes int keys as strings — convert back.
                 raw = file_config["player_count_distribution"]
                 player_count_distribution = {int(k): float(v) for k, v in raw.items()}
+            # Phase 2 resign params: pick up auto-calibrated threshold + any
+            # manually edited bounds from the file. Missing keys keep defaults.
+            for key in (
+                "enable_resign",
+                "resign_window",
+                "resign_high_threshold",
+                "resign_gap_threshold",
+                "noresign_holdout_rate",
+                "resign_high_threshold_min",
+            ):
+                if key in file_config and file_config[key] is not None:
+                    resign_overrides[key] = file_config[key]
         except Exception as e:
             LOGGER.warning(f"Error reading loop config file: {e}. Using CLI defaults.")
 
@@ -169,6 +202,7 @@ def load_loop_config(
         num_readouts=num_readouts,
         target_experiences=target_experiences,
         player_count_distribution=player_count_distribution,
+        **resign_overrides,
     )
 
     # Write current config to file for visibility / hot-reload editing
@@ -275,7 +309,40 @@ def run_self_play(
         f"({num_players}-player). Logging to {game_log_file}"
     )
 
-    model = get_latest_model("model_checkpoints")
+    # Phase 3: when the inference server is enabled, this worker's
+    # ``InferenceClient`` was stashed by ``worker_init_inference`` at
+    # process boot. Fetch it (or None) and route inference through it
+    # instead of holding a local model copy.
+    from rl18xx.agent.alphazero.inference_server import get_worker_client
+    inference_client = get_worker_client()
+    model = None if inference_client is not None else get_latest_model("model_checkpoints")
+
+    # Phase 2: pull resign params from the loop config file (auto-calibrated
+    # between iterations). Missing keys fall back to SelfPlayHyperparams
+    # defaults (frozen). Reading on each game pickups any mid-run tuning.
+    resign_kwargs: dict = {}
+    file_cfg = _safe_read_json(LOOP_CONFIG_PATH) if LOOP_CONFIG_PATH.exists() else None
+    if file_cfg:
+        for key in (
+            "enable_resign",
+            "resign_window",
+            "resign_high_threshold",
+            "resign_gap_threshold",
+            "noresign_holdout_rate",
+            "resign_high_threshold_min",
+        ):
+            if key in file_cfg and file_cfg[key] is not None:
+                resign_kwargs[key] = file_cfg[key]
+    # Phase 3 inference-server flag mirrors what the parent set up. When
+    # we have a client, ``MCTSPlayer`` routes inference through it.
+    server_kwargs: dict = {}
+    if inference_client is not None:
+        server_kwargs["use_inference_server"] = True
+        if file_cfg:
+            for key in ("inference_batch_size", "inference_batch_timeout_ms"):
+                if key in file_cfg and file_cfg[key] is not None:
+                    server_kwargs[key] = file_cfg[key]
+
     try:
         # Tensorboard logging is disabled for now because it's using up too much space on disk
         self_play_config = SelfPlayConfig(
@@ -290,6 +357,9 @@ def run_self_play(
             # to a singleton — the child SelfPlay only ever opens one game and
             # we want it to use the seat count chosen by the parent process.
             player_count_distribution={num_players: 1.0},
+            inference_client=inference_client,
+            **resign_kwargs,
+            **server_kwargs,
         )
         selfplay = SelfPlay(self_play_config)
         selfplay.run_game()
@@ -620,6 +690,19 @@ _SELFPLAY_TIMING_KEYS = [
 ]
 
 
+def _server_model_factory(checkpoint_path: Optional[str] = None):
+    """Inference-server-side model loader.
+
+    Used by the Phase 3 ``InferenceServer`` to (re)load the current-best
+    model at STARTING and RELOADING transitions. The ``checkpoint_path``
+    argument is informational only — we always defer to
+    ``get_latest_model`` so the gated current-best pointer is honored.
+    Must be a module-level top-function so it pickles across the spawn
+    boundary into the server child process.
+    """
+    return get_latest_model(MODEL_CHECKPOINT_DIR)
+
+
 def _submit_selfplay_game(
     executor, game_idx, tb_log_dir, timestamp, loop, num_readouts, max_game_length, num_players=4
 ):
@@ -671,8 +754,15 @@ def _run_selfplay_iteration(
     tb_log_dir: str,
     timestamp: str,
     loop_metrics: "LoopMetrics",
+    server_handle: Optional["ServerHandle"] = None,
 ) -> SelfPlayIterationResult:
-    """Drive the process-pool self-play phase until target experiences are reached."""
+    """Drive the process-pool self-play phase until target experiences are reached.
+
+    When ``server_handle`` is set (Phase 3 inference server enabled), workers
+    boot with ``worker_init_inference`` so they pull a unique slot ticket
+    and stash an ``InferenceClient`` on the module globals; ``run_self_play``
+    then attaches that client to the worker's ``SelfPlayConfig``.
+    """
     import concurrent.futures
 
     games_completed_count = 0
@@ -689,7 +779,16 @@ def _run_selfplay_iteration(
     # Sample a player count per game. ``None`` falls back to legacy 4-player.
     player_count_distribution = loop_config.player_count_distribution
 
-    executor = ProcessPoolExecutor(max_workers=loop_config.num_threads)
+    executor_kwargs: dict = {"max_workers": loop_config.num_threads}
+    if server_handle is not None:
+        from rl18xx.agent.alphazero.inference_server import worker_init_inference
+        executor_kwargs["initializer"] = worker_init_inference
+        executor_kwargs["initargs"] = (
+            server_handle.request_q,
+            server_handle.reply_qs,
+            server_handle.ticket_q,
+        )
+    executor = ProcessPoolExecutor(**executor_kwargs)
     try:
         pending_futures: dict = {}
         for _ in range(loop_config.num_threads):
@@ -740,6 +839,130 @@ def _run_selfplay_iteration(
         experiences=experiences_this_iteration,
         wall_time=time.time() - selfplay_start_time,
     )
+
+
+def calibrate_resign_threshold(
+    loop: int,
+    loop_config: "LoopConfig",
+    loop_metrics: "LoopMetrics",
+    metrics: Optional[Metrics] = None,
+) -> dict:
+    """Auto-calibrate ``resign_high_threshold`` from the iteration's holdout games.
+
+    Implements the AlphaGo-Zero schedule from
+    docs/mcts_improvements_plan.md Phase 2:
+
+    - Scan ``L{loop}_G*.json`` for **completed holdout** games (those with
+      ``noresign_holdout=True``). These are games that ignored the resign
+      signal and played to completion, so we have ground truth for whether
+      the resign signal would have been correct.
+    - For each holdout that recorded a ``would_have_resigned`` moment, the
+      decision is a **false positive** when the leader at that moment is
+      not the actual winner of the game.
+    - ``fp_rate = 1 - correct / would_have_resigned`` (denominator is
+      holdouts where the conditions ever held; absent denominator yields
+      ``None``).
+    - Tightening: if ``fp_rate > 5%`` → bump threshold by +0.05.
+    - Loosening: if the last 3 iterations all had ``fp_rate < 2%`` →
+      lower threshold by -0.05 and clear the running history (so we don't
+      loosen again immediately).
+    - Clamped at ``loop_config.resign_high_threshold_min``.
+
+    Mutates ``loop_config.resign_high_threshold`` and persists the entire
+    loop config back to ``LOOP_CONFIG_PATH`` so the next iteration's
+    ``load_loop_config`` (and the worker's resign_kwargs lookup) picks it
+    up. Updates ``loop_metrics.recent_resign_fp_rates`` for the rolling
+    loosen window.
+
+    Returns the calibration info dict for logging.
+    """
+    holdouts_total = 0
+    holdouts_with_signal = 0
+    correct = 0
+    resigned_total = 0
+    for game_file in SELF_PLAY_GAMES_STATUS_PATH.glob(f"L{loop}_G*.json"):
+        gdata = _safe_read_json(game_file)
+        if not gdata or gdata.get("status") != "Completed":
+            continue
+        if gdata.get("termination") == "resigned":
+            resigned_total += 1
+        if not gdata.get("noresign_holdout"):
+            continue
+        holdouts_total += 1
+        whr = gdata.get("would_have_resigned")
+        if not whr:
+            continue
+        holdouts_with_signal += 1
+        leader_idx = whr.get("leader")
+        result = gdata.get("result_per_player") or []
+        if leader_idx is None or not result:
+            continue
+        winner_idx = int(np.argmax(result))
+        if winner_idx == int(leader_idx):
+            correct += 1
+
+    fp_rate: Optional[float] = None
+    if holdouts_with_signal > 0:
+        fp_rate = 1.0 - correct / holdouts_with_signal
+
+    # Maintain the 3-iteration history for the loosen condition.
+    if fp_rate is not None:
+        loop_metrics.recent_resign_fp_rates.append(float(fp_rate))
+        if len(loop_metrics.recent_resign_fp_rates) > 3:
+            loop_metrics.recent_resign_fp_rates = loop_metrics.recent_resign_fp_rates[-3:]
+
+    old_threshold = float(loop_config.resign_high_threshold)
+    min_threshold = float(loop_config.resign_high_threshold_min)
+    adjustment = 0.0
+    if fp_rate is not None:
+        if fp_rate > 0.05:
+            adjustment = +0.05
+        elif (
+            len(loop_metrics.recent_resign_fp_rates) >= 3
+            and all(rate < 0.02 for rate in loop_metrics.recent_resign_fp_rates[-3:])
+        ):
+            adjustment = -0.05
+            # Clear history so we don't loosen again on the very next iteration
+            # before observing 3 fresh low-fp readings at the new threshold.
+            loop_metrics.recent_resign_fp_rates = []
+    new_threshold = max(min_threshold, min(0.99, old_threshold + adjustment))
+
+    if abs(new_threshold - old_threshold) > 1e-9:
+        loop_config.resign_high_threshold = new_threshold
+        # Persist back so subsequent workers + next iteration's
+        # load_loop_config pick up the updated threshold.
+        try:
+            serializable = asdict(loop_config)
+            serializable["training_config"] = loop_config.training_config.to_json()
+            atomic_write_json(LOOP_CONFIG_PATH, serializable, indent=4)
+        except Exception as e:
+            LOGGER.warning(f"Failed to persist resign threshold update: {e}")
+
+    info = {
+        "iteration": loop,
+        "holdouts_total": holdouts_total,
+        "holdouts_with_signal": holdouts_with_signal,
+        "correct_holdouts": correct,
+        "fp_rate": fp_rate,
+        "old_threshold": old_threshold,
+        "new_threshold": float(loop_config.resign_high_threshold),
+        "adjustment": adjustment,
+        "resigned_games": resigned_total,
+    }
+    LOGGER.info(
+        f"Loop {loop+1}: resign calibration — holdouts={holdouts_total} "
+        f"(signal={holdouts_with_signal}, correct={correct}, fp_rate={fp_rate}); "
+        f"threshold: {old_threshold:.3f} -> {info['new_threshold']:.3f} "
+        f"(resigned={resigned_total})"
+    )
+    if metrics is not None:
+        metrics.add_scalar("Resign/Holdouts_Total", holdouts_total, loop)
+        metrics.add_scalar("Resign/Holdouts_With_Signal", holdouts_with_signal, loop)
+        if fp_rate is not None:
+            metrics.add_scalar("Resign/Holdout_FP_Rate", fp_rate, loop)
+        metrics.add_scalar("Resign/High_Threshold", info["new_threshold"], loop)
+        metrics.add_scalar("Resign/Resigned_Games", resigned_total, loop)
+    return info
 
 
 def _aggregate_selfplay_stats(
@@ -1229,6 +1452,36 @@ def main(
     signal.signal(signal.SIGTERM, cleanup_and_exit)
     atexit.register(cleanup_and_exit)
 
+    # Phase 3: optionally spawn the cross-process inference server before
+    # the main loop. Persistent across iterations; paused while training
+    # runs in this process (so the GPU isn't contended), then reloaded
+    # from the newly-saved checkpoint.
+    inference_server_handle = None
+    initial_loop_config = load_loop_config(
+        num_loop_iterations,
+        max(1, target_experiences // game_length_schedule[0]),
+        num_threads,
+        default_training_config,
+        readout_schedule[0],
+        target_experiences,
+    )
+    if initial_loop_config.use_inference_server:
+        from rl18xx.agent.alphazero.inference_server import start_inference_server
+        LOGGER.info(
+            f"Spawning inference server (batch_size={initial_loop_config.inference_batch_size}, "
+            f"batch_timeout_ms={initial_loop_config.inference_batch_timeout_ms})"
+        )
+        # ``num_workers`` is the maximum concurrent self-play workers, used
+        # for the per-worker reply-queue allocation.
+        inference_server_handle = start_inference_server(
+            num_workers=num_threads,
+            model_factory=_server_model_factory,
+            checkpoint_path=None,
+            batch_size=initial_loop_config.inference_batch_size,
+            batch_timeout_ms=initial_loop_config.inference_batch_timeout_ms,
+            autocast_device="cuda" if torch.cuda.is_available() else None,
+        )
+
     loop = 0
     try:
         while True:
@@ -1290,12 +1543,28 @@ def main(
 
             sp = _run_selfplay_iteration(
                 loop, loop_config, scheduled_game_length, tb_log_dir, timestamp, loop_metrics,
+                server_handle=inference_server_handle,
             )
             sp_stats = _aggregate_selfplay_stats(loop, sp, metrics, loop_metrics)
+            # Phase 2: auto-calibrate the resign high threshold from this
+            # iteration's holdout games (no-op until enough holdouts have
+            # accumulated). Mutates loop_config + persists to disk so the
+            # next iteration's workers pick up the new threshold.
+            if loop_config.enable_resign:
+                calibrate_resign_threshold(loop, loop_config, loop_metrics, metrics)
 
             status["status_message"] = "Self-play phase completed. Starting training."
             update_loop_status(status)
             LOGGER.info(f"--- Starting training on self-play data ({sp.games_completed} games) ---")
+
+            # Phase 3: pause the inference server so it drops its model
+            # and frees VRAM before training takes over the GPU.
+            if inference_server_handle is not None:
+                try:
+                    inference_server_handle.pause()
+                    LOGGER.info("Inference server paused before training")
+                except Exception as e:
+                    LOGGER.warning(f"Inference server pause failed (continuing): {e}")
 
             train_result = _run_training_iteration(loop, loop_config, metrics)
             model = train_result.model
@@ -1309,6 +1578,16 @@ def main(
                 loop, model, candidate_checkpoint_num, no_gate, gate_games, gate_threshold,
                 num_readouts, status, metrics,
             )
+
+            # Phase 3: reload the inference server from the (possibly
+            # gated-and-promoted) checkpoint so the next iteration's
+            # workers infer against the latest weights.
+            if inference_server_handle is not None:
+                try:
+                    inference_server_handle.reload(None)
+                    LOGGER.info("Inference server reloaded with latest checkpoint")
+                except Exception as e:
+                    LOGGER.warning(f"Inference server reload failed (continuing): {e}")
 
             _emit_tensorboard_metrics(
                 loop, sp_stats, sp, training_wall_time, gating.wall_time,
@@ -1349,6 +1628,12 @@ def main(
         update_loop_status(status)
         raise
     finally:
+        if inference_server_handle is not None:
+            try:
+                inference_server_handle.shutdown()
+                LOGGER.info("Inference server shut down")
+            except Exception as e:
+                LOGGER.warning(f"Inference server shutdown error (ignoring): {e}")
         if LOOP_LOCK_FILE.exists():
             LOOP_LOCK_FILE.unlink()
 

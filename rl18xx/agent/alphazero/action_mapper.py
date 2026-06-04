@@ -1079,9 +1079,25 @@ class ActionMapper(metaclass=Singleton):
         ``RustGameAdapter`` exposes ``get_factored_choices`` mirroring the
         Python :class:`FactoredActionHelper`. For Python ``BaseGame`` instances
         we fall back to the in-tree helper.
+
+        Phase 3.5: the Rust path is the production path; the Python fallback
+        is kept for tests and parity audits only. We log a one-time warning
+        per process if the Python fallback is hit so any production-path
+        regression is visible in worker logs.
         """
         if hasattr(state, "get_factored_choices") and callable(state.get_factored_choices):
             return state.get_factored_choices()
+        if not getattr(self, "_warned_python_fallback", False):
+            LOGGER.warning(
+                "ActionMapper._get_factored_choices: state has no Rust "
+                "get_factored_choices; falling back to Python "
+                "FactoredActionHelper. Expected in tests and in pretraining "
+                "(where the inner replay state stays Python so "
+                "canonical_index_for_action can read BaseAction internals); "
+                "unexpected in self-play / MCTS workers (those should run "
+                "fully on RustGameAdapter)."
+            )
+            self._warned_python_fallback = True
         return FactoredActionHelper().get_choices(state)
 
     def get_legal_action_indices(self, state: BaseGame) -> List[int]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 import collections
 import math
 import numpy as np
+from dataclasses import dataclass, field
 from typing import Optional, Union
 import scipy
 import torch
@@ -11,6 +12,46 @@ from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.alphazero.config import SelfPlayConfig
 from rl18xx.rust_adapter import RustGameAdapter
 import time
+
+
+@dataclass
+class PlayoutTrace:
+    """Per-playout diagnostic record (Phase 1 of MCTS improvements plan).
+
+    Populated by ``MCTSNode.select_leaf`` (descent path + PW/forced-chain
+    markers) and finalized by ``MCTSPlayer.tree_search`` after the leaf is
+    evaluated (NN value, leaf Q, expansion flag, prior entropy). Lives only
+    when ``SelfPlayConfig.trace`` is enabled.
+
+    ``move_idx`` is the parent ``play_move`` index this trace was recorded
+    under; ``action_path`` / ``pw_grandchild_path`` / ``forced_chain_lengths``
+    are parallel arrays indexed by descent step from the root.
+    """
+
+    move_idx: int
+    leaf_depth: int = 0
+    action_path: list[int] = field(default_factory=list)
+    pw_grandchild_path: list[bool] = field(default_factory=list)
+    forced_chain_lengths: list[int] = field(default_factory=list)
+    nn_value: Optional[np.ndarray] = None
+    leaf_q_perspective: float = 0.0
+    leaf_terminal: bool = False
+    expansion_occurred: bool = False
+    leaf_prior_entropy: float = 0.0
+
+    def to_jsonable(self) -> dict:
+        return {
+            "move_idx": self.move_idx,
+            "leaf_depth": self.leaf_depth,
+            "action_path": list(self.action_path),
+            "pw_grandchild_path": list(self.pw_grandchild_path),
+            "forced_chain_lengths": list(self.forced_chain_lengths),
+            "nn_value": None if self.nn_value is None else [float(v) for v in self.nn_value],
+            "leaf_q_perspective": float(self.leaf_q_perspective),
+            "leaf_terminal": bool(self.leaf_terminal),
+            "expansion_occurred": bool(self.expansion_occurred),
+            "leaf_prior_entropy": float(self.leaf_prior_entropy),
+        }
 
 # Flat policy size: computed once from the ActionMapper so it stays in sync
 # with the action encoding (no hardcoded magic). ActionMapper is a Singleton,
@@ -448,7 +489,7 @@ class MCTSNode:
         """Return value of position, from perspective of player to play."""
         return self.Q[self.active_player_index]
 
-    def select_leaf(self):
+    def select_leaf(self, trace: Optional[PlayoutTrace] = None):
         start_time = time.time()
         current = self
         num_added = 0
@@ -472,11 +513,18 @@ class MCTSNode:
             # which either grows a new grandchild or PUCT-selects an existing
             # one. Otherwise the standard categorical descent applies.
             price_range = current.price_ranges_by_idx.get(best_move)
-            if price_range is not None and price_range[0] != price_range[1]:
+            is_pw_descent = price_range is not None and price_range[0] != price_range[1]
+            if is_pw_descent:
                 current = current._select_or_expand_price_child(best_move, price_range)
             else:
                 current = current.maybe_add_child(best_move)
+            if trace is not None:
+                trace.action_path.append(int(best_move))
+                trace.pw_grandchild_path.append(bool(is_pw_descent))
+                trace.forced_chain_lengths.append(len(current.forced_action_chain))
             num_added += 1
+        if trace is not None:
+            trace.leaf_depth = num_added
         end_time = time.time()
         self.add_metric("MCTS/Select_Leaf_Time", end_time - start_time)
         self.add_metric("MCTS/Select_Leaf_Path_Length", num_added)

@@ -1,5 +1,6 @@
 from rl18xx.game.engine.game import BaseGame
 from rl18xx.rust_adapter import RustGameAdapter
+import collections
 import random
 import os
 import socket
@@ -129,12 +130,70 @@ class MCTSPlayer(Agent):
     def __init__(self, config: SelfPlayConfig):
         self.config = config
         self.network = config.network
+        # Phase 3: route inference through the cross-process server when
+        # ``use_inference_server`` is on AND a client is wired (set by
+        # ``worker_init_inference`` on each self-play worker). Otherwise
+        # fall back to the local model. ``self._backend`` exposes both
+        # ``run_encoded`` and ``run_many_encoded`` with the same shape as
+        # the model API; the client also exposes ``last_price_components``
+        # after each batched call so the existing slicer can index it.
+        self._backend = self._select_inference_backend()
         # Cumulative timing accumulators (seconds); populated during tree_search.
         self.cumulative_inference_time = 0.0
         self.cumulative_encoding_time = 0.0
         self.cumulative_leaf_selection_time = 0.0
         self.cumulative_backup_time = 0.0
+        # Phase 1 PlayoutTrace state. Game-level coin flip decides whether this
+        # whole game is traced; ``self.traces`` accumulates one ``PlayoutTrace``
+        # per traced playout across all moves. Off when ``trace_game_rate=0``.
+        trace_cfg = getattr(self.config, "trace", None)
+        rate = float(getattr(trace_cfg, "trace_game_rate", 0.0)) if trace_cfg is not None else 0.0
+        self._tracing_enabled = rate > 0.0 and random.random() < rate
+        self.traces: list[mcts.PlayoutTrace] = []
+        self._traces_collected_this_move = 0
+
+        # Phase 2 consensus resign state.
+        # ``_noresign_holdout`` games never resign — they always play to
+        # completion so the loop calibrator can measure the would-have-
+        # resigned false-positive rate. Flag is set once at game start.
+        holdout_rate = float(getattr(self.config, "noresign_holdout_rate", 0.0))
+        self._noresign_holdout: bool = random.random() < holdout_rate
+        # Rolling window of recent root Q vectors (one per move, recorded by
+        # ``check_resign`` itself before its threshold check).
+        window = max(1, int(getattr(self.config, "resign_window", 1)))
+        self._q_window: collections.deque = collections.deque(maxlen=window)
+        # Info dict from the first move the resign conditions held (regardless
+        # of holdout). Used by the loop's auto-calibrator for false-positive
+        # rate estimation; remains None if conditions never held.
+        self._would_have_resigned_info: Optional[dict] = None
+        # Termination reason: set when the game ends. ``finished`` = engine
+        # natural ending; ``max_length`` = truncation by move-count cap;
+        # ``resigned`` = consensus resign triggered.
+        self.termination: Optional[str] = None
         self.initialize_game()
+
+    def _select_inference_backend(self):
+        """Return the inference backend (``run_encoded`` /
+        ``run_many_encoded`` + ``last_price_components``) for this player.
+
+        When ``SelfPlayConfig.use_inference_server`` is enabled AND a
+        cross-process ``inference_client`` has been wired on the worker
+        runtime, route through it. Otherwise return the local model. This
+        keeps the in-process inference path the production default.
+        """
+        if not bool(getattr(self.config, "use_inference_server", False)):
+            return self.network
+        client = getattr(self.config, "inference_client", None)
+        if client is None:
+            # Server flag is on but no client has been provisioned (e.g.,
+            # in a unit-test context). Fall back to the local model so
+            # tree_search still works; log once for visibility.
+            LOGGER.warning(
+                "MCTSPlayer: use_inference_server=True but no inference_client "
+                "on the config; falling back to local network."
+            )
+            return self.network
+        return client
 
     def __str__(self):
         return f"MCTSPlayer"
@@ -238,6 +297,18 @@ class MCTSPlayer(Agent):
         # Track action dicts for replay in extract_data.
         # Seed with any actions already in the game state (e.g., from a terminal_game_state test fixture).
         self.played_actions = list(game_state.raw_actions) if hasattr(game_state, "raw_actions") else []
+        # ``forced_action_dicts[i]`` holds the engine-level action dicts the
+        # forced-chain collapse inserted *after* ``played_actions[i]``. MCTS
+        # auto-advances the engine through these, so they don't generate
+        # training tuples — but ``extract_data`` still has to replay them
+        # to keep its parallel game state in lock-step with the moves the
+        # network actually saw. Without this, replay diverges on the first
+        # forced cascade and ``process_action`` later trips a player-turn
+        # mismatch hundreds of moves in.
+        self.forced_action_dicts: list[list[dict]] = []
+        # Initial forced-chain padding (e.g., if the seed state itself had
+        # a forced-only opening): zero-length list to keep indexes aligned.
+        self._initial_action_count = len(self.played_actions)
         LOGGER.info(f"Initialized game. Root node N: {self.root.N}")
 
     def play_move(self, action_index):
@@ -254,6 +325,9 @@ class MCTSPlayer(Agent):
         # If the picked categorical slot is price-bearing, descend to the
         # most-visited price grandchild and commit to its concrete price.
         # Otherwise materialize the categorical child directly.
+        # Snapshot the engine's raw_actions count *before* the move so we
+        # can recover the forced-chain dicts the cascade collapse appends.
+        raw_actions_before = len(self.root.game_object.raw_actions)
         price_range = self.root.price_ranges_by_idx.get(action_index)
         if price_range is not None and price_range[0] != price_range[1]:
             new_root = self._select_most_visited_price_grandchild(action_index)
@@ -265,6 +339,14 @@ class MCTSPlayer(Agent):
             action_obj = self.root.action_mapper.map_index_to_action(action_index, self.root.game_object)
             new_root = self.root.maybe_add_child(action_index)
         self.played_actions.append(action_obj.to_dict() if hasattr(action_obj, "to_dict") else action_obj)
+        # Recover forced-chain dicts. After ``maybe_add_child`` returns, the
+        # new root's engine has advanced through the chosen action *plus*
+        # any forced-chain actions ``maybe_add_child`` collapsed. The slice
+        # ``raw_actions[raw_actions_before + 1:]`` is the forced chain
+        # (skipping the chosen action at index ``raw_actions_before``).
+        full_raw_after = list(new_root.game_object.raw_actions)
+        forced_dicts = full_raw_after[raw_actions_before + 1:] if len(full_raw_after) > raw_actions_before + 1 else []
+        self.forced_action_dicts.append(forced_dicts)
 
         # Capture ContinuousPriceHead targets from MCTS price grandchildren
         # BEFORE pruning destroys them. For price-bearing slots, every
@@ -289,6 +371,9 @@ class MCTSPlayer(Agent):
         self.root = new_root
         # Prune the tree
         self.prune_mcts_tree_retain_parent(self.root)
+
+        # Reset Phase 1 trace-budget counter for the next move's tree_search calls.
+        self._traces_collected_this_move = 0
 
         LOGGER.debug(f"Played move. New root N: {self.root.N}, Searches_pi length: {len(self.searches_pi)}")
         self.log_memory_usage(stage_name="MCTSPlayer.play_move")
@@ -403,12 +488,29 @@ class MCTSPlayer(Agent):
         if parallel_readouts is None:
             parallel_readouts = min(self.config.parallel_readouts, self.config.num_readouts)
 
+        # Phase 1 PlayoutTrace: decide whether *this* move is a traced one
+        # (the per-game coin flip is on ``self._tracing_enabled``; the
+        # per-move filter is ``trace_every_n_moves``). Within a traced move,
+        # ``self.config.trace.traces_per_move`` caps the budget across all
+        # tree_search() calls until ``play_move`` resets it.
+        trace_cfg = getattr(self.config, "trace", None)
+        trace_this_move = False
+        traces_this_move_budget = 0
+        if self._tracing_enabled and trace_cfg is not None:
+            move_idx = len(self.searches_pi)
+            every_n = max(1, int(trace_cfg.trace_every_n_moves))
+            if move_idx % every_n == 0:
+                trace_this_move = True
+                traces_this_move_budget = max(0, int(trace_cfg.traces_per_move))
+
         # metrics
         leaf_depths_collected = []
         leaf_initial_qs_collected = []
         leaf_prior_entropies_collected = []
 
         leaves = []
+        # Parallel to ``leaves``: per-leaf trace (or None if untraced).
+        leaf_traces: list[Optional[mcts.PlayoutTrace]] = []
         failsafe = 0
         select_leaf_attempts = 0
         max_select_leaf_attempts = parallel_readouts * 2
@@ -417,16 +519,31 @@ class MCTSPlayer(Agent):
         while len(leaves) < parallel_readouts and failsafe < max_select_leaf_attempts:
             select_leaf_attempts += 1
             failsafe += 1
-            leaf = self.root.select_leaf()
+            trace = None
+            if (
+                trace_this_move
+                and self._traces_collected_this_move < traces_this_move_budget
+            ):
+                trace = mcts.PlayoutTrace(move_idx=len(self.searches_pi))
+            leaf = self.root.select_leaf(trace=trace)
             if leaf.is_done():
                 LOGGER.info(f"tree_search: Found finished game for leaf. Result: {leaf.game_result_string()}")
                 self.add_metric("MCTS/Finished_Games", 1)
                 value = leaf.game_result()
                 leaf.backup_value(value, up_to=self.root)
+                if trace is not None:
+                    trace.leaf_terminal = True
+                    trace.nn_value = np.asarray(value, dtype=np.float32)
+                    trace.leaf_q_perspective = float(value[leaf.active_player_index])
+                    self.traces.append(trace)
+                    self._traces_collected_this_move += 1
                 continue
 
             leaf.add_virtual_loss(up_to=self.root)
             leaves.append(leaf)
+            leaf_traces.append(trace)
+            if trace is not None:
+                self._traces_collected_this_move += 1
         select_leaves_end = time.time()
 
         leaf_selection_duration = select_leaves_end - select_leaves_start
@@ -453,25 +570,36 @@ class MCTSPlayer(Agent):
             # Phase 6.5: FP16 inference for ~2x GPU throughput (CUDA or MPS)
             inference_start = time.time()
             autocast_device = _get_autocast_device() if self.config.use_fp16_inference else None
-            if autocast_device:
+            # Phase 3: use ``self._backend`` (server client when on, local
+            # model otherwise). The autocast context applies only to the
+            # in-process path — the server runs its own forward and handles
+            # autocast internally.
+            backend = self._backend
+            backend_is_client = backend is not self.network
+            if backend_is_client:
+                # Server-backed: no client-side autocast; server owns the model.
+                move_probs, _, values = backend.run_many_encoded(
+                    [leaf.encoded_game_state for leaf in leaves]
+                )
+            elif autocast_device:
                 with torch.no_grad(), torch.amp.autocast(autocast_device):
-                    move_probs, _, values = self.network.run_many_encoded(
+                    move_probs, _, values = backend.run_many_encoded(
                         [leaf.encoded_game_state for leaf in leaves]
                     )
             else:
                 with torch.no_grad():
-                    move_probs, _, values = self.network.run_many_encoded(
+                    move_probs, _, values = backend.run_many_encoded(
                         [leaf.encoded_game_state for leaf in leaves]
                     )
             inference_duration = time.time() - inference_start
             self.cumulative_inference_time += inference_duration
 
-            # Continuous price head outputs (Task #28): the transformer model
-            # stashes ``last_price_components`` (batched tensors + slot index
-            # lookup) after each forward pass. Slice per-leaf so MCTS PW can
-            # sample prices from the head's Normal. None for the GNN model
-            # (no price head) — MCTS falls back to a wide-Normal default.
-            batched_price_components = getattr(self.network, "last_price_components", None)
+            # Continuous price head outputs (Task #28): both the model and
+            # the inference client expose a batched ``last_price_components``
+            # dict after the forward; the existing slicer is shape-compatible
+            # with either. ``None`` for the GNN model (no price head) — MCTS
+            # falls back to a wide-Normal default.
+            batched_price_components = getattr(backend, "last_price_components", None)
 
             # Combined for backward-compat metric
             run_network_duration = encode_duration + inference_duration
@@ -480,6 +608,7 @@ class MCTSPlayer(Agent):
             for i, (leaf, move_prob, value) in enumerate(zip(leaves, move_probs, values)):
                 leaf.revert_virtual_loss(up_to=self.root)
                 leaf_price_components = _slice_price_components(batched_price_components, i)
+                was_expanded_before = leaf.is_expanded
                 leaf.incorporate_results(
                     move_prob, value, up_to=self.root, price_components=leaf_price_components
                 )
@@ -487,9 +616,22 @@ class MCTSPlayer(Agent):
                 # metrics
                 leaf_depths_collected.append(leaf.depth)
                 leaf_initial_qs_collected.append(value[leaf.active_player_index].item())
+                leaf_entropy: Optional[float] = None
                 if np.sum(leaf.child_prior_compressed) > 1e-6:  # Ensure it's not all zeros
                     normalized_prior_compressed = leaf.child_prior_compressed / np.sum(leaf.child_prior_compressed)
-                    leaf_prior_entropies_collected.append(mcts.calculate_entropy(normalized_prior_compressed))
+                    leaf_entropy = float(mcts.calculate_entropy(normalized_prior_compressed))
+                    leaf_prior_entropies_collected.append(leaf_entropy)
+
+                # Phase 1 PlayoutTrace finalization (cheap; only when tracing).
+                trace = leaf_traces[i] if i < len(leaf_traces) else None
+                if trace is not None:
+                    value_np = value.cpu().numpy() if isinstance(value, torch.Tensor) else np.asarray(value)
+                    trace.nn_value = np.asarray(value_np, dtype=np.float32)
+                    trace.leaf_q_perspective = float(value_np[leaf.active_player_index])
+                    trace.leaf_terminal = False
+                    trace.expansion_occurred = not was_expanded_before
+                    trace.leaf_prior_entropy = leaf_entropy if leaf_entropy is not None else 0.0
+                    self.traces.append(trace)
             revert_and_incorporate_duration = time.time() - revert_and_incorporate_start
             self.cumulative_backup_time += revert_and_incorporate_duration
             self.add_histogram("MCTS_Player/TreeSearch_Leaf_Depths", np.array(leaf_depths_collected))
@@ -506,6 +648,124 @@ class MCTSPlayer(Agent):
         self.add_metric("MCTS/Inference_Time", inference_duration)
         self.add_metric("MCTS/Revert_And_Incorporate_Time", revert_and_incorporate_duration)
         return leaves
+
+    def dump_traces(self, output_dir: Optional[Path] = None) -> Optional[Path]:
+        """Write accumulated Phase 1 PlayoutTraces to a JSONL file.
+
+        Returns the file path written, or ``None`` if tracing was off / no
+        traces were collected. The first line is a header dict with config
+        snapshot + players; subsequent lines are one ``PlayoutTrace`` each.
+
+        File layout: ``{output_dir}/{iteration}/{game_id}.jsonl``. The
+        ``iteration`` segment uses ``self.config.global_step`` so traces are
+        sharded by training iteration.
+        """
+        if not self._tracing_enabled or not self.traces:
+            return None
+        trace_cfg = getattr(self.config, "trace", None)
+        if trace_cfg is None:
+            return None
+        base = Path(output_dir) if output_dir is not None else Path(trace_cfg.output_dir)
+        iteration_dir = base / str(int(self.config.global_step))
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        path = iteration_dir / f"{self.config.game_id}.jsonl"
+        players = []
+        for p in sorted(self.root.game_object.players, key=lambda x: x.id):
+            players.append({"id": p.id, "name": getattr(p, "name", str(p.id))})
+        header = {
+            "kind": "header",
+            "iteration": int(self.config.global_step),
+            "game_idx_in_iteration": int(self.config.game_idx_in_iteration),
+            "game_id": str(self.config.game_id),
+            "players": players,
+            "trace_config": {
+                "trace_game_rate": float(trace_cfg.trace_game_rate),
+                "trace_every_n_moves": int(trace_cfg.trace_every_n_moves),
+                "traces_per_move": int(trace_cfg.traces_per_move),
+            },
+            "num_traces": len(self.traces),
+        }
+        with path.open("w") as f:
+            f.write(json.dumps(header))
+            f.write("\n")
+            for trace in self.traces:
+                f.write(json.dumps(trace.to_jsonable()))
+                f.write("\n")
+        LOGGER.info(f"Wrote {len(self.traces)} PlayoutTraces to {path}")
+        return path
+
+    def check_resign(self) -> tuple[bool, Optional[dict]]:
+        """Phase 2 multiplayer consensus resign decision for the current root.
+
+        Called by ``SelfPlay.play()`` after ``pick_move()`` returns but before
+        ``play_move()`` advances the root. Records this move's root Q vector
+        into the rolling window and tests whether the resign conditions
+        (stable leader + decisive gap) hold over the full window.
+
+        Returns ``(should_resign, info)`` where ``info`` carries the leader,
+        ``q_leader_min``, ``gap_min``, and the resign-trigger move number.
+        ``should_resign`` is True only when conditions hold AND this game is
+        not a no-resign holdout. For holdouts the conditions are still
+        observed and stashed in ``self._would_have_resigned_info`` so the
+        loop calibrator can compute the false-positive rate.
+
+        Returns ``(False, None)`` when resign is disabled, the window has
+        not yet filled, or the conditions are not met.
+        """
+        if not bool(getattr(self.config, "enable_resign", False)):
+            return False, None
+
+        num_players = len(self.root.game_object.players)
+        # ``root.Q`` is per-slot (length VALUE_SIZE = 6 in max-N); only the
+        # first ``num_players`` slots correspond to real players.
+        q_full = self.root.Q
+        q = np.asarray(q_full[:num_players], dtype=np.float32).copy()
+        self._q_window.append(q)
+
+        window_target = max(1, int(self.config.resign_window))
+        if len(self._q_window) < window_target:
+            return False, None
+
+        # Stable leader: argmax of Q must be the same player across every
+        # vector in the window.
+        leaders = {int(np.argmax(vec)) for vec in self._q_window}
+        if len(leaders) != 1:
+            return False, None
+        leader = next(iter(leaders))
+
+        q_leader_min = float(min(vec[leader] for vec in self._q_window))
+        if q_leader_min < float(self.config.resign_high_threshold):
+            return False, None
+
+        # Gap: min over the window of (Q_leader - Q_second). The "second" is
+        # the highest non-leader player's Q in each vector independently.
+        def _gap(vec: np.ndarray, leader_idx: int) -> float:
+            other = np.delete(vec, leader_idx)
+            if other.size == 0:
+                return float("inf")
+            return float(vec[leader_idx] - float(other.max()))
+
+        gap_min = min(_gap(vec, leader) for vec in self._q_window)
+        if gap_min < float(self.config.resign_gap_threshold):
+            return False, None
+
+        info = {
+            "leader": leader,
+            "q_leader_min": q_leader_min,
+            "gap_min": float(gap_min),
+            "move_number": int(self.root.game_object.move_number),
+            "window_size": len(self._q_window),
+        }
+
+        # Record the first would-have-resigned moment for the calibrator.
+        # Tracked for every game (not just holdouts) so resigned games still
+        # contribute a "leader at trigger" data point for downstream analysis.
+        if self._would_have_resigned_info is None:
+            self._would_have_resigned_info = dict(info)
+
+        if self._noresign_holdout:
+            return False, info
+        return True, info
 
     def adaptive_readouts(self) -> int:
         """Scale readouts by position complexity. Low-branching nodes use min_readouts."""
@@ -534,28 +794,37 @@ class MCTSPlayer(Agent):
         self.result_string = string
 
     def extract_data(self) -> Generator[Tuple[Union[BaseGame, RustGameAdapter], torch.Tensor, torch.Tensor, torch.Tensor, list], None, None]:
-        assert (
-            len(self.searches_pi) == len(self.played_actions)
-        ), f"searches_pi length {len(self.searches_pi)} != played_actions length {len(self.played_actions)}"
+        # ``played_actions`` may contain a prefix of seed actions from the
+        # initial game state (e.g., fixture states); those have no
+        # ``searches_pi`` entry. The Mcts decision points are the last
+        # ``len(searches_pi)`` entries.
+        n_chosen = len(self.searches_pi)
+        chosen_actions = self.played_actions[-n_chosen:] if n_chosen > 0 else []
         # ``self.result`` is sized to the number of players in the game (set by
         # ``initialize_game``), so use the array's own shape rather than a
         # hard-coded length-4 vector.
         assert not np.array_equal(self.result, np.zeros_like(self.result)), f"result {self.result} is 0"
 
-        # ``price_targets`` is built in lockstep with ``played_actions`` /
-        # ``searches_pi`` (one entry per ``play_move`` call). Pad missing
-        # entries with an empty list to keep the schema uniform if a legacy
-        # caller bypassed ``play_move``.
-        if len(self.price_targets) < len(self.played_actions):
-            pad = [[]] * (len(self.played_actions) - len(self.price_targets))
+        # ``price_targets`` is built in lockstep with the chosen MCTS moves;
+        # pad to ``n_chosen`` if a legacy caller bypassed ``play_move``.
+        if len(self.price_targets) < n_chosen:
+            pad = [[]] * (n_chosen - len(self.price_targets))
             self.price_targets.extend(pad)
+        if len(self.forced_action_dicts) < n_chosen:
+            pad = [[]] * (n_chosen - len(self.forced_action_dicts))
+            self.forced_action_dicts.extend(pad)
 
         result = torch.tensor(self.result)
         # Training loop runs exclusively on the Rust engine, so the replay game
         # is always a fresh RustGameAdapter.
         game_state = self.get_new_game_state()
         action_mapper = ActionMapper()
-        for i, action in enumerate(self.played_actions):
+        # Apply any pre-MCTS seed actions before yielding decision-point tuples.
+        seed_actions = self.played_actions[:-n_chosen] if n_chosen > 0 else list(self.played_actions)
+        for seed_action in seed_actions:
+            game_state = game_state.pickle_clone()
+            game_state.process_action(seed_action)
+        for i, action in enumerate(chosen_actions):
             yield (
                 game_state,
                 torch.tensor(action_mapper.get_legal_action_indices(game_state)),
@@ -567,6 +836,12 @@ class MCTSPlayer(Agent):
             )
             game_state = game_state.pickle_clone()
             game_state.process_action(action)
+            # Replay forced-chain actions that MCTS auto-advanced through —
+            # otherwise the engine state diverges from where the next chosen
+            # action was selected, and ``process_action`` eventually trips a
+            # player-turn mismatch.
+            for forced_action in self.forced_action_dicts[i]:
+                game_state.process_action(forced_action)
 
     def _recursive_clear_references(self, node: mcts.MCTSNode, stats: Optional[dict] = None):
         """
@@ -708,6 +983,10 @@ class SelfPlay:
         status: str,
         timing: Optional[dict] = None,
         phase_move_counts: Optional[dict] = None,
+        termination: Optional[str] = None,
+        noresign_holdout: Optional[bool] = None,
+        would_have_resigned: Optional[dict] = None,
+        result_per_player: Optional[list[float]] = None,
     ):
         file = SELF_PLAY_GAMES_STATUS_PATH / f"{game_id}.json"
         status_data = {
@@ -725,6 +1004,16 @@ class SelfPlay:
             status_data["timing"] = timing
         if phase_move_counts is not None:
             status_data["phase_move_counts"] = phase_move_counts
+        # Phase 2: termination reason + holdout calibration record. Surfaced
+        # only on completion so the loop's resign calibrator can read them.
+        if termination is not None:
+            status_data["termination"] = termination
+        if noresign_holdout is not None:
+            status_data["noresign_holdout"] = bool(noresign_holdout)
+        if would_have_resigned is not None:
+            status_data["would_have_resigned"] = would_have_resigned
+        if result_per_player is not None:
+            status_data["result_per_player"] = list(result_per_player)
         try:
             atomic_write_json(file, status_data, indent=4)
         except IOError as e:
@@ -739,7 +1028,17 @@ class SelfPlay:
         - the n x 4 tensor of floats representing the original value-net estimate
         where n is the number of moves in the game
         """
-        player = MCTSPlayer(self.config)
+        if getattr(self.config, "use_rust_mcts", False):
+            # Phase 4b feature flag — use the Rust-MCTS-backed adapter
+            # instead of the pure-Python ``MCTSPlayer``. Categorical-only
+            # for 4b (Bid/BuyTrain/BuyCompany treated as fixed-price at
+            # price_range[0]); PW lands in 4c.
+            from rl18xx.agent.alphazero.rust_mcts_player import (
+                RustMCTSPlayer as _RustMCTSPlayer,
+            )
+            player = _RustMCTSPlayer(self.config)
+        else:
+            player = MCTSPlayer(self.config)
 
         game_start_time = time.time()
         self.update_self_play_game_progress(
@@ -769,17 +1068,24 @@ class SelfPlay:
         first_node = player.root.select_leaf()
         first_node.ensure_encoded()
         autocast_device = _get_autocast_device() if self.config.use_fp16_inference else None
-        if autocast_device:
+        # Phase 3: route through the same backend MCTS uses (server client
+        # when on, local network otherwise). Server-backed paths skip the
+        # client-side autocast — the server owns the model.
+        first_backend = player._backend
+        first_is_client = first_backend is not player.network
+        if first_is_client:
+            probs, _, val = first_backend.run_encoded(first_node.encoded_game_state)
+        elif autocast_device:
             with torch.no_grad(), torch.amp.autocast(autocast_device):
-                probs, _, val = self.config.network.run_encoded(first_node.encoded_game_state)
+                probs, _, val = first_backend.run_encoded(first_node.encoded_game_state)
         else:
             with torch.no_grad():
-                probs, _, val = self.config.network.run_encoded(first_node.encoded_game_state)
+                probs, _, val = first_backend.run_encoded(first_node.encoded_game_state)
         # Slice the (single-leaf) price head outputs for the root expansion so
         # MCTS PW has price priors available on the first descent. ``None`` for
         # models without a price head (GNN).
         first_price_components = _slice_price_components(
-            getattr(self.config.network, "last_price_components", None), 0
+            getattr(first_backend, "last_price_components", None), 0
         )
         first_node.incorporate_results(
             probs, val, first_node, price_components=first_price_components
@@ -787,6 +1093,7 @@ class SelfPlay:
         del first_node
         move_counter = 0
         game_ended_by_max_length = 0
+        game_ended_by_resign = 0
         try:
             while True:
                 LOGGER.info(f"SelfPlay.play loop start, move {move_counter}")
@@ -795,12 +1102,14 @@ class SelfPlay:
 
                 sim_count_this_move = 0
                 tree_search_duration_this_move = 0
+                mcts_ran_this_move = False
                 if player.root.num_legal_actions == 1:
                     LOGGER.info(f"Move {move_counter}: Only one legal action. Skipping MCTS.")
                     num_forced_moves_in_game += 1
                 else:
                     player.root.inject_noise()
                     num_mcts_moves_in_game += 1
+                    mcts_ran_this_move = True
                     current_readouts = player.root.N
                     target_readouts_for_move = current_readouts + player.adaptive_readouts()
 
@@ -817,11 +1126,37 @@ class SelfPlay:
                 pick_move_duration_this_move = time.time() - pick_move_start_time
                 total_pick_move_time_for_game += pick_move_duration_this_move
                 LOGGER.info(f"Selected move: {move}")
-                play_move_start_time = time.time()
-                player.play_move(move)
-                play_move_duration_this_move = time.time() - play_move_start_time
-                total_play_move_time_for_game += play_move_duration_this_move
-                move_counter += 1
+
+                # Phase 2 consensus resign check: only meaningful when MCTS
+                # ran on this move (root Q is fresh). Forced moves skip the
+                # window update entirely so the window reflects real MCTS
+                # consensus, not stale carry-over Q.
+                should_resign = False
+                resign_info: Optional[dict] = None
+                if mcts_ran_this_move:
+                    should_resign, resign_info = player.check_resign()
+                if should_resign:
+                    LOGGER.info(
+                        f"Game resigning at move {move_counter}: "
+                        f"leader={resign_info['leader']}, "
+                        f"q_leader_min={resign_info['q_leader_min']:.3f}, "
+                        f"gap_min={resign_info['gap_min']:.3f}"
+                    )
+                    # Reuse the truncation-style end path: mark engine done,
+                    # set termination reason, let the is_done() block below
+                    # record the result and break.
+                    player.root.game_object.end_game()
+                    player.termination = "resigned"
+                    game_ended_by_resign = 1
+                    # Skip play_move — we abandon the selected action so it
+                    # does not become a training example.
+                    play_move_duration_this_move = 0.0
+                else:
+                    play_move_start_time = time.time()
+                    player.play_move(move)
+                    play_move_duration_this_move = time.time() - play_move_start_time
+                    total_play_move_time_for_game += play_move_duration_this_move
+                    move_counter += 1
 
                 # Track phase move counts (Item 6)
                 round_class_name = player.root.game_object.round.__class__.__name__
@@ -854,7 +1189,14 @@ class SelfPlay:
                 self.add_metric("SelfPlay/Total_Sims_For_MCTS_Moves", total_sims_for_mcts_moves)
 
                 if player.root.is_done():
-                    if player.root.game_object.move_number >= self.config.max_game_length:
+                    if player.termination == "resigned":
+                        # Already end_game'd above; do not double-flag as truncation.
+                        net_worth = _compute_net_worth(player.root.game_object)
+                        LOGGER.info(
+                            f"Game ended by resign ({move_counter} moves). "
+                            f"Net worth at resign: {net_worth}"
+                        )
+                    elif player.root.game_object.move_number >= self.config.max_game_length:
                         # Truncated game: derive win/loss + score targets from net worth
                         # at the truncation step. end_game() flips the engine's `finished`
                         # flag but does not mutate player cash / share holdings; the
@@ -867,6 +1209,10 @@ class SelfPlay:
                         )
                         player.root.game_object.end_game()
                         game_ended_by_max_length = 1
+                        player.termination = "max_length"
+                    elif player.termination is None:
+                        # Natural engine-driven ending (train exhaustion, bankruptcy, ...).
+                        player.termination = "finished"
 
                     player.set_result(player.root.game_result())
                     LOGGER.info(
@@ -899,6 +1245,10 @@ class SelfPlay:
                         status="Completed",
                         timing=game_timing,
                         phase_move_counts=phase_move_counts,
+                        termination=player.termination,
+                        noresign_holdout=player._noresign_holdout,
+                        would_have_resigned=player._would_have_resigned_info,
+                        result_per_player=[float(v) for v in player.result],
                     )
                     break
 
@@ -926,6 +1276,9 @@ class SelfPlay:
         # Per-game binary truncation indicator; averaging across games yields the
         # truncation rate. Logged unconditionally (0 for natural end, 1 for truncation).
         self.add_metric("self_play/truncated", float(game_ended_by_max_length))
+        # Phase 2: resign indicator. Averaging across games yields the resign rate.
+        self.add_metric("SelfPlay/Game_Ended_By_Resign", float(game_ended_by_resign))
+        self.add_metric("self_play/resigned", float(game_ended_by_resign))
 
         if player.result is not None and len(player.result) > 0:
             for i, score in enumerate(player.result):
@@ -941,6 +1294,12 @@ class SelfPlay:
         avg_play_move_time_ms = (total_play_move_time_for_game / move_counter if move_counter > 0 else 0) * 1000
         self.add_metric("SelfPlay/Avg_Pick_Move_Time_ms", avg_pick_move_time_ms)
         self.add_metric("SelfPlay/Avg_Play_Move_Time_ms", avg_play_move_time_ms)
+
+        # Phase 1: dump accumulated PlayoutTraces (no-op when tracing is off).
+        try:
+            player.dump_traces()
+        except Exception as e:
+            LOGGER.warning(f"dump_traces failed (non-fatal): {e}", exc_info=True)
 
         return player
 
