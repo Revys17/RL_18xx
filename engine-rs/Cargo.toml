@@ -8,9 +8,9 @@ name = "engine_rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.23", features = ["extension-module", "multiple-pymethods"] }
+pyo3 = { version = "0.24", features = ["extension-module", "multiple-pymethods"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-numpy = "0.23"
+numpy = "0.24"
 rand = "0.8"
 rand_distr = "0.4"
