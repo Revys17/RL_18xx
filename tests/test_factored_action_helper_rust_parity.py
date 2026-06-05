@@ -24,18 +24,16 @@ in practice:
 - ``Bankrupt`` (emergency BuyTrain fallback)
 - ``CompanyBuyShares`` (MH -> NYC exchange; categorical-only)
 
-Special private-company branches that are deliberately *not yet* covered (and
-that the AlphaZero pipeline currently doesn't depend on) — these are noted
-explicitly in :func:`_canonical_key` so the parity test ignores them:
+The private-company special branches are now covered too:
 
-- ``LayTile`` via ``CS`` / ``DH`` special-track abilities (private company as
-  actor). The Python helper surfaces these when the corp owns CS/DH; the Rust
-  port does not yet enumerate them. Companies are mid-game niche and require
-  significantly more engine plumbing.
-- ``PlaceToken`` via ``DH`` teleport ability (similar).
+- ``LayTile`` via ``CS`` (B20) and ``DH`` (F16 teleport, tile 57) special-track
+  abilities.
+- ``PlaceToken`` via ``DH`` teleport ability (F16).
+- ``CompanyBuyShares`` (MH -> NYC exchange), including the pre-par claim.
 
-The pretraining and MCTS migration tasks can be unblocked by the covered set;
-the special-private branches will be added in a follow-up.
+The parity is enforced *exactly*: categorical option sets must match and, for
+price-bearing types (Bid, BuyTrain, BuyCompany), the ``price_range`` must match
+too (see :func:`_canonical_key`). There are no tolerated divergences.
 
 Usage::
 
@@ -64,23 +62,23 @@ from rl18xx.rust_adapter import RustGameAdapter  # noqa: E402
 
 
 def _canonical_key(la: LegalAction):
-    """Stable categorical fingerprint for a :class:`LegalAction`.
+    """Stable fingerprint for a :class:`LegalAction`, comparable across the
+    Python and Rust implementations.
 
-    Comparable across the Python and Rust implementations. The fingerprint
-    intentionally drops the *exact* price_range value (Python and Rust may
-    disagree at the edges of bid windows for non-cheapest auction companies,
-    where the Python helper uses the bidder's full cash budget and the Rust
-    helper does the same — but if a future implementation changes the cap, we
-    still want to recognise the underlying categorical option).
+    Includes the *exact* ``price_range`` for the price-bearing types (Bid,
+    BuyTrain, BuyCompany). The two engines are expected to agree on prices
+    exactly — the earlier tolerance ("disagree at the edges of bid windows")
+    has been eliminated, so any price drift now surfaces as a divergence.
     """
     t = la.type
     e = la.entity
     p = la.params
+    pr = tuple(la.price_range) if la.price_range is not None else None
 
     if t == "Pass":
         return ("Pass",)
     if t == "Bid":
-        return ("Bid", e.get("private"))
+        return ("Bid", e.get("private"), pr)
     if t == "Par":
         return ("Par", e.get("corp"), p.get("par_price"))
     if t == "BuyShares":
@@ -91,11 +89,9 @@ def _canonical_key(la: LegalAction):
         # difference, not a factored-helper bug.
         return ("BuyShares", e.get("corp"))
     if t == "CompanyBuyShares":
-        # MH -> NYC exchange. The Python helper surfaces this whenever the
-        # MH owner has a "reserved" NYC share to claim, even before NYC pars.
-        # The Rust port currently only emits this once NYC is parred. This
-        # is tracked as out-of-scope for the initial port — see module
-        # docstring. Tag as a distinct key so the diff is interpretable.
+        # MH -> NYC exchange. Both engines surface this whenever the MH owner
+        # can claim an available NYC ipo/market share (including before NYC
+        # pars), outside the initial private auction.
         return ("CompanyBuyShares", e.get("private"), e.get("corp"))
     if t == "SellShares":
         return ("SellShares", e.get("corp"), int(p.get("count", 0)))
@@ -106,13 +102,15 @@ def _canonical_key(la: LegalAction):
     if t == "BuyTrain":
         # Treat exchange branch (MH -> NYC discount, optional D, etc.) as a
         # separate categorical key so the test distinguishes regular buys.
-        return ("BuyTrain", e.get("source"), e.get("train"), e.get("exchange"))
+        # Includes the exact price range (depot trains are fixed-price; cross-
+        # corp buys must match spend_minmax exactly).
+        return ("BuyTrain", e.get("source"), e.get("train"), e.get("exchange"), pr)
     if t == "DiscardTrain":
         return ("DiscardTrain", p.get("train"))
     if t == "Dividend":
         return ("Dividend", p.get("kind"))
     if t == "BuyCompany":
-        return ("BuyCompany", e.get("private"))
+        return ("BuyCompany", e.get("private"), pr)
     if t == "RunRoutes":
         return ("RunRoutes",)
     if t == "Bankrupt":

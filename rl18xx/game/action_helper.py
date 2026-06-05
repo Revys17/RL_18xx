@@ -444,20 +444,20 @@ class ActionHelper(metaclass=Singleton):
                     options.append((train, train.min_price()))
             else:
                 LOGGER.debug(f"Train {train.name} not from depot")
-                if limited_price_options:
-                    min = 1
-                    if game.current_entity.cash == 0 and pres_may_contribute:
-                        max = game.current_entity.cash + game.current_entity.owner.cash
-                    else:
-                        max = game.current_entity.cash
-                else:
-                    min, max = step.spend_minmax(game.current_entity, train)
-                    # spend_minmax may include president's cash in the EBUY path,
-                    # but the president can only contribute when must_buy_train is true.
-                    # Cap max at the entity's own buying power when president cannot contribute.
-                    if not pres_may_contribute:
-                        entity_buying_power = game.buying_power(game.current_entity)
-                        max = max if max <= entity_buying_power else entity_buying_power
+                # Use the engine's spend_minmax for BOTH limited and full price
+                # enumeration so every offered price satisfies the legal window.
+                # The limited path previously used [1, cash], which in an
+                # emergency buy (after a forced share sale) could offer a price
+                # below the engine's minimum and be rejected (e.g. "$36 ... may
+                # only spend between $124 and $133"). limited_price_options only
+                # controls how many discrete prices within [min, max] surface.
+                min, max = step.spend_minmax(game.current_entity, train)
+                # spend_minmax may include president's cash in the EBUY path,
+                # but the president can only contribute when must_buy_train is true.
+                # Cap max at the entity's own buying power when president cannot contribute.
+                if not pres_may_contribute:
+                    entity_buying_power = game.buying_power(game.current_entity)
+                    max = max if max <= entity_buying_power else entity_buying_power
                 LOGGER.debug(f"Min: {min}, Max: {max}")
                 valid_prices = self.get_valid_cross_company_train_prices(min, max, limited_price_options)
                 for price in valid_prices:

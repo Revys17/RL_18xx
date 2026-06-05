@@ -1458,7 +1458,10 @@ impl BaseGame {
         let cash = g1830::starting_cash(num_players);
         let cert_lim = g1830::cert_limit(num_players);
 
-        // 1. Players (sorted by ID for deterministic order)
+        // Seating order. NOTE: sorting player ids matches Python only when the
+        // ids are already in seating order (random games use 1..N). Human games
+        // seat players in input order with arbitrary ids, so sorted seating
+        // diverges from Python — known player-order parity bug, fixed separately.
         let mut player_ids: Vec<u32> = player_names.keys().copied().collect();
         player_ids.sort();
         let players: Vec<Player> = player_ids
@@ -1978,9 +1981,18 @@ impl BaseGame {
                         let corp_sym = os.current_corp_sym().unwrap_or("").to_string();
                         let ci = self.corp_idx.get(corp_sym.as_str()).copied();
                         let corp_cash = ci.map_or(0, |i| self.corporations[i].cash);
-                        let connected = self.connected_hexes(&corp_sym);
+                        // Use the SAME candidate-hex computation as the factored
+                        // enumerator (`lay_tile_candidate_hexes`) so the gate and
+                        // `factored_lay_tile` agree exactly on reachability —
+                        // base walked exits + frontier neighbours + tokened-city
+                        // all-edges. (mut borrow ends before blocked_hexes below.)
+                        let candidates = self.lay_tile_candidate_hexes(&corp_sym);
 
-                        // Build set of blocked hexes (private company hex blocks)
+                        // Build set of blocked hexes (private company hex blocks).
+                        // A blocked hex can't be laid on, but the corp's network
+                        // still extends through it to unblocked frontier neighbours
+                        // — those frontier hexes are already separate entries in
+                        // `candidates`, so we simply skip the blocked hex itself.
                         let blocked_hexes: std::collections::HashSet<&str> = self
                             .companies
                             .iter()
@@ -1997,37 +2009,13 @@ impl BaseGame {
                             .collect();
 
                         let mut has_layable = false;
-                        // Python's connected_hexes includes both tiled hexes in the
-                        // network AND their white neighbors (with entry edges).
-                        // Check each connected hex for layable tiles.
-                        'lay_check: for (hex_id, edges) in &connected {
+                        for (hex_id, edges) in &candidates {
                             if blocked_hexes.contains(hex_id.as_str()) {
                                 continue;
                             }
-                            let edge_slice: Vec<u8> = edges.clone();
-                            if self.has_layable_tile_for_corp(hex_id, &edge_slice, corp_cash) {
+                            if self.has_layable_tile_for_corp(hex_id, edges, corp_cash) {
                                 has_layable = true;
-                                break 'lay_check;
-                            }
-                            // Also check neighbor hexes reachable through this hex's
-                            // track edges that aren't already in connected_hexes.
-                            if let Some(neighbors) = self.hex_adjacency.get(hex_id.as_str()) {
-                                for &edge in edges {
-                                    if let Some(n_id) = neighbors.get(&edge) {
-                                        if blocked_hexes.contains(n_id.as_str()) {
-                                            continue;
-                                        }
-                                        if connected.contains_key(n_id.as_str()) {
-                                            continue; // already checked above
-                                        }
-                                        // Entry edge on the neighbor is opposite: (edge+3)%6
-                                        let entry_edge = (edge + 3) % 6;
-                                        if self.has_layable_tile_for_corp(n_id, &[entry_edge], corp_cash) {
-                                            has_layable = true;
-                                            break 'lay_check;
-                                        }
-                                    }
-                                }
+                                break;
                             }
                         }
                         if has_layable || cs_available || dh_available {
@@ -2084,6 +2072,13 @@ impl BaseGame {
                         if cs_available {
                             types.push("lay_tile".to_string());
                         }
+                        // BuyCompany is a parallel option during the corp's
+                        // operating turn (Python's actions_for surfaces it at the
+                        // Route step too) whenever a president-owned private is
+                        // affordable.
+                        if self.has_buyable_companies(&os) {
+                            types.push("buy_company".to_string());
+                        }
                         if mh_available {
                             types.push("buy_shares".to_string());
                         }
@@ -2130,7 +2125,6 @@ impl BaseGame {
                             }
                         };
 
-                        // Check cheapest available train (depot OR sister corp at min price 1)
                         let pres_id = ci.and_then(|i| self.corporations[i].president_id());
                         let has_sister_trains = pres_id.map_or(false, |pid| {
                             self.corporations.iter().any(|c| {
@@ -2139,36 +2133,54 @@ impl BaseGame {
                                     && !c.trains.is_empty()
                             })
                         });
-                        // Min price to buy ANY train: 1 from sister corp, or depot price
-                        let min_train_price = if has_sister_trains { 1 } else { cheapest_price };
-                        let can_afford_some_train = corp_cash >= min_train_price;
 
-                        if must_buy && !can_afford_some_train {
-                            // True emergency — president must sell shares or go bankrupt
-                            let pres_cash = pres_id
-                                .and_then(|pid| self.players.iter().find(|p| p.id == pid))
-                                .map_or(0, |p| p.cash);
-                            let pres_sell_value = pres_id.map_or(0, |pid| {
-                                let peid = EntityId::player(pid);
-                                self.corporations.iter().map(|c| {
-                                    let pct = c.percent_owned_by(&peid);
-                                    let price = c.share_price.as_ref().map_or(0, |sp| sp.price);
-                                    (pct.saturating_sub(if c.president_id() == Some(pid) { 20 } else { 0 }) as i32 / 10) * price
-                                }).sum::<i32>()
-                            });
-
-                            if corp_cash + pres_cash + pres_sell_value >= min_train_price {
-                                types.push("buy_train".to_string());
-                                types.push("sell_shares".to_string());
+                        if must_buy {
+                            // EMERGENCY = the corp can't afford the cheapest DEPOT
+                            // train on its own (Python's `ebuy_president_can_contribute`:
+                            // corp.cash < min_depot_price). The president may sell
+                            // shares to contribute ONLY in an emergency; a cheap
+                            // sister-corp train (buyable for >= $1) does NOT negate
+                            // it — the trigger is depot affordability, not whether
+                            // *some* train is reachable.
+                            let is_emergency = corp_cash < cheapest_price;
+                            if is_emergency {
+                                let pres_cash = pres_id
+                                    .and_then(|pid| self.players.iter().find(|p| p.id == pid))
+                                    .map_or(0, |p| p.cash);
+                                let pres_sell_value = pres_id.map_or(0, |pid| {
+                                    let peid = EntityId::player(pid);
+                                    self.corporations.iter().map(|c| {
+                                        let pct = c.percent_owned_by(&peid);
+                                        let price = c.share_price.as_ref().map_or(0, |sp| sp.price);
+                                        (pct.saturating_sub(if c.president_id() == Some(pid) { 20 } else { 0 }) as i32 / 10) * price
+                                    }).sum::<i32>()
+                                });
+                                // The corp ends up with a train iff it can buy a
+                                // sister train (>= $1) or raise enough (corp + pres
+                                // cash + sellable share value) for the cheapest
+                                // depot train; otherwise it must declare bankruptcy.
+                                let can_get_train = has_sister_trains
+                                    || (corp_cash + pres_cash + pres_sell_value >= cheapest_price);
+                                if can_get_train {
+                                    types.push("buy_train".to_string());
+                                    types.push("sell_shares".to_string());
+                                    if self.has_buyable_companies(&os) {
+                                        types.push("buy_company".to_string());
+                                    }
+                                } else {
+                                    types.push("bankrupt".to_string());
+                                }
                             } else {
-                                types.push("bankrupt".to_string());
+                                // Can afford the cheapest depot train on its own —
+                                // not an emergency, so no president share sale.
+                                // BuyCompany is still a parallel option (Python's
+                                // actions_for surfaces it when a president-owned
+                                // private is affordable).
+                                types.push("buy_train".to_string());
+                                if self.has_buyable_companies(&os) {
+                                    types.push("buy_company".to_string());
+                                }
                             }
-                        } else if must_buy {
-                            // Corp can afford cheapest train but must buy. Python's BuyTrain
-                            // step returns [SellShares, BuyTrain] — sell_shares for president
-                            // to sell shares to help buy a more expensive train.
-                            types.push("buy_train".to_string());
-                            types.push("sell_shares".to_string());
                         } else {
                             types.push("buy_train".to_string());
                             if cs_available {
@@ -2376,7 +2388,7 @@ impl BaseGame {
     ///   must match an edge in the corp's connected_edges for this hex
     /// - Terrain cost <= corp cash
     /// This mirrors Python's get_lay_tile_actions filtering.
-    fn has_layable_tile_for_corp(
+    pub(crate) fn has_layable_tile_for_corp(
         &self,
         hex_id: &str,
         corp_connected_edges: &[u8],
@@ -2576,19 +2588,19 @@ impl BaseGame {
                     continue;
                 }
                 for t in &other_corp.trains {
-                    let max_price = if must_buy {
-                        total_cash.min(t.price)
-                    } else {
-                        corp_cash.min(t.price)
-                    };
-                    if max_price >= 1 {
-                        cross.push((
-                            t.id.clone(),
-                            t.name.clone(),
-                            max_price,
-                            other_corp.sym.clone(),
-                        ));
-                    }
+                    // Push the TRUE face price. The factored helper computes the
+                    // legal spend range via an exact `spend_minmax` port and gates
+                    // affordability there, mirroring Python's `buyable_trains`
+                    // (set membership) + `spend_minmax` (price range) split. Python
+                    // includes every same-president other-corp train regardless of
+                    // affordability (1830 has no face_value ability, so
+                    // `must_buy_at_face_value` is always False).
+                    cross.push((
+                        t.id.clone(),
+                        t.name.clone(),
+                        t.price,
+                        other_corp.sym.clone(),
+                    ));
                 }
             }
             cross.sort_by(|a, b| a.0.cmp(&b.0));
@@ -2902,12 +2914,20 @@ impl BaseGame {
         result
     }
 
-    /// Stock: sellable share bundles for a player.
+    /// Sellable share bundles for a player.
     /// Returns list of (corp_sym, num_shares, percent) tuples.
     /// Each tuple represents a sellable bundle (cumulative prefix of shares).
+    ///
+    /// Valid both in the Stock round (the active player sells) and during an
+    /// Operating-round emergency train buy (the operating corp's president
+    /// sells to raise funds). The Operating path is only reached when the gate
+    /// has already made `sell_shares` legal (the emergency BuyTrain step), and
+    /// the cumulative-bundle + market-cap + president-dump checks below mirror
+    /// Python's `sellable_bundle` (`can_dump` + `fit_in_bank`); for non-operating
+    /// corps `EBUY_PRES_SWAP=True` makes the presidency swap permissible, which
+    /// the president-dump check (another player can take over) already models.
     fn sellable_bundles(&self, player_id: u32) -> Vec<(String, usize, u8)> {
-        // Must be in Stock round.
-        if !matches!(&self.round, Round::Stock(_)) {
+        if !matches!(&self.round, Round::Stock(_) | Round::Operating(_)) {
             return Vec::new();
         }
 
