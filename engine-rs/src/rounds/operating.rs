@@ -1324,6 +1324,14 @@ impl BaseGame {
         self.recalculate_operating_order();
 
         self.update_round_state();
+        // Record the per-share price of this emergency sale (captured pre-sale,
+        // like Python's `bundle.price_per_share()` at action time) so the
+        // subsequent emergency train buy's `spend_minmax` computes the correct
+        // minimum. Set after update_round_state so it isn't clobbered; reset on
+        // the next corp's turn via `advance_to_next_corp`.
+        if let crate::rounds::Round::Operating(ref mut s) = self.round {
+            s.last_share_sold_price = Some(share_price.price);
+        }
         Ok(())
     }
 

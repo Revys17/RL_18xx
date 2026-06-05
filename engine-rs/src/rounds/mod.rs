@@ -425,6 +425,12 @@ pub struct OperatingState {
     /// Python's `pending_token['hexes']` list — currently always a single hex
     /// in 1830 because every displacement source is a single-hex OO upgrade).
     pub pending_tokens: Vec<(String, usize, String)>,
+    /// Per-share price of the most recent emergency share sale this operating
+    /// turn (Python's `Train.last_share_sold_price`), or `None` if no emergency
+    /// sale has happened. Used by `spend_minmax` to compute the minimum legal
+    /// price when buying a train after an emergency sell. Reset each corp turn.
+    #[serde(default)]
+    pub last_share_sold_price: Option<i32>,
 }
 
 impl OperatingState {
@@ -442,6 +448,7 @@ impl OperatingState {
             pending_tokens: Vec::new(),
             revenue: 0,
             finished: false,
+            last_share_sold_price: None,
         }
     }
 
@@ -466,6 +473,7 @@ impl OperatingState {
         self.routes.clear();
         self.pending_tokens.clear();
         self.revenue = 0;
+        self.last_share_sold_price = None;
 
         if self.entity_index >= self.operating_order.len() {
             self.finished = true;
