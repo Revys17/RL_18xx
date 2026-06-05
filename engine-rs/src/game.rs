@@ -1450,20 +1450,18 @@ fn build_hex_from_def(def: &g1830::HexDef) -> Hex {
 // PyO3 methods
 // ---------------------------------------------------------------------------
 
-#[pymethods]
 impl BaseGame {
-    #[new]
-    fn new(player_names: HashMap<u32, String>) -> Self {
+    /// Internal constructor used once the seating order is known. `player_ids`
+    /// is the seating order (it becomes the priority/turn order); `player_names`
+    /// maps id -> name. Used by the PyO3 `new` (below) and by Rust unit tests.
+    pub(crate) fn build(player_ids: Vec<u32>, player_names: HashMap<u32, String>) -> Self {
         let num_players = player_names.len() as u8;
         let cash = g1830::starting_cash(num_players);
         let cert_lim = g1830::cert_limit(num_players);
 
-        // Seating order. NOTE: sorting player ids matches Python only when the
-        // ids are already in seating order (random games use 1..N). Human games
-        // seat players in input order with arbitrary ids, so sorted seating
-        // diverges from Python — known player-order parity bug, fixed separately.
-        let mut player_ids: Vec<u32> = player_names.keys().copied().collect();
-        player_ids.sort();
+        // Seat players in the caller-provided order (Python seats in input /
+        // JSON order). Do NOT sort — sorting diverges from Python whenever ids
+        // aren't already in seating order (e.g. human games with real user ids).
         let players: Vec<Player> = player_ids
             .iter()
             .map(|&id| Player::new(id, player_names[&id].clone(), cash))
@@ -1627,6 +1625,26 @@ impl BaseGame {
             player_order: player_ids.clone(),
             priority_deal_player: first_player_id,
         }
+    }
+}
+
+#[pymethods]
+impl BaseGame {
+    /// PyO3 constructor. Seats players in the dict's insertion order — Python
+    /// seats in input/JSON order and a Python dict iterates insertion order, so
+    /// building from the raw dict (instead of a HashMap, which loses order)
+    /// makes Rust's seating and priority/turn order match the Python engine.
+    #[new]
+    fn new(player_names: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let mut player_ids: Vec<u32> = Vec::new();
+        let mut names: HashMap<u32, String> = HashMap::new();
+        for (k, v) in player_names.iter() {
+            let id: u32 = k.extract()?;
+            let name: String = v.extract()?;
+            player_ids.push(id);
+            names.insert(id, name);
+        }
+        Ok(Self::build(player_ids, names))
     }
 
     // -- Getters --
@@ -3357,7 +3375,7 @@ mod tests {
         players.insert(2, "Bob".to_string());
         players.insert(3, "Carol".to_string());
         players.insert(4, "Dave".to_string());
-        BaseGame::new(players)
+        BaseGame::build(vec![1, 2, 3, 4], players)
     }
 
     #[test]
