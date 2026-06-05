@@ -57,6 +57,7 @@ from rl18xx.game.action_helper import ActionHelper  # noqa: E402
 from rl18xx.game.factored_action_helper import FactoredActionHelper  # noqa: E402
 from rl18xx.game.gamemap import GameMap  # noqa: E402
 from rl18xx.rust_adapter import RustGameAdapter  # noqa: E402
+from rl18xx.agent.alphazero.pretraining import filter_actions  # noqa: E402
 from tests.validate_rust_engine import compare_state  # noqa: E402
 
 MAX_STEPS_DEFAULT = 100000
@@ -170,7 +171,16 @@ def run_human_game(path, max_steps):
     except Exception as exc:
         return None, {"kind": "python_side", "id": game_id, "step": -1,
                       "reason": f"unparseable game JSON: {exc}"}
-    actions = data.get("actions", [])[:max_steps]
+    # "Human game import" replays the FILTERED action sequence (undo/redo
+    # resolved, messages + program_ actions stripped) — exactly what the
+    # production import (_get_game_object_for_game_with_reason) feeds the engine.
+    # Replaying raw logs would test meta-actions (undo/message) the import never
+    # sends and the engine has no handler for.
+    try:
+        actions = filter_actions(data.get("actions", []))[:max_steps]
+    except Exception as exc:
+        return None, {"kind": "python_side", "id": game_id, "step": -1,
+                      "reason": f"filter_actions failed: {exc}"}
     if "players" not in data:
         return None, {"kind": "python_side", "id": game_id, "step": -1,
                       "reason": "no players in game JSON"}
