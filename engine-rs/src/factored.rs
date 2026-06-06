@@ -176,7 +176,11 @@ impl BaseGame {
                 "run_routes" => out.extend(self.factored_run_routes()),
                 "dividend" => out.extend(self.factored_dividend()),
                 "buy_company" => out.extend(self.factored_buy_company()),
-                "bankrupt" => out.extend(self.factored_bankrupt()),
+                // "bankrupt" is intentionally NOT emitted per-type here:
+                // Python's factored helper has no Bankrupt branch in
+                // `_choices_for_action`; Bankrupt is only added as a fallback
+                // (see below) when no other concrete action exists.
+                "bankrupt" => {}
                 _ => {}
             }
         }
@@ -185,10 +189,31 @@ impl BaseGame {
         // current entity is a player/corp, mirroring Python's get_company_actions.
         out.extend(self.factored_company_actions());
 
-        // Bankruptcy fallback: if no actions emitted at all and we're in
-        // a state where the entity can go bankrupt, emit a Bankrupt option.
-        // (legal_action_types_internal already includes "bankrupt" when the
-        // engine thinks bankruptcy is required, so this is rare in practice.)
+        // Bankruptcy fallback, mirroring `FactoredActionHelper.get_choices`
+        // (factored_action_helper.py:157-162): ONLY when no other concrete
+        // action exists AND `can_go_bankrupt(president, corp)` is True. The
+        // non-blocking Bankrupt step always surfaces the Bankrupt action *type*
+        // alongside SellShares/BuyTrain/BuyCompany, but the factored helper hides
+        // it whenever any of those produce a concrete choice — so a corp that can
+        // still sell shares or buy a company is never offered bankruptcy.
+        if out.is_empty() {
+            if let Round::Operating(s) = &self.round {
+                if s.step == crate::rounds::OperatingStep::BuyTrain {
+                    if let Some(corp_sym) = s.current_corp_sym() {
+                        let corp_sym = corp_sym.to_string();
+                        let pres_id = self
+                            .corp_idx
+                            .get(corp_sym.as_str())
+                            .and_then(|&ci| self.corporations[ci].president_id());
+                        if let Some(pid) = pres_id {
+                            if self.can_go_bankrupt_emr(pid, &corp_sym) {
+                                out.extend(self.factored_bankrupt());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         out
     }
 
@@ -404,17 +429,182 @@ impl BaseGame {
             return Vec::new();
         };
 
-        let bundles = self.sellable_bundles_for_factored(seller_pid);
+        let bundles = self.sellable_bundles_detailed(seller_pid);
+
+        // Emergency-money (BuyTrain step) restriction, mirroring Python's
+        // `BuyTrain.can_sell` → base `can_sell` → `selling_minimum_shares`
+        // (round.py:469-478) when `EBUY_SELL_MORE_THAN_NEEDED == False`
+        // (1830 default). During an emergency train buy the president may sell
+        // ONLY the minimum number of shares needed: a bundle is sellable iff the
+        // NEXT-SMALLER bundle (this bundle minus its cheapest share) would leave
+        // the buyer short, i.e.
+        //   (bundle.price - min_share_price) < (needed_cash - available_cash)
+        // where `needed_cash = min_depot_price` (EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST)
+        // and `available_cash(seller) = seller.cash + operating_corp.cash`
+        // (the seller is the president, distinct from the operating corp).
+        // Outside the BuyTrain step (e.g. the Stock round's SellShares step,
+        // which uses a different `can_sell` without this check) all bundles
+        // pass — so the filter is applied only in the OR BuyTrain context.
+        let emergency_filter = match &self.round {
+            Round::Operating(s) if s.step == crate::rounds::OperatingStep::BuyTrain => {
+                s.current_corp_sym().map(|cs| cs.to_string())
+            }
+            _ => None,
+        };
+        // `additional_cash_needed = needed_cash(seller) - available_cash(seller)`
+        // is independent of the bundle, so compute it once. `needed_cash` is the
+        // cheapest depot train; `available_cash(seller) = seller.cash + op.cash`.
+        let additional_cash_needed = emergency_filter.as_ref().map(|op_corp_sym| {
+            let needed_cash = self.min_depot_price_for_emr();
+            let seller_cash = self
+                .players
+                .iter()
+                .find(|p| p.id == seller_pid)
+                .map_or(0, |p| p.cash);
+            let op_corp_cash = self
+                .corp_idx
+                .get(op_corp_sym.as_str())
+                .map_or(0, |&ci| self.corporations[ci].cash);
+            needed_cash - (seller_cash + op_corp_cash)
+        });
+
         let mut out: Vec<LegalAction> = Vec::new();
-        for (corp_sym, count, percent) in bundles {
+        for b in bundles {
+            if let Some(op_corp_sym) = &emergency_filter {
+                // president-swap restriction (Python `sellable_bundle` →
+                // `president_swap_concern` / `causes_president_swap`,
+                // round.py:480-505): with `EBUY_PRES_SWAP == True` (1830), the
+                // concern is active ONLY when the bundle's corp is the operating
+                // (current) corp. The president may not sell shares of the
+                // operating corp if doing so drops them below the next-highest
+                // holder. For all OTHER corps the concern is False, so the
+                // stock-round dump check already applied governs.
+                if &b.corp_sym == op_corp_sym
+                    && self.causes_president_swap(&b.corp_sym, seller_pid, b.percent)
+                {
+                    continue;
+                }
+            }
+            if let Some(additional) = additional_cash_needed {
+                // selling_minimum_shares: next-smaller bundle (this bundle minus
+                // its cheapest single share) must leave the buyer short.
+                let next_smaller = b.bundle_price - b.min_share_price;
+                if !(next_smaller < additional) {
+                    continue;
+                }
+            }
             let mut a = LegalAction::new("SellShares");
             a.entity = sell_entity_desc.clone();
-            a.entity.insert("corp".to_string(), json!(corp_sym));
-            a.params.insert("count".to_string(), json!(count));
-            a.params.insert("percent".to_string(), json!(percent as i64));
+            a.entity.insert("corp".to_string(), json!(b.corp_sym));
+            a.params.insert("count".to_string(), json!(b.num_shares));
+            a.params.insert("percent".to_string(), json!(b.percent as i64));
             out.push(a);
         }
         out
+    }
+
+    /// Mirror Python `Game.can_go_bankrupt(player, corporation)` for the
+    /// emergency BuyTrain context (round.py / base.py:2217-2227):
+    ///   `total_emr_buying_power(player, corp) < depot.min_depot_price`
+    /// where `total_emr_buying_power = liquidity(player, emergency=True)
+    ///   + corp.cash + emergency_issuable_cash(corp)` and (1830)
+    /// `emergency_issuable_cash == 0`, `BANKRUPTCY_ALLOWED == True`.
+    ///
+    /// `liquidity(player, emergency=True) = player.cash + sum over corps of
+    /// value_for_sellable(player, corp)`, and `value_for_sellable` is the max
+    /// `bundle.price` among the bundles the BuyTrain `can_sell` accepts — the
+    /// same emergency-filtered set `factored_sell_shares` enumerates.
+    pub(crate) fn can_go_bankrupt_emr(&self, seller_pid: u32, op_corp_sym: &str) -> bool {
+        let needed_cash = self.min_depot_price_for_emr();
+
+        // additional_cash_needed for the selling_minimum_shares filter
+        // (constant across corps): needed_cash - (seller.cash + op_corp.cash).
+        let seller_cash = self
+            .players
+            .iter()
+            .find(|p| p.id == seller_pid)
+            .map_or(0, |p| p.cash);
+        let op_corp_cash = self
+            .corp_idx
+            .get(op_corp_sym)
+            .map_or(0, |&ci| self.corporations[ci].cash);
+        let additional_cash_needed = needed_cash - (seller_cash + op_corp_cash);
+
+        // liquidity(player, emergency=True): player cash + value_for_sellable
+        // per corp, where value_for_sellable is the MAX accepted bundle.price.
+        // Bundles are filtered exactly as `factored_sell_shares` does.
+        let mut per_corp_max: std::collections::HashMap<String, i32> =
+            std::collections::HashMap::new();
+        for b in self.sellable_bundles_detailed(seller_pid) {
+            if &b.corp_sym == op_corp_sym
+                && self.causes_president_swap(&b.corp_sym, seller_pid, b.percent)
+            {
+                continue;
+            }
+            let next_smaller = b.bundle_price - b.min_share_price;
+            if !(next_smaller < additional_cash_needed) {
+                continue;
+            }
+            let e = per_corp_max.entry(b.corp_sym.clone()).or_insert(0);
+            if b.bundle_price > *e {
+                *e = b.bundle_price;
+            }
+        }
+        let sellable_value: i32 = per_corp_max.values().sum();
+
+        let liquidity = seller_cash + sellable_value;
+        let total_emr_buying_power = liquidity + op_corp_cash;
+        total_emr_buying_power < needed_cash
+    }
+
+    /// Python `causes_president_swap` (round.py:500-505): selling `bundle_percent`
+    /// of `corp` would drop the president below the next-highest holder. Only
+    /// consulted for the operating corp (where `president_swap_concern` is True
+    /// under `EBUY_PRES_SWAP`). Returns true if the sale is forbidden.
+    fn causes_president_swap(&self, corp_sym: &str, seller_pid: u32, bundle_percent: u8) -> bool {
+        let ci = match self.corp_idx.get(corp_sym) {
+            Some(&i) => i,
+            None => return false,
+        };
+        let corp = &self.corporations[ci];
+        if corp.president_id() != Some(seller_pid) {
+            return false;
+        }
+        let seller_eid = crate::entities::EntityId::player(seller_pid);
+        let remaining = corp.percent_owned_by(&seller_eid) as i32 - bundle_percent as i32;
+        let next_highest = self
+            .players
+            .iter()
+            .filter(|p| p.id != seller_pid)
+            .map(|p| corp.percent_owned_by(&crate::entities::EntityId::player(p.id)) as i32)
+            .max()
+            .unwrap_or(0);
+        remaining < next_highest
+    }
+
+    /// Mirror Python `Depot.min_depot_price`: the cheapest price among
+    /// `depot_trains()` (visible upcoming + all discarded). Used by the
+    /// emergency-money `needed_cash`.
+    fn min_depot_price_for_emr(&self) -> i32 {
+        let depot_first_name: Option<String> =
+            self.depot.trains.first().map(|t| t.name.clone());
+        let upcoming_min = self
+            .depot
+            .trains
+            .iter()
+            .filter(|t| {
+                self.phase_available(t.available_on.as_deref())
+                    || Some(&t.name) == depot_first_name.as_ref()
+            })
+            .map(|t| t.price)
+            .min();
+        let discarded_min = self.depot.discarded.iter().map(|t| t.price).min();
+        match (upcoming_min, discarded_min) {
+            (Some(u), Some(d)) => u.min(d),
+            (Some(u), None) => u,
+            (None, Some(d)) => d,
+            (None, None) => 0,
+        }
     }
 
     fn factored_place_token(&mut self) -> Vec<LegalAction> {
@@ -444,7 +634,9 @@ impl BaseGame {
                     if !city.tokens.iter().any(|t| t.is_none()) {
                         continue;
                     }
-                    let slot = self.first_empty_slot(pending_hex, city_idx).unwrap_or(0);
+                    let slot = self
+                        .token_slot_for(pending_hex, city_idx, &corp_sym)
+                        .unwrap_or(0);
                     let mut a = LegalAction::new("PlaceToken");
                     a.entity = entity_desc.clone();
                     a.params.insert("hex".to_string(), json!(pending_hex));
@@ -456,25 +648,41 @@ impl BaseGame {
             return out;
         }
 
-        let cities = self.tokenable_cities_for_factored(&corp_sym);
-        for (hex_id, city_idx) in cities {
-            let slot = self.first_empty_slot(&hex_id, city_idx).unwrap_or(0);
-            let mut a = LegalAction::new("PlaceToken");
-            a.entity = entity_desc.clone();
-            a.params.insert("hex".to_string(), json!(hex_id));
-            a.params.insert("city".to_string(), json!(city_idx));
-            a.params.insert("slot".to_string(), json!(slot));
-            out.push(a);
+        // While a DH teleport token is pending (Python `round.teleported`), the
+        // blocking `SpecialToken` step sits BEFORE the regular `Token` step in
+        // the OR step list, so `actions_for` never reaches the corp's normal
+        // reachable-city tokens. Suppress them here and emit ONLY the teleport
+        // hex (F16) below. (The Pass option is added by `legal_action_types`.)
+        let teleport_pending = matches!(&self.round, Round::Operating(s) if s.teleport_pending);
+
+        if !teleport_pending {
+            let cities = self.tokenable_cities_for_factored(&corp_sym);
+            for (hex_id, city_idx) in cities {
+                let slot = self
+                    .token_slot_for(&hex_id, city_idx, &corp_sym)
+                    .unwrap_or(0);
+                let mut a = LegalAction::new("PlaceToken");
+                a.entity = entity_desc.clone();
+                a.params.insert("hex".to_string(), json!(hex_id));
+                a.params.insert("city".to_string(), json!(city_idx));
+                a.params.insert("slot".to_string(), json!(slot));
+                out.push(a);
+            }
         }
 
         // DH teleport token: after the DH tile lay (`ability_used`), the owning
         // corp may place a station token on F16 even though it isn't connected.
-        // Mirrors Python's `_company_place_token_choices` for the DH SpecialToken
-        // ability; gate condition matches `legal_action_types`'s dh_token check.
+        // Mirrors Python's `SpecialToken` step, which is only active while the
+        // teleport is PENDING (`round.teleported`). Once the corp places the
+        // teleport token OR declines (Pass), Python's `teleport_complete()`
+        // REMOVES the teleport ability, so F16 is never offered again — even
+        // though `DH.ability_used` stays true. We therefore gate the F16 option
+        // on `teleport_pending`, not merely on `ability_used`.
         let corp_eid = crate::entities::EntityId::corporation(&corp_sym);
-        let dh_token = self.companies.iter().any(|co| {
-            co.sym == "DH" && !co.closed && co.ability_used && co.owner == corp_eid
-        });
+        let dh_token = teleport_pending
+            && self.companies.iter().any(|co| {
+                co.sym == "DH" && !co.closed && co.ability_used && co.owner == corp_eid
+            });
         if dh_token {
             if let Some(&ci) = self.corp_idx.get(corp_sym.as_str()) {
                 if self.corporations[ci].next_token_index().is_some() {
@@ -493,7 +701,9 @@ impl BaseGame {
                             if already {
                                 continue;
                             }
-                            let slot = self.first_empty_slot("F16", city_idx).unwrap_or(0);
+                            let slot = self
+                                .token_slot_for("F16", city_idx, &corp_sym)
+                                .unwrap_or(0);
                             let mut a = LegalAction::new("PlaceToken");
                             a.entity = entity_desc.clone();
                             a.params.insert("hex".to_string(), json!("F16"));
@@ -508,17 +718,6 @@ impl BaseGame {
         out
     }
 
-    fn first_empty_slot(&self, hex_id: &str, city_idx: usize) -> Option<usize> {
-        let hi = *self.hex_idx.get(hex_id)?;
-        let hex = &self.hexes[hi];
-        let city = hex.tile.cities.get(city_idx)?;
-        for (i, t) in city.tokens.iter().enumerate() {
-            if t.is_none() {
-                return Some(i);
-            }
-        }
-        Some(0)
-    }
 
     /// Candidate `(hex_id, connected_edges)` pairs for tile-laying, replicating
     /// Python's `Graph.compute` population of `connected_hexes`
@@ -1131,36 +1330,32 @@ impl BaseGame {
         };
 
         let mut trains = self.buyable_trains_for_factored(&corp_sym);
-        // Phase availability filter for depot trains: only the first upcoming
-        // train + trains whose name is <= current phase are visible. This
-        // matches Python's `Depot.depot_trains` which gates by
-        // `phase.available(train.available_on)`. The Rust Train struct
-        // doesn't track `available_on`, so we infer from the name vs.
-        // current phase: a train "X" is visible if X equals the current
-        // phase name or one of the previously-passed phases.
-        let phase_name = self.phase.name.clone();
-        // 1830 phase order: "2", "3", "4", "5", "6", "D".
-        let phase_order = ["2", "3", "4", "5", "6", "D"];
-        let phase_idx = phase_order
-            .iter()
-            .position(|&p| p == phase_name)
-            .unwrap_or(0);
+        // Phase availability filter for depot (upcoming) trains, mirroring
+        // Python's `Depot.depot_trains` exactly: the visible upcoming trains are
+        //   [upcoming[0]] + [t for t in upcoming if phase.available(t.available_on)]
+        // i.e. the head-of-queue train (always next to sell) PLUS any upcoming
+        // train whose `available_on` phase has already been reached. In 1830
+        // only the D-train sets `available_on` ("6"), so the D becomes visible
+        // in phase 6 even though 6-trains are still ahead of it in the queue.
+        // Discarded trains (`source == "discard"`) are appended unconditionally
+        // by Python and so are left untouched here.
         let depot_first_name: Option<String> =
             self.depot.trains.first().map(|t| t.name.clone());
+        let visible_depot_names: std::collections::HashSet<String> = self
+            .depot
+            .trains
+            .iter()
+            .filter(|t| {
+                self.phase_available(t.available_on.as_deref())
+                    || Some(&t.name) == depot_first_name.as_ref()
+            })
+            .map(|t| t.name.clone())
+            .collect();
         trains.retain(|(_id, name, _price, source)| {
             if source != "depot" {
                 return true;
             }
-            // Always show the head-of-depot train (next to sell).
-            if Some(name) == depot_first_name.as_ref() {
-                return true;
-            }
-            // Otherwise must be at-or-before current phase.
-            let train_idx = phase_order
-                .iter()
-                .position(|&p| p == name.as_str())
-                .unwrap_or(usize::MAX);
-            train_idx <= phase_idx
+            visible_depot_names.contains(name)
         });
 
         // Deduplicate by (source, train_name).
@@ -1255,6 +1450,87 @@ impl BaseGame {
                 a.entity.insert("source".to_string(), json!(out_source.clone()));
                 a.entity.insert("train".to_string(), json!(name.clone()));
                 a.price_range = Some((min_p as i64, max_p as i64));
+                out.push(a);
+            }
+        }
+
+        // Exchange-discounted depot trains (the optional $800 D in 1830),
+        // mirroring Python's `_exchange_train_choices` /
+        // `BaseGame.discountable_trains_for` (base.py:2381-2417):
+        //
+        //   * discountable depot trains = phase-visible depot trains that carry
+        //     a `discount` map (only the D-train in 1830);
+        //   * for each train the buying corp OWNS, the discounted price is
+        //     `depot_price - discount[owned.name]` — emitted only when it is
+        //     strictly below the base price (i.e. the owned train actually
+        //     qualifies for a discount);
+        //   * dedup to a single categorical option per (new train name, exchanged
+        //     train name) — matching Python's `_unique_trains` over discount
+        //     candidates followed by the per-(train,exchange) action key.
+        //
+        // Affordability uses `available_funds` = corp buying power (corp.cash)
+        // plus the president's buying power when the president may contribute,
+        // exactly as `_exchange_train_choices` computes it.
+        {
+            // available_funds: corp cash (+ president cash when contributing).
+            let available_funds = if pres_may_contribute {
+                corp_cash + pres_cash
+            } else {
+                corp_cash
+            };
+            // Phase-visible depot trains carrying a discount. A depot train is
+            // visible if its `available_on` phase has been reached OR it is the
+            // head-of-queue train (mirrors `Depot.depot_trains`).
+            let depot_first_name2: Option<String> =
+                self.depot.trains.first().map(|t| t.name.clone());
+            // Names of owned trains (the exchange candidates).
+            let owned_names: Vec<String> = self.corporations[ci]
+                .trains
+                .iter()
+                .map(|t| t.name.clone())
+                .collect();
+            // Collect unique (new_train_name, exchanged_name, price) discount
+            // options. Dedup by (new_train_name, exchanged_name) so the 20 D
+            // depot copies collapse to one option per exchanged train, matching
+            // Python's `_unique_trains`.
+            let mut seen_disc: std::collections::HashSet<(String, String)> =
+                std::collections::HashSet::new();
+            let mut disc_options: Vec<(String, String, i32)> = Vec::new();
+            for dt in &self.depot.trains {
+                if dt.discount.is_empty() {
+                    continue;
+                }
+                let visible = self.phase_available(dt.available_on.as_deref())
+                    || Some(&dt.name) == depot_first_name2.as_ref();
+                if !visible {
+                    continue;
+                }
+                for owned_name in &owned_names {
+                    if let Some((_, disc)) =
+                        dt.discount.iter().find(|(n, _)| n == owned_name)
+                    {
+                        let discounted = dt.price - disc;
+                        // Only a strict discount qualifies (Python's
+                        // `price > base_discounted_price`).
+                        if dt.price <= discounted {
+                            continue;
+                        }
+                        if seen_disc.insert((dt.name.clone(), owned_name.clone())) {
+                            disc_options.push((dt.name.clone(), owned_name.clone(), discounted));
+                        }
+                    }
+                }
+            }
+            for (new_name, exchanged_name, price) in disc_options {
+                if price > available_funds {
+                    continue;
+                }
+                let mut a = LegalAction::new("BuyTrain");
+                a.entity = entity_desc.clone();
+                a.entity.insert("source".to_string(), json!("depot"));
+                a.entity.insert("train".to_string(), json!(new_name));
+                a.entity.insert("exchange".to_string(), json!(exchanged_name));
+                a.price_range = Some((price as i64, price as i64));
                 out.push(a);
             }
         }

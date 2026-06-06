@@ -431,6 +431,17 @@ pub struct OperatingState {
     /// price when buying a train after an emergency sell. Reset each corp turn.
     #[serde(default)]
     pub last_share_sold_price: Option<i32>,
+    /// True while a DH teleport station-token placement is pending — i.e. the
+    /// owning corp has laid the DH teleport tile (SpecialTrack) but has not yet
+    /// placed (or declined) the teleport token. Mirrors Python's
+    /// `round.teleported` (round.py:4046, 4106-4117): while it is set, the
+    /// non-blocking `SpecialToken` step (OR step list index 3) BLOCKS, so
+    /// `actions_for` breaks there and the regular `Token` step (index 7) — the
+    /// corp's normal reachable-city tokens — is never reached. We must suppress
+    /// those normal-token choices and offer ONLY the teleport hex (F16) until
+    /// the teleport completes (token placed or passed → `teleport_complete()`).
+    #[serde(default)]
+    pub teleport_pending: bool,
 }
 
 impl OperatingState {
@@ -449,6 +460,7 @@ impl OperatingState {
             revenue: 0,
             finished: false,
             last_share_sold_price: None,
+            teleport_pending: false,
         }
     }
 
@@ -474,6 +486,7 @@ impl OperatingState {
         self.pending_tokens.clear();
         self.revenue = 0;
         self.last_share_sold_price = None;
+        self.teleport_pending = false;
 
         if self.entity_index >= self.operating_order.len() {
             self.finished = true;

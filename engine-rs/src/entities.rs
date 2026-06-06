@@ -73,6 +73,15 @@ pub struct Train {
     #[pyo3(get)]
     pub operated: bool,
     pub owner: EntityId,
+    /// Phase name on which this train becomes depot-purchasable even when it is
+    /// not the head-of-queue train (mirrors Python `Train.available_on`).
+    #[serde(default)]
+    pub available_on: Option<String>,
+    /// Exchange discount map: trading in a train of name `k` reduces this
+    /// train's depot price by `v` (mirrors Python `Train.discount`). Empty for
+    /// trains without a discount.
+    #[serde(default)]
+    pub discount: Vec<(String, i32)>,
 }
 
 #[pymethods]
@@ -87,6 +96,8 @@ impl Train {
             price,
             operated: false,
             owner: EntityId::none(),
+            available_on: None,
+            discount: Vec::new(),
         }
     }
 

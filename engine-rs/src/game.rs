@@ -105,6 +105,18 @@ fn json_to_py_obj(py: Python<'_>, v: &serde_json::Value) -> PyResult<PyObject> {
     })
 }
 
+/// A sellable share bundle with the pricing details Python's emergency-money
+/// rules need. `bundle_price` mirrors `ShareBundle.price`; `min_share_price`
+/// mirrors `min(share.price for share in bundle.shares)`.
+#[derive(Clone, Debug)]
+pub(crate) struct SellableBundle {
+    pub corp_sym: String,
+    pub num_shares: usize,
+    pub percent: u8,
+    pub bundle_price: i32,
+    pub min_share_price: i32,
+}
+
 // ---------------------------------------------------------------------------
 // RoundState
 // ---------------------------------------------------------------------------
@@ -209,6 +221,14 @@ pub struct BaseGame {
     /// history including process'd action dicts.
     pub(crate) action_log: Vec<serde_json::Value>,
 
+    /// Set true when the most recent `process_action_internal` call swallowed a
+    /// `Pass` that the round could not route to any step, leaving state
+    /// unchanged. Mirrors Python `BaseGame.process_action`
+    /// (base.py:934-945), which pops the stray Pass off `actions`/`raw_actions`
+    /// so it never enters the action history. Callers use this to skip the
+    /// `action_log` push for such no-op passes.
+    pub(crate) last_action_swallowed: bool,
+
     // Game end tracking
     pub(crate) game_end_triggered: bool,
     /// The player order for the current game (ids, in seating order).
@@ -291,7 +311,11 @@ impl BaseGame {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         self.process_action_internal(&action)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        self.action_log.push(logged);
+        // A swallowed (unroutable) pass is a no-op: leave the action log
+        // untouched, mirroring Python's pop of actions/raw_actions.
+        if !self.last_action_swallowed {
+            self.action_log.push(logged);
+        }
         Ok(())
     }
 }
@@ -393,14 +417,68 @@ impl BaseGame {
                 self.recent_actions.clone()
             },
             action_log: self.action_log.clone(),
+            last_action_swallowed: self.last_action_swallowed,
             game_end_triggered: self.game_end_triggered,
             player_order: self.player_order.clone(),
             priority_deal_player: self.priority_deal_player,
         }
     }
 
-    /// Internal action dispatch — routes to the correct round processor.
+    /// Top-level action entry point — mirrors Python `BaseGame.process_action`
+    /// (base.py:921-945). Python wraps the ENTIRE `process_single_action` in a
+    /// try/except and, on ANY exception, re-raises UNLESS the action is a
+    /// `Pass`, in which case it logs "Skipping pass action", pops the stray pass
+    /// off `actions`/`raw_actions`, and continues with game state unchanged.
+    ///
+    /// We reproduce that here generally (not just for the operating-round Track
+    /// step that happens to raise in the known human games): snapshot the full
+    /// state before dispatch, and if dispatch returns an `Err` for a `Pass`
+    /// action, restore the snapshot, mark the pass swallowed (so callers skip the
+    /// `action_log` push, mirroring Python's pop), and return Ok. Non-Pass errors
+    /// propagate exactly as before. The snapshot/restore also undoes any partial
+    /// mutation a Pass may have caused before the raise (Python's `actions.pop()`
+    /// likewise relies on `process_single_action` not having committed observable
+    /// state for these stray passes; restoring from a snapshot is the faithful,
+    /// path-independent way to guarantee state is unchanged).
     fn process_action_internal(&mut self, action: &Action) -> Result<(), GameError> {
+        // Reset the swallowed-pass marker for this action.
+        self.last_action_swallowed = false;
+
+        // Snapshot full state so a swallowed Pass leaves the game byte-for-byte
+        // unchanged regardless of which internal step raised.
+        let snapshot = self.snapshot_full();
+        match self.process_action_dispatch(action) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                if matches!(action, Action::Pass { .. }) {
+                    // Swallow the unroutable/invalid pass as a complete no-op.
+                    *self = snapshot;
+                    self.last_action_swallowed = true;
+                    Ok(())
+                } else {
+                    // Python only swallows Pass; everything else propagates.
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// Full-fidelity state snapshot for the Pass-swallow restore path. Unlike
+    /// `clone_for_search` (which truncates `recent_actions` to the last 5 and
+    /// drops the graph cache for MCTS speed), this preserves the complete
+    /// `recent_actions` and `action_log` so restoring is exact. The graph cache
+    /// is a pure derived cache and is rebuilt on demand, so leaving it fresh on
+    /// the snapshot is observationally identical.
+    fn snapshot_full(&self) -> BaseGame {
+        let mut snap = self.clone_for_search();
+        snap.recent_actions = self.recent_actions.clone();
+        snap.action_log = self.action_log.clone();
+        snap
+    }
+
+    /// Internal action dispatch — routes to the correct round processor.
+    /// Wrapped by `process_action_internal` for Python-faithful Pass swallowing.
+    fn process_action_dispatch(&mut self, action: &Action) -> Result<(), GameError> {
         if self.finished {
             return Err(GameError::new("Game is already finished"));
         }
@@ -490,8 +568,13 @@ impl BaseGame {
                                 .map(|&ci| self.corporations[ci].next_token_index().is_some())
                                 .unwrap_or(false);
                             if corp_has_unused_token {
-                                // DH place_token will come — advance to PlaceToken
+                                // DH place_token will come — advance to PlaceToken.
+                                // The DH teleport token is now pending: mirror
+                                // Python's `round.teleported = DH`. While pending,
+                                // the SpecialToken step blocks the regular Token
+                                // step, so ONLY the teleport hex (F16) is tokenable.
                                 s.step = crate::rounds::OperatingStep::PlaceToken;
+                                s.teleport_pending = true;
                             } else {
                                 // No tokens available — consume both and advance
                                 s.num_placed_token += 1;
@@ -500,8 +583,10 @@ impl BaseGame {
                             }
                         }
                         Action::PlaceToken { .. } => {
-                            // DH token placed — consume the token step.
+                            // DH token placed — consume the token step and the
+                            // teleport (Python's `teleport_complete()`).
                             s.num_placed_token += 1;
+                            s.teleport_pending = false;
                             let corp_sym = s.current_corp_sym().unwrap_or("").to_string();
                             let has_trains = self.corp_idx.get(corp_sym.as_str())
                                 .map(|&ci| !self.corporations[ci].trains.is_empty())
@@ -511,10 +596,13 @@ impl BaseGame {
                             dh_post_token = Some((corp_sym, has_trains));
                         }
                         Action::Pass { .. } => {
-                            // DH token declined — do NOT consume the regular
-                            // token step. The corp can still place its own token.
-                            // Just advance past DH's PlaceToken offer to the
-                            // regular PlaceToken, which skip_steps will handle.
+                            // DH token declined — complete the teleport (Python's
+                            // `teleport_complete()` clears `round.teleported`) but
+                            // do NOT consume the regular token step. The corp can
+                            // still place its own token: advance past DH's
+                            // PlaceToken offer to the regular PlaceToken, which
+                            // skip_steps will handle.
+                            s.teleport_pending = false;
                             needs_skip_steps = true;
                         }
                         _ => {}
@@ -1261,6 +1349,76 @@ impl BaseGame {
         reservations
     }
 
+    /// Mirror Python's `Phase.available(phase_name)` (core.py:698-705): a phase
+    /// name is "available" if its index in the title phase order is at or before
+    /// the current phase's index. A `None` name is never available (matches
+    /// Python returning False for a falsy `phase_name`).
+    pub(crate) fn phase_available(&self, phase_name: Option<&str>) -> bool {
+        let phase_name = match phase_name {
+            Some(p) if !p.is_empty() => p,
+            _ => return false,
+        };
+        let phases = crate::title::g1830::phases();
+        let cur_idx = phases.iter().position(|p| p.name == self.phase.name);
+        let tgt_idx = phases.iter().position(|p| p.name == phase_name);
+        match (cur_idx, tgt_idx) {
+            (Some(cur), Some(tgt)) => tgt <= cur,
+            // Python's `next(..., -1)` yields -1 for an unknown name, and
+            // `-1 <= index` is always True; reproduce that here.
+            (Some(_), None) => true,
+            _ => false,
+        }
+    }
+
+    /// Compute the token slot a corporation would occupy when tokening a city,
+    /// mirroring Python's `City.get_slot` (graph.py:983-1002).
+    ///
+    /// Python keeps a positional `city.reservations` list (slot `i` is reserved
+    /// for `reservations[i]`) and:
+    ///   * if the placing corp has its OWN reservation, returns that slot index;
+    ///   * otherwise returns the first slot whose token AND reservation are both
+    ///     empty — so a slot reserved for ANOTHER corp is skipped.
+    ///
+    /// In 1830 every active city reservation is a single home reservation sitting
+    /// at slot 0 of the home city (verified: `add_reservation(slot=None)` on an
+    /// empty city resolves to slot 0, then `reservations.insert(0, entity)`).
+    /// `home_reservations()` already drops a reservation once its corp's home
+    /// token is placed, so it matches Python's live reservation set. Returns
+    /// `None` only if the city has no free slot.
+    pub(crate) fn token_slot_for(&self, hex_id: &str, city_idx: usize, corp_sym: &str) -> Option<usize> {
+        let hi = *self.hex_idx.get(hex_id)?;
+        let city = self.hexes[hi].tile.cities.get(city_idx)?;
+        let n = city.tokens.len();
+
+        // Reservation list, positional by slot (None where unreserved). 1830
+        // home reservations all occupy slot 0 of the home city.
+        let mut reservations: Vec<Option<String>> = vec![None; n];
+        for (rh, rc, rsym) in self.home_reservations() {
+            if rh == hex_id && rc == city_idx {
+                // Home reservation occupies slot 0 (Python inserts at index 0).
+                if !reservations.is_empty() {
+                    reservations[0] = Some(rsym);
+                }
+            }
+        }
+
+        // If the placing corp holds its own reservation, return that slot.
+        if let Some(slot) = reservations
+            .iter()
+            .position(|r| r.as_deref() == Some(corp_sym))
+        {
+            return Some(slot);
+        }
+
+        // Otherwise the first slot with neither a token nor a reservation.
+        for (i, t) in city.tokens.iter().enumerate() {
+            if t.is_none() && reservations[i].is_none() {
+                return Some(i);
+            }
+        }
+        None
+    }
+
     /// Build a tile from a TileDef, creating the graph.rs Tile with paths and cities.
     pub(crate) fn tile_from_def(tile_def: &TileDef, rotation: u8) -> Tile {
         let rotated = tile_def.rotated(rotation);
@@ -1530,6 +1688,12 @@ impl BaseGame {
                     .or_insert(0);
                 let mut train = Train::new(td.name.to_string(), td.distance, td.price);
                 train.id = format!("{}-{}", td.name, instance);
+                train.available_on = td.available_on.map(|s| s.to_string());
+                train.discount = td
+                    .discount
+                    .iter()
+                    .map(|(n, d)| (n.to_string(), *d))
+                    .collect();
                 *instance += 1;
                 depot.trains.push(train);
             }
@@ -1621,6 +1785,7 @@ impl BaseGame {
             turn: 1, // Start at 1 (Auction round is turn 1, first Stock round is still turn 1)
             recent_actions: Vec::new(),
             action_log: Vec::new(),
+            last_action_swallowed: false,
             game_end_triggered: false,
             player_order: player_ids.clone(),
             priority_deal_player: first_player_id,
@@ -1828,8 +1993,12 @@ impl BaseGame {
         let logged = py_to_json(action_dict.as_any())?;
         self.process_action_internal(&action)?;
         // Append to the full action log only after successful processing,
-        // matching Python's net effect for actions that complete cleanly.
-        self.action_log.push(logged);
+        // matching Python's net effect for actions that complete cleanly. A
+        // swallowed (unroutable) pass is a no-op and must not be logged,
+        // mirroring Python's pop of actions/raw_actions for stray passes.
+        if !self.last_action_swallowed {
+            self.action_log.push(logged);
+        }
         Ok(())
     }
 
@@ -2052,14 +2221,51 @@ impl BaseGame {
                         // tile displacement), place_token is mandatory — no pass.
                         if !os.pending_tokens.is_empty() {
                             types.push("place_token".to_string());
+                            // Python's non-blocking steps that sit BEFORE the
+                            // blocking HomeToken/Token placement in the 1830 OR
+                            // step list (Exchange/MH, SpecialTrack/CS, BuyCompany)
+                            // still surface their actions in parallel:
+                            // BaseRound.actions_for accumulates non-blocking step
+                            // actions and only breaks at the first blocking step.
+                            // Each of these keys off the round's current operator,
+                            // which equals `current_corp_sym()` here. Mirror the
+                            // exact conditions used by the LayTile/Dividend branches.
+                            if cs_available {
+                                types.push("lay_tile".to_string());
+                            }
+                            if self.has_buyable_companies(&os) {
+                                types.push("buy_company".to_string());
+                            }
+                            if mh_available {
+                                types.push("buy_shares".to_string());
+                            }
                         } else {
                             let corp_sym = os.current_corp_sym().unwrap_or("").to_string();
-                            let tokenable = self.tokenable_cities_for(&corp_sym);
+                            // While a DH teleport token is pending (Python
+                            // `round.teleported`), the blocking `SpecialToken`
+                            // step (OR step list index 3) is reached BEFORE the
+                            // regular `Token` step (index 7), so the corp's normal
+                            // reachable-city tokens are NOT surfaced — only the
+                            // teleport hex (F16). Likewise `BuyCompany` (index 4)
+                            // sits AFTER `SpecialToken`, so it is NOT offered while
+                            // the teleport blocks; the only non-blocking steps that
+                            // run first are Exchange (MH) and SpecialTrack (CS).
+                            let teleport_pending = os.teleport_pending;
+                            let tokenable = if teleport_pending {
+                                Vec::new()
+                            } else {
+                                self.tokenable_cities_for(&corp_sym)
+                            };
                             // Check if home token needs to be placed (mandatory, no connectivity needed)
                             let needs_home_token = self.corp_idx.get(corp_sym.as_str())
                                 .map_or(false, |&ci| !self.corporations[ci].home_token_ever_placed);
-                            // Also check DH special token (teleport: place on F16 without connectivity)
-                            let dh_token = self.companies.iter().any(|co| {
+                            // Also check DH special token (teleport: place on F16
+                            // without connectivity). Only offered while the
+                            // teleport is PENDING — once placed or declined,
+                            // Python's `teleport_complete()` removes the ability,
+                            // so F16 is no longer tokenable even though
+                            // `DH.ability_used` stays true.
+                            let dh_token = teleport_pending && self.companies.iter().any(|co| {
                                 co.sym == "DH"
                                     && !co.closed
                                     && co.ability_used  // tile already laid
@@ -2078,6 +2284,11 @@ impl BaseGame {
                             }
                             if cs_available {
                                 types.push("lay_tile".to_string());
+                            }
+                            // BuyCompany sits AFTER SpecialToken in the OR step
+                            // list, so it is suppressed while a teleport blocks.
+                            if !teleport_pending && self.has_buyable_companies(&os) {
+                                types.push("buy_company".to_string());
                             }
                             if mh_available {
                                 types.push("buy_shares".to_string());
@@ -2105,6 +2316,14 @@ impl BaseGame {
                         types.push("dividend".to_string());
                         if cs_available {
                             types.push("lay_tile".to_string());
+                        }
+                        // BuyCompany is a parallel option during the corp's
+                        // operating turn (Python's actions_for surfaces the
+                        // non-blocking BuyCompany step alongside the blocking
+                        // Dividend step) whenever a president-owned private is
+                        // affordable.
+                        if self.has_buyable_companies(&os) {
+                            types.push("buy_company".to_string());
                         }
                         if mh_available {
                             types.push("buy_shares".to_string());
@@ -2152,40 +2371,45 @@ impl BaseGame {
                             })
                         });
 
+                        let _ = has_sister_trains;
                         if must_buy {
                             // EMERGENCY = the corp can't afford the cheapest DEPOT
                             // train on its own (Python's `ebuy_president_can_contribute`:
                             // corp.cash < min_depot_price). The president may sell
-                            // shares to contribute ONLY in an emergency; a cheap
-                            // sister-corp train (buyable for >= $1) does NOT negate
-                            // it — the trigger is depot affordability, not whether
-                            // *some* train is reachable.
+                            // shares to contribute ONLY in an emergency.
                             let is_emergency = corp_cash < cheapest_price;
                             if is_emergency {
-                                let pres_cash = pres_id
-                                    .and_then(|pid| self.players.iter().find(|p| p.id == pid))
-                                    .map_or(0, |p| p.cash);
-                                let pres_sell_value = pres_id.map_or(0, |pid| {
-                                    let peid = EntityId::player(pid);
-                                    self.corporations.iter().map(|c| {
-                                        let pct = c.percent_owned_by(&peid);
-                                        let price = c.share_price.as_ref().map_or(0, |sp| sp.price);
-                                        (pct.saturating_sub(if c.president_id() == Some(pid) { 20 } else { 0 }) as i32 / 10) * price
-                                    }).sum::<i32>()
-                                });
-                                // The corp ends up with a train iff it can buy a
-                                // sister train (>= $1) or raise enough (corp + pres
-                                // cash + sellable share value) for the cheapest
-                                // depot train; otherwise it must declare bankruptcy.
-                                let can_get_train = has_sister_trains
-                                    || (corp_cash + pres_cash + pres_sell_value >= cheapest_price);
-                                if can_get_train {
-                                    types.push("buy_train".to_string());
-                                    types.push("sell_shares".to_string());
-                                    if self.has_buyable_companies(&os) {
-                                        types.push("buy_company".to_string());
-                                    }
-                                } else {
+                                // Python's BuyTrain step, when `president_may_contribute`
+                                // (== must_buy_train) holds, returns `[SellShares,
+                                // BuyTrain]`; BuyCompany is a parallel option. The
+                                // non-blocking Bankrupt step surfaces `Bankrupt` too,
+                                // but BOTH Python helpers gate it on `can_go_bankrupt`
+                                // (action_helper.py:479, factored_action_helper.py:160).
+                                // We therefore always offer buy_train + sell_shares +
+                                // buy_company and let the per-type enumerators decide
+                                // what is actually possible; bankruptcy is gated on
+                                // `can_go_bankrupt`. (The factored helper further hides
+                                // Bankrupt unless no other concrete action exists — that
+                                // refinement lives in get_factored_choices_impl.)
+                                types.push("buy_train".to_string());
+                                types.push("sell_shares".to_string());
+                                if self.has_buyable_companies(&os) {
+                                    types.push("buy_company".to_string());
+                                }
+                                // CS / MH company abilities are surfaced by the
+                                // non-blocking SpecialTrack / Exchange steps at any
+                                // OR step during the owning corp's turn (Python's
+                                // `actions_for(company)` path), independent of the
+                                // train-buying state.
+                                if cs_available {
+                                    types.push("lay_tile".to_string());
+                                }
+                                if mh_available {
+                                    types.push("buy_shares".to_string());
+                                }
+                                let can_bankrupt = pres_id
+                                    .map_or(false, |pid| self.can_go_bankrupt_emr(pid, &corp_sym));
+                                if can_bankrupt {
                                     types.push("bankrupt".to_string());
                                 }
                             } else {
@@ -2197,6 +2421,13 @@ impl BaseGame {
                                 types.push("buy_train".to_string());
                                 if self.has_buyable_companies(&os) {
                                     types.push("buy_company".to_string());
+                                }
+                                // CS / MH company abilities (see note above).
+                                if cs_available {
+                                    types.push("lay_tile".to_string());
+                                }
+                                if mh_available {
+                                    types.push("buy_shares".to_string());
                                 }
                             }
                         } else {
@@ -2666,6 +2897,15 @@ impl BaseGame {
         }
     }
 
+    /// Whether a DH teleport token is currently PENDING (mirrors Python's
+    /// `round.teleported == DH`). True only in the narrow window after the DH
+    /// teleport tile is laid and before the teleport token is placed/declined.
+    /// Used by the adapter to gate the DH `PlaceToken` (SpecialToken) offer
+    /// instead of the permanent `DH.ability_used` flag.
+    fn teleport_pending(&self) -> bool {
+        matches!(&self.round, Round::Operating(s) if s.teleport_pending)
+    }
+
     /// Auction: company currently being auctioned (sym), or None.
     fn auctioning_company(&self) -> Option<String> {
         match &self.round {
@@ -2945,6 +3185,24 @@ impl BaseGame {
     /// corps `EBUY_PRES_SWAP=True` makes the presidency swap permissible, which
     /// the president-dump check (another player can take over) already models.
     fn sellable_bundles(&self, player_id: u32) -> Vec<(String, usize, u8)> {
+        self.sellable_bundles_detailed(player_id)
+            .into_iter()
+            .map(|b| (b.corp_sym, b.num_shares, b.percent))
+            .collect()
+    }
+}
+
+impl BaseGame {
+    /// Detailed variant of `sellable_bundles` that also carries each bundle's
+    /// exact `bundle.price` and the minimum individual `Share.price` within the
+    /// bundle, mirroring Python's `ShareBundle.price` and `min(share.price for
+    /// share in bundle.shares)`. These are required to reproduce Python's
+    /// emergency-money `selling_minimum_shares` filter (round.py:474-478), which
+    /// compares `bundle.price - min(share.price)` against the cash shortfall.
+    /// A partial president bundle is a 10% slice of the 20% president share, so
+    /// its `bundle.price` is the 10% price while its only share's price is the
+    /// full 20% price — a distinction a percent-only heuristic cannot recover.
+    pub(crate) fn sellable_bundles_detailed(&self, player_id: u32) -> Vec<SellableBundle> {
         if !matches!(&self.round, Round::Stock(_) | Round::Operating(_)) {
             return Vec::new();
         }
@@ -2984,7 +3242,10 @@ impl BaseGame {
                 continue;
             }
 
-            player_shares.sort_by_key(|(_, s)| if s.president { 1 } else { 0 });
+            // Match Python's `all_bundles_for_corporation` share ordering:
+            // `(1 if president else 0, percent)` — non-president shares first,
+            // ascending by percent, then the president share last.
+            player_shares.sort_by_key(|(_, s)| (if s.president { 1u8 } else { 0u8 }, s.percent));
 
             // Market pool capacity check: 50% limit in 1830
             let market_pct: u8 = corp
@@ -2994,14 +3255,37 @@ impl BaseGame {
                 .map(|s| s.percent)
                 .sum();
 
+            // Base per-10%-share market price (`Share.price_per_share()` for a
+            // player-owned share == share_price.price * price_multiplier; 1830
+            // has price_multiplier == 1). A share/bundle of `pct`% is priced
+            // `ceil(P * pct / 10)`, mirroring `Share.price` / `ShareBundle.price`.
+            let per_share_price = corp.share_price.as_ref().map_or(0, |sp| sp.price);
+            let price_for_pct =
+                |pct: u8| -> i32 { ((per_share_price as i64 * pct as i64 + 9) / 10) as i32 };
+
             // Build cumulative bundles
             let mut cum_percent: u8 = 0;
             let mut includes_president = false;
+            // Minimum individual `Share.price` among the shares accumulated so
+            // far (mirrors `min(share.price for share in bundle.shares)`).
+            let mut min_share_price = i32::MAX;
+            // Minimum individual share price across ALL the player's shares of
+            // this corp — used for the partial president bundle, whose
+            // `bundle.shares` is the full share list (Python passes `bundle[:]`).
+            let all_min_share_price = player_shares
+                .iter()
+                .map(|(_, s)| price_for_pct(s.percent))
+                .min()
+                .unwrap_or(0);
 
             for (_, share) in &player_shares {
                 cum_percent += share.percent;
                 if share.president {
                     includes_president = true;
+                }
+                let this_share_price = price_for_pct(share.percent);
+                if this_share_price < min_share_price {
+                    min_share_price = this_share_price;
                 }
 
                 // Check market capacity (pool can't exceed 50%)
@@ -3037,12 +3321,21 @@ impl BaseGame {
                 // in 1830). The president share at 20% counts as 2 "share-equivalents",
                 // so a (president,) bundle reports count=2 not count=1.
                 let bundle_shares = (cum_percent as usize + 9) / 10;
-                result.push((corp.sym.clone(), bundle_shares, cum_percent));
+                result.push(SellableBundle {
+                    corp_sym: corp.sym.clone(),
+                    num_shares: bundle_shares,
+                    percent: cum_percent,
+                    bundle_price: price_for_pct(cum_percent),
+                    min_share_price,
+                });
             }
 
             // Partial president bundles: if the last share is the president share,
             // add a bundle for (total - 10%) representing selling half the president.
             // In 1830: president=20%, normal=10%, so one partial bundle at cum_percent-10.
+            // Python builds it from the FULL share list (`bundle[:]`) at a reduced
+            // percent, so its `bundle.price` is the partial-percent price while the
+            // cheapest member share is still the smallest of all the player's shares.
             if includes_president && cum_percent > 10 {
                 let partial_pct = cum_percent - 10;
                 if market_pct + partial_pct <= 50 {
@@ -3062,7 +3355,13 @@ impl BaseGame {
                     if max_other >= presidents_pct {
                         // Same num_shares convention as the main loop.
                         let partial_shares = (partial_pct as usize + 9) / 10;
-                        result.push((corp.sym.clone(), partial_shares, partial_pct));
+                        result.push(SellableBundle {
+                            corp_sym: corp.sym.clone(),
+                            num_shares: partial_shares,
+                            percent: partial_pct,
+                            bundle_price: price_for_pct(partial_pct),
+                            min_share_price: all_min_share_price,
+                        });
                     }
                 }
             }
@@ -3070,7 +3369,10 @@ impl BaseGame {
 
         result
     }
+}
 
+#[pymethods]
+impl BaseGame {
     /// Get the game result: player_id -> total value (cash + share values).
     fn result(&self) -> HashMap<u32, i32> {
         self.calculate_results()
