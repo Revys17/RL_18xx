@@ -937,6 +937,78 @@ impl BaseGame {
             .to_string();
         let corp_idx = self.corp_idx[&corp_sym];
 
+        // Validate that the action's EXACT train (matched by full ID) is
+        // actually buyable in the current situation, mirroring Python's
+        // `buy_train_action` (round.py:566-570):
+        //
+        //     if train not in (depot.available(entity) + buyable_trains(entity)):
+        //         raise Exception("Not a buyable train")
+        //
+        // Membership is by object identity, so a same-NAMED train at a
+        // different/own corp or a later upcoming copy does NOT satisfy the
+        // check. Since `buyable_trains(entity)` is always a subset of
+        // `depot.available(entity)` (it only further restricts the same
+        // pools), the union reduces, membership-wise, to
+        // `depot.available(entity)` =
+        //     depot.depot_trains() + depot.other_trains(entity)
+        // with no affordability filter (affordability is enforced separately
+        // below and during enumeration). Build the legal exact-train-ID set
+        // exactly:
+        //
+        //   depot_trains() (entities.py:739-753):
+        //     [upcoming[0]]                      # head-of-queue, always visible
+        //     + [t for t in upcoming if phase.available(t.available_on)]
+        //     + discarded
+        //   other_trains(entity) (entities.py:758-762):
+        //     trains on OTHER corps that are buyable (always True in 1830),
+        //     owner not in [corp, depot, None], and — since
+        //     ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS == False — only where the
+        //     seller corp's president == the buyer corp's president.
+        //
+        // For exchanges (exchange.is_some()) the variant/discount legality is
+        // validated separately by enumeration/Python, so skip this membership
+        // check (the discounted exchange train comes from the depot anyway).
+        if exchange.is_none() {
+            let mut legal_ids: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+
+            // depot_trains(): head-of-queue is always visible.
+            if let Some(t) = self.depot.trains.first() {
+                legal_ids.insert(t.id.clone());
+            }
+            // depot_trains(): upcoming trains whose available_on phase is
+            // reached. `phase_available(None)` returns false (matching Python's
+            // `phase.available(None) == False`), so non-D trains only become
+            // visible via the head rule above.
+            for t in &self.depot.trains {
+                if self.phase_available(t.available_on.as_deref()) {
+                    legal_ids.insert(t.id.clone());
+                }
+            }
+            // depot_trains(): discarded pool, always visible.
+            for t in &self.depot.discarded {
+                legal_ids.insert(t.id.clone());
+            }
+            // other_trains(entity): other-corp trains, same president only
+            // (ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS == False for 1830).
+            let buyer_pres = self.corporations[corp_idx].president_id();
+            for other in &self.corporations {
+                if other.sym == corp_sym {
+                    continue;
+                }
+                if buyer_pres.is_none() || other.president_id() != buyer_pres {
+                    continue;
+                }
+                for t in &other.trains {
+                    legal_ids.insert(t.id.clone());
+                }
+            }
+
+            if !legal_ids.contains(train_name) {
+                return Err(GameError::new("Not a buyable train"));
+            }
+        }
+
         // Determine source: "depot", explicit corp sym, or auto-detect.
         // When "from" is unspecified (defaults to "depot"), use these heuristics:
         // 1. If the price differs from the depot price for this train type → inter-corp

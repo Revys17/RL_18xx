@@ -1020,6 +1020,45 @@ impl BaseGame {
             return Ok(false);
         }
 
+        // Enforce Python's ability_right_time / ability_check_time gating
+        // (BaseGame.abilities -> ability_right_time -> ability_check_time,
+        // base.py:3339-3431). All of CS/DH's tile_lay / place_token / teleport
+        // abilities in 1830 are operating-round-only: CS uses
+        // when="owning_corp_or_turn" (base.py:3392-3393 requires self.round.operating),
+        // and DH teleport defaults to when=["track"] (abilities.py:258-260), which
+        // ability_blocking_step (base.py:3422-3431) only matches against active
+        // operating-round steps. So outside an Operating round Python returns no
+        // abilities, the SpecialTrack step is inactive, and the blocking
+        // BuySellParShares step rejects the company action (round.py:5350-5357).
+        // Rust must reject it too: return Ok(false) so the action falls through to
+        // process_stock_action, whose catch-all rejects it (stock.rs:62-65),
+        // matching Python. This guard covers all three handled arms (LayTile,
+        // PlaceToken, Pass).
+        if !matches!(&self.round, Round::Operating(_)) {
+            return Ok(false);
+        }
+
+        // Within an Operating round, a corporation-owned company tile_lay /
+        // place_token ability is only usable when the owning corporation is the
+        // current operator (Python's owning_corp_or_turn / ability_blocking_step
+        // tie the ability to the active operator). Reject otherwise; the normal
+        // corp lay path already rejects entity != current operator, but company
+        // entities bypass that check.
+        if matches!(action, Action::LayTile { .. } | Action::PlaceToken { .. }) {
+            if let Some(owning_corp_sym) = self.companies[company_idx].owner.corp_sym() {
+                let usable = match &self.round {
+                    Round::Operating(s) => s.current_corp_sym() == Some(owning_corp_sym),
+                    _ => false,
+                };
+                if !usable {
+                    return Err(GameError::new(format!(
+                        "Company {} ability not usable: owning corp {} is not the current operator",
+                        self.companies[company_idx].sym, owning_corp_sym
+                    )));
+                }
+            }
+        }
+
         match action {
             Action::LayTile {
                 hex_id,
