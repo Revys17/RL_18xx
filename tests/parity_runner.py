@@ -47,6 +47,7 @@ import json
 import logging
 import random
 import sys
+import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -156,7 +157,7 @@ def run_random_seed(seed, max_steps):
                     "detail": str(exc), "py": str(action), "rust": None, **ctx}
         try:
             adapter.process_action(action)
-        except Exception as exc:
+        except BaseException as exc:
             return {"kind": "random", "id": seed, "step": step, "check": "rust_error",
                     "detail": str(exc), "py": None, "rust": str(action), **ctx}
     return None
@@ -185,21 +186,60 @@ def run_human_game(path, max_steps):
         return None, {"kind": "python_side", "id": game_id, "step": -1,
                       "reason": "no players in game JSON"}
     names = {p.get("id"): p["name"] for p in data["players"]}
-    py = GameMap().game_by_title("1830")(names)
-    rust = RustGame(names)
+    # Construct both engines. If Python (oracle) can't even build the game
+    # (e.g. invalid player count = bad data), it's python_side — but only if
+    # Rust ALSO fails to construct it (else Rust is more permissive = divergence).
+    try:
+        py = GameMap().game_by_title("1830")(names)
+    except Exception as py_exc:
+        rust_ok = True
+        try:
+            RustGame(names)
+        except BaseException:
+            rust_ok = False
+        if not rust_ok:
+            return None, {"kind": "python_side", "id": game_id, "step": -1,
+                          "reason": f"construction failed: {py_exc}"}
+        return ({"kind": "human", "id": game_id, "step": -1,
+                 "check": "rust_accepts_python_reject",
+                 "detail": f"Python construction failed ({py_exc}) but Rust constructed",
+                 "py": str(py_exc), "rust": None, "round": "?", "op_step": "?",
+                 "phase": "?", "entity": "?"}, None)
+    try:
+        rust = RustGame(names)
+    except BaseException as exc:
+        return ({"kind": "human", "id": game_id, "step": -1, "check": "rust_error",
+                 "detail": f"construction: {exc}", "py": None, "rust": str(exc),
+                 "round": "?", "op_step": "?", "phase": "?", "entity": "?"}, None)
 
     for i, action in enumerate(actions):
         # Python is the oracle. If it rejects an externally-sourced action, the
-        # game can't be replayed — bucket it (NOT a Rust-parity failure).
+        # game can't be replayed further. That is only a python_side (non-parity)
+        # case if RUST ALSO rejects it at this step — otherwise Rust is MORE
+        # permissive than the oracle (accepts what Python rejects), which IS a
+        # real parity divergence, not a free pass.
+        ctx_before = _ctx(py)
         try:
             py = py.process_action(action)
-        except Exception as exc:
-            return None, {"kind": "python_side", "id": game_id, "step": i,
-                          "reason": str(exc), "action_type": action.get("type")}
+        except Exception as py_exc:
+            rust_rejected = True
+            try:
+                rust.process_action(action)
+                rust_rejected = False
+            except BaseException:
+                rust_rejected = True
+            if rust_rejected:
+                return None, {"kind": "python_side", "id": game_id, "step": i,
+                              "reason": str(py_exc), "action_type": action.get("type")}
+            return ({"kind": "human", "id": game_id, "step": i,
+                     "check": "rust_accepts_python_reject",
+                     "detail": f"Python rejected ({py_exc}) but Rust accepted",
+                     "py": str(py_exc), "rust": None,
+                     "action_type": action.get("type"), **ctx_before}, None)
         ctx = _ctx(py)
         try:
             rust.process_action(action)
-        except Exception as exc:
+        except BaseException as exc:
             return ({"kind": "human", "id": game_id, "step": i, "check": "rust_error",
                      "detail": str(exc), "py": None, "rust": str(action),
                      "action_type": action.get("type"), **ctx}, None)
@@ -232,7 +272,14 @@ def main():
         seeds += [int(s) for s in args.random_seeds.split(",") if s.strip()]
     for seed in seeds:
         random_run += 1
-        f = run_random_seed(seed, args.max_steps)
+        try:
+            f = run_random_seed(seed, args.max_steps)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException:  # incl. pyo3 PanicException (a BaseException)
+            f = {"kind": "random", "id": seed, "step": -1, "check": "runner_crash",
+                 "detail": traceback.format_exc()[-800:], "py": None, "rust": None,
+                 "round": "?", "op_step": "?", "phase": "?", "entity": "?"}
         if f:
             failures.append(f)
 
@@ -243,7 +290,15 @@ def main():
         games += [g for g in args.human_games.split(",") if g.strip()]
     for path in games:
         human_run += 1
-        f, ps = run_human_game(path, args.max_steps)
+        try:
+            f, ps = run_human_game(path, args.max_steps)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException:  # incl. pyo3 PanicException (a BaseException)
+            f = {"kind": "human", "id": Path(path).stem, "step": -1, "check": "runner_crash",
+                 "detail": traceback.format_exc()[-800:], "py": None, "rust": None,
+                 "round": "?", "op_step": "?", "phase": "?", "entity": "?"}
+            ps = None
         if f:
             failures.append(f)
         if ps:

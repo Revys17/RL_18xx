@@ -738,7 +738,15 @@ class Depot(Entity):
 
     def depot_trains(self, clear=False):
         if clear or self.depot_trains_cache is None:
-            self.depot_trains_cache = [self.upcoming[0]] + [
+            # Mirror Ruby's `[@upcoming.first] + ...`: the head-of-queue train is
+            # always visible (it's the next to sell), regardless of phase. Ruby's
+            # `@upcoming.first` returns nil on an empty queue, so the leading
+            # element simply vanishes; replicate that here by prepending
+            # `upcoming[0]` only when the queue is non-empty (Python's
+            # `self.upcoming[0]` would otherwise raise IndexError when the last
+            # train has been bought — e.g. the 20th D-train in 1830).
+            head = self.upcoming[:1]
+            self.depot_trains_cache = head + [
                 t for t in self.upcoming if self.game.phase.available(t.available_on)
             ]
             self.depot_trains_cache = list(dict.fromkeys(self.depot_trains_cache + self.discarded).keys())

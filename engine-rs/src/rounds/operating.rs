@@ -1426,29 +1426,26 @@ impl BaseGame {
             .get(company_sym)
             .ok_or_else(|| GameError::new(format!("Unknown company: {}", company_sym)))?;
 
-        // Validate: company must be owned by the corporation's president
-        let president_id = self.corporations[corp_idx]
-            .president_id()
-            .ok_or_else(|| GameError::new("Corporation has no president"))?;
-
+        // Validate ownership: Python's purchasable_companies (base.py:1439-1447)
+        // plus company_sellable (base.py:2109-2110) require that the company be
+        // owned by a PLAYER (any player), and not by the buying corporation. A
+        // company owned by a Corporation is not sellable. There is NO
+        // president restriction in Python.
         let company_owner_id = self.companies[company_idx]
             .owner
             .player_id()
-            .ok_or_else(|| GameError::new("Company not owned by a player"))?;
+            .ok_or_else(|| GameError::new(format!("Cannot buy {} (not owned by a player)", company_sym)))?;
 
-        if company_owner_id != president_id {
-            return Err(GameError::new(
-                "Company must be owned by the corporation's president",
-            ));
-        }
-
-        // Validate price: between 1 and 2x face value
+        // Validate price: between ceil(value/2) and 2x face value.
+        // Python: Company.min_price = (value//2)+(value%2) = ceil(value/2),
+        // max_price = value*2 (entities.py:938-939, get_max_price entities.py:1020).
         let face_value = self.companies[company_idx].value;
-        if price < 1 || price > face_value * 2 {
+        let min_price = (face_value + 1) / 2;
+        let max_price = face_value * 2;
+        if price < min_price || price > max_price {
             return Err(GameError::new(format!(
-                "Price {} must be between 1 and {} (2x face value)",
-                price,
-                face_value * 2
+                "Price {} must be between {} and {} (2x face value)",
+                price, min_price, max_price
             )));
         }
 
@@ -1456,10 +1453,11 @@ impl BaseGame {
             return Err(GameError::new("Corporation cannot afford company"));
         }
 
-        // Transfer
+        // Transfer. Python pays the seller `owner = company.owner` (round.py:1483),
+        // which is the company's current player-owner (not the president).
         self.corporations[corp_idx].cash -= price;
-        let pres_idx = self.player_index(president_id).unwrap();
-        self.players[pres_idx].cash += price;
+        let owner_idx = self.player_index(company_owner_id).unwrap();
+        self.players[owner_idx].cash += price;
         self.companies[company_idx].owner = EntityId::corporation(&corp_sym);
 
         self.round = crate::rounds::Round::Operating(new_state);
@@ -1737,12 +1735,25 @@ impl BaseGame {
                         // (D-trains have available_on="6"). They're also available
                         // in phase D. Check phase name for "6" or "D".
                         let d_available = self.phase.name == "D" || self.phase.name == "6";
+                        // Python's `discountable_trains_for` looks at
+                        // `depot.depot_trains()` — the VISIBLE upcoming trains
+                        // PLUS the discarded pool — not just the upcoming queue.
+                        // Once the last upcoming D is bought the queue empties,
+                        // but discarded D-trains remain exchangeable, so the
+                        // BuyTrain step must stay blocking (the corp can still
+                        // exchange an owned 4/5/6 for a discounted discarded D).
+                        // Find a D across both upcoming and discarded.
+                        let d_train_price = self
+                            .depot
+                            .trains
+                            .iter()
+                            .chain(self.depot.discarded.iter())
+                            .find(|t| t.name == "D")
+                            .map(|t| t.price);
                         let can_exchange = if d_available {
-                            if let Some(d_train) =
-                                self.depot.trains.iter().find(|t| t.name == "D")
-                            {
+                            if let Some(d_price) = d_train_price {
                                 let discount = 300;
-                                let exchange_price = d_train.price - discount;
+                                let exchange_price = d_price - discount;
                                 corp_cash >= exchange_price
                                     && self.corporations[corp_idx]
                                         .trains

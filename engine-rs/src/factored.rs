@@ -585,7 +585,7 @@ impl BaseGame {
     /// Mirror Python `Depot.min_depot_price`: the cheapest price among
     /// `depot_trains()` (visible upcoming + all discarded). Used by the
     /// emergency-money `needed_cash`.
-    fn min_depot_price_for_emr(&self) -> i32 {
+    pub(crate) fn min_depot_price_for_emr(&self) -> i32 {
         let depot_first_name: Option<String> =
             self.depot.trains.first().map(|t| t.name.clone());
         let upcoming_min = self
@@ -785,15 +785,29 @@ impl BaseGame {
         };
         let at_lay_tile_step = matches!(or_step, Some(crate::rounds::OperatingStep::LayTile));
 
-        // Always check for CS company lay availability. CS fires at any step
+        // Always check for CS company lay availability. CS's tile_lay ability has
+        // `when: "owning_corp_or_turn"` (g1830.py:47), so it fires at any step
         // during the owning corp's OR turn (count=1, hexes=B20, tiles=3/4/58).
         let mut out: Vec<LegalAction> = Vec::new();
         out.extend(self.factored_cs_lay_tile(&corp_sym));
-        out.extend(self.factored_dh_lay_tile(&corp_sym));
 
-        // Skip corp-side enumeration when not at the LayTile step. Python's
-        // `game.round.actions_for(corp)` does not include LayTile at
-        // BuyCompany/BuyTrain/Dividend/RunRoutes/PlaceToken steps.
+        // DH's teleport ability defaults to `when: ["track"]` (Teleport ability,
+        // abilities.py:258-260), so unlike CS it is only available when the
+        // current OR blocking step resolves to the `track` step — i.e. the
+        // regular LayTile step. Python's `ability_right_time` resolves
+        // `%current_step%` via `ability_blocking_step()` (base.py:3339-3431):
+        // during a pending HomeToken/Token placement the blocking step is a
+        // TokenStep, so the DH teleport (`when=["track"]`) does not match and
+        // `SpecialTrack.actions(DH)` returns []. Gate the DH lay on the LayTile
+        // step accordingly. (CS, with `owning_corp_or_turn`, is unaffected and is
+        // emitted above for every step.)
+        if at_lay_tile_step {
+            out.extend(self.factored_dh_lay_tile(&corp_sym));
+        }
+
+        // Skip the rest of the corp-side enumeration when not at the LayTile
+        // step. Python's `game.round.actions_for(corp)` does not include LayTile
+        // at BuyCompany/BuyTrain/Dividend/RunRoutes/PlaceToken steps.
         if !at_lay_tile_step {
             return out;
         }
@@ -1239,7 +1253,14 @@ impl BaseGame {
     }
 
     fn factored_buy_company(&self) -> Vec<LegalAction> {
-        // Corp buys a private from its president in OR.
+        // Corp buys a private from its president in OR. This MIRRORS Python's
+        // FactoredActionHelper._buy_company_choices (factored_action_helper.py:
+        // 423-447), which enumerates only `owner.companies` where owner =
+        // buyer.owner = the corporation's president. (The Python *engine*
+        // `purchasable_companies` allows any player-owned company, and the
+        // engine's `or_process_buy_company` accepts those; but the factored
+        // *helper* — the enumeration oracle this is checked against — restricts
+        // to the president's companies, so we match it here.)
         let corp_sym = match self.round_state.active_entity_id.corp_sym() {
             Some(s) => s.to_string(),
             None => return Vec::new(),
@@ -1262,7 +1283,8 @@ impl BaseGame {
             if co.closed || co.no_buy || co.owner != pres_eid {
                 continue;
             }
-            let min_price = co.value / 2;
+            // Python: Company.min_price = ceil(value/2), max_price = value*2.
+            let min_price = (co.value + 1) / 2;
             let max_price = (co.value * 2).min(buying_power);
             if max_price < min_price {
                 continue;
@@ -1496,11 +1518,24 @@ impl BaseGame {
             let mut seen_disc: std::collections::HashSet<(String, String)> =
                 std::collections::HashSet::new();
             let mut disc_options: Vec<(String, String, i32)> = Vec::new();
-            for dt in &self.depot.trains {
+            // Python's `discountable_trains_for` iterates `depot.depot_trains()`,
+            // i.e. the visible upcoming trains PLUS the discarded pool. Discarded
+            // trains are always part of `depot_trains()` (no phase/head gate), so
+            // include them here with `visible = true` — otherwise the discounted-D
+            // exchange option vanishes once the last upcoming D has been bought
+            // even though discarded D-trains are still exchangeable.
+            for (dt, is_discard) in self
+                .depot
+                .trains
+                .iter()
+                .map(|t| (t, false))
+                .chain(self.depot.discarded.iter().map(|t| (t, true)))
+            {
                 if dt.discount.is_empty() {
                     continue;
                 }
-                let visible = self.phase_available(dt.available_on.as_deref())
+                let visible = is_discard
+                    || self.phase_available(dt.available_on.as_deref())
                     || Some(&dt.name) == depot_first_name2.as_ref();
                 if !visible {
                     continue;
