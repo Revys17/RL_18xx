@@ -65,17 +65,23 @@ def compare_state(rust_game, py_game):
     # Game finished status
     if rust_game.finished != py_game.finished:
         errors.append(f"Finished: Rust={rust_game.finished} Python={py_game.finished}")
-    # If both finished, skip round/step checks — stale state is expected
-    if rust_game.finished and py_game.finished:
-        return errors
+    both_finished = rust_game.finished and py_game.finished
 
     # ---- Round / turn structure ----
-
-    # Round type
     r_round = rust_game.round.round_type
     p_round_obj = py_game.round
     p_round = "Operating" if p_round_obj.operating else ("Stock" if p_round_obj.stock else "Auction")
-    if r_round != p_round:
+    # When both games are finished the round/step structure is stale, but the
+    # substantive END STATE (bank, player cash, corp cash, share OWNERSHIP and
+    # PRICES, trains, tokens) MUST still match — that is what determines result().
+    # Neutralize the structure + graph checks (which all key off r_round/p_round)
+    # by overriding to "Finished" so they skip, while the end-state comparisons
+    # below still run. (Previously the function returned early here, silently
+    # skipping the end state and letting finished-game share-price divergences —
+    # the bulk of the human-import gap — go completely undetected.)
+    if both_finished:
+        r_round = p_round = "Finished"
+    elif r_round != p_round:
         errors.append(f"Round type: Rust={r_round} Python={p_round}")
 
     # Round num (OR number within a set: 1, 2, 3) — only meaningful in OR
