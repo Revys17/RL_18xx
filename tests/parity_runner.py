@@ -58,7 +58,9 @@ from rl18xx.game.action_helper import ActionHelper  # noqa: E402
 from rl18xx.game.factored_action_helper import FactoredActionHelper  # noqa: E402
 from rl18xx.game.gamemap import GameMap  # noqa: E402
 from rl18xx.rust_adapter import RustGameAdapter  # noqa: E402
-from rl18xx.agent.alphazero.pretraining import filter_actions  # noqa: E402
+from rl18xx.agent.alphazero.pretraining import (  # noqa: E402
+    _get_game_object_for_game_with_reason,
+)
 from tests.validate_rust_engine import compare_state  # noqa: E402
 
 MAX_STEPS_DEFAULT = 100000
@@ -164,90 +166,78 @@ def run_random_seed(seed, max_steps):
 
 
 def run_human_game(path, max_steps):
-    """Replay one human game in lockstep. Returns (failure_or_None,
-    python_side_or_None)."""
+    """Compare the REAL human-game IMPORT: run the production cleaning pipeline
+    (`_get_game_object_for_game_with_reason`) on BOTH engines and compare the
+    outcome (drop reason / final state). This is what training-data import
+    actually does (filter_actions + pass/skip handling) — NOT a raw filtered
+    replay, which hits blocking-step rejections the real import resolves and
+    thereby masks divergences. Returns (failure_or_None, python_side_or_None)."""
     game_id = Path(path).stem
     try:
-        data = json.load(open(path))
+        game = json.load(open(path))
     except Exception as exc:
         return None, {"kind": "python_side", "id": game_id, "step": -1,
                       "reason": f"unparseable game JSON: {exc}"}
-    # "Human game import" replays the FILTERED action sequence (undo/redo
-    # resolved, messages + program_ actions stripped) — exactly what the
-    # production import (_get_game_object_for_game_with_reason) feeds the engine.
-    # Replaying raw logs would test meta-actions (undo/message) the import never
-    # sends and the engine has no handler for.
-    try:
-        actions = filter_actions(data.get("actions", []))[:max_steps]
-    except Exception as exc:
-        return None, {"kind": "python_side", "id": game_id, "step": -1,
-                      "reason": f"filter_actions failed: {exc}"}
-    if "players" not in data:
-        return None, {"kind": "python_side", "id": game_id, "step": -1,
-                      "reason": "no players in game JSON"}
-    names = {p.get("id"): p["name"] for p in data["players"]}
-    # Construct both engines. If Python (oracle) can't even build the game
-    # (e.g. invalid player count = bad data), it's python_side — but only if
-    # Rust ALSO fails to construct it (else Rust is more permissive = divergence).
-    try:
-        py = GameMap().game_by_title("1830")(names)
-    except Exception as py_exc:
-        rust_ok = True
-        try:
-            RustGame(names)
-        except BaseException:
-            rust_ok = False
-        if not rust_ok:
-            return None, {"kind": "python_side", "id": game_id, "step": -1,
-                          "reason": f"construction failed: {py_exc}"}
-        return ({"kind": "human", "id": game_id, "step": -1,
-                 "check": "rust_accepts_python_reject",
-                 "detail": f"Python construction failed ({py_exc}) but Rust constructed",
-                 "py": str(py_exc), "rust": None, "round": "?", "op_step": "?",
-                 "phase": "?", "entity": "?"}, None)
-    try:
-        rust = RustGame(names)
-    except BaseException as exc:
-        return ({"kind": "human", "id": game_id, "step": -1, "check": "rust_error",
-                 "detail": f"construction: {exc}", "py": None, "rust": str(exc),
-                 "round": "?", "op_step": "?", "phase": "?", "entity": "?"}, None)
 
-    for i, action in enumerate(actions):
-        # Python is the oracle. If it rejects an externally-sourced action, the
-        # game can't be replayed further. That is only a python_side (non-parity)
-        # case if RUST ALSO rejects it at this step — otherwise Rust is MORE
-        # permissive than the oracle (accepts what Python rejects), which IS a
-        # real parity divergence, not a free pass.
-        ctx_before = _ctx(py)
+    def clean(use_rust):
         try:
-            py = py.process_action(action)
-        except Exception as py_exc:
-            rust_rejected = True
-            try:
-                rust.process_action(action)
-                rust_rejected = False
-            except BaseException:
-                rust_rejected = True
-            if rust_rejected:
-                return None, {"kind": "python_side", "id": game_id, "step": i,
-                              "reason": str(py_exc), "action_type": action.get("type")}
-            return ({"kind": "human", "id": game_id, "step": i,
-                     "check": "rust_accepts_python_reject",
-                     "detail": f"Python rejected ({py_exc}) but Rust accepted",
-                     "py": str(py_exc), "rust": None,
-                     "action_type": action.get("type"), **ctx_before}, None)
-        ctx = _ctx(py)
-        try:
-            rust.process_action(action)
-        except BaseException as exc:
-            return ({"kind": "human", "id": game_id, "step": i, "check": "rust_error",
-                     "detail": str(exc), "py": None, "rust": str(action),
-                     "action_type": action.get("type"), **ctx}, None)
-        state_errs = compare_state(rust, py)
-        if state_errs:
-            return ({"kind": "human", "id": game_id, "step": i, "check": "state",
-                     "detail": list(state_errs)[:20], "py": None, "rust": None,
-                     "action_type": action.get("type"), **ctx}, None)
+            obj, reason = _get_game_object_for_game_with_reason(game, use_rust=use_rust)
+            return obj, reason, None
+        except BaseException as exc:  # incl. pyo3 PanicException (a BaseException)
+            return None, None, f"{type(exc).__name__}: {str(exc)[:140]}"
+
+    opy, rpy, epy = clean(False)
+    oru, rru, eru = clean(True)
+    base = {"id": game_id, "step": -1, "round": "?", "op_step": "?",
+            "phase": "?", "entity": "?"}
+
+    # Python (oracle) errored during import -> Python can't import this game:
+    # python_side, UNLESS Rust imported it cleanly (Rust more permissive).
+    if epy is not None:
+        if eru is not None or oru is None:
+            return None, {"kind": "python_side", "id": game_id, "step": -1,
+                          "reason": f"python import error: {epy}"}
+        return ({"kind": "human", "check": "rust_accepts_python_reject",
+                 "detail": f"Python import errored ({epy}) but Rust imported (reason={rru!r})",
+                 "py": epy, "rust": None, **base}, None)
+
+    # Rust errored where Python imported cleanly -> real divergence.
+    if eru is not None:
+        return ({"kind": "human", "check": "rust_import_error",
+                 "detail": f"Python imported (reason={rpy!r}) but Rust raised: {eru}",
+                 "py": str(rpy), "rust": eru, **base}, None)
+
+    # Different drop/keep outcome -> divergence.
+    if rpy != rru:
+        return ({"kind": "human", "check": "reason_mismatch",
+                 "detail": f"py_reason={rpy!r} rust_reason={rru!r}",
+                 "py": str(rpy), "rust": str(rru), **base}, None)
+
+    # Both dropped with the SAME reason -> consistent (python_side, non-parity).
+    if rpy is not None:
+        return None, {"kind": "python_side", "id": game_id, "step": -1,
+                      "reason": f"both engines drop: {rpy}"}
+
+    # Both imported successfully -> final state must match EXACTLY.
+    finished = bool(getattr(opy, "finished", False))
+    try:
+        res_py = {k: round(v) for k, v in opy.result().items()}
+        res_ru = {k: round(v) for k, v in oru.result().items()}
+    except BaseException as exc:
+        res_py = res_ru = f"result() raised: {exc}"
+    if res_py != res_ru:
+        return ({"kind": "human", "check": "result_mismatch",
+                 "detail": f"py={res_py} rust={res_ru}", "py": str(res_py),
+                 "rust": str(res_ru), "finished": finished, **base}, None)
+    rust_raw = getattr(oru, "_game", oru)
+    try:
+        state_errs = compare_state(rust_raw, opy)
+    except BaseException as exc:
+        state_errs = [f"compare_state raised: {exc}"]
+    if state_errs:
+        return ({"kind": "human", "check": "state_mismatch",
+                 "detail": list(state_errs)[:20], "py": None, "rust": None,
+                 "finished": finished, **base}, None)
     return None, None
 
 
