@@ -2334,7 +2334,12 @@ impl BaseGame {
                         let ci = self.corp_idx.get(corp_sym.as_str()).copied();
                         let corp_cash = ci.map_or(0, |i| self.corporations[i].cash);
                         let no_trains = ci.map_or(true, |i| self.corporations[i].trains.is_empty());
-                        let depot_has_trains = !self.depot.trains.is_empty();
+                        // Python's `must_buy_train` keys off `depot.depot_trains()`
+                        // (visible upcoming + discarded) being non-empty, not just
+                        // the upcoming queue — a discarded train still satisfies the
+                        // buy obligation after the upcoming queue empties.
+                        let depot_has_trains =
+                            !self.depot.trains.is_empty() || !self.depot.discarded.is_empty();
                         // must_buy uses route_train_purchase (2+ mandatory/city nodes),
                         // matching Python's must_buy_train.
                         let must_buy = no_trains && depot_has_trains && self.must_buy_train(&corp_sym);
@@ -2777,8 +2782,15 @@ impl BaseGame {
         let corp_cash = corp.cash;
         let president_id = corp.president_id();
 
-        // Check if president may contribute (must_buy_train = no trains + has route)
-        let must_buy = corp.trains.is_empty() && !self.depot.trains.is_empty();
+        // Check if president may contribute. Python's `must_buy_train` keys off
+        // `depot.depot_trains()` (the VISIBLE upcoming trains PLUS the discarded
+        // pool) being non-empty — NOT just the upcoming queue. Once the last
+        // upcoming train is bought the queue empties, but a discarded train still
+        // satisfies the buy obligation, so the corp must still buy (and the
+        // president may contribute). Mirror that here.
+        let depot_trains_nonempty =
+            !self.depot.trains.is_empty() || !self.depot.discarded.is_empty();
+        let must_buy = corp.trains.is_empty() && depot_trains_nonempty;
         let pres_cash = if must_buy {
             president_id
                 .and_then(|pid| self.players.iter().find(|p| p.id == pid))
@@ -2787,14 +2799,25 @@ impl BaseGame {
             0
         };
         let total_cash = corp_cash + pres_cash;
-        let is_ebuy = corp_cash < self.depot.trains.first().map_or(0, |t| t.price);
+        // Emergency = corp can't afford the cheapest depot train on its own.
+        // Python's `entity.cash < depot.min_depot_price`, where `min_depot_price`
+        // is the cheapest price across `depot_trains()` (visible upcoming +
+        // discarded) — not just the head of the upcoming queue.
+        let min_depot_price = self.min_depot_price_for_emr();
+        let is_ebuy = corp_cash < min_depot_price;
 
         let mut result = Vec::new();
 
         // Depot trains: first train always visible; subsequent if phase unlocked
         // For 1830 simplicity: all depot trains are visible (phase gating handled elsewhere)
         if is_ebuy {
-            // Emergency buy: only cheapest depot train
+            // Emergency buy: only the cheapest depot train. Python's
+            // `ebuy_offer_only_cheapest_depot_train` restricts to
+            // `[depot.min_depot_train]` — the single cheapest across the visible
+            // upcoming trains AND the discarded pool, not merely `upcoming[0]`.
+            // It is emitted from the upcoming queue here (the discard loop below
+            // adds discarded trains, and the factored helper applies the
+            // cheapest-only restriction across both pools via `cheapest_name`).
             if let Some(t) = self.depot.trains.first() {
                 if t.price <= total_cash {
                     result.push((t.id.clone(), t.name.clone(), t.price, "depot".to_string()));
@@ -2862,13 +2885,18 @@ impl BaseGame {
     /// Whether president must contribute to train purchase.
     /// 1830 MUST_BUY_TRAIN="route": only when corp has no trains, depot not empty,
     /// AND the corp has a route (≥2 connected revenue nodes with a token).
+    /// Python's `must_buy_train` keys off `depot.depot_trains()` (visible upcoming
+    /// PLUS the discarded pool) being non-empty — not just the upcoming queue, so
+    /// a discarded train still triggers the obligation after the queue empties.
     fn president_may_contribute(&mut self, corp_sym: &str) -> bool {
         let ci = match self.corp_idx.get(corp_sym) {
             Some(&i) => i,
             None => return false,
         };
+        let depot_trains_nonempty =
+            !self.depot.trains.is_empty() || !self.depot.discarded.is_empty();
         self.corporations[ci].trains.is_empty()
-            && !self.depot.trains.is_empty()
+            && depot_trains_nonempty
             && self.can_run_route(corp_sym)
     }
 
