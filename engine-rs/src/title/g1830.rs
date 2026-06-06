@@ -38,6 +38,14 @@ pub struct TrainDef {
     pub price: i32,
     pub count: u32,
     pub rusts_on: Option<&'static str>,
+    /// The phase name on which this train becomes purchasable from the depot
+    /// even while it is not the head-of-queue train. Mirrors Python's
+    /// `Train.available_on` (entities.py:806); only the D-train sets it ("6").
+    pub available_on: Option<&'static str>,
+    /// Exchange discount: when the buyer trades in a train of the given name,
+    /// the depot price drops by the given amount. Mirrors the D-train's
+    /// `discount` map (g1830.py:589). Empty for trains without a discount.
+    pub discount: &'static [(&'static str, i32)],
 }
 
 pub struct PhaseDef {
@@ -235,6 +243,8 @@ pub fn trains() -> Vec<TrainDef> {
             price: 80,
             count: 6,
             rusts_on: Some("4"),
+            available_on: None,
+            discount: &[],
         },
         TrainDef {
             name: "3",
@@ -242,6 +252,8 @@ pub fn trains() -> Vec<TrainDef> {
             price: 180,
             count: 5,
             rusts_on: Some("6"),
+            available_on: None,
+            discount: &[],
         },
         TrainDef {
             name: "4",
@@ -249,6 +261,8 @@ pub fn trains() -> Vec<TrainDef> {
             price: 300,
             count: 4,
             rusts_on: Some("D"),
+            available_on: None,
+            discount: &[],
         },
         TrainDef {
             name: "5",
@@ -256,6 +270,8 @@ pub fn trains() -> Vec<TrainDef> {
             price: 450,
             count: 3,
             rusts_on: None,
+            available_on: None,
+            discount: &[],
         },
         TrainDef {
             name: "6",
@@ -263,6 +279,8 @@ pub fn trains() -> Vec<TrainDef> {
             price: 630,
             count: 2,
             rusts_on: None,
+            available_on: None,
+            discount: &[],
         },
         TrainDef {
             name: "D",
@@ -270,6 +288,8 @@ pub fn trains() -> Vec<TrainDef> {
             price: 1100,
             count: 20,
             rusts_on: None,
+            available_on: Some("6"),
+            discount: &[("4", 300), ("5", 300), ("6", 300)],
         },
     ]
 }

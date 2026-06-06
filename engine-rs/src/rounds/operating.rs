@@ -138,17 +138,22 @@ impl BaseGame {
                     .get(resolved_hex_id.as_str())
                     .ok_or_else(|| GameError::new(format!("Unknown hex: {}", resolved_hex_id)))?;
                 let corp_idx = self.corp_idx[pending_corp.as_str()];
+
+                // Reservation-aware slot selection mirroring Python's
+                // `City.exchange_token` -> `get_slot(token.corporation)`
+                // (graph.py:1025-1031). A plain "first None token" pick ignores
+                // reservations and would write the wrong slot when another corp's
+                // home reservation sits ahead of an empty slot. Compute before
+                // taking the mutable city borrow.
+                let slot_idx = self
+                    .token_slot_for(&resolved_hex_id, *city_index as usize, pending_corp)
+                    .ok_or_else(|| GameError::new("No empty token slots"))?;
+
                 let city = self.hexes[hex_idx]
                     .tile
                     .cities
                     .get_mut(*city_index as usize)
                     .ok_or_else(|| GameError::new("Invalid city index"))?;
-
-                let slot_idx = city
-                    .tokens
-                    .iter()
-                    .position(|t| t.is_none())
-                    .ok_or_else(|| GameError::new("No empty token slots"))?;
 
                 let mut token = self.corporations[corp_idx].tokens[pending_token_idx].clone();
                 token.used = true;
@@ -721,18 +726,23 @@ impl BaseGame {
             .get(resolved_hex_id.as_str())
             .ok_or_else(|| GameError::new(format!("Unknown hex: {}", resolved_hex_id)))?;
 
+        // Resolve the slot the SAME way Python's `City.get_slot` does (skipping
+        // slots reserved for OTHER corps, honoring this corp's own reservation).
+        // Computed before the mutable city borrow below so the borrows don't
+        // overlap. Mirrors Python's `exchange_token` recomputing the slot from
+        // the corporation rather than trusting the action's slot field.
+        let slot_idx = self
+            .token_slot_for(&resolved_hex_id, city_index as usize, &corp_sym)
+            .ok_or_else(|| GameError::new("No empty token slots"))?;
+
         let city = self.hexes[hex_idx]
             .tile
             .cities
             .get_mut(city_index as usize)
             .ok_or_else(|| GameError::new("Invalid city index"))?;
-
-        // Find empty slot
-        let slot_idx = city
-            .tokens
-            .iter()
-            .position(|t| t.is_none())
-            .ok_or_else(|| GameError::new("No empty token slots"))?;
+        if city.tokens.get(slot_idx).map_or(true, |t| t.is_some()) {
+            return Err(GameError::new("No empty token slots"));
+        }
 
         let mut token = self.corporations[corp_idx].tokens[token_idx].clone();
         token.used = true;

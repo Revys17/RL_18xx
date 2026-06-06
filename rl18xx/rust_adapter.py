@@ -485,7 +485,12 @@ class _RoundProxy:
                     # Check if this company has abilities usable in the current step
                     if sym in ("CS", "DH") and step_type in ("LayTile", "PlaceToken", "RunRoutes", "Dividend", "BuyTrain", "BuyCompany"):
                         return [LayTile]
-                    if sym == "DH" and step_type == "PlaceToken" and co.ability_used:
+                    # DH teleport token: offered ONLY while the teleport is
+                    # PENDING (Python's `round.teleported == DH`), not for the
+                    # whole game. `co.ability_used` stays True permanently after
+                    # the DH lay, so gating on it re-offers F16 on every later OR
+                    # turn. Gate on the bounded teleport window instead.
+                    if sym == "DH" and step_type == "PlaceToken" and self._game.teleport_pending():
                         return [PlaceToken]
                     if sym == "MH" and owner_str and owner_str.startswith("player:"):
                         return [BuyShares]
