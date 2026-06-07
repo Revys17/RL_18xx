@@ -715,6 +715,46 @@ impl BaseGame {
         corp.percent_owned_by(&player_eid) <= 60
     }
 
+    /// Faithful port of Python `BuySellParShares.must_sell(entity)`
+    /// (rl18xx/game/engine/round.py:1592-1599). When this returns true, the
+    /// Stock-round step offers ONLY `SellShares` — Par/BuyShares/BuyCompany/Pass
+    /// are all suppressed.
+    ///
+    ///   def must_sell(self, entity):
+    ///       if not self.can_sell_any(entity): return False
+    ///       if self.game.num_certs(entity) > self.game.cert_limit(entity): return True
+    ///       if not self.game.can_hold_above_corp_limit(entity):
+    ///           return any(not corp.holding_ok(entity) for corp in self.game.corporations)
+    ///       return False
+    ///
+    /// `sellable` is the `can_sell_any(entity)` analog (== `!sellable_bundles().is_empty()`),
+    /// passed in by the caller which has already computed it. `certs` is
+    /// `num_certs(entity)` (== `num_certs_internal`). For 1830
+    /// `can_hold_above_corp_limit` is unconditionally false (base.py:2483), so the
+    /// holding-limit branch is always evaluated — encoded explicitly here so the
+    /// correspondence to Python is exact and survives a future title that lifts it.
+    pub(crate) fn stock_must_sell(&self, player_id: u32, sellable: bool, certs: u32) -> bool {
+        if !sellable {
+            return false;
+        }
+        if certs > self.cert_limit as u32 {
+            return true;
+        }
+        if !self.can_hold_above_corp_limit() {
+            return self
+                .corporations
+                .iter()
+                .any(|corp| !self.corp_holding_ok(corp, player_id));
+        }
+        false
+    }
+
+    /// Mirror of Python `BaseGame.can_hold_above_corp_limit(entity)`
+    /// (rl18xx/game/engine/game/base.py:2483-2484): false for 1830.
+    pub(crate) fn can_hold_above_corp_limit(&self) -> bool {
+        false
+    }
+
     /// Check if a corporation should float (60%+ sold from IPO).
     pub(crate) fn check_float(&mut self, corp_idx: usize) {
         let corp = &self.corporations[corp_idx];
