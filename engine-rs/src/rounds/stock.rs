@@ -427,15 +427,45 @@ impl BaseGame {
             .map(|(i, _)| i)
             .collect();
 
-        // Transfer shares to market.
-        // Note: share_indices are NOT used for sells because specific share positions
-        // may diverge between Python and Rust. We use the owner-based logic instead.
+        // Transfer shares to market. Python's SellShares carries the EXACT
+        // shares being sold (``[game.share_by_id(id) for id in args["shares"]]``)
+        // and moves precisely those certs to the pool. To keep Rust's
+        // share-index → owner mapping aligned with Python's recorded share ids
+        // (so later actions naming specific share ids resolve to the same
+        // owner in both engines), honor the named ``share_indices`` whenever
+        // they are valid for this sale: each named non-president index must be
+        // currently owned by the seller. When the indices aren't usable (empty,
+        // or already drifted out of the seller's hands), fall back to the
+        // owner-based selection by ascending index (the historical behavior),
+        // which still moves the correct PERCENT to market.
+        let non_pres_to_sell = if includes_president {
+            percent.saturating_sub(10)
+        } else {
+            percent
+        };
+        // Candidate named non-president shares owned by the seller, in the
+        // order Python would dump them (the bundle is built from the sorted
+        // share list; ``set_share_owner`` order does not affect final owners).
+        let named_non_pres: Vec<usize> = share_indices
+            .iter()
+            .copied()
+            .filter(|&i| {
+                i < self.corporations[corp_idx].shares.len()
+                    && self.corporations[corp_idx].shares[i].owner == player_eid
+                    && !self.corporations[corp_idx].shares[i].president
+            })
+            .collect();
+        let named_total: u8 = named_non_pres
+            .iter()
+            .map(|&i| self.corporations[corp_idx].shares[i].percent)
+            .sum();
+        let use_named = !named_non_pres.is_empty() && named_total == non_pres_to_sell;
         {
-            let mut transferred_pct = 0u8;
-            if includes_president {
-                let non_pres_to_sell = percent.saturating_sub(10);
-                let mut to_market: Vec<usize> = Vec::new();
-                let mut pres_idx_opt: Option<usize> = None;
+            let mut to_market: Vec<usize> = Vec::new();
+            if use_named {
+                to_market = named_non_pres;
+            } else {
+                let mut transferred_pct = 0u8;
                 for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                     if transferred_pct >= non_pres_to_sell {
                         break;
@@ -445,34 +475,20 @@ impl BaseGame {
                         transferred_pct += share.percent;
                     }
                 }
-                for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
-                    if share.owner == player_eid && share.president {
-                        pres_idx_opt = Some(i);
-                        break;
-                    }
-                }
-                for i in to_market {
+            }
+            for i in to_market {
+                self.corporations[corp_idx]
+                    .set_share_owner(i, market_eid.clone());
+            }
+            // The president cert is always moved last (when dumped).
+            if includes_president {
+                if let Some(pres_idx) = self.corporations[corp_idx]
+                    .shares
+                    .iter()
+                    .position(|s| s.owner == player_eid && s.president)
+                {
                     self.corporations[corp_idx]
-                        .set_share_owner(i, market_eid.clone());
-                }
-                if let Some(i) = pres_idx_opt {
-                    self.corporations[corp_idx]
-                        .set_share_owner(i, market_eid.clone());
-                }
-            } else {
-                let mut to_market: Vec<usize> = Vec::new();
-                for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
-                    if transferred_pct >= percent {
-                        break;
-                    }
-                    if share.owner == player_eid && !share.president {
-                        to_market.push(i);
-                        transferred_pct += share.percent;
-                    }
-                }
-                for i in to_market {
-                    self.corporations[corp_idx]
-                        .set_share_owner(i, market_eid.clone());
+                        .set_share_owner(pres_idx, market_eid.clone());
                 }
             }
         }

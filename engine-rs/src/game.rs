@@ -483,18 +483,40 @@ impl BaseGame {
             return Err(GameError::new("Game is already finished"));
         }
 
-        // Handle bankruptcy immediately
+        // Handle bankruptcy immediately. Mirrors Python's
+        // ``round.Bankrupt.process_bankrupt`` (round.py:1355-1377):
+        //   1) sell_bankrupt_shares — the president liquidates ALL remaining
+        //      shares (across all parred corps) into the market, dropping
+        //      prices; 2) round.recalculate_order; 3) spend any leftover player
+        //      cash to the bank; 4) declare_bankrupt (set player.bankrupt).
+        // The game then ends because BANKRUPTCY_ENDS_GAME_AFTER == "one".
         if let Action::Bankrupt { entity_id } = action {
-            // The bankrupt entity is the corporation. Its president's cash goes to the bank.
-            let president_id = if let Some(&ci) = self.corp_idx.get(entity_id.as_str()) {
-                self.corporations[ci].president_id()
-            } else {
-                entity_id.parse::<u32>().ok()
-            };
+            // The bankrupt entity is the corporation; its president liquidates.
+            let (op_corp_sym, president_id) =
+                if let Some(&ci) = self.corp_idx.get(entity_id.as_str()) {
+                    (
+                        Some(self.corporations[ci].sym.clone()),
+                        self.corporations[ci].president_id(),
+                    )
+                } else {
+                    (None, entity_id.parse::<u32>().ok())
+                };
+
             if let Some(pid) = president_id {
+                if let Some(ref corp_sym) = op_corp_sym {
+                    self.sell_bankrupt_shares(pid, corp_sym);
+                    // recalculate_order: the liquidation moved share prices, so
+                    // the not-yet-operated tail of the OR may need re-sorting.
+                    self.recalculate_operating_order();
+                }
+                // Spend any remaining player cash to the bank.
                 if let Some(idx) = self.player_index(pid) {
-                    self.bank.cash += self.players[idx].cash;
-                    self.players[idx].cash = 0;
+                    if self.players[idx].cash > 0 {
+                        self.bank.cash += self.players[idx].cash;
+                        self.players[idx].cash = 0;
+                    }
+                    // declare_bankrupt.
+                    self.players[idx].bankrupt = true;
                 }
             }
             self.end_game();
@@ -1541,6 +1563,127 @@ impl BaseGame {
             // play it safe and leave the order alone in that case).
             if resorted_tail.len() == tail_syms.len() {
                 s.operating_order.splice(tail_start.., resorted_tail);
+            }
+        }
+    }
+
+    /// Sell ALL of a bankrupt player's remaining shares, mirroring Python's
+    /// ``round.Bankrupt.sell_bankrupt_shares`` (round.py:1379-1391).
+    ///
+    /// Python iterates the player's corporations in ``shares_by_corporation_sorted``
+    /// order (each Corporation's ``sort_order_key`` =
+    /// ``[-price, -column, row, cell_position, name]`` — the same key used by
+    /// ``compute_operating_order``). For each parred corp it repeatedly takes the
+    /// most valuable currently-sellable bundle and sells it
+    /// (``sell_shares_and_change_price``), until no sellable bundle remains.
+    ///
+    /// "Sellable" is exactly the active (BuyTrain) step's ``can_sell``: the
+    /// candidate bundle must (a) fit in the bank (market ≤ 50%), (b) be dumpable
+    /// (if it includes the president share, another holder must reach the
+    /// president percent), (c) for the OPERATING corp only, not cause a
+    /// president swap (``EBUY_PRES_SWAP`` ⇒ ``president_swap_concern`` is true
+    /// only for ``current_entity``), and (d) satisfy ``selling_minimum_shares``
+    /// (``EBUY_SELL_MORE_THAN_NEEDED == False``):
+    /// ``bundle.price - min(share.price) < needed_cash - available_cash``, where
+    /// ``needed_cash == depot.min_depot_price`` and
+    /// ``available_cash == seller.cash + operating_corp.cash``. As each sale pays
+    /// the player, ``available_cash`` grows and the loop naturally terminates.
+    pub(crate) fn sell_bankrupt_shares(&mut self, player_id: u32, op_corp_sym: &str) {
+        let needed_cash = self.min_depot_price_for_emr();
+        let op_corp_cash = self
+            .corp_idx
+            .get(op_corp_sym)
+            .map_or(0, |&ci| self.corporations[ci].cash);
+
+        // Corps the player holds shares in, in Python's
+        // ``shares_by_corporation_sorted`` order. The sort key matches
+        // ``compute_operating_order`` exactly.
+        let player_eid = EntityId::player(player_id);
+        let mut corp_syms: Vec<(String, i32, u8, u8, usize, String)> = self
+            .corporations
+            .iter()
+            .filter(|c| c.percent_owned_by(&player_eid) > 0)
+            .map(|c| {
+                let (price, col, row) = c
+                    .share_price
+                    .as_ref()
+                    .map_or((0, 0, 0), |sp| (sp.price, sp.column, sp.row));
+                let cell_pos = self.market_cell_position(&c.sym, row, col);
+                (c.sym.clone(), price, col, row, cell_pos, c.name.clone())
+            })
+            .collect();
+        corp_syms.sort_by(|a, b| {
+            b.1.cmp(&a.1) // highest price first
+                .then(b.2.cmp(&a.2)) // rightmost column first
+                .then(a.3.cmp(&b.3)) // lowest row first
+                .then(a.4.cmp(&b.4)) // earlier cell arrival first
+                .then(a.5.cmp(&b.5)) // alphabetical name
+        });
+        let order: Vec<String> = corp_syms.into_iter().map(|(sym, ..)| sym).collect();
+
+        for corp_sym in order {
+            // Skip corps that have not parred (no share price) — Python's
+            // ``if not corporation.share_price: continue``.
+            let has_price = self
+                .corp_idx
+                .get(&corp_sym)
+                .map_or(false, |&ci| self.corporations[ci].share_price.is_some());
+            if !has_price {
+                continue;
+            }
+
+            loop {
+                // additional_cash_needed is recomputed each iteration because
+                // selling pays the player (available_cash grows).
+                let seller_cash = self
+                    .players
+                    .iter()
+                    .find(|p| p.id == player_id)
+                    .map_or(0, |p| p.cash);
+                let available_cash = seller_cash + op_corp_cash;
+                let additional_cash_needed = needed_cash - available_cash;
+
+                // Candidate bundles for THIS corp, generated exactly like the
+                // EMR / stock-round path (market cap, president dump, partial
+                // president), then filtered by the BuyTrain step's can_sell.
+                let mut best: Option<(u8, i32)> = None; // (percent, bundle_price)
+                for b in self.sellable_bundles_detailed(player_id) {
+                    if b.corp_sym != corp_sym {
+                        continue;
+                    }
+                    // president_swap_concern: only the OPERATING corp is gated by
+                    // causes_president_swap (EBUY_PRES_SWAP == True).
+                    if corp_sym == op_corp_sym
+                        && self.causes_president_swap(&corp_sym, player_id, b.percent)
+                    {
+                        continue;
+                    }
+                    // selling_minimum_shares (EBUY_SELL_MORE_THAN_NEEDED == False).
+                    let next_smaller = b.bundle_price - b.min_share_price;
+                    if !(next_smaller < additional_cash_needed) {
+                        continue;
+                    }
+                    // Python picks max(bundles, key=lambda x: x.price).
+                    match best {
+                        Some((_, bp)) if b.bundle_price <= bp => {}
+                        _ => best = Some((b.percent, b.bundle_price)),
+                    }
+                }
+
+                match best {
+                    Some((percent, _)) => {
+                        // sell_shares_and_change_price for this bundle. The
+                        // bankruptcy liquidation has no recorded share ids, so
+                        // pass no explicit indices (owner-based selection).
+                        if self
+                            .sell_share_bundle(player_id, &corp_sym, percent, &[])
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
             }
         }
     }
