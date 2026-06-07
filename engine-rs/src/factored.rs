@@ -785,11 +785,25 @@ impl BaseGame {
         };
         let at_lay_tile_step = matches!(or_step, Some(crate::rounds::OperatingStep::LayTile));
 
+        // While a DH teleport token is PENDING (Python `round.teleported`), the
+        // legal actor is the single teleported DH Company, and
+        // `BaseRound.actions_for(DH)` BREAKS at the blocking SpecialToken step
+        // (OR step index 3) BEFORE reaching SpecialTrack/CS (index 2). The
+        // factored `_company_actions` helper only queries `current_entity` (= DH
+        // Company) when it is a Company, so the C&O's parallel CS B20 lay is
+        // never enumerated. Suppress ALL company special-track lays here to keep
+        // this emitter in sync with the `legal_action_types` gate (which omits
+        // "lay_tile" during a pending teleport).
+        let teleport_pending = matches!(&self.round, Round::Operating(s) if s.teleport_pending);
+
         // Always check for CS company lay availability. CS's tile_lay ability has
         // `when: "owning_corp_or_turn"` (g1830.py:47), so it fires at any step
-        // during the owning corp's OR turn (count=1, hexes=B20, tiles=3/4/58).
+        // during the owning corp's OR turn (count=1, hexes=B20, tiles=3/4/58) —
+        // EXCEPT while a teleport blocks, per the invariant above.
         let mut out: Vec<LegalAction> = Vec::new();
-        out.extend(self.factored_cs_lay_tile(&corp_sym));
+        if !teleport_pending {
+            out.extend(self.factored_cs_lay_tile(&corp_sym));
+        }
 
         // DH's teleport ability defaults to `when: ["track"]` (Teleport ability,
         // abilities.py:258-260), so unlike CS it is only available when the
@@ -799,9 +813,10 @@ impl BaseGame {
         // during a pending HomeToken/Token placement the blocking step is a
         // TokenStep, so the DH teleport (`when=["track"]`) does not match and
         // `SpecialTrack.actions(DH)` returns []. Gate the DH lay on the LayTile
-        // step accordingly. (CS, with `owning_corp_or_turn`, is unaffected and is
-        // emitted above for every step.)
-        if at_lay_tile_step {
+        // step accordingly (and, for robustness, also on !teleport_pending so
+        // the emitter never diverges from the gate). (CS, with
+        // `owning_corp_or_turn`, is handled above for every non-teleport step.)
+        if at_lay_tile_step && !teleport_pending {
             out.extend(self.factored_dh_lay_tile(&corp_sym));
         }
 
