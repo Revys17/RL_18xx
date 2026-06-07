@@ -2308,22 +2308,17 @@ impl BaseGame {
                 let buyable = !self.buyable_shares(player_id).is_empty();
                 let sellable = !self.sellable_bundles(player_id).is_empty();
 
-                // must_sell (BuySellParShares.must_sell, round.py:1592-1599):
-                // when the player CAN sell AND is either over the cert limit OR
+                // must_sell short-circuit (BuySellParShares.actions, round.py:1527-1528):
+                //   if self.must_sell(entity): return [SellShares]
+                // When the player CAN sell AND is either over the cert limit OR
                 // (since 1830's can_hold_above_corp_limit==False) holds any corp
-                // above its ownership limit, ONLY SellShares is legal. Both
-                // conditions require can_sell_any (== sellable) first.
+                // above its ownership limit, ONLY SellShares is legal — Par,
+                // BuyShares, BuyCompany and Pass are all suppressed. The predicate
+                // is a faithful port of Python's must_sell() (see stock.rs).
                 let certs = self.num_certs_internal(player_id);
-                if sellable {
-                    let over_cert_limit = certs > self.cert_limit as u32;
-                    let over_holding = self
-                        .corporations
-                        .iter()
-                        .any(|corp| !self.corp_holding_ok(corp, player_id));
-                    if over_cert_limit || over_holding {
-                        types.push("sell_shares".to_string());
-                        return types;
-                    }
+                if self.stock_must_sell(player_id, sellable, certs) {
+                    types.push("sell_shares".to_string());
+                    return types;
                 }
 
                 let mh_exchange = self.mh_exchange_available();
