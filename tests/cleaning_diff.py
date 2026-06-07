@@ -81,6 +81,32 @@ from rl18xx.agent.alphazero.pretraining import (  # noqa: E402
     BuySellParShares,
 )
 from tests.validate_rust_engine import compare_state  # noqa: E402
+from rl18xx.game.factored_action_helper import FactoredActionHelper  # noqa: E402
+from tests.parity_runner import _key  # noqa: E402  (canonical categorical+exact-price fingerprint)
+
+_FACTORED = None
+
+
+def _factored_helper():
+    global _FACTORED
+    if _FACTORED is None:
+        _FACTORED = FactoredActionHelper()
+    return _FACTORED
+
+
+def enum_diff(py_state, ru_adapter):
+    """Compare the FACTORED legal-action enumeration of both engines at the
+    current (shared) state. Returns (py_only, rust_only) lists of differing keys
+    or None if the sets match EXACTLY (bidirectional — a `rust_only` entry means
+    Rust is over-permissive). Uses parity_runner._key so this is identical to
+    random-mode enumeration parity (categorical type + value + exact price_range
+    for Bid/BuyTrain/BuyCompany)."""
+    hp = _factored_helper()
+    py_keys = {_key(la) for la in hp.get_choices(py_state)}
+    ru_keys = {_key(la) for la in ru_adapter.get_factored_choices()}
+    if py_keys == ru_keys:
+        return None
+    return (sorted(map(str, py_keys - ru_keys)), sorted(map(str, ru_keys - py_keys)))
 
 
 def _ctx(py):
@@ -103,12 +129,18 @@ class _Divergence(Exception):
         self.record = record
 
 
-def diagnose_game(game: dict):
+def diagnose_game(game: dict, strict: bool = False):
     """Run both engines through the same cleaning decisions in lockstep.
 
     Returns a result dict (see module docstring). The Python engine is the
     oracle and makes all decisions; both engines receive the identical applied
     action stream; the first divergent applied action is reported.
+
+    When ``strict=True``, also enforce per-step ENUMERATION parity: before each
+    applied action (at the shared state) the factored legal-action SETS of both
+    engines must match exactly (bidirectional, incl. exact price ranges), i.e.
+    the same b/c/d rigor as random mode but on the human-import trajectory. The
+    first enumeration divergence is reported as ``status="enum_divergence"``.
     """
     optional_rules = bool(game["settings"].get("optional_rules"))
     num_players = len(game["players"])
@@ -131,6 +163,16 @@ def diagnose_game(game: dict):
         divergence by raising _Divergence. ``idx`` is the filtered-action index;
         ``label`` distinguishes main vs synthesized pass/run_routes."""
         ctx = _ctx(state["py"])
+        # 0) ENUMERATION parity at the current (shared) state — strict mode only.
+        #    Both engines are in lockstep up to here, so their legal-action SETS
+        #    must be identical; a difference (either direction) is a divergence.
+        if strict:
+            ed = enum_diff(state["py"], ru_state)
+            if ed is not None:
+                raise _Divergence({
+                    "status": "enum_divergence", "index": idx, "label": label,
+                    "py_only": ed[0][:25], "rust_only": ed[1][:25], **ctx,
+                })
         # 1) Python (oracle) — must accept; if it raises, that is not a Rust bug.
         try:
             state["py"] = state["py"].process_action(action)
@@ -441,10 +483,19 @@ def diagnose_decisions(game: dict):
     return {"status": "parity", "scanned": len(ap)}
 
 
-def run(path: str):
+def run(path: str, strict: bool = False):
     """Full diagnosis: lockstep (process_action class) first; if that is clean,
-    fall back to per-engine decision tracing (decision/adapter class)."""
+    fall back to per-engine decision tracing (decision/adapter class).
+
+    With ``strict=True`` run ONLY the strict per-step lockstep check (state +
+    enumeration + acceptance at every step of the human-import trajectory) — the
+    a/b/c/d rigor of random mode applied to human games."""
     game = json.load(open(path))
+    if strict:
+        res = diagnose_game(game, strict=True)
+        res["found_by"] = "strict-lockstep"
+        res["game_id"] = Path(path).stem
+        return res
     res = diagnose_game(game)
     if res["status"] in ("parity", "dropped"):
         # process_action is fine — check whether the real per-engine cleaning
@@ -476,6 +527,12 @@ def _fmt(res):
                 f"rust_applied={res['rust_applied']}")
     if status == "diagnostic_crash":
         return f"[{gid}] DIAGNOSTIC_CRASH: {res.get('error')}\n{res.get('trace','')}"
+    if status == "enum_divergence":
+        return (f"[{gid}] ENUM_DIVERGENCE{via} @ filtered-action #{res.get('index')} "
+                f"({res.get('label')}) round={res.get('round')} step={res.get('op_step')} "
+                f"phase={res.get('phase')} entity={res.get('entity')}\n"
+                f"    py_only:   {res.get('py_only')}\n"
+                f"    rust_only: {res.get('rust_only')}")
     head = (f"[{gid}] {status.upper()}{via} @ filtered-action #{res.get('index')} "
             f"({res.get('label')}) round={res.get('round')} step={res.get('op_step')} "
             f"phase={res.get('phase')} entity={res.get('entity')}")
@@ -498,12 +555,15 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("games", nargs="+", help="human game JSON file paths")
     ap.add_argument("--json", help="write all results as a JSON array to this file")
+    ap.add_argument("--strict", action="store_true",
+                    help="strict per-step human-import parity: state + enumeration "
+                         "(types/values, bidirectional) + acceptance at EVERY step")
     args = ap.parse_args()
 
     results = []
     for path in args.games:
         try:
-            res = run(path)
+            res = run(path, strict=args.strict)
         except BaseException as exc:
             import traceback
             res = {"game_id": Path(path).stem, "status": "diagnostic_crash",
@@ -517,7 +577,7 @@ def main():
         print(f"\nwrote {args.json}")
 
     # Exit non-zero if any game showed a real Rust divergence.
-    bad = [r for r in results if r["status"] in ("rust_error", "state_divergence")]
+    bad = [r for r in results if r["status"] in ("rust_error", "state_divergence", "enum_divergence")]
     sys.exit(1 if bad else 0)
 
 
