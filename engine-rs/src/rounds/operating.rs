@@ -315,10 +315,17 @@ impl BaseGame {
             entity_id,
             corporation_sym,
             percent,
+            share_indices,
             ..
         } = action
         {
-            return self.or_emergency_sell(&state, entity_id, corporation_sym, *percent);
+            return self.or_emergency_sell(
+                &state,
+                entity_id,
+                corporation_sym,
+                *percent,
+                share_indices,
+            );
         }
 
         // Process the action. BuyCompany is accepted at any step (non-blocking),
@@ -1257,11 +1264,51 @@ impl BaseGame {
         entity_id: &str,
         corporation_sym: &str,
         percent: u8,
+        share_indices: &[usize],
     ) -> Result<(), GameError> {
         let player_id: u32 = entity_id
             .parse()
             .map_err(|_| GameError::new(format!("Invalid player id: {}", entity_id)))?;
 
+        // Perform the actual bundle sale (share transfer to market, price drop,
+        // president change, partial-president return). Mirrors Python's
+        // ``sell_shares_and_change_price``. The named share_indices keep the
+        // sold certs aligned with Python's recorded share ids.
+        let pre_sale_price =
+            self.sell_share_bundle(player_id, corporation_sym, percent, share_indices)?;
+
+        // Emergency sale dropped a (possibly future-operating) corp's share
+        // price. Mirror Python's ``Operating.recalculate_order`` so the
+        // not-yet-operated tail of operating_order is resorted by current
+        // price (round.py:5667).
+        self.recalculate_operating_order();
+
+        self.update_round_state();
+        // Record the per-share price of this emergency sale (captured pre-sale,
+        // like Python's `bundle.price_per_share()` at action time) so the
+        // subsequent emergency train buy's `spend_minmax` computes the correct
+        // minimum. Set after update_round_state so it isn't clobbered; reset on
+        // the next corp's turn via `advance_to_next_corp`.
+        if let crate::rounds::Round::Operating(ref mut s) = self.round {
+            s.last_share_sold_price = Some(pre_sale_price);
+        }
+        Ok(())
+    }
+
+    /// Sell a `percent`% bundle of `corporation_sym` held by `player_id` into
+    /// the market. Mirrors Python's ``sell_shares_and_change_price`` for 1830's
+    /// ``SELL_MOVEMENT = "down_share"``: transfer the shares to the share pool,
+    /// pay the player, drop the price one step per 10% sold, route the
+    /// presidency if the president share was dumped, and return any leftover
+    /// half-president slice to the seller. Returns the pre-sale per-share price
+    /// (for ``last_share_sold_price`` bookkeeping).
+    pub(crate) fn sell_share_bundle(
+        &mut self,
+        player_id: u32,
+        corporation_sym: &str,
+        percent: u8,
+        share_indices: &[usize],
+    ) -> Result<i32, GameError> {
         let corp_idx = *self
             .corp_idx
             .get(corporation_sym)
@@ -1294,17 +1341,45 @@ impl BaseGame {
         // market. ``check_president_change`` below will then route the
         // president to the new president and balance with two of their
         // normal shares moving to market.
-        let mut transferred_pct = 0u8;
-        if includes_president {
-            let pres_pct: u8 = self.corporations[corp_idx]
-                .shares
-                .iter()
-                .find(|s| s.president)
-                .map(|s| s.percent)
-                .unwrap_or(20);
-            let non_pres_to_sell = percent.saturating_sub(pres_pct);
-            let mut to_market: Vec<usize> = Vec::new();
-            let mut pres_idx_opt: Option<usize> = None;
+        //
+        // Like the stock-round sell, honor the action's named ``share_indices``
+        // when they are valid (each named non-president index is owned by the
+        // seller and they sum to the non-president portion being sold), so the
+        // share-index → owner mapping stays aligned with Python's recorded
+        // share ids. Otherwise fall back to owner-based ascending-index
+        // selection (used by the bankruptcy liquidation, which passes no
+        // explicit indices). Either way the correct PERCENT reaches the market.
+        let pres_pct: u8 = self.corporations[corp_idx]
+            .shares
+            .iter()
+            .find(|s| s.president)
+            .map(|s| s.percent)
+            .unwrap_or(20);
+        let non_pres_to_sell = if includes_president {
+            percent.saturating_sub(pres_pct)
+        } else {
+            percent
+        };
+        let named_non_pres: Vec<usize> = share_indices
+            .iter()
+            .copied()
+            .filter(|&i| {
+                i < self.corporations[corp_idx].shares.len()
+                    && self.corporations[corp_idx].shares[i].owner == player_eid
+                    && !self.corporations[corp_idx].shares[i].president
+            })
+            .collect();
+        let named_total: u8 = named_non_pres
+            .iter()
+            .map(|&i| self.corporations[corp_idx].shares[i].percent)
+            .sum();
+        let use_named = !named_non_pres.is_empty() && named_total == non_pres_to_sell;
+
+        let mut to_market: Vec<usize> = Vec::new();
+        if use_named {
+            to_market = named_non_pres;
+        } else {
+            let mut transferred_pct = 0u8;
             for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                 if transferred_pct >= non_pres_to_sell {
                     break;
@@ -1314,34 +1389,20 @@ impl BaseGame {
                     transferred_pct += share.percent;
                 }
             }
-            for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
-                if share.owner == player_eid && share.president {
-                    pres_idx_opt = Some(i);
-                    break;
-                }
-            }
-            for i in to_market {
+        }
+        for i in to_market {
+            self.corporations[corp_idx]
+                .set_share_owner(i, market_eid.clone());
+        }
+        // The president cert is moved last (only when it is being dumped).
+        if includes_president {
+            if let Some(pres_idx) = self.corporations[corp_idx]
+                .shares
+                .iter()
+                .position(|s| s.owner == player_eid && s.president)
+            {
                 self.corporations[corp_idx]
-                    .set_share_owner(i, market_eid.clone());
-            }
-            if let Some(i) = pres_idx_opt {
-                self.corporations[corp_idx]
-                    .set_share_owner(i, market_eid.clone());
-            }
-        } else {
-            let mut to_market: Vec<usize> = Vec::new();
-            for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
-                if transferred_pct >= percent {
-                    break;
-                }
-                if share.owner == player_eid && !share.president {
-                    to_market.push(i);
-                    transferred_pct += share.percent;
-                }
-            }
-            for i in to_market {
-                self.corporations[corp_idx]
-                    .set_share_owner(i, market_eid.clone());
+                    .set_share_owner(pres_idx, market_eid.clone());
             }
         }
 
@@ -1399,22 +1460,7 @@ impl BaseGame {
             }
         }
 
-        // Emergency sale dropped a (possibly future-operating) corp's share
-        // price. Mirror Python's ``Operating.recalculate_order`` so the
-        // not-yet-operated tail of operating_order is resorted by current
-        // price (round.py:5667).
-        self.recalculate_operating_order();
-
-        self.update_round_state();
-        // Record the per-share price of this emergency sale (captured pre-sale,
-        // like Python's `bundle.price_per_share()` at action time) so the
-        // subsequent emergency train buy's `spend_minmax` computes the correct
-        // minimum. Set after update_round_state so it isn't clobbered; reset on
-        // the next corp's turn via `advance_to_next_corp`.
-        if let crate::rounds::Round::Operating(ref mut s) = self.round {
-            s.last_share_sold_price = Some(share_price.price);
-        }
-        Ok(())
+        Ok(share_price.price)
     }
 
     fn or_process_discard_train(
@@ -1900,6 +1946,23 @@ impl BaseGame {
                 self.start_operating();
             }
         } else {
+            // When the corp MUST buy a train (Python's `president_may_contribute`
+            // == `must_buy_train`), the BuyTrain step's legal actions are
+            // [SellShares, BuyTrain] — Pass is EXCLUDED (round.py:805-810). An
+            // inserted/attempted Pass at that point is rejected by Python's
+            // blocking-step guard (round.py:5356-5357) and the GameError is
+            // swallowed by BaseGame.process_action for Pass actions, leaving
+            // state byte-for-byte unchanged (base.py:934-945). Mirror that here:
+            // reject the Pass so Rust's Pass-swallow restore path
+            // (game.rs process_action_internal) turns it into a no-op. The corp
+            // stays at BuyTrain with the same current_entity/step.
+            if new_state.step == OperatingStep::BuyTrain
+                && self.president_may_contribute_pub(cur)
+            {
+                return Err(GameError::new(
+                    "Blocking step Buy Trains cannot process action Pass",
+                ));
+            }
             // Pass from any blocking step: advance to next step
             new_state.step = new_state.step.next();
             self.round = crate::rounds::Round::Operating(new_state);

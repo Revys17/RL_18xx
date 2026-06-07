@@ -561,7 +561,7 @@ impl BaseGame {
     /// of `corp` would drop the president below the next-highest holder. Only
     /// consulted for the operating corp (where `president_swap_concern` is True
     /// under `EBUY_PRES_SWAP`). Returns true if the sale is forbidden.
-    fn causes_president_swap(&self, corp_sym: &str, seller_pid: u32, bundle_percent: u8) -> bool {
+    pub(crate) fn causes_president_swap(&self, corp_sym: &str, seller_pid: u32, bundle_percent: u8) -> bool {
         let ci = match self.corp_idx.get(corp_sym) {
             Some(&i) => i,
             None => return false,
