@@ -2490,7 +2490,14 @@ impl BaseGame {
                             if !tokenable.is_empty() || dh_token || needs_home_token {
                                 types.push("place_token".to_string());
                             }
-                            if cs_available {
+                            // While a DH teleport is PENDING, the legal actor is
+                            // the teleported DH Company and `actions_for` BREAKS
+                            // at the blocking SpecialToken step (OR step index 3)
+                            // BEFORE SpecialTrack/CS (index 2) can contribute via
+                            // the corp's parallel companies. So CS's B20 lay is
+                            // NOT enumerated here. Gate on !teleport_pending,
+                            // exactly like the BuyCompany guard below.
+                            if !teleport_pending && cs_available {
                                 types.push("lay_tile".to_string());
                             }
                             // BuyCompany sits AFTER SpecialToken in the OR step
