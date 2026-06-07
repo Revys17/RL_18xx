@@ -1632,7 +1632,23 @@ impl BaseGame {
                         let owner_pct = mh_owner_pid
                             .map(|pid| nyc.percent_owned_by(&crate::entities::EntityId::player(pid)))
                             .unwrap_or(0);
-                        if owner_pct < 60 {
+                        // Python `Exchange.exchangeable_shares` filters by
+                        // `can_gain(owner, share.to_bundle(), exchange=True)`
+                        // (round.py:2973 + round.py:426). With exchange=True the
+                        // cert-limit clause is bypassed, so the binding rule is
+                        // `holding_ok(owner, bundle.common_percent=10)`
+                        // (entities.py:1319): the 60% ownership limit is LIFTED in
+                        // the multiple_buy/unlimited zones, otherwise the owner's
+                        // NYC common% + 10 must be <= 60. The old `owner_pct < 60`
+                        // gate ignored the zone exemption (so it dropped legal
+                        // exchanges when NYC sits in an unlimited/multiple_buy zone,
+                        // e.g. NYC at a low price) and used the wrong threshold.
+                        const OWNERSHIP_EXEMPT: &[&str] = &["multiple_buy", "unlimited"];
+                        let zone_exempt = nyc
+                            .share_price
+                            .as_ref()
+                            .is_some_and(|sp| sp.types.iter().any(|t| OWNERSHIP_EXEMPT.contains(&t.as_str())));
+                        if zone_exempt || owner_pct + 10 <= 60 {
                             // Pre-par, this engine hasn't materialised the corp's
                             // shares into `nyc.shares` yet (they're created at par),
                             // but the IPO conceptually still holds all 100% — so a
