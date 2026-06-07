@@ -1324,6 +1324,20 @@ impl BaseGame {
         let market_eid = crate::entities::EntityId::market();
         let player_idx = self.player_index(player_id).unwrap();
 
+        // Snapshot pre-action owners of every share BEFORE any owner mutation.
+        // When this sale triggers a president change, the swap must pick the new
+        // president's OLDEST pre-action shares (by acquisition order), matching
+        // Python's ``shares_for_presidency_swap(president.shares_of(corp))``.
+        // The stock-round sell path snapshots this too (stock.rs); the OR
+        // emergency-sale path previously called ``check_president_change_with_prev``
+        // without a snapshot, so its swap fell back to Vec-index order and
+        // picked the wrong specific certs — diverging from Python.
+        let pre_action_owners: Vec<crate::entities::EntityId> = self.corporations[corp_idx]
+            .shares
+            .iter()
+            .map(|s| s.owner.clone())
+            .collect();
+
         // Determine if the president share is being dumped — same condition
         // as the stock-round sell logic: player has the president and would
         // be left with < 20% after the sale.
@@ -1342,13 +1356,18 @@ impl BaseGame {
         // president to the new president and balance with two of their
         // normal shares moving to market.
         //
-        // Like the stock-round sell, honor the action's named ``share_indices``
-        // when they are valid (each named non-president index is owned by the
-        // seller and they sum to the non-president portion being sold), so the
-        // share-index → owner mapping stays aligned with Python's recorded
-        // share ids. Otherwise fall back to owner-based ascending-index
-        // selection (used by the bankruptcy liquidation, which passes no
-        // explicit indices). Either way the correct PERCENT reaches the market.
+        // Like the stock-round sell, the action's named ``share_indices`` ARE
+        // the exact certs to move (for every 1830 share ``corp.shares[i].index
+        // == i``, set once at init and never reordered). Python's
+        // ``SharePool.transfer_shares`` moves precisely the bundle's certs, so
+        // we honor every named NON-president index on EVERY sell (the president
+        // cert, if named, is routed separately below). This keeps Rust's
+        // per-cert → owner mapping in lockstep with Python's recorded share ids
+        // so a later sell that names a specific id resolves to the same owner in
+        // both engines. We only fall back to owner-based ascending-index
+        // selection when no indices are supplied (the bankruptcy liquidation,
+        // which constructs its own bundle). Either way the correct PERCENT
+        // reaches the market.
         let pres_pct: u8 = self.corporations[corp_idx]
             .shares
             .iter()
@@ -1360,24 +1379,23 @@ impl BaseGame {
         } else {
             percent
         };
-        let named_non_pres: Vec<usize> = share_indices
-            .iter()
-            .copied()
-            .filter(|&i| {
-                i < self.corporations[corp_idx].shares.len()
-                    && self.corporations[corp_idx].shares[i].owner == player_eid
-                    && !self.corporations[corp_idx].shares[i].president
-            })
-            .collect();
-        let named_total: u8 = named_non_pres
-            .iter()
-            .map(|&i| self.corporations[corp_idx].shares[i].percent)
-            .sum();
-        let use_named = !named_non_pres.is_empty() && named_total == non_pres_to_sell;
 
+        // Honor the EXACT certs named by the action (Python's transfer_shares
+        // moves precisely the bundle's non-president certs; any over-move for a
+        // partial president-dump is returned by the partial handling below).
+        // The president cert, if named, is routed separately. Moving exactly the
+        // named ids keeps Rust's per-cert -> owner map aligned with Python; the
+        // president-swap snapshot fixes (acquired_seq ordering) keep the seller
+        // owning these certs, so identity never drifts onto another owner's cert.
         let mut to_market: Vec<usize> = Vec::new();
-        if use_named {
-            to_market = named_non_pres;
+        if !share_indices.is_empty() {
+            for &i in share_indices {
+                if i < self.corporations[corp_idx].shares.len()
+                    && !self.corporations[corp_idx].shares[i].president
+                {
+                    to_market.push(i);
+                }
+            }
         } else {
             let mut transferred_pct = 0u8;
             for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
@@ -1431,8 +1449,11 @@ impl BaseGame {
         }
 
         // Check president change — pass the seller as previous_president so
-        // the clockwise-from-prev tiebreaker works (mirrors stock.rs:457).
-        self.check_president_change_with_prev(corp_idx, Some(player_id));
+        // the clockwise-from-prev tiebreaker works (mirrors stock.rs), AND the
+        // pre-action owner snapshot so the presidency swap picks the new
+        // president's oldest pre-action shares (matches Python's
+        // ``possible_reorder(president.shares_of(corp))`` insertion order).
+        self.check_president_change_with_snapshot(corp_idx, Some(player_id), pre_action_owners);
 
         // Handle partial bundles: when selling a partial president bundle
         // (percent < president face value), the seller keeps the leftover
