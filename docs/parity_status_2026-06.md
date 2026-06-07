@@ -1,7 +1,35 @@
-# Rust ↔ Python 1830 engine parity — status (2026-06-06)
+# Rust ↔ Python 1830 engine parity — status (2026-06-06; RESOLVED 2026-06-07)
 
-Consolidation of a parity push. All work is on branch **`rust-parity`** (8 commits,
-not merged). `master` additionally has `67a58ce address dependabot`.
+Consolidation of a parity push. All work is on branch **`rust-parity`**, not merged.
+`master` additionally has `67a58ce address dependabot`.
+
+## ✅ RESOLVED 2026-06-07 — human-import parity is now EXACT
+
+Full human corpus (**all 3243** `human_games/1830/*.json`) = **0 failures**; random
+0:200 = **0 failures** (verified with the honest harness on a clean rebuild of the
+committed source). The ~25% gap below was **two engine-rs root causes**, both fixed:
+
+1. **`b45c6e4` — BuyTrain inserted-pass OR-desync** (the bulk, ~556 games). On an
+   inserted `pass` at the BuyTrain step Rust prematurely advanced `current_entity`
+   to the next corp and reset the OR step to LayTile; Python keeps the current corp
+   on BuyTrain (mandatory/emergency train purchase → bankruptcy path). Fixed in
+   `rounds/operating.rs` `or_process_pass`.
+2. **`532f509` — per-cert share identity** (the `rust_import_error` /
+   "All shares must be owned by the same owner" class). (a) sells move the EXACT
+   certs named in the action (`share_indices`), mirroring Python
+   `SharePool.transfer_shares`; (b) every president swap picks the new president's
+   certs in acquisition (`acquired_seq`) order = Python's
+   `shares_for_presidency_swap(president.shares_of(corp))` — the MH→NYC exchange
+   had skipped the snapshot and used Vec-index order, drifting per-cert identity.
+
+Diagnosed with **`tests/cleaning_diff.py`** (`e4067c6`), a dual-engine cleaning
+diagnostic (lockstep + decision-trace) that pinpoints the first divergence per game.
+**Note:** `compare_state` is AGGREGATE-ONLY (per-owner share sums), so per-cert
+index→owner drift is invisible to it — it only surfaces when an action names a
+specific cert id. Prefer `result()` + the cleaning-import metric for share
+correctness.
+
+The rest of this document is the pre-resolution snapshot.
 
 ## Two parity axes (they are different tests)
 
