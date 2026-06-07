@@ -79,6 +79,31 @@ impl BaseGame {
                     }
                 }
                 return Ok(());
+            } else if let Action::BuyCompany {
+                entity_id,
+                company_sym,
+                price,
+            } = action
+            {
+                // The blocking DiscardTrain step sits AFTER the non-blocking
+                // BuyCompany step in the 1830 OR step list (g1830.py:612-626).
+                // Python's process_action loop (round.py:5344-5369) lets that
+                // earlier non-blocking step process a BuyCompanyAction and
+                // RETURN before reaching the blocking DiscardTrain, so Python
+                // ACCEPTS BuyCompany while a corp is crowded. Mirror that:
+                // dispatch through the normal buy-company handler. (MH BuyShares
+                // and CS LayTile while crowded are already handled earlier in
+                // process_action_internal via try_process_company_exchange /
+                // try_process_company_ability — those paths short-circuit BEFORE
+                // this gate, and their skip_steps stays at DiscardTrain because a
+                // corp is still crowded. Only BuyCompany reaches here.)
+                self.or_process_buy_company(&state, entity_id, company_sym, *price)?;
+                // skip_steps stays at the blocking DiscardTrain while any corp is
+                // crowded (operating.rs DiscardTrain branch returns false), so the
+                // game correctly remains at DiscardTrain after the buy. Do NOT run
+                // the discard-specific "unpass BuyTrain / advance" logic.
+                self.skip_steps();
+                return Ok(());
             } else {
                 return Err(GameError::new(format!(
                     "{:?} must discard a train (over train limit)",

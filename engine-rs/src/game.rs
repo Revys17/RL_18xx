@@ -2367,6 +2367,25 @@ impl BaseGame {
                 match os.step {
                     crate::rounds::OperatingStep::DiscardTrain => {
                         types.push("discard_train".to_string());
+                        // The blocking DiscardTrain step sits AFTER the
+                        // non-blocking Exchange (MH), SpecialTrack (CS) and
+                        // BuyCompany steps in the 1830 OR step list
+                        // (g1830.py:612-626). Python's BaseRound.actions_for
+                        // accumulates the actions of every active step and only
+                        // breaks at the FIRST blocking step, so while a corp is
+                        // crowded those earlier non-blocking steps still surface
+                        // their actions in parallel with discard_train. Mirror
+                        // the Dividend branch (immediately preceding DiscardTrain
+                        // in the step model) which is already proven at parity.
+                        if cs_available {
+                            types.push("lay_tile".to_string());
+                        }
+                        if self.has_buyable_companies(&os) {
+                            types.push("buy_company".to_string());
+                        }
+                        if mh_available {
+                            types.push("buy_shares".to_string());
+                        }
                     }
                     crate::rounds::OperatingStep::LayTile => {
                         // Check all connected hexes for layable tiles, matching
