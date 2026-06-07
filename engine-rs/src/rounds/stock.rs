@@ -429,42 +429,53 @@ impl BaseGame {
 
         // Transfer shares to market. Python's SellShares carries the EXACT
         // shares being sold (``[game.share_by_id(id) for id in args["shares"]]``)
-        // and moves precisely those certs to the pool. To keep Rust's
-        // share-index → owner mapping aligned with Python's recorded share ids
-        // (so later actions naming specific share ids resolve to the same
-        // owner in both engines), honor the named ``share_indices`` whenever
-        // they are valid for this sale: each named non-president index must be
-        // currently owned by the seller. When the indices aren't usable (empty,
-        // or already drifted out of the seller's hands), fall back to the
-        // owner-based selection by ascending index (the historical behavior),
-        // which still moves the correct PERCENT to market.
+        // and ``SharePool.transfer_shares`` moves precisely those certs to the
+        // pool (``for share in bundle.shares: self.move_share(share, to_entity)``).
+        // The cert ids map directly onto Rust's share-Vec positions: for every
+        // 1830 share ``corp.shares[i].index == i`` (set once at init in
+        // game.rs and never reordered — only the owner field mutates), so
+        // ``share_indices`` ARE the exact certs to move. We must honor those
+        // indices on EVERY sell; otherwise Rust's per-cert → owner mapping
+        // drifts from Python's recorded ids and a later sell that names a
+        // specific id resolves to a cert with a different owner (raising
+        // "All shares must be owned by the same owner").
+        //
+        // The named bundle includes the president cert when it is being dumped;
+        // that cert is routed separately (moved last, then
+        // ``check_president_change`` swaps the presidency), so here we move only
+        // the named NON-president certs. When no indices are supplied (the
+        // bankruptcy liquidation path constructs its own bundle) we fall back to
+        // owner-based selection by ascending index.
         let non_pres_to_sell = if includes_president {
             percent.saturating_sub(10)
         } else {
             percent
         };
-        // Candidate named non-president shares owned by the seller, in the
-        // order Python would dump them (the bundle is built from the sorted
-        // share list; ``set_share_owner`` order does not affect final owners).
-        let named_non_pres: Vec<usize> = share_indices
-            .iter()
-            .copied()
-            .filter(|&i| {
-                i < self.corporations[corp_idx].shares.len()
-                    && self.corporations[corp_idx].shares[i].owner == player_eid
-                    && !self.corporations[corp_idx].shares[i].president
-            })
-            .collect();
-        let named_total: u8 = named_non_pres
-            .iter()
-            .map(|&i| self.corporations[corp_idx].shares[i].percent)
-            .sum();
-        let use_named = !named_non_pres.is_empty() && named_total == non_pres_to_sell;
         {
             let mut to_market: Vec<usize> = Vec::new();
-            if use_named {
-                to_market = named_non_pres;
+            if !share_indices.is_empty() {
+                // Honor the EXACT certs named by the action — Python's
+                // SharePool.transfer_shares moves precisely the bundle's
+                // non-president certs to the pool (the president cert, if named,
+                // is routed separately below; any over-move for a partial
+                // president-dump bundle is returned by the partial handling
+                // further down). Moving exactly the named ids keeps Rust's
+                // per-cert index -> owner map aligned with Python's recorded ids.
+                // The seller owns these certs in Python; the president-change
+                // snapshot fixes (acquired_seq ordering on every president swap)
+                // keep that true in Rust, so identity never drifts onto another
+                // owner's cert.
+                for &i in share_indices {
+                    if i < self.corporations[corp_idx].shares.len()
+                        && !self.corporations[corp_idx].shares[i].president
+                    {
+                        to_market.push(i);
+                    }
+                }
             } else {
+                // No indices supplied (bankruptcy liquidation builds its own
+                // bundle): take the seller's non-president certs by ascending
+                // index until the percent is covered.
                 let mut transferred_pct = 0u8;
                 for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                     if transferred_pct >= non_pres_to_sell {

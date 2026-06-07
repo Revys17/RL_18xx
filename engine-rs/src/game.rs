@@ -941,6 +941,20 @@ impl BaseGame {
 
         let player_eid = EntityId::player(owner_player_id);
 
+        // Snapshot per-cert owners BEFORE the exchange transfer. If exchanging in
+        // the share triggers a president change, the swap must pick the new
+        // president's pre-action certs in acquisition (`acquired_seq`) order —
+        // matching Python's ``shares_for_presidency_swap(president.shares_of(corp))``.
+        // Without this snapshot the swap fell back to Vec-index order and moved
+        // the wrong specific certs, silently drifting Rust's per-cert → owner map
+        // from Python's recorded share ids (invisible to aggregate state checks
+        // until a later action names a specific drifted cert id).
+        let pre_action_owners: Vec<EntityId> = self.corporations[corp_idx]
+            .shares
+            .iter()
+            .map(|s| s.owner.clone())
+            .collect();
+
         // Find a share to transfer.
         // If specific share indices are provided, use the exact share.
         // Otherwise: prefer IPO, then market, then uninitialized.
@@ -1020,8 +1034,9 @@ impl BaseGame {
         // ``corp`` than the current president, which means the presidency
         // should transfer. Mirrors Python (Stock.process_buy_shares calls
         // through to ``share_pool.buy_shares`` which calls
-        // ``check_president_change``).
-        self.check_president_change(corp_idx);
+        // ``check_president_change``). Pass the pre-action owner snapshot so the
+        // swap picks the new president's oldest-acquired certs (Python parity).
+        self.check_president_change_with_snapshot(corp_idx, None, pre_action_owners);
 
         Ok(true)
     }

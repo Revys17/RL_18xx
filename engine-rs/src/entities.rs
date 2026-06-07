@@ -189,6 +189,11 @@ impl Share {
     fn owner(&self) -> String {
         self.owner.0.clone()
     }
+
+    #[getter]
+    fn acquired_seq(&self) -> u64 {
+        self.acquired_seq
+    }
 }
 
 /// A private company.
