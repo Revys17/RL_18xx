@@ -688,11 +688,31 @@ impl BaseGame {
 
     /// Check if a corporation is in a cert-limit-exempt price zone.
     /// In 1830, CERT_LIMIT_TYPES = ["multiple_buy", "unlimited", "no_cert_limit"].
-    fn corp_exempt_from_cert_limit(corp: &Corporation) -> bool {
+    pub(crate) fn corp_exempt_from_cert_limit(corp: &Corporation) -> bool {
         const EXEMPT_TYPES: &[&str] = &["no_cert_limit", "multiple_buy", "unlimited"];
         corp.share_price
             .as_ref()
             .is_some_and(|sp| sp.types.iter().any(|t| EXEMPT_TYPES.contains(&t.as_str())))
+    }
+
+    /// Mirror of Python `Corporation.holding_ok(player, extra_percent=0)`
+    /// (entities.py:1319-1323): the ownership (60%) limit is lifted only in the
+    /// "multiple_buy"/"unlimited" zones; otherwise the player's common percent of
+    /// this corp must be <= max_ownership_percent (60 in 1830). An un-parred corp
+    /// (no share_price) holds 0% for the player and is therefore always ok.
+    /// NOTE: this is DISTINCT from the cert-limit exemption — `no_cert_limit` is
+    /// NOT an ownership exemption (only multiple_buy/unlimited are).
+    pub(crate) fn corp_holding_ok(&self, corp: &Corporation, player_id: u32) -> bool {
+        const OWNERSHIP_EXEMPT: &[&str] = &["multiple_buy", "unlimited"];
+        let ownership_exempt = corp
+            .share_price
+            .as_ref()
+            .is_some_and(|sp| sp.types.iter().any(|t| OWNERSHIP_EXEMPT.contains(&t.as_str())));
+        if ownership_exempt {
+            return true;
+        }
+        let player_eid = EntityId::player(player_id);
+        corp.percent_owned_by(&player_eid) <= 60
     }
 
     /// Check if a corporation should float (60%+ sold from IPO).

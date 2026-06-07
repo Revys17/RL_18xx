@@ -2304,16 +2304,27 @@ impl BaseGame {
                 let player_id = s.current_player_id();
                 let mut types = Vec::new();
 
-                // Check must_sell (over cert limit)
-                let certs = self.num_certs_internal(player_id);
-                if certs > self.cert_limit as u32 {
-                    types.push("sell_shares".to_string());
-                    return types;
-                }
-
                 // Use the buyable_shares/sellable_bundles methods for accuracy
                 let buyable = !self.buyable_shares(player_id).is_empty();
                 let sellable = !self.sellable_bundles(player_id).is_empty();
+
+                // must_sell (BuySellParShares.must_sell, round.py:1592-1599):
+                // when the player CAN sell AND is either over the cert limit OR
+                // (since 1830's can_hold_above_corp_limit==False) holds any corp
+                // above its ownership limit, ONLY SellShares is legal. Both
+                // conditions require can_sell_any (== sellable) first.
+                let certs = self.num_certs_internal(player_id);
+                if sellable {
+                    let over_cert_limit = certs > self.cert_limit as u32;
+                    let over_holding = self
+                        .corporations
+                        .iter()
+                        .any(|corp| !self.corp_holding_ok(corp, player_id));
+                    if over_cert_limit || over_holding {
+                        types.push("sell_shares".to_string());
+                        return types;
+                    }
+                }
 
                 let mh_exchange = self.mh_exchange_available();
 
@@ -3354,8 +3365,12 @@ impl BaseGame {
             let ownership_exempt = sp_types.iter().any(|t| t == "multiple_buy" || t == "unlimited");
             let max_pct: u8 = if ownership_exempt { 100 } else { 60 };
 
-            // Cert limit exempt for multiple_buy/unlimited zones
-            let cert_exempt = ownership_exempt;
+            // Cert limit exempt for no_cert_limit / multiple_buy / unlimited zones.
+            // (Python: can_gain -> `not corporation.counts_for_limit()`; counts_for_limit
+            //  == share_price.limited == type NOT in CERT_LIMIT_TYPES.) This is a DISTINCT
+            // concept from the 60% ownership exemption (holding_ok = {multiple_buy, unlimited})
+            // captured by `ownership_exempt` above.
+            let cert_exempt = Self::corp_exempt_from_cert_limit(corp);
             let at_cert_limit = !cert_exempt && player_certs >= self.cert_limit as u32;
 
             // IPO shares (non-president only — president is bought via par action).
