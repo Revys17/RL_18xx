@@ -2606,63 +2606,37 @@ impl BaseGame {
                         });
 
                         let _ = has_sister_trains;
+                        let _ = cheapest_price;
                         if must_buy {
-                            // EMERGENCY = the corp can't afford the cheapest DEPOT
-                            // train on its own (Python's `ebuy_president_can_contribute`:
-                            // corp.cash < min_depot_price). The president may sell
-                            // shares to contribute ONLY in an emergency.
-                            let is_emergency = corp_cash < cheapest_price;
-                            if is_emergency {
-                                // Python's BuyTrain step, when `president_may_contribute`
-                                // (== must_buy_train) holds, returns `[SellShares,
-                                // BuyTrain]`; BuyCompany is a parallel option. The
-                                // non-blocking Bankrupt step surfaces `Bankrupt` too,
-                                // but BOTH Python helpers gate it on `can_go_bankrupt`
-                                // (action_helper.py:479, factored_action_helper.py:160).
-                                // We therefore always offer buy_train + sell_shares +
-                                // buy_company and let the per-type enumerators decide
-                                // what is actually possible; bankruptcy is gated on
-                                // `can_go_bankrupt`. (The factored helper further hides
-                                // Bankrupt unless no other concrete action exists — that
-                                // refinement lives in get_factored_choices_impl.)
-                                types.push("buy_train".to_string());
-                                types.push("sell_shares".to_string());
-                                if self.has_buyable_companies(&os) {
-                                    types.push("buy_company".to_string());
-                                }
-                                // CS / MH company abilities are surfaced by the
-                                // non-blocking SpecialTrack / Exchange steps at any
-                                // OR step during the owning corp's turn (Python's
-                                // `actions_for(company)` path), independent of the
-                                // train-buying state.
-                                if cs_available {
-                                    types.push("lay_tile".to_string());
-                                }
-                                if mh_available {
-                                    types.push("buy_shares".to_string());
-                                }
-                                let can_bankrupt = pres_id
-                                    .map_or(false, |pid| self.can_go_bankrupt_emr(pid, &corp_sym));
-                                if can_bankrupt {
-                                    types.push("bankrupt".to_string());
-                                }
-                            } else {
-                                // Can afford the cheapest depot train on its own —
-                                // not an emergency, so no president share sale.
-                                // BuyCompany is still a parallel option (Python's
-                                // actions_for surfaces it when a president-owned
-                                // private is affordable).
-                                types.push("buy_train".to_string());
-                                if self.has_buyable_companies(&os) {
-                                    types.push("buy_company".to_string());
-                                }
-                                // CS / MH company abilities (see note above).
-                                if cs_available {
-                                    types.push("lay_tile".to_string());
-                                }
-                                if mh_available {
-                                    types.push("buy_shares".to_string());
-                                }
+                            // Python's BuyTrain step (round.py:792-805): when
+                            // `president_may_contribute(entity)` holds it returns
+                            // `[SellShares, BuyTrain]`. And `president_may_contribute`
+                            // is EXACTLY `must_buy_train(entity)` (round.py:550) — it
+                            // is NOT gated on affordability. So whenever the corp must
+                            // buy a train the president MAY sell shares (to fund a
+                            // costlier train than the corp can currently afford), even
+                            // if the cheapest depot train is affordable on the corp's
+                            // own cash. The old `corp_cash < cheapest_price` emergency
+                            // gate dropped `sell_shares` when the corp could exactly
+                            // afford the cheapest train (e.g. game 65407: cash 630,
+                            // min_depot_price 630). BuyCompany / CS / MH are parallel
+                            // options; Bankrupt is gated on `can_go_bankrupt` and the
+                            // factored helper hides it unless no concrete action exists.
+                            types.push("buy_train".to_string());
+                            types.push("sell_shares".to_string());
+                            if self.has_buyable_companies(&os) {
+                                types.push("buy_company".to_string());
+                            }
+                            if cs_available {
+                                types.push("lay_tile".to_string());
+                            }
+                            if mh_available {
+                                types.push("buy_shares".to_string());
+                            }
+                            let can_bankrupt = pres_id
+                                .map_or(false, |pid| self.can_go_bankrupt_emr(pid, &corp_sym));
+                            if can_bankrupt {
+                                types.push("bankrupt".to_string());
                             }
                         } else {
                             types.push("buy_train".to_string());
