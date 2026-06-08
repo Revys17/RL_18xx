@@ -28,6 +28,18 @@ pub struct LegalAction {
     pub entity: HashMap<String, serde_json::Value>,
     pub params: HashMap<String, serde_json::Value>,
     pub price_range: Option<(i64, i64)>,
+    /// Internal index discriminator for BuyTrain: true when this is a depot
+    /// train whose *name* appears in the depot's discarded (face-value) pool.
+    /// Python's `ActionMapper._index_for_factored_buy_train` derives the same
+    /// bit from live `depot.discarded` state at index time; we capture it here
+    /// at enumeration time (where the depot is in hand) so the otherwise-pure
+    /// `index_for_factored_buy_train` can route the train to its per-train-type
+    /// discard slot instead of collapsing it onto the single cheapest-depot
+    /// slot. NOT serialized in `to_py_dict` — it is an indexing hint only and
+    /// must not perturb the Python-visible entity descriptor or the parity
+    /// `_key` (Python labels both upcoming and discarded depot trains
+    /// `source="depot"`, so the descriptors stay byte-identical).
+    pub depot_discarded: bool,
 }
 
 impl LegalAction {
@@ -37,6 +49,7 @@ impl LegalAction {
             entity: HashMap::new(),
             params: HashMap::new(),
             price_range: None,
+            depot_discarded: false,
         }
     }
 
@@ -707,8 +720,16 @@ impl BaseGame {
                             let slot = self
                                 .token_slot_for("F16", city_idx, &corp_sym)
                                 .unwrap_or(0);
+                            // DH teleport is a COMPANY special ability: Python's
+                            // `_company_place_token_choices` tags the entity
+                            // `{private: "DH"}` (not the corp), which routes the
+                            // action to the `CompanyPlaceToken` slot. Emitting the
+                            // corp descriptor here instead would (correctly per the
+                            // index fn) land it in the regular per-city PlaceToken
+                            // block — a different policy slot than the training
+                            // target. Match Python's entity exactly.
                             let mut a = LegalAction::new("PlaceToken");
-                            a.entity = entity_desc.clone();
+                            a.entity.insert("private".to_string(), json!("DH"));
                             a.params.insert("hex".to_string(), json!("F16"));
                             a.params.insert("city".to_string(), json!(city_idx));
                             a.params.insert("slot".to_string(), json!(slot));
@@ -1369,6 +1390,15 @@ impl BaseGame {
             None
         };
 
+        // Names present in the depot's discarded (face-value) pool. Python's
+        // `_index_for_factored_buy_train` routes a `source="depot"` train to its
+        // per-train-type discard slot iff a discarded train of the SAME NAME
+        // exists (`action_mapper.py`: `name in depot.discarded`) — independent of
+        // which entry survives `_unique_trains` dedup. Capture that name set here
+        // so we can stamp the indexing hint below.
+        let discarded_names: std::collections::HashSet<String> =
+            self.depot.discarded.iter().map(|t| t.name.clone()).collect();
+
         let mut trains = self.buyable_trains_for_factored(&corp_sym);
         // Phase availability filter for depot (upcoming) trains, mirroring
         // Python's `Depot.depot_trains` exactly: the visible upcoming trains are
@@ -1446,6 +1476,7 @@ impl BaseGame {
                 a.entity.insert("source".to_string(), json!(out_source.clone()));
                 a.entity.insert("train".to_string(), json!(name.clone()));
                 a.price_range = Some((min_p as i64, min_p as i64));
+                a.depot_discarded = discarded_names.contains(name);
                 out.push(a);
             } else {
                 // Cross-corp (inter-corporation) train. Mirror Python's
@@ -1584,6 +1615,10 @@ impl BaseGame {
                 a.entity.insert("train".to_string(), json!(new_name));
                 a.entity.insert("exchange".to_string(), json!(exchanged_name));
                 a.price_range = Some((price as i64, price as i64));
+                // Python checks `is_discarded` BEFORE the D-train/exchange branch
+                // (`action_mapper.py`), so a trade-in whose train name is also in
+                // the discard pool still routes to the per-type discard slot.
+                a.depot_discarded = discarded_names.contains(&new_name);
                 out.push(a);
             }
         }
@@ -1712,5 +1747,26 @@ impl BaseGame {
     fn get_factored_choices(&mut self, py: Python<'_>) -> PyResult<Vec<Py<PyDict>>> {
         let choices = self.get_factored_choices_impl();
         choices.iter().map(|c| c.to_py_dict(py)).collect()
+    }
+
+    /// The sorted, de-duplicated set of flat policy indices legal at the current
+    /// state — exactly the index set `RustMCTSPlayer::build_node` constructs for
+    /// the search tree. Mirrors Python
+    /// `ActionMapper.get_legal_actions_factored(game)[0]`, so the two can be
+    /// compared directly to verify training-target (Python) vs. search (Rust)
+    /// index alignment.
+    fn factored_legal_indices(&mut self) -> Vec<u32> {
+        let choices = self.get_factored_choices_impl();
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut out: Vec<u32> = Vec::new();
+        for la in &choices {
+            if let Some(idx) = crate::action_index::legal_action_to_index(la) {
+                if seen.insert(idx) {
+                    out.push(idx);
+                }
+            }
+        }
+        out.sort_unstable();
+        out
     }
 }
