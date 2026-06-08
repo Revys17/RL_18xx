@@ -23,7 +23,7 @@ from engine_rs import BaseGame as RustGame
 from rl18xx.rust_adapter import RustGameAdapter
 from rl18xx.game.action_helper import ActionHelper
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
-from rl18xx.agent.alphazero.encoder import Encoder_GNN
+from rl18xx.agent.alphazero.encoder import Encoder_1830Graph
 
 
 def play_mcts_game(seed: int, max_actions: int = 3000, full_mcts: bool = False) -> dict:
@@ -33,7 +33,7 @@ def play_mcts_game(seed: int, max_actions: int = 3000, full_mcts: bool = False) 
     adapted = RustGameAdapter(rust_game)
     helper = ActionHelper()
     mapper = ActionMapper()
-    encoder = Encoder_GNN() if full_mcts else None
+    encoder = Encoder_1830Graph() if full_mcts else None
 
     for i in range(max_actions):
         # Encode (as MCTS would) — optional for speed

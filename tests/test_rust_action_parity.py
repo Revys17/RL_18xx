@@ -70,9 +70,9 @@ def play_game_with_parity_check(
 
     encoder = None
     if check_encoder:
-        from rl18xx.agent.alphazero.encoder import Encoder_GNN
+        from rl18xx.agent.alphazero.encoder import Encoder_1830Graph
 
-        encoder = Encoder_GNN()
+        encoder = Encoder_1830Graph()
 
     action_count = 0
     while not py_game.finished and action_count < max_actions:

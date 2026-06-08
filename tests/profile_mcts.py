@@ -32,7 +32,7 @@ import numpy as np
 from engine_rs import BaseGame as RustGame
 from rl18xx.game.gamemap import GameMap
 from rl18xx.rust_adapter import RustGameAdapter
-from rl18xx.agent.alphazero.encoder import Encoder_GNN
+from rl18xx.agent.alphazero.encoder import Encoder_1830Graph
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
 
 GAME_FILE = "tests/test_games/manual_game.json"
@@ -86,7 +86,7 @@ def profile_python_clone(game, n=200):
 
 def profile_encoder(game, n=200):
     """Measure encoder.encode() on Python game."""
-    encoder = Encoder_GNN()
+    encoder = Encoder_1830Graph()
     encoder.initialize(game)
     times = []
     for _ in range(n):
@@ -145,7 +145,7 @@ def profile_full_node_creation(game, n=50):
     """Measure full MCTSNode creation (clone + process + encode + action enum).
     This simulates maybe_add_child without the neural net."""
     mapper = ActionMapper()
-    encoder = Encoder_GNN()
+    encoder = Encoder_1830Graph()
     encoder.initialize(game)
     indices = mapper.get_legal_action_indices(game)
     if not indices:

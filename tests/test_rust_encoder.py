@@ -12,14 +12,14 @@ logging.disable(logging.CRITICAL)
 
 from engine_rs import BaseGame as RustGame
 from rl18xx.rust_adapter import RustGameAdapter
-from rl18xx.agent.alphazero.encoder import Encoder_GNN
+from rl18xx.agent.alphazero.encoder import Encoder_1830Graph
 
 GAME_FILE = "tests/test_games/manual_game.json"
 
 
 def compare_encodings(py_game, rust_game, move_num):
     """Compare Python and Rust encoder outputs."""
-    encoder = Encoder_GNN()
+    encoder = Encoder_1830Graph()
     encoder.initialize(py_game)
 
     # Python encoding

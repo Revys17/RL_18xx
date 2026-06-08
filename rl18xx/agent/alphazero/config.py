@@ -212,7 +212,7 @@ class ModelTransformerConfig:
         # encoder's max-N layout. The encoder always emits a state of this
         # length (shorter games pad their player feature regions with zeros)
         # so the model's gather indices have a single fixed layout.
-        from rl18xx.agent.alphazero.encoder import Encoder_GNN as _Encoder
+        from rl18xx.agent.alphazero.encoder import Encoder_1830Graph as _Encoder
         _, computed_size = _Encoder.compute_section_layout(self.max_players)
         if self.game_state_size != computed_size:
             self.game_state_size = computed_size

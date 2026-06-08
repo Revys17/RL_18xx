@@ -135,15 +135,15 @@ def _infer_num_players_from_state_size(size: int) -> int:
     Mirrors ``model_transformer._infer_num_players_from_state_size`` but
     duplicated here so pretraining stays self-contained (the model module is
     off-limits to this migration). ``compute_section_layout`` lives on
-    ``Encoder_GNN`` (the Encoder_1830 subclass that actually owns the layout
+    ``Encoder_1830Graph`` (the Encoder_1830 subclass that actually owns the layout
     machinery — Encoder_1830 itself is a thin base). Falls back to 4 if the
     size can't be matched; practically every well-formed example matches one
     of the 2..6 layouts.
     """
-    from rl18xx.agent.alphazero.encoder import Encoder_GNN
+    from rl18xx.agent.alphazero.encoder import Encoder_1830Graph
 
     for n in range(2, 7):
-        _, total = Encoder_GNN.compute_section_layout(n)
+        _, total = Encoder_1830Graph.compute_section_layout(n)
         if total == size:
             return n
     LOGGER.warning(

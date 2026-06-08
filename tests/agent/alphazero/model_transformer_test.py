@@ -319,13 +319,13 @@ def test_encoder_pad_to_max_players_3_player_to_6_layout():
     """Encoder emits a shorter state vector for a 3-player game; the model's
     ``_pad_state_to_max_players`` helper must remap it into the 442-dim
     max-N (max_players=6) layout."""
-    from rl18xx.agent.alphazero.encoder import Encoder_GNN
+    from rl18xx.agent.alphazero.encoder import Encoder_1830Graph
     from rl18xx.agent.alphazero.model_transformer import _pad_state_to_max_players
 
     # 3-player layout size
-    _, size_3 = Encoder_GNN.compute_section_layout(3)
+    _, size_3 = Encoder_1830Graph.compute_section_layout(3)
     # 6-player (max-N) layout size
-    _, size_6 = Encoder_GNN.compute_section_layout(6)
+    _, size_6 = Encoder_1830Graph.compute_section_layout(6)
     assert size_6 == GAME_STATE_SIZE
 
     # Build a synthetic state vector at the 3-player size and pad it.

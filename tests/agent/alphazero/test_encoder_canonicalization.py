@@ -15,7 +15,7 @@ take one action as Player 1, then verify Player 2's data ends up at the
 
 import pytest
 
-from rl18xx.agent.alphazero.encoder import Encoder_GNN
+from rl18xx.agent.alphazero.encoder import Encoder_1830Graph
 from rl18xx.game.action_helper import ActionHelper
 from rl18xx.game.gamemap import GameMap
 
@@ -32,7 +32,7 @@ def fresh_4p_game():
 def test_initial_canonicalization_active_player_idx_zero(fresh_4p_game):
     """At the start of a fresh game Player 1 is active → rotation == 0,
     active_player_idx == 0, and the state passes through unchanged."""
-    encoder = Encoder_GNN()
+    encoder = Encoder_1830Graph()
     result = encoder.encode(fresh_4p_game)
     _, _, _, _, _round_type, active_player_idx, rotation, num_players = result
 
@@ -46,7 +46,7 @@ def test_canonicalization_rotates_after_first_action(fresh_4p_game):
     ``rotation`` therefore equals 1 (Player 2's absolute index) and the
     player-cash section in the canonical state has been rolled left so the
     active player's actual cash sits at slot 0."""
-    encoder = Encoder_GNN()
+    encoder = Encoder_1830Graph()
     action_helper = ActionHelper()
 
     pre = encoder.encode(fresh_4p_game)
@@ -59,7 +59,7 @@ def test_canonicalization_rotates_after_first_action(fresh_4p_game):
     fresh_4p_game.process_action(choices[0])
     assert fresh_4p_game.active_players()[0].id == 2
 
-    layout, _ = Encoder_GNN.compute_section_layout(4)
+    layout, _ = Encoder_1830Graph.compute_section_layout(4)
     cash_offset, cash_size = layout["player_cash"]
     assert cash_size == 4
 
@@ -94,11 +94,11 @@ def test_canonicalize_perspective_is_inverse_of_itself(fresh_4p_game):
     ``rotation``; applying the inverse shift (``-rotation mod N``) must
     recover the original absolute layout. This is the property the
     ``encode_absolute`` helper in encoder_gnn_test.py depends on."""
-    encoder = Encoder_GNN()
+    encoder = Encoder_1830Graph()
     encoder.initialize(fresh_4p_game)
 
     # Pre-canonical state with known values: pretend Player 2 is active.
-    layout, _ = Encoder_GNN.compute_section_layout(4)
+    layout, _ = Encoder_1830Graph.compute_section_layout(4)
     cash_offset, _ = layout["player_cash"]
     state_pre = encoder.encode(fresh_4p_game)[0].squeeze(0).numpy().copy()
     # Stamp identifiable per-player values into the cash slots.
