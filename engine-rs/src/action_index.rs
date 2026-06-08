@@ -371,10 +371,19 @@ fn index_for_factored_buy_train(la: &LegalAction) -> Option<u32> {
     }
 
     if source == "depot" {
-        // For 4a we treat the depot source as "fresh" unless explicitly tagged
-        // — this mirrors Python's logic with the depot-check collapsed (the
-        // discard distinction is handled by the factored helper via the
-        // `source="discard"` branch above).
+        // Mirror Python `ActionMapper._index_for_factored_buy_train` exactly:
+        // a depot train whose *name* is in the discarded (face-value) pool routes
+        // to its per-train-type discard slot — and this discard check runs BEFORE
+        // the D-train/exchange disambiguation, so even a trade-in D lands in the
+        // discard slot when a discarded D exists. `depot_discarded` is stamped by
+        // the factored enumeration (`factored.rs`), which has the live depot in
+        // hand; the descriptor itself still reads `source="depot"` (matching
+        // Python), so this is the only place the upcoming-vs-discarded split is
+        // resolved.
+        if la.depot_discarded {
+            let ti = pos(&lo.train_type_offsets, &train_name)?;
+            return Some(offset + 1 + ti as u32);
+        }
         if train_name == "D" {
             if la.entity.get("exchange").is_some() {
                 return Some(lo.action_offsets["BuyTrainDTradeIn"]);
@@ -466,6 +475,7 @@ pub fn legal_action_to_index_py(t: &str, entity: &Bound<'_, PyDict>, params: &Bo
         entity: HashMap::new(),
         params: HashMap::new(),
         price_range: None,
+        depot_discarded: false,
     };
     for (k, v) in entity.iter() {
         let key: String = k.extract()?;
@@ -476,6 +486,14 @@ pub fn legal_action_to_index_py(t: &str, entity: &Bound<'_, PyDict>, params: &Bo
         let key: String = k.extract()?;
         let val = py_to_json_value(&v)?;
         la.params.insert(key, val);
+    }
+    // This stateless shim has no depot in hand, so the upcoming-vs-discarded
+    // split can only be resolved if the caller passes an explicit
+    // `_depot_discarded` hint in the entity dict (the live Rust enumeration sets
+    // the struct field directly and never emits this key). Defaults to the
+    // legacy "fresh depot" behavior when absent.
+    if let Some(v) = la.entity.get("_depot_discarded") {
+        la.depot_discarded = v.as_bool().unwrap_or(false);
     }
     Ok(legal_action_to_index(&la))
 }
