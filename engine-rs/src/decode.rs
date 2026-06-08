@@ -1,0 +1,436 @@
+//! Native index → `Action` decode.
+//!
+//! Mirrors `rl18xx/agent/alphazero/action_mapper.py::map_index_to_action` /
+//! `map_index_to_action_with_price`, but builds a Rust [`crate::actions::Action`]
+//! directly from the engine state — removing the Python `ActionMapper` from the
+//! MCTS / self-play hot loop.
+//!
+//! Strategy: bridge through the factored enumeration. The Rust
+//! `get_factored_choices_impl()` already resolves the concrete entity / hex /
+//! train / source for every legal action, and `legal_action_to_index` maps each
+//! to its flat policy slot. So to decode an index we enumerate, find the
+//! `LegalAction` whose index matches, and translate it into an `Action`. This
+//! reuses the forward index function (no second copy of the layout inverse) and
+//! all the state-resolution the enumerator already performs.
+//!
+//! The decoded `Action` need not be field-identical to Python's — Python is no
+//! longer in the loop. It must be BEHAVIORALLY identical: feeding it to
+//! `process_action_internal` must reproduce the state the old
+//! (Python-decode → dict → `from_py_dict`) path produced. Behavioral parity is
+//! verified against that old path in `tests/decode_parity_corpus.py`.
+
+use crate::actions::{Action, DividendKind, GameError, RouteData};
+use crate::factored::LegalAction;
+use crate::game::BaseGame;
+use pyo3::prelude::*;
+
+/// Read a string field from a JSON map.
+fn s(map: &std::collections::HashMap<String, serde_json::Value>, key: &str) -> Option<String> {
+    map.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+}
+
+/// Read an i64 field from a JSON map.
+fn i(map: &std::collections::HashMap<String, serde_json::Value>, key: &str) -> Option<i64> {
+    map.get(key).and_then(|v| v.as_i64())
+}
+
+impl BaseGame {
+    /// The actor id string for a non-company action: the current entity as
+    /// `Action.entity_id()` expects it (player → numeric id string; corp → sym).
+    fn current_actor_id(&self) -> Result<String, GameError> {
+        let e = &self.round_state.active_entity_id;
+        if let Some(pid) = e.player_id() {
+            return Ok(pid.to_string());
+        }
+        if let Some(sym) = e.corp_sym() {
+            return Ok(sym.to_string());
+        }
+        Err(GameError::new(format!(
+            "current entity {:?} is neither player nor corporation",
+            e
+        )))
+    }
+
+    /// Decode a flat policy index into a concrete [`Action`] at the current
+    /// state. `sampled_price` supplies the price for continuous-price slots
+    /// (Bid / BuyCompany / cross-corp BuyTrain); ignored for fixed-price slots.
+    pub(crate) fn decode_index(
+        &mut self,
+        idx: u32,
+        sampled_price: Option<i64>,
+    ) -> Result<Action, GameError> {
+        let total = crate::action_index::POLICY_SIZE;
+        if idx >= total {
+            return Err(GameError::new(format!(
+                "Action index {} out of bounds (0-{})",
+                idx,
+                total - 1
+            )));
+        }
+
+        // Find the factored LegalAction whose flat index matches. (After dedup
+        // there is at most one categorical entry per index; price-bearing slots
+        // collapse the price dimension to a single entry carrying a range.)
+        let choices = self.get_factored_choices_impl();
+        let la = choices
+            .into_iter()
+            .find(|c| crate::action_index::legal_action_to_index(c) == Some(idx))
+            .ok_or_else(|| {
+                GameError::new(format!("index {} is not legal at the current state", idx))
+            })?;
+
+        let company_offset = crate::action_index::layout().action_offsets["CompanyBuyShares"];
+        let is_company = idx >= company_offset;
+
+        self.build_action(&la, idx, is_company, sampled_price)
+    }
+
+    fn build_action(
+        &mut self,
+        la: &LegalAction,
+        idx: u32,
+        is_company: bool,
+        sampled_price: Option<i64>,
+    ) -> Result<Action, GameError> {
+        let t = la.action_type.as_str();
+        match t {
+            "Pass" => Ok(Action::Pass {
+                entity_id: self.current_actor_id()?,
+            }),
+
+            "Bid" => {
+                // entity = the bidding player; company = bid target (entity.private).
+                let entity_id = self.current_actor_id()?;
+                let company_sym = s(&la.entity, "private")
+                    .ok_or_else(|| GameError::new("Bid LegalAction missing 'private'"))?;
+                let price = sampled_price
+                    .or_else(|| la.price_range.map(|(lo, _)| lo))
+                    .ok_or_else(|| GameError::new("Bid has no price"))?;
+                Ok(Action::Bid {
+                    entity_id,
+                    company_sym,
+                    price: price as i32,
+                })
+            }
+
+            "Par" => {
+                let entity_id = self.current_actor_id()?;
+                let corporation_sym = s(&la.entity, "corp")
+                    .ok_or_else(|| GameError::new("Par LegalAction missing 'corp'"))?;
+                let share_price = i(&la.params, "par_price")
+                    .ok_or_else(|| GameError::new("Par LegalAction missing 'par_price'"))?;
+                Ok(Action::Par {
+                    entity_id,
+                    corporation_sym,
+                    share_price: share_price as i32,
+                })
+            }
+
+            "BuyShares" | "CompanyBuyShares" => {
+                let corporation_sym = s(&la.entity, "corp")
+                    .ok_or_else(|| GameError::new("BuyShares LegalAction missing 'corp'"))?;
+                let source = s(&la.params, "source").unwrap_or_else(|| "auto".to_string());
+                let percent = i(&la.params, "percent").unwrap_or(10) as u8;
+                let entity_id = if is_company {
+                    s(&la.entity, "private").ok_or_else(|| {
+                        GameError::new("company BuyShares LegalAction missing 'private'")
+                    })?
+                } else {
+                    self.current_actor_id()?
+                };
+                // Regular BuyShares: leave share_indices empty — the buy handler
+                // resolves the lowest-index non-president cert in the pool, which
+                // equals Python's `pool[0]`. For the COMPANY exchange (MH→NYC),
+                // the handler's empty-indices fallback always tries IPO first and
+                // ignores `source`, so a `source="market"` exchange would grab an
+                // IPO cert. Resolve the exact cert matching the source here, the
+                // way Python's `exchangeable_shares(...)[owner][0]` does.
+                let share_indices = if is_company {
+                    use crate::entities::EntityId;
+                    let target = match source.as_str() {
+                        "ipo" => EntityId::ipo(&corporation_sym),
+                        "market" => EntityId::market(),
+                        _ => EntityId::ipo(&corporation_sym),
+                    };
+                    let ci = *self.corp_idx.get(corporation_sym.as_str()).ok_or_else(|| {
+                        GameError::new(format!("exchange: unknown corp {}", corporation_sym))
+                    })?;
+                    let found = self.corporations[ci]
+                        .shares
+                        .iter()
+                        .position(|sh| !sh.president && sh.percent == percent && sh.owner == target);
+                    match found {
+                        Some(idx) => vec![idx],
+                        None => Vec::new(),
+                    }
+                } else {
+                    Vec::new()
+                };
+                Ok(Action::BuyShares {
+                    entity_id,
+                    corporation_sym,
+                    shares: Vec::new(),
+                    percent,
+                    source,
+                    share_indices,
+                })
+            }
+
+            "SellShares" => {
+                let entity_id = self.current_actor_id()?;
+                let corporation_sym = s(&la.entity, "corp")
+                    .ok_or_else(|| GameError::new("SellShares LegalAction missing 'corp'"))?;
+                // The factored sell slot encodes the share count; percent = num*10.
+                let num = i(&la.params, "num")
+                    .or_else(|| i(&la.params, "percent").map(|p| p / 10))
+                    .ok_or_else(|| GameError::new("SellShares LegalAction missing 'num'"))?;
+                Ok(Action::SellShares {
+                    entity_id,
+                    corporation_sym,
+                    shares: Vec::new(),
+                    percent: (num * 10) as u8,
+                    share_indices: Vec::new(),
+                })
+            }
+
+            "PlaceToken" => {
+                let entity_id = if is_company {
+                    s(&la.entity, "private").ok_or_else(|| {
+                        GameError::new("company PlaceToken LegalAction missing 'private'")
+                    })?
+                } else {
+                    self.current_actor_id()?
+                };
+                let hex_id = s(&la.params, "hex")
+                    .ok_or_else(|| GameError::new("PlaceToken LegalAction missing 'hex'"))?;
+                let city_index = i(&la.params, "city").unwrap_or(0) as u8;
+                Ok(Action::PlaceToken {
+                    entity_id,
+                    hex_id,
+                    city_index,
+                })
+            }
+
+            "LayTile" => {
+                let entity_id = if is_company {
+                    s(&la.entity, "private").ok_or_else(|| {
+                        GameError::new("company LayTile LegalAction missing 'private'")
+                    })?
+                } else {
+                    self.current_actor_id()?
+                };
+                let hex_id = s(&la.params, "hex")
+                    .ok_or_else(|| GameError::new("LayTile LegalAction missing 'hex'"))?;
+                let tile_id = s(&la.params, "tile")
+                    .ok_or_else(|| GameError::new("LayTile LegalAction missing 'tile'"))?;
+                let rotation = i(&la.params, "rotation").unwrap_or(0) as u8;
+                Ok(Action::LayTile {
+                    entity_id,
+                    hex_id,
+                    tile_id,
+                    rotation,
+                })
+            }
+
+            "BuyTrain" => {
+                let entity_id = self.current_actor_id()?;
+                let name = s(&la.entity, "train")
+                    .ok_or_else(|| GameError::new("BuyTrain LegalAction missing 'train'"))?;
+                let source = s(&la.entity, "source").unwrap_or_else(|| "depot".to_string());
+                let exchange_name = s(&la.entity, "exchange"); // donor NAME (trade-in)
+                let is_depot = source == "depot" || source == "discard";
+
+                // The buy_train handler validates by EXACT train instance id
+                // (it builds the legal set from depot/other-corp train `.id`s).
+                // The factored LegalAction only carries the train NAME, so resolve
+                // it to the concrete buyable instance, mirroring Python's
+                // map_index_to_action (which returns the train object → its id).
+                let (train_id, instance_price) = if !is_depot {
+                    // Cross-corp: the named train on the selling corporation.
+                    let ci = *self.corp_idx.get(source.as_str()).ok_or_else(|| {
+                        GameError::new(format!("BuyTrain: unknown seller corp {}", source))
+                    })?;
+                    let tr = self.corporations[ci]
+                        .trains
+                        .iter()
+                        .find(|t| t.name == name)
+                        .ok_or_else(|| {
+                            GameError::new(format!("BuyTrain: {} has no train {}", source, name))
+                        })?;
+                    (tr.id.clone(), tr.price)
+                } else if la.depot_discarded {
+                    // Discarded (face-value) pool train of this name.
+                    let tr = self
+                        .depot
+                        .discarded
+                        .iter()
+                        .find(|t| t.name == name)
+                        .ok_or_else(|| {
+                            GameError::new(format!("BuyTrain: no discarded {} train", name))
+                        })?;
+                    (tr.id.clone(), tr.price)
+                } else {
+                    // Fresh depot train: first upcoming instance of this name
+                    // (head-of-queue / phase-visible), matching Python's
+                    // depot.depot_trains() first non-discarded entry.
+                    let tr = self
+                        .depot
+                        .trains
+                        .iter()
+                        .find(|t| t.name == name)
+                        .ok_or_else(|| {
+                            GameError::new(format!("BuyTrain: no depot {} train", name))
+                        })?;
+                    (tr.id.clone(), tr.price)
+                };
+
+                let from = if is_depot { "depot".to_string() } else { source.clone() };
+
+                // Trade-in: several donor variants (exchange="4"/"5"/"6") collapse
+                // onto the single BuyTrainDTradeIn slot, so the matched
+                // LegalAction's specific donor is arbitrary. Mirror Python's
+                // map_index_to_action, which AUTO-PICKS the lowest-tier owned
+                // donor (4, then 5, then 6) — all yield the same $300 discount in
+                // 1830, so the price is unchanged. Resolve to that donor's
+                // instance id.
+                let exchange_id = if exchange_name.is_some() {
+                    let ci = *self.corp_idx.get(entity_id.as_str()).ok_or_else(|| {
+                        GameError::new(format!("BuyTrain: unknown buyer corp {}", entity_id))
+                    })?;
+                    let donor_id = ["4", "5", "6"].iter().find_map(|dn| {
+                        self.corporations[ci]
+                            .trains
+                            .iter()
+                            .find(|t| t.name == *dn)
+                            .map(|t| t.id.clone())
+                    });
+                    Some(donor_id.ok_or_else(|| {
+                        GameError::new(format!(
+                            "BuyTrain trade-in: buyer {} owns no 4/5/6 donor",
+                            entity_id
+                        ))
+                    })?)
+                } else {
+                    None
+                };
+
+                // Price: trade-in / cross-corp take the slot's range (or sampled);
+                // a plain depot buy uses the instance's fixed price.
+                let price = if exchange_id.is_some() {
+                    la.price_range
+                        .map(|(lo, _)| lo)
+                        .unwrap_or(instance_price as i64)
+                } else if is_depot {
+                    instance_price as i64
+                } else {
+                    sampled_price
+                        .or_else(|| la.price_range.map(|(lo, _)| lo))
+                        .ok_or_else(|| GameError::new("cross-corp BuyTrain has no price"))?
+                };
+
+                Ok(Action::BuyTrain {
+                    entity_id,
+                    train_name: train_id,
+                    price: price as i32,
+                    from,
+                    variant: None,
+                    exchange: exchange_id,
+                })
+            }
+
+            "DiscardTrain" => {
+                let entity_id = self.current_actor_id()?;
+                let train_name = s(&la.entity, "train")
+                    .or_else(|| s(&la.params, "train"))
+                    .ok_or_else(|| GameError::new("DiscardTrain LegalAction missing 'train'"))?;
+                Ok(Action::DiscardTrain {
+                    entity_id,
+                    train_name,
+                })
+            }
+
+            "Dividend" => {
+                let entity_id = self.current_actor_id()?;
+                let kind_str = s(&la.params, "kind")
+                    .ok_or_else(|| GameError::new("Dividend LegalAction missing 'kind'"))?;
+                Ok(Action::Dividend {
+                    entity_id,
+                    kind: DividendKind::parse(&kind_str)?,
+                })
+            }
+
+            "BuyCompany" => {
+                let entity_id = self.current_actor_id()?;
+                let company_sym = s(&la.entity, "private")
+                    .ok_or_else(|| GameError::new("BuyCompany LegalAction missing 'private'"))?;
+                // Fixed min/max price slots carry their value in the range;
+                // a sampled price (continuous) overrides.
+                let price = sampled_price
+                    .or_else(|| la.price_range.map(|(lo, _)| lo))
+                    .ok_or_else(|| GameError::new("BuyCompany has no price"))?;
+                Ok(Action::BuyCompany {
+                    entity_id,
+                    company_sym,
+                    price: price as i32,
+                })
+            }
+
+            "Bankrupt" => Ok(Action::Bankrupt {
+                entity_id: self.current_actor_id()?,
+            }),
+
+            "RunRoutes" => {
+                let corp_sym = self
+                    .round_state
+                    .active_entity_id
+                    .corp_sym()
+                    .ok_or_else(|| GameError::new("RunRoutes: current entity is not a corp"))?
+                    .to_string();
+                // Native optimal routing — replaces Python's
+                // ActionHelper.auto_route_action. `or_process_run_routes` only
+                // consumes the summed revenue, so a single RouteData carrying the
+                // total revenue is behaviorally equivalent.
+                let (_route_dicts, total_revenue) = self.calculate_routes(corp_sym.clone());
+                let routes = vec![RouteData {
+                    train_name: String::new(),
+                    hexes: Vec::new(),
+                    revenue: total_revenue,
+                }];
+                Ok(Action::RunRoutes {
+                    entity_id: corp_sym,
+                    routes,
+                    extra_revenue: 0,
+                })
+            }
+
+            other => Err(GameError::new(format!(
+                "decode_index: unhandled LegalAction type {:?} at index {}",
+                other, idx
+            ))),
+        }
+    }
+}
+
+#[pymethods]
+impl BaseGame {
+    /// Decode a flat policy index into an action and apply it natively — the
+    /// Rust replacement for `apply_action`'s Python `ActionMapper` round-trip.
+    /// `price` supplies the sampled price for continuous-price slots.
+    fn apply_action_index(&mut self, idx: u32, price: Option<i64>) -> PyResult<()> {
+        let action = self.decode_index(idx, price).map_err(PyErr::from)?;
+        self.process_action_internal(&action).map_err(PyErr::from)?;
+        Ok(())
+    }
+
+    /// Decode a flat policy index into an action's `to_map()` representation
+    /// WITHOUT applying it. Used by the decode-parity harness to compare the
+    /// native decode against Python's `map_index_to_action(...).to_dict()`.
+    fn decode_index_to_map(
+        &mut self,
+        idx: u32,
+        price: Option<i64>,
+    ) -> PyResult<std::collections::HashMap<String, String>> {
+        let action = self.decode_index(idx, price).map_err(PyErr::from)?;
+        Ok(action.to_map())
+    }
+}

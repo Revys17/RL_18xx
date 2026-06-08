@@ -103,6 +103,54 @@ def _action_mapper():
     return _ACTION_MAPPER
 
 
+# Opt-in: also verify the NATIVE Rust index→action decode behaviorally matches
+# the Python ActionMapper decode at every state (set by the decode-parity gate).
+_CHECK_DECODE = False
+
+
+def set_check_decode(enabled):
+    global _CHECK_DECODE
+    _CHECK_DECODE = enabled
+
+
+def _enc(game):
+    gs, nf, _sz, _h, _n = game.encode_for_gnn()
+    return (tuple(gs), tuple(nf))
+
+
+def decode_diff(ru_adapter):
+    """For every legal index at the current state, apply it via the OLD path
+    (Python ``map_index_to_action`` -> dict -> process) and the NEW path (native
+    ``apply_action_index``) to independent clones and compare resulting engine
+    state (via ``encode_for_gnn``). Returns a list of mismatch strings (empty if
+    the native decode behaviorally matches Python for every legal action)."""
+    am = _action_mapper()
+    game = ru_adapter._game
+    indices, price_ranges, types = am.get_legal_actions_factored(ru_adapter)
+    out = []
+    for idx in indices:
+        pr = price_ranges.get(idx)
+        price = pr[0] if pr else None
+        old = game.pickle_clone()
+        new = game.pickle_clone()
+        try:
+            if price is not None:
+                act = am.map_index_to_action_with_price(idx, RustGameAdapter(old), int(price))
+            else:
+                act = am.map_index_to_action(idx, RustGameAdapter(old))
+            old.process_action(act.to_dict())
+        except Exception:
+            continue  # Python decode itself rejected — not a NEW-path bug.
+        try:
+            new.apply_action_index(idx, int(price) if price is not None else None)
+        except Exception as exc:
+            out.append(f"idx{idx}({types.get(idx)}): NEW raised {type(exc).__name__}: {exc}")
+            continue
+        if _enc(old) != _enc(new):
+            out.append(f"idx{idx}({types.get(idx)}): state mismatch")
+    return out
+
+
 def enum_diff(py_state, ru_adapter):
     """Compare the FACTORED legal-action enumeration of both engines at the
     current (shared) state. Returns (py_only, rust_only) lists of differing keys
@@ -209,6 +257,15 @@ def diagnose_game(game: dict, strict: bool = False):
                     "status": "index_divergence", "index": idx, "label": label,
                     "py_only": idd[0][:25], "rust_only": idd[1][:25], **ctx,
                 })
+            # Native decode parity: every legal index decodes+applies to the same
+            # state via the native Rust path as via the Python ActionMapper.
+            if _CHECK_DECODE:
+                dd = decode_diff(ru_state)
+                if dd:
+                    raise _Divergence({
+                        "status": "decode_divergence", "index": idx, "label": label,
+                        "py_only": dd[:25], "rust_only": [], **ctx,
+                    })
         # 1) Python (oracle) — must accept; if it raises, that is not a Rust bug.
         try:
             state["py"] = state["py"].process_action(action)
@@ -563,7 +620,7 @@ def _fmt(res):
                 f"rust_applied={res['rust_applied']}")
     if status == "diagnostic_crash":
         return f"[{gid}] DIAGNOSTIC_CRASH: {res.get('error')}\n{res.get('trace','')}"
-    if status in ("enum_divergence", "index_divergence"):
+    if status in ("enum_divergence", "index_divergence", "decode_divergence"):
         return (f"[{gid}] {status.upper()}{via} @ filtered-action #{res.get('index')} "
                 f"({res.get('label')}) round={res.get('round')} step={res.get('op_step')} "
                 f"phase={res.get('phase')} entity={res.get('entity')}\n"
@@ -613,7 +670,7 @@ def main():
         print(f"\nwrote {args.json}")
 
     # Exit non-zero if any game showed a real Rust divergence.
-    bad = [r for r in results if r["status"] in ("rust_error", "state_divergence", "enum_divergence", "index_divergence")]
+    bad = [r for r in results if r["status"] in ("rust_error", "state_divergence", "enum_divergence", "index_divergence", "decode_divergence")]
     sys.exit(1 if bad else 0)
 
 
