@@ -440,7 +440,7 @@ impl BaseGame {
     /// likewise relies on `process_single_action` not having committed observable
     /// state for these stray passes; restoring from a snapshot is the faithful,
     /// path-independent way to guarantee state is unchanged).
-    fn process_action_internal(&mut self, action: &Action) -> Result<(), GameError> {
+    pub(crate) fn process_action_internal(&mut self, action: &Action) -> Result<(), GameError> {
         // Reset the swallowed-pass marker for this action.
         self.last_action_swallowed = false;
 
@@ -3712,7 +3712,7 @@ impl BaseGame {
 
     /// Calculate optimal routes and revenue for a corporation.
     /// Returns (routes_as_dicts, total_revenue).
-    fn calculate_routes(&mut self, corp_sym: String) -> (Vec<HashMap<String, String>>, i32) {
+    pub(crate) fn calculate_routes(&mut self, corp_sym: String) -> (Vec<HashMap<String, String>>, i32) {
         let ci = match self.corp_idx.get(corp_sym.as_str()) {
             Some(&i) => i,
             None => return (Vec::new(), 0),

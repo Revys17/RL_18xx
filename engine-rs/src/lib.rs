@@ -3,6 +3,7 @@ use pyo3::prelude::*;
 pub mod action_index;
 pub mod actions;
 pub mod core;
+pub mod decode;
 pub mod encoder;
 pub mod entities;
 pub mod factored;

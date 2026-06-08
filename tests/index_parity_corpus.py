@@ -36,6 +36,8 @@ def _one(path):
     import logging
     logging.disable(logging.CRITICAL)
     from tests import cleaning_diff
+    if os.environ.get("DECODE_CHECK") == "1":
+        cleaning_diff.set_check_decode(True)
     try:
         return cleaning_diff.run(path, strict=True)
     except BaseException as exc:  # noqa: BLE001
