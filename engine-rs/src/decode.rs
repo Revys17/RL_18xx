@@ -87,9 +87,9 @@ impl BaseGame {
     }
 
     /// Process a natively-decoded action AND append a faithful, replayable JSON
-    /// dict to the action log — mirroring `process_action_dict_inner` so the
-    /// driver's `raw_actions` (which `extract_data` replays) stay intact, but
-    /// without any Python `ActionMapper` round-trip. The apply itself uses the
+    /// dict to the action log, so the driver's `raw_actions` (which
+    /// `extract_data` replays) stay intact — but without any Python
+    /// `ActionMapper` round-trip. The apply itself uses the
     /// decode-parity-verified `process_action_internal` path directly; the JSON
     /// is for logging only (never re-parsed for this apply).
     pub(crate) fn process_action_native(&mut self, action: &Action) -> Result<(), GameError> {

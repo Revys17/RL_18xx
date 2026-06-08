@@ -5,11 +5,9 @@
 //!
 //! - [`legal_action_to_index`]: pure-Rust encode (mirrors Python's
 //!   `index_for_factored`).
-//! - [`index_to_action_dict`]: returns a JSON-style action dict suitable for
-//!   `BaseGame::process_action`. For the 4a scaffold the heavy lifting
-//!   (engine-aware lookups for BuyTrain/BuyShares/etc.) is delegated to the
-//!   Python `ActionMapper` to guarantee parity by construction; the Rust MCTS
-//!   still owns PUCT descent. Native Rust decode lands in Phase 4c.
+//!
+//! The inverse (index -> action) is native Rust in `decode.rs`
+//! (`BaseGame::decode_index`) — no Python round-trip.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -405,43 +403,6 @@ fn index_for_factored_buy_train(la: &LegalAction) -> Option<u32> {
             + (ti * lo.train_price_offsets.len()) as u32
             + first_price,
     )
-}
-
-// ----------------------------------------------------------------------------
-// Decode: index -> action dict
-// ----------------------------------------------------------------------------
-
-/// Convert a flat policy index to a Python-shaped action dict suitable for
-/// `BaseGame::process_action`.
-///
-/// For the 4a scaffold we delegate to the Python `ActionMapper` (singleton)
-/// to guarantee parity by construction: this keeps the engine-aware decode
-/// logic (active step, depot trains, sellable bundles, ...) in one place.
-/// Native Rust decode lands in Phase 4c when PW + continuous prices move
-/// across the FFI boundary.
-///
-/// `game` here is the `BaseGame` the index will be applied to (the Python
-/// ActionMapper consults its `current_entity`, `active_step()`, etc.).
-/// `sampled_price` is forwarded to `map_index_to_action_with_price` for
-/// price-bearing slots; `None` falls back to the default-price mapper.
-pub fn index_to_action_dict<'py>(
-    py: Python<'py>,
-    game_obj: &Bound<'py, PyAny>,
-    idx: u32,
-    sampled_price: Option<i64>,
-) -> PyResult<Option<Bound<'py, PyDict>>> {
-    let action_mapper_mod = py.import("rl18xx.agent.alphazero.action_mapper")?;
-    let mapper_cls = action_mapper_mod.getattr("ActionMapper")?;
-    let mapper = mapper_cls.call0()?;
-
-    let action_obj = if let Some(price) = sampled_price {
-        mapper.call_method1("map_index_to_action_with_price", (idx, game_obj, price))?
-    } else {
-        mapper.call_method1("map_index_to_action", (idx, game_obj))?
-    };
-    let dict_any = action_obj.call_method0("to_dict")?;
-    let dict: Bound<'py, PyDict> = dict_any.downcast_into::<PyDict>()?;
-    Ok(Some(dict))
 }
 
 // ----------------------------------------------------------------------------
