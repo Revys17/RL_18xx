@@ -546,4 +546,60 @@ impl BaseGame {
         let action = self.decode_index(idx, price).map_err(PyErr::from)?;
         Ok(action.to_map())
     }
+
+    /// The legal `(price_min, price_max)` range for a flat index, or `None` if
+    /// the index is illegal or categorical (no price). Native replacement for
+    /// reading `ActionMapper.get_legal_actions_factored(...)[1][idx]`.
+    fn price_range_for_index(&mut self, idx: u32) -> Option<(i64, i64)> {
+        let choices = self.get_factored_choices_impl();
+        choices
+            .iter()
+            .find(|c| crate::action_index::legal_action_to_index(c) == Some(idx))
+            .and_then(|c| c.price_range)
+    }
+
+    /// Resolve the `ContinuousPriceHead` slot for a flat index:
+    /// `(slot_index, price_min, price_max)`, or `None` for categorical /
+    /// fixed-price slots that don't reach the head. Native replacement for
+    /// `ActionMapper.price_head_slot_for_action`. The slot layout matches the
+    /// Python head: [Bid×6 companies][BuyTrain×(8 corps·6 train types)]
+    /// [BuyCompany×6 companies].
+    fn price_head_slot_for_index(&mut self, idx: u32) -> Option<(u32, i64, i64)> {
+        const COMPANIES: [&str; 6] = ["SV", "CS", "DH", "MH", "CA", "BO"];
+        const CORPS: [&str; 8] = ["PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M"];
+        const TRAINS: [&str; 6] = ["2", "3", "4", "5", "6", "D"];
+        let choices = self.get_factored_choices_impl();
+        let la = choices
+            .into_iter()
+            .find(|c| crate::action_index::legal_action_to_index(c) == Some(idx))?;
+        // Only continuous-price (min != max) slots reach the head.
+        let (min, max) = match la.price_range {
+            Some((lo, hi)) if lo != hi => (lo, hi),
+            _ => return None,
+        };
+        let slot = match la.action_type.as_str() {
+            "Bid" => {
+                let c = la.entity.get("private").and_then(|v| v.as_str())?;
+                COMPANIES.iter().position(|x| *x == c)? as u32
+            }
+            "BuyCompany" => {
+                let c = la.entity.get("private").and_then(|v| v.as_str())?;
+                let ci = COMPANIES.iter().position(|x| *x == c)?;
+                (COMPANIES.len() + CORPS.len() * TRAINS.len() + ci) as u32
+            }
+            "BuyTrain" => {
+                // Only cross-corp buys reach the head; depot/discard are fixed.
+                let src = la.entity.get("source").and_then(|v| v.as_str())?;
+                if src == "depot" || src == "discard" {
+                    return None;
+                }
+                let ci = CORPS.iter().position(|x| *x == src)?;
+                let train = la.entity.get("train").and_then(|v| v.as_str())?;
+                let ti = TRAINS.iter().position(|x| *x == train)?;
+                (COMPANIES.len() + ci * TRAINS.len() + ti) as u32
+            }
+            _ => return None,
+        };
+        Some((slot, min, max))
+    }
 }
