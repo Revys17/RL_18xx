@@ -16,7 +16,7 @@ logging.disable(logging.CRITICAL)
 
 from engine_rs import BaseGame as RustGame
 from rl18xx.rust_adapter import RustGameAdapter
-from rl18xx.agent.alphazero.encoder import Encoder_GNN
+from rl18xx.agent.alphazero.encoder import Encoder_1830Graph
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
 
 GAME_FILE = "tests/test_games/manual_game.json"
@@ -29,7 +29,7 @@ def test_full_game_adapter():
 
     rust_game = RustGame(names)
     adapted = RustGameAdapter(rust_game)
-    encoder = Encoder_GNN()
+    encoder = Encoder_1830Graph()
     mapper = ActionMapper()
 
     errors = []

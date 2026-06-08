@@ -384,7 +384,7 @@ def test_stack_returns_none_on_mixed_some_none():
 
 
 class _MCTSEncoderShapedMockModel:
-    """Model stub that returns the same shapes ``Encoder_GNN`` produces.
+    """Model stub that returns the same shapes ``Encoder_1830Graph`` produces.
 
     Used by the MCTS integration tests below where we drive a full
     ``MCTSPlayer.tree_search`` through the inference client. The encoded

@@ -1028,11 +1028,11 @@ class SelfPlay:
         - the n x 4 tensor of floats representing the original value-net estimate
         where n is the number of moves in the game
         """
-        if getattr(self.config, "use_rust_mcts", False):
-            # Phase 4b feature flag — use the Rust-MCTS-backed adapter
-            # instead of the pure-Python ``MCTSPlayer``. Categorical-only
-            # for 4b (Bid/BuyTrain/BuyCompany treated as fixed-price at
-            # price_range[0]); PW lands in 4c.
+        if getattr(self.config, "use_rust_mcts", True):
+            # Default: Rust-native MCTS (engine_rs.RustMCTSPlayer) — the search
+            # tree runs in Rust on the Rust engine, with progressive widening /
+            # continuous prices, calling the PyTorch model only for leaf eval.
+            # Set use_rust_mcts=False to fall back to the pure-Python MCTSPlayer.
             from rl18xx.agent.alphazero.rust_mcts_player import (
                 RustMCTSPlayer as _RustMCTSPlayer,
             )

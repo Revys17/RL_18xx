@@ -62,7 +62,7 @@ class Encoder_1830:
         if not hasattr(model, "encoder_type"):
             raise ValueError("Model does not have an encoder_type attribute")
         if model.encoder_type() == "GNN":
-            return Encoder_GNN()
+            return Encoder_1830Graph()
         elif model.encoder_type() == "Transformer":
             return Encoder_Transformer()
         else:
@@ -72,7 +72,7 @@ class Encoder_1830:
         raise NotImplementedError("Subclasses must implement this method")
 
 
-class Encoder_GNN(Encoder_1830, metaclass=Singleton):
+class Encoder_1830Graph(Encoder_1830, metaclass=Singleton):
     # --- Dynamically set in __init__ based on player count ---
     # These will be filled based on the actual game instance
     num_players: int = 0
@@ -1006,10 +1006,10 @@ class Encoder_GNN(Encoder_1830, metaclass=Singleton):
         return from_numpy(node_features).float()
 
 
-class Encoder_Transformer(Encoder_GNN):
+class Encoder_Transformer(Encoder_1830Graph):
     """Encoder for the v2 model architecture (Hex Transformer).
 
-    Reuses Encoder_GNN for game state and node feature encoding, but returns
+    Reuses Encoder_1830Graph for game state and node feature encoding, but returns
     node features as a (N, F) tensor instead of PyG graph data. The v2 model
     doesn't need edge_index/edge_attr since it uses a Transformer (not GNN).
 
@@ -1031,3 +1031,9 @@ class Encoder_Transformer(Encoder_GNN):
     def encode(self, game: BaseGame) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, int, int, int]:
         """Encode game state for v2 model. Same format as GNN encoder for compatibility."""
         return super().encode(game)
+
+
+# Deprecated alias. This encoder produces the GRAPH representation (hex-map
+# node features + edges) consumed by BOTH the legacy GNN model and the
+# Transformer model; the old name wrongly implied GNN-model specificity.
+Encoder_GNN = Encoder_1830Graph

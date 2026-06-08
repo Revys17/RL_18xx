@@ -22,7 +22,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from rl18xx.agent.alphazero.config import ModelTransformerConfig
-from rl18xx.agent.alphazero.encoder import Encoder_GNN
+from rl18xx.agent.alphazero.encoder import Encoder_1830Graph
 from rl18xx.agent.alphazero.model import AlphaZeroModel
 
 LOGGER = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ def hex_coord_to_axial(coord_str: str) -> tuple[float, float]:
 # Entity group index definitions for variable-player-count 1830
 #
 # The flat game-state vector layout (section name -> (offset, size)) is owned by
-# ``Encoder_GNN.compute_section_layout``. A single Transformer checkpoint
+# ``Encoder_1830Graph.compute_section_layout``. A single Transformer checkpoint
 # supports the full 2..MAX_PLAYERS range: the model's fixed buffers (gather
 # indices, id embedding, value head output) are built for ``MAX_PLAYERS``, and
 # shorter games are padded to that layout — player slots beyond the sample's
@@ -66,15 +66,15 @@ def hex_coord_to_axial(coord_str: str) -> tuple[float, float]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 MAX_PLAYERS = 6  # Module-level maximum; the model uses ``config.max_players``.
-NUM_CORPORATIONS = Encoder_GNN.NUM_CORPORATIONS
-NUM_PRIVATES = Encoder_GNN.NUM_PRIVATES
-NUM_TRAIN_TYPES = Encoder_GNN.NUM_TRAIN_TYPES
-NUM_TILE_IDS = Encoder_GNN.NUM_TILE_IDS
+NUM_CORPORATIONS = Encoder_1830Graph.NUM_CORPORATIONS
+NUM_PRIVATES = Encoder_1830Graph.NUM_PRIVATES
+NUM_TRAIN_TYPES = Encoder_1830Graph.NUM_TRAIN_TYPES
+NUM_TILE_IDS = Encoder_1830Graph.NUM_TILE_IDS
 
 
 def _layout_for(num_players: int) -> tuple[dict, dict, int]:
     """Return ``(off, size, total_size)`` for the encoder's flat game-state layout."""
-    layout, total = Encoder_GNN.compute_section_layout(num_players)
+    layout, total = Encoder_1830Graph.compute_section_layout(num_players)
     off = {name: offset for name, (offset, _size) in layout.items()}
     size = {name: sz for name, (_offset, sz) in layout.items()}
     return off, size, total
@@ -82,7 +82,7 @@ def _layout_for(num_players: int) -> tuple[dict, dict, int]:
 
 # Module-level layout used by the model's fixed-shape buffers: built for the
 # max player count, so a single checkpoint covers 2..MAX_PLAYERS.
-_LAYOUT, _GAME_STATE_SIZE = Encoder_GNN.compute_section_layout(MAX_PLAYERS)
+_LAYOUT, _GAME_STATE_SIZE = Encoder_1830Graph.compute_section_layout(MAX_PLAYERS)
 _OFF = {name: offset for name, (offset, _size) in _LAYOUT.items()}
 _SIZE = {name: size for name, (_offset, size) in _LAYOUT.items()}
 
@@ -1742,7 +1742,7 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         element.
         """
         for n in range(2, MAX_PLAYERS + 1):
-            _, total = Encoder_GNN.compute_section_layout(n)
+            _, total = Encoder_1830Graph.compute_section_layout(n)
             if total == size:
                 return n
         raise ValueError(

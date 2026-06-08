@@ -94,9 +94,9 @@ def _rust_encode(game: RustGameAdapter) -> tuple:
     """
     global _cached_edge_index, _cached_edge_attrs
 
-    from rl18xx.agent.alphazero.encoder import ROUND_TYPE_MAP, Encoder_GNN
+    from rl18xx.agent.alphazero.encoder import ROUND_TYPE_MAP, Encoder_1830Graph
 
-    encoder = Encoder_GNN()
+    encoder = Encoder_1830Graph()
     encoder.initialize(game)
 
     # Compute static edge index once (hex adjacency never changes)

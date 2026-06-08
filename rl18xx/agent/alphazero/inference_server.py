@@ -66,7 +66,7 @@ class InferenceRequest:
 
     request_id: int
     worker_id: int
-    encoded_state: Any  # the encoded-state tuple emitted by Encoder_GNN / _rust_encode
+    encoded_state: Any  # the encoded-state tuple emitted by Encoder_1830Graph / _rust_encode
 
 
 @dataclass
