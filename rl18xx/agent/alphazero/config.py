@@ -422,12 +422,15 @@ class SelfPlayHyperparams:
     use_inference_server: bool = False
     inference_batch_size: int = 64
     inference_batch_timeout_ms: float = 2.0
-    # Phase 4b Rust MCTS. Defaults off until parity is verified on a full
-    # training run. When True, ``SelfPlay`` instantiates ``RustMCTSPlayer``
-    # from rust_mcts_player.py instead of the Python ``MCTSPlayer``.
-    # Categorical-only — Bid/BuyTrain/BuyCompany slots are treated as
-    # fixed-price at price_range[0]. PW + continuous prices land in 4c.
-    use_rust_mcts: bool = False
+    # Rust-native MCTS (``engine_rs.RustMCTSPlayer`` via rust_mcts_player.py):
+    # the search tree, expansion, and backup run in Rust on the Rust engine,
+    # states are encoded natively, and only leaf evaluation calls back into the
+    # PyTorch model. When False, ``SelfPlay`` uses the Python ``MCTSPlayer``
+    # (same Rust engine, Python tree). Default ON — validated against the
+    # Python MCTSPlayer by tests/agent/alphazero/test_rust_mcts_parity*.py
+    # (incl. _pw for progressive-widening / continuous prices) +
+    # test_rust_mcts_player_e2e.py + tests/test_rust_mcts_flow.py (24 tests).
+    use_rust_mcts: bool = True
 
     def __post_init__(self):
         assert self.softpick_move_cutoff % 2 == 0
