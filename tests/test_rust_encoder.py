@@ -22,8 +22,13 @@ def compare_encodings(py_game, rust_game, move_num):
     encoder = Encoder_1830Graph()
     encoder.initialize(py_game)
 
-    # Python encoding
-    py_gs, py_nf, py_ei, py_ea, *_ = encoder.encode(py_game)
+    # Python encoding. Call the pure-Python compute methods DIRECTLY (not
+    # ``encode()``): ``encode()`` now delegates to the Rust encoder for a
+    # RustGameAdapter, so going through it would compare Rust-vs-Rust and make
+    # this parity check vacuous. These raw methods are the reference
+    # implementation we validate the Rust ``encode_for_gnn`` against.
+    py_gs = encoder.encode_game_state(py_game)
+    py_nf = encoder.get_node_features(py_game)
     py_gs_np = py_gs.squeeze(0).numpy()
     py_nf_np = py_nf.numpy()
 

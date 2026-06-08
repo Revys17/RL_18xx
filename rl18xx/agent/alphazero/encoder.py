@@ -380,8 +380,24 @@ class Encoder_1830Graph(Encoder_1830, metaclass=Singleton):
 
         self.initialize(game)
 
-        game_state_tensor = self.encode_game_state(game)
-        node_features_tensor = self.get_node_features(game)
+        # Game-state vector + hex-map node features. For the production engine
+        # (a RustGameAdapter) delegate to the Rust-native encoder
+        # ``encode_for_gnn`` — the SAME source of truth the MCTS search path
+        # (mcts._rust_encode) uses — so training-time and search-time encodings
+        # are identical and there is one encoder to keep in sync. The pure-Python
+        # computation (``encode_game_state``/``get_node_features``) is retained as
+        # the readable reference/parity oracle for a real Python ``BaseGame``
+        # (asserted ~equal to the Rust output by tests/test_rust_encoder.py).
+        rust_game = getattr(game, "_game", None)
+        if rust_game is not None and hasattr(rust_game, "encode_for_gnn"):
+            gs_flat, nf_flat, _enc_size, num_hexes, num_nf = rust_game.encode_for_gnn()
+            game_state_tensor = from_numpy(np.asarray(gs_flat, dtype=np.float32)).unsqueeze(0)
+            node_features_tensor = from_numpy(
+                np.asarray(nf_flat, dtype=np.float32).reshape(num_hexes, num_nf)
+            )
+        else:
+            game_state_tensor = self.encode_game_state(game)
+            node_features_tensor = self.get_node_features(game)
         base_edge_index_tensor, base_edge_attributes_tensor = self.get_edge_index(game)
 
         round_name = game.round.__class__.__name__
