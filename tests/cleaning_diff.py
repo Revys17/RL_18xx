@@ -82,9 +82,11 @@ from rl18xx.agent.alphazero.pretraining import (  # noqa: E402
 )
 from tests.validate_rust_engine import compare_state  # noqa: E402
 from rl18xx.game.factored_action_helper import FactoredActionHelper  # noqa: E402
+from rl18xx.agent.alphazero.action_mapper import ActionMapper  # noqa: E402
 from tests.parity_runner import _key  # noqa: E402  (canonical categorical+exact-price fingerprint)
 
 _FACTORED = None
+_ACTION_MAPPER = None
 
 
 def _factored_helper():
@@ -92,6 +94,13 @@ def _factored_helper():
     if _FACTORED is None:
         _FACTORED = FactoredActionHelper()
     return _FACTORED
+
+
+def _action_mapper():
+    global _ACTION_MAPPER
+    if _ACTION_MAPPER is None:
+        _ACTION_MAPPER = ActionMapper()
+    return _ACTION_MAPPER
 
 
 def enum_diff(py_state, ru_adapter):
@@ -107,6 +116,26 @@ def enum_diff(py_state, ru_adapter):
     if py_keys == ru_keys:
         return None
     return (sorted(map(str, py_keys - ru_keys)), sorted(map(str, ru_keys - py_keys)))
+
+
+def index_diff(py_state, ru_adapter):
+    """Compare the FACTORED POLICY-INDEX sets of both engines at the current
+    (shared) state. Python's ``ActionMapper.get_legal_actions_factored`` is the
+    training-target source of truth (it maps each legal action to the flat slot a
+    self-play example is trained toward); Rust's ``BaseGame.factored_legal_indices``
+    is the index set the Rust MCTS search actually builds. They must be identical
+    — if they diverge, a position is trained toward a slot the search never
+    explored (or vice versa). This is strictly stronger than ``enum_diff``: two
+    distinct legal actions can share a ``_key`` source label yet still need
+    distinct policy indices (e.g. different-type discarded depot trains, which
+    Python separates via ``depot.discarded`` state). Returns (py_only, rust_only)
+    index lists, or None if the sets match exactly."""
+    am = _action_mapper()
+    py_idx = set(am.get_legal_actions_factored(py_state)[0])
+    ru_idx = set(ru_adapter._game.factored_legal_indices())
+    if py_idx == ru_idx:
+        return None
+    return (sorted(py_idx - ru_idx), sorted(ru_idx - py_idx))
 
 
 def _ctx(py):
@@ -172,6 +201,13 @@ def diagnose_game(game: dict, strict: bool = False):
                 raise _Divergence({
                     "status": "enum_divergence", "index": idx, "label": label,
                     "py_only": ed[0][:25], "rust_only": ed[1][:25], **ctx,
+                })
+            # Policy-index parity: training-target (Python) vs search (Rust) slots.
+            idd = index_diff(state["py"], ru_state)
+            if idd is not None:
+                raise _Divergence({
+                    "status": "index_divergence", "index": idx, "label": label,
+                    "py_only": idd[0][:25], "rust_only": idd[1][:25], **ctx,
                 })
         # 1) Python (oracle) — must accept; if it raises, that is not a Rust bug.
         try:
@@ -527,8 +563,8 @@ def _fmt(res):
                 f"rust_applied={res['rust_applied']}")
     if status == "diagnostic_crash":
         return f"[{gid}] DIAGNOSTIC_CRASH: {res.get('error')}\n{res.get('trace','')}"
-    if status == "enum_divergence":
-        return (f"[{gid}] ENUM_DIVERGENCE{via} @ filtered-action #{res.get('index')} "
+    if status in ("enum_divergence", "index_divergence"):
+        return (f"[{gid}] {status.upper()}{via} @ filtered-action #{res.get('index')} "
                 f"({res.get('label')}) round={res.get('round')} step={res.get('op_step')} "
                 f"phase={res.get('phase')} entity={res.get('entity')}\n"
                 f"    py_only:   {res.get('py_only')}\n"
@@ -577,7 +613,7 @@ def main():
         print(f"\nwrote {args.json}")
 
     # Exit non-zero if any game showed a real Rust divergence.
-    bad = [r for r in results if r["status"] in ("rust_error", "state_divergence", "enum_divergence")]
+    bad = [r for r in results if r["status"] in ("rust_error", "state_divergence", "enum_divergence", "index_divergence")]
     sys.exit(1 if bad else 0)
 
 
