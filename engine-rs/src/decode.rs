@@ -23,6 +23,7 @@ use crate::actions::{Action, DividendKind, GameError, RouteData};
 use crate::factored::LegalAction;
 use crate::game::BaseGame;
 use pyo3::prelude::*;
+use serde_json::json;
 
 /// Read a string field from a JSON map.
 fn s(map: &std::collections::HashMap<String, serde_json::Value>, key: &str) -> Option<String> {
@@ -83,6 +84,118 @@ impl BaseGame {
         let is_company = idx >= company_offset;
 
         self.build_action(&la, idx, is_company, sampled_price)
+    }
+
+    /// Process a natively-decoded action AND append a faithful, replayable JSON
+    /// dict to the action log — mirroring `process_action_dict_inner` so the
+    /// driver's `raw_actions` (which `extract_data` replays) stay intact, but
+    /// without any Python `ActionMapper` round-trip. The apply itself uses the
+    /// decode-parity-verified `process_action_internal` path directly; the JSON
+    /// is for logging only (never re-parsed for this apply).
+    pub(crate) fn process_action_native(&mut self, action: &Action) -> Result<(), GameError> {
+        let logged = self.action_to_json(action);
+        self.process_action_internal(action)?;
+        if !self.last_action_swallowed {
+            self.action_log.push(logged);
+        }
+        Ok(())
+    }
+
+    /// (entity JSON value, entity_type) for an action's entity id — player ids
+    /// become JSON numbers, corp/company syms strings (matching what the action
+    /// dicts recorded by the cleaning pipeline look like, so replay works).
+    fn entity_json(&self, eid: &str) -> (serde_json::Value, &'static str) {
+        if let Ok(pid) = eid.parse::<u32>() {
+            (json!(pid), "player")
+        } else if self.corp_idx.contains_key(eid) {
+            (json!(eid), "corporation")
+        } else {
+            (json!(eid), "company")
+        }
+    }
+
+    /// Build a faithful, replayable action dict (as JSON) from a decoded action.
+    /// Field shapes match what `Action::from_py_dict` parses, so re-processing
+    /// the logged dict reproduces the same action/state.
+    fn action_to_json(&self, action: &Action) -> serde_json::Value {
+        let (entity, entity_type) = self.entity_json(action.entity_id());
+        let mut m = serde_json::Map::new();
+        m.insert("type".to_string(), json!(action.action_type()));
+        m.insert("entity".to_string(), entity);
+        m.insert("entity_type".to_string(), json!(entity_type));
+        match action {
+            Action::Pass { .. } | Action::Bankrupt { .. } => {}
+            Action::Bid { company_sym, price, .. } => {
+                m.insert("company".to_string(), json!(company_sym));
+                m.insert("price".to_string(), json!(price));
+            }
+            Action::Par { corporation_sym, share_price, .. } => {
+                m.insert("corporation".to_string(), json!(corporation_sym));
+                m.insert("share_price".to_string(), json!(share_price));
+            }
+            Action::BuyShares { corporation_sym, percent, source, share_indices, .. } => {
+                m.insert("corporation".to_string(), json!(corporation_sym));
+                m.insert("percent".to_string(), json!(percent));
+                m.insert("source".to_string(), json!(source));
+                if !share_indices.is_empty() {
+                    let shares: Vec<String> = share_indices
+                        .iter()
+                        .map(|i| format!("{}_{}", corporation_sym, i))
+                        .collect();
+                    m.insert("shares".to_string(), json!(shares));
+                }
+            }
+            Action::SellShares { corporation_sym, percent, share_indices, .. } => {
+                m.insert("corporation".to_string(), json!(corporation_sym));
+                m.insert("percent".to_string(), json!(percent));
+                if !share_indices.is_empty() {
+                    let shares: Vec<String> = share_indices
+                        .iter()
+                        .map(|i| format!("{}_{}", corporation_sym, i))
+                        .collect();
+                    m.insert("shares".to_string(), json!(shares));
+                }
+            }
+            Action::LayTile { hex_id, tile_id, rotation, .. } => {
+                m.insert("hex".to_string(), json!(hex_id));
+                m.insert("tile".to_string(), json!(tile_id));
+                m.insert("rotation".to_string(), json!(rotation));
+            }
+            Action::PlaceToken { hex_id, city_index, .. } => {
+                m.insert("hex".to_string(), json!(hex_id));
+                m.insert("city_index".to_string(), json!(city_index));
+            }
+            Action::RunRoutes { routes, extra_revenue, .. } => {
+                let rlist: Vec<serde_json::Value> = routes
+                    .iter()
+                    .map(|r| json!({"train": r.train_name, "revenue": r.revenue, "hexes": r.hexes}))
+                    .collect();
+                m.insert("routes".to_string(), json!(rlist));
+                m.insert("extra_revenue".to_string(), json!(extra_revenue));
+            }
+            Action::Dividend { kind, .. } => {
+                m.insert("kind".to_string(), json!(kind.as_str()));
+            }
+            Action::BuyTrain { train_name, price, from, variant, exchange, .. } => {
+                m.insert("train".to_string(), json!(train_name));
+                m.insert("price".to_string(), json!(price));
+                m.insert("from".to_string(), json!(from));
+                if let Some(v) = variant {
+                    m.insert("variant".to_string(), json!(v));
+                }
+                if let Some(e) = exchange {
+                    m.insert("exchange".to_string(), json!(e));
+                }
+            }
+            Action::DiscardTrain { train_name, .. } => {
+                m.insert("train".to_string(), json!(train_name));
+            }
+            Action::BuyCompany { company_sym, price, .. } => {
+                m.insert("company".to_string(), json!(company_sym));
+                m.insert("price".to_string(), json!(price));
+            }
+        }
+        serde_json::Value::Object(m)
     }
 
     fn build_action(
@@ -418,7 +531,7 @@ impl BaseGame {
     /// `price` supplies the sampled price for continuous-price slots.
     fn apply_action_index(&mut self, idx: u32, price: Option<i64>) -> PyResult<()> {
         let action = self.decode_index(idx, price).map_err(PyErr::from)?;
-        self.process_action_internal(&action).map_err(PyErr::from)?;
+        self.process_action_native(&action).map_err(PyErr::from)?;
         Ok(())
     }
 

@@ -22,7 +22,7 @@ use pyo3::types::PyDict;
 use rand::SeedableRng;
 use rand_distr::{Dirichlet, Distribution, Normal};
 
-use crate::action_index::{index_to_action_dict, POLICY_SIZE};
+use crate::action_index::POLICY_SIZE;
 use crate::factored::LegalAction;
 use crate::game::BaseGame;
 
@@ -1310,25 +1310,20 @@ impl RustMCTSPlayer {
 /// produces a Python Action object that we convert to a dict and route
 /// through the BaseGame's PyO3-exposed `process_action`.
 fn apply_action(
-    py: Python<'_>,
+    _py: Python<'_>,
     game: &mut BaseGame,
     flat_idx: u32,
     sampled_price: Option<i64>,
 ) -> PyResult<()> {
-    let cloned: BaseGame = game.clone_for_search();
-    let py_game = Py::new(py, cloned)?;
-    let py_game_obj: Bound<'_, PyAny> = py_game.into_bound(py).into_any();
-
-    let rust_adapter_mod = py.import("rl18xx.rust_adapter")?;
-    let adapter_cls = rust_adapter_mod.getattr("RustGameAdapter")?;
-    let adapter = adapter_cls.call1((py_game_obj,))?;
-
-    let dict_opt = index_to_action_dict(py, &adapter, flat_idx, sampled_price)?;
-    let dict = dict_opt.ok_or_else(|| {
-        PyRuntimeError::new_err(format!("index_to_action_dict returned None for idx={}", flat_idx))
-    })?;
-
-    game.process_action_dict_inner(py, &dict).map_err(|e| {
+    // Native decode + apply — no Python ActionMapper round-trip. The decode is
+    // verified behaviorally-equivalent to Python's map_index_to_action (see
+    // tests/decode_parity_check.py + the strict lockstep's decode_diff), and
+    // `process_action_native` logs a faithful, replayable dict to `raw_actions`
+    // exactly as the old `process_action_dict_inner` path did.
+    let action = game
+        .decode_index(flat_idx, sampled_price)
+        .map_err(|e| PyRuntimeError::new_err(format!("decode_index failed for idx={}: {}", flat_idx, e)))?;
+    game.process_action_native(&action).map_err(|e| {
         PyRuntimeError::new_err(format!("process_action failed for idx={}: {}", flat_idx, e))
     })?;
     Ok(())
