@@ -2369,17 +2369,37 @@ impl BaseGame {
                         // accumulates the actions of every active step and only
                         // breaks at the FIRST blocking step, so while a corp is
                         // crowded those earlier non-blocking steps still surface
-                        // their actions in parallel with discard_train. Mirror
-                        // the Dividend branch (immediately preceding DiscardTrain
-                        // in the step model) which is already proven at parity.
-                        if cs_available {
-                            types.push("lay_tile".to_string());
-                        }
-                        if self.has_buyable_companies(&os) {
-                            types.push("buy_company".to_string());
-                        }
-                        if mh_available {
-                            types.push("buy_shares".to_string());
+                        // their actions in parallel with discard_train.
+                        //
+                        // BUT those parallel steps gate on `entity == current_entity`
+                        // where, for them, current_entity is the OPERATING corp
+                        // (`BaseStep.current_entity == entities[entity_index]`,
+                        // round.py:167-175). At DiscardTrain the round's current
+                        // entity is the DISCARDER (`DiscardTrain.active_entities ==
+                        // [crowded_corps[0]]`, round.py:2689-2690). When a corp is
+                        // crowded OUT OF TURN (e.g. a phase change crowded a corp
+                        // that is not the current operator — game 30642), the
+                        // discarder != operator, so Python's BuyCompany/SpecialTrack/
+                        // Exchange steps return [] for it and ONLY discard_train is
+                        // legal. Mirror that: surface the parallel actions only when
+                        // the discarder IS the operating corp (`crowded_corps[0] ==
+                        // current_corp_sym()`). `current_corp_sym` keys off
+                        // `entity_index`, which stays at the operator across a crowd.
+                        let discarder_is_operator = os
+                            .crowded_corps
+                            .first()
+                            .map(|s| s.as_str())
+                            == os.current_corp_sym();
+                        if discarder_is_operator {
+                            if cs_available {
+                                types.push("lay_tile".to_string());
+                            }
+                            if self.has_buyable_companies(&os) {
+                                types.push("buy_company".to_string());
+                            }
+                            if mh_available {
+                                types.push("buy_shares".to_string());
+                            }
                         }
                     }
                     crate::rounds::OperatingStep::LayTile => {
@@ -2561,7 +2581,6 @@ impl BaseGame {
                     crate::rounds::OperatingStep::BuyTrain => {
                         let corp_sym = os.current_corp_sym().unwrap_or("").to_string();
                         let ci = self.corp_idx.get(corp_sym.as_str()).copied();
-                        let corp_cash = ci.map_or(0, |i| self.corporations[i].cash);
                         let no_trains = ci.map_or(true, |i| self.corporations[i].trains.is_empty());
                         // Python's `must_buy_train` keys off `depot.depot_trains()`
                         // (visible upcoming + discarded) being non-empty, not just
