@@ -29,6 +29,28 @@ index→owner drift is invisible to it — it only surfaces when an action names
 specific cert id. Prefer `result()` + the cleaning-import metric for share
 correctness.
 
+### ✅ Strict ENUMERATION parity also resolved (2026-06-08)
+
+A second axis was hardened: `tests/cleaning_diff.py --strict` extends the
+human-import lockstep with **per-step factored legal-action ENUMERATION parity**
+(bidirectional, exact, via `parity_runner._key`) + `compare_state` + acceptance —
+the same a/b/c/d rigor random mode applies, but on every human-game trajectory.
+It initially flagged **689/3243** games where Rust's factored enumeration
+(`engine-rs/src/factored.rs`, `legal_action_types` in `game.rs`, `buyable_shares`)
+diverged from Python's `round.actions_for(entity)` / step `.actions` (a hand-rolled
+approximation, both over- and under-permissive). Driven to **0** via commits
+`53a8db8` (stock can_buy/can_gain/must_sell·holding_ok / counts_for_limit),
+`8cd5022` (SpecialToken), `91b2284` (HomeToken), `b51c980` (DiscardTrain),
+`3624935` (stock par/pass) [enum workflow], `49eb4e4` (MH exchange holding_ok zone
+exemption), `3b05d4d` (BuyTrain SellShares whenever must_buy_train),
+`6e14170` (no parallel actions for an out-of-turn crowded discarder).
+
+**Final verified state (full corpus, clean rebuild):** strict enum parity = 0
+(3024 parity, 212 Python-drops, 6 bad-data, 1 Python-side lockstep error);
+random 0:500 = 0; random-walk state parity clean; import-outcome parity 0/3243.
+Note: random mode uses aggregate `compare_state`, so per-cert identity drift can
+still be invisible there — the human-import strict mode is the stronger check.
+
 The rest of this document is the pre-resolution snapshot.
 
 ## Two parity axes (they are different tests)
