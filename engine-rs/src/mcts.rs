@@ -1319,7 +1319,7 @@ fn apply_action(
     // verified behaviorally-equivalent to Python's map_index_to_action (see
     // tests/decode_parity_check.py + the strict lockstep's decode_diff), and
     // `process_action_native` logs a faithful, replayable dict to `raw_actions`
-    // exactly as the old `process_action_dict_inner` path did.
+    // so the driver's forced-chain recovery / extract_data replay still work.
     let action = game
         .decode_index(flat_idx, sampled_price)
         .map_err(|e| PyRuntimeError::new_err(format!("decode_index failed for idx={}: {}", flat_idx, e)))?;
