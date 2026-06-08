@@ -23,7 +23,6 @@ import numpy as np
 import torch
 
 import engine_rs
-from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.alphazero.config import SelfPlayConfig
 from rl18xx.agent.alphazero.mcts import (
     POLICY_SIZE,
@@ -448,7 +447,6 @@ class RustMCTSPlayer:
 
     def play_move(self, action_index: int) -> bool:
         rust_root_game = self._rust_player.root_game_object()
-        root_adapter = RustGameAdapter(rust_root_game)
         move_idx = len(self.searches_pi)
         temperature = (
             1.0 if move_idx < self.config.softpick_move_cutoff else 0.0
@@ -460,61 +458,31 @@ class RustMCTSPlayer:
         )
         self.searches_pi.append(pi)
 
-        action_mapper = ActionMapper()
-        _, price_ranges, _ = action_mapper.get_legal_actions_factored(root_adapter)
-        price_range = price_ranges.get(action_index)
+        # Native price range for the chosen slot (replaces the Python
+        # ActionMapper.get_legal_actions_factored price-range lookup).
+        price_range = rust_root_game.price_range_for_index(int(action_index))
 
-        # Decide the price to commit. For PW slots ask the Rust tree for the
-        # most-visited grandchild's price; fall back to the engine min if
-        # nothing has been expanded yet (rare).
-        is_pw_slot = (
-            price_range is not None and price_range[0] != price_range[1]
-        )
-        committed_price: Optional[int] = None
-        if is_pw_slot:
-            try:
-                committed_price = self._rust_player.most_visited_price_for_slot(
-                    action_index
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                LOGGER.warning(
-                    "most_visited_price_for_slot raised for action_index=%s: %s",
-                    action_index, exc,
-                )
-                committed_price = None
-            if committed_price is None:
-                committed_price = int(price_range[0])
-            action_obj = action_mapper.map_index_to_action_with_price(
-                action_index, root_adapter, int(committed_price)
-            )
-        elif price_range is not None:
-            # Fixed-price categorical (depot/exchange trains): use engine min.
-            action_obj = action_mapper.map_index_to_action_with_price(
-                action_index, root_adapter, int(price_range[0])
-            )
-        else:
-            action_obj = action_mapper.map_index_to_action(action_index, root_adapter)
-        action_dict = (
-            action_obj.to_dict() if hasattr(action_obj, "to_dict") else action_obj
-        )
-
-        # Capture price-head training targets BEFORE the root is rebased so
-        # the per-(slot, price) visit counts under ``action_index`` are still
+        # Capture price-head training targets BEFORE the root is rebased so the
+        # per-(slot, price) visit counts under ``action_index`` are still
         # reachable. Mirrors ``MCTSPlayer._extract_price_targets``.
         price_targets_this_move = self._extract_price_targets(
-            root_adapter, action_obj, action_index, price_range
+            rust_root_game, action_index, price_range
         )
 
-        # Snapshot the action log length BEFORE rebasing so we can recover
-        # the forced-chain dicts the Rust ``maybe_add_child`` collapsed.
+        # Snapshot the action log length BEFORE rebasing so we can recover the
+        # chosen action + forced-chain dicts the Rust apply logged natively.
         raw_before = len(rust_root_game.raw_actions)
 
-        # Rebase the Rust tree to the chosen child.
+        # Rebase the Rust tree to the chosen child. ``advance_root`` selects the
+        # most-visited PW price internally and applies the action natively,
+        # logging a faithful, replayable dict to ``raw_actions`` — so the chosen
+        # action dict and any forced-chain dicts are recovered straight from the
+        # log, with no Python ActionMapper decode.
         self._rust_player.advance_root(action_index)
 
-        # Recover forced-chain dicts from the new root's game.
         new_root_game = self._rust_player.root_game_object()
         new_raw = list(new_root_game.raw_actions)
+        action_dict = new_raw[raw_before] if len(new_raw) > raw_before else None
         forced_dicts = (
             new_raw[raw_before + 1:] if len(new_raw) > raw_before + 1 else []
         )
@@ -537,8 +505,7 @@ class RustMCTSPlayer:
 
     def _extract_price_targets(
         self,
-        root_adapter: RustGameAdapter,
-        action_obj,
+        rust_root_game,
         action_index: int,
         price_range,
     ) -> list:
@@ -548,22 +515,24 @@ class RustMCTSPlayer:
         grandchild visit counts from the Rust tree via
         ``price_grandchildren_at_root``. Returns an empty list for
         categorical-only / fixed-price slots and on lookup errors.
+
+        The price-head slot + legal range come from the native Rust
+        ``price_head_slot_for_index`` (replacing the Python
+        ``ActionMapper.price_head_slot_for_action``).
         """
         if price_range is None or price_range[0] == price_range[1]:
             return []
         try:
-            slot_info = ActionMapper().price_head_slot_for_action(
-                action_obj, root_adapter
-            )
+            slot_info = rust_root_game.price_head_slot_for_index(int(action_index))
         except Exception as exc:  # pragma: no cover - defensive
             LOGGER.warning(
-                "price_head_slot_for_action raised for action_index=%s: %s",
+                "price_head_slot_for_index raised for action_index=%s: %s",
                 action_index, exc,
             )
             return []
         if slot_info is None:
             return []
-        _action_type, slot_index, _observed_price, price_min, price_max = slot_info
+        slot_index, price_min, price_max = slot_info
         try:
             grand = self._rust_player.price_grandchildren_at_root()
         except Exception as exc:  # pragma: no cover - defensive
@@ -766,7 +735,6 @@ class RustMCTSPlayer:
 
         result = torch.tensor(self.result)
         game_state = self.get_new_game_state()
-        action_mapper = ActionMapper()
         # Replay any pre-MCTS seed actions on the fresh game state first.
         seed_actions = (
             self.played_actions[:-n_chosen] if n_chosen > 0 else list(self.played_actions)
@@ -777,7 +745,7 @@ class RustMCTSPlayer:
         for i, action in enumerate(chosen_actions):
             yield (
                 game_state,
-                torch.tensor(action_mapper.get_legal_action_indices(game_state)),
+                torch.tensor(game_state._game.factored_legal_indices()),
                 torch.tensor(self.searches_pi[i])
                 if isinstance(self.searches_pi[i], np.ndarray)
                 else self.searches_pi[i],
