@@ -140,6 +140,7 @@ def _play_random_game(seed: int, max_steps: int = 200, verbose: bool = False):
         steps: number of action steps successfully taken
         mismatches: list of (step_idx, py_only, rust_only) tuples
         terminated_early: bool — True if either engine errored
+        error: str | None — the captured engine error when terminated_early
     """
     rng = random.Random(seed)
     names = {1: "P1", 2: "P2", 3: "P3", 4: "P4"}
@@ -149,7 +150,7 @@ def _play_random_game(seed: int, max_steps: int = 200, verbose: bool = False):
     helper_py = FactoredActionHelper()
     action_helper = ActionHelper()
 
-    result = {"ok": True, "steps": 0, "mismatches": [], "terminated_early": False}
+    result = {"ok": True, "steps": 0, "mismatches": [], "terminated_early": False, "error": None}
     for step_idx in range(max_steps):
         if py_game.finished:
             break
@@ -176,13 +177,16 @@ def _play_random_game(seed: int, max_steps: int = 200, verbose: bool = False):
             py_game = py_game.process_action(action_dict)
         except Exception as exc:
             result["terminated_early"] = True
+            result["error"] = f"step {step_idx} python error: {exc}"
             if verbose:
                 print(f"  STEP {step_idx} python error: {exc}")
             break
+        # Catch BaseException so pyo3 panics (PanicException) are recorded too.
         try:
             adapter.process_action(action_dict)
-        except Exception as exc:
+        except BaseException as exc:
             result["terminated_early"] = True
+            result["error"] = f"step {step_idx} rust error: {exc}"
             if verbose:
                 print(f"  STEP {step_idx} rust error: {exc}")
             break
@@ -204,6 +208,13 @@ def test_factored_helper_parity_random_game(seed):
     helper is asserted to match on every step.
     """
     result = _play_random_game(seed, max_steps=120)
+
+    # An engine error mid-walk (e.g. a Rust panic at step 1) is a hard failure,
+    # not a silent early stop — otherwise a crashing engine "passes" with zero
+    # mismatches.
+    assert not result["terminated_early"], (
+        f"seed={seed}: engine errored after {result['steps']} steps: {result['error']}"
+    )
 
     mismatch_step_count = len(result["mismatches"])
     if mismatch_step_count > 0:
@@ -233,6 +244,9 @@ def test_factored_helper_parity_long_game(seed):
     price-range disagreements, etc.).
     """
     result = _play_random_game(seed, max_steps=500)
+    assert not result["terminated_early"], (
+        f"seed={seed}: engine errored after {result['steps']} steps: {result['error']}"
+    )
     mismatch_count = len(result["mismatches"])
     assert mismatch_count == 0, (
         f"Factored-helper mismatches in seed={seed}: "

@@ -14,7 +14,7 @@ from engine_rs import BaseGame as RustGame
 from rl18xx.rust_adapter import RustGameAdapter
 from rl18xx.agent.alphazero.encoder import Encoder_1830Graph
 
-GAME_FILE = "tests/test_games/manual_game.json"
+GAME_FILE = str(Path(__file__).parent / "test_games" / "manual_game.json")
 
 
 def compare_encodings(py_game, rust_game, move_num):
@@ -60,7 +60,12 @@ def compare_encodings(py_game, rust_game, move_num):
     return status == "PASS"
 
 
-def main():
+def run_encoder_parity(checkpoints=None):
+    """Replay the manual game and compare encodings at each checkpoint.
+
+    Returns ``(passed, total)`` checkpoint counts so callers (the pytest gate
+    below, or ``__main__``) can assert/report on the result.
+    """
     data = json.load(open(GAME_FILE))
     names = {p.get("id"): p["name"] for p in data["players"]}
     actions = data.get("actions", [])
@@ -72,7 +77,8 @@ def main():
     rust_game = RustGame(names)
     adapted = RustGameAdapter(rust_game)
 
-    checkpoints = [0, 10, 20, 50, 100, 200, 300, 400, 500, 600, 690]
+    if checkpoints is None:
+        checkpoints = [0, 10, 20, 50, 100, 200, 300, 400, 500, 600, 690]
     passed = 0
     total = 0
 
@@ -92,7 +98,16 @@ def main():
         passed += 1
 
     print(f"\n{passed}/{total} checkpoints matched")
+    return passed, total
+
+
+def test_encoder_parity_manual_game():
+    """Pytest gate over the existing comparison (tolerances unchanged: a
+    checkpoint PASSes iff max abs diff < 0.02 in both the game-state vector
+    and the node features). Every checkpoint must pass."""
+    passed, total = run_encoder_parity()
+    assert passed == total, f"Encoder parity: only {passed}/{total} checkpoints matched"
 
 
 if __name__ == "__main__":
-    main()
+    run_encoder_parity()

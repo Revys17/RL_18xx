@@ -20,7 +20,8 @@ from rl18xx.game.gamemap import GameMap
 from tests.validate_rust_engine import compare_state
 
 
-def play_random_game(seed: int, max_actions: int = 2000, verbose: bool = False) -> bool:
+def play_random_game(seed: int, max_actions: int = 2000, verbose: bool = False) -> dict:
+    """Returns {"ok": bool, "errors": [str], "action_count": int, "finished": bool}."""
     rng = random.Random(seed)
     names = {1: "P1", 2: "P2", 3: "P3", 4: "P4"}
     game_cls = GameMap().game_by_title("1830")
@@ -77,7 +78,22 @@ def play_random_game(seed: int, max_actions: int = 2000, verbose: bool = False) 
     status = "FINISHED" if py_game.finished else f"STOPPED at {action_count}"
     ok = len(errors) == 0
     print(f"  [seed={seed}] {status} after {action_count} actions — {'OK' if ok else 'FAILED'}")
-    return ok
+    return {"ok": ok, "errors": errors, "action_count": action_count, "finished": py_game.finished}
+
+
+# ---------------------------------------------------------------------------
+# pytest gate (fast, bounded) — the full sweep stays available via __main__.
+# ---------------------------------------------------------------------------
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("seed", [42, 43])
+def test_random_game_state_parity_fast(seed):
+    result = play_random_game(seed, max_actions=800)
+    assert result["ok"], (
+        f"seed={seed}: {len(result['errors'])} error(s) after "
+        f"{result['action_count']} actions: {result['errors'][:3]}"
+    )
 
 
 if __name__ == "__main__":
@@ -94,7 +110,7 @@ if __name__ == "__main__":
     for i in range(args.seeds):
         seed = args.start_seed + i
         print(f"Game {i + 1}/{args.seeds} (seed={seed}):")
-        ok = play_random_game(seed, max_actions=args.max_actions, verbose=args.verbose)
+        ok = play_random_game(seed, max_actions=args.max_actions, verbose=args.verbose)["ok"]
         if not ok:
             all_ok = False
         print()

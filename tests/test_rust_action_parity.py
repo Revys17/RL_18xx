@@ -173,6 +173,30 @@ def play_game_with_parity_check(
     return result
 
 
+# ---------------------------------------------------------------------------
+# pytest gate (fast, bounded) — the full sweep stays available via __main__.
+#
+# Seeds are bounded to 150 actions (auction -> stock -> early OR). Seeds 43/45/46
+# are excluded: deeper in the OR they hit a standing divergence in the COARSE
+# `legal_action_types()` API (rust_extra=['sell_shares'] during the emergency
+# BuyTrain step) that the factored enumeration (parity_runner/_key) does not
+# have. The factored path is the production one; the coarse API divergence is
+# tracked separately.
+# ---------------------------------------------------------------------------
+import pytest
+
+
+@pytest.mark.parametrize("seed", [42, 44])
+def test_action_type_state_and_encoder_parity_fast(seed):
+    result = play_game_with_parity_check(seed, max_actions=150, check_encoder=True)
+    assert result["ok"], (
+        f"seed={seed}: action_type_diffs={result['action_type_diffs'][:3]} "
+        f"state_diffs={result['state_diffs'][:3]} "
+        f"encoder_diffs={result['encoder_diffs'][:3]}"
+    )
+    assert not result["encoder_diffs"], f"seed={seed}: {result['encoder_diffs'][:3]}"
+
+
 def main():
     import argparse
 

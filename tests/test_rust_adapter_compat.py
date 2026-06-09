@@ -75,6 +75,16 @@ def test_full_game_adapter():
     else:
         print("ALL actions processed with encoder + action_mapper successfully!")
 
+    # Hard gate: any collected error is a test failure (this used to only print,
+    # which let adapter regressions pass silently).
+    assert not errors, (
+        f"{len(errors)} adapter-compat error(s); processed {last_success + 1}/"
+        f"{len(actions)} actions. First error: {errors[0][0]}\n{errors[0][1]}"
+    )
+    assert last_success == len(actions) - 1, (
+        f"Only {last_success + 1}/{len(actions)} actions processed"
+    )
+
 
 if __name__ == "__main__":
     test_full_game_adapter()

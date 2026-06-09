@@ -163,8 +163,17 @@ def test_rust_mcts_player_short_game_extracts_data():
     assert isinstance(pi, torch.Tensor)
     assert pi.shape[-1] == POLICY_SIZE
     assert isinstance(result, torch.Tensor)
-    # Categorical-only in 4b — price_targets must be an empty list.
-    assert price_targets == []
+    # price_targets is empty unless the move chosen for this state was a
+    # price-bearing slot. With softpick (visit-proportional sampling below
+    # softpick_move_cutoff, parity with the Python player) the first move CAN
+    # be e.g. a Bid, so assert structure rather than emptiness: entries are
+    # (head_slot, price, visit_weight, range_min, range_max).
+    assert isinstance(price_targets, list)
+    for entry in price_targets:
+        assert len(entry) == 5
+        _slot, price, weight, pmin, pmax = entry
+        assert pmin <= price <= pmax
+        assert weight > 0
 
 
 def test_rust_mcts_player_check_resign_window_not_full():
