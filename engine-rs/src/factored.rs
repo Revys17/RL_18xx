@@ -303,15 +303,12 @@ impl BaseGame {
         // Pending par
         if let Round::Auction(s) = &self.round {
             if let Some((corp_sym, pid)) = s.pending_par.clone() {
-                // Find the company that triggered this par (e.g., BO → B&O).
-                let company_sym = self
-                    .companies
-                    .iter()
-                    .find(|c| {
-                        // Hard-coded for 1830: only BO triggers B&O par.
-                        c.sym == "BO" && corp_sym == "B&O"
-                    })
-                    .map(|c| c.sym.clone());
+                // Find the company that triggered this par (the one whose
+                // Shares ability grants this corp's president cert, e.g.
+                // BO -> B&O).
+                let company_sym = crate::abilities::par_trigger_company_for(&corp_sym)
+                    .filter(|sym| self.companies.iter().any(|c| c.sym == *sym))
+                    .map(|s| s.to_string());
                 let entity_desc = entity_descriptor_player(self, pid);
                 for price in &par_prices {
                     let mut a = LegalAction::new("Par");
@@ -1643,99 +1640,112 @@ impl BaseGame {
         out
     }
 
-    /// Company-as-actor branch: MH exchange (CompanyBuyShares).
+    /// Company-as-actor branch: exchange-ability companies (CompanyBuyShares,
+    /// 1830: MH -> NYC).
     fn factored_company_actions(&self) -> Vec<LegalAction> {
         let mut out: Vec<LegalAction> = Vec::new();
 
-        // MH exchange: NYC IPO share for free if MH owner is the current player.
-        // Python surfaces this via `round.actions_for(MH)`, which exposes the
-        // Exchange step only in the Stock and Operating rounds — never during the
-        // initial private Auction (a player can own MH mid-auction, but the
-        // exchange isn't available until the auction resolves).
+        // Exchange: a target-corp share for free if the exchange company's
+        // owner is the current player. Python surfaces this via
+        // `round.actions_for(MH)`, which exposes the Exchange step only in the
+        // Stock and Operating rounds — never during the initial private
+        // Auction (a player can own the company mid-auction, but the exchange
+        // isn't available until the auction resolves).
         let in_auction = matches!(self.round, Round::Auction(_));
-        let mh = self.companies.iter().find(|c| c.sym == "MH" && !c.closed);
-        if let Some(mh) = mh {
-            if mh.owner.is_player() && !in_auction {
-                let mh_owner_pid = mh.owner.player_id();
-                // Restrict surfacing to the current actor:
-                // - if current entity is a player, must equal MH owner
-                // - if current entity is a corp, the corp's president must equal MH owner
-                let current_pid = if self.round_state.active_entity_id.is_player() {
-                    self.round_state.active_entity_id.player_id()
-                } else if let Some(sym) = self.round_state.active_entity_id.corp_sym() {
-                    self.corp_idx
-                        .get(sym)
-                        .and_then(|&i| self.corporations[i].president_id())
-                } else {
-                    None
+        for co in self.companies.iter().filter(|c| !c.closed) {
+            let Some((corporations, from)) = crate::abilities::exchange(&co.sym) else {
+                continue;
+            };
+            if !co.owner.is_player() || in_auction {
+                continue;
+            }
+            let co_owner_pid = co.owner.player_id();
+            // Restrict surfacing to the current actor:
+            // - if current entity is a player, must equal the company owner
+            // - if current entity is a corp, the corp's president must equal
+            //   the company owner
+            let current_pid = if self.round_state.active_entity_id.is_player() {
+                self.round_state.active_entity_id.player_id()
+            } else if let Some(sym) = self.round_state.active_entity_id.corp_sym() {
+                self.corp_idx
+                    .get(sym)
+                    .and_then(|&i| self.corporations[i].president_id())
+            } else {
+                None
+            };
+            let surface = match (current_pid, co_owner_pid) {
+                (Some(cpid), Some(mpid)) => cpid == mpid,
+                _ => true,
+            };
+            if !surface {
+                continue;
+            }
+            for corp_sym in corporations {
+                let Some(&ci) = self.corp_idx.get(*corp_sym) else {
+                    continue;
                 };
-                let surface = match (current_pid, mh_owner_pid) {
-                    (Some(cpid), Some(mpid)) => cpid == mpid,
-                    _ => true,
-                };
-                if surface {
-                    if let Some(&ci) = self.corp_idx.get("NYC") {
-                        let nyc = &self.corporations[ci];
-                        // Python's `Exchange.exchangeable_shares`: MH (from =
-                        // [ipo, market], when = any) can claim an available NYC
-                        // ipo/market share at ANY time — including BEFORE NYC pars
-                        // — filtered by `can_gain`, whose binding 1830 rule is "the
-                        // MH owner does not already hold 60% of NYC". No par gate
-                        // (the IPO shares exist in `nyc.shares` pre-par).
-                        let owner_pct = mh_owner_pid
-                            .map(|pid| nyc.percent_owned_by(&crate::entities::EntityId::player(pid)))
-                            .unwrap_or(0);
-                        // Python `Exchange.exchangeable_shares` filters by
-                        // `can_gain(owner, share.to_bundle(), exchange=True)`
-                        // (round.py:2973 + round.py:426). With exchange=True the
-                        // cert-limit clause is bypassed, so the binding rule is
-                        // `holding_ok(owner, bundle.common_percent=10)`
-                        // (entities.py:1319): the 60% ownership limit is LIFTED in
-                        // the multiple_buy/unlimited zones, otherwise the owner's
-                        // NYC common% + 10 must be <= 60. The old `owner_pct < 60`
-                        // gate ignored the zone exemption (so it dropped legal
-                        // exchanges when NYC sits in an unlimited/multiple_buy zone,
-                        // e.g. NYC at a low price) and used the wrong threshold.
-                        const OWNERSHIP_EXEMPT: &[&str] = &["multiple_buy", "unlimited"];
-                        let zone_exempt = nyc
-                            .share_price
-                            .as_ref()
-                            .is_some_and(|sp| sp.types.iter().any(|t| OWNERSHIP_EXEMPT.contains(&t.as_str())));
-                        if zone_exempt || owner_pct + 10 <= 60 {
-                            // Pre-par, this engine hasn't materialised the corp's
-                            // shares into `nyc.shares` yet (they're created at par),
-                            // but the IPO conceptually still holds all 100% — so a
-                            // 10% IPO share is available to claim, matching Python's
-                            // `available_share` (which reads the bank/IPO, not the
-                            // corp treasury).
-                            let has_ipo_share = if nyc.ipo_price.is_none() {
-                                true
-                            } else {
-                                nyc.shares.iter().any(|s| {
-                                    !s.president && !s.owner.is_player() && s.owner.is_ipo()
-                                })
-                            };
-                            let has_market_share = nyc.shares.iter().any(|s| {
-                                !s.president && !s.owner.is_player() && s.owner.is_market()
-                            });
-                            if has_ipo_share {
-                                let mut a = LegalAction::new("CompanyBuyShares");
-                                a.entity.insert("private".to_string(), json!("MH"));
-                                a.entity.insert("corp".to_string(), json!("NYC"));
-                                a.params.insert("source".to_string(), json!("ipo"));
-                                a.params.insert("percent".to_string(), json!(10));
-                                out.push(a);
-                            }
-                            if has_market_share {
-                                let mut a = LegalAction::new("CompanyBuyShares");
-                                a.entity.insert("private".to_string(), json!("MH"));
-                                a.entity.insert("corp".to_string(), json!("NYC"));
-                                a.params.insert("source".to_string(), json!("market"));
-                                a.params.insert("percent".to_string(), json!(10));
-                                out.push(a);
-                            }
-                        }
-                    }
+                let target = &self.corporations[ci];
+                // Python's `Exchange.exchangeable_shares`: MH (from =
+                // [ipo, market], when = any) can claim an available NYC
+                // ipo/market share at ANY time — including BEFORE NYC pars
+                // — filtered by `can_gain`, whose binding 1830 rule is "the
+                // MH owner does not already hold 60% of NYC". No par gate
+                // (the IPO shares exist in `nyc.shares` pre-par).
+                let owner_pct = co_owner_pid
+                    .map(|pid| target.percent_owned_by(&crate::entities::EntityId::player(pid)))
+                    .unwrap_or(0);
+                // Python `Exchange.exchangeable_shares` filters by
+                // `can_gain(owner, share.to_bundle(), exchange=True)`
+                // (round.py:2973 + round.py:426). With exchange=True the
+                // cert-limit clause is bypassed, so the binding rule is
+                // `holding_ok(owner, bundle.common_percent=10)`
+                // (entities.py:1319): the 60% ownership limit is LIFTED in
+                // the multiple_buy/unlimited zones, otherwise the owner's
+                // common% + 10 must be <= 60. The old `owner_pct < 60`
+                // gate ignored the zone exemption (so it dropped legal
+                // exchanges when NYC sits in an unlimited/multiple_buy zone,
+                // e.g. NYC at a low price) and used the wrong threshold.
+                const OWNERSHIP_EXEMPT: &[&str] = &["multiple_buy", "unlimited"];
+                let zone_exempt = target
+                    .share_price
+                    .as_ref()
+                    .is_some_and(|sp| sp.types.iter().any(|t| OWNERSHIP_EXEMPT.contains(&t.as_str())));
+                if !(zone_exempt || owner_pct + 10 <= 60) {
+                    continue;
+                }
+                // Pre-par, this engine hasn't materialised the corp's
+                // shares into `target.shares` yet (they're created at par),
+                // but the IPO conceptually still holds all 100% — so a
+                // 10% IPO share is available to claim, matching Python's
+                // `available_share` (which reads the bank/IPO, not the
+                // corp treasury).
+                let has_ipo_share = from.contains(&crate::title::ShareSource::Ipo)
+                    && if target.ipo_price.is_none() {
+                        true
+                    } else {
+                        target.shares.iter().any(|s| {
+                            !s.president && !s.owner.is_player() && s.owner.is_ipo()
+                        })
+                    };
+                let has_market_share = from.contains(&crate::title::ShareSource::Market)
+                    && target.shares.iter().any(|s| {
+                        !s.president && !s.owner.is_player() && s.owner.is_market()
+                    });
+                if has_ipo_share {
+                    let mut a = LegalAction::new("CompanyBuyShares");
+                    a.entity.insert("private".to_string(), json!(co.sym.clone()));
+                    a.entity.insert("corp".to_string(), json!(*corp_sym));
+                    a.params.insert("source".to_string(), json!("ipo"));
+                    a.params.insert("percent".to_string(), json!(10));
+                    out.push(a);
+                }
+                if has_market_share {
+                    let mut a = LegalAction::new("CompanyBuyShares");
+                    a.entity.insert("private".to_string(), json!(co.sym.clone()));
+                    a.entity.insert("corp".to_string(), json!(*corp_sym));
+                    a.params.insert("source".to_string(), json!("market"));
+                    a.params.insert("percent".to_string(), json!(10));
+                    out.push(a);
                 }
             }
         }

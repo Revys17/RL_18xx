@@ -309,7 +309,7 @@ impl BaseGame {
     /// Check if a company exchange is available (any round, the exchange
     /// company not closed, the target corporation has non-president shares
     /// outside player hands). 1830: MH -> NYC.
-    fn mh_exchange_available(&self) -> bool {
+    fn exchange_ability_available(&self) -> bool {
         self.companies.iter().any(|co| {
             if co.closed {
                 return false;
@@ -2256,12 +2256,12 @@ impl BaseGame {
                     return types;
                 }
 
-                let mh_exchange = self.mh_exchange_available();
+                let exchange_surfaced = self.exchange_ability_available();
 
                 if sellable {
                     types.push("sell_shares".to_string());
                 }
-                if buyable || mh_exchange {
+                if buyable || exchange_surfaced {
                     types.push("buy_shares".to_string());
                 }
 
@@ -2298,7 +2298,7 @@ impl BaseGame {
                 let dh_available = co_abilities
                     .iter()
                     .any(|s| crate::abilities::teleport(s).is_some());
-                let mh_available = self.mh_exchange_available();
+                let exchange_available = self.exchange_ability_available();
 
                 match os.step {
                     crate::rounds::OperatingStep::DiscardTrain => {
@@ -2338,7 +2338,7 @@ impl BaseGame {
                             if self.has_buyable_companies(&os) {
                                 types.push("buy_company".to_string());
                             }
-                            if mh_available {
+                            if exchange_available {
                                 types.push("buy_shares".to_string());
                             }
                         }
@@ -2382,7 +2382,7 @@ impl BaseGame {
                         if self.has_buyable_companies(&os) {
                             types.push("buy_company".to_string());
                         }
-                        if mh_available {
+                        if exchange_available {
                             types.push("buy_shares".to_string());
                         }
                         types.push("pass".to_string());
@@ -2407,7 +2407,7 @@ impl BaseGame {
                             if self.has_buyable_companies(&os) {
                                 types.push("buy_company".to_string());
                             }
-                            if mh_available {
+                            if exchange_available {
                                 types.push("buy_shares".to_string());
                             }
                         } else {
@@ -2477,7 +2477,7 @@ impl BaseGame {
                             if !teleport_pending && self.has_buyable_companies(&os) {
                                 types.push("buy_company".to_string());
                             }
-                            if mh_available {
+                            if exchange_available {
                                 types.push("buy_shares".to_string());
                             }
                             types.push("pass".to_string());
@@ -2495,7 +2495,7 @@ impl BaseGame {
                         if self.has_buyable_companies(&os) {
                             types.push("buy_company".to_string());
                         }
-                        if mh_available {
+                        if exchange_available {
                             types.push("buy_shares".to_string());
                         }
                     }
@@ -2512,7 +2512,7 @@ impl BaseGame {
                         if self.has_buyable_companies(&os) {
                             types.push("buy_company".to_string());
                         }
-                        if mh_available {
+                        if exchange_available {
                             types.push("buy_shares".to_string());
                         }
                     }
@@ -2553,7 +2553,7 @@ impl BaseGame {
                             if cs_available {
                                 types.push("lay_tile".to_string());
                             }
-                            if mh_available {
+                            if exchange_available {
                                 types.push("buy_shares".to_string());
                             }
                             let can_bankrupt = pres_id
@@ -2569,7 +2569,7 @@ impl BaseGame {
                             if self.has_buyable_companies(&os) {
                                 types.push("buy_company".to_string());
                             }
-                            if mh_available {
+                            if exchange_available {
                                 types.push("buy_shares".to_string());
                             }
                             types.push("pass".to_string());
@@ -2582,7 +2582,7 @@ impl BaseGame {
                         if cs_available {
                             types.push("lay_tile".to_string());
                         }
-                        if mh_available {
+                        if exchange_available {
                             types.push("buy_shares".to_string());
                         }
                         types.push("pass".to_string());

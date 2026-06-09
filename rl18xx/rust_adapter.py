@@ -45,9 +45,23 @@ from rl18xx.game.engine.game.title.g1830 import Entities as _G1830Entities
 # data (the same `abilities:` arrays the reference engine uses). The adapter
 # must never key on company syms — query these helpers instead, so a new
 # title's privates are data, not adapter code.
+#
+# Deep-copied because the Python engine MUTATES the shared class-level dicts
+# in place when a Python game is constructed (abilities.py renames the "from"
+# key to "from_"); `_exchange_sources` tolerates both spellings since a game
+# may have been built before this module was imported.
 # ---------------------------------------------------------------------------
 
-_COMPANY_ABILITIES = {c["sym"]: tuple(c.get("abilities") or ()) for c in _G1830Entities.COMPANIES}
+import copy as _copy
+
+_COMPANY_ABILITIES = {
+    c["sym"]: tuple(_copy.deepcopy(c.get("abilities")) or ()) for c in _G1830Entities.COMPANIES
+}
+
+
+def _exchange_sources(ability):
+    """The `from` list of an exchange ability (handles the engine's `from_` rename)."""
+    return ability.get("from", ability.get("from_", ()))
 
 
 def _company_abilities(sym, ability_type):
@@ -689,22 +703,18 @@ class _StepProxy:
     def companies_pending_par(self):
         """Return companies awaiting par after auction win.
 
-        auction_pending_par() returns (corp_sym, player_id). We need to find
-        the company that triggers parring of that corporation. In 1830:
-        BO company → B&O corp, CA company → not a par trigger, etc.
-        The company-to-corp mapping is: BO→B&O (the only par-triggering company).
+        auction_pending_par() returns (corp_sym, player_id). The triggering
+        company is the one whose `shares` ability grants that corporation's
+        president certificate (index 0) — in 1830, BO -> B&O_0.
         """
         pending = self._game.auction_pending_par()
         if pending:
             corp_sym, player_id = pending
-            # Find the company that grants shares in this corporation
-            # In 1830, BO company triggers B&O par
-            _COMPANY_TO_CORP = {"BO": "B&O"}
-            for co_sym, co_corp in _COMPANY_TO_CORP.items():
-                if co_corp == corp_sym:
-                    co = self._game.company_by_id(co_sym)
-                    if co:
-                        return [_CompanyProxy(co)]
+            co_sym = _par_trigger_company_for(corp_sym)
+            if co_sym:
+                co = self._game.company_by_id(co_sym)
+                if co:
+                    return [_CompanyProxy(co)]
         return []
 
     def min_bid(self, company):
@@ -1086,20 +1096,25 @@ class _ExchangeStepProxy:
         return []
 
     def exchangeable_shares(self, company):
-        """MH exchange: return NYC share from IPO or market if MH is owned and NYC exists."""
+        """Exchange ability: target-corp shares from IPO or market (1830: MH -> NYC)."""
         sym = company.sym if hasattr(company, 'sym') else str(company)
-        if sym != "MH":
-            return []
-        nyc = self._game.corporation_by_id("NYC")
-        if not nyc or nyc.ipo_price is None:
+        ability = _company_ability(sym, "exchange")
+        if not ability:
             return []
         result = []
-        ipo_shares = [s for s in nyc.shares if s.owner == "ipo:NYC" and not s.president]
-        if ipo_shares:
-            result.append(_BuyableShare(nyc, "ipo", ipo_shares[0].index, 0, self._game))
-        market_shares = [s for s in nyc.shares if s.owner == "market" and not s.president]
-        if market_shares:
-            result.append(_BuyableShare(nyc, "market", market_shares[0].index, 0, self._game))
+        sources = _exchange_sources(ability)
+        for corp_sym in ability.get("corporations", ()):
+            corp = self._game.corporation_by_id(corp_sym)
+            if not corp or corp.ipo_price is None:
+                continue
+            if "ipo" in sources:
+                ipo_shares = [s for s in corp.shares if s.owner == f"ipo:{corp_sym}" and not s.president]
+                if ipo_shares:
+                    result.append(_BuyableShare(corp, "ipo", ipo_shares[0].index, 0, self._game))
+            if "market" in sources:
+                market_shares = [s for s in corp.shares if s.owner == "market" and not s.president]
+                if market_shares:
+                    result.append(_BuyableShare(corp, "market", market_shares[0].index, 0, self._game))
         return result
 
 
@@ -1688,9 +1703,17 @@ class _CompanyProxy:
 
     @property
     def abilities(self):
-        """Return abilities for this company. In 1830, BO has a SharesAbility."""
-        if self._company.sym == "BO":
-            return [_BOSharesAbility()]
+        """Return abilities for this company.
+
+        Synthesizes a SharesAbility-like proxy for companies whose `shares`
+        ability grants a president's certificate (index 0) — in 1830 only BO
+        (-> B&O_0). Normal-share grants (CA -> PRR_1) are handled inside the
+        Rust auction and are deliberately NOT surfaced here (the Python
+        ActionHelper only consumes president-cert Shares abilities).
+        """
+        granted = _shares_granted(self._company.sym)
+        if granted and granted[1] == 0:
+            return [_PresidentSharesAbility(granted[0])]
         return []
 
     @property
@@ -1698,25 +1721,33 @@ class _CompanyProxy:
         return PyCompany
 
 
-class _BOSharesAbility:
-    """Fake SharesAbility for BO company → B&O corporation."""
+class _PresidentSharesAbility:
+    """Fake SharesAbility for a company granting a president's certificate."""
     from rl18xx.game.engine.abilities import Shares as _SharesType
     type = "shares"
 
+    def __init__(self, corp_sym):
+        self._corp_sym = corp_sym
+
     @property
     def shares(self):
-        return [_BOShareRef()]
+        return [_PresidentShareRef(self._corp_sym)]
 
     @property
     def __class__(self):
-        return _BOSharesAbility._SharesType
+        return _PresidentSharesAbility._SharesType
 
 
-class _BOShareRef:
-    """Fake share reference for BO→B&O mapping."""
+class _PresidentShareRef:
+    """Fake share reference for the president-cert grant (e.g. BO -> B&O)."""
+
+    def __init__(self, corp_sym):
+        self._corp_sym = corp_sym
+
     def corporation(self):
-        # Return an object with .id and .sym for B&O
-        return type('Corp', (), {'id': 'B&O', 'sym': 'B&O', 'name': 'B&O'})()
+        # Return an object with .id and .sym for the corporation
+        sym = self._corp_sym
+        return type('Corp', (), {'id': sym, 'sym': sym, 'name': sym})()
 
 
 class _DepotProxy:
@@ -2644,11 +2675,14 @@ class RustGameAdapter:
         return sum(u.cost for u in h.tile.upgrades)
 
     def abilities(self, company, ability_type):
-        """Check company abilities. Returns empty list for most cases."""
-        if ability_type == "no_buy":
-            # MH has no_buy ability when owned by a player
-            if hasattr(company, 'sym') and company.sym == "MH":
-                return []  # MH doesn't have no_buy
+        """Check company abilities.
+
+        Always returns [] — the Rust engine enforces ability effects (e.g.
+        no_buy filtering of buyable companies) internally, and the Python
+        ActionHelper paths that run against this adapter never need a truthy
+        result here. Kept falsy on purpose: returning real abilities would
+        change ActionHelper behavior the parity harnesses pin down.
+        """
         return []
 
     def can_go_bankrupt(self, owner, corp):
