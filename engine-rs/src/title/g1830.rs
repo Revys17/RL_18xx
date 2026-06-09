@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+use super::{AbilityDef, AbilityWhen, OwnerType, ShareSource};
+
 // ---------------------------------------------------------------------------
 // Definition structs
 // ---------------------------------------------------------------------------
@@ -25,11 +27,10 @@ pub struct CompanyDef {
     pub name: &'static str,
     pub value: i32,
     pub revenue: i32,
-    pub blocked_hexes: &'static [&'static str],
-    /// If set, buying this company grants a free share of this corporation.
-    pub grants_share: Option<(&'static str, u8)>, // (corp_sym, percent)
-    /// If set, buying this company triggers a pending par for this corporation.
-    pub triggers_par: Option<&'static str>, // corp_sym
+    /// Special powers, transcribed from the Python title data's `abilities`
+    /// arrays (g1830.py). Queried via `crate::abilities` — engine code must
+    /// not key on company syms.
+    pub abilities: &'static [AbilityDef],
 }
 
 pub struct TrainDef {
@@ -179,54 +180,104 @@ pub fn companies() -> Vec<CompanyDef> {
             name: "Schuylkill Valley",
             value: 20,
             revenue: 5,
-            blocked_hexes: &["G15"],
-            grants_share: None,
-            triggers_par: None,
+            abilities: &[AbilityDef::BlocksHexes {
+                owner_type: OwnerType::Player,
+                hexes: &["G15"],
+            }],
         },
         CompanyDef {
             sym: "CS",
             name: "Champlain & St.Lawrence",
             value: 40,
             revenue: 10,
-            blocked_hexes: &["B20"],
-            grants_share: None,
-            triggers_par: None,
+            abilities: &[
+                AbilityDef::BlocksHexes {
+                    owner_type: OwnerType::Player,
+                    hexes: &["B20"],
+                },
+                AbilityDef::TileLay {
+                    owner_type: OwnerType::Corporation,
+                    hexes: &["B20"],
+                    tiles: &["3", "4", "58"],
+                    when: AbilityWhen::OwningCorpOrTurn,
+                    count: 1,
+                },
+            ],
         },
         CompanyDef {
             sym: "DH",
             name: "Delaware & Hudson",
             value: 70,
             revenue: 15,
-            blocked_hexes: &["F16"],
-            grants_share: None,
-            triggers_par: None,
+            abilities: &[
+                AbilityDef::BlocksHexes {
+                    owner_type: OwnerType::Player,
+                    hexes: &["F16"],
+                },
+                AbilityDef::Teleport {
+                    owner_type: OwnerType::Corporation,
+                    hexes: &["F16"],
+                    tiles: &["57"],
+                },
+            ],
         },
         CompanyDef {
             sym: "MH",
             name: "Mohawk & Hudson",
             value: 110,
             revenue: 20,
-            blocked_hexes: &["D18"],
-            grants_share: None,
-            triggers_par: None,
+            abilities: &[
+                AbilityDef::BlocksHexes {
+                    owner_type: OwnerType::Player,
+                    hexes: &["D18"],
+                },
+                AbilityDef::Exchange {
+                    owner_type: OwnerType::Player,
+                    corporations: &["NYC"],
+                    from: &[ShareSource::Ipo, ShareSource::Market],
+                    when: AbilityWhen::Any,
+                },
+            ],
         },
         CompanyDef {
             sym: "CA",
             name: "Camden & Amboy",
             value: 160,
             revenue: 25,
-            blocked_hexes: &["H18"],
-            grants_share: Some(("PRR", 10)),
-            triggers_par: None,
+            abilities: &[
+                AbilityDef::BlocksHexes {
+                    owner_type: OwnerType::Player,
+                    hexes: &["H18"],
+                },
+                // "shares": "PRR_1" — a normal 10% share granted on purchase.
+                AbilityDef::Shares {
+                    corporation: "PRR",
+                    share_index: 1,
+                },
+            ],
         },
         CompanyDef {
             sym: "BO",
             name: "Baltimore & Ohio",
             value: 220,
             revenue: 30,
-            blocked_hexes: &["I13", "I15"],
-            grants_share: None,
-            triggers_par: Some("B&O"),
+            abilities: &[
+                AbilityDef::BlocksHexes {
+                    owner_type: OwnerType::Player,
+                    hexes: &["I13", "I15"],
+                },
+                AbilityDef::Close {
+                    when: AbilityWhen::BoughtTrain,
+                    corporation: "B&O",
+                },
+                AbilityDef::NoBuy,
+                // "shares": "B&O_0" — the president's certificate; granting it
+                // triggers the pending B&O par.
+                AbilityDef::Shares {
+                    corporation: "B&O",
+                    share_index: 0,
+                },
+            ],
         },
     ]
 }

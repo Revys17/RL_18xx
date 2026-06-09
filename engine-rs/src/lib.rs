@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 
+pub mod abilities;
 pub mod action_index;
 pub mod actions;
 pub mod core;

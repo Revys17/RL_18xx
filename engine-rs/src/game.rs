@@ -1774,9 +1774,9 @@ impl BaseGame {
                     cd.value,
                     cd.revenue,
                 );
-                // BO (Baltimore & Ohio private) has a no_buy ability —
-                // it cannot be purchased by corporations during the OR.
-                if cd.sym == "BO" {
+                // no_buy ability (1830: BO) — the company cannot be
+                // purchased by corporations during the OR.
+                if crate::abilities::no_buy(cd.sym) {
                     company.no_buy = true;
                 }
                 company
