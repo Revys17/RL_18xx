@@ -424,14 +424,21 @@ impl BaseGame {
         // Reset the swallowed-pass marker for this action.
         self.last_action_swallowed = false;
 
-        // Snapshot full state so a swallowed Pass leaves the game byte-for-byte
-        // unchanged regardless of which internal step raised.
-        let snapshot = self.snapshot_full();
+        // Only a Pass can be swallowed (restored to the pre-dispatch state), so
+        // only a Pass needs the full snapshot. Non-Pass errors propagate
+        // unchanged and never read it — so skip the per-action deep clone for
+        // the common (non-Pass) case, which runs on every MCTS expansion.
+        let snapshot = if matches!(action, Action::Pass { .. }) {
+            Some(self.snapshot_full())
+        } else {
+            None
+        };
         match self.process_action_dispatch(action) {
             Ok(()) => Ok(()),
             Err(e) => {
-                if matches!(action, Action::Pass { .. }) {
+                if let Some(snapshot) = snapshot {
                     // Swallow the unroutable/invalid pass as a complete no-op.
+                    // (`snapshot` is `Some` for exactly the `Pass` actions.)
                     *self = snapshot;
                     self.last_action_swallowed = true;
                     Ok(())
@@ -2571,41 +2578,7 @@ impl BaseGame {
                         // must_buy uses route_train_purchase (2+ mandatory/city nodes),
                         // matching Python's must_buy_train.
                         let must_buy = no_trains && depot_has_trains && self.must_buy_train(&corp_sym);
-                        // Python's ``depot.min_depot_price`` considers both upcoming and
-                        // discarded depot trains. Use the lowest across both so the
-                        // bankruptcy check matches Python's threshold.
-                        let cheapest_price = {
-                            let upcoming_min =
-                                self.depot.trains.iter().map(|t| t.price).min().unwrap_or(0);
-                            let discarded_min = self
-                                .depot
-                                .discarded
-                                .iter()
-                                .map(|t| t.price)
-                                .min()
-                                .unwrap_or(i32::MAX);
-                            if self.depot.trains.is_empty() && self.depot.discarded.is_empty() {
-                                0
-                            } else if self.depot.trains.is_empty() {
-                                discarded_min
-                            } else if self.depot.discarded.is_empty() {
-                                upcoming_min
-                            } else {
-                                upcoming_min.min(discarded_min)
-                            }
-                        };
-
                         let pres_id = ci.and_then(|i| self.corporations[i].president_id());
-                        let has_sister_trains = pres_id.map_or(false, |pid| {
-                            self.corporations.iter().any(|c| {
-                                c.sym != *corp_sym
-                                    && c.president_id() == Some(pid)
-                                    && !c.trains.is_empty()
-                            })
-                        });
-
-                        let _ = has_sister_trains;
-                        let _ = cheapest_price;
                         if must_buy {
                             // Python's BuyTrain step (round.py:792-805): when
                             // `president_may_contribute(entity)` holds it returns
