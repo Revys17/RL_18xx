@@ -709,8 +709,14 @@ def main():
         Path(args.json).write_text(json.dumps(results, indent=2, default=str))
         print(f"\nwrote {args.json}")
 
-    # Exit non-zero if any game showed a real Rust divergence.
-    bad = [r for r in results if r["status"] in ("rust_error", "state_divergence", "enum_divergence", "index_divergence", "decode_divergence")]
+    # Exit non-zero if any game showed a real Rust divergence. This must cover
+    # EVERY divergence-class status either mode can emit (lockstep AND
+    # decision-trace) — a status missing here silently exits 0.
+    bad = [r for r in results if r["status"] in (
+        "rust_error", "state_divergence", "enum_divergence", "index_divergence",
+        "decode_divergence", "pass_acceptance_divergence", "decision_divergence",
+        "reason_mismatch", "stream_length_mismatch", "diagnostic_crash",
+    )]
     sys.exit(1 if bad else 0)
 
 

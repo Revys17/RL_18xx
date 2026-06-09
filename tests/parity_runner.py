@@ -312,6 +312,10 @@ def main():
     else:
         print(out)
 
+    # Fail loud: any parity failure must produce a non-zero exit so shell
+    # chains / CI can gate on this runner, not just on reading the JSON.
+    sys.exit(1 if failures else 0)
+
 
 if __name__ == "__main__":
     main()
