@@ -37,8 +37,27 @@ pub struct SlotLayout {
     pub tile_offsets: Vec<&'static str>,
     pub city_offsets: HashMap<(&'static str, usize), u32>,
     pub city_count: HashMap<&'static str, usize>,
-    pub company_tile_offsets: Vec<&'static str>,
+    /// Per-company sub-blocks of the CompanyLayTile slot range, derived from
+    /// the title's Teleport / TileLay ability data.
+    pub company_lay_tile_blocks: Vec<CompanyLayBlock>,
+    /// Per-company offsets within the CompanyPlaceToken slot range (one slot
+    /// per teleport company).
+    pub company_place_token_offsets: Vec<(&'static str, u32)>,
     pub action_offsets: HashMap<&'static str, u32>,
+}
+
+/// One company's sub-block within the CompanyLayTile slot range:
+/// `tiles.len() * 6` rotation slots starting at `offset` (relative to the
+/// CompanyLayTile base), addressed as `offset + tile_pos * 6 + rotation`.
+pub struct CompanyLayBlock {
+    pub sym: &'static str,
+    pub hexes: &'static [&'static str],
+    pub tiles: &'static [&'static str],
+    pub offset: u32,
+    /// True for Teleport-derived blocks (DH), false for TileLay (CS). Only
+    /// affects how unmatched tiles are handled during encode (mirroring the
+    /// Python ActionMapper's fall-through vs error behavior).
+    pub teleport: bool,
 }
 
 static LAYOUT: OnceLock<SlotLayout> = OnceLock::new();
@@ -96,7 +115,44 @@ fn build_layout() -> SlotLayout {
     ];
     let city_offsets: HashMap<(&'static str, usize), u32> = city_offset_entries.into_iter().collect();
 
-    let company_tile_offsets = vec!["3", "4", "58"];
+    // Company special-lay sub-blocks, derived from the ability data. Mirrors
+    // ActionMapper.init_actions: teleport lays first (DH: 1 tile x 6
+    // rotations), then bonus tile lays (CS: 3 tiles x 6 rotations), each in
+    // title company order.
+    let mut company_lay_tile_blocks: Vec<CompanyLayBlock> = Vec::new();
+    let mut company_lay_n: u32 = 0;
+    for sym in &company_offsets {
+        if let Some((hexes, tiles)) = crate::abilities::teleport(sym) {
+            company_lay_tile_blocks.push(CompanyLayBlock {
+                sym,
+                hexes,
+                tiles,
+                offset: company_lay_n,
+                teleport: true,
+            });
+            company_lay_n += (tiles.len() * 6) as u32;
+        }
+    }
+    for sym in &company_offsets {
+        if let Some((hexes, tiles, _, _)) = crate::abilities::tile_lay(sym) {
+            company_lay_tile_blocks.push(CompanyLayBlock {
+                sym,
+                hexes,
+                tiles,
+                offset: company_lay_n,
+                teleport: false,
+            });
+            company_lay_n += (tiles.len() * 6) as u32;
+        }
+    }
+
+    // One CompanyPlaceToken slot per teleport company (DH on F16).
+    let mut company_place_token_offsets: Vec<(&'static str, u32)> = Vec::new();
+    for sym in &company_offsets {
+        if crate::abilities::teleport(sym).is_some() {
+            company_place_token_offsets.push((sym, company_place_token_offsets.len() as u32));
+        }
+    }
 
     // ----- Compute action_offsets and total slot count, mirroring init_actions -----
     let mut action_offsets: HashMap<&'static str, u32> = HashMap::new();
@@ -160,14 +216,14 @@ fn build_layout() -> SlotLayout {
     action_offsets.insert("CompanyBuyShares", idx);
     idx += share_location_offsets.len() as u32;
 
-    // CompanyLayTile: 6 (DH F16) + 3 tiles * 6 rotations (CS).
+    // CompanyLayTile: the ability-derived sub-blocks (1830: 6 DH teleport
+    // slots + 3 CS tiles * 6 rotations = 24).
     action_offsets.insert("CompanyLayTile", idx);
-    idx += 6;
-    idx += (company_tile_offsets.len() * 6) as u32;
+    idx += company_lay_n;
 
-    // CompanyPlaceToken: 1 slot (DH F16).
+    // CompanyPlaceToken: one slot per teleport company (1830: 1, DH F16).
     action_offsets.insert("CompanyPlaceToken", idx);
-    idx += 1;
+    idx += company_place_token_offsets.len() as u32;
 
     // D-train depot disambiguation slots (appended last for backward-compat).
     action_offsets.insert("BuyTrainDFull", idx);
@@ -193,7 +249,8 @@ fn build_layout() -> SlotLayout {
         tile_offsets,
         city_offsets,
         city_count,
-        company_tile_offsets,
+        company_lay_tile_blocks,
+        company_place_token_offsets,
         action_offsets,
     }
 }
@@ -280,8 +337,15 @@ pub fn legal_action_to_index(la: &LegalAction) -> Option<u32> {
     }
 
     if t == "PlaceToken" {
-        if la.entity.get("private").and_then(s_to_json_str) == Some("DH") {
-            return Some(lo.action_offsets["CompanyPlaceToken"]);
+        // A teleport company's token routes to its CompanyPlaceToken slot.
+        if let Some(private) = la.entity.get("private").and_then(s_to_json_str) {
+            if let Some((_, off)) = lo
+                .company_place_token_offsets
+                .iter()
+                .find(|(sym, _)| *sym == private)
+            {
+                return Some(lo.action_offsets["CompanyPlaceToken"] + off);
+            }
         }
         let hex_id = la.params.get("hex").and_then(s_to_json_str)?;
         let city_idx = la
@@ -313,12 +377,30 @@ pub fn legal_action_to_index(la: &LegalAction) -> Option<u32> {
         let tile_name = la.params.get("tile").and_then(s_to_json_str)?;
         let hex_id = la.params.get("hex").and_then(s_to_json_str)?;
         let rotation = la.params.get("rotation").and_then(|v| v.as_i64())? as u32;
-        if private == Some("DH") && hex_id == "F16" && tile_name == "57" {
-            return Some(lo.action_offsets["CompanyLayTile"] + rotation);
-        }
-        if private == Some("CS") && hex_id == "B20" {
-            let ti = pos(&lo.company_tile_offsets, &tile_name)?;
-            return Some(lo.action_offsets["CompanyLayTile"] + 6 + (ti * 6) as u32 + rotation);
+        // A company special lay (teleport / bonus tile_lay) routes to the
+        // company's CompanyLayTile sub-block. Mirrors Python
+        // `index_for_factored`: a teleport lay with an unmatched tile falls
+        // through to the regular hex/tile encode, while a bonus tile_lay with
+        // an unmatched tile is an error (None).
+        if let Some(private) = private {
+            if let Some(block) = lo
+                .company_lay_tile_blocks
+                .iter()
+                .find(|b| b.sym == private && b.hexes.contains(&hex_id))
+            {
+                match pos(block.tiles, &tile_name) {
+                    Some(ti) => {
+                        return Some(
+                            lo.action_offsets["CompanyLayTile"]
+                                + block.offset
+                                + (ti * 6) as u32
+                                + rotation,
+                        )
+                    }
+                    None if block.teleport => {} // fall through (Python parity)
+                    None => return None,
+                }
+            }
         }
         let hi = pos(&lo.hex_offsets, &hex_id)?;
         let ti = pos(&lo.tile_offsets, &tile_name)?;
@@ -542,5 +624,22 @@ mod tests {
             lo.action_offsets["BuyTrainDFull"] - lo.action_offsets["CompanyPlaceToken"],
             1
         );
+
+        // The ability-derived company sub-blocks must reproduce the frozen
+        // 1830 ordering exactly: DH teleport (offset 0, tile 57 on F16),
+        // then CS bonus lays (offset 6, tiles 3/4/58 on B20).
+        let blocks: Vec<(&str, &[&str], &[&str], u32, bool)> = lo
+            .company_lay_tile_blocks
+            .iter()
+            .map(|b| (b.sym, b.hexes, b.tiles, b.offset, b.teleport))
+            .collect();
+        assert_eq!(
+            blocks,
+            vec![
+                ("DH", &["F16"][..], &["57"][..], 0, true),
+                ("CS", &["B20"][..], &["3", "4", "58"][..], 6, false),
+            ]
+        );
+        assert_eq!(lo.company_place_token_offsets, vec![("DH", 0)]);
     }
 }

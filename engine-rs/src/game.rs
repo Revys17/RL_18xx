@@ -293,37 +293,39 @@ impl BaseGame {
 }
 
 impl BaseGame {
-    /// Get active company tile-lay abilities for the current operating corp.
-    /// Returns a list of company syms that have available tile lay abilities.
-    /// - CS: bonus tile lay on B20 (available at any OR step, when owned by corp)
-    /// - DH: teleport tile lay on F16 (available at LayTile step, when owned by corp)
+    /// Get active company special-lay abilities for the current operating corp.
+    /// Returns the syms of owned, open companies whose TileLay (bonus lay,
+    /// available at any OR step) or Teleport (lay at the LayTile step) ability
+    /// is still unused.
     fn company_tile_abilities(&self, s: &crate::rounds::OperatingState) -> Vec<String> {
         let corp_sym = match s.current_corp_sym() {
             Some(sym) => sym.to_string(),
             None => return Vec::new(),
         };
         let corp_eid = EntityId::corporation(&corp_sym);
-        self.companies
-            .iter()
-            .filter(|co| {
-                !co.closed
-                    && !co.ability_used
-                    && (co.sym == "CS" || co.sym == "DH")
-                    && co.owner == corp_eid
-            })
-            .map(|co| co.sym.clone())
-            .collect()
+        self.special_lay_companies(&corp_eid)
     }
 
-    /// Check if MH exchange is available (any round, MH not closed, NYC has shares).
+    /// Check if a company exchange is available (any round, the exchange
+    /// company not closed, the target corporation has non-president shares
+    /// outside player hands). 1830: MH -> NYC.
     fn mh_exchange_available(&self) -> bool {
-        self.companies.iter().any(|co| co.sym == "MH" && !co.closed)
-            && self.corp_idx.get("NYC").map_or(false, |&ci| {
-                self.corporations[ci]
-                    .shares
-                    .iter()
-                    .any(|s| !s.president && !s.owner.is_player())
+        self.companies.iter().any(|co| {
+            if co.closed {
+                return false;
+            }
+            let Some((corporations, _)) = crate::abilities::exchange(&co.sym) else {
+                return false;
+            };
+            corporations.iter().any(|corp_sym| {
+                self.corp_idx.get(*corp_sym).map_or(false, |&ci| {
+                    self.corporations[ci]
+                        .shares
+                        .iter()
+                        .any(|s| !s.president && !s.owner.is_player())
+                })
             })
+        })
     }
 
     /// Check if the active corp's president owns CS or DH with unused ability.
@@ -488,18 +490,19 @@ impl BaseGame {
             self.move_number += 1;
             self.check_game_end();
 
-            // DH's lay_tile consumes the corp's tile lay AND token placement.
-            // After DH lay_tile, the corp may optionally place the DH token
-            // (DH place_token) or decline (DH pass). Either way, both Track
-            // and PlaceToken steps are consumed.
+            // A teleport company's (DH) lay_tile consumes the corp's tile lay
+            // AND token placement. After the teleport lay, the corp may
+            // optionally place the teleport token (company place_token) or
+            // decline (company pass). Either way, both Track and PlaceToken
+            // steps are consumed.
             //
-            // CS's lay_tile is a BONUS tile — doesn't consume anything.
-            // After CS lay_tile, skip_steps should check if BuyCompany
-            // (or whatever step we're at) can auto-advance.
+            // A bonus tile_lay company's (CS) lay_tile is a BONUS tile —
+            // doesn't consume anything. After it, skip_steps should check if
+            // BuyCompany (or whatever step we're at) can auto-advance.
             let entity_id = action.entity_id();
-            let mut needs_skip_steps = entity_id == "CS";
+            let mut needs_skip_steps = crate::abilities::tile_lay(entity_id).is_some();
             let mut dh_post_token: Option<(String, bool)> = None;
-            if entity_id == "DH" {
+            if crate::abilities::teleport(entity_id).is_some() {
                 if let Round::Operating(ref mut s) = self.round {
                     match action {
                         Action::LayTile { .. } if s.step == crate::rounds::OperatingStep::LayTile => {
@@ -2285,10 +2288,16 @@ impl BaseGame {
             Round::Operating(os) => {
                 let mut types = Vec::new();
 
-                // Company tile-lay abilities available during OR
+                // Company special-lay abilities available during OR:
+                // bonus tile_lay (CS-style, any step of the owning corp's
+                // turn) vs teleport (DH-style, LayTile step only).
                 let co_abilities = self.company_tile_abilities(&os);
-                let cs_available = co_abilities.iter().any(|s| s == "CS");
-                let dh_available = co_abilities.iter().any(|s| s == "DH");
+                let cs_available = co_abilities
+                    .iter()
+                    .any(|s| crate::abilities::tile_lay(s).is_some());
+                let dh_available = co_abilities
+                    .iter()
+                    .any(|s| crate::abilities::teleport(s).is_some());
                 let mh_available = self.mh_exchange_available();
 
                 match os.step {
@@ -2421,26 +2430,35 @@ impl BaseGame {
                             // Check if home token needs to be placed (mandatory, no connectivity needed)
                             let needs_home_token = self.corp_idx.get(corp_sym.as_str())
                                 .map_or(false, |&ci| !self.corporations[ci].home_token_ever_placed);
-                            // Also check DH special token (teleport: place on F16
-                            // without connectivity). Only offered while the
-                            // teleport is PENDING — once placed or declined,
-                            // Python's `teleport_complete()` removes the ability,
-                            // so F16 is no longer tokenable even though
-                            // `DH.ability_used` stays true.
-                            let dh_token = teleport_pending && self.companies.iter().any(|co| {
-                                co.sym == "DH"
-                                    && !co.closed
-                                    && co.ability_used  // tile already laid
-                                    && co.owner == EntityId::corporation(&corp_sym)
-                            }) && self.hex_idx.get("F16").map_or(false, |&hi| {
-                                let ci = match self.corp_idx.get(corp_sym.as_str()) {
-                                    Some(&i) => i,
-                                    None => return false,
-                                };
-                                // Corp has an unplaced token
-                                self.corporations[ci].next_token_index().is_some()
-                                    && self.hexes[hi].tile.cities.iter().any(|c| c.tokens.iter().any(|t| t.is_none()))
-                            });
+                            // Also check the teleport company's special token
+                            // (DH: place on F16 without connectivity). Only
+                            // offered while the teleport is PENDING — once
+                            // placed or declined, Python's `teleport_complete()`
+                            // removes the ability, so the hex is no longer
+                            // tokenable even though `ability_used` stays true.
+                            let corp_eid = EntityId::corporation(&corp_sym);
+                            let dh_token = teleport_pending
+                                && self.companies.iter().any(|co| {
+                                    !co.closed
+                                        && co.ability_used // tile already laid
+                                        && co.owner == corp_eid
+                                        && crate::abilities::teleport(&co.sym).map_or(
+                                            false,
+                                            |(hexes, _)| {
+                                                hexes.iter().any(|h| {
+                                                    self.hex_idx.get(*h).map_or(false, |&hi| {
+                                                        self.hexes[hi].tile.cities.iter().any(|c| {
+                                                            c.tokens.iter().any(|t| t.is_none())
+                                                        })
+                                                    })
+                                                })
+                                            },
+                                        )
+                                })
+                                && self.corp_idx.get(corp_sym.as_str()).map_or(false, |&ci| {
+                                    // Corp has an unplaced token
+                                    self.corporations[ci].next_token_index().is_some()
+                                });
                             if !tokenable.is_empty() || dh_token || needs_home_token {
                                 types.push("place_token".to_string());
                             }

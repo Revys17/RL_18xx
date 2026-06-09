@@ -686,55 +686,68 @@ impl BaseGame {
             }
         }
 
-        // DH teleport token: after the DH tile lay (`ability_used`), the owning
-        // corp may place a station token on F16 even though it isn't connected.
-        // Mirrors Python's `SpecialToken` step, which is only active while the
-        // teleport is PENDING (`round.teleported`). Once the corp places the
-        // teleport token OR declines (Pass), Python's `teleport_complete()`
-        // REMOVES the teleport ability, so F16 is never offered again — even
-        // though `DH.ability_used` stays true. We therefore gate the F16 option
-        // on `teleport_pending`, not merely on `ability_used`.
-        let corp_eid = crate::entities::EntityId::corporation(&corp_sym);
-        let dh_token = teleport_pending
-            && self.companies.iter().any(|co| {
-                co.sym == "DH" && !co.closed && co.ability_used && co.owner == corp_eid
-            });
-        if dh_token {
-            if let Some(&ci) = self.corp_idx.get(corp_sym.as_str()) {
-                if self.corporations[ci].next_token_index().is_some() {
-                    if let Some(&hi) = self.hex_idx.get("F16") {
-                        let cities = self.hexes[hi].tile.cities.clone();
-                        for (city_idx, city) in cities.iter().enumerate() {
-                            if !city.tokens.iter().any(|t| t.is_none()) {
-                                continue;
-                            }
-                            // Don't duplicate an F16 city already emitted above.
-                            let already = out.iter().any(|a| {
-                                a.params.get("hex").and_then(|v| v.as_str()) == Some("F16")
-                                    && a.params.get("city").and_then(|v| v.as_u64())
-                                        == Some(city_idx as u64)
-                            });
-                            if already {
-                                continue;
-                            }
-                            let slot = self
-                                .token_slot_for("F16", city_idx, &corp_sym)
-                                .unwrap_or(0);
-                            // DH teleport is a COMPANY special ability: Python's
-                            // `_company_place_token_choices` tags the entity
-                            // `{private: "DH"}` (not the corp), which routes the
-                            // action to the `CompanyPlaceToken` slot. Emitting the
-                            // corp descriptor here instead would (correctly per the
-                            // index fn) land it in the regular per-city PlaceToken
-                            // block — a different policy slot than the training
-                            // target. Match Python's entity exactly.
-                            let mut a = LegalAction::new("PlaceToken");
-                            a.entity.insert("private".to_string(), json!("DH"));
-                            a.params.insert("hex".to_string(), json!("F16"));
-                            a.params.insert("city".to_string(), json!(city_idx));
-                            a.params.insert("slot".to_string(), json!(slot));
-                            out.push(a);
+        // Teleport token (DH): after the teleport tile lay (`ability_used`),
+        // the owning corp may place a station token on the teleport hex even
+        // though it isn't connected. Mirrors Python's `SpecialToken` step,
+        // which is only active while the teleport is PENDING
+        // (`round.teleported`). Once the corp places the teleport token OR
+        // declines (Pass), Python's `teleport_complete()` REMOVES the
+        // teleport ability, so the hex is never offered again — even though
+        // `ability_used` stays true. We therefore gate the option on
+        // `teleport_pending`, not merely on `ability_used`.
+        if teleport_pending {
+            let corp_eid = crate::entities::EntityId::corporation(&corp_sym);
+            let teleport_companies: Vec<(String, &'static [&'static str])> = self
+                .companies
+                .iter()
+                .filter(|co| !co.closed && co.ability_used && co.owner == corp_eid)
+                .filter_map(|co| {
+                    crate::abilities::teleport(&co.sym).map(|(hexes, _)| (co.sym.clone(), hexes))
+                })
+                .collect();
+            for (co_sym, hexes) in teleport_companies {
+                let has_token = self
+                    .corp_idx
+                    .get(corp_sym.as_str())
+                    .map_or(false, |&ci| self.corporations[ci].next_token_index().is_some());
+                if !has_token {
+                    continue;
+                }
+                for hex_id in hexes {
+                    let Some(&hi) = self.hex_idx.get(*hex_id) else {
+                        continue;
+                    };
+                    let cities = self.hexes[hi].tile.cities.clone();
+                    for (city_idx, city) in cities.iter().enumerate() {
+                        if !city.tokens.iter().any(|t| t.is_none()) {
+                            continue;
                         }
+                        // Don't duplicate a teleport-hex city already emitted above.
+                        let already = out.iter().any(|a| {
+                            a.params.get("hex").and_then(|v| v.as_str()) == Some(*hex_id)
+                                && a.params.get("city").and_then(|v| v.as_u64())
+                                    == Some(city_idx as u64)
+                        });
+                        if already {
+                            continue;
+                        }
+                        let slot = self
+                            .token_slot_for(hex_id, city_idx, &corp_sym)
+                            .unwrap_or(0);
+                        // The teleport is a COMPANY special ability: Python's
+                        // `_company_place_token_choices` tags the entity
+                        // `{private: "DH"}` (not the corp), which routes the
+                        // action to the `CompanyPlaceToken` slot. Emitting the
+                        // corp descriptor here instead would (correctly per the
+                        // index fn) land it in the regular per-city PlaceToken
+                        // block — a different policy slot than the training
+                        // target. Match Python's entity exactly.
+                        let mut a = LegalAction::new("PlaceToken");
+                        a.entity.insert("private".to_string(), json!(co_sym.clone()));
+                        a.params.insert("hex".to_string(), json!(*hex_id));
+                        a.params.insert("city".to_string(), json!(city_idx));
+                        a.params.insert("slot".to_string(), json!(slot));
+                        out.push(a);
                     }
                 }
             }
@@ -826,7 +839,7 @@ impl BaseGame {
         // EXCEPT while a teleport blocks, per the invariant above.
         let mut out: Vec<LegalAction> = Vec::new();
         if !teleport_pending {
-            out.extend(self.factored_cs_lay_tile(&corp_sym));
+            out.extend(self.factored_company_bonus_lays(&corp_sym));
         }
 
         // DH's teleport ability defaults to `when: ["track"]` (Teleport ability,
@@ -841,7 +854,7 @@ impl BaseGame {
         // the emitter never diverges from the gate). (CS, with
         // `owning_corp_or_turn`, is handled above for every non-teleport step.)
         if at_lay_tile_step && !teleport_pending {
-            out.extend(self.factored_dh_lay_tile(&corp_sym));
+            out.extend(self.factored_company_teleport_lays(&corp_sym));
         }
 
         // Skip the rest of the corp-side enumeration when not at the LayTile
@@ -903,96 +916,100 @@ impl BaseGame {
         out
     }
 
-    /// Enumerate CS company tile-lay actions on B20.
+    /// Enumerate bonus tile_lay-ability company lays (1830: CS on B20).
     ///
-    /// CS rules (1830):
+    /// Rules (from the ability data):
     /// * Owner must be the active operating corp.
     /// * Company must be open and ability unused.
-    /// * Only hex B20, only yellow tiles "3", "4", "58".
-    /// * Tile must be a valid upgrade of B20's current tile (yellow over the
-    ///   pre-printed blank, with at least one rotation that connects to an
-    ///   adjacent neighbor edge).
+    /// * Only the ability's hexes and tiles (CS: B20, yellow "3"/"4"/"58").
+    /// * Tile must be a valid upgrade of the hex's current tile (yellow over
+    ///   the pre-printed blank, with at least one rotation that connects to
+    ///   an adjacent neighbor edge).
     /// * Free of charge (no terrain cost on B20).
-    fn factored_cs_lay_tile(&self, corp_sym: &str) -> Vec<LegalAction> {
-        // Find a CS company owned by the active corp with unused ability.
+    fn factored_company_bonus_lays(&self, corp_sym: &str) -> Vec<LegalAction> {
+        // Companies owned by the active corp with an unused tile_lay ability.
         let corp_eid = crate::entities::EntityId::corporation(corp_sym);
-        let cs_available = self
+        let lay_companies: Vec<(String, &'static [&'static str], &'static [&'static str])> = self
             .companies
             .iter()
-            .any(|co| co.sym == "CS" && !co.closed && !co.ability_used && co.owner == corp_eid);
-        if !cs_available {
-            return Vec::new();
-        }
-
-        let hex_id = "B20";
-        let hi = match self.hex_idx.get(hex_id) {
-            Some(&i) => i,
-            None => return Vec::new(),
-        };
-        let hex = &self.hexes[hi];
-        let current_tile = &hex.tile;
-
-        // CS only lays on the blank pre-printed hex (yellow tiles are valid
-        // upgrades). If a tile is already laid, the CS ability is moot.
-        // We still validate via `is_valid_upgrade_for` below for safety.
-        let old_tile_def = match self.tile_catalog.get(&current_tile.name) {
-            Some(def) => def.rotated(current_tile.rotation),
-            None => crate::tiles::TileDef {
-                name: current_tile.name.clone(),
-                color: current_tile.color,
-                paths: current_tile.paths.clone(),
-                cities: current_tile.cities.iter().map(|c| crate::tiles::CityDef {
-                    revenue: c.revenue,
-                    slots: c.slots as u8,
-                }).collect(),
-                towns: current_tile.towns.iter().map(|t| crate::tiles::TownDef {
-                    revenue: t.revenue,
-                }).collect(),
-                offboards: Vec::new(),
-                edges: crate::tiles::TileDef::compute_edges_pub(&current_tile.paths),
-                upgrades: Vec::new(),
-                label: current_tile.label.clone(),
-                has_junction: current_tile.paths.iter().any(|p|
-                    p.a == crate::tiles::PathEndpoint::Junction
-                        || p.b == crate::tiles::PathEndpoint::Junction
-                ),
-            },
-        };
-
-        let valid_exits = self.passable_exits_for(hex_id);
+            .filter(|co| !co.closed && !co.ability_used && co.owner == corp_eid)
+            .filter_map(|co| {
+                crate::abilities::tile_lay(&co.sym)
+                    .map(|(hexes, tiles, _, _)| (co.sym.clone(), hexes, tiles))
+            })
+            .collect();
 
         let mut out: Vec<LegalAction> = Vec::new();
-        let cs_tile_names = ["3", "4", "58"];
-        for tile_name in cs_tile_names.iter() {
-            let tile_def = match self.tile_catalog.get(*tile_name) {
-                Some(def) => def,
-                None => continue,
-            };
-            // Phase must allow this tile's color (always yellow for CS).
-            let color_str = format!("{:?}", tile_def.color).to_lowercase();
-            if !self.phase.tiles.iter().any(|t| t == &color_str) {
-                continue;
-            }
-            let remaining = self
-                .tile_counts_remaining
-                .get(*tile_name)
-                .copied()
-                .unwrap_or(0);
-            if remaining == 0 {
-                continue;
-            }
-            if !tile_def.is_valid_upgrade_for(&old_tile_def) {
-                continue;
-            }
-            let rotations = tile_def.legal_rotations_for(&old_tile_def, &valid_exits);
-            for &rot in &rotations {
-                let mut a = LegalAction::new("LayTile");
-                a.entity
-                    .insert("private".to_string(), json!("CS"));
-                a.params.insert("hex".to_string(), json!(hex_id));
-                a.params.insert("tile".to_string(), json!((*tile_name).to_string()));
-                a.params.insert("rotation".to_string(), json!(rot));
-                out.push(a);
+        for (co_sym, hexes, tiles) in lay_companies {
+            for hex_id in hexes {
+                let hi = match self.hex_idx.get(*hex_id) {
+                    Some(&i) => i,
+                    None => continue,
+                };
+                let current_tile = &self.hexes[hi].tile;
+
+                // The bonus lay targets the blank pre-printed hex (yellow
+                // tiles are valid upgrades). If a tile is already laid, the
+                // ability is moot. We still validate via
+                // `is_valid_upgrade_for` below for safety.
+                let old_tile_def = match self.tile_catalog.get(&current_tile.name) {
+                    Some(def) => def.rotated(current_tile.rotation),
+                    None => crate::tiles::TileDef {
+                        name: current_tile.name.clone(),
+                        color: current_tile.color,
+                        paths: current_tile.paths.clone(),
+                        cities: current_tile.cities.iter().map(|c| crate::tiles::CityDef {
+                            revenue: c.revenue,
+                            slots: c.slots as u8,
+                        }).collect(),
+                        towns: current_tile.towns.iter().map(|t| crate::tiles::TownDef {
+                            revenue: t.revenue,
+                        }).collect(),
+                        offboards: Vec::new(),
+                        edges: crate::tiles::TileDef::compute_edges_pub(&current_tile.paths),
+                        upgrades: Vec::new(),
+                        label: current_tile.label.clone(),
+                        has_junction: current_tile.paths.iter().any(|p|
+                            p.a == crate::tiles::PathEndpoint::Junction
+                                || p.b == crate::tiles::PathEndpoint::Junction
+                        ),
+                    },
+                };
+
+                let valid_exits = self.passable_exits_for(hex_id);
+
+                for tile_name in tiles.iter() {
+                    let tile_def = match self.tile_catalog.get(*tile_name) {
+                        Some(def) => def,
+                        None => continue,
+                    };
+                    // Phase must allow this tile's color (always yellow for CS).
+                    let color_str = format!("{:?}", tile_def.color).to_lowercase();
+                    if !self.phase.tiles.iter().any(|t| t == &color_str) {
+                        continue;
+                    }
+                    let remaining = self
+                        .tile_counts_remaining
+                        .get(*tile_name)
+                        .copied()
+                        .unwrap_or(0);
+                    if remaining == 0 {
+                        continue;
+                    }
+                    if !tile_def.is_valid_upgrade_for(&old_tile_def) {
+                        continue;
+                    }
+                    let rotations = tile_def.legal_rotations_for(&old_tile_def, &valid_exits);
+                    for &rot in &rotations {
+                        let mut a = LegalAction::new("LayTile");
+                        a.entity
+                            .insert("private".to_string(), json!(co_sym.clone()));
+                        a.params.insert("hex".to_string(), json!(*hex_id));
+                        a.params.insert("tile".to_string(), json!((*tile_name).to_string()));
+                        a.params.insert("rotation".to_string(), json!(rot));
+                        out.push(a);
+                    }
+                }
             }
         }
         out
@@ -1004,88 +1021,105 @@ impl BaseGame {
     /// blocked by a hardcoded impassable border on the starting tile. Mirrors
     /// Python's ``Hex.neighbors`` (vs ``all_neighbors``) which filters out
     /// impassable neighbors during ``connect_hexes`` and tile-laying logic.
-    /// Enumerate DH special-track tile lays on F16 (teleport ability).
+    /// Enumerate teleport-ability company lays (1830: DH tile "57" on F16).
     ///
-    /// DH rules (1830, g1830.py:54-68): a corp owning DH may lay tile "57" on
-    /// hex F16 (and later place a station token there) for the $120 mountain
-    /// cost. The ability is a teleport — no track connectivity is required.
-    /// Mirrors Python's `_company_lay_tile_choices` for the DH SpecialTrack
-    /// ability: emit one LayTile per legal rotation, entity `{private: "DH"}`,
-    /// gated on the corp being able to afford the F16 upgrade cost.
-    fn factored_dh_lay_tile(&self, corp_sym: &str) -> Vec<LegalAction> {
+    /// Rules (from the ability data, g1830.py:54-68): a corp owning the
+    /// teleport company may lay one of the ability's tiles on the ability's
+    /// hex (and later place a station token there) for the terrain cost
+    /// (F16: $120 mountain). The ability is a teleport — no track
+    /// connectivity is required. Mirrors Python's
+    /// `_company_lay_tile_choices` for the SpecialTrack ability: emit one
+    /// LayTile per legal rotation, entity `{private: <sym>}`, gated on the
+    /// corp being able to afford the hex's upgrade cost.
+    fn factored_company_teleport_lays(&self, corp_sym: &str) -> Vec<LegalAction> {
         let corp_eid = crate::entities::EntityId::corporation(corp_sym);
-        let dh_available = self.companies.iter().any(|co| {
-            co.sym == "DH" && !co.closed && !co.ability_used && co.owner == corp_eid
-        });
-        if !dh_available {
-            return Vec::new();
-        }
+        let teleport_companies: Vec<(String, &'static [&'static str], &'static [&'static str])> =
+            self.companies
+                .iter()
+                .filter(|co| !co.closed && !co.ability_used && co.owner == corp_eid)
+                .filter_map(|co| {
+                    crate::abilities::teleport(&co.sym)
+                        .map(|(hexes, tiles)| (co.sym.clone(), hexes, tiles))
+                })
+                .collect();
 
-        let hi = match self.hex_idx.get("F16") {
-            Some(&i) => i,
-            None => return Vec::new(),
-        };
-        // Python gates the DH lay on `upgrade_cost <= buying_power(corp)`; the
-        // F16 mountain upgrade costs $120.
         let corp_cash = self
             .corp_idx
             .get(corp_sym)
             .map_or(0, |&i| self.corporations[i].cash);
-        let f16_cost: i32 = self.hexes[hi].tile.upgrades.iter().map(|u| u.cost).sum();
-        if f16_cost > corp_cash {
-            return Vec::new();
-        }
-
-        let current_tile = &self.hexes[hi].tile;
-        let old_tile_def = match self.tile_catalog.get(&current_tile.name) {
-            Some(def) => def.rotated(current_tile.rotation),
-            None => crate::tiles::TileDef {
-                name: current_tile.name.clone(),
-                color: current_tile.color,
-                paths: current_tile.paths.clone(),
-                cities: current_tile.cities.iter().map(|c| crate::tiles::CityDef {
-                    revenue: c.revenue,
-                    slots: c.slots as u8,
-                }).collect(),
-                towns: current_tile.towns.iter().map(|t| crate::tiles::TownDef {
-                    revenue: t.revenue,
-                }).collect(),
-                offboards: Vec::new(),
-                edges: crate::tiles::TileDef::compute_edges_pub(&current_tile.paths),
-                upgrades: Vec::new(),
-                label: current_tile.label.clone(),
-                has_junction: current_tile.paths.iter().any(|p| {
-                    p.a == crate::tiles::PathEndpoint::Junction
-                        || p.b == crate::tiles::PathEndpoint::Junction
-                }),
-            },
-        };
-
-        let valid_exits = self.passable_exits_for("F16");
-        let tile_name = "57";
-        let tile_def = match self.tile_catalog.get(tile_name) {
-            Some(d) => d,
-            None => return Vec::new(),
-        };
-        let color_str = format!("{:?}", tile_def.color).to_lowercase();
-        if !self.phase.tiles.iter().any(|t| t == &color_str) {
-            return Vec::new();
-        }
-        if self.tile_counts_remaining.get(tile_name).copied().unwrap_or(0) == 0 {
-            return Vec::new();
-        }
-        if !tile_def.is_valid_upgrade_for(&old_tile_def) {
-            return Vec::new();
-        }
 
         let mut out: Vec<LegalAction> = Vec::new();
-        for &rot in &tile_def.legal_rotations_for(&old_tile_def, &valid_exits) {
-            let mut a = LegalAction::new("LayTile");
-            a.entity.insert("private".to_string(), json!("DH"));
-            a.params.insert("hex".to_string(), json!("F16"));
-            a.params.insert("tile".to_string(), json!(tile_name.to_string()));
-            a.params.insert("rotation".to_string(), json!(rot));
-            out.push(a);
+        for (co_sym, hexes, tiles) in teleport_companies {
+            for hex_id in hexes {
+                let hi = match self.hex_idx.get(*hex_id) {
+                    Some(&i) => i,
+                    None => continue,
+                };
+                // Python gates the teleport lay on
+                // `upgrade_cost <= buying_power(corp)`; F16 costs $120.
+                let hex_cost: i32 = self.hexes[hi].tile.upgrades.iter().map(|u| u.cost).sum();
+                if hex_cost > corp_cash {
+                    continue;
+                }
+
+                let current_tile = &self.hexes[hi].tile;
+                let old_tile_def = match self.tile_catalog.get(&current_tile.name) {
+                    Some(def) => def.rotated(current_tile.rotation),
+                    None => crate::tiles::TileDef {
+                        name: current_tile.name.clone(),
+                        color: current_tile.color,
+                        paths: current_tile.paths.clone(),
+                        cities: current_tile.cities.iter().map(|c| crate::tiles::CityDef {
+                            revenue: c.revenue,
+                            slots: c.slots as u8,
+                        }).collect(),
+                        towns: current_tile.towns.iter().map(|t| crate::tiles::TownDef {
+                            revenue: t.revenue,
+                        }).collect(),
+                        offboards: Vec::new(),
+                        edges: crate::tiles::TileDef::compute_edges_pub(&current_tile.paths),
+                        upgrades: Vec::new(),
+                        label: current_tile.label.clone(),
+                        has_junction: current_tile.paths.iter().any(|p| {
+                            p.a == crate::tiles::PathEndpoint::Junction
+                                || p.b == crate::tiles::PathEndpoint::Junction
+                        }),
+                    },
+                };
+
+                let valid_exits = self.passable_exits_for(hex_id);
+                for tile_name in tiles.iter() {
+                    let tile_def = match self.tile_catalog.get(*tile_name) {
+                        Some(d) => d,
+                        None => continue,
+                    };
+                    let color_str = format!("{:?}", tile_def.color).to_lowercase();
+                    if !self.phase.tiles.iter().any(|t| t == &color_str) {
+                        continue;
+                    }
+                    if self
+                        .tile_counts_remaining
+                        .get(*tile_name)
+                        .copied()
+                        .unwrap_or(0)
+                        == 0
+                    {
+                        continue;
+                    }
+                    if !tile_def.is_valid_upgrade_for(&old_tile_def) {
+                        continue;
+                    }
+                    for &rot in &tile_def.legal_rotations_for(&old_tile_def, &valid_exits) {
+                        let mut a = LegalAction::new("LayTile");
+                        a.entity.insert("private".to_string(), json!(co_sym.clone()));
+                        a.params.insert("hex".to_string(), json!(*hex_id));
+                        a.params
+                            .insert("tile".to_string(), json!((*tile_name).to_string()));
+                        a.params.insert("rotation".to_string(), json!(rot));
+                        out.push(a);
+                    }
+                }
+            }
         }
         out
     }

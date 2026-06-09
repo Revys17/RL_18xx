@@ -1872,14 +1872,17 @@ impl BaseGame {
                             !c.closed && !c.no_buy && c.owner.is_player()
                                 && corp_cash >= c.value / 2
                         });
-                        // Check if the corp owns CS with unused tile_lay ability.
-                        // ability_used is set when CS's lay_tile fires.
-                        // DH's teleport ability doesn't block BuyCompany
-                        // (it's filtered by Python's abilities() timing check).
+                        // Check if the corp owns a company with an unused
+                        // bonus tile_lay ability (CS). ability_used is set
+                        // when the company's lay_tile fires. A teleport
+                        // ability (DH) doesn't block BuyCompany (it's
+                        // filtered by Python's abilities() timing check).
                         let corp_eid = EntityId::corporation(&corp_sym);
                         let has_ability = self.companies.iter().any(|c| {
-                            c.sym == "CS" && !c.closed && !c.ability_used
+                            !c.closed
+                                && !c.ability_used
                                 && c.owner == corp_eid
+                                && crate::abilities::tile_lay(&c.sym).is_some()
                         });
                         !can_buy_company && !has_ability
                     }
