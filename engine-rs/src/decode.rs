@@ -102,9 +102,7 @@ impl BaseGame {
     pub(crate) fn process_action_native(&mut self, action: &Action) -> Result<(), GameError> {
         let logged = self.action_to_json(action);
         self.process_action_internal(action)?;
-        if !self.last_action_swallowed {
-            self.action_log.push(logged);
-        }
+        self.action_log.push(logged);
         Ok(())
     }
 

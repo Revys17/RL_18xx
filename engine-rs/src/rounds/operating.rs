@@ -1994,14 +1994,11 @@ impl BaseGame {
         } else {
             // When the corp MUST buy a train (Python's `president_may_contribute`
             // == `must_buy_train`), the BuyTrain step's legal actions are
-            // [SellShares, BuyTrain] — Pass is EXCLUDED (round.py:805-810). An
-            // inserted/attempted Pass at that point is rejected by Python's
-            // blocking-step guard (round.py:5356-5357) and the GameError is
-            // swallowed by BaseGame.process_action for Pass actions, leaving
-            // state byte-for-byte unchanged (base.py:934-945). Mirror that here:
-            // reject the Pass so Rust's Pass-swallow restore path
-            // (game.rs process_action_internal) turns it into a no-op. The corp
-            // stays at BuyTrain with the same current_entity/step.
+            // [SellShares, BuyTrain] — Pass is EXCLUDED (round.py:805-810). A
+            // Pass at that point is rejected by Python's blocking-step guard
+            // (round.py:5356-5357) and now propagates as a real error (neither
+            // engine swallows failed passes). The enumerator never offers this
+            // pass, so reaching here signals a bad caller; reject it.
             if new_state.step == OperatingStep::BuyTrain
                 && self.president_may_contribute_pub(cur)
             {
