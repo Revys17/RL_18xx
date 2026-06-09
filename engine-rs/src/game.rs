@@ -1004,15 +1004,30 @@ impl BaseGame {
         // corp lay path already rejects entity != current operator, but company
         // entities bypass that check.
         if matches!(action, Action::LayTile { .. } | Action::PlaceToken { .. }) {
-            if let Some(owning_corp_sym) = self.companies[company_idx].owner.corp_sym() {
-                let usable = match &self.round {
-                    Round::Operating(s) => s.current_corp_sym() == Some(owning_corp_sym),
-                    _ => false,
-                };
-                if !usable {
+            match self.companies[company_idx].owner.corp_sym() {
+                Some(owning_corp_sym) => {
+                    let usable = match &self.round {
+                        Round::Operating(s) => s.current_corp_sym() == Some(owning_corp_sym),
+                        _ => false,
+                    };
+                    if !usable {
+                        return Err(GameError::new(format!(
+                            "Company {} ability not usable: owning corp {} is not the current operator",
+                            self.companies[company_idx].sym, owning_corp_sym
+                        )));
+                    }
+                }
+                None => {
+                    // Player-owned (or unowned) company: the tile_lay /
+                    // place_token abilities carry owner_type "corporation"
+                    // (g1830.py), so they are unusable until a corporation
+                    // buys the company. Python's blocking-step dispatch
+                    // rejects the action; without this arm a player-owned
+                    // CS/DH lay_tile fell through to the generic LayTile
+                    // handler and silently laid a free tile.
                     return Err(GameError::new(format!(
-                        "Company {} ability not usable: owning corp {} is not the current operator",
-                        self.companies[company_idx].sym, owning_corp_sym
+                        "Company {} ability not usable: company is not owned by a corporation",
+                        self.companies[company_idx].sym
                     )));
                 }
             }

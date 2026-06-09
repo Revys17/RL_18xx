@@ -1128,35 +1128,33 @@ impl BaseGame {
                     .ok_or_else(|| GameError::new(format!("Train {} not in depot", train_name)))?
             };
 
-            // If exchanging a train (e.g., 4→D), remove the old train first
-            // and use the discounted price from the action.
-            if let Some(exchange_name) = exchange {
+            // Resolve the trade-in train (validation only — the removal is
+            // deferred until every check below passes, so a failed buy
+            // leaves state untouched).
+            let ex_idx = if let Some(exchange_name) = exchange {
                 let exchange_base = exchange_name.split('-').next().unwrap_or(exchange_name);
                 // Match by full ID first, then fall back to base name
-                let ex_idx = self.corporations[corp_idx]
-                    .trains
-                    .iter()
-                    .position(|t| t.id == exchange_name)
-                    .or_else(|| {
-                        self.corporations[corp_idx]
-                            .trains
-                            .iter()
-                            .position(|t| t.name == exchange_base)
-                    })
-                    .ok_or_else(|| {
-                        GameError::new(format!(
-                            "Exchange train {} not owned by {}",
-                            exchange_name, corp_sym
-                        ))
-                    })?;
-                let mut old_train = self.corporations[corp_idx].trains.remove(ex_idx);
-                // Reset ownership when train returns to the bank pool — otherwise
-                // ``train.owner`` still reports the previous corporation, which breaks
-                // the cleaning pipeline's cross-player check (it sees the discarded
-                // train as still owned by the old corp).
-                old_train.owner = EntityId::none();
-                self.depot.discarded.push(old_train);
-            }
+                Some(
+                    self.corporations[corp_idx]
+                        .trains
+                        .iter()
+                        .position(|t| t.id == exchange_name)
+                        .or_else(|| {
+                            self.corporations[corp_idx]
+                                .trains
+                                .iter()
+                                .position(|t| t.name == exchange_base)
+                        })
+                        .ok_or_else(|| {
+                            GameError::new(format!(
+                                "Exchange train {} not owned by {}",
+                                exchange_name, corp_sym
+                            ))
+                        })?,
+                )
+            } else {
+                None
+            };
 
             // Use the action's price — Python honors ``action.price`` for
             // all depot purchases, matching what the human game recorded.
@@ -1164,11 +1162,15 @@ impl BaseGame {
             // action's ``price`` is the source of truth.
             let actual_price = price;
 
-            // Check if corp can afford; if not, president contributes
+            // Check if corp can afford; if not, president contributes.
             let corp_pays = self.corporations[corp_idx].cash.min(actual_price);
-
-            if corp_pays < actual_price {
-                let president_pays = actual_price - corp_pays;
+            let president_pays = actual_price - corp_pays;
+            if president_pays > 0 {
+                // Python forbids president contribution on an exchange buy
+                // (round.py:579-581).
+                if ex_idx.is_some() {
+                    return Err(GameError::new("Cannot contribute funds when exchanging"));
+                }
                 if let Some(pres_id) = self.corporations[corp_idx].president_id() {
                     let pres_idx = self.player_index(pres_id).unwrap();
                     if self.players[pres_idx].cash < president_pays {
@@ -1179,7 +1181,20 @@ impl BaseGame {
                         )));
                     }
                     self.players[pres_idx].cash -= president_pays;
+                } else {
+                    return Err(GameError::new("Cannot afford train and no president"));
                 }
+            }
+
+            // All checks passed — commit. The trade-in goes to the discard pile.
+            if let Some(ex_idx) = ex_idx {
+                let mut old_train = self.corporations[corp_idx].trains.remove(ex_idx);
+                // Reset ownership when train returns to the bank pool — otherwise
+                // ``train.owner`` still reports the previous corporation, which breaks
+                // the cleaning pipeline's cross-player check (it sees the discarded
+                // train as still owned by the old corp).
+                old_train.owner = EntityId::none();
+                self.depot.discarded.push(old_train);
             }
 
             self.corporations[corp_idx].cash -= corp_pays;
