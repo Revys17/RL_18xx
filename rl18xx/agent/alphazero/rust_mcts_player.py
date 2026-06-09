@@ -201,6 +201,15 @@ class RustMCTSPlayer:
             float(getattr(self.config, "pw_alpha", 0.5)),
             int(getattr(self.config, "min_price_children", 1)),
         )
+        # PUCT / forced-chain knobs (parity with the Python MCTSPlayer):
+        # per-round c_puct_init overrides and the forced-chain
+        # max_game_length guard.
+        self._rust_player.set_search_config(
+            float(getattr(self.config, "c_puct_init", 1.25)),
+            float(getattr(self.config, "c_puct_base", 19652.0)),
+            {str(k): float(v) for k, v in getattr(self.config, "c_puct_by_round", {}).items()},
+            int(getattr(self.config, "max_game_length", 1000)),
+        )
         self.result = np.zeros(len(game_state.players))
         self.result_string: Optional[str] = None
         self.searches_pi: list = []
@@ -440,16 +449,35 @@ class RustMCTSPlayer:
         return self.pick_move()
 
     def pick_move(self) -> int:
+        """Pick a move from root visit counts — parity with Python
+        ``MCTSPlayer.pick_move``: argmax after ``softpick_move_cutoff``
+        engine moves, visit-count-proportional sampling (temperature=1)
+        before it."""
         legal = self._rust_player.legal_action_indices_at_root()
+        if self._rust_player.root_move_number() >= self.config.softpick_move_cutoff:
+            return int(self._rust_player.pick_best_action())
         if len(legal) == 1:
             return int(legal[0])
-        return int(self._rust_player.pick_best_action())
+        visit_counts = np.asarray(self._rust_player.child_n_at_root(), dtype=np.float64)
+        total = visit_counts.sum()
+        if total == 0:
+            # No visits; fall back to uniform over legal actions.
+            return int(legal[random.randrange(len(legal))])
+        probs = visit_counts / total
+        cdf = probs.cumsum()
+        selection = random.random()
+        compressed_idx = int(cdf.searchsorted(selection))
+        compressed_idx = min(compressed_idx, len(legal) - 1)
+        return int(legal[compressed_idx])
 
     def play_move(self, action_index: int) -> bool:
         rust_root_game = self._rust_player.root_game_object()
-        move_idx = len(self.searches_pi)
+        # Temperature keys off the ENGINE move number (action-log length,
+        # which includes forced-chain actions) — Python MCTSPlayer.play_move
+        # uses ``game_object.move_number``, NOT the decision count.
+        move_number = self._rust_player.root_move_number()
         temperature = (
-            1.0 if move_idx < self.config.softpick_move_cutoff else 0.0
+            1.0 if move_number < self.config.softpick_move_cutoff else 0.0
         )
 
         # Snapshot the search-policy vector before advancing the root.

@@ -269,6 +269,16 @@ pub struct RustMCTSPlayer {
     pub pw_c: f32,
     pub pw_alpha: f32,
     pub min_price_children: usize,
+
+    /// Per-round-type c_puct_init override (Python ``config.c_puct_by_round``,
+    /// keyed by the round class name "Auction"/"Stock"/"Operating"). Falls
+    /// back to ``c_puct_init`` for unknown round names.
+    pub c_puct_by_round: HashMap<String, f32>,
+    /// Forced-chain guard (Python ``config.max_game_length``): the collapse
+    /// loop stops once the engine move number (action-log length) reaches
+    /// this, exactly like Python's ``while not (finished or move_number >=
+    /// max_game_length)``.
+    pub max_game_length: usize,
 }
 
 impl RustMCTSPlayer {
@@ -404,6 +414,8 @@ impl RustMCTSPlayer {
             pw_c: pw_c.unwrap_or(1.0),
             pw_alpha: pw_alpha.unwrap_or(0.5),
             min_price_children: min_price_children.unwrap_or(1),
+            c_puct_by_round: HashMap::new(),
+            max_game_length: 1000,
         };
         let root = player.build_node(cloned_inner, None, None)?;
         player.num_players = root.num_players;
@@ -417,6 +429,30 @@ impl RustMCTSPlayer {
         self.pw_c = pw_c;
         self.pw_alpha = pw_alpha;
         self.min_price_children = min_price_children;
+    }
+
+    /// Set the PUCT / forced-chain knobs from the Python ``SelfPlayConfig``
+    /// (c_puct_init, c_puct_base, per-round c_puct_init overrides, and the
+    /// forced-chain ``max_game_length`` guard).
+    pub fn set_search_config(
+        &mut self,
+        c_puct_init: f32,
+        c_puct_base: f32,
+        c_puct_by_round: HashMap<String, f32>,
+        max_game_length: usize,
+    ) {
+        self.c_puct_init = c_puct_init;
+        self.c_puct_base = c_puct_base;
+        self.c_puct_by_round = c_puct_by_round;
+        self.max_game_length = max_game_length;
+    }
+
+    /// Engine move number at the root (length of the full action log) —
+    /// Python's ``game_object.move_number`` (= ``len(raw_actions)``). Used by
+    /// the Python wrapper for softpick / temperature cutoffs so both players
+    /// key off the same counter (which includes forced-chain actions).
+    pub fn root_move_number(&self) -> usize {
+        self.arena[self.root_idx].game.action_log.len()
     }
 
     /// Number of players in the root game.
@@ -640,7 +676,7 @@ impl RustMCTSPlayer {
 
         let c_puct = 2.0
             * ((1.0 + slot_visits + self.c_puct_base) / self.c_puct_base).ln()
-            + 2.0 * self.c_puct_init;
+            + 2.0 * self.c_puct_init_for(arena_idx);
         let n_s = (slot_visits - 1.0).max(1.0);
         let sqrt_n_s = n_s.sqrt();
 
@@ -749,9 +785,11 @@ impl RustMCTSPlayer {
         apply_action(&mut new_game, action_index, expansion_price_for_apply)?;
 
         // Forced-chain collapse: while exactly one legal action, apply it.
+        // Mirrors Python's loop guard ``while not (finished or move_number >=
+        // max_game_length)`` — move_number is the action-log length.
         let mut forced_chain: Vec<u32> = Vec::new();
         loop {
-            if new_game.is_finished_pub() {
+            if new_game.is_finished_pub() || new_game.action_log.len() >= self.max_game_length {
                 break;
             }
             // Enumerate factored choices, dedupe to flat indices.
@@ -759,6 +797,7 @@ impl RustMCTSPlayer {
             let mut flat_indices: Vec<u32> = Vec::new();
             let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
             let mut forced_price_ranges: HashMap<u32, (i64, i64)> = HashMap::new();
+            let mut forced_action_types: HashMap<u32, String> = HashMap::new();
             for la in &choices {
                 if let Some(idx) = crate::action_index::legal_action_to_index(la) {
                     if seen.insert(idx) {
@@ -768,13 +807,30 @@ impl RustMCTSPlayer {
                         let existing = forced_price_ranges.entry(idx).or_insert(pr);
                         *existing = (existing.0.min(pr.0), existing.1.max(pr.1));
                     }
+                    forced_action_types
+                        .entry(idx)
+                        .or_insert_with(|| la.action_type.clone());
                 }
             }
             if flat_indices.len() != 1 {
                 break;
             }
             let forced_idx = flat_indices[0];
-            let forced_price = forced_price_ranges.get(&forced_idx).map(|(lo, _)| *lo);
+            // Python's forced loop samples a price from the price-head
+            // posterior for non-degenerate ranges (the same sampler PW
+            // expansion uses, reading this node's stashed price_components);
+            // degenerate ranges apply the engine minimum.
+            let forced_price = match forced_price_ranges.get(&forced_idx) {
+                Some(&(lo, hi)) if lo != hi => {
+                    let at = forced_action_types
+                        .get(&forced_idx)
+                        .cloned()
+                        .unwrap_or_default();
+                    Some(self._sample_price_with_index(arena_idx, forced_idx, &at, (lo, hi)))
+                }
+                Some(&(lo, _)) => Some(lo),
+                None => None,
+            };
             apply_action(&mut new_game, forced_idx, forced_price)?;
             forced_chain.push(forced_idx);
         }
@@ -1114,9 +1170,35 @@ impl RustMCTSPlayer {
         } else {
             self.maybe_add_child(self.root_idx, action_index, None)?
         };
+        // Rebase the root tally from the committed child's OWN stats. For a
+        // PW price grandchild that is the per-price entry — the categorical
+        // slot aggregates ALL price siblings and would inflate n_at_root and
+        // mix sibling values into root_q_vector (Python's root-as-grandchild
+        // reads parent.price_child_N/W[fmove][price]).
         let pidx = self.arena[child_idx].parent_compressed_idx;
-        let new_n = self.arena[self.root_idx].child_n[pidx];
-        let new_w = self.arena[self.root_idx].child_w[pidx];
+        let (new_n, new_w) = if self.arena[child_idx].is_price_grandchild {
+            let fmove = self.arena[child_idx].fmove.unwrap();
+            let sp = self.arena[child_idx].sampled_price.unwrap();
+            (
+                self.arena[self.root_idx]
+                    .price_child_n
+                    .get(&fmove)
+                    .and_then(|m| m.get(&sp))
+                    .copied()
+                    .unwrap_or(0.0),
+                self.arena[self.root_idx]
+                    .price_child_w
+                    .get(&fmove)
+                    .and_then(|m| m.get(&sp))
+                    .copied()
+                    .unwrap_or([0.0; VALUE_SIZE]),
+            )
+        } else {
+            (
+                self.arena[self.root_idx].child_n[pidx],
+                self.arena[self.root_idx].child_w[pidx],
+            )
+        };
         self.root_idx = child_idx;
         self.root_n = new_n;
         self.root_w = new_w;
@@ -1188,7 +1270,7 @@ impl RustMCTSPlayer {
         let n_this = self.root_n;
         let c_puct = 2.0
             * ((1.0 + n_this + self.c_puct_base) / self.c_puct_base).ln()
-            + 2.0 * self.c_puct_init;
+            + 2.0 * self.c_puct_init_for(self.root_idx);
         let n_s = (n_this - 1.0).max(1.0);
         let sqrt_n_s = n_s.sqrt();
         let ap = root.active_player_index;
@@ -1281,35 +1363,101 @@ impl RustMCTSPlayer {
         sample_price_for_pw(price_mean, price_log_std, action_type, price_range)
     }
 
-    /// Score: Q + U for each child compressed slot.
+    /// A node's own visit count — Python ``MCTSNode.N``. The root reads its
+    /// dedicated tally; a PW price grandchild reads its per-price entry in
+    /// the parent's ``price_child_n`` (NOT the categorical slot, which
+    /// aggregates all price siblings); a regular child reads the parent's
+    /// compressed slot.
+    fn node_n(&self, arena_idx: usize) -> f32 {
+        if arena_idx == self.root_idx {
+            return self.root_n;
+        }
+        let node = &self.arena[arena_idx];
+        let parent = node.parent.unwrap();
+        if node.is_price_grandchild {
+            let fmove = node.fmove.unwrap();
+            let sp = node.sampled_price.unwrap();
+            self.arena[parent]
+                .price_child_n
+                .get(&fmove)
+                .and_then(|m| m.get(&sp))
+                .copied()
+                .unwrap_or(0.0)
+        } else {
+            self.arena[parent].child_n[node.parent_compressed_idx]
+        }
+    }
+
+    /// c_puct_init for the node's round type — Python's
+    /// ``config.c_puct_by_round.get(round_name, config.c_puct_init)`` keyed
+    /// by the round class name.
+    fn c_puct_init_for(&self, arena_idx: usize) -> f32 {
+        let name = match &self.arena[arena_idx].game.round {
+            crate::rounds::Round::Auction(_) => "Auction",
+            crate::rounds::Round::Stock(_) => "Stock",
+            crate::rounds::Round::Operating(_) => "Operating",
+        };
+        self.c_puct_by_round
+            .get(name)
+            .copied()
+            .unwrap_or(self.c_puct_init)
+    }
+
+    /// Score: Q + U for each child compressed slot, with Python's top-k
+    /// categorical progressive widening at wide nodes (``select_leaf``:
+    /// when >20 legal actions, restrict to the k = max(1, pw_c * N^pw_alpha)
+    /// highest-prior slots).
     fn argmax_action_score(&self, arena_idx: usize) -> usize {
         let node = &self.arena[arena_idx];
-        let n_this = if arena_idx == self.root_idx {
-            self.root_n
-        } else {
-            // Node's own N is stored on parent.
-            let parent = node.parent.unwrap();
-            self.arena[parent].child_n[node.parent_compressed_idx]
-        };
+        let n_this = self.node_n(arena_idx);
         let c_puct = 2.0
             * ((1.0 + n_this + self.c_puct_base) / self.c_puct_base).ln()
-            + 2.0 * self.c_puct_init;
+            + 2.0 * self.c_puct_init_for(arena_idx);
         let n_s = (n_this - 1.0).max(1.0);
         let sqrt_n_s = n_s.sqrt();
         let ap = node.active_player_index;
-        let mut best_i = 0usize;
+        let num_legal = node.legal_action_indices.len();
+
+        // Top-k categorical PW mask (by current — possibly noised — prior).
+        let allowed: Option<Vec<bool>> = if num_legal > 20 {
+            let k = ((self.pw_c * n_this.powf(self.pw_alpha)) as usize).max(1);
+            if k < num_legal {
+                let mut order: Vec<usize> = (0..num_legal).collect();
+                order.sort_unstable_by(|&a, &b| {
+                    node.child_prior[b]
+                        .partial_cmp(&node.child_prior[a])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let mut mask = vec![false; num_legal];
+                for &i in order.iter().take(k) {
+                    mask[i] = true;
+                }
+                Some(mask)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut best_i: Option<usize> = None;
         let mut best_score = f32::NEG_INFINITY;
-        for i in 0..node.legal_action_indices.len() {
+        for i in 0..num_legal {
+            if let Some(ref mask) = allowed {
+                if !mask[i] {
+                    continue;
+                }
+            }
             let n_sa = node.child_n[i];
             let q_sa = node.child_w[i][ap] / (1.0 + n_sa);
             let u_sa = c_puct * node.child_prior[i] * sqrt_n_s / (1.0 + n_sa);
             let score = q_sa + u_sa;
-            if score > best_score {
+            if best_i.is_none() || score > best_score {
                 best_score = score;
-                best_i = i;
+                best_i = Some(i);
             }
         }
-        best_i
+        best_i.unwrap_or(0)
     }
 }
 
