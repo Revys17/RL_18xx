@@ -2,12 +2,21 @@
 
 Runs ``cleaning_diff.run(path, strict=True)`` over every human game in
 ``human_games/1830/`` across a process pool and aggregates the outcomes. The
-strict lockstep enforces, at every state of the real cleaning import:
-  * exact state parity (certs/cash/trains/tokens/privates),
+strict lockstep enforces, at every state of the real cleaning import, all four
+parity axes:
+  * STATE parity (certs/cash/trains/tokens/privates),
   * factored ENUMERATION parity (``_key`` sets, bidirectional),
   * factored POLICY-INDEX parity (Python ActionMapper training-target indices
-    == Rust ``factored_legal_indices`` search indices), and
+    == Rust ``factored_legal_indices`` search indices),
+  * native DECODE parity (every legal index decode+applies to the same state via
+    the native Rust path as via the Python ActionMapper) — on by default; set
+    ``DECODE_CHECK=0`` to skip this (most expensive) axis, and
   * acceptance of the applied action by both engines.
+
+Because the real recorded action stream is replayed, this exercises the rare
+paths that synthetic random/round-robin walks miss — emergency-money president
+share sales, bankruptcy, and D-train trade-in/exchange. It is the gate to run
+before and after engine refactors / architectural simplifications.
 
 Any game whose status is in BAD is a real Rust divergence. Prints a summary and
 the first divergence of each bad game; writes the full result array to --json.
@@ -15,6 +24,7 @@ the first divergence of each bad game; writes the full result array to --json.
 Usage::
 
     uv run python tests/index_parity_corpus.py [--limit N] [--workers W] [--json out.json]
+    DECODE_CHECK=0 uv run python tests/index_parity_corpus.py   # skip decode axis (faster)
 """
 
 import argparse
@@ -28,7 +38,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 BAD = {"rust_error", "state_divergence", "enum_divergence", "index_divergence",
-       "python_error", "stream_length_mismatch", "reason_mismatch", "diagnostic_crash"}
+       "decode_divergence", "python_error", "stream_length_mismatch",
+       "reason_mismatch", "diagnostic_crash"}
 
 
 def _one(path):
@@ -36,7 +47,11 @@ def _one(path):
     import logging
     logging.disable(logging.CRITICAL)
     from tests import cleaning_diff
-    if os.environ.get("DECODE_CHECK") == "1":
+    # Native decode parity is part of the gate by default; set DECODE_CHECK=0 to
+    # skip it (it is the most expensive axis — it decode+applies every legal
+    # index at every state). Decode mismatches surface as ``decode_divergence``,
+    # which is in BAD above so they actually fail the gate.
+    if os.environ.get("DECODE_CHECK", "1") != "0":
         cleaning_diff.set_check_decode(True)
     try:
         return cleaning_diff.run(path, strict=True)

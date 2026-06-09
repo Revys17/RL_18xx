@@ -52,6 +52,17 @@ impl BaseGame {
         )))
     }
 
+    /// Find the deduplicated factored [`LegalAction`] whose flat policy index
+    /// matches `idx` at the current state, re-running the factored enumeration.
+    /// Shared by `decode_index`, `price_range_for_index`, and
+    /// `price_head_slot_for_index` (after dedup there is at most one entry per
+    /// index, so the first match is the only match).
+    pub(crate) fn legal_action_for_index(&mut self, idx: u32) -> Option<LegalAction> {
+        self.get_factored_choices_impl()
+            .into_iter()
+            .find(|c| crate::action_index::legal_action_to_index(c) == Some(idx))
+    }
+
     /// Decode a flat policy index into a concrete [`Action`] at the current
     /// state. `sampled_price` supplies the price for continuous-price slots
     /// (Bid / BuyCompany / cross-corp BuyTrain); ignored for fixed-price slots.
@@ -72,13 +83,9 @@ impl BaseGame {
         // Find the factored LegalAction whose flat index matches. (After dedup
         // there is at most one categorical entry per index; price-bearing slots
         // collapse the price dimension to a single entry carrying a range.)
-        let choices = self.get_factored_choices_impl();
-        let la = choices
-            .into_iter()
-            .find(|c| crate::action_index::legal_action_to_index(c) == Some(idx))
-            .ok_or_else(|| {
-                GameError::new(format!("index {} is not legal at the current state", idx))
-            })?;
+        let la = self.legal_action_for_index(idx).ok_or_else(|| {
+            GameError::new(format!("index {} is not legal at the current state", idx))
+        })?;
 
         let company_offset = crate::action_index::layout().action_offsets["CompanyBuyShares"];
         let is_company = idx >= company_offset;
@@ -290,13 +297,49 @@ impl BaseGame {
             }
 
             "SellShares" => {
-                let entity_id = self.current_actor_id()?;
+                // The seller is the active player in a Stock round, but in an
+                // Operating round the active entity is the operating
+                // corporation and the seller is its PRESIDENT (emergency money
+                // — round.py / factored_sell_shares). Mirror the enumerator's
+                // seller resolution so the decoded entity is the president's
+                // numeric id that `or_emergency_sell` expects; `current_actor_id()`
+                // would yield the corp sym here and trip "Invalid player id".
+                let entity_id = match self.round_state.active_entity_id.player_id() {
+                    Some(pid) => pid.to_string(),
+                    None => {
+                        let sym = self
+                            .round_state
+                            .active_entity_id
+                            .corp_sym()
+                            .ok_or_else(|| {
+                                GameError::new(
+                                    "SellShares: active entity is neither player nor corporation",
+                                )
+                            })?;
+                        let ci = *self.corp_idx.get(sym).ok_or_else(|| {
+                            GameError::new(format!("SellShares: unknown corp {}", sym))
+                        })?;
+                        self.corporations[ci]
+                            .president_id()
+                            .ok_or_else(|| {
+                                GameError::new(format!(
+                                    "SellShares: corp {} has no president",
+                                    sym
+                                ))
+                            })?
+                            .to_string()
+                    }
+                };
                 let corporation_sym = s(&la.entity, "corp")
                     .ok_or_else(|| GameError::new("SellShares LegalAction missing 'corp'"))?;
-                // The factored sell slot encodes the share count; percent = num*10.
-                let num = i(&la.params, "num")
+                // The factored sell slot encodes the share count under "count"
+                // (see factored_sell_shares); fall back to percent/10 for any
+                // producer that only carries the percent.
+                let num = i(&la.params, "count")
                     .or_else(|| i(&la.params, "percent").map(|p| p / 10))
-                    .ok_or_else(|| GameError::new("SellShares LegalAction missing 'num'"))?;
+                    .ok_or_else(|| {
+                        GameError::new("SellShares LegalAction missing 'count'/'percent'")
+                    })?;
                 Ok(Action::SellShares {
                     entity_id,
                     corporation_sym,
@@ -551,11 +594,7 @@ impl BaseGame {
     /// the index is illegal or categorical (no price). Native replacement for
     /// reading `ActionMapper.get_legal_actions_factored(...)[1][idx]`.
     fn price_range_for_index(&mut self, idx: u32) -> Option<(i64, i64)> {
-        let choices = self.get_factored_choices_impl();
-        choices
-            .iter()
-            .find(|c| crate::action_index::legal_action_to_index(c) == Some(idx))
-            .and_then(|c| c.price_range)
+        self.legal_action_for_index(idx).and_then(|c| c.price_range)
     }
 
     /// Resolve the `ContinuousPriceHead` slot for a flat index:
@@ -568,14 +607,15 @@ impl BaseGame {
         const COMPANIES: [&str; 6] = ["SV", "CS", "DH", "MH", "CA", "BO"];
         const CORPS: [&str; 8] = ["PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M"];
         const TRAINS: [&str; 6] = ["2", "3", "4", "5", "6", "D"];
-        let choices = self.get_factored_choices_impl();
-        let la = choices
-            .into_iter()
-            .find(|c| crate::action_index::legal_action_to_index(c) == Some(idx))?;
-        // Only continuous-price (min != max) slots reach the head.
+        let la = self.legal_action_for_index(idx)?;
+        // Any price-bearing slot maps to the head; a degenerate (min == max)
+        // range still yields a slot with price_min == price_max, matching
+        // Python's `price_head_slot_for_action`. (The sole caller,
+        // `_extract_price_targets`, short-circuits on min == max before reaching
+        // here, so this only matters for direct / parity-audit callers.)
         let (min, max) = match la.price_range {
-            Some((lo, hi)) if lo != hi => (lo, hi),
-            _ => return None,
+            Some((lo, hi)) => (lo, hi),
+            None => return None,
         };
         let slot = match la.action_type.as_str() {
             "Bid" => {

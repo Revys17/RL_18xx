@@ -1098,11 +1098,44 @@ impl RustMCTSPlayer {
                     None => self.maybe_add_child(py, self.root_idx, action_index, Some(price))?,
                 }
             } else {
-                self.maybe_add_child(py, self.root_idx, action_index, None)?
+                // No price-grandchild was ever expanded for this PW slot at
+                // commit time. Commit the deterministic engine minimum
+                // (price_range low) rather than letting maybe_add_child sample
+                // a random price — passing `None` here would route through
+                // `_sample_price_with_index` and produce a nondeterministic
+                // committed price. This mirrors the removed Python fixed-min
+                // fallback (``committed_price = int(price_range[0])``). For PW
+                // slots the range entry is guaranteed present (is_pw_slot just
+                // returned true on it); snapping the min is identity for every
+                // action type (Bid mins are multiples of the step-5 grid; all
+                // others use step 1).
+                let price_min = self.arena[self.root_idx]
+                    .price_ranges
+                    .get(&action_index)
+                    .map(|&(lo, _)| lo);
+                self.maybe_add_child(py, self.root_idx, action_index, price_min)?
             }
         } else {
             self.maybe_add_child(py, self.root_idx, action_index, None)?
         };
+        // Defensive parity guard: the committed child's action log must equal
+        // the root's log plus exactly one entry for the chosen action plus one
+        // per forced-chain action. A shortfall means an applied (chosen or
+        // forced) action was swallowed as a no-op Pass — which under correct
+        // enumeration cannot happen, since enumerated actions do not error on
+        // dispatch — and would silently misalign the ``played_actions`` /
+        // ``forced_action_dicts`` recovered from ``raw_actions`` in Python,
+        // corrupting training targets. Fail loud rather than corrupt silently.
+        let parent_log_len = self.arena[self.root_idx].game.action_log.len();
+        let child_log_len = self.arena[child_idx].game.action_log.len();
+        let forced_len = self.arena[child_idx].forced_action_chain.len();
+        let expected_log_len = parent_log_len + 1 + forced_len;
+        if child_log_len != expected_log_len {
+            return Err(PyRuntimeError::new_err(format!(
+                "advance_root: committed action_log length mismatch (expected {} = root {} + 1 chosen + {} forced, got {}); an applied action was swallowed as a no-op Pass, indicating an enumeration/parity divergence",
+                expected_log_len, parent_log_len, forced_len, child_log_len
+            )));
+        }
         let pidx = self.arena[child_idx].parent_compressed_idx;
         let new_n = self.arena[self.root_idx].child_n[pidx];
         let new_w = self.arena[self.root_idx].child_w[pidx];

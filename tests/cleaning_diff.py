@@ -221,6 +221,13 @@ def diagnose_game(game: dict, strict: bool = False):
     """
     optional_rules = bool(game["settings"].get("optional_rules"))
     num_players = len(game["players"])
+    # Malformed / never-started exports (0–1 players, e.g. abandoned games) can't
+    # form a legal 1830 game — the Python oracle itself raises in
+    # init_starting_cash (the cash table is keyed 2..6). These are not parity
+    # divergences; drop them so they don't trip the corpus gate.
+    if not (2 <= num_players <= 6):
+        return {"status": "dropped", "reason": "malformed_player_count",
+                "num_players": num_players}
     players = {i + 1: f"Player {i + 1}" for i in range(num_players)}
 
     # Python oracle (drives decisions) + Rust mirror (compared only).
