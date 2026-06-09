@@ -39,7 +39,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 BAD = {"rust_error", "state_divergence", "enum_divergence", "index_divergence",
        "decode_divergence", "python_error", "stream_length_mismatch",
-       "reason_mismatch", "diagnostic_crash"}
+       "reason_mismatch", "diagnostic_crash", "pass_acceptance_divergence",
+       "decision_divergence"}
 
 
 def _one(path):
