@@ -857,25 +857,9 @@ impl BaseGame {
             .get(corp_sym.as_str())
             .map_or(0, |&i| self.corporations[i].cash);
 
-        // Build blocked-hexes set (private companies still owned by a player)
-        let mut blocked: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for co in &self.companies {
-            if co.closed || !co.owner.is_player() {
-                continue;
-            }
-            let h = match co.sym.as_str() {
-                "SV" => vec!["G15"],
-                "CS" => vec!["B20"],
-                "DH" => vec!["F16"],
-                "MH" => vec!["D18"],
-                "CA" => vec!["H18"],
-                "BO" => vec!["I13", "I15"],
-                _ => vec![],
-            };
-            for x in h {
-                blocked.insert(x.to_string());
-            }
-        }
+        // Blocked-hexes set (private companies' blocks_hexes abilities),
+        // derived from the title data.
+        let blocked = self.ability_blocked_hexes();
 
         // Candidate (hex, connected-edge) pairs, replicating Python's
         // `Graph.connected_hexes` exactly. Shared with the `legal_action_types`
@@ -884,7 +868,7 @@ impl BaseGame {
         let targets = self.lay_tile_candidate_hexes(&corp_sym);
 
         for (hex_id, edges) in targets {
-            if blocked.contains(&hex_id) {
+            if blocked.contains(hex_id.as_str()) {
                 continue;
             }
             // Terrain cost check

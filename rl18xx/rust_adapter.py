@@ -38,6 +38,49 @@ from rl18xx.game.engine.actions import (
     Dividend, LayTile, Par, Pass, PlaceToken, RunRoutes,
     SellShares, DiscardTrain, Bankrupt,
 )
+from rl18xx.game.engine.game.title.g1830 import Entities as _G1830Entities
+
+# ---------------------------------------------------------------------------
+# Private-company ability data, read straight from the Python engine's title
+# data (the same `abilities:` arrays the reference engine uses). The adapter
+# must never key on company syms — query these helpers instead, so a new
+# title's privates are data, not adapter code.
+# ---------------------------------------------------------------------------
+
+_COMPANY_ABILITIES = {c["sym"]: tuple(c.get("abilities") or ()) for c in _G1830Entities.COMPANIES}
+
+
+def _company_abilities(sym, ability_type):
+    """All abilities of type ``ability_type`` for the company ``sym``."""
+    return [a for a in _COMPANY_ABILITIES.get(sym, ()) if a.get("type") == ability_type]
+
+
+def _company_ability(sym, ability_type):
+    """The first ability of type ``ability_type`` for ``sym``, or None."""
+    matches = _company_abilities(sym, ability_type)
+    return matches[0] if matches else None
+
+
+def _shares_granted(sym):
+    """(corp_sym, share_index) granted by the company's `shares` ability, or None.
+
+    Index 0 is the president's certificate (par trigger, e.g. BO -> B&O_0);
+    higher indices are normal shares (e.g. CA -> PRR_1).
+    """
+    ability = _company_ability(sym, "shares")
+    if not ability:
+        return None
+    corp_sym, _, index = ability["shares"].rpartition("_")
+    return corp_sym, int(index)
+
+
+def _par_trigger_company_for(corp_sym):
+    """The company sym whose purchase triggers a pending par for ``corp_sym``."""
+    for sym in _COMPANY_ABILITIES:
+        granted = _shares_granted(sym)
+        if granted and granted == (corp_sym, 0):
+            return sym
+    return None
 
 # Map action type strings from Rust legal_action_types() to Python action classes
 _ACTION_TYPE_MAP = {
@@ -735,21 +778,20 @@ class _StepProxy:
         return result
 
     def ability_blocking_hex(self, entity, hex_obj):
-        """Check if a hex is blocked by a private company ability."""
+        """Check if a hex is blocked by a private company's blocks_hexes ability."""
         hex_id = hex_obj.id if hasattr(hex_obj, 'id') else str(hex_obj)
-        # Hardcoded 1830 blocks: private companies block specific hexes
         for co in self._game.companies:
             if co.closed:
                 continue
             owner_str = co.owner
-            if not owner_str or not owner_str.startswith("player:"):
-                continue
-            blocked = {
-                "SV": ["G15"], "CS": ["B20"], "DH": ["F16"],
-                "MH": ["D18"], "CA": ["H18"], "BO": ["I13", "I15"],
-            }.get(co.sym, [])
-            if hex_id in blocked:
-                return True  # Return truthy to indicate blocking
+            for ability in _company_abilities(co.sym, "blocks_hexes"):
+                owner_type = ability.get("owner_type")
+                if owner_type == "player" and not (owner_str and owner_str.startswith("player:")):
+                    continue
+                if owner_type == "corporation" and not (owner_str and owner_str.startswith("corp:")):
+                    continue
+                if hex_id in ability.get("hexes", ()):
+                    return True  # Return truthy to indicate blocking
         return None
 
     def legal_tile_rotations(self, entity, hex_obj, tile):

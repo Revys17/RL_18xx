@@ -2349,25 +2349,13 @@ impl BaseGame {
                         // all-edges. (mut borrow ends before blocked_hexes below.)
                         let candidates = self.lay_tile_candidate_hexes(&corp_sym);
 
-                        // Build set of blocked hexes (private company hex blocks).
-                        // A blocked hex can't be laid on, but the corp's network
-                        // still extends through it to unblocked frontier neighbours
-                        // — those frontier hexes are already separate entries in
-                        // `candidates`, so we simply skip the blocked hex itself.
-                        let blocked_hexes: std::collections::HashSet<&str> = self
-                            .companies
-                            .iter()
-                            .filter(|co| !co.closed && co.owner.is_player())
-                            .flat_map(|co| match co.sym.as_str() {
-                                "SV" => vec!["G15"],
-                                "CS" => vec!["B20"],
-                                "DH" => vec!["F16"],
-                                "MH" => vec!["D18"],
-                                "CA" => vec!["H18"],
-                                "BO" => vec!["I13", "I15"],
-                                _ => vec![],
-                            })
-                            .collect();
+                        // Blocked hexes (private companies' blocks_hexes
+                        // abilities). A blocked hex can't be laid on, but the
+                        // corp's network still extends through it to unblocked
+                        // frontier neighbours — those frontier hexes are already
+                        // separate entries in `candidates`, so we simply skip
+                        // the blocked hex itself.
+                        let blocked_hexes = self.ability_blocked_hexes();
 
                         let mut has_layable = false;
                         for (hex_id, edges) in &candidates {
