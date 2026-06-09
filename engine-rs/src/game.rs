@@ -221,14 +221,6 @@ pub struct BaseGame {
     /// history including process'd action dicts.
     pub(crate) action_log: Vec<serde_json::Value>,
 
-    /// Set true when the most recent `process_action_internal` call swallowed a
-    /// `Pass` that the round could not route to any step, leaving state
-    /// unchanged. Mirrors Python `BaseGame.process_action`
-    /// (base.py:934-945), which pops the stray Pass off `actions`/`raw_actions`
-    /// so it never enters the action history. Callers use this to skip the
-    /// `action_log` push for such no-op passes.
-    pub(crate) last_action_swallowed: bool,
-
     // Game end tracking
     pub(crate) game_end_triggered: bool,
     /// The player order for the current game (ids, in seating order).
@@ -397,75 +389,18 @@ impl BaseGame {
                 self.recent_actions.clone()
             },
             action_log: self.action_log.clone(),
-            last_action_swallowed: self.last_action_swallowed,
             game_end_triggered: self.game_end_triggered,
             player_order: self.player_order.clone(),
             priority_deal_player: self.priority_deal_player,
         }
     }
 
-    /// Top-level action entry point — mirrors Python `BaseGame.process_action`
-    /// (base.py:921-945). Python wraps the ENTIRE `process_single_action` in a
-    /// try/except and, on ANY exception, re-raises UNLESS the action is a
-    /// `Pass`, in which case it logs "Skipping pass action", pops the stray pass
-    /// off `actions`/`raw_actions`, and continues with game state unchanged.
-    ///
-    /// We reproduce that here generally (not just for the operating-round Track
-    /// step that happens to raise in the known human games): snapshot the full
-    /// state before dispatch, and if dispatch returns an `Err` for a `Pass`
-    /// action, restore the snapshot, mark the pass swallowed (so callers skip the
-    /// `action_log` push, mirroring Python's pop), and return Ok. Non-Pass errors
-    /// propagate exactly as before. The snapshot/restore also undoes any partial
-    /// mutation a Pass may have caused before the raise (Python's `actions.pop()`
-    /// likewise relies on `process_single_action` not having committed observable
-    /// state for these stray passes; restoring from a snapshot is the faithful,
-    /// path-independent way to guarantee state is unchanged).
-    pub(crate) fn process_action_internal(&mut self, action: &Action) -> Result<(), GameError> {
-        // Reset the swallowed-pass marker for this action.
-        self.last_action_swallowed = false;
-
-        // Only a Pass can be swallowed (restored to the pre-dispatch state), so
-        // only a Pass needs the full snapshot. Non-Pass errors propagate
-        // unchanged and never read it — so skip the per-action deep clone for
-        // the common (non-Pass) case, which runs on every MCTS expansion.
-        let snapshot = if matches!(action, Action::Pass { .. }) {
-            Some(self.snapshot_full())
-        } else {
-            None
-        };
-        match self.process_action_dispatch(action) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                if let Some(snapshot) = snapshot {
-                    // Swallow the unroutable/invalid pass as a complete no-op.
-                    // (`snapshot` is `Some` for exactly the `Pass` actions.)
-                    *self = snapshot;
-                    self.last_action_swallowed = true;
-                    Ok(())
-                } else {
-                    // Python only swallows Pass; everything else propagates.
-                    Err(e)
-                }
-            }
-        }
-    }
-
-    /// Full-fidelity state snapshot for the Pass-swallow restore path. Unlike
-    /// `clone_for_search` (which truncates `recent_actions` to the last 5 and
-    /// drops the graph cache for MCTS speed), this preserves the complete
-    /// `recent_actions` and `action_log` so restoring is exact. The graph cache
-    /// is a pure derived cache and is rebuilt on demand, so leaving it fresh on
-    /// the snapshot is observationally identical.
-    fn snapshot_full(&self) -> BaseGame {
-        let mut snap = self.clone_for_search();
-        snap.recent_actions = self.recent_actions.clone();
-        snap.action_log = self.action_log.clone();
-        snap
-    }
-
     /// Internal action dispatch — routes to the correct round processor.
-    /// Wrapped by `process_action_internal` for Python-faithful Pass swallowing.
-    fn process_action_dispatch(&mut self, action: &Action) -> Result<(), GameError> {
+    /// Errors propagate to the caller. The engine does NOT swallow failed
+    /// `Pass` actions: the human-game importer filters un-appliable passes
+    /// itself before they reach the engine, and the action enumerator never
+    /// offers an illegal pass, so a Pass that fails dispatch is a real error.
+    pub(crate) fn process_action_internal(&mut self, action: &Action) -> Result<(), GameError> {
         if self.finished {
             return Err(GameError::new("Game is already finished"));
         }
@@ -1969,7 +1904,6 @@ impl BaseGame {
             turn: 1, // Start at 1 (Auction round is turn 1, first Stock round is still turn 1)
             recent_actions: Vec::new(),
             action_log: Vec::new(),
-            last_action_swallowed: false,
             game_end_triggered: false,
             player_order: player_ids.clone(),
             priority_deal_player: first_player_id,
@@ -2177,12 +2111,8 @@ impl BaseGame {
         let logged = py_to_json(action_dict.as_any())?;
         self.process_action_internal(&action)?;
         // Append to the full action log only after successful processing,
-        // matching Python's net effect for actions that complete cleanly. A
-        // swallowed (unroutable) pass is a no-op and must not be logged,
-        // mirroring Python's pop of actions/raw_actions for stray passes.
-        if !self.last_action_swallowed {
-            self.action_log.push(logged);
-        }
+        // matching Python's net effect for actions that complete cleanly.
+        self.action_log.push(logged);
         Ok(())
     }
 

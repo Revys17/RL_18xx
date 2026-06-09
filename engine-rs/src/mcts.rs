@@ -513,8 +513,8 @@ impl RustMCTSPlayer {
     }
 
     /// PUCT descent from the root to a leaf. Returns the leaf's arena index.
-    pub fn select_leaf(&mut self, py: Python<'_>) -> PyResult<usize> {
-        let (leaf, _, _, _) = self._select_leaf_inner(py, false)?;
+    pub fn select_leaf(&mut self) -> PyResult<usize> {
+        let (leaf, _, _, _) = self._select_leaf_inner(false)?;
         Ok(leaf)
     }
 
@@ -525,14 +525,12 @@ impl RustMCTSPlayer {
     /// step from depth ``i`` to depth ``i+1``.
     pub fn select_leaf_with_trace(
         &mut self,
-        py: Python<'_>,
     ) -> PyResult<(usize, Vec<u32>, Vec<bool>, Vec<u32>)> {
-        self._select_leaf_inner(py, true)
+        self._select_leaf_inner(true)
     }
 
     fn _select_leaf_inner(
         &mut self,
-        py: Python<'_>,
         record: bool,
     ) -> PyResult<(usize, Vec<u32>, Vec<bool>, Vec<u32>)> {
         let mut current = self.root_idx;
@@ -554,9 +552,9 @@ impl RustMCTSPlayer {
             // else uses the categorical ``maybe_add_child``.
             let is_pw = Self::is_pw_slot(&self.arena[current], best_move);
             current = if is_pw {
-                self._select_or_expand_price_child(py, current, best_move)?
+                self._select_or_expand_price_child(current, best_move)?
             } else {
-                self.maybe_add_child(py, current, best_move, None)?
+                self.maybe_add_child(current, best_move, None)?
             };
             if record {
                 action_path.push(best_move);
@@ -574,7 +572,6 @@ impl RustMCTSPlayer {
     /// among existing grandchildren.
     pub fn _select_or_expand_price_child(
         &mut self,
-        py: Python<'_>,
         arena_idx: usize,
         action_index: u32,
     ) -> PyResult<usize> {
@@ -622,7 +619,7 @@ impl RustMCTSPlayer {
                     return Ok(existing_idx);
                 }
             }
-            return self.maybe_add_child(py, arena_idx, action_index, Some(sampled));
+            return self.maybe_add_child(arena_idx, action_index, Some(sampled));
         }
 
         // PW cap reached — PUCT among existing grandchildren using the
@@ -691,7 +688,6 @@ impl RustMCTSPlayer {
     #[pyo3(signature = (arena_idx, action_index, price=None))]
     pub fn maybe_add_child(
         &mut self,
-        py: Python<'_>,
         arena_idx: usize,
         action_index: u32,
         price: Option<i64>,
@@ -748,9 +744,9 @@ impl RustMCTSPlayer {
             (None, None)
         };
 
-        // Clone the parent's game and apply the action via Python ActionMapper.
+        // Clone the parent's game and apply the action via the native decode.
         let mut new_game = self.arena[arena_idx].game.clone_for_search();
-        apply_action(py, &mut new_game, action_index, expansion_price_for_apply)?;
+        apply_action(&mut new_game, action_index, expansion_price_for_apply)?;
 
         // Forced-chain collapse: while exactly one legal action, apply it.
         let mut forced_chain: Vec<u32> = Vec::new();
@@ -779,7 +775,7 @@ impl RustMCTSPlayer {
             }
             let forced_idx = flat_indices[0];
             let forced_price = forced_price_ranges.get(&forced_idx).map(|(lo, _)| *lo);
-            apply_action(py, &mut new_game, forced_idx, forced_price)?;
+            apply_action(&mut new_game, forced_idx, forced_price)?;
             forced_chain.push(forced_idx);
         }
 
@@ -1082,7 +1078,7 @@ impl RustMCTSPlayer {
     /// For PW slots, the new root is the most-visited price grandchild (so
     /// the next move starts under the committed price). Otherwise the
     /// regular categorical child is used.
-    pub fn advance_root(&mut self, py: Python<'_>, action_index: u32) -> PyResult<()> {
+    pub fn advance_root(&mut self, action_index: u32) -> PyResult<()> {
         let is_pw = Self::is_pw_slot(&self.arena[self.root_idx], action_index);
         let child_idx = if is_pw {
             let price_opt = self.most_visited_price_for_slot(action_index);
@@ -1095,7 +1091,7 @@ impl RustMCTSPlayer {
                     .copied();
                 match gc {
                     Some(idx) => idx,
-                    None => self.maybe_add_child(py, self.root_idx, action_index, Some(price))?,
+                    None => self.maybe_add_child(self.root_idx, action_index, Some(price))?,
                 }
             } else {
                 // No price-grandchild was ever expanded for this PW slot at
@@ -1113,29 +1109,11 @@ impl RustMCTSPlayer {
                     .price_ranges
                     .get(&action_index)
                     .map(|&(lo, _)| lo);
-                self.maybe_add_child(py, self.root_idx, action_index, price_min)?
+                self.maybe_add_child(self.root_idx, action_index, price_min)?
             }
         } else {
-            self.maybe_add_child(py, self.root_idx, action_index, None)?
+            self.maybe_add_child(self.root_idx, action_index, None)?
         };
-        // Defensive parity guard: the committed child's action log must equal
-        // the root's log plus exactly one entry for the chosen action plus one
-        // per forced-chain action. A shortfall means an applied (chosen or
-        // forced) action was swallowed as a no-op Pass — which under correct
-        // enumeration cannot happen, since enumerated actions do not error on
-        // dispatch — and would silently misalign the ``played_actions`` /
-        // ``forced_action_dicts`` recovered from ``raw_actions`` in Python,
-        // corrupting training targets. Fail loud rather than corrupt silently.
-        let parent_log_len = self.arena[self.root_idx].game.action_log.len();
-        let child_log_len = self.arena[child_idx].game.action_log.len();
-        let forced_len = self.arena[child_idx].forced_action_chain.len();
-        let expected_log_len = parent_log_len + 1 + forced_len;
-        if child_log_len != expected_log_len {
-            return Err(PyRuntimeError::new_err(format!(
-                "advance_root: committed action_log length mismatch (expected {} = root {} + 1 chosen + {} forced, got {}); an applied action was swallowed as a no-op Pass, indicating an enumeration/parity divergence",
-                expected_log_len, parent_log_len, forced_len, child_log_len
-            )));
-        }
         let pidx = self.arena[child_idx].parent_compressed_idx;
         let new_n = self.arena[self.root_idx].child_n[pidx];
         let new_w = self.arena[self.root_idx].child_w[pidx];
@@ -1339,11 +1317,9 @@ impl RustMCTSPlayer {
 // Action application helper
 // ----------------------------------------------------------------------------
 
-/// Apply `flat_idx` to `game` via the Python ActionMapper. The mapper
-/// produces a Python Action object that we convert to a dict and route
-/// through the BaseGame's PyO3-exposed `process_action`.
+/// Decode `flat_idx` to a concrete `Action` and apply it natively. Pure Rust —
+/// no Python round-trip — so it needs no GIL token.
 fn apply_action(
-    _py: Python<'_>,
     game: &mut BaseGame,
     flat_idx: u32,
     sampled_price: Option<i64>,

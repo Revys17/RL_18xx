@@ -933,16 +933,10 @@ class BaseGame:
 
         try:
             self.process_single_action(action)
-        except Exception as e:
-            # if the action is a pass, let's try skipping it.
-            if not isinstance(action, Pass):
-                LOGGER.error(f"Error processing action: {action}")
-                LOGGER.error(f"Last 5 actions: {self.raw_actions[-5:]}")
-                raise e
-            else:
-                LOGGER.debug(f"Skipping pass action: {action}")
-                self.actions.pop()
-                self.raw_actions.pop()
+        except Exception:
+            LOGGER.error(f"Error processing action: {action}")
+            LOGGER.error(f"Last 5 actions: {self.raw_actions[-5:]}")
+            raise
 
         if not isinstance(action, Message):
             self.redo_possible = False
@@ -1094,7 +1088,24 @@ class BaseGame:
             if action["id"] > id:
                 break
             if self._filtered_actions[index]:
-                self.process_action(action)
+                if self.loading and action["type"] == "pass":
+                    # Recorded human games (browser exports) contain stray
+                    # passes the engine rejects (e.g. a pass at a blocking
+                    # step that excludes Pass). `process_action` is strict —
+                    # it no longer swallows these — so the loading path drops
+                    # them itself, unwinding the entries `process_action`
+                    # appends before dispatching.
+                    n_actions = len(self.actions)
+                    n_raw = len(self.raw_actions)
+                    try:
+                        self.process_action(action)
+                    except Exception:
+                        LOGGER.debug(f"Skipping un-processable pass action during load: {action}")
+                        del self.actions[n_actions:]
+                        del self.raw_actions[n_raw:]
+                        continue
+                else:
+                    self.process_action(action)
                 self.raw_actions[-1]["id"] = action["id"]
                 self.last_processed_action = action["id"]
             else:

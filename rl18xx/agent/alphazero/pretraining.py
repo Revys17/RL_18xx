@@ -1079,6 +1079,35 @@ def _load_cleaned_game_via_rust(game: dict):
         return None
 
 
+def _process_pass_leniently(game_state, pass_action: dict, use_rust: bool) -> bool:
+    """Apply a pass action, dropping it as a no-op if the engine rejects it.
+
+    Human game streams from 18xx.games contain stray passes the strict
+    engines reject (e.g. a pass during a must-buy-train BuyTrain step).
+    Both engines used to swallow these internally (Python ``base.py``
+    popped them off ``actions``/``raw_actions``; Rust restored a snapshot).
+    The engines are strict now, so the importer — the only consumer of
+    recorded streams with stray passes — performs the skip itself.
+
+    Returns True if the pass applied cleanly, False if it was dropped.
+    """
+    n_actions = len(game_state.actions) if not use_rust else 0
+    n_raw = len(game_state.raw_actions) if not use_rust else 0
+    try:
+        game_state.process_action(pass_action)
+        return True
+    except Exception as e:
+        LOGGER.debug(f"Dropping un-processable pass action {pass_action}: {e}")
+        if not use_rust:
+            # Python's ``BaseGame.process_action`` appends to
+            # ``actions``/``raw_actions`` before dispatching; trim the stray
+            # pass back off so it leaves no trace in the action history.
+            # (The Rust engine logs an action only after it succeeds.)
+            del game_state.actions[n_actions:]
+            del game_state.raw_actions[n_raw:]
+        return False
+
+
 def get_game_object_for_game(game: dict, use_rust: bool = True) -> BaseGame:
     """Replay a recorded human game through the engine, filtering out
     illegal/redundant actions where possible.
@@ -1235,7 +1264,7 @@ def _get_game_object_for_game_with_reason(game: dict, use_rust: bool = True):
                 "user": game_state.current_entity.player().id,
             }
             LOGGER.debug(f"Adding pass action {pass_action} before action: {action}")
-            game_state.process_action(pass_action)
+            _process_pass_leniently(game_state, pass_action, use_rust)
 
         # Some human Ruby game streams skip ``run_routes`` entirely for a
         # corp that has a train but no profitable route — Ruby's online
@@ -1315,6 +1344,14 @@ def _get_game_object_for_game_with_reason(game: dict, use_rust: bool = True):
             LOGGER.debug(f"Action: {action}")
             LOGGER.debug(f"Current operator: {game_state.current_entity.id}")
             return None, "entity_mismatch"
+
+        if action["type"] == "pass":
+            # Stray passes the engine can't route are dropped here (the
+            # engines no longer swallow them internally) — same net effect
+            # as the historical engine-side skip, regardless of
+            # optional_rules.
+            _process_pass_leniently(game_state, action, use_rust)
+            continue
 
         try:
             game_state.process_action(action)

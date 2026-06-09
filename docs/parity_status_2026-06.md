@@ -127,3 +127,26 @@ uv run python tests/parity_runner.py --random 0:150 \
 - `tests/parity_runner.py` — strict runner (random + human/cleaning modes).
 - `tests/validate_rust_engine.py::compare_state` — the (now complete) state comparison.
 - `tests/_parity_diag.py` — per-category random-walk divergence diagnostic.
+
+## 2026-06-09 — engine pass-swallow removed; leniency moved to the importers
+
+Both engines used to silently swallow a `Pass` that failed to process (Python
+`base.py` popped it off `actions`/`raw_actions`; Rust snapshot-restored via
+`last_action_swallowed`). That special-casing is now REMOVED from the engines —
+`process_action` is strict everywhere (live play, self-play, MCTS): a rejected
+pass propagates as a real error. The skip lives where dirty recorded data enters:
+
+- `pretraining._process_pass_leniently` — used by the cleaning loop for both
+  recorded and synthesized passes (unwinds Python's pre-appended
+  `actions`/`raw_actions`; Rust logs an action only after success, nothing to
+  unwind). Fires for real: ~64 stray corp passes dropped per 300 games.
+- `BaseGame.process_to_action` (Python, gated on `self.loading`) — covers
+  `BaseGame.load` of raw browser exports (`test_1830_from_browser_import`'s
+  stray C&O pass at a blocking Track step).
+- `RustGameAdapter.process_action` no longer swallows rejected passes either.
+- `tests/cleaning_diff.py` lockstep/trace skeletons mirror the lenient handling
+  (a one-sided drop surfaces as `pass_acceptance_divergence` / decision divergence).
+
+Re-verified after the change: full corpus (3243) import-outcome parity = **0
+failures** (212 both-engines-drop + 7 Python-side bad-data, identical to the
+2026-06-07 baseline); random 0:100 = 0; full pytest suite green.

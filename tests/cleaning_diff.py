@@ -79,6 +79,7 @@ from rl18xx.agent.alphazero.pretraining import (  # noqa: E402
     check_action_in_action_helper,
     RouteStep,
     BuySellParShares,
+    _process_pass_leniently,
 )
 from tests.validate_rust_engine import compare_state  # noqa: E402
 from rl18xx.game.factored_action_helper import FactoredActionHelper  # noqa: E402
@@ -274,13 +275,30 @@ def diagnose_game(game: dict, strict: bool = False):
                         "py_only": dd[:25], "rust_only": [], **ctx,
                     })
         # 1) Python (oracle) — must accept; if it raises, that is not a Rust bug.
-        try:
-            state["py"] = state["py"].process_action(action)
-        except Exception as exc:
-            raise _Divergence({
-                "status": "python_error", "index": idx, "label": label,
-                "action": action, "error": f"{type(exc).__name__}: {exc}", **ctx,
-            })
+        #    EXCEPT passes: production import is lenient (a rejected pass is
+        #    dropped without trace), so a Python-rejected pass is skipped here —
+        #    but Rust must agree, or the two per-engine cleanings diverge.
+        if action.get("type") == "pass":
+            if not _process_pass_leniently(state["py"], action, use_rust=False):
+                try:
+                    ru_state.process_action(action)
+                except BaseException:
+                    return  # both engines reject — production drops it on both
+                raise _Divergence({
+                    "status": "pass_acceptance_divergence", "index": idx, "label": label,
+                    "action": action,
+                    "error": "Python rejected this pass (production drops it) but Rust applied it",
+                    **ctx,
+                })
+            # Python applied the pass — fall through to the Rust apply + compare.
+        else:
+            try:
+                state["py"] = state["py"].process_action(action)
+            except Exception as exc:
+                raise _Divergence({
+                    "status": "python_error", "index": idx, "label": label,
+                    "action": action, "error": f"{type(exc).__name__}: {exc}", **ctx,
+                })
         # 2) Rust — a raise here (incl. pyo3 PanicException, a BaseException) is
         #    a divergence: Python applied this exact action and Rust could not.
         try:
@@ -448,6 +466,17 @@ def trace_clean(game: dict, use_rust: bool):
         applied.append({"index": idx, "label": label, "action": action, **ctx})
         return gs.process_action(action)
 
+    def record_and_apply_pass(idx, action, label):
+        # Mirror production's lenient pass handling: a pass the engine rejects
+        # is dropped without trace, so it is removed from the applied stream
+        # too. An engine that DOES apply it keeps the extra entry, surfacing
+        # as a decision divergence in ``diagnose_decisions``.
+        ctx = _ctx(gs)
+        applied.append({"index": idx, "label": label, "action": action, **ctx})
+        if not _process_pass_leniently(gs, action, use_rust):
+            applied.pop()
+        return gs
+
     i = 0
     cur = {"action": None}  # action currently being processed (for error reporting)
     try:
@@ -494,7 +523,7 @@ def trace_clean(game: dict, use_rust: bool):
                 pass_action = {"type": "pass", "entity": gs.current_entity.id,
                                "entity_type": gs.current_entity.__class__.__name__.lower(),
                                "user": gs.current_entity.player().id}
-                gs = record_and_apply(i, pass_action, "inserted-pass")
+                gs = record_and_apply_pass(i, pass_action, "inserted-pass")
 
             active_step = gs.round.active_step()
             if (isinstance(active_step, RouteStep)
@@ -526,6 +555,10 @@ def trace_clean(game: dict, use_rust: bool):
                     and action["entity"] != gs.current_entity.id):
                 return {"applied": applied,
                         "outcome": {"status": "dropped", "reason": "entity_mismatch", "scanned": i}}
+
+            if action["type"] == "pass":
+                gs = record_and_apply_pass(i, action, "main")
+                continue
 
             gs = record_and_apply(i, action, "main")
 

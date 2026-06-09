@@ -2172,8 +2172,9 @@ class RustGameAdapter:
 
         Mirrors Python's ``BaseGame.process_action`` semantics:
 
-          * Pass actions that the engine rejects are silently dropped
-            (Python explicitly catches at ``base.py:937``).
+          * Engine rejections propagate to the caller — including for Pass
+            actions. (The human-game importer in ``pretraining.py`` filters
+            un-appliable passes itself; the engine no longer swallows them.)
           * "free" action types that Rust doesn't model (``end_game``,
             ``message``, ``undo``, ``redo``) are no-ops here — Python's
             ``BaseAction.free()`` covers these; the cleaning pipeline
@@ -2200,15 +2201,7 @@ class RustGameAdapter:
             raise RuntimeError(
                 f"Blocking step {step} cannot process action Type: EndGame"
             )
-        try:
-            self._game.process_action(action_dict)
-        except Exception as e:
-            if atype == "pass":
-                # Same fall-through as Python's BaseGame.process_action for
-                # pass actions that the engine rejected.
-                pass
-            else:
-                raise
+        self._game.process_action(action_dict)
         # Invalidate depot proxy since trains may have changed
         self._depot_proxy = None
         return self
