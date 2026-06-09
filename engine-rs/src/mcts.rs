@@ -113,14 +113,16 @@ impl RustMCTSNode {
 /// trains return ``None`` (they are fixed-price and never reach the sampler).
 fn price_head_entity_key(action_index: u32, action_type: &str) -> Option<(String, Vec<String>)> {
     // We mirror the layout from `model_transformer.py::ContinuousPriceHead`
-    // and `action_mapper.py::_PRICE_HEAD_*`. Order matches Python.
-    const COMPANIES: [&str; 6] = ["SV", "CS", "DH", "MH", "CA", "BO"];
-    const CORPORATIONS: [&str; 8] = ["PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M"];
-    const TRAIN_TYPES: [&str; 6] = ["2", "3", "4", "5", "6", "D"];
-
+    // and `action_mapper.py::_PRICE_HEAD_*`. Order matches Python; the title
+    // lists (company / corporation / train-type order) come from the shared
+    // action layout rather than duplicated literals.
+    //
     // Re-fetch the layout offsets via the Rust action_index module. The
     // layout is global (memoized once); the lookup is cheap.
     let lo = crate::action_index::layout();
+    let companies = &lo.company_offsets;
+    let corporations = &lo.corporation_offsets;
+    let train_types = &lo.train_type_offsets;
     let bid_start = *lo.action_offsets.get("Bid")? as i64;
     let buy_train_start = *lo.action_offsets.get("BuyTrain")? as i64;
     let buy_company_start = *lo.action_offsets.get("BuyCompany")? as i64;
@@ -128,10 +130,10 @@ fn price_head_entity_key(action_index: u32, action_type: &str) -> Option<(String
     let idx = action_index as i64;
 
     if action_type == "Bid" {
-        let bid_end = bid_start + COMPANIES.len() as i64;
+        let bid_end = bid_start + companies.len() as i64;
         if idx >= bid_start && idx < bid_end {
             let i = (idx - bid_start) as usize;
-            return Some(("Bid".to_string(), vec![COMPANIES[i].to_string()]));
+            return Some(("Bid".to_string(), vec![companies[i].to_string()]));
         }
         return None;
     }
@@ -140,10 +142,10 @@ fn price_head_entity_key(action_index: u32, action_type: &str) -> Option<(String
         // First slot is depot; next ``train_type_offsets.len()`` are market
         // discarded — both fixed-price. The cross-corp block follows.
         let train_price_count = lo.train_price_offsets.len() as i64;
-        let train_type_count = TRAIN_TYPES.len() as i64;
+        let train_type_count = train_types.len() as i64;
         let cross_corp_start = buy_train_start + 1 + train_type_count;
         let per_corp = train_type_count * train_price_count;
-        let cross_corp_end = cross_corp_start + (CORPORATIONS.len() as i64) * per_corp;
+        let cross_corp_end = cross_corp_start + (corporations.len() as i64) * per_corp;
         if idx >= cross_corp_start && idx < cross_corp_end {
             let rel = idx - cross_corp_start;
             let corp_idx = (rel / per_corp) as usize;
@@ -151,8 +153,8 @@ fn price_head_entity_key(action_index: u32, action_type: &str) -> Option<(String
             return Some((
                 "BuyTrain".to_string(),
                 vec![
-                    CORPORATIONS[corp_idx].to_string(),
-                    TRAIN_TYPES[train_idx].to_string(),
+                    corporations[corp_idx].to_string(),
+                    train_types[train_idx].to_string(),
                 ],
             ));
         }
@@ -161,13 +163,13 @@ fn price_head_entity_key(action_index: u32, action_type: &str) -> Option<(String
 
     if action_type == "BuyCompany" {
         let price_count = lo.buy_company_price_offsets.len() as i64;
-        let block_end = buy_company_start + (COMPANIES.len() as i64) * price_count;
+        let block_end = buy_company_start + (companies.len() as i64) * price_count;
         if idx >= buy_company_start && idx < block_end {
             let rel = idx - buy_company_start;
             let company_idx = (rel / price_count) as usize;
             return Some((
                 "BuyCompany".to_string(),
-                vec![COMPANIES[company_idx].to_string()],
+                vec![companies[company_idx].to_string()],
             ));
         }
         return None;

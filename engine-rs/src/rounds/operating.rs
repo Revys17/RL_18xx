@@ -1261,11 +1261,15 @@ impl BaseGame {
             self.corporations[corp_idx].trains.push(train);
         }
 
-        // Special rule: B&O private company closes when B&O buys its first train
-        if corp_sym == "B&O" && self.corporations[corp_idx].trains.len() == 1 {
-            if let Some(&bo_idx) = self.company_idx.get("BO") {
-                if !self.companies[bo_idx].closed {
-                    self.companies[bo_idx].closed = true;
+        // Close ability (when: bought_train): the linked private company
+        // closes when its corporation buys its first train (1830: BO closes
+        // on B&O's first train).
+        if self.corporations[corp_idx].trains.len() == 1 {
+            if let Some(co_sym) = crate::abilities::close_on_bought_train(&corp_sym) {
+                if let Some(&co_idx) = self.company_idx.get(co_sym) {
+                    if !self.companies[co_idx].closed {
+                        self.companies[co_idx].closed = true;
+                    }
                 }
             }
         }

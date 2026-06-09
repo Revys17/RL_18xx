@@ -309,10 +309,15 @@ pub fn legal_action_to_index(la: &LegalAction) -> Option<u32> {
     if t == "BuyShares" {
         let corp_sym = la.entity.get("corp").and_then(s_to_json_str)?;
         let source = la.params.get("source").and_then(s_to_json_str)?;
-        // CompanyBuyShares (MH → NYC) routes through a different block.
-        if la.entity.get("private").and_then(s_to_json_str) == Some("MH") && corp_sym == "NYC" {
-            let li = pos(&lo.share_location_offsets, &source)?;
-            return Some(lo.action_offsets["CompanyBuyShares"] + li as u32);
+        // A company exchange (private with an Exchange ability targeting this
+        // corp, 1830: MH -> NYC) routes through the CompanyBuyShares block.
+        if let Some(private) = la.entity.get("private").and_then(s_to_json_str) {
+            if let Some((corporations, _)) = crate::abilities::exchange(private) {
+                if corporations.contains(&corp_sym) {
+                    let li = pos(&lo.share_location_offsets, &source)?;
+                    return Some(lo.action_offsets["CompanyBuyShares"] + li as u32);
+                }
+            }
         }
         let ci = pos(&lo.corporation_offsets, &corp_sym)?;
         let li = pos(&lo.share_location_offsets, &source)?;

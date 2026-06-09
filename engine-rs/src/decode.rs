@@ -616,9 +616,12 @@ impl BaseGame {
     /// Python head: [Bid×6 companies][BuyTrain×(8 corps·6 train types)]
     /// [BuyCompany×6 companies].
     fn price_head_slot_for_index(&mut self, idx: u32) -> Option<(u32, i64, i64)> {
-        const COMPANIES: [&str; 6] = ["SV", "CS", "DH", "MH", "CA", "BO"];
-        const CORPS: [&str; 8] = ["PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M"];
-        const TRAINS: [&str; 6] = ["2", "3", "4", "5", "6", "D"];
+        // The price head's slot layout reuses the action layout's title lists
+        // (company / corporation / train-type order).
+        let lo = crate::action_index::layout();
+        let companies = &lo.company_offsets;
+        let corps = &lo.corporation_offsets;
+        let trains = &lo.train_type_offsets;
         let la = self.legal_action_for_index(idx)?;
         // Any price-bearing slot maps to the head; a degenerate (min == max)
         // range still yields a slot with price_min == price_max, matching
@@ -632,12 +635,12 @@ impl BaseGame {
         let slot = match la.action_type.as_str() {
             "Bid" => {
                 let c = la.entity.get("private").and_then(|v| v.as_str())?;
-                COMPANIES.iter().position(|x| *x == c)? as u32
+                companies.iter().position(|x| *x == c)? as u32
             }
             "BuyCompany" => {
                 let c = la.entity.get("private").and_then(|v| v.as_str())?;
-                let ci = COMPANIES.iter().position(|x| *x == c)?;
-                (COMPANIES.len() + CORPS.len() * TRAINS.len() + ci) as u32
+                let ci = companies.iter().position(|x| *x == c)?;
+                (companies.len() + corps.len() * trains.len() + ci) as u32
             }
             "BuyTrain" => {
                 // Only cross-corp buys reach the head; depot/discard are fixed.
@@ -645,10 +648,10 @@ impl BaseGame {
                 if src == "depot" || src == "discard" {
                     return None;
                 }
-                let ci = CORPS.iter().position(|x| *x == src)?;
+                let ci = corps.iter().position(|x| *x == src)?;
                 let train = la.entity.get("train").and_then(|v| v.as_str())?;
-                let ti = TRAINS.iter().position(|x| *x == train)?;
-                (COMPANIES.len() + ci * TRAINS.len() + ti) as u32
+                let ti = trains.iter().position(|x| *x == train)?;
+                (companies.len() + ci * trains.len() + ti) as u32
             }
             _ => return None,
         };
