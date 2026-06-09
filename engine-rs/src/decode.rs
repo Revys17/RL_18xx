@@ -110,10 +110,16 @@ impl BaseGame {
     /// become JSON numbers, corp/company syms strings (matching what the action
     /// dicts recorded by the cleaning pipeline look like, so replay works).
     fn entity_json(&self, eid: &str) -> (serde_json::Value, &'static str) {
-        if let Ok(pid) = eid.parse::<u32>() {
-            (json!(pid), "player")
-        } else if self.corp_idx.contains_key(eid) {
+        // Classify by consulting the actual game collections, not the id's
+        // shape: titles with numeric-string corporation ids (1867/1822
+        // minors are "1".."30") would otherwise be misclassified as players
+        // by a parses-as-int heuristic.
+        if self.corp_idx.contains_key(eid) {
             (json!(eid), "corporation")
+        } else if self.company_idx.contains_key(eid) {
+            (json!(eid), "company")
+        } else if let Ok(pid) = eid.parse::<u32>() {
+            (json!(pid), "player")
         } else {
             (json!(eid), "company")
         }
@@ -440,28 +446,36 @@ impl BaseGame {
 
                 let from = if is_depot { "depot".to_string() } else { source.clone() };
 
-                // Trade-in: several donor variants (exchange="4"/"5"/"6") collapse
-                // onto the single BuyTrainDTradeIn slot, so the matched
-                // LegalAction's specific donor is arbitrary. Mirror Python's
-                // map_index_to_action, which AUTO-PICKS the lowest-tier owned
-                // donor (4, then 5, then 6) — all yield the same $300 discount in
-                // 1830, so the price is unchanged. Resolve to that donor's
-                // instance id.
+                // Trade-in: several donor variants collapse onto the single
+                // trade-in slot, so the matched LegalAction's specific donor
+                // is arbitrary. Mirror Python's map_index_to_action, which
+                // AUTO-PICKS the lowest-tier owned donor. The donor preference
+                // order comes from the bought train's exchange-discount map in
+                // data order (["4","5","6"] for 1830's D — all $300, so the
+                // price is unchanged). Resolve to that donor's instance id.
                 let exchange_id = if exchange_name.is_some() {
                     let ci = *self.corp_idx.get(entity_id.as_str()).ok_or_else(|| {
                         GameError::new(format!("BuyTrain: unknown buyer corp {}", entity_id))
                     })?;
-                    let donor_id = ["4", "5", "6"].iter().find_map(|dn| {
+                    let donor_names: Vec<String> = self
+                        .depot
+                        .trains
+                        .iter()
+                        .chain(self.depot.discarded.iter())
+                        .find(|t| t.id == train_id)
+                        .map(|t| t.discount.iter().map(|(n, _)| n.clone()).collect())
+                        .unwrap_or_default();
+                    let donor_id = donor_names.iter().find_map(|dn| {
                         self.corporations[ci]
                             .trains
                             .iter()
-                            .find(|t| t.name == *dn)
+                            .find(|t| &t.name == dn)
                             .map(|t| t.id.clone())
                     });
                     Some(donor_id.ok_or_else(|| {
                         GameError::new(format!(
-                            "BuyTrain trade-in: buyer {} owns no 4/5/6 donor",
-                            entity_id
+                            "BuyTrain trade-in: buyer {} owns no discount donor for {}",
+                            entity_id, name
                         ))
                     })?)
                 } else {
