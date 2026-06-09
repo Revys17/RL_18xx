@@ -482,3 +482,65 @@ fn py_to_json_value(v: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
 // without re-shuffling the prelude.
 #[allow(dead_code)]
 fn _force_unused(_g: Option<&BaseGame>, _t: Option<&Bound<'_, PyTuple>>) {}
+
+// ----------------------------------------------------------------------------
+// Layout-equivalence oracle
+// ----------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The 1830 flat action layout is frozen: Python `ActionMapper` and
+    /// already-trained checkpoints depend on these exact offsets. Any
+    /// refactor of `build_layout` (e.g. deriving the company sub-blocks from
+    /// ability data) must keep this test green — it pins every block offset
+    /// and the total POLICY_SIZE to the historical constants.
+    #[test]
+    fn layout_matches_frozen_1830_constants() {
+        let lo = layout();
+        let expected: &[(&str, u32)] = &[
+            ("Pass", 0),
+            ("CompanyPass", 0),
+            ("Bid", 1),
+            ("Par", 7),
+            ("BuyShares", 55),
+            ("SellShares", 71),
+            ("PlaceToken", 111),
+            ("LayTile", 139),
+            ("BuyTrain", 25807),
+            ("DiscardTrain", 26486),
+            ("Dividend", 26492),
+            ("BuyCompany", 26494),
+            ("Bankrupt", 26506),
+            ("RunRoutes", 26507),
+            ("CompanyBuyShares", 26508),
+            ("CompanyLayTile", 26510),
+            ("CompanyPlaceToken", 26534),
+            ("BuyTrainDFull", 26535),
+            ("BuyTrainDTradeIn", 26536),
+        ];
+        for (k, v) in expected {
+            assert_eq!(lo.action_offsets[k], *v, "offset for {}", k);
+        }
+        assert_eq!(POLICY_SIZE, 26537);
+
+        // Company-ability sub-block sizes (1830):
+        // CompanyBuyShares: 2 (MH -> NYC from ipo|market)
+        assert_eq!(
+            lo.action_offsets["CompanyLayTile"] - lo.action_offsets["CompanyBuyShares"],
+            2
+        );
+        // CompanyLayTile: 6 (DH teleport, 1 tile x 6 rotations)
+        //               + 18 (CS tile_lay, 3 tiles x 6 rotations)
+        assert_eq!(
+            lo.action_offsets["CompanyPlaceToken"] - lo.action_offsets["CompanyLayTile"],
+            24
+        );
+        // CompanyPlaceToken: 1 (DH teleport token)
+        assert_eq!(
+            lo.action_offsets["BuyTrainDFull"] - lo.action_offsets["CompanyPlaceToken"],
+            1
+        );
+    }
+}
