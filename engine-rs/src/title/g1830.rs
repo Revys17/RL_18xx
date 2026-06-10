@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use super::{AbilityDef, AbilityWhen, OwnerType, ShareSource};
-use crate::steps::{StepDesc, StepKind};
+use crate::steps::{RoundKind, StepDesc, StepKind};
 
 // ---------------------------------------------------------------------------
 // Round descriptions — the per-title ordered step lists
@@ -57,6 +57,15 @@ pub fn auction_steps() -> &'static [StepDesc] {
         StepDesc::blocking(StepKind::WaterfallAuction),
     ];
     STEPS
+}
+
+/// 1830's round sequence (base.py::next_round!): the opening waterfall
+/// auction (constructed at game start, before the cycle), then this cycle
+/// repeats forever — a stock round, then a set of `phase.operating_rounds`
+/// operating rounds. The game's `turn` counter increments on each wrap.
+pub fn round_cycle() -> &'static [RoundKind] {
+    const CYCLE: &[RoundKind] = &[RoundKind::Stock, RoundKind::OperatingSet];
+    CYCLE
 }
 
 // ---------------------------------------------------------------------------
