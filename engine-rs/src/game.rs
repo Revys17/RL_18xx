@@ -421,6 +421,13 @@ impl BaseGame {
             return Err(GameError::new("Game is already finished"));
         }
 
+        // Structural dispatch gate — Python `BaseRound.process_action`'s step
+        // walk (round.py:5344-5375): an action whose type is not accepted by
+        // any active step at-or-before the round's blocking step is rejected
+        // BEFORE any handler runs ("Blocking step {X} cannot process action
+        // {Y}"). Type-level only; parameter validation stays in the handlers.
+        self.dispatch_gate(action)?;
+
         // Handle bankruptcy immediately. Mirrors Python's
         // ``round.Bankrupt.process_bankrupt`` (round.py:1355-1377):
         //   1) sell_bankrupt_shares — the president liquidates ALL remaining

@@ -41,6 +41,7 @@
 //!     "minor's first OR turn" — the accumulation loop and skip machinery pick
 //!     it up automatically because they iterate the title's list.
 
+use crate::actions::{Action, GameError};
 use crate::entities::EntityId;
 use crate::game::BaseGame;
 use crate::rounds::{OperatingState, OperatingStep, Round};
@@ -109,6 +110,32 @@ impl StepDesc {
             StepKind::BuyCompany if self.blocks => Some(OperatingStep::BuyCompany),
             _ => None,
         }
+    }
+}
+
+/// Python `step.description` for each step kind, used by the dispatch gate's
+/// "Blocking step {description} cannot process action {action}" error
+/// (round.py:5356-5357). Python's Track/HomeToken descriptions are dynamic
+/// ("Lay/Upgrade Track", "Place {corp} Home Token"); we pin the common static
+/// form — the error CLASS and shape mirror Python, not the byte-exact text.
+pub(crate) fn step_description(kind: StepKind) -> &'static str {
+    match kind {
+        StepKind::Bankrupt => "Bankrupt",
+        StepKind::Exchange => "Exchange",
+        StepKind::SpecialTrack => "Lay Track",
+        StepKind::SpecialToken => "Place teleport token",
+        StepKind::BuyCompany => "Buy Companies",
+        StepKind::HomeToken => "Place Home Token",
+        StepKind::Track => "Lay Track",
+        StepKind::Token => "Place a Token",
+        StepKind::Route => "Run Routes",
+        StepKind::Dividend => "Pay or Withhold Dividends",
+        StepKind::DiscardTrain => "Discard Train",
+        StepKind::BuyTrain => "Buy Trains",
+        // 1830 SELL_BUY_ORDER = "sell_buy_sell" (g1830.py:441) → round.py:1560-1561.
+        StepKind::BuySellParShares => "Sell/Buy/Sell Shares",
+        StepKind::CompanyPendingPar => "Choose Corporation Par Value",
+        StepKind::WaterfallAuction => "Bid on Companies",
     }
 }
 
@@ -288,6 +315,215 @@ impl BaseGame {
         out
     }
 
+    // -- structural dispatch gate --------------------------------------------
+
+    /// THE structural dispatch gate — a faithful port of Python
+    /// `BaseRound.process_action`'s step walk (round.py:5344-5375):
+    ///
+    /// ```python
+    /// for step in self.steps:
+    ///     if not step.active: continue
+    ///     process = type in step.actions(action.entity)   # the ACTION's entity
+    ///     blocking = step.blocking                        # step's OWN current entity
+    ///     if blocking and not process:
+    ///         raise GameError(f"Blocking step {step.description} cannot process action {action}")
+    ///     if blocking or process:
+    ///         ... dispatch to this step ...; return
+    /// raise GameError(f"No step found for action ...")
+    /// ```
+    ///
+    /// Walks the title's step list in order; an action is accepted by the
+    /// FIRST active step whose `actions(action.entity)` contains its type. If
+    /// the walk reaches the blocking step (Python `blocks && current_actions`)
+    /// and the action's type still isn't accepted, the action is rejected.
+    /// Type-level only — per-handler parameter validation stays downstream.
+    ///
+    /// `process` is computed with [`step_actions_dispatch`], which is
+    /// [`step_actions`] (the enumerator-pinned arms) EXCEPT where Python's
+    /// `step.actions` is deliberately looser than its enumerator (see the
+    /// per-kind notes there); `blocking` reuses the enumeration arms exactly
+    /// like `step_action_types_impl` does, so the gate's blocking step is the
+    /// same step the enumeration stops at.
+    pub(crate) fn dispatch_gate(&mut self, action: &Action) -> Result<(), GameError> {
+        let snap = self.round.clone();
+        let steps = self.round_step_descs(&snap);
+        let atype = action.action_type();
+        let aentity = self.action_step_entity(action);
+
+        for desc in steps {
+            if !self.step_active(desc, &snap) {
+                continue;
+            }
+            let process = self
+                .step_actions_dispatch(desc, &aentity, &snap)
+                .iter()
+                .any(|t| *t == atype);
+            let blocking = self.step_blocking_override(desc, &snap)
+                || (desc.blocks
+                    && self
+                        .step_current_entity(desc, &snap)
+                        .map_or(false, |ce| !self.step_actions(desc, &ce, &snap).is_empty()));
+            if blocking && !process {
+                return Err(GameError::new(format!(
+                    "Blocking step {} cannot process action {} (entity {})",
+                    step_description(desc.kind),
+                    atype,
+                    action.entity_id(),
+                )));
+            }
+            if blocking || process {
+                return Ok(());
+            }
+        }
+        Err(GameError::new(format!(
+            "No step found for action {} (entity {})",
+            atype,
+            action.entity_id(),
+        )))
+    }
+
+    /// Resolve an action's `entity` id to the step-entity it acts as: a
+    /// company sym (CS/DH/MH/... special abilities), a corporation sym, or a
+    /// numeric player id. 1830 syms never collide with numeric player ids.
+    /// An unresolvable id maps to a company sym no step will ever accept,
+    /// reproducing Python's behavior for an unknown entity (no step's
+    /// `actions` contains the type → the blocking step rejects it).
+    fn action_step_entity(&self, action: &Action) -> StepEntity {
+        let id = action.entity_id();
+        if self.company_idx.contains_key(id) {
+            return StepEntity::Company(id.to_string());
+        }
+        if self.corp_idx.contains_key(id) {
+            return StepEntity::Corp(id.to_string());
+        }
+        if let Ok(pid) = id.parse::<u32>() {
+            return StepEntity::Player(pid);
+        }
+        StepEntity::Company(format!("__unknown:{}", id))
+    }
+
+    /// `step.actions(entity)` as consulted by the DISPATCH gate. Defaults to
+    /// the enumerator-pinned [`step_actions`]; overridden only where Python's
+    /// `step.actions` is deliberately LOOSER than what the enumerator offers
+    /// (the parameter-level rejection then lives in the handler, exactly like
+    /// Python's `process_*`):
+    ///
+    ///   * `Bankrupt` — Python (round.py:1342-1345) returns `[Bankrupt]`
+    ///     whenever the action's entity is the step's current entity (the
+    ///     operating corp), with NO must-buy/affordability gate; those live in
+    ///     `process_bankrupt`'s `can_go_bankrupt` guard.
+    ///   * `BuyTrain` for a PLAYER entity — Python (round.py:798-799) gives the
+    ///     operating corp's owner `[SellShares]` whenever
+    ///     `EBUY_CAN_SELL_SHARES` (1830: always), NOT gated on
+    ///     `must_buy_train`; `EmergencyMoney.can_sell` does the real work.
+    ///   * `BuyCompany` — Python's `can_buy_company` (round.py:1415-1422)
+    ///     accepts companies owned by ANY player (`game.purchasable_companies`,
+    ///     base.py:1450-1458), phase-gated on `"can_buy_companies" in
+    ///     phase.status` (1830: phases 3-4), affordability =
+    ///     `min(min_price) <= corp.cash`. The enumerator arm is
+    ///     president-owned-only (matching Python's ActionHelper), so the
+    ///     dispatch variant must widen back to the engine's gate.
+    ///   * `WaterfallAuction` — Python (round.py:5128-5135) returns
+    ///     `[Bid, Pass]` for the current entity / active lowest bidder with NO
+    ///     can-afford-a-bid gate; min/max bid rejection lives in `add_bid` /
+    ///     `accept_bid` (ported in auction.rs).
+    fn step_actions_dispatch(
+        &mut self,
+        desc: &StepDesc,
+        entity: &StepEntity,
+        snap: &Round,
+    ) -> Vec<&'static str> {
+        match desc.kind {
+            StepKind::Bankrupt => {
+                let Some(s) = operating(snap) else { return vec![] };
+                let StepEntity::Corp(sym) = entity else { return vec![] };
+                if Some(sym.as_str()) == s.current_corp_sym() {
+                    vec!["bankrupt"]
+                } else {
+                    vec![]
+                }
+            }
+            StepKind::BuyTrain => match entity {
+                StepEntity::Player(pid) => {
+                    let Some(s) = operating(snap) else { return vec![] };
+                    if s.step != OperatingStep::BuyTrain {
+                        return vec![];
+                    }
+                    let owner = s
+                        .current_corp_sym()
+                        .and_then(|sym| self.corp_idx.get(sym))
+                        .and_then(|&ci| self.corporations[ci].president_id());
+                    if owner == Some(*pid) {
+                        vec!["sell_shares"]
+                    } else {
+                        vec![]
+                    }
+                }
+                _ => self.step_actions(desc, entity, snap),
+            },
+            StepKind::BuyCompany => {
+                let Some(s) = operating(snap) else { return vec![] };
+                if desc.blocks && s.step != OperatingStep::BuyCompany {
+                    return vec![];
+                }
+                let StepEntity::Corp(sym) = entity else { return vec![] };
+                if Some(sym.as_str()) != s.current_corp_sym() {
+                    return vec![];
+                }
+                if self.dispatch_can_buy_company(sym) {
+                    if desc.blocks {
+                        vec!["buy_company", "pass"]
+                    } else {
+                        vec!["buy_company"]
+                    }
+                } else if desc.blocks {
+                    // Same Pass-at-this-pc reasoning as the enumeration arm.
+                    vec!["pass"]
+                } else {
+                    vec![]
+                }
+            }
+            StepKind::WaterfallAuction => {
+                let Round::Auction(s) = snap else { return vec![] };
+                if s.pending_par.is_some() || s.remaining_companies.is_empty() {
+                    return vec![];
+                }
+                let StepEntity::Player(pid) = entity else { return vec![] };
+                if *pid != s.active_player_id() {
+                    return vec![];
+                }
+                vec!["bid", "pass"]
+            }
+            _ => self.step_actions(desc, entity, snap),
+        }
+    }
+
+    /// Python `BuyCompany.can_buy_company` (round.py:1415-1422) for the
+    /// operating corp:
+    ///   `"can_buy_companies" in phase.status` (1830: phases 3-4) AND
+    ///   `game.purchasable_companies(entity)` non-empty (companies owned by
+    ///   ANY player, not closed, no `no_buy` ability — base.py:1450-1458) AND
+    ///   `min(company.min_price) <= buying_power(corp)` (cheapest is
+    ///   affordable; `min_price = ceil(value / 2)`, entities.py).
+    fn dispatch_can_buy_company(&self, corp_sym: &str) -> bool {
+        // 1830 phase.status: phases 3 and 4 carry ["can_buy_companies"]
+        // (g1830.py:539,547).
+        if self.phase.name != "3" && self.phase.name != "4" {
+            return false;
+        }
+        let corp_cash = self
+            .corp_idx
+            .get(corp_sym)
+            .map_or(0, |&ci| self.corporations[ci].cash);
+        let min_price = self
+            .companies
+            .iter()
+            .filter(|c| !c.closed && !c.no_buy && c.owner.is_player())
+            .map(|c| (c.value + 1) / 2)
+            .min();
+        min_price.map_or(false, |mp| mp <= corp_cash)
+    }
+
     // -- step predicates ----------------------------------------------------
 
     /// Python `step.active` (default `True`; overridden by DiscardTrain,
@@ -356,6 +592,10 @@ impl BaseGame {
 
     /// The open teleport company owned by the operating corp whose teleport
     /// tile has been laid (`ability_used`) — Python's `round.teleported`.
+    pub(crate) fn teleport_company_pub(&self, s: &OperatingState) -> Option<String> {
+        self.teleport_company(s)
+    }
+
     fn teleport_company(&self, s: &OperatingState) -> Option<String> {
         let corp_eid = EntityId::corporation(s.current_corp_sym()?);
         self.companies
@@ -948,6 +1188,207 @@ mod tests {
         for seed in 0..12u64 {
             run_differential_walk(seed, 4000);
         }
+    }
+
+    // -- dispatch-gate negative cases ----------------------------------------
+    //
+    // Each test checks BOTH that the malformed/ill-timed action is rejected
+    // (mirroring Python's "Blocking step {X} cannot process action {Y}" gate,
+    // round.py:5350-5357) AND that the failed action left the game state
+    // byte-unchanged (the engine's validate-then-mutate convention).
+
+    /// A state fingerprint covering everything the gate-rejected actions could
+    /// have touched: cash, share ownership, companies, trains, market, round.
+    fn fingerprint(game: &BaseGame) -> String {
+        let mut s = String::new();
+        for p in &game.players {
+            s.push_str(&format!("p{}:{};", p.id, p.cash));
+        }
+        s.push_str(&format!("bank:{};", game.bank.cash));
+        for c in &game.corporations {
+            s.push_str(&format!(
+                "{}:{}:{:?}:{}:",
+                c.sym,
+                c.cash,
+                c.share_price.as_ref().map(|sp| sp.price),
+                c.trains.len()
+            ));
+            for sh in &c.shares {
+                s.push_str(&format!("{},", sh.owner.0));
+            }
+            s.push(';');
+        }
+        for co in &game.companies {
+            s.push_str(&format!("{}:{}:{};", co.sym, co.owner.0, co.closed));
+        }
+        s.push_str(&format!(
+            "depot:{}:{};",
+            game.depot.trains.len(),
+            game.depot.discarded.len()
+        ));
+        s.push_str(&format!("round:{:?};", game.round));
+        s
+    }
+
+    /// Build a game mid-OR: PRR floated and operating, pc at the Track step,
+    /// player 1 president (60%), player 2 holding 20% (so a president dump
+    /// would be structurally legal — the gate must reject on TIMING alone).
+    fn game_in_or_at_track() -> BaseGame {
+        let mut game = new_4p_game();
+        let ci = game.corp_idx["PRR"];
+        let par = game.stock_market.par_price(67).expect("par 67");
+        game.corporations[ci].ipo_price = Some(par.clone());
+        game.corporations[ci].share_price = Some(par.clone());
+        game.update_market_cell("PRR", 0, 0, par.row, par.column);
+        let ipo = EntityId::ipo("PRR");
+        let n = game.corporations[ci].shares.len();
+        for i in 0..n {
+            game.corporations[ci].set_share_owner(i, ipo.clone());
+        }
+        // president (20%) + 4 normals to player 1; 2 normals to player 2.
+        game.corporations[ci].set_share_owner(0, EntityId::player(1));
+        for i in 1..5 {
+            game.corporations[ci].set_share_owner(i, EntityId::player(1));
+        }
+        game.corporations[ci].set_share_owner(5, EntityId::player(2));
+        game.corporations[ci].set_share_owner(6, EntityId::player(2));
+        game.corporations[ci].owner_id = EntityId::player(1);
+        game.corporations[ci].floated = true;
+        game.corporations[ci].cash = 670;
+        game.place_home_token(ci);
+        game.turn = 2; // selling timing not the thing under test
+        game.round = Round::Operating(crate::rounds::OperatingState::new(
+            1,
+            1,
+            vec!["PRR".to_string()],
+        ));
+        game.update_round_state();
+        assert_eq!(
+            match &game.round {
+                Round::Operating(s) => s.step.clone(),
+                _ => panic!("expected OR"),
+            },
+            OperatingStep::LayTile
+        );
+        game
+    }
+
+    /// SellShares at the Track step: Python's blocking Track step rejects it
+    /// (BuyTrain.actions only offers the president SellShares once the turn
+    /// reaches Buy Trains — round.py:798-799 vs the Track block at 5356).
+    #[test]
+    fn gate_rejects_sell_shares_at_track_step() {
+        let mut game = game_in_or_at_track();
+        let before = fingerprint(&game);
+        let err = game
+            .process_action_internal(&crate::actions::Action::SellShares {
+                entity_id: "1".to_string(),
+                corporation_sym: "PRR".to_string(),
+                shares: Vec::new(),
+                percent: 10,
+                share_indices: vec![],
+            })
+            .unwrap_err();
+        assert!(
+            err.message.contains("Blocking step Lay Track cannot process action sell_shares"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert_eq!(fingerprint(&game), before, "failed action mutated state");
+    }
+
+    /// BuyCompany in phase 2: Python's BuyCompany.can_buy_company requires
+    /// "can_buy_companies" in phase.status (phases 3-4 in 1830,
+    /// round.py:1415-1422) — in phase 2 the non-blocking BuyCompany step
+    /// offers nothing and the blocking Track step rejects the action.
+    #[test]
+    fn gate_rejects_buy_company_in_phase_2() {
+        let mut game = game_in_or_at_track();
+        // CS owned by the president — purchasable in phases 3-4 only.
+        let cs_idx = game.company_idx["CS"];
+        game.companies[cs_idx].owner = EntityId::player(1);
+        assert_eq!(game.phase.name, "2");
+        let before = fingerprint(&game);
+        let err = game
+            .process_action_internal(&crate::actions::Action::BuyCompany {
+                entity_id: "PRR".to_string(),
+                company_sym: "CS".to_string(),
+                price: 40,
+            })
+            .unwrap_err();
+        assert!(
+            err.message.contains("Blocking step Lay Track cannot process action buy_company"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert_eq!(fingerprint(&game), before, "failed action mutated state");
+    }
+
+    /// Bankrupt outside an operating round: the stock/auction step lists have
+    /// no Bankrupt step, so the blocking step rejects the type (Python
+    /// round.py:5350-5357).
+    #[test]
+    fn gate_rejects_bankrupt_in_auction_round() {
+        let mut game = new_4p_game();
+        let before = fingerprint(&game);
+        let err = game
+            .process_action_internal(&crate::actions::Action::Bankrupt {
+                entity_id: "PRR".to_string(),
+            })
+            .unwrap_err();
+        assert!(
+            err.message
+                .contains("Blocking step Bid on Companies cannot process action bankrupt"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert_eq!(fingerprint(&game), before, "failed action mutated state");
+        assert!(!game.is_finished_pub(), "gate-rejected bankrupt ended the game");
+    }
+
+    /// Bankrupt for a corp that is NOT the current operator: Python's
+    /// Bankrupt.actions only accepts the step's current entity
+    /// (round.py:1342-1345).
+    #[test]
+    fn gate_rejects_bankrupt_from_non_operating_corp() {
+        let mut game = game_in_or_at_track();
+        let before = fingerprint(&game);
+        let err = game
+            .process_action_internal(&crate::actions::Action::Bankrupt {
+                entity_id: "NYC".to_string(),
+            })
+            .unwrap_err();
+        assert!(
+            err.message.contains("cannot process action bankrupt"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert_eq!(fingerprint(&game), before, "failed action mutated state");
+        assert!(!game.is_finished_pub());
+    }
+
+    /// Pass while a home-token placement is pending: Python's HomeToken step
+    /// is blocking and only accepts PlaceToken (round.py:3022,3031-3034).
+    #[test]
+    fn gate_rejects_pass_during_pending_home_token() {
+        let mut game = game_in_or_at_track();
+        if let Round::Operating(ref mut s) = game.round {
+            s.pending_tokens.push(("PRR".to_string(), 0, "H12".to_string()));
+            s.step = OperatingStep::PlaceToken;
+        }
+        let before = fingerprint(&game);
+        let err = game
+            .process_action_internal(&crate::actions::Action::Pass {
+                entity_id: "PRR".to_string(),
+            })
+            .unwrap_err();
+        assert!(
+            err.message
+                .contains("Blocking step Place Home Token cannot process action pass"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert_eq!(fingerprint(&game), before, "failed action mutated state");
     }
 
     #[test]

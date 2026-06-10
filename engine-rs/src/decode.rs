@@ -218,9 +218,27 @@ impl BaseGame {
     ) -> Result<Action, GameError> {
         let t = la.action_type.as_str();
         match t {
-            "Pass" => Ok(Action::Pass {
-                entity_id: self.current_actor_id()?,
-            }),
+            "Pass" => {
+                // While a DH teleport token is pending, the acting entity is
+                // the teleported COMPANY, not the operating corp: Python's
+                // active step is SpecialToken whose `active_entities` is
+                // `[round.teleported]` (round.py:4076-4078) and whose
+                // `actions` only accepts the company (round.py:4041-4048) —
+                // a corp-entity Pass is rejected by the dispatch gate in both
+                // engines. The company Pass declines the teleport
+                // (`teleport_complete()`), clearing the pending flag.
+                let entity_id = match &self.round {
+                    crate::rounds::Round::Operating(s)
+                        if s.teleport_pending
+                            && s.step == crate::rounds::OperatingStep::PlaceToken =>
+                    {
+                        self.teleport_company_pub(s)
+                            .ok_or_else(|| GameError::new("teleport pending but no teleport company"))?
+                    }
+                    _ => self.current_actor_id()?,
+                };
+                Ok(Action::Pass { entity_id })
+            }
 
             "Bid" => {
                 // entity = the bidding player; company = bid target (entity.private).
