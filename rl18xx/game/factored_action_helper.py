@@ -295,6 +295,16 @@ class FactoredActionHelper:
             hexes = step.pending_token.get("hexes")
             for hex_ in hexes:
                 for city in hex_._tile.cities:
+                    slot = city.get_slot(game.current_entity)
+                    # A city with no open slot and no reservation for this
+                    # corporation cannot accept the token — the engine rejects
+                    # it at process time ("no token slots available"), so
+                    # emitting it would mark an unapplyable policy index as
+                    # legal (and a self-play playout that samples it dies).
+                    # The home city always carries the corp's reservation, so
+                    # at least one entry survives this filter.
+                    if slot is None:
+                        continue
                     out.append(
                         LegalAction(
                             type="PlaceToken",
@@ -302,7 +312,7 @@ class FactoredActionHelper:
                             params={
                                 "hex": hex_.id,
                                 "city": city.index,
-                                "slot": city.get_slot(game.current_entity),
+                                "slot": slot,
                             },
                         )
                     )
