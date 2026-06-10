@@ -1582,6 +1582,196 @@ mod tests {
         assert_eq!(fingerprint(&game), before, "failed action mutated state");
     }
 
+    // -- BuyTrain / Bankrupt parameter validation ----------------------------
+
+    /// B&M's home (E23 Boston, preprinted paths reaching another revenue
+    /// node) gives `must_buy_train` (= president_may_contribute) right at
+    /// float — the only 1830 corp with a route straight from its home token.
+    fn game_in_or_must_buy(corp_cash: i32) -> BaseGame {
+        let mut game = new_4p_game();
+        let ci = game.corp_idx["B&M"];
+        let par = game.stock_market.par_price(67).expect("par 67");
+        game.corporations[ci].ipo_price = Some(par.clone());
+        game.corporations[ci].share_price = Some(par.clone());
+        game.update_market_cell("B&M", 0, 0, par.row, par.column);
+        let ipo = EntityId::ipo("B&M");
+        let n = game.corporations[ci].shares.len();
+        for i in 0..n {
+            game.corporations[ci].set_share_owner(i, ipo.clone());
+        }
+        for i in 0..5 {
+            game.corporations[ci].set_share_owner(i, EntityId::player(1));
+        }
+        game.corporations[ci].set_share_owner(5, EntityId::player(2));
+        game.corporations[ci].set_share_owner(6, EntityId::player(2));
+        game.corporations[ci].owner_id = EntityId::player(1);
+        game.corporations[ci].floated = true;
+        game.corporations[ci].cash = corp_cash;
+        game.place_home_token(ci);
+        game.turn = 2;
+        game.round = Round::Operating(crate::rounds::OperatingState::new(
+            1,
+            1,
+            vec!["B&M".to_string()],
+        ));
+        if let Round::Operating(ref mut s) = game.round {
+            s.step = OperatingStep::BuyTrain;
+        }
+        game.update_round_state();
+        assert!(game.must_buy_train_pub("B&M"), "B&M should have a route from home");
+        game
+    }
+
+    fn buy_train(
+        game: &mut BaseGame,
+        corp: &str,
+        train: &str,
+        price: i32,
+        from: &str,
+    ) -> Result<(), crate::actions::GameError> {
+        game.process_action_internal(&crate::actions::Action::BuyTrain {
+            entity_id: corp.to_string(),
+            train_name: train.to_string(),
+            price,
+            from: from.to_string(),
+            variant: None,
+            exchange: None,
+        })
+    }
+
+    /// President contribution is gated on `president_may_contribute`
+    /// (== must_buy_train, round.py:550-551, 576-577): a corp that already
+    /// owns a train may NOT have its shortfall funded by the president —
+    /// Python skips the contribution block and `entity.spend(price)` raises.
+    #[test]
+    fn buy_train_rejects_president_contribution_when_not_forced() {
+        let mut game = game_in_or_at_buy_train(); // PRR, cash 10, no route
+        let ci = game.corp_idx["PRR"];
+        game.corporations[ci]
+            .trains
+            .push(crate::entities::Train::new("2".to_string(), 2, 80));
+        assert!(!game.president_may_contribute_pub("PRR"));
+        let before = fingerprint(&game);
+        let err = buy_train(&mut game, "PRR", "2-0", 80, "depot").unwrap_err();
+        assert!(
+            err.message.contains("may not contribute"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert_eq!(fingerprint(&game), before, "failed action mutated state");
+    }
+
+    /// A forced buy with contribution works — and pays the right amounts.
+    #[test]
+    fn buy_train_allows_president_contribution_when_forced() {
+        let mut game = game_in_or_must_buy(10);
+        let p1 = game.player_index(1).unwrap();
+        let p1_cash = game.players[p1].cash;
+        buy_train(&mut game, "B&M", "2-0", 80, "depot").unwrap();
+        let ci = game.corp_idx["B&M"];
+        assert_eq!(game.corporations[ci].trains.len(), 1);
+        assert_eq!(game.corporations[ci].cash, 0, "corp paid its 10");
+        assert_eq!(game.players[p1].cash, p1_cash - 70, "president contributed 70");
+    }
+
+    /// "Cannot buy for more than cost" (round.py:582-583): with the president
+    /// contributing, the price is capped at the train's face value.
+    #[test]
+    fn buy_train_rejects_above_face_when_contributing() {
+        let mut game = game_in_or_must_buy(10);
+        let before = fingerprint(&game);
+        let err = buy_train(&mut game, "B&M", "2-0", 100, "depot").unwrap_err();
+        assert!(
+            err.message.contains("Cannot buy for more than cost"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert_eq!(fingerprint(&game), before, "failed action mutated state");
+    }
+
+    /// Inter-corp buys must respect Python's `check_spend` / `spend_minmax`
+    /// bounds (round.py:824-839, 749-757): outside an emergency the max is
+    /// the corp's own cash (no president money), the min is 1.
+    #[test]
+    fn buy_train_rejects_intercorp_price_out_of_bounds() {
+        let mut game = game_in_or_must_buy(10);
+        // Give the same president a second corp holding a 2-train.
+        let nyc = game.corp_idx["NYC"];
+        game.corporations[nyc].owner_id = EntityId::player(1);
+        game.corporations[nyc].set_share_owner(0, EntityId::player(1)); // president cert
+        let mut t = crate::entities::Train::new("2".to_string(), 2, 80);
+        t.id = "2-1".to_string();
+        t.owner = EntityId::corporation("NYC");
+        game.corporations[nyc].trains.push(t);
+        // B&M cash 200: NOT an emergency (face 80 <= 200) → max = corp cash.
+        let bm = game.corp_idx["B&M"];
+        game.corporations[bm].cash = 200;
+        let before = fingerprint(&game);
+        let err = buy_train(&mut game, "B&M", "2-1", 300, "NYC").unwrap_err();
+        assert!(
+            err.message.contains("may only spend between 1 and 200"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert_eq!(fingerprint(&game), before, "failed action mutated state");
+        let err = buy_train(&mut game, "B&M", "2-1", 0, "NYC").unwrap_err();
+        assert!(
+            err.message.contains("may only spend between"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert_eq!(fingerprint(&game), before, "failed action mutated state");
+        // In bounds: any price up to corp cash, even above face (1830's
+        // EBUY_OTHER_VALUE pricing — Python's non-emergency max is corp.cash).
+        buy_train(&mut game, "B&M", "2-1", 150, "NYC").unwrap();
+        assert_eq!(game.corporations[bm].cash, 50);
+        assert_eq!(game.corporations[nyc].cash, 150);
+    }
+
+    /// Bankrupt is rejected while the president can still fund a train
+    /// (`can_go_bankrupt`, base.py:2228-2238 via round.py:1355-1368), and the
+    /// failed action liquidates nothing.
+    #[test]
+    fn bankrupt_rejected_when_can_afford() {
+        let mut game = game_in_or_must_buy(10); // president has 600 cash
+        let before = fingerprint(&game);
+        let err = game
+            .process_action_internal(&crate::actions::Action::Bankrupt {
+                entity_id: "B&M".to_string(),
+            })
+            .unwrap_err();
+        assert!(
+            err.message.contains("Cannot go bankrupt"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert_eq!(fingerprint(&game), before, "failed action mutated state");
+        assert!(!game.is_finished_pub());
+        assert!(!game.players[game.player_index(1).unwrap()].bankrupt);
+    }
+
+    /// ... and accepted when the president truly cannot raise the price:
+    /// no cash anywhere and only an undumpable president cert.
+    #[test]
+    fn bankrupt_accepted_when_truly_broke() {
+        let mut game = game_in_or_must_buy(0);
+        let ci = game.corp_idx["B&M"];
+        // President keeps ONLY the president cert (20%); selling it would
+        // swap the presidency of the OPERATING corp — not sellable in EMR.
+        let ipo = EntityId::ipo("B&M");
+        for i in 1..5 {
+            game.corporations[ci].set_share_owner(i, ipo.clone());
+        }
+        let p1 = game.player_index(1).unwrap();
+        game.players[p1].cash = 0;
+        game.process_action_internal(&crate::actions::Action::Bankrupt {
+            entity_id: "B&M".to_string(),
+        })
+        .unwrap();
+        assert!(game.players[p1].bankrupt);
+        assert!(game.is_finished_pub(), "1830 ends on first bankruptcy");
+    }
+
     #[test]
     fn differential_step_machinery_long_walks() {
         for seed in [100u64, 101, 102, 103] {
@@ -1672,3 +1862,4 @@ mod tests {
         assert_eq!(next_operating_pc(steps, &OperatingStep::Done), OperatingStep::Done);
     }
 }
+
