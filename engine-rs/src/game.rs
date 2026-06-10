@@ -268,6 +268,9 @@ impl BaseGame {
     pub(crate) fn president_may_contribute_pub(&mut self, corp_sym: &str) -> bool {
         self.president_may_contribute(corp_sym)
     }
+    pub(crate) fn must_buy_train_pub(&mut self, corp_sym: &str) -> bool {
+        self.must_buy_train(corp_sym)
+    }
 
     // Rust-internal accessors used by the in-process MCTS (`crate::mcts`).
     // Keep these crate-visible so the MCTS arena can read engine state
@@ -330,7 +333,7 @@ impl BaseGame {
 
     /// Check if the active corp's president owns CS or DH with unused ability.
     /// 1830 rules: corps can only buy privates from their president, in phases 3-4.
-    fn has_buyable_companies(&self, s: &crate::rounds::OperatingState) -> bool {
+    pub(crate) fn has_buyable_companies(&self, s: &crate::rounds::OperatingState) -> bool {
         if self.phase.name != "3" && self.phase.name != "4" {
             return false;
         }
