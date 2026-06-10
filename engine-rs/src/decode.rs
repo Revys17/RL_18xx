@@ -209,7 +209,7 @@ impl BaseGame {
         serde_json::Value::Object(m)
     }
 
-    fn build_action(
+    pub(crate) fn build_action(
         &mut self,
         la: &LegalAction,
         idx: u32,

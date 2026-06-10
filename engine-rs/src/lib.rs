@@ -14,6 +14,7 @@ pub mod map;
 pub mod mcts;
 pub mod rounds;
 pub mod router;
+pub mod steps;
 pub mod tiles;
 pub mod title;
 

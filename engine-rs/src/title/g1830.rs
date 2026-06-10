@@ -7,6 +7,57 @@
 use std::collections::HashMap;
 
 use super::{AbilityDef, AbilityWhen, OwnerType, ShareSource};
+use crate::steps::{StepDesc, StepKind};
+
+// ---------------------------------------------------------------------------
+// Round descriptions — the per-title ordered step lists
+// ---------------------------------------------------------------------------
+
+/// 1830's operating-round step list, mirroring the PYTHON reference exactly
+/// (g1830.py::operating_round, including order):
+/// Bankrupt, Exchange, SpecialTrack, SpecialToken, BuyCompany, HomeToken,
+/// Track, Token, Route, Dividend, DiscardTrain, BuyTrain,
+/// [BuyCompany, {"blocks": True}].
+pub fn operating_steps() -> &'static [StepDesc] {
+    const STEPS: &[StepDesc] = &[
+        StepDesc::non_blocking(StepKind::Bankrupt),
+        StepDesc::non_blocking(StepKind::Exchange),
+        StepDesc::non_blocking(StepKind::SpecialTrack),
+        StepDesc::non_blocking(StepKind::SpecialToken),
+        StepDesc::non_blocking(StepKind::BuyCompany),
+        StepDesc::blocking(StepKind::HomeToken),
+        StepDesc::blocking(StepKind::Track),
+        StepDesc::blocking(StepKind::Token),
+        StepDesc::blocking(StepKind::Route),
+        StepDesc::blocking(StepKind::Dividend),
+        StepDesc::blocking(StepKind::DiscardTrain),
+        StepDesc::blocking(StepKind::BuyTrain),
+        StepDesc::blocking(StepKind::BuyCompany),
+    ];
+    STEPS
+}
+
+/// 1830's stock-round step list (base.py::stock_round):
+/// DiscardTrain, Exchange, SpecialTrack, BuySellParShares.
+pub fn stock_steps() -> &'static [StepDesc] {
+    const STEPS: &[StepDesc] = &[
+        StepDesc::blocking(StepKind::DiscardTrain),
+        StepDesc::non_blocking(StepKind::Exchange),
+        StepDesc::non_blocking(StepKind::SpecialTrack),
+        StepDesc::blocking(StepKind::BuySellParShares),
+    ];
+    STEPS
+}
+
+/// 1830's auction-round step list (base.py::new_auction_round):
+/// CompanyPendingPar, WaterfallAuction.
+pub fn auction_steps() -> &'static [StepDesc] {
+    const STEPS: &[StepDesc] = &[
+        StepDesc::blocking(StepKind::CompanyPendingPar),
+        StepDesc::blocking(StepKind::WaterfallAuction),
+    ];
+    STEPS
+}
 
 // ---------------------------------------------------------------------------
 // Definition structs
