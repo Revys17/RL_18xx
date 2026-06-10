@@ -326,16 +326,13 @@ impl BaseGame {
             }
         }
 
-        // Emergency sell: president sells shares during an OR step to fund
-        // a forced train purchase. Normally fires at BuyTrain, but some
-        // human game streams record the sell_shares early (before the
-        // Track / Token steps have been explicitly skipped). Accept the
-        // sell at any OR step when the cleaning pipeline hasn't yet
-        // advanced the engine past the blocking step — the seller is the
-        // president of the operating corp and the sell is functionally an
-        // emergency. Mirrors Python's behaviour, which routes the action
-        // through ``BuySellParShares`` regardless of the OR step the
-        // cleaning happens to be at when ``should_add_pass`` runs.
+        // Emergency sell: the operating corp's president sells shares at the
+        // Buy Trains step (Python BuyTrain.actions gives the owner
+        // [SellShares], round.py:798-799; processed by
+        // EmergencyMoney.process_sell_shares, round.py:450-457). The dispatch
+        // gate has already enforced the timing (pc == BuyTrain) and the
+        // seller's identity (the corp's president) — a sell at any other OR
+        // step is rejected there, exactly like Python's blocking-step guard.
         if let Action::SellShares {
             entity_id,
             corporation_sym,
@@ -1304,7 +1301,7 @@ impl BaseGame {
     /// stock round sell, but without stock round state management.
     fn or_emergency_sell(
         &mut self,
-        _state: &OperatingState,
+        state: &OperatingState,
         entity_id: &str,
         corporation_sym: &str,
         percent: u8,
@@ -1313,6 +1310,16 @@ impl BaseGame {
         let player_id: u32 = entity_id
             .parse()
             .map_err(|_| GameError::new(format!("Invalid player id: {}", entity_id)))?;
+
+        // Validate-then-mutate: the Buy Trains step's `can_sell`
+        // (Train.can_sell -> EmergencyMoney.can_sell, round.py:459-505,626-631)
+        // before any state change — ownership of the named certs, the 50%
+        // market cap, president-dump legality, the operating-corp
+        // president-swap concern, and `selling_minimum_shares`.
+        let op_corp = state
+            .current_corp_sym()
+            .ok_or_else(|| GameError::new("No current corp"))?;
+        self.validate_sell_bundle(player_id, corporation_sym, percent, share_indices, Some(op_corp))?;
 
         // Perform the actual bundle sale (share transfer to market, price drop,
         // president change, partial-president return). Mirrors Python's
@@ -1336,6 +1343,211 @@ impl BaseGame {
         if let crate::rounds::Round::Operating(ref mut s) = self.round {
             s.last_share_sold_price = Some(pre_sale_price);
         }
+        Ok(())
+    }
+
+    /// Which Python step's `can_sell` governs a SellShares action.
+    pub(crate) fn validate_sell_bundle(
+        &self,
+        player_id: u32,
+        corporation_sym: &str,
+        percent: u8,
+        share_indices: &[usize],
+        operating_corp: Option<&str>,
+    ) -> Result<(), GameError> {
+        // Faithful port of Python's sell-side validation, run BEFORE any
+        // mutation (validate-then-mutate):
+        //   * Stock round (`operating_corp == None`):
+        //     `BuySellParShares.sell_shares` -> `can_sell` (round.py:1839-1844,
+        //     1601-1621): ownership, `check_sale_timing` (SELL_AFTER="first"),
+        //     `can_sell_order` (always true for 1830's sell_buy_sell),
+        //     `share_pool.fit_in_bank` (50% market cap), `bundle.can_dump`.
+        //   * OR Buy Trains step (`operating_corp == Some(op)`):
+        //     `Train.can_sell` -> `EmergencyMoney.can_sell` (round.py:626-631,
+        //     459-505): ownership, `check_sale_timing` (always passes in an
+        //     OR), `sellable_bundle` (can_dump + fit_in_bank +
+        //     president-swap concern for the OPERATING corp), and
+        //     `selling_minimum_shares` (EBUY_SELL_MORE_THAN_NEEDED == False).
+        // Every rejection is Python's "Cannot sell shares of {corp}".
+        let reject = || GameError::new(format!("Cannot sell shares of {}", corporation_sym));
+
+        let ci = *self
+            .corp_idx
+            .get(corporation_sym)
+            .ok_or_else(|| GameError::new(format!("Unknown corporation: {}", corporation_sym)))?;
+        let corp = &self.corporations[ci];
+        let share_price = corp
+            .share_price
+            .as_ref()
+            .ok_or_else(|| GameError::new(format!("{} has not been parred", corporation_sym)))?
+            .price;
+        let player_eid = crate::entities::EntityId::player(player_id);
+
+        let pres_pct: u8 = corp
+            .shares
+            .iter()
+            .find(|s| s.president)
+            .map(|s| s.percent)
+            .unwrap_or(20);
+        let player_total = corp.percent_owned_by(&player_eid);
+
+        // -- resolve the bundle's certs ------------------------------------
+        // Named certs: every index must exist and be owned by the seller
+        // (Python: `share_by_id` + `ShareBundle` same-owner invariant +
+        // `can_sell`'s `entity != bundle.owner`), and the action's percent
+        // must be consistent with the named certs (equal, or the generated
+        // partial-president reduction — `partial_bundles_for_presidents_share`,
+        // base.py:1599-1603).
+        let includes_president: bool;
+        let bundle_cert_pcts: Vec<u8>;
+        if !share_indices.is_empty() {
+            let mut named_pcts: Vec<u8> = Vec::new();
+            let mut named_pres = false;
+            for &i in share_indices {
+                let sh = corp
+                    .shares
+                    .get(i)
+                    .ok_or_else(|| GameError::new(format!(
+                        "Unknown share {}_{}",
+                        corporation_sym, i
+                    )))?;
+                if sh.owner != player_eid {
+                    return Err(reject());
+                }
+                named_pcts.push(sh.percent);
+                named_pres = named_pres || sh.president;
+            }
+            let sum_pct: u8 = named_pcts.iter().sum();
+            let percent_ok = percent == sum_pct
+                || (named_pres
+                    && percent < sum_pct
+                    && (sum_pct - percent) % 10 == 0
+                    && percent >= sum_pct - (pres_pct - 10));
+            if !percent_ok {
+                return Err(GameError::new(format!(
+                    "SellShares percent {} does not match named shares totalling {}%",
+                    percent, sum_pct
+                )));
+            }
+            includes_president = named_pres;
+            bundle_cert_pcts = named_pcts;
+        } else {
+            // No named certs (the native-decode path): the bundle is implied
+            // by the percent — the seller's non-president certs by ascending
+            // index, plus the president cert when the sale would leave the
+            // seller below the president percent (the same selection the
+            // mutation below performs). The seller must actually hold it.
+            if percent > player_total {
+                return Err(reject());
+            }
+            let has_pres = corp
+                .shares
+                .iter()
+                .any(|s| s.president && s.owner == player_eid);
+            includes_president = has_pres && player_total - percent < pres_pct;
+            let non_pres_needed = if includes_president {
+                percent.saturating_sub(pres_pct)
+            } else {
+                percent
+            };
+            let non_pres_held: u8 = corp
+                .shares
+                .iter()
+                .filter(|s| s.owner == player_eid && !s.president)
+                .map(|s| s.percent)
+                .sum();
+            if non_pres_held < non_pres_needed {
+                return Err(reject());
+            }
+            let mut pcts: Vec<u8> = Vec::new();
+            let mut taken = 0u8;
+            for s in corp.shares.iter() {
+                if taken >= non_pres_needed {
+                    break;
+                }
+                if s.owner == player_eid && !s.president {
+                    pcts.push(s.percent);
+                    taken += s.percent;
+                }
+            }
+            if includes_president {
+                pcts.push(pres_pct);
+            }
+            bundle_cert_pcts = pcts;
+        }
+
+        // -- check_sale_timing (base.py:1511-1515, SELL_AFTER = "first") ----
+        // `turn > 1 or round.operating`: stock-round sales are forbidden in
+        // the first stock round; OR sales always pass the timing check.
+        if operating_corp.is_none() && self.turn <= 1 {
+            return Err(reject());
+        }
+
+        // -- fit_in_bank (entities.py:455-458): pool capped at 50% ----------
+        let market_pct: u8 = corp
+            .shares
+            .iter()
+            .filter(|s| s.owner.is_market())
+            .map(|s| s.percent)
+            .sum();
+        if market_pct + percent > 50 {
+            return Err(reject());
+        }
+
+        // -- can_dump (entities.py:141-146): dumping the presidency requires
+        // another holder at or above the president percent ------------------
+        if includes_president {
+            let max_other = self
+                .players
+                .iter()
+                .filter(|p| p.id != player_id)
+                .map(|p| corp.percent_owned_by(&crate::entities::EntityId::player(p.id)))
+                .max()
+                .unwrap_or(0);
+            if max_other < pres_pct {
+                return Err(reject());
+            }
+        }
+
+        // -- OR Buy Trains extras (EmergencyMoney, round.py:459-505) --------
+        if let Some(op_corp) = operating_corp {
+            // president_swap_concern (EBUY_PRES_SWAP == True): only the
+            // OPERATING corp's shares are guarded against a president swap.
+            if corporation_sym == op_corp
+                && self.causes_president_swap(corporation_sym, player_id, percent)
+            {
+                return Err(reject());
+            }
+            // selling_minimum_shares (round.py:474-478,
+            // EBUY_SELL_MORE_THAN_NEEDED == False): the next-smaller bundle
+            // (this bundle minus its cheapest cert) must leave the buyer
+            // short. needed_cash = depot.min_depot_price
+            // (EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST), available_cash =
+            // seller.cash + operating corp cash (round.py:664-668).
+            let price_for_pct =
+                |pct: u8| -> i32 { ((share_price as i64 * pct as i64 + 9) / 10) as i32 };
+            let bundle_price = price_for_pct(percent);
+            let min_share_price = bundle_cert_pcts
+                .iter()
+                .map(|&p| price_for_pct(p))
+                .min()
+                .unwrap_or(0);
+            let seller_cash = self
+                .players
+                .iter()
+                .find(|p| p.id == player_id)
+                .map_or(0, |p| p.cash);
+            let op_corp_cash = self
+                .corp_idx
+                .get(op_corp)
+                .map_or(0, |&i| self.corporations[i].cash);
+            let additional_cash_needed =
+                self.min_depot_price_for_emr() - (seller_cash + op_corp_cash);
+            if !(bundle_price - min_share_price < additional_cash_needed) {
+                return Err(reject());
+            }
+        }
+
         Ok(())
     }
 
@@ -1408,10 +1620,11 @@ impl BaseGame {
         // cert, if named, is routed separately below). This keeps Rust's
         // per-cert → owner mapping in lockstep with Python's recorded share ids
         // so a later sell that names a specific id resolves to the same owner in
-        // both engines. We only fall back to owner-based ascending-index
-        // selection when no indices are supplied (the bankruptcy liquidation,
-        // which constructs its own bundle). Either way the correct PERCENT
-        // reaches the market.
+        // both engines. We fall back to owner-based ascending-index selection
+        // when no indices are supplied — which is NOT rare: the native decode
+        // emits empty ``share_indices`` for EVERY SellShares (decode.rs), and
+        // the bankruptcy liquidation constructs its own bundles. Either way
+        // the correct PERCENT reaches the market.
         let pres_pct: u8 = self.corporations[corp_idx]
             .shares
             .iter()

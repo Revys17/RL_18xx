@@ -1367,6 +1367,197 @@ mod tests {
         assert!(!game.is_finished_pub());
     }
 
+    /// The same game state but in a stock round with player 1 to act.
+    fn game_in_stock_with_prr(turn: u32) -> BaseGame {
+        let mut game = game_in_or_at_track();
+        game.turn = turn;
+        game.round = Round::Stock(crate::rounds::StockState::new(&[1, 2, 3, 4], 1));
+        game.update_round_state();
+        game
+    }
+
+    fn sell(game: &mut BaseGame, pid: u32, corp: &str, percent: u8, idxs: Vec<usize>) -> Result<(), crate::actions::GameError> {
+        game.process_action_internal(&crate::actions::Action::SellShares {
+            entity_id: pid.to_string(),
+            corporation_sym: corp.to_string(),
+            shares: Vec::new(),
+            percent,
+            share_indices: idxs,
+        })
+    }
+
+    /// Named certs not owned by the seller: Python's `can_sell` rejects via
+    /// `entity != bundle.owner` ("Cannot sell shares of X", round.py:1604).
+    #[test]
+    fn sell_rejects_unowned_named_certs() {
+        let mut game = game_in_stock_with_prr(2);
+        let before = fingerprint(&game);
+        // Share index 5 belongs to player 2, not player 1.
+        let err = sell(&mut game, 1, "PRR", 10, vec![5]).unwrap_err();
+        assert!(err.message.contains("Cannot sell shares of PRR"), "{}", err.message);
+        assert_eq!(fingerprint(&game), before);
+        // And an out-of-range cert id is rejected too.
+        let err = sell(&mut game, 1, "PRR", 10, vec![42]).unwrap_err();
+        assert!(err.message.contains("Unknown share PRR_42"), "{}", err.message);
+        assert_eq!(fingerprint(&game), before);
+    }
+
+    /// Bundle percent must match the named certs (or a legal partial-president
+    /// reduction, base.py:1599-1603).
+    #[test]
+    fn sell_rejects_percent_mismatch() {
+        let mut game = game_in_stock_with_prr(2);
+        let before = fingerprint(&game);
+        // Indices 1+2 are two 10% certs of player 1 — percent 30 is a lie.
+        let err = sell(&mut game, 1, "PRR", 30, vec![1, 2]).unwrap_err();
+        assert!(err.message.contains("does not match named shares"), "{}", err.message);
+        assert_eq!(fingerprint(&game), before);
+    }
+
+    /// 50% market pool cap (`SharePool.fit_in_bank`, entities.py:455-458).
+    #[test]
+    fn sell_rejects_over_market_cap() {
+        let mut game = game_in_stock_with_prr(2);
+        let ci = game.corp_idx["PRR"];
+        // 40% already in the market (certs 5,6 from p2 and 7,8 from IPO).
+        for i in 5..9 {
+            game.corporations[ci].set_share_owner(i, EntityId::market());
+        }
+        let before = fingerprint(&game);
+        // Player 1 selling 20% would push the pool to 60%.
+        let err = sell(&mut game, 1, "PRR", 20, vec![1, 2]).unwrap_err();
+        assert!(err.message.contains("Cannot sell shares of PRR"), "{}", err.message);
+        assert_eq!(fingerprint(&game), before);
+        // 10% (to exactly 50%) is legal.
+        sell(&mut game, 1, "PRR", 10, vec![1]).unwrap();
+    }
+
+    /// President dump requires another holder at the president percent
+    /// (`ShareBundle.can_dump`, entities.py:141-146).
+    #[test]
+    fn sell_rejects_undumpable_president() {
+        let mut game = game_in_stock_with_prr(2);
+        let ci = game.corp_idx["PRR"];
+        // Take player 2 down to 10% — nobody else reaches 20%.
+        game.corporations[ci].set_share_owner(6, EntityId::ipo("PRR"));
+        let before = fingerprint(&game);
+        // Player 1 sells everything (president incluse) — 60% with pres cert.
+        let err = sell(&mut game, 1, "PRR", 60, vec![0, 1, 2, 3, 4]).unwrap_err();
+        assert!(err.message.contains("Cannot sell shares of PRR"), "{}", err.message);
+        assert_eq!(fingerprint(&game), before);
+    }
+
+    /// SELL_AFTER = "first" (g1830 via base.py:1511-1515): no sales in the
+    /// first stock round; the same bundle is fine in a later one. In Python
+    /// the dispatch gate fires first (`can_sell_any` is false in SR1, so
+    /// SellShares isn't in the blocking step's actions) — same here.
+    #[test]
+    fn sell_rejects_in_first_stock_round() {
+        let mut game = game_in_stock_with_prr(1);
+        let before = fingerprint(&game);
+        let err = sell(&mut game, 1, "PRR", 10, vec![1]).unwrap_err();
+        assert!(
+            err.message
+                .contains("Blocking step Sell/Buy/Sell Shares cannot process action sell_shares")
+                || err.message.contains("Cannot sell shares of PRR"),
+            "{}",
+            err.message
+        );
+        assert_eq!(fingerprint(&game), before);
+        let mut game2 = game_in_stock_with_prr(2);
+        sell(&mut game2, 1, "PRR", 10, vec![1]).unwrap();
+    }
+
+    /// A game state at the OR Buy Trains step where PRR must buy a train.
+    fn game_in_or_at_buy_train() -> BaseGame {
+        let mut game = game_in_or_at_track();
+        let ci = game.corp_idx["PRR"];
+        game.corporations[ci].cash = 10; // can't afford the $80 2-train alone
+        if let Round::Operating(ref mut s) = game.round {
+            s.step = OperatingStep::BuyTrain;
+        }
+        game.update_round_state();
+        game
+    }
+
+    /// OR emergency sell may only raise what is NEEDED
+    /// (`selling_minimum_shares`, round.py:474-478): with the cheapest depot
+    /// train at $80, PRR at $10 and a rich president, any sale whose
+    /// next-smaller bundle already covers the shortfall is rejected.
+    #[test]
+    fn or_emergency_sell_rejects_overselling() {
+        let mut game = game_in_or_at_buy_train();
+        // President cash 600 + corp 10 >= 80: NO sale is needed at all.
+        let before = fingerprint(&game);
+        let err = sell(&mut game, 1, "PRR", 10, vec![1]).unwrap_err();
+        assert!(err.message.contains("Cannot sell shares of PRR"), "{}", err.message);
+        assert_eq!(fingerprint(&game), before);
+
+        // Make the president poor: shortfall = 80 - (10 + 1) = 69. A single
+        // 10% cert of PRR at 67 has next-smaller bundle price 0 < 69 → legal.
+        let pidx = game.player_index(1).unwrap();
+        game.players[pidx].cash = 1;
+        // Selling PRR (the operating corp) 10%: 50 - 10 = 40 >= p2's 20% — no
+        // swap concern... but 20% would have next-smaller (10%) price 67 < 69,
+        // still legal; 30% has next-smaller 134 >= 69 → rejected.
+        let before = fingerprint(&game);
+        let err = sell(&mut game, 1, "PRR", 30, vec![1, 2, 3]).unwrap_err();
+        assert!(err.message.contains("Cannot sell shares of PRR"), "{}", err.message);
+        assert_eq!(fingerprint(&game), before);
+        sell(&mut game, 1, "PRR", 10, vec![1]).unwrap();
+    }
+
+    /// The president may not sell the OPERATING corp below the next-highest
+    /// holder during an emergency buy (`president_swap_concern` /
+    /// `causes_president_swap`, round.py:480-505).
+    #[test]
+    fn or_emergency_sell_rejects_operating_corp_president_swap() {
+        let mut game = game_in_or_at_buy_train();
+        let pidx = game.player_index(1).unwrap();
+        game.players[pidx].cash = 1;
+        // Player 1 at 60%, player 2 at 20%: selling 50% (pres + 3 normals)
+        // leaves 10% < 20% → swap of the OPERATING corp → rejected.
+        let before = fingerprint(&game);
+        let err = sell(&mut game, 1, "PRR", 50, vec![0, 1, 2, 3]).unwrap_err();
+        assert!(err.message.contains("Cannot sell shares of PRR"), "{}", err.message);
+        assert_eq!(fingerprint(&game), before);
+    }
+
+    /// Empty-share_indices president dump (the native-decode hot path) moves
+    /// `percent - 20` of normals plus the president cert — NOT `percent - 10`
+    /// — matching the OR emergency path's bundle composition, with no
+    /// partial-handling churn (no extra cert bounced through the pool).
+    #[test]
+    fn sell_fallback_president_dump_uses_president_face_value() {
+        let mut game = game_in_stock_with_prr(2);
+        let ci = game.corp_idx["PRR"];
+        // Player 1: pres (cert 0) + normals 1-3 = 50%; cert 4 back to IPO.
+        game.corporations[ci].set_share_owner(4, EntityId::ipo("PRR"));
+        // Partial dump: sell 40% of the 50% (keep a 10% slice), no named certs.
+        sell(&mut game, 1, "PRR", 40, vec![]).unwrap();
+        let market = EntityId::market();
+        // bundle = [2 normals (certs 1,2), president]: with the president face
+        // value (20) subtracted, exactly 20% of normals move; cert 3 NEVER
+        // leaves the seller (the old `percent - 10` bug moved cert 3 too and
+        // then bounced cert 1 back via partial handling — aggregate-equal but
+        // cert-identity churn). P2 (20%) takes the presidency: the pres cert
+        // goes to p2 and p2's two normals (certs 5,6) swap into the pool.
+        assert_eq!(game.corporations[ci].shares[0].owner, EntityId::player(2), "pres cert to p2");
+        assert_eq!(game.corporations[ci].shares[1].owner, market, "cert 1 sold to pool");
+        assert_eq!(game.corporations[ci].shares[2].owner, market, "cert 2 sold to pool");
+        assert_eq!(
+            game.corporations[ci].shares[3].owner,
+            EntityId::player(1),
+            "cert 3 (the kept 10% slice) stays with the seller — no churn"
+        );
+        assert_eq!(game.corporations[ci].shares[5].owner, market, "p2 swap cert 5");
+        assert_eq!(game.corporations[ci].shares[6].owner, market, "p2 swap cert 6");
+        assert_eq!(game.corporations[ci].percent_owned_by(&EntityId::player(1)), 10);
+        assert_eq!(game.corporations[ci].percent_owned_by(&EntityId::player(2)), 20);
+        assert_eq!(game.corporations[ci].percent_owned_by(&market), 40);
+        assert_eq!(game.corporations[ci].owner_id, EntityId::player(2), "p2 is the new president");
+    }
+
     /// Pass while a home-token placement is pending: Python's HomeToken step
     /// is blocking and only accepts PlaceToken (round.py:3022,3031-3034).
     #[test]
