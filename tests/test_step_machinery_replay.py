@@ -45,17 +45,24 @@ _CORPUS = sorted((Path(__file__).parent.parent / "human_games" / "1830").glob("*
 _SAMPLE = [str(p) for p in _CORPUS[::400]] if _CORPUS else []
 
 
-def _types_old(game):
+# NOTE: post-Stage-B these two PyO3 surfaces delegate to the SAME shared
+# accumulation loop, so comparing them is NOT a differential against the
+# legacy dispatch — that differential lives in-crate
+# (steps::tests::differential_* vs legacy_legal_action_types_oracle, which is
+# a byte-faithful frozen copy of the pre-refactor dispatch). This test's
+# value is the no-crash replay over human-game trajectories plus pinning
+# both surfaces to one loop.
+def _types_via_legal_action_types(game):
     return sorted(set(game.legal_action_types()))
 
 
-def _types_new(game):
+def _types_via_step_action_types(game):
     return sorted(set(game.step_action_types()))
 
 
 @pytest.mark.skipif(not _SAMPLE, reason="human_games corpus not present")
 @pytest.mark.parametrize("path", _SAMPLE, ids=[Path(p).stem for p in _SAMPLE])
-def test_step_machinery_matches_legacy_on_human_games(path):
+def test_step_machinery_replays_human_games(path):
     game_json = json.load(open(path))
     num_players = len(game_json["players"])
     if not (2 <= num_players <= 6):
@@ -76,11 +83,11 @@ def test_step_machinery_matches_legacy_on_human_games(path):
 
     checked = 0
     for entry in applied:
-        old = _types_old(rust)
-        new = _types_new(rust)
+        old = _types_via_legal_action_types(rust)
+        new = _types_via_step_action_types(rust)
         assert old == new, (
             f"{Path(path).stem} before applied action #{entry['index']} ({entry['label']}): "
-            f"legacy {old} != step machinery {new} "
+            f"legal_action_types {old} != step_action_types {new} "
             f"[round={entry.get('round')}, op_step={entry.get('op_step')}, entity={entry.get('entity')}]"
         )
         checked += 1
@@ -94,5 +101,5 @@ def test_step_machinery_matches_legacy_on_human_games(path):
             adapter.process_action(action)
 
     # Final state too.
-    assert _types_old(rust) == _types_new(rust)
+    assert _types_via_legal_action_types(rust) == _types_via_step_action_types(rust)
     assert checked == len(applied)
