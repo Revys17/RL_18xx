@@ -380,6 +380,14 @@ impl BaseGame {
         share_indices: &[usize],
     ) -> Result<(), GameError> {
         let player_id = self.validate_stock_turn(state, entity_id)?;
+
+        // Validate-then-mutate: BuySellParShares.sell_shares -> can_sell
+        // (round.py:1839-1844, 1601-1621) before any state change — ownership
+        // of the named certs / percent consistency, check_sale_timing
+        // (SELL_AFTER="first": no sales in the first stock round), the 50%
+        // market cap (fit_in_bank), and president-dump legality (can_dump).
+        self.validate_sell_bundle(player_id, corporation_sym, percent, share_indices, None)?;
+
         let mut new_state = state.clone();
 
         let corp_idx = *self
@@ -443,11 +451,26 @@ impl BaseGame {
         // The named bundle includes the president cert when it is being dumped;
         // that cert is routed separately (moved last, then
         // ``check_president_change`` swaps the presidency), so here we move only
-        // the named NON-president certs. When no indices are supplied (the
-        // bankruptcy liquidation path constructs its own bundle) we fall back to
-        // owner-based selection by ascending index.
+        // the named NON-president certs. When no indices are supplied we fall
+        // back to owner-based selection by ascending index. The empty-indices
+        // fallback is NOT a rare path: the native decode emits empty
+        // ``share_indices`` for EVERY SellShares (decode.rs), and the
+        // bankruptcy liquidation constructs its own bundles — so this
+        // selection must match Python's bundle composition exactly. A dumped
+        // bundle's non-president portion is ``percent`` minus the PRESIDENT
+        // CERT'S FACE VALUE (20% in 1830) — Python's
+        // ``all_bundles_for_corporation`` builds [normals..., president], so
+        // the certs moved alongside the president are the remaining
+        // ``percent - 20`` of normals (the partial-dump leftover is returned
+        // from the pool afterwards, mirroring ``handle_partial``).
+        let pres_pct: u8 = self.corporations[corp_idx]
+            .shares
+            .iter()
+            .find(|s| s.president)
+            .map(|s| s.percent)
+            .unwrap_or(20);
         let non_pres_to_sell = if includes_president {
-            percent.saturating_sub(10)
+            percent.saturating_sub(pres_pct)
         } else {
             percent
         };
@@ -473,9 +496,10 @@ impl BaseGame {
                     }
                 }
             } else {
-                // No indices supplied (bankruptcy liquidation builds its own
-                // bundle): take the seller's non-president certs by ascending
-                // index until the percent is covered.
+                // No indices supplied (the native-decode path — EVERY decoded
+                // SellShares — and the bankruptcy liquidation): take the
+                // seller's non-president certs by ascending index until the
+                // percent is covered.
                 let mut transferred_pct = 0u8;
                 for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
                     if transferred_pct >= non_pres_to_sell {
