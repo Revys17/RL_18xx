@@ -437,6 +437,9 @@ impl BaseGame {
         // The game then ends because BANKRUPTCY_ENDS_GAME_AFTER == "one".
         if let Action::Bankrupt { entity_id } = action {
             // The bankrupt entity is the corporation; its president liquidates.
+            // (The dispatch gate above only admits a Bankrupt whose entity is
+            // the current operating corp — Python Bankrupt.actions,
+            // round.py:1342-1345 — so the player-id fallback is vestigial.)
             let (op_corp_sym, president_id) =
                 if let Some(&ci) = self.corp_idx.get(entity_id.as_str()) {
                     (
@@ -447,9 +450,47 @@ impl BaseGame {
                     (None, entity_id.parse::<u32>().ok())
                 };
 
+            // Python's process_bankrupt guard (round.py:1355-1368): reject
+            // unless `can_go_bankrupt(player, corp)` —
+            // `total_emr_buying_power(player, corp) < depot.min_depot_price`
+            // (base.py:2228-2238). The sellable-share component of
+            // `liquidity(player, emergency=True)` flows through
+            // `round.active_step().can_sell` (base.py:1565-1570); only the OR
+            // Buy Trains step HAS `can_sell`, so at any other step the
+            // sellable value is 0 (cash-only comparison). Runs BEFORE any
+            // liquidation (validate-then-mutate).
+            if let (Some(pid), Some(ref corp_sym)) = (president_id, &op_corp_sym) {
+                let at_buy_train = matches!(
+                    &self.round,
+                    Round::Operating(s) if s.step == crate::rounds::OperatingStep::BuyTrain
+                );
+                let needed = self.min_depot_price_for_emr();
+                let seller_cash = self
+                    .players
+                    .iter()
+                    .find(|p| p.id == pid)
+                    .map_or(0, |p| p.cash);
+                let corp_cash = self
+                    .corp_idx
+                    .get(corp_sym.as_str())
+                    .map_or(0, |&ci| self.corporations[ci].cash);
+                let can_go_bankrupt = if at_buy_train {
+                    self.can_go_bankrupt_emr(pid, corp_sym)
+                } else {
+                    seller_cash + corp_cash < needed
+                };
+                if !can_go_bankrupt {
+                    return Err(GameError::new(format!(
+                        "Cannot go bankrupt. {}'s cash plus president's cash and \
+                         sellable shares exceed the cheapest train in the Depot ({}).",
+                        corp_sym, needed
+                    )));
+                }
+            }
+
             if let Some(pid) = president_id {
                 if let Some(ref corp_sym) = op_corp_sym {
-                    self.sell_bankrupt_shares(pid, corp_sym);
+                    self.sell_bankrupt_shares(pid, corp_sym)?;
                     // recalculate_order: the liquidation moved share prices, so
                     // the not-yet-operated tail of the OR may need re-sorting.
                     self.recalculate_operating_order();
@@ -1606,7 +1647,11 @@ impl BaseGame {
     /// ``needed_cash == depot.min_depot_price`` and
     /// ``available_cash == seller.cash + operating_corp.cash``. As each sale pays
     /// the player, ``available_cash`` grows and the loop naturally terminates.
-    pub(crate) fn sell_bankrupt_shares(&mut self, player_id: u32, op_corp_sym: &str) {
+    pub(crate) fn sell_bankrupt_shares(
+        &mut self,
+        player_id: u32,
+        op_corp_sym: &str,
+    ) -> Result<(), GameError> {
         let needed_cash = self.min_depot_price_for_emr();
         let op_corp_cash = self
             .corp_idx
@@ -1692,18 +1737,18 @@ impl BaseGame {
                     Some((percent, _)) => {
                         // sell_shares_and_change_price for this bundle. The
                         // bankruptcy liquidation has no recorded share ids, so
-                        // pass no explicit indices (owner-based selection).
-                        if self
-                            .sell_share_bundle(player_id, &corp_sym, percent, &[])
-                            .is_err()
-                        {
-                            break;
-                        }
+                        // pass no explicit indices (owner-based selection). A
+                        // failed sale propagates — Python's
+                        // sell_shares_and_change_price would raise out of
+                        // process_bankrupt, not silently truncate the
+                        // liquidation.
+                        self.sell_share_bundle(player_id, &corp_sym, percent, &[])?;
                     }
                     None => break,
                 }
             }
         }
+        Ok(())
     }
 }
 

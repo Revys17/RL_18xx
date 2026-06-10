@@ -1156,17 +1156,66 @@ impl BaseGame {
             // Use the action's price — Python honors ``action.price`` for
             // all depot purchases, matching what the human game recorded.
             // Depot trains normally sell at face value, but the recorded
-            // action's ``price`` is the source of truth.
+            // action's ``price`` is the source of truth (no face-value check
+            // when the corp pays on its own — Python only enforces "Cannot
+            // buy for more than cost" inside the president-contribution
+            // branch, round.py:582-583).
             let actual_price = price;
 
             // Check if corp can afford; if not, president contributes.
             let corp_pays = self.corporations[corp_idx].cash.min(actual_price);
             let president_pays = actual_price - corp_pays;
             if president_pays > 0 {
+                // Python only lets the president fund the shortfall when
+                // `president_may_contribute(entity)` — i.e. `must_buy_train`
+                // (round.py:550-551, 576-577). Otherwise the contribution
+                // block is skipped and `entity.spend(price)` raises on the
+                // corp's insufficient cash.
+                if !self.president_may_contribute_pub(&corp_sym) {
+                    return Err(GameError::new(format!(
+                        "{} cannot afford {} for the {} train (has {}) and the president may not contribute",
+                        corp_sym, actual_price, train_name, self.corporations[corp_idx].cash
+                    )));
+                }
                 // Python forbids president contribution on an exchange buy
                 // (round.py:579-581).
                 if ex_idx.is_some() {
                     return Err(GameError::new("Cannot contribute funds when exchanging"));
+                }
+                // check_for_cheapest_train (round.py:765-773): when the
+                // president contributes, a from-depot train must be the
+                // cheapest train in the depot (EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST,
+                // base.py:532; EBUY_OTHER_VALUE exempts corp-owned trains only).
+                let head_name = self.depot.trains.first().map(|t| t.name.clone());
+                let cheapest: Option<(i32, String)> = self
+                    .depot
+                    .trains
+                    .iter()
+                    .filter(|t| {
+                        self.phase_available(t.available_on.as_deref())
+                            || Some(&t.name) == head_name.as_ref()
+                    })
+                    .chain(self.depot.discarded.iter())
+                    .map(|t| (t.price, t.name.clone()))
+                    .min_by_key(|(p, _)| *p);
+                if let Some((_, ref cheapest_name)) = cheapest {
+                    if cheapest_name != base_name {
+                        return Err(GameError::new(format!(
+                            "Cannot purchase {} train: cheaper train available ({})",
+                            base_name, cheapest_name
+                        )));
+                    }
+                }
+                // "Cannot buy for more than cost" (round.py:582-583): with the
+                // president contributing, the price is capped at the train's
+                // face value.
+                let train_face = if from_discarded {
+                    self.depot.discarded[train_idx].price
+                } else {
+                    self.depot.trains[train_idx].price
+                };
+                if actual_price > train_face {
+                    return Err(GameError::new("Cannot buy for more than cost"));
                 }
                 if let Some(pres_id) = self.corporations[corp_idx].president_id() {
                     let pres_idx = self.player_index(pres_id).unwrap();
@@ -1211,6 +1260,12 @@ impl BaseGame {
             self.check_phase_advance(train_name);
         } else {
             // Buy from another corporation
+            if actual_from == corp_sym {
+                // Python buy_train_action (round.py:573-574).
+                return Err(GameError::new(
+                    "An entity cannot buy a train from itself",
+                ));
+            }
             let from_corp_idx = *self
                 .corp_idx
                 .get(actual_from.as_str())
@@ -1231,10 +1286,61 @@ impl BaseGame {
                     GameError::new(format!("Train {} not owned by {}", train_name, actual_from))
                 })?;
 
-            // Transfer money — president contributes if corp can't afford (emergency buy)
+            // check_spend (round.py:824-839): a corp-owned train's price must
+            // fall inside `spend_minmax` (round.py:749-757). For 1830,
+            // EBUY_OTHER_VALUE == True and buying_power(corp) == corp.cash:
+            //   corp.cash < face (emergency):
+            //     min = 1, or corp.cash + president.cash - last_share_sold_price + 1
+            //           after an emergency share sale this turn (752-753);
+            //     max = min(face, corp.cash + president.cash)
+            //   otherwise: min = 1, max = corp.cash (no face cap).
+            // Python runs this BEFORE buy_train_action and regardless of
+            // president_may_contribute — the contribution gate below then
+            // rejects shortfalls the president may not fund.
+            {
+                let face = self.corporations[from_corp_idx].trains[train_idx].price;
+                let bp = self.corporations[corp_idx].cash;
+                let pres_cash = self.corporations[corp_idx]
+                    .president_id()
+                    .and_then(|pid| self.players.iter().find(|p| p.id == pid))
+                    .map_or(0, |p| p.cash);
+                let last_sold = match &self.round {
+                    crate::rounds::Round::Operating(s) => s.last_share_sold_price,
+                    _ => None,
+                };
+                let (min_p, max_p) = if bp < face {
+                    let min_p = match last_sold {
+                        Some(lssp) => bp + pres_cash - lssp + 1,
+                        None => 1,
+                    };
+                    (min_p, face.min(bp + pres_cash))
+                } else {
+                    (1, bp)
+                };
+                if !(min_p <= price && price <= max_p) {
+                    // The "may not buy a train from another corporation"
+                    // branch requires `not EBUY_OTHER_VALUE` (round.py:832) —
+                    // never for 1830, so always the range message.
+                    return Err(GameError::new(format!(
+                        "{} may not spend {} on {}'s {} train; may only spend between {} and {}.",
+                        corp_sym, price, actual_from, base_name, min_p, max_p
+                    )));
+                }
+            }
+
+            // Transfer money — president contributes ONLY when Python's
+            // `president_may_contribute` (== must_buy_train, round.py:550-551,
+            // 576-577) holds; otherwise the corp pays alone and an unfunded
+            // shortfall is an error (Python: entity.spend raises).
             let corp_pays = self.corporations[corp_idx].cash.min(price);
             if corp_pays < price {
                 let president_pays = price - corp_pays;
+                if !self.president_may_contribute_pub(&corp_sym) {
+                    return Err(GameError::new(format!(
+                        "{} cannot afford {} for the {} train (has {}) and the president may not contribute",
+                        corp_sym, price, train_name, self.corporations[corp_idx].cash
+                    )));
+                }
                 if let Some(pres_id) = self.corporations[corp_idx].president_id() {
                     let pres_idx = self.player_index(pres_id).unwrap();
                     if self.players[pres_idx].cash < president_pays {
