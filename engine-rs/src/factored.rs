@@ -627,16 +627,18 @@ impl BaseGame {
         let mut out: Vec<LegalAction> = Vec::new();
 
         // Pending tokens (OO upgrade displacements & home-token on tile-reserved hex).
-        // Python's pending branch (factored_action_helper._place_token_choices,
-        // ~289-309) iterates `pending_token['hexes']` and, for EACH hex, EVERY
-        // city in `hex._tile.cities` UNCONDITIONALLY (no tokenable / free-slot
-        // filter), emitting a PlaceToken with `slot = city.get_slot(entity)`.
-        // For a city with no free unreserved slot, get_slot returns None, so
-        // Python emits that city too with slot=None. We mirror that exactly:
-        // iterate every city, never filter on free slots, and preserve the
-        // None slot as JSON null (which deserializes to Python None). The Rust
-        // state stores a single pending hex (1830 place_home_token supplies
-        // hexes=[hex]); token_slot_for has identical semantics to get_slot.
+        // Mirrors Python's pending branch (factored_action_helper
+        // ._place_token_choices): iterate `pending_token['hexes']` and, for
+        // each hex, every city in `hex._tile.cities` with `slot =
+        // city.get_slot(entity)` — SKIPPING cities where get_slot returns
+        // None (no open slot, no reservation for this corp). Those entries
+        // are unprocessable — the handler rejects them ("No empty token
+        // slots") — so emitting them would mark an unapplyable policy index
+        // as legal, and a self-play playout that samples one dies. The home
+        // city always carries the corp's reservation, so at least one entry
+        // survives the filter. The Rust state stores a single pending hex
+        // (1830 place_home_token supplies hexes=[hex]); token_slot_for has
+        // identical semantics to get_slot.
         let pending = match &self.round {
             Round::Operating(s) => s.pending_tokens.clone(),
             _ => Vec::new(),
@@ -647,14 +649,14 @@ impl BaseGame {
                 let cities = self.hexes[hi].tile.cities.clone();
                 for (city_idx, _city) in cities.iter().enumerate() {
                     let slot = match self.token_slot_for(pending_hex, city_idx, &corp_sym) {
-                        Some(s) => json!(s),
-                        None => json!(null),
+                        Some(s) => s,
+                        None => continue,
                     };
                     let mut a = LegalAction::new("PlaceToken");
                     a.entity = entity_desc.clone();
                     a.params.insert("hex".to_string(), json!(pending_hex));
                     a.params.insert("city".to_string(), json!(city_idx));
-                    a.params.insert("slot".to_string(), slot);
+                    a.params.insert("slot".to_string(), json!(slot));
                     out.push(a);
                 }
             }

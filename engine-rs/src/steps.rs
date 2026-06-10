@@ -913,14 +913,13 @@ mod tests {
             if choices.is_empty() {
                 break;
             }
-            // Python-faithful UNPROCESSABLE entries: the pending-token branch
-            // (factored.rs) mirrors Python's `_place_token_choices`, which
-            // emits EVERY city of the pending hex — including full ones, with
-            // `slot=None` — and BOTH engines then reject the action at process
-            // time (Python `City#place_token` → "no token slots available";
-            // Rust → "No empty token slots"). The enumeration equality above
-            // already covered them; never APPLY one — the walk advances via
-            // processable actions only.
+            // Defensive filter: pending-token entries with `slot=None` used
+            // to be enumerated (parity-faithfully) by BOTH engines and then
+            // rejected at process time. Both enumerations now skip full
+            // cities (factored.rs / factored_action_helper.py), so this
+            // filter should never match — kept so a regression degrades the
+            // walk's coverage instead of crashing it (the enumeration
+            // equality assert above still sees every entry).
             let applicable: Vec<&crate::factored::LegalAction> = choices
                 .iter()
                 .filter(|c| {
