@@ -130,6 +130,27 @@ pub fn next_operating_pc(steps: &[StepDesc], cur: &OperatingStep) -> OperatingSt
     OperatingStep::Done
 }
 
+/// One entry in a title's round-sequence description.
+///
+/// A title's game flow = an opening round (1830: the waterfall auction,
+/// constructed at game start) followed by the repeating
+/// [`round_cycle`](crate::title::g1830::round_cycle); the game's `turn`
+/// counter increments each time the cycle wraps. Future titles add kinds
+/// here (1867's `Merger` round between OR sets, 1822's `Choices` round) and
+/// list them in their cycle — `transition_to_next_round` only walks the
+/// title's list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoundKind {
+    /// The opening (waterfall) auction. Constructed once at game start;
+    /// no 1830 cycle entry.
+    Auction,
+    /// A stock round.
+    Stock,
+    /// A set of operating rounds (`phase.operating_rounds` of them; the
+    /// set-internal repetition lives in the OperatingState, not the cycle).
+    OperatingSet,
+}
+
 /// The entity a step acts for / offers actions to. Players act in auction and
 /// stock rounds, corporations in operating rounds, and companies when a
 /// private's special ability is the actor (teleport token, exchange, ...).
@@ -168,6 +189,14 @@ impl BaseGame {
     /// today; a second title dispatches here.
     pub(crate) fn operating_step_descs(&self) -> &'static [StepDesc] {
         crate::title::g1830::operating_steps()
+    }
+
+    /// The title's repeating round cycle — everything after the opening
+    /// auction. Drives `transition_to_next_round`; the title-dispatch point
+    /// for the round SEQUENCE. 1830: Stock → OR set → (wrap, `turn` += 1) →
+    /// Stock → ...
+    pub(crate) fn round_cycle(&self) -> &'static [RoundKind] {
+        crate::title::g1830::round_cycle()
     }
 
     /// THE shared `actions_for` accumulation loop (Python
@@ -884,7 +913,25 @@ mod tests {
             if choices.is_empty() {
                 break;
             }
-            let la = &choices[rng.gen_range(0..choices.len())];
+            // Python-faithful UNPROCESSABLE entries: the pending-token branch
+            // (factored.rs) mirrors Python's `_place_token_choices`, which
+            // emits EVERY city of the pending hex — including full ones, with
+            // `slot=None` — and BOTH engines then reject the action at process
+            // time (Python `City#place_token` → "no token slots available";
+            // Rust → "No empty token slots"). The enumeration equality above
+            // already covered them; never APPLY one — the walk advances via
+            // processable actions only.
+            let applicable: Vec<&crate::factored::LegalAction> = choices
+                .iter()
+                .filter(|c| {
+                    !(c.action_type == "PlaceToken"
+                        && c.params.get("slot").map_or(false, |s| s.is_null()))
+                })
+                .collect();
+            if applicable.is_empty() {
+                break;
+            }
+            let la = applicable[rng.gen_range(0..applicable.len())];
             let Some(idx) = crate::action_index::legal_action_to_index(la) else {
                 panic!("seed {} step {}: unindexable {:?}", seed, step, la);
             };
@@ -956,6 +1003,16 @@ mod tests {
             .map(|d| (d.kind, d.blocks))
             .collect();
         assert_eq!(auction, vec![(CompanyPendingPar, true), (WaterfallAuction, true)]);
+    }
+
+    /// Pin 1830's round cycle to the Python reference (base.py::next_round!):
+    /// opening auction (pre-cycle), then Stock → OR set, turn += 1 on wrap.
+    #[test]
+    fn g1830_round_cycle_mirrors_python() {
+        assert_eq!(
+            crate::title::g1830::round_cycle(),
+            &[RoundKind::Stock, RoundKind::OperatingSet]
+        );
     }
 
     /// The derived pc sequence equals the historical hardcoded
