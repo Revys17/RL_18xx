@@ -23,6 +23,14 @@
 //! live in `crate::title::g1830` (`operating_steps`, `stock_steps`,
 //! `auction_steps`), mirroring the Python lists exactly, including order.
 //!
+//! This IS the production dispatch: `legal_action_types` /
+//! `legal_action_types_for_factored` (and therefore the factored enumeration,
+//! decode, and MCTS) all route through [`BaseGame::step_action_types_impl`],
+//! and the operating round's `skip_steps` / pc advances derive the turn
+//! sequence from the title's step list ([`next_operating_pc`]). The historical
+//! hand-derived dispatch survives only as the test-only differential oracle
+//! (`game.rs::legacy_legal_action_types_oracle`).
+//!
 //! How future titles plug in (design notes, not implemented):
 //!   * 1867's merger (M&A) round: add a `Merger` round variant + step kinds
 //!     (`Merge`, `PostMergerShares`, `ReduceTokens`, ...), list them in
@@ -150,8 +158,16 @@ impl BaseGame {
         match snap {
             Round::Auction(_) => crate::title::g1830::auction_steps(),
             Round::Stock(_) => crate::title::g1830::stock_steps(),
-            Round::Operating(_) => crate::title::g1830::operating_steps(),
+            Round::Operating(_) => self.operating_step_descs(),
         }
+    }
+
+    /// The title's OPERATING-round step list — the single title-dispatch point
+    /// for everything that walks the OR turn sequence (`skip_steps`, the pc
+    /// advance after a blocking Pass, the post-lay auto-advance). 1830-only
+    /// today; a second title dispatches here.
+    pub(crate) fn operating_step_descs(&self) -> &'static [StepDesc] {
+        crate::title::g1830::operating_steps()
     }
 
     /// THE shared `actions_for` accumulation loop (Python
@@ -842,9 +858,10 @@ mod tests {
     }
 
     /// Differential: at every state of a random self-played game, the
-    /// step-machinery enumeration must equal the hand-derived
-    /// `legal_action_types` exactly (as a set — the historical Vec order is
-    /// hand-arranged; every consumer is set/index-based).
+    /// step-machinery enumeration must equal the historical hand-derived
+    /// dispatch (retained as the test-only `legacy_legal_action_types_oracle`)
+    /// exactly (as a set — the historical Vec order is hand-arranged; every
+    /// consumer is set/index-based).
     fn run_differential_walk(seed: u64, max_actions: usize) {
         let mut game = new_4p_game();
         let mut rng = StdRng::seed_from_u64(seed);
@@ -854,7 +871,7 @@ mod tests {
             if game.is_finished_pub() {
                 break;
             }
-            let old = sorted_set(game.legal_action_types_for_factored());
+            let old = sorted_set(game.legacy_legal_action_types_oracle());
             let new = sorted_set(game.step_action_types_impl());
             assert_eq!(
                 old, new,

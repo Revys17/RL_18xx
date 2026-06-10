@@ -1,19 +1,27 @@
-"""Differential test for the table-driven step machinery (engine-rs/src/steps.rs).
+"""Replay test for the table-driven step machinery (engine-rs/src/steps.rs).
 
-The Rust engine grew a port of Ruby/Python's round architecture: per-title
-ordered step lists + ONE shared ``actions_for`` accumulation loop
-(``BaseGame.step_action_types()``). It must reproduce the historical
-hand-derived ``legal_action_types()`` enumeration EXACTLY (as a set — the
-legacy Vec order is hand-arranged and every consumer is set/index-based).
+The Rust engine's round architecture is a port of Ruby/Python's: per-title
+ordered step lists + ONE shared ``actions_for`` accumulation loop. Since the
+Stage B switch, ``legal_action_types()`` (and the whole factored enumeration /
+decode / MCTS stack behind it) IS the step machinery; the historical
+hand-derived dispatch survives only as a test-only oracle inside the crate,
+where the random-walk differential lives
+(``steps::tests::differential_step_machinery_*`` vs
+``legacy_legal_action_types_oracle``).
 
-Coverage here: HUMAN-GAME import trajectories (the states real training data
-walks through, incl. teleport / home-token / crowded-corp interleavings).
-Random-walk differential coverage lives in the Rust crate
-(``steps::tests::differential_step_machinery_*``).
+What this test still pins, on HUMAN-GAME import trajectories (the states real
+training data walks through, incl. teleport / home-token / crowded-corp
+interleavings):
+  * the machinery enumerates without error at every walked state, and the
+    production cleaning stream replays cleanly through it;
+  * the two PyO3 surfaces (``legal_action_types`` / ``step_action_types``)
+    stay wired to the same loop.
+Cross-engine (vs the Python reference) coverage for these same trajectories
+is the index-level parity harness (``tests/parity_runner.py --human-games``).
 
 The applied-action stream is produced by the production cleaning loop
 (``tests/cleaning_diff.trace_clean`` on the Rust engine) and replayed on a
-fresh Rust game with the old-vs-new comparison before every applied action.
+fresh Rust game with the comparison before every applied action.
 """
 
 import json

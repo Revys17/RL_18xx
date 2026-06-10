@@ -233,7 +233,9 @@ pub struct BaseGame {
 // below. Used by `crate::factored` to enumerate legal actions.
 impl BaseGame {
     pub(crate) fn legal_action_types_for_factored(&mut self) -> Vec<String> {
-        self.legal_action_types()
+        // The table-driven step machinery (`crate::steps`): the title's step
+        // lists + the shared actions_for accumulation loop.
+        self.step_action_types_impl()
     }
     pub(crate) fn buyable_shares_for_factored(
         &self,
@@ -300,6 +302,10 @@ impl BaseGame {
     /// Returns the syms of owned, open companies whose TileLay (bonus lay,
     /// available at any OR step) or Teleport (lay at the LayTile step) ability
     /// is still unused.
+    ///
+    /// Test-only: production enumeration goes through the step machinery
+    /// (`crate::steps`); the sole remaining caller is the legacy oracle.
+    #[cfg(test)]
     fn company_tile_abilities(&self, s: &crate::rounds::OperatingState) -> Vec<String> {
         let corp_sym = match s.current_corp_sym() {
             Some(sym) => sym.to_string(),
@@ -312,6 +318,11 @@ impl BaseGame {
     /// Check if a company exchange is available (any round, the exchange
     /// company not closed, the target corporation has non-president shares
     /// outside player hands). 1830: MH -> NYC.
+    ///
+    /// Test-only: production uses the per-company
+    /// `steps::company_exchange_available`; the sole remaining caller is the
+    /// legacy oracle.
+    #[cfg(test)]
     fn exchange_ability_available(&self) -> bool {
         self.companies.iter().any(|co| {
             if co.closed {
@@ -503,6 +514,7 @@ impl BaseGame {
             // doesn't consume anything. After it, skip_steps should check if
             // BuyCompany (or whatever step we're at) can auto-advance.
             let entity_id = action.entity_id();
+            let op_descs = self.operating_step_descs();
             let mut needs_skip_steps = crate::abilities::tile_lay(entity_id).is_some();
             let mut dh_post_token: Option<(String, bool)> = None;
             if crate::abilities::teleport(entity_id).is_some() {
@@ -541,7 +553,8 @@ impl BaseGame {
                             let has_trains = self.corp_idx.get(corp_sym.as_str())
                                 .map(|&ci| !self.corporations[ci].trains.is_empty())
                                 .unwrap_or(false);
-                            s.step = s.step.next(); // PlaceToken → RunRoutes
+                            // PlaceToken → RunRoutes (next pc per the title's step list)
+                            s.step = crate::steps::next_operating_pc(op_descs, &s.step);
                             needs_skip_steps = true;
                             dh_post_token = Some((corp_sym, has_trains));
                         }
@@ -2196,405 +2209,13 @@ impl BaseGame {
     }
 
     /// Returns the set of valid action type strings at the current game state.
+    ///
+    /// Driven by the table-driven step machinery (`crate::steps`): the title's
+    /// per-round step lists + the ONE shared `actions_for` accumulation loop.
+    /// The historical hand-derived dispatch survives only as the test-only
+    /// differential oracle (`legacy_legal_action_types_oracle`, end of file).
     fn legal_action_types(&mut self) -> Vec<String> {
-        if self.finished {
-            return Vec::new();
-        }
-
-        // Extract round state upfront to avoid borrow conflicts with &mut self
-        let round_snapshot = self.round.clone();
-
-        match &round_snapshot {
-            Round::Auction(s) => {
-                if s.pending_par.is_some() {
-                    return vec!["par".to_string()];
-                }
-                if s.remaining_companies.is_empty() {
-                    return Vec::new();
-                }
-                // Check if the player can actually bid on anything
-                let player_id = s.active_player_id();
-                let player_cash = self
-                    .players
-                    .iter()
-                    .find(|p| p.id == player_id)
-                    .map_or(0, |p| p.cash);
-                // When there's an active auction, can only bid on that company
-                let biddable_companies: Vec<usize> = if let Some(auc_ci) = s.auctioning {
-                    vec![auc_ci]
-                } else {
-                    s.remaining_companies.clone()
-                };
-                let can_bid = biddable_companies.iter().any(|&ci| {
-                    let value = self.companies.get(ci).map_or(0, |c| c.value);
-                    let min_bid = s.min_bid_for(ci, value);
-                    let max_bid = s.max_bid(player_id, ci, player_cash);
-                    max_bid >= min_bid
-                });
-                let mut types = Vec::new();
-                if can_bid {
-                    types.push("bid".to_string());
-                }
-                types.push("pass".to_string());
-                types
-            }
-            Round::Stock(s) => {
-                let player_id = s.current_player_id();
-                let mut types = Vec::new();
-
-                // Use the buyable_shares/sellable_bundles methods for accuracy
-                let buyable = !self.buyable_shares(player_id).is_empty();
-                let sellable = !self.sellable_bundles(player_id).is_empty();
-
-                // must_sell short-circuit (BuySellParShares.actions, round.py:1527-1528):
-                //   if self.must_sell(entity): return [SellShares]
-                // When the player CAN sell AND is either over the cert limit OR
-                // (since 1830's can_hold_above_corp_limit==False) holds any corp
-                // above its ownership limit, ONLY SellShares is legal — Par,
-                // BuyShares, BuyCompany and Pass are all suppressed. The predicate
-                // is a faithful port of Python's must_sell() (see stock.rs).
-                let certs = self.num_certs_internal(player_id);
-                if self.stock_must_sell(player_id, sellable, certs) {
-                    types.push("sell_shares".to_string());
-                    return types;
-                }
-
-                let exchange_surfaced = self.exchange_ability_available();
-
-                if sellable {
-                    types.push("sell_shares".to_string());
-                }
-                if buyable || exchange_surfaced {
-                    types.push("buy_shares".to_string());
-                }
-
-                if !s.bought_this_turn {
-                    let can_par = certs < self.cert_limit as u32
-                        && self.corporations.iter().any(|c| {
-                            c.ipo_price.is_none()
-                                && self
-                                    .players
-                                    .iter()
-                                    .find(|p| p.id == player_id)
-                                    .map_or(false, |p| {
-                                        p.cash >= self.stock_market.par_prices().first().copied().unwrap_or(0) * 2
-                                    })
-                        });
-                    if can_par {
-                        types.push("par".to_string());
-                    }
-                }
-
-                types.push("pass".to_string());
-                types
-            }
-            Round::Operating(os) => {
-                let mut types = Vec::new();
-
-                // Company special-lay abilities available during OR:
-                // bonus tile_lay (CS-style, any step of the owning corp's
-                // turn) vs teleport (DH-style, LayTile step only).
-                let co_abilities = self.company_tile_abilities(&os);
-                let cs_available = co_abilities
-                    .iter()
-                    .any(|s| crate::abilities::tile_lay(s).is_some());
-                let dh_available = co_abilities
-                    .iter()
-                    .any(|s| crate::abilities::teleport(s).is_some());
-                let exchange_available = self.exchange_ability_available();
-
-                match os.step {
-                    crate::rounds::OperatingStep::DiscardTrain => {
-                        types.push("discard_train".to_string());
-                        // The blocking DiscardTrain step sits AFTER the
-                        // non-blocking Exchange (MH), SpecialTrack (CS) and
-                        // BuyCompany steps in the 1830 OR step list
-                        // (g1830.py:612-626). Python's BaseRound.actions_for
-                        // accumulates the actions of every active step and only
-                        // breaks at the FIRST blocking step, so while a corp is
-                        // crowded those earlier non-blocking steps still surface
-                        // their actions in parallel with discard_train.
-                        //
-                        // BUT those parallel steps gate on `entity == current_entity`
-                        // where, for them, current_entity is the OPERATING corp
-                        // (`BaseStep.current_entity == entities[entity_index]`,
-                        // round.py:167-175). At DiscardTrain the round's current
-                        // entity is the DISCARDER (`DiscardTrain.active_entities ==
-                        // [crowded_corps[0]]`, round.py:2689-2690). When a corp is
-                        // crowded OUT OF TURN (e.g. a phase change crowded a corp
-                        // that is not the current operator — game 30642), the
-                        // discarder != operator, so Python's BuyCompany/SpecialTrack/
-                        // Exchange steps return [] for it and ONLY discard_train is
-                        // legal. Mirror that: surface the parallel actions only when
-                        // the discarder IS the operating corp (`crowded_corps[0] ==
-                        // current_corp_sym()`). `current_corp_sym` keys off
-                        // `entity_index`, which stays at the operator across a crowd.
-                        let discarder_is_operator = os
-                            .crowded_corps
-                            .first()
-                            .map(|s| s.as_str())
-                            == os.current_corp_sym();
-                        if discarder_is_operator {
-                            if cs_available {
-                                types.push("lay_tile".to_string());
-                            }
-                            if self.has_buyable_companies(&os) {
-                                types.push("buy_company".to_string());
-                            }
-                            if exchange_available {
-                                types.push("buy_shares".to_string());
-                            }
-                        }
-                    }
-                    crate::rounds::OperatingStep::LayTile => {
-                        // Check all connected hexes for layable tiles, matching
-                        // Python's get_lay_tile_actions: for each hex in connected_hexes,
-                        // check if any tile rotation has an exit matching the corp's
-                        // connected edges AND terrain cost <= corp cash.
-                        let corp_sym = os.current_corp_sym().unwrap_or("").to_string();
-                        let ci = self.corp_idx.get(corp_sym.as_str()).copied();
-                        let corp_cash = ci.map_or(0, |i| self.corporations[i].cash);
-                        // Use the SAME candidate-hex computation as the factored
-                        // enumerator (`lay_tile_candidate_hexes`) so the gate and
-                        // `factored_lay_tile` agree exactly on reachability —
-                        // base walked exits + frontier neighbours + tokened-city
-                        // all-edges. (mut borrow ends before blocked_hexes below.)
-                        let candidates = self.lay_tile_candidate_hexes(&corp_sym);
-
-                        // Blocked hexes (private companies' blocks_hexes
-                        // abilities). A blocked hex can't be laid on, but the
-                        // corp's network still extends through it to unblocked
-                        // frontier neighbours — those frontier hexes are already
-                        // separate entries in `candidates`, so we simply skip
-                        // the blocked hex itself.
-                        let blocked_hexes = self.ability_blocked_hexes();
-
-                        let mut has_layable = false;
-                        for (hex_id, edges) in &candidates {
-                            if blocked_hexes.contains(hex_id.as_str()) {
-                                continue;
-                            }
-                            if self.has_layable_tile_for_corp(hex_id, edges, corp_cash) {
-                                has_layable = true;
-                                break;
-                            }
-                        }
-                        if has_layable || cs_available || dh_available {
-                            types.push("lay_tile".to_string());
-                        }
-                        if self.has_buyable_companies(&os) {
-                            types.push("buy_company".to_string());
-                        }
-                        if exchange_available {
-                            types.push("buy_shares".to_string());
-                        }
-                        types.push("pass".to_string());
-                    }
-                    crate::rounds::OperatingStep::PlaceToken => {
-                        // If there are pending tokens (from home token choice or OO
-                        // tile displacement), place_token is mandatory — no pass.
-                        if !os.pending_tokens.is_empty() {
-                            types.push("place_token".to_string());
-                            // Python's non-blocking steps that sit BEFORE the
-                            // blocking HomeToken/Token placement in the 1830 OR
-                            // step list (Exchange/MH, SpecialTrack/CS, BuyCompany)
-                            // still surface their actions in parallel:
-                            // BaseRound.actions_for accumulates non-blocking step
-                            // actions and only breaks at the first blocking step.
-                            // Each of these keys off the round's current operator,
-                            // which equals `current_corp_sym()` here. Mirror the
-                            // exact conditions used by the LayTile/Dividend branches.
-                            if cs_available {
-                                types.push("lay_tile".to_string());
-                            }
-                            if self.has_buyable_companies(&os) {
-                                types.push("buy_company".to_string());
-                            }
-                            if exchange_available {
-                                types.push("buy_shares".to_string());
-                            }
-                        } else {
-                            let corp_sym = os.current_corp_sym().unwrap_or("").to_string();
-                            // While a DH teleport token is pending (Python
-                            // `round.teleported`), the blocking `SpecialToken`
-                            // step (OR step list index 3) is reached BEFORE the
-                            // regular `Token` step (index 7), so the corp's normal
-                            // reachable-city tokens are NOT surfaced — only the
-                            // teleport hex (F16). Likewise `BuyCompany` (index 4)
-                            // sits AFTER `SpecialToken`, so it is NOT offered while
-                            // the teleport blocks; the only non-blocking steps that
-                            // run first are Exchange (MH) and SpecialTrack (CS).
-                            let teleport_pending = os.teleport_pending;
-                            let tokenable = if teleport_pending {
-                                Vec::new()
-                            } else {
-                                self.tokenable_cities_for(&corp_sym)
-                            };
-                            // Check if home token needs to be placed (mandatory, no connectivity needed)
-                            let needs_home_token = self.corp_idx.get(corp_sym.as_str())
-                                .map_or(false, |&ci| !self.corporations[ci].home_token_ever_placed);
-                            // Also check the teleport company's special token
-                            // (DH: place on F16 without connectivity). Only
-                            // offered while the teleport is PENDING — once
-                            // placed or declined, Python's `teleport_complete()`
-                            // removes the ability, so the hex is no longer
-                            // tokenable even though `ability_used` stays true.
-                            let corp_eid = EntityId::corporation(&corp_sym);
-                            let dh_token = teleport_pending
-                                && self.companies.iter().any(|co| {
-                                    !co.closed
-                                        && co.ability_used // tile already laid
-                                        && co.owner == corp_eid
-                                        && crate::abilities::teleport(&co.sym).map_or(
-                                            false,
-                                            |(hexes, _)| {
-                                                hexes.iter().any(|h| {
-                                                    self.hex_idx.get(*h).map_or(false, |&hi| {
-                                                        self.hexes[hi].tile.cities.iter().any(|c| {
-                                                            c.tokens.iter().any(|t| t.is_none())
-                                                        })
-                                                    })
-                                                })
-                                            },
-                                        )
-                                })
-                                && self.corp_idx.get(corp_sym.as_str()).map_or(false, |&ci| {
-                                    // Corp has an unplaced token
-                                    self.corporations[ci].next_token_index().is_some()
-                                });
-                            if !tokenable.is_empty() || dh_token || needs_home_token {
-                                types.push("place_token".to_string());
-                            }
-                            // While a DH teleport is PENDING, the legal actor is
-                            // the teleported DH Company and `actions_for` BREAKS
-                            // at the blocking SpecialToken step (OR step index 3)
-                            // BEFORE SpecialTrack/CS (index 2) can contribute via
-                            // the corp's parallel companies. So CS's B20 lay is
-                            // NOT enumerated here. Gate on !teleport_pending,
-                            // exactly like the BuyCompany guard below.
-                            if !teleport_pending && cs_available {
-                                types.push("lay_tile".to_string());
-                            }
-                            // BuyCompany sits AFTER SpecialToken in the OR step
-                            // list, so it is suppressed while a teleport blocks.
-                            if !teleport_pending && self.has_buyable_companies(&os) {
-                                types.push("buy_company".to_string());
-                            }
-                            if exchange_available {
-                                types.push("buy_shares".to_string());
-                            }
-                            types.push("pass".to_string());
-                        }
-                    }
-                    crate::rounds::OperatingStep::RunRoutes => {
-                        types.push("run_routes".to_string());
-                        if cs_available {
-                            types.push("lay_tile".to_string());
-                        }
-                        // BuyCompany is a parallel option during the corp's
-                        // operating turn (Python's actions_for surfaces it at the
-                        // Route step too) whenever a president-owned private is
-                        // affordable.
-                        if self.has_buyable_companies(&os) {
-                            types.push("buy_company".to_string());
-                        }
-                        if exchange_available {
-                            types.push("buy_shares".to_string());
-                        }
-                    }
-                    crate::rounds::OperatingStep::Dividend => {
-                        types.push("dividend".to_string());
-                        if cs_available {
-                            types.push("lay_tile".to_string());
-                        }
-                        // BuyCompany is a parallel option during the corp's
-                        // operating turn (Python's actions_for surfaces the
-                        // non-blocking BuyCompany step alongside the blocking
-                        // Dividend step) whenever a president-owned private is
-                        // affordable.
-                        if self.has_buyable_companies(&os) {
-                            types.push("buy_company".to_string());
-                        }
-                        if exchange_available {
-                            types.push("buy_shares".to_string());
-                        }
-                    }
-                    crate::rounds::OperatingStep::BuyTrain => {
-                        let corp_sym = os.current_corp_sym().unwrap_or("").to_string();
-                        let ci = self.corp_idx.get(corp_sym.as_str()).copied();
-                        let no_trains = ci.map_or(true, |i| self.corporations[i].trains.is_empty());
-                        // Python's `must_buy_train` keys off `depot.depot_trains()`
-                        // (visible upcoming + discarded) being non-empty, not just
-                        // the upcoming queue — a discarded train still satisfies the
-                        // buy obligation after the upcoming queue empties.
-                        let depot_has_trains =
-                            !self.depot.trains.is_empty() || !self.depot.discarded.is_empty();
-                        // must_buy uses route_train_purchase (2+ mandatory/city nodes),
-                        // matching Python's must_buy_train.
-                        let must_buy = no_trains && depot_has_trains && self.must_buy_train(&corp_sym);
-                        let pres_id = ci.and_then(|i| self.corporations[i].president_id());
-                        if must_buy {
-                            // Python's BuyTrain step (round.py:792-805): when
-                            // `president_may_contribute(entity)` holds it returns
-                            // `[SellShares, BuyTrain]`. And `president_may_contribute`
-                            // is EXACTLY `must_buy_train(entity)` (round.py:550) — it
-                            // is NOT gated on affordability. So whenever the corp must
-                            // buy a train the president MAY sell shares (to fund a
-                            // costlier train than the corp can currently afford), even
-                            // if the cheapest depot train is affordable on the corp's
-                            // own cash. The old `corp_cash < cheapest_price` emergency
-                            // gate dropped `sell_shares` when the corp could exactly
-                            // afford the cheapest train (e.g. game 65407: cash 630,
-                            // min_depot_price 630). BuyCompany / CS / MH are parallel
-                            // options; Bankrupt is gated on `can_go_bankrupt` and the
-                            // factored helper hides it unless no concrete action exists.
-                            types.push("buy_train".to_string());
-                            types.push("sell_shares".to_string());
-                            if self.has_buyable_companies(&os) {
-                                types.push("buy_company".to_string());
-                            }
-                            if cs_available {
-                                types.push("lay_tile".to_string());
-                            }
-                            if exchange_available {
-                                types.push("buy_shares".to_string());
-                            }
-                            let can_bankrupt = pres_id
-                                .map_or(false, |pid| self.can_go_bankrupt_emr(pid, &corp_sym));
-                            if can_bankrupt {
-                                types.push("bankrupt".to_string());
-                            }
-                        } else {
-                            types.push("buy_train".to_string());
-                            if cs_available {
-                                types.push("lay_tile".to_string());
-                            }
-                            if self.has_buyable_companies(&os) {
-                                types.push("buy_company".to_string());
-                            }
-                            if exchange_available {
-                                types.push("buy_shares".to_string());
-                            }
-                            types.push("pass".to_string());
-                        }
-                    }
-                    crate::rounds::OperatingStep::BuyCompany => {
-                        if self.has_buyable_companies(&os) {
-                            types.push("buy_company".to_string());
-                        }
-                        if cs_available {
-                            types.push("lay_tile".to_string());
-                        }
-                        if exchange_available {
-                            types.push("buy_shares".to_string());
-                        }
-                        types.push("pass".to_string());
-                    }
-                    crate::rounds::OperatingStep::Done => {}
-                }
-                types
-            }
-        }
+        self.step_action_types_impl()
     }
 
     /// The currently active entity's ID string (e.g., "player:1", "corp:PRR").
@@ -4797,5 +4418,420 @@ mod tests {
             "NYC should reach D20's city. Connected nodes: {:?}",
             graph.connected_nodes
         );
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Test-only differential oracle
+// ---------------------------------------------------------------------------
+
+/// The HISTORICAL hand-derived `legal_action_types` dispatch, frozen at the
+/// moment the table-driven step machinery (`crate::steps`) replaced it in
+/// production. Retained ONLY as the oracle for the in-crate differential
+/// walks (`steps::tests::differential_step_machinery_*`), which pin the step
+/// machinery's enumeration to this 1830 behavior (as a set) at every state
+/// of random self-played games. Never compiled into the wheel.
+#[cfg(test)]
+impl BaseGame {
+    pub(crate) fn legacy_legal_action_types_oracle(&mut self) -> Vec<String> {
+        if self.finished {
+            return Vec::new();
+        }
+
+        // Extract round state upfront to avoid borrow conflicts with &mut self
+        let round_snapshot = self.round.clone();
+
+        match &round_snapshot {
+            Round::Auction(s) => {
+                if s.pending_par.is_some() {
+                    return vec!["par".to_string()];
+                }
+                if s.remaining_companies.is_empty() {
+                    return Vec::new();
+                }
+                // Check if the player can actually bid on anything
+                let player_id = s.active_player_id();
+                let player_cash = self
+                    .players
+                    .iter()
+                    .find(|p| p.id == player_id)
+                    .map_or(0, |p| p.cash);
+                // When there's an active auction, can only bid on that company
+                let biddable_companies: Vec<usize> = if let Some(auc_ci) = s.auctioning {
+                    vec![auc_ci]
+                } else {
+                    s.remaining_companies.clone()
+                };
+                let can_bid = biddable_companies.iter().any(|&ci| {
+                    let value = self.companies.get(ci).map_or(0, |c| c.value);
+                    let min_bid = s.min_bid_for(ci, value);
+                    let max_bid = s.max_bid(player_id, ci, player_cash);
+                    max_bid >= min_bid
+                });
+                let mut types = Vec::new();
+                if can_bid {
+                    types.push("bid".to_string());
+                }
+                types.push("pass".to_string());
+                types
+            }
+            Round::Stock(s) => {
+                let player_id = s.current_player_id();
+                let mut types = Vec::new();
+
+                // Use the buyable_shares/sellable_bundles methods for accuracy
+                let buyable = !self.buyable_shares(player_id).is_empty();
+                let sellable = !self.sellable_bundles(player_id).is_empty();
+
+                // must_sell short-circuit (BuySellParShares.actions, round.py:1527-1528):
+                //   if self.must_sell(entity): return [SellShares]
+                // When the player CAN sell AND is either over the cert limit OR
+                // (since 1830's can_hold_above_corp_limit==False) holds any corp
+                // above its ownership limit, ONLY SellShares is legal — Par,
+                // BuyShares, BuyCompany and Pass are all suppressed. The predicate
+                // is a faithful port of Python's must_sell() (see stock.rs).
+                let certs = self.num_certs_internal(player_id);
+                if self.stock_must_sell(player_id, sellable, certs) {
+                    types.push("sell_shares".to_string());
+                    return types;
+                }
+
+                let exchange_surfaced = self.exchange_ability_available();
+
+                if sellable {
+                    types.push("sell_shares".to_string());
+                }
+                if buyable || exchange_surfaced {
+                    types.push("buy_shares".to_string());
+                }
+
+                if !s.bought_this_turn {
+                    let can_par = certs < self.cert_limit as u32
+                        && self.corporations.iter().any(|c| {
+                            c.ipo_price.is_none()
+                                && self
+                                    .players
+                                    .iter()
+                                    .find(|p| p.id == player_id)
+                                    .map_or(false, |p| {
+                                        p.cash >= self.stock_market.par_prices().first().copied().unwrap_or(0) * 2
+                                    })
+                        });
+                    if can_par {
+                        types.push("par".to_string());
+                    }
+                }
+
+                types.push("pass".to_string());
+                types
+            }
+            Round::Operating(os) => {
+                let mut types = Vec::new();
+
+                // Company special-lay abilities available during OR:
+                // bonus tile_lay (CS-style, any step of the owning corp's
+                // turn) vs teleport (DH-style, LayTile step only).
+                let co_abilities = self.company_tile_abilities(&os);
+                let cs_available = co_abilities
+                    .iter()
+                    .any(|s| crate::abilities::tile_lay(s).is_some());
+                let dh_available = co_abilities
+                    .iter()
+                    .any(|s| crate::abilities::teleport(s).is_some());
+                let exchange_available = self.exchange_ability_available();
+
+                match os.step {
+                    crate::rounds::OperatingStep::DiscardTrain => {
+                        types.push("discard_train".to_string());
+                        // The blocking DiscardTrain step sits AFTER the
+                        // non-blocking Exchange (MH), SpecialTrack (CS) and
+                        // BuyCompany steps in the 1830 OR step list
+                        // (g1830.py:612-626). Python's BaseRound.actions_for
+                        // accumulates the actions of every active step and only
+                        // breaks at the FIRST blocking step, so while a corp is
+                        // crowded those earlier non-blocking steps still surface
+                        // their actions in parallel with discard_train.
+                        //
+                        // BUT those parallel steps gate on `entity == current_entity`
+                        // where, for them, current_entity is the OPERATING corp
+                        // (`BaseStep.current_entity == entities[entity_index]`,
+                        // round.py:167-175). At DiscardTrain the round's current
+                        // entity is the DISCARDER (`DiscardTrain.active_entities ==
+                        // [crowded_corps[0]]`, round.py:2689-2690). When a corp is
+                        // crowded OUT OF TURN (e.g. a phase change crowded a corp
+                        // that is not the current operator — game 30642), the
+                        // discarder != operator, so Python's BuyCompany/SpecialTrack/
+                        // Exchange steps return [] for it and ONLY discard_train is
+                        // legal. Mirror that: surface the parallel actions only when
+                        // the discarder IS the operating corp (`crowded_corps[0] ==
+                        // current_corp_sym()`). `current_corp_sym` keys off
+                        // `entity_index`, which stays at the operator across a crowd.
+                        let discarder_is_operator = os
+                            .crowded_corps
+                            .first()
+                            .map(|s| s.as_str())
+                            == os.current_corp_sym();
+                        if discarder_is_operator {
+                            if cs_available {
+                                types.push("lay_tile".to_string());
+                            }
+                            if self.has_buyable_companies(&os) {
+                                types.push("buy_company".to_string());
+                            }
+                            if exchange_available {
+                                types.push("buy_shares".to_string());
+                            }
+                        }
+                    }
+                    crate::rounds::OperatingStep::LayTile => {
+                        // Check all connected hexes for layable tiles, matching
+                        // Python's get_lay_tile_actions: for each hex in connected_hexes,
+                        // check if any tile rotation has an exit matching the corp's
+                        // connected edges AND terrain cost <= corp cash.
+                        let corp_sym = os.current_corp_sym().unwrap_or("").to_string();
+                        let ci = self.corp_idx.get(corp_sym.as_str()).copied();
+                        let corp_cash = ci.map_or(0, |i| self.corporations[i].cash);
+                        // Use the SAME candidate-hex computation as the factored
+                        // enumerator (`lay_tile_candidate_hexes`) so the gate and
+                        // `factored_lay_tile` agree exactly on reachability —
+                        // base walked exits + frontier neighbours + tokened-city
+                        // all-edges. (mut borrow ends before blocked_hexes below.)
+                        let candidates = self.lay_tile_candidate_hexes(&corp_sym);
+
+                        // Blocked hexes (private companies' blocks_hexes
+                        // abilities). A blocked hex can't be laid on, but the
+                        // corp's network still extends through it to unblocked
+                        // frontier neighbours — those frontier hexes are already
+                        // separate entries in `candidates`, so we simply skip
+                        // the blocked hex itself.
+                        let blocked_hexes = self.ability_blocked_hexes();
+
+                        let mut has_layable = false;
+                        for (hex_id, edges) in &candidates {
+                            if blocked_hexes.contains(hex_id.as_str()) {
+                                continue;
+                            }
+                            if self.has_layable_tile_for_corp(hex_id, edges, corp_cash) {
+                                has_layable = true;
+                                break;
+                            }
+                        }
+                        if has_layable || cs_available || dh_available {
+                            types.push("lay_tile".to_string());
+                        }
+                        if self.has_buyable_companies(&os) {
+                            types.push("buy_company".to_string());
+                        }
+                        if exchange_available {
+                            types.push("buy_shares".to_string());
+                        }
+                        types.push("pass".to_string());
+                    }
+                    crate::rounds::OperatingStep::PlaceToken => {
+                        // If there are pending tokens (from home token choice or OO
+                        // tile displacement), place_token is mandatory — no pass.
+                        if !os.pending_tokens.is_empty() {
+                            types.push("place_token".to_string());
+                            // Python's non-blocking steps that sit BEFORE the
+                            // blocking HomeToken/Token placement in the 1830 OR
+                            // step list (Exchange/MH, SpecialTrack/CS, BuyCompany)
+                            // still surface their actions in parallel:
+                            // BaseRound.actions_for accumulates non-blocking step
+                            // actions and only breaks at the first blocking step.
+                            // Each of these keys off the round's current operator,
+                            // which equals `current_corp_sym()` here. Mirror the
+                            // exact conditions used by the LayTile/Dividend branches.
+                            if cs_available {
+                                types.push("lay_tile".to_string());
+                            }
+                            if self.has_buyable_companies(&os) {
+                                types.push("buy_company".to_string());
+                            }
+                            if exchange_available {
+                                types.push("buy_shares".to_string());
+                            }
+                        } else {
+                            let corp_sym = os.current_corp_sym().unwrap_or("").to_string();
+                            // While a DH teleport token is pending (Python
+                            // `round.teleported`), the blocking `SpecialToken`
+                            // step (OR step list index 3) is reached BEFORE the
+                            // regular `Token` step (index 7), so the corp's normal
+                            // reachable-city tokens are NOT surfaced — only the
+                            // teleport hex (F16). Likewise `BuyCompany` (index 4)
+                            // sits AFTER `SpecialToken`, so it is NOT offered while
+                            // the teleport blocks; the only non-blocking steps that
+                            // run first are Exchange (MH) and SpecialTrack (CS).
+                            let teleport_pending = os.teleport_pending;
+                            let tokenable = if teleport_pending {
+                                Vec::new()
+                            } else {
+                                self.tokenable_cities_for(&corp_sym)
+                            };
+                            // Check if home token needs to be placed (mandatory, no connectivity needed)
+                            let needs_home_token = self.corp_idx.get(corp_sym.as_str())
+                                .map_or(false, |&ci| !self.corporations[ci].home_token_ever_placed);
+                            // Also check the teleport company's special token
+                            // (DH: place on F16 without connectivity). Only
+                            // offered while the teleport is PENDING — once
+                            // placed or declined, Python's `teleport_complete()`
+                            // removes the ability, so the hex is no longer
+                            // tokenable even though `ability_used` stays true.
+                            let corp_eid = EntityId::corporation(&corp_sym);
+                            let dh_token = teleport_pending
+                                && self.companies.iter().any(|co| {
+                                    !co.closed
+                                        && co.ability_used // tile already laid
+                                        && co.owner == corp_eid
+                                        && crate::abilities::teleport(&co.sym).map_or(
+                                            false,
+                                            |(hexes, _)| {
+                                                hexes.iter().any(|h| {
+                                                    self.hex_idx.get(*h).map_or(false, |&hi| {
+                                                        self.hexes[hi].tile.cities.iter().any(|c| {
+                                                            c.tokens.iter().any(|t| t.is_none())
+                                                        })
+                                                    })
+                                                })
+                                            },
+                                        )
+                                })
+                                && self.corp_idx.get(corp_sym.as_str()).map_or(false, |&ci| {
+                                    // Corp has an unplaced token
+                                    self.corporations[ci].next_token_index().is_some()
+                                });
+                            if !tokenable.is_empty() || dh_token || needs_home_token {
+                                types.push("place_token".to_string());
+                            }
+                            // While a DH teleport is PENDING, the legal actor is
+                            // the teleported DH Company and `actions_for` BREAKS
+                            // at the blocking SpecialToken step (OR step index 3)
+                            // BEFORE SpecialTrack/CS (index 2) can contribute via
+                            // the corp's parallel companies. So CS's B20 lay is
+                            // NOT enumerated here. Gate on !teleport_pending,
+                            // exactly like the BuyCompany guard below.
+                            if !teleport_pending && cs_available {
+                                types.push("lay_tile".to_string());
+                            }
+                            // BuyCompany sits AFTER SpecialToken in the OR step
+                            // list, so it is suppressed while a teleport blocks.
+                            if !teleport_pending && self.has_buyable_companies(&os) {
+                                types.push("buy_company".to_string());
+                            }
+                            if exchange_available {
+                                types.push("buy_shares".to_string());
+                            }
+                            types.push("pass".to_string());
+                        }
+                    }
+                    crate::rounds::OperatingStep::RunRoutes => {
+                        types.push("run_routes".to_string());
+                        if cs_available {
+                            types.push("lay_tile".to_string());
+                        }
+                        // BuyCompany is a parallel option during the corp's
+                        // operating turn (Python's actions_for surfaces it at the
+                        // Route step too) whenever a president-owned private is
+                        // affordable.
+                        if self.has_buyable_companies(&os) {
+                            types.push("buy_company".to_string());
+                        }
+                        if exchange_available {
+                            types.push("buy_shares".to_string());
+                        }
+                    }
+                    crate::rounds::OperatingStep::Dividend => {
+                        types.push("dividend".to_string());
+                        if cs_available {
+                            types.push("lay_tile".to_string());
+                        }
+                        // BuyCompany is a parallel option during the corp's
+                        // operating turn (Python's actions_for surfaces the
+                        // non-blocking BuyCompany step alongside the blocking
+                        // Dividend step) whenever a president-owned private is
+                        // affordable.
+                        if self.has_buyable_companies(&os) {
+                            types.push("buy_company".to_string());
+                        }
+                        if exchange_available {
+                            types.push("buy_shares".to_string());
+                        }
+                    }
+                    crate::rounds::OperatingStep::BuyTrain => {
+                        let corp_sym = os.current_corp_sym().unwrap_or("").to_string();
+                        let ci = self.corp_idx.get(corp_sym.as_str()).copied();
+                        let no_trains = ci.map_or(true, |i| self.corporations[i].trains.is_empty());
+                        // Python's `must_buy_train` keys off `depot.depot_trains()`
+                        // (visible upcoming + discarded) being non-empty, not just
+                        // the upcoming queue — a discarded train still satisfies the
+                        // buy obligation after the upcoming queue empties.
+                        let depot_has_trains =
+                            !self.depot.trains.is_empty() || !self.depot.discarded.is_empty();
+                        // must_buy uses route_train_purchase (2+ mandatory/city nodes),
+                        // matching Python's must_buy_train.
+                        let must_buy = no_trains && depot_has_trains && self.must_buy_train(&corp_sym);
+                        let pres_id = ci.and_then(|i| self.corporations[i].president_id());
+                        if must_buy {
+                            // Python's BuyTrain step (round.py:792-805): when
+                            // `president_may_contribute(entity)` holds it returns
+                            // `[SellShares, BuyTrain]`. And `president_may_contribute`
+                            // is EXACTLY `must_buy_train(entity)` (round.py:550) — it
+                            // is NOT gated on affordability. So whenever the corp must
+                            // buy a train the president MAY sell shares (to fund a
+                            // costlier train than the corp can currently afford), even
+                            // if the cheapest depot train is affordable on the corp's
+                            // own cash. The old `corp_cash < cheapest_price` emergency
+                            // gate dropped `sell_shares` when the corp could exactly
+                            // afford the cheapest train (e.g. game 65407: cash 630,
+                            // min_depot_price 630). BuyCompany / CS / MH are parallel
+                            // options; Bankrupt is gated on `can_go_bankrupt` and the
+                            // factored helper hides it unless no concrete action exists.
+                            types.push("buy_train".to_string());
+                            types.push("sell_shares".to_string());
+                            if self.has_buyable_companies(&os) {
+                                types.push("buy_company".to_string());
+                            }
+                            if cs_available {
+                                types.push("lay_tile".to_string());
+                            }
+                            if exchange_available {
+                                types.push("buy_shares".to_string());
+                            }
+                            let can_bankrupt = pres_id
+                                .map_or(false, |pid| self.can_go_bankrupt_emr(pid, &corp_sym));
+                            if can_bankrupt {
+                                types.push("bankrupt".to_string());
+                            }
+                        } else {
+                            types.push("buy_train".to_string());
+                            if cs_available {
+                                types.push("lay_tile".to_string());
+                            }
+                            if self.has_buyable_companies(&os) {
+                                types.push("buy_company".to_string());
+                            }
+                            if exchange_available {
+                                types.push("buy_shares".to_string());
+                            }
+                            types.push("pass".to_string());
+                        }
+                    }
+                    crate::rounds::OperatingStep::BuyCompany => {
+                        if self.has_buyable_companies(&os) {
+                            types.push("buy_company".to_string());
+                        }
+                        if cs_available {
+                            types.push("lay_tile".to_string());
+                        }
+                        if exchange_available {
+                            types.push("buy_shares".to_string());
+                        }
+                        types.push("pass".to_string());
+                    }
+                    crate::rounds::OperatingStep::Done => {}
+                }
+                types
+            }
+        }
     }
 }
