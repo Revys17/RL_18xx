@@ -8,6 +8,11 @@ and after any engine/rules/decode/encoder refactor.
 
 ```bash
 uv run pytest tests/
+# Rust in-crate tests, incl. the frozen-1830-action-layout pin (pytest never
+# runs these; PyO3 needs a linkable libpython for the test binary):
+PY="$(pwd)/.venv/bin/python"
+LIBDIR="$("$PY" -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+(cd engine-rs && PYO3_PYTHON="$PY" LD_LIBRARY_PATH="$LIBDIR" cargo test --release --no-default-features -q)
 ```
 
 Includes bounded slices of every parity axis: random-walk lockstep

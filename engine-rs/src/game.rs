@@ -4062,6 +4062,35 @@ mod tests {
         }
     }
 
+    /// The player the dispatcher will accept a stock-round action from.
+    /// (`StockState::current_player_id()` does not skip players who have
+    /// passed out of the round; the round state's active entity does.)
+    fn active_stock_player(game: &BaseGame) -> u32 {
+        match &game.round {
+            Round::Stock(_) => {}
+            other => panic!("Expected Stock round, got {}", other.round_type_str()),
+        }
+        game.round_state
+            .active_entity_id
+            .player_id()
+            .expect("stock-round active entity should be a player")
+    }
+
+    /// Pass as `pid` only if they are still the active stock-round player.
+    /// The engine ends a stock turn automatically when the player has no
+    /// further action (e.g. after a par/buy in SR1 where selling is
+    /// forbidden), so an unconditional pass can hit "Not player X's turn".
+    fn pass_if_current(game: &mut BaseGame, pid: u32) {
+        if matches!(&game.round, Round::Stock(_))
+            && game.round_state.active_entity_id.player_id() == Some(pid)
+        {
+            game.process_action_internal(&Action::Pass {
+                entity_id: pid.to_string(),
+            })
+            .unwrap();
+        }
+    }
+
     /// Helper: buy all auction companies at face value, returning game in Stock round.
     fn game_in_stock_round() -> BaseGame {
         let mut game = new_4p_game();
@@ -4166,15 +4195,9 @@ mod tests {
 
         // Player 0 already has 10% from CA company ability.
         // President share = 20%, so 30% sold. Need 3 more buys to reach 60%.
-        // After par, current player bought, so pass first.
-        let parrer = match &game.round {
-            Round::Stock(s) => s.current_player_id(),
-            _ => panic!(),
-        };
-        game.process_action_internal(&Action::Pass {
-            entity_id: parrer.to_string(),
-        })
-        .unwrap();
+        // The par ends the parrer's turn (nothing else legal in SR1); only
+        // pass if the engine still has them as current.
+        pass_if_current(&mut game, p1);
 
         for i in 0..3 {
             let buyer = match &game.round {
@@ -4190,10 +4213,7 @@ mod tests {
                 share_indices: vec![],
             })
             .unwrap_or_else(|e| panic!("Float buy {} by player {} failed: {}", i, buyer, e));
-            game.process_action_internal(&Action::Pass {
-                entity_id: buyer.to_string(),
-            })
-            .unwrap();
+            pass_if_current(&mut game, buyer);
             skip_or(&mut game);
         }
 
@@ -4223,10 +4243,7 @@ mod tests {
             share_price: 67,
         })
         .unwrap();
-        game.process_action_internal(&Action::Pass {
-            entity_id: first.to_string(),
-        })
-        .unwrap();
+        pass_if_current(&mut game, first);
         skip_or(&mut game);
 
         // Buy 3 more shares to float (player 0 already has 10% from CA = 60% total)
@@ -4244,10 +4261,7 @@ mod tests {
                 share_indices: vec![],
             })
             .unwrap_or_else(|e| panic!("Buy {} by player {} failed: {}", i, pid, e));
-            game.process_action_internal(&Action::Pass {
-                entity_id: pid.to_string(),
-            })
-            .unwrap();
+            pass_if_current(&mut game, pid);
             skip_or(&mut game);
         }
 
@@ -4315,13 +4329,12 @@ mod tests {
             share_price: 100,
         })
         .unwrap();
-        game.process_action_internal(&Action::Pass {
-            entity_id: p1.to_string(),
-        })
-        .unwrap();
+        pass_if_current(&mut game, p1);
         skip_or(&mut game);
 
-        // Other players buy shares then pass
+        // Other players buy shares then pass. Deliberately do NOT float PRR
+        // (stay at 50%): a floated corp's OR blocks at the mandatory
+        // BuyTrain step, which the pass-driven skip_or below can't clear.
         for _ in 0..2 {
             let pid = match &game.round {
                 Round::Stock(s) => s.current_player_id(),
@@ -4336,18 +4349,34 @@ mod tests {
                 share_indices: vec![],
             })
             .unwrap();
-            game.process_action_internal(&Action::Pass {
-                entity_id: pid.to_string(),
-            })
-            .unwrap();
+            pass_if_current(&mut game, pid);
             skip_or(&mut game);
         }
 
-        // P1's turn: buy another share
-        let current = match &game.round {
-            Round::Stock(s) => s.current_player_id(),
-            _ => panic!("Expected Stock round"),
-        };
+        // Selling needs game.turn >= 2 (SELL_AFTER = "first"; the counter
+        // increments on the OR → Stock transition), so pass everyone out of
+        // SR1. With no floated corp the engine skips the OR and lands
+        // straight in SR2 — the round stays Stock throughout, so loop on the
+        // turn counter, not the round type.
+        let mut safety = 0;
+        while game.turn < 2 {
+            assert!(safety < 50, "game never reached SR2 within 50 actions");
+            safety += 1;
+            match &game.round {
+                Round::Stock(_) => {
+                    let pid = active_stock_player(&game);
+                    game.process_action_internal(&Action::Pass {
+                        entity_id: pid.to_string(),
+                    })
+                    .unwrap();
+                }
+                Round::Operating(_) => skip_or(&mut game),
+                other => panic!("Unexpected round {}", other.round_type_str()),
+            }
+        }
+
+        // SR2: active player buys another share
+        let current = active_stock_player(&game);
         game.process_action_internal(&Action::BuyShares {
             entity_id: current.to_string(),
             corporation_sym: "PRR".to_string(),
