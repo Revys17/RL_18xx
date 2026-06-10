@@ -165,3 +165,47 @@ In Ruby this `extends G1822::Game`, so it reuses Phase 2's machinery.
 - `docs/rust_engine_*_audit.*`, `docs/cleaning_engine_parity.*`, `docs/rust_engine_bugs.md` —
   the parity tooling to replicate per title.
 - Root `roadmap.md` — lists multi-title support as a stretch goal among other engine/model work.
+
+## Phase 0 outcomes & carry-forwards (2026-06-10, branch `multi-title`)
+
+Phase 0 landed in two refactors, both verified 1830-behavior-preserving (full
+corpus 0/3243 import-outcome parity, strict 4-axis subset, random walks,
+pytest 326 + cargo 70, independent diff reviews):
+
+- **Ability system** (`3aec050..297f925`): per-company `AbilityDef` data on
+  `CompanyDef`; CS/DH/MH/BO/CA/SV sym if-chains across five layers replaced by
+  data queries; blocked-hex map single-sourced; 1830 action layout pinned by a
+  frozen-layout cargo test (wired into the pre-push hook).
+- **Step/round machinery** (`de74e09..338c5fc`): `steps.rs` —
+  `StepKind`/`StepDesc` per-title ordered step lists + ONE shared `actions_for`
+  accumulation loop; `skip_steps` table-driven; `OperatingStep::next()`
+  deleted; legacy dispatch frozen as a `#[cfg(test)]` oracle for the in-crate
+  random-walk differential; `RoundKind` cycle description drives
+  `transition_to_next_round`.
+
+Carry-forwards from the sign-off review (do these WITH the 1867 work):
+
+1. **Stage C is a thin veneer.** 1867's merger rounds interleave *within* the
+   OR set (SR → MR → OR → MR → OR) and OR counts are phase-dependent —
+   a static `&[RoundKind]` cycle can't express that, and the OR-set repetition
+   early-returns inside `transition_to_next_round`, bypassing the cycle. The
+   1867 work should replace the static list with a per-title round-flow hook
+   (or give `RoundKind::OperatingSet` interleave entries) rather than extend
+   the current shape.
+2. **`next_operating_pc` is first-match by pc** (`steps.rs`): a title listing
+   two steps with the same `operating_pc` (e.g. 1822's minor-first-OR BuyTrain
+   in front of the normal BuyTrain) would mis-sequence. Use a pc-less overlay
+   step + `step_blocking_override` (the SpecialToken pattern) for such steps,
+   or generalize the pc walker to positional indices.
+3. **Title dispatch funnel**: `steps.rs::{round_step_descs,
+   operating_step_descs, round_cycle}` hardcode g1830 — the `GameTitle` trait
+   goes exactly there.
+4. Minor: the blocking step's `step_actions` is computed twice per enumeration
+   (blocking scan + accumulation) — memoize if MCTS profiles show it; add
+   debug_asserts for the "crowding forces pc=DiscardTrain" / "pending tokens
+   force pc=PlaceToken" invariants the new state-gated `step_active` relies on.
+5. **Known both-engine wart** (pre-existing, parity-faithful): pending
+   home-token enumeration on an OO hex emits full cities (`slot=None`) that
+   `process_action` then rejects — a legal-masked policy index can be
+   unapplyable, which kills a self-play playout if sampled. Fixing requires a
+   Python-side decision first (the enumeration is reference behavior).
