@@ -16,5 +16,20 @@ if [ $status -ne 0 ]; then
     exit $status
 fi
 
-echo "pre-push: tests passed."
+# Rust in-crate unit tests — includes the frozen-1830-action-layout test
+# (action_index.rs), which pytest never exercises. Needs a linkable
+# libpython: point PyO3 at the venv interpreter and put its LIBDIR on the
+# runtime path.
+echo "pre-push: running cargo test --no-default-features..."
+PY="$(pwd)/.venv/bin/python"
+LIBDIR="$("$PY" -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+(cd engine-rs && PYO3_PYTHON="$PY" LD_LIBRARY_PATH="$LIBDIR" cargo test --release --no-default-features -q)
+status=$?
+
+if [ $status -ne 0 ]; then
+    echo "pre-push: cargo tests FAILED — push aborted." >&2
+    exit $status
+fi
+
+echo "pre-push: all gates passed."
 exit 0
