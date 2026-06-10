@@ -679,7 +679,7 @@ impl BaseGame {
 
         // Auto-pass Track step if no more tiles can be laid (1 per turn in 1830)
         if new_state.num_laid_track >= 1 {
-            new_state.step = new_state.step.next();
+            new_state.step = crate::steps::next_operating_pc(self.operating_step_descs(), &new_state.step);
         }
 
         self.round = crate::rounds::Round::Operating(new_state);
@@ -1771,18 +1771,17 @@ impl BaseGame {
         self.update_round_state();
     }
 
-    /// Advance past non-blocking steps in the current corp's operating turn.
-    /// Stops at the first blocking step that has possible actions.
+    /// Advance past auto-skippable steps in the current corp's operating
+    /// turn (Python `BaseRound.skip_steps` + the per-step `skip!` hooks).
+    /// Stops at the first pc whose listed step blocks at the current state.
     ///
-    /// Skip conditions:
-    /// - Track: always blocking (requires pass)
-    /// - Token: skip if no available tokens or can't afford
-    /// - Route: skip if corp has no trains
-    /// - Dividend: skip if revenue == 0 (auto-withhold, move price left)
-    /// - DiscardTrain: skip if within train limit
-    /// - BuyTrain: always blocking
-    /// - BuyCompany(blocking): always blocking
+    /// Table-driven: the title's OR step list supplies both the pc SEQUENCE
+    /// (`crate::steps::next_operating_pc`) and the step kind whose skip
+    /// predicate runs at each pc (`operating_step_auto_skips`). Adding a step
+    /// to a title = write its predicate arm + list it in the title's round
+    /// description; this loop never changes.
     pub(crate) fn skip_steps(&mut self) {
+        let descs = self.operating_step_descs();
         for _iteration in 0..20 {
             let (step, corp_sym) = match &self.round {
                 crate::rounds::Round::Operating(s) => {
@@ -1790,9 +1789,7 @@ impl BaseGame {
                         return;
                     }
                     match s.current_corp_sym() {
-                        Some(sym) => {
-                                (s.step.clone(), sym.to_string())
-                        }
+                        Some(sym) => (s.step.clone(), sym.to_string()),
                         None => return,
                     }
                 }
@@ -1804,12 +1801,55 @@ impl BaseGame {
                 None => return,
             };
 
-            let should_skip = match step {
-                OperatingStep::LayTile => {
+            // pc -> the listed step that executes it. A pc not in the list
+            // (Done) blocks: the caller's advance machinery takes over.
+            let kind = match descs
+                .iter()
+                .find_map(|d| (d.operating_pc() == Some(step.clone())).then_some(d.kind))
+            {
+                Some(k) => k,
+                None => return,
+            };
+
+            if !self.operating_step_auto_skips(kind, corp_idx, &corp_sym) {
+                return;
+            }
+
+            // Advance to the next pc in the title's step list.
+            if let crate::rounds::Round::Operating(ref mut s) = self.round {
+                s.step = crate::steps::next_operating_pc(descs, &step);
+            }
+        }
+    }
+
+    /// Whether the listed step auto-skips (Python `step.skip!`) when the
+    /// turn's pc reaches it — i.e. it does NOT block at the current state.
+    /// May carry the step's skip side effect (Dividend auto-withholds: 0
+    /// revenue moves the share price left). Skip conditions:
+    /// - Track: always blocking (requires explicit lay_tile or pass)
+    /// - Token: skip if no available tokens or can't afford (pending home/OO
+    ///   tokens block)
+    /// - Route: skip if corp has no runnable train or no route
+    /// - Dividend: skip if revenue == 0 (auto-withhold, move price left)
+    /// - DiscardTrain: skip if no corp is over the train limit
+    /// - BuyTrain: blocking when a train can be bought or must be bought
+    /// - BuyCompany(blocking): blocking when a purchasable company or an
+    ///   unused lay ability is open
+    fn operating_step_auto_skips(
+        &mut self,
+        kind: crate::steps::StepKind,
+        corp_idx: usize,
+        corp_sym: &str,
+    ) -> bool {
+        use crate::steps::StepKind;
+        let corp_sym = corp_sym.to_string();
+        {
+            let should_skip = match kind {
+                StepKind::Track => {
                     // Always blocking — requires explicit lay_tile or pass
                     false
                 }
-                OperatingStep::PlaceToken => {
+                StepKind::Token => {
                     // Check for pending tokens from OO upgrade
                     let has_pending = match &self.round {
                         crate::rounds::Round::Operating(s) => !s.pending_tokens.is_empty(),
@@ -1822,7 +1862,7 @@ impl BaseGame {
                         !self.can_place_token(&corp_sym)
                     }
                 }
-                OperatingStep::RunRoutes => {
+                StepKind::Route => {
                     let has_runnable_train = self.corporations[corp_idx]
                         .trains
                         .iter()
@@ -1833,7 +1873,7 @@ impl BaseGame {
                         !self.can_run_route(&corp_sym)
                     }
                 }
-                OperatingStep::Dividend => {
+                StepKind::Dividend => {
                     // Skip if revenue == 0: auto-withhold (move price left)
                     let revenue = match &self.round {
                         crate::rounds::Round::Operating(s) => s.revenue,
@@ -1852,7 +1892,7 @@ impl BaseGame {
                         false
                     }
                 }
-                OperatingStep::DiscardTrain => {
+                StepKind::DiscardTrain => {
                     // Block if ANY corp is over the train limit (crowded_corps)
                     // or if the current corp is over the limit.
                     let has_crowded = match &self.round {
@@ -1866,7 +1906,7 @@ impl BaseGame {
                         self.corporations[corp_idx].trains.len() <= train_limit
                     }
                 }
-                OperatingStep::BuyCompany => {
+                StepKind::BuyCompany => {
                     let phase_num: u8 = self.phase.name.parse().unwrap_or(0);
                     if phase_num < 3 {
                         true
@@ -1876,22 +1916,15 @@ impl BaseGame {
                             !c.closed && !c.no_buy && c.owner.is_player()
                                 && corp_cash >= c.value / 2
                         });
-                        // Check if the corp owns a company with an unused
-                        // bonus tile_lay ability (CS). ability_used is set
-                        // when the company's lay_tile fires. A teleport
-                        // ability (DH) doesn't block BuyCompany (it's
-                        // filtered by Python's abilities() timing check).
-                        let corp_eid = EntityId::corporation(&corp_sym);
-                        let has_ability = self.companies.iter().any(|c| {
-                            !c.closed
-                                && !c.ability_used
-                                && c.owner == corp_eid
-                                && crate::abilities::tile_lay(&c.sym).is_some()
-                        });
+                        // A corp holding a company with an unused bonus
+                        // tile_lay ability (CS) keeps the step blocking; a
+                        // teleport ability (DH) doesn't (it's filtered by
+                        // Python's abilities() timing check).
+                        let has_ability = self.corp_has_unused_lay_ability(&corp_sym);
                         !can_buy_company && !has_ability
                     }
                 }
-                OperatingStep::BuyTrain => {
+                StepKind::BuyTrain => {
                     // A corp must buy a train only if it has no trains AND has a
                     // legal revenue route. No legal route = no obligation to own a
                     // train, so BuyTrain is optional (and skippable if unaffordable).
@@ -1971,18 +2004,11 @@ impl BaseGame {
                         !((has_room && (can_buy_from_depot || can_buy_from_discard || can_buy_inter_corp)) || can_exchange)
                     }
                 }
-                // Done: always blocking
+                // Steps with no auto-skip hook (HomeToken; future kinds)
+                // block when the pc lands on them.
                 _ => false,
             };
-
-            if !should_skip {
-                return;
-            }
-
-            // Advance to next step
-            if let crate::rounds::Round::Operating(ref mut s) = self.round {
-                s.step = s.step.next();
-            }
+            should_skip
         }
     }
 
@@ -2028,8 +2054,9 @@ impl BaseGame {
                     "Blocking step Buy Trains cannot process action Pass",
                 ));
             }
-            // Pass from any blocking step: advance to next step
-            new_state.step = new_state.step.next();
+            // Pass from any blocking step: advance to the next pc per the
+            // title's step list.
+            new_state.step = crate::steps::next_operating_pc(self.operating_step_descs(), &new_state.step);
             self.round = crate::rounds::Round::Operating(new_state);
             self.update_round_state();
             // skip_steps is called by process_operating_action after this returns

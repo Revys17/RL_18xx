@@ -10,6 +10,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+#[cfg(test)]
 use crate::entities::EntityId;
 use crate::game::BaseGame;
 use crate::title::{AbilityDef, AbilityWhen, OwnerType, ShareSource};
@@ -172,6 +173,11 @@ impl BaseGame {
     /// Open companies owned by `corp_eid` whose special tile-lay ability
     /// (TileLay or Teleport) is still unused — the candidates for company
     /// LayTile actions during the corp's OR turn.
+    ///
+    /// Test-only: production enumeration goes through the step machinery
+    /// (`crate::steps::step_actions`, SpecialTrack arm); the sole remaining
+    /// caller is the legacy `legal_action_types` oracle.
+    #[cfg(test)]
     pub(crate) fn special_lay_companies(&self, corp_eid: &EntityId) -> Vec<String> {
         self.companies
             .iter()

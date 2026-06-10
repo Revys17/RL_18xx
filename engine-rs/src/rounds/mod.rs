@@ -365,10 +365,12 @@ impl StockState {
 // Operating round state
 // ---------------------------------------------------------------------------
 
+/// The operating turn's program counter. The SEQUENCE of pcs is not encoded
+/// here — it is derived from the title's ordered step list
+/// (`crate::steps::next_operating_pc`); this enum only names the blocking
+/// positions a turn can stop at.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum OperatingStep {
-    /// Blocking steps in 1830 OR order:
-    /// Track → Token → Route → Dividend → DiscardTrain → BuyTrain → BuyCompany(blocking)
     LayTile,
     PlaceToken,
     RunRoutes,
@@ -377,22 +379,6 @@ pub enum OperatingStep {
     BuyTrain,
     BuyCompany,
     Done,
-}
-
-impl OperatingStep {
-    /// Returns the next step in the operating turn sequence.
-    pub fn next(&self) -> Self {
-        match self {
-            OperatingStep::LayTile => OperatingStep::PlaceToken,
-            OperatingStep::PlaceToken => OperatingStep::RunRoutes,
-            OperatingStep::RunRoutes => OperatingStep::Dividend,
-            OperatingStep::Dividend => OperatingStep::DiscardTrain,
-            OperatingStep::DiscardTrain => OperatingStep::BuyTrain,
-            OperatingStep::BuyTrain => OperatingStep::BuyCompany,
-            OperatingStep::BuyCompany => OperatingStep::Done,
-            OperatingStep::Done => OperatingStep::Done,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -469,11 +455,6 @@ impl OperatingState {
         self.operating_order
             .get(self.entity_index)
             .map(|s| s.as_str())
-    }
-
-    /// Advance to the next step in the operating turn.
-    pub fn advance_step(&mut self) {
-        self.step = self.step.next();
     }
 
     /// Reset state for the next corporation's turn.
