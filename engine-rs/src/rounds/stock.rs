@@ -426,15 +426,6 @@ impl BaseGame {
             .iter()
             .map(|s| s.owner.clone())
             .collect();
-        let pre_existing_market: Vec<usize> = pre_action_owners
-            .iter()
-            .enumerate()
-            .filter(|(idx, owner)| {
-                owner.is_market() && !self.corporations[corp_idx].shares[*idx].president
-            })
-            .map(|(i, _)| i)
-            .collect();
-
         // Transfer shares to market. Python's SellShares carries the EXACT
         // shares being sold (``[game.share_by_id(id) for id in args["shares"]]``)
         // and ``SharePool.transfer_shares`` moves precisely those certs to the
@@ -450,7 +441,7 @@ impl BaseGame {
         //
         // The named bundle includes the president cert when it is being dumped;
         // that cert is routed separately (moved last, then
-        // ``check_president_change`` swaps the presidency), so here we move only
+        // ``check_president_change_with_snapshot`` swaps the presidency), so here we move only
         // the named NON-president certs. When no indices are supplied we fall
         // back to owner-based selection by ascending index. The empty-indices
         // fallback is NOT a rare path: the native decode emits empty
@@ -825,23 +816,15 @@ impl BaseGame {
         }
     }
 
-    /// Check if president should change.
-    /// In 1830, the current president keeps the certificate on ties —
-    /// a new president is only assigned when another player has STRICTLY more shares.
-    pub(crate) fn check_president_change(&mut self, corp_idx: usize) {
-        self.check_president_change_inner(corp_idx, None, None);
-    }
-
-    pub(crate) fn check_president_change_with_prev(&mut self, corp_idx: usize, previous_president: Option<u32>) {
-        self.check_president_change_inner(corp_idx, previous_president, None);
-    }
-
-    /// Like `check_president_change_with_prev`, but accepts a `pre_action_owners`
-    /// snapshot: for each share index in this corp, the EntityId that owned it
-    /// before the current action started. When the president changes and we need
-    /// to pick 2 shares from the new president to swap, we prefer shares that
-    /// the new president already owned (filtered through this snapshot) — this
-    /// matches Python's insertion-order semantics
+    /// Check if president should change, given `previous_president` and a
+    /// `pre_action_owners` snapshot: for each share index in this corp, the
+    /// EntityId that owned it before the current action started. In 1830 the
+    /// current president keeps the certificate on ties — a new president is
+    /// only assigned when another player has STRICTLY more shares. When the
+    /// president changes and we need to pick 2 shares from the new president
+    /// to swap, we prefer shares that the new president already owned
+    /// (filtered through this snapshot) — this matches Python's
+    /// insertion-order semantics
     /// (`shares_for_presidency_swap(P.shares_of(corp)[:2])`).
     pub(crate) fn check_president_change_with_snapshot(
         &mut self,
@@ -1299,10 +1282,9 @@ impl BaseGame {
         if bought {
             // Check if can_buy_multiple: any corp with multiple_buy share price
             // that the player could still buy from (market only in 1830)
-            let (bought_corp, bought_from_ipo, parred) = match &self.round {
+            let (bought_corp, parred) = match &self.round {
                 crate::rounds::Round::Stock(s) => (
                     s.bought_corp_this_turn.clone(),
-                    s.bought_from_ipo,
                     s.parred_this_turn,
                 ),
                 _ => return false,

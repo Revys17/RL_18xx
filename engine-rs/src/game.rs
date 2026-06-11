@@ -1353,22 +1353,6 @@ impl BaseGame {
         results
     }
 
-    fn force_or_completion(&mut self) {
-        // Complete the current OR and advance through remaining ORs to reach Stock.
-        // Each new OR gets company payouts and state machine advancement.
-        for _ in 0..5 {
-            // Complete current OR
-            if let Round::Operating(ref mut s) = self.round {
-                s.finished = true;
-            }
-            self.transition_to_next_round();
-            if !matches!(&self.round, Round::Operating(_)) {
-                break;
-            }
-        }
-        self.update_round_state();
-    }
-
     /// Update market cell occupancy when a corp's share price changes.
     /// Removes from old cell, adds to new cell.
     pub(crate) fn update_market_cell(
