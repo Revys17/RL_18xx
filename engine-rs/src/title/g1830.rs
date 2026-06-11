@@ -6,7 +6,10 @@
 
 use std::collections::HashMap;
 
-use super::{AbilityDef, AbilityWhen, OwnerType, ShareSource};
+use super::{
+    AbilityDef, AbilityWhen, CompanyDef, CorporationDef, HexDef, HexType, MarketCell, MarketZone,
+    OwnerType, PhaseDef, ShareSource, TrainDef,
+};
 use crate::steps::{FinishedRound, RoundStart, RoundTransition, StepDesc, StepKind};
 
 // ---------------------------------------------------------------------------
@@ -89,90 +92,6 @@ pub fn next_round(finished: FinishedRound, phase_operating_rounds: u8) -> RoundT
 // ---------------------------------------------------------------------------
 // Definition structs
 // ---------------------------------------------------------------------------
-
-pub struct CorporationDef {
-    pub sym: &'static str,
-    pub name: &'static str,
-    pub token_prices: &'static [i32],
-    pub home_hex: &'static str,
-    pub home_city_index: u8,
-    /// Whether the home hex tile is reserved for this corp (token placed after tile upgrade).
-    pub reserved: bool,
-}
-
-pub struct CompanyDef {
-    pub sym: &'static str,
-    pub name: &'static str,
-    pub value: i32,
-    pub revenue: i32,
-    /// Special powers, transcribed from the Python title data's `abilities`
-    /// arrays (g1830.py). Queried via `crate::abilities` — engine code must
-    /// not key on company syms.
-    pub abilities: &'static [AbilityDef],
-}
-
-pub struct TrainDef {
-    pub name: &'static str,
-    pub distance: u32,
-    pub price: i32,
-    pub count: u32,
-    pub rusts_on: Option<&'static str>,
-    /// The phase name on which this train becomes purchasable from the depot
-    /// even while it is not the head-of-queue train. Mirrors Python's
-    /// `Train.available_on` (entities.py:806); only the D-train sets it ("6").
-    pub available_on: Option<&'static str>,
-    /// Exchange discount: when the buyer trades in a train of the given name,
-    /// the depot price drops by the given amount. Mirrors the D-train's
-    /// `discount` map (g1830.py:589). Empty for trains without a discount.
-    pub discount: &'static [(&'static str, i32)],
-}
-
-pub struct PhaseDef {
-    pub name: &'static str,
-    pub train_limit: u8,
-    pub tiles: &'static [&'static str],
-    pub operating_rounds: u8,
-}
-
-pub struct MarketCell {
-    pub price: i32,
-    pub zone: MarketZone,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum MarketZone {
-    Normal,
-    Par,
-    Yellow,
-    Orange,
-    Brown,
-}
-
-pub struct HexDef {
-    pub coord: &'static str,
-    pub hex_type: HexType,
-    pub terrain_cost: i32,
-}
-
-pub enum HexType {
-    Blank,
-    City {
-        revenue: i32,
-        slots: u8,
-    },
-    Town {
-        revenue: i32,
-    },
-    DoubleCity {
-        revenue: i32,
-    },
-    DoubleTown,
-    Offboard {
-        yellow_revenue: i32,
-        brown_revenue: i32,
-    },
-    Path,
-}
 
 // ---------------------------------------------------------------------------
 // Corporation data (8 corporations)
@@ -755,15 +674,6 @@ pub fn tile_cities(tile_id: &str) -> Option<Vec<u8>> {
 // Hex grid definitions
 // ---------------------------------------------------------------------------
 
-/// Parses a hex coordinate like "H12" into (row_letter_index, number).
-/// Letter part → x: A=0..K=10.  Number part → y (raw number).
-pub fn parse_coord(coord: &str) -> (i32, i32) {
-    let bytes = coord.as_bytes();
-    let letter = (bytes[0] - b'A') as i32;
-    let number: i32 = coord[1..].parse().expect("invalid hex coordinate number");
-    (letter, number)
-}
-
 /// Returns all hex definitions for the 1830 map.
 pub fn hex_definitions() -> Vec<HexDef> {
     use HexType::*;
@@ -1320,61 +1230,6 @@ pub fn hex_definitions() -> Vec<HexDef> {
             terrain_cost: 0,
         },
     ]
-}
-
-// ---------------------------------------------------------------------------
-// Hex adjacency computation
-// ---------------------------------------------------------------------------
-
-/// Pointy-top hex direction deltas in (d_letter, d_number) space.
-///
-/// 1830 uses axes: x=number, y=letter. The Python engine's pointy-top
-/// direction deltas are in (dx, dy) = (d_number, d_letter) space:
-///   0:(-1,1), 1:(-2,0), 2:(-1,-1), 3:(1,-1), 4:(2,0), 5:(1,1)
-///
-/// We store coordinates as (letter_index, number), so we swap to (dy, dx):
-const HEX_DELTAS: [(i32, i32); 6] = [
-    (1, -1),  // 0: upper-right  (Python dx=-1, dy=+1)
-    (0, -2),  // 1: right        (Python dx=-2, dy= 0)
-    (-1, -1), // 2: lower-right  (Python dx=-1, dy=-1)
-    (-1, 1),  // 3: lower-left   (Python dx=+1, dy=-1)
-    (0, 2),   // 4: left         (Python dx=+2, dy= 0)
-    (1, 1),   // 5: upper-left   (Python dx=+1, dy=+1)
-];
-
-/// Format (letter_index, number) back to a coordinate string like "H12".
-fn format_coord(letter: i32, number: i32) -> String {
-    let ch = (b'A' + letter as u8) as char;
-    format!("{}{}", ch, number)
-}
-
-/// Compute hex adjacency from a set of hex coordinates.
-/// Returns hex_id -> { direction -> neighbor_hex_id } for all valid neighbors.
-pub fn compute_adjacency(coords: &[&str]) -> HashMap<String, HashMap<u8, String>> {
-    let coord_set: std::collections::HashSet<String> =
-        coords.iter().map(|c| c.to_string()).collect();
-
-    let mut adjacency: HashMap<String, HashMap<u8, String>> = HashMap::new();
-
-    for &coord in coords {
-        let (letter, number) = parse_coord(coord);
-        let mut neighbors = HashMap::new();
-
-        for (dir, (dl, dn)) in HEX_DELTAS.iter().enumerate() {
-            let nl = letter + dl;
-            let nn = number + dn;
-            if nl >= 0 {
-                let neighbor = format_coord(nl, nn);
-                if coord_set.contains(&neighbor) {
-                    neighbors.insert(dir as u8, neighbor);
-                }
-            }
-        }
-
-        adjacency.insert(coord.to_string(), neighbors);
-    }
-
-    adjacency
 }
 
 // ---------------------------------------------------------------------------

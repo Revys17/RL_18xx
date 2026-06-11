@@ -788,7 +788,7 @@ impl BaseGame {
 
     /// Place the corporation's first token on its home city.
     pub(crate) fn place_home_token(&mut self, corp_idx: usize) {
-        let corp_defs = crate::title::g1830::corporations();
+        let corp_defs = self.title_def().corporations();
         let corp_sym = &self.corporations[corp_idx].sym;
         let corp_def = corp_defs.iter().find(|cd| cd.sym == corp_sym);
 

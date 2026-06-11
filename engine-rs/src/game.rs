@@ -11,7 +11,7 @@ use crate::graph::{City, Edge, Hex, Offboard, Tile, Town, Upgrade};
 use crate::map::{GraphCache, NodeId, NodeType};
 use crate::rounds::Round;
 use crate::tiles::{self, TileColor, TileDef};
-use crate::title::g1830::{self, HexType};
+use crate::title::{GameTitle, HexDef, HexType};
 
 // ---------------------------------------------------------------------------
 // Python <-> serde_json conversion helpers
@@ -298,6 +298,12 @@ impl BaseGame {
 }
 
 impl BaseGame {
+    /// The game's [`GameTitle`] impl, resolved from the `title` string — THE
+    /// way engine code reaches per-title data and machinery descriptions.
+    pub(crate) fn title_def(&self) -> &'static dyn GameTitle {
+        crate::title::resolve(&self.title)
+    }
+
     /// Get active company special-lay abilities for the current operating corp.
     /// Returns the syms of owned, open companies whose TileLay (bonus lay,
     /// available at any OR step) or Teleport (lay at the LayTile step) ability
@@ -328,7 +334,7 @@ impl BaseGame {
             if co.closed {
                 return false;
             }
-            let Some((corporations, _)) = crate::abilities::exchange(&co.sym) else {
+            let Some((corporations, _)) = crate::abilities::exchange(&self.title, &co.sym) else {
                 return false;
             };
             corporations.iter().any(|corp_sym| {
@@ -563,9 +569,9 @@ impl BaseGame {
             // BuyCompany (or whatever step we're at) can auto-advance.
             let entity_id = action.entity_id();
             let op_descs = self.operating_step_descs();
-            let mut needs_skip_steps = crate::abilities::tile_lay(entity_id).is_some();
+            let mut needs_skip_steps = crate::abilities::tile_lay(&self.title, entity_id).is_some();
             let mut dh_post_token: Option<(String, bool)> = None;
-            if crate::abilities::teleport(entity_id).is_some() {
+            if crate::abilities::teleport(&self.title, entity_id).is_some() {
                 if let Round::Operating(ref mut s) = self.round {
                     match action {
                         Action::LayTile { .. } if s.step == crate::rounds::OperatingStep::LayTile => {
@@ -817,7 +823,7 @@ impl BaseGame {
 
     /// Check if buying a certain train triggers a phase change.
     pub(crate) fn check_phase_advance(&mut self, train_name: &str) {
-        let phase_defs = g1830::phases();
+        let phase_defs = self.title_def().phases();
 
         // Strip instance suffix (e.g., "3-0" → "3")
         let base_name = train_name.split('-').next().unwrap_or(train_name);
@@ -1166,8 +1172,7 @@ impl BaseGame {
                     // Transfer tokens from old cities
                     if !old_cities.is_empty() {
                         if new_tile.cities.is_empty() {
-                            if let Some(city_slots) = crate::title::g1830::tile_cities(base_tile_id)
-                            {
+                            if let Some(city_slots) = self.title_def().tile_cities(base_tile_id) {
                                 for (i, &slots) in city_slots.iter().enumerate() {
                                     if i < old_cities.len() {
                                         let mut city = old_cities[i].clone();
@@ -1388,7 +1393,7 @@ impl BaseGame {
     /// In 1830 each corp's home city is reserved for that corp until they place
     /// their home token. After the token is placed, the reservation is consumed.
     pub(crate) fn home_reservations(&self) -> Vec<(String, usize, String)> {
-        let corp_defs = crate::title::g1830::corporations();
+        let corp_defs = self.title_def().corporations();
         let mut reservations = Vec::new();
         for cd in &corp_defs {
             let sym = cd.sym.to_string();
@@ -1427,7 +1432,7 @@ impl BaseGame {
             Some(p) if !p.is_empty() => p,
             _ => return false,
         };
-        let phases = crate::title::g1830::phases();
+        let phases = self.title_def().phases();
         let cur_idx = phases.iter().position(|p| p.name == self.phase.name);
         let tgt_idx = phases.iter().position(|p| p.name == phase_name);
         match (cur_idx, tgt_idx) {
@@ -1705,11 +1710,11 @@ impl BaseGame {
 // Hex construction helpers
 // ---------------------------------------------------------------------------
 
-fn build_hex_from_def(def: &g1830::HexDef) -> Hex {
+fn build_hex_from_def(title: &dyn GameTitle, def: &HexDef) -> Hex {
     let coord = def.coord.to_string();
 
     // Check if this hex has a preprinted DSL definition with path data
-    if let Some((dsl, color_str)) = g1830::preprinted_hex_dsl(def.coord) {
+    if let Some((dsl, color_str)) = title.preprinted_hex_dsl(def.coord) {
         let color = match color_str {
             "red" => TileColor::Red,
             "gray" => TileColor::Gray,
@@ -1807,9 +1812,12 @@ impl BaseGame {
     /// is the seating order (it becomes the priority/turn order); `player_names`
     /// maps id -> name. Used by the PyO3 `new` (below) and by Rust unit tests.
     pub(crate) fn build(player_ids: Vec<u32>, player_names: HashMap<u32, String>) -> Self {
+        // 1830 is the only title constructible today; a second title adds a
+        // title argument to the public constructors and passes it through.
+        let title = crate::title::resolve("1830");
         let num_players = player_names.len() as u8;
-        let cash = g1830::starting_cash(num_players);
-        let cert_lim = g1830::cert_limit(num_players);
+        let cash = title.starting_cash(num_players);
+        let cert_lim = title.cert_limit(num_players);
 
         // Seat players in the caller-provided order (Python seats in input /
         // JSON order). Do NOT sort — sorting diverges from Python whenever ids
@@ -1821,10 +1829,10 @@ impl BaseGame {
 
         // 2. Bank (starting cash is deducted for players)
         let total_player_cash = cash * num_players as i32;
-        let bank = Bank::new(g1830::BANK_CASH - total_player_cash);
+        let bank = Bank::new(title.bank_cash() - total_player_cash);
 
         // 3. Companies
-        let company_defs = g1830::companies();
+        let company_defs = title.companies();
         let companies: Vec<Company> = company_defs
             .iter()
             .map(|cd| {
@@ -1836,7 +1844,7 @@ impl BaseGame {
                 );
                 // no_buy ability (1830: BO) — the company cannot be
                 // purchased by corporations during the OR.
-                if crate::abilities::no_buy(cd.sym) {
+                if crate::abilities::no_buy(title.name(), cd.sym) {
                     company.no_buy = true;
                 }
                 company
@@ -1844,7 +1852,7 @@ impl BaseGame {
             .collect();
 
         // 4. Corporations (with tokens and shares)
-        let corp_defs = g1830::corporations();
+        let corp_defs = title.corporations();
         let corporations: Vec<Corporation> = corp_defs
             .iter()
             .map(|cd| {
@@ -1871,7 +1879,7 @@ impl BaseGame {
             .collect();
 
         // 5. Depot (trains)
-        let train_defs = g1830::trains();
+        let train_defs = title.trains();
         let mut depot = Depot::new();
         let mut train_instance_counters: std::collections::HashMap<String, u32> =
             std::collections::HashMap::new();
@@ -1894,15 +1902,15 @@ impl BaseGame {
         }
 
         // 6. Hexes
-        let hex_defs = g1830::hex_definitions();
-        let hexes: Vec<Hex> = hex_defs.iter().map(build_hex_from_def).collect();
+        let hex_defs = title.hex_definitions();
+        let hexes: Vec<Hex> = hex_defs.iter().map(|d| build_hex_from_def(title, d)).collect();
 
         // 7. Hex adjacency
         let coords: Vec<&str> = hex_defs.iter().map(|h| h.coord).collect();
-        let adjacency = g1830::compute_adjacency(&coords);
+        let adjacency = crate::title::compute_adjacency(&coords);
 
         // 8. Phase
-        let phase_defs = g1830::phases();
+        let phase_defs = title.phases();
         let first_phase = &phase_defs[0];
         let phase = Phase::new(
             first_phase.name.to_string(),
@@ -1925,13 +1933,14 @@ impl BaseGame {
         let stock_market = StockMarket::new_1830();
 
         // 10. Tile counts
-        let tile_counts_remaining: HashMap<String, u32> = g1830::tile_counts()
+        let tile_counts_remaining: HashMap<String, u32> = title
+            .tile_counts()
             .into_iter()
             .map(|(id, count)| (id.to_string(), count))
             .collect();
 
         // 10b. Tile catalog (shared immutable data)
-        let tile_catalog = tiles::tile_catalog_1830();
+        let tile_catalog = title.tile_catalog();
 
         // 11. Lookup caches
         let corp_idx: HashMap<String, usize> = corporations
@@ -1973,7 +1982,7 @@ impl BaseGame {
             corp_idx: Arc::new(corp_idx),
             company_idx: Arc::new(company_idx),
             hex_idx: Arc::new(hex_idx),
-            title: "1830".to_string(),
+            title: title.name().to_string(),
             finished: false,
             move_number: 0,
             turn: 1, // Start at 1 (Auction round is turn 1, first Stock round is still turn 1)
@@ -4576,10 +4585,10 @@ impl BaseGame {
                 let co_abilities = self.company_tile_abilities(&os);
                 let cs_available = co_abilities
                     .iter()
-                    .any(|s| crate::abilities::tile_lay(s).is_some());
+                    .any(|s| crate::abilities::tile_lay(&self.title, s).is_some());
                 let dh_available = co_abilities
                     .iter()
-                    .any(|s| crate::abilities::teleport(s).is_some());
+                    .any(|s| crate::abilities::teleport(&self.title, s).is_some());
                 let exchange_available = self.exchange_ability_available();
 
                 match os.step {
@@ -4724,7 +4733,7 @@ impl BaseGame {
                                     !co.closed
                                         && co.ability_used // tile already laid
                                         && co.owner == corp_eid
-                                        && crate::abilities::teleport(&co.sym).map_or(
+                                        && crate::abilities::teleport(&self.title, &co.sym).map_or(
                                             false,
                                             |(hexes, _)| {
                                                 hexes.iter().any(|h| {

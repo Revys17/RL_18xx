@@ -306,7 +306,7 @@ impl BaseGame {
                 // Find the company that triggered this par (the one whose
                 // Shares ability grants this corp's president cert, e.g.
                 // BO -> B&O).
-                let company_sym = crate::abilities::par_trigger_company_for(&corp_sym)
+                let company_sym = crate::abilities::par_trigger_company_for(&self.title, &corp_sym)
                     .filter(|sym| self.companies.iter().any(|c| c.sym == *sym))
                     .map(|s| s.to_string());
                 let entity_desc = entity_descriptor_player(self, pid);
@@ -701,7 +701,7 @@ impl BaseGame {
                 .iter()
                 .filter(|co| !co.closed && co.ability_used && co.owner == corp_eid)
                 .filter_map(|co| {
-                    crate::abilities::teleport(&co.sym).map(|(hexes, _)| (co.sym.clone(), hexes))
+                    crate::abilities::teleport(&self.title, &co.sym).map(|(hexes, _)| (co.sym.clone(), hexes))
                 })
                 .collect();
             for (co_sym, hexes) in teleport_companies {
@@ -933,7 +933,7 @@ impl BaseGame {
             .iter()
             .filter(|co| !co.closed && !co.ability_used && co.owner == corp_eid)
             .filter_map(|co| {
-                crate::abilities::tile_lay(&co.sym)
+                crate::abilities::tile_lay(&self.title, &co.sym)
                     .map(|(hexes, tiles, _, _)| (co.sym.clone(), hexes, tiles))
             })
             .collect();
@@ -1037,7 +1037,7 @@ impl BaseGame {
                 .iter()
                 .filter(|co| !co.closed && !co.ability_used && co.owner == corp_eid)
                 .filter_map(|co| {
-                    crate::abilities::teleport(&co.sym)
+                    crate::abilities::teleport(&self.title, &co.sym)
                         .map(|(hexes, tiles)| (co.sym.clone(), hexes, tiles))
                 })
                 .collect();
@@ -1655,7 +1655,7 @@ impl BaseGame {
         // isn't available until the auction resolves).
         let in_auction = matches!(self.round, Round::Auction(_));
         for co in self.companies.iter().filter(|c| !c.closed) {
-            let Some((corporations, from)) = crate::abilities::exchange(&co.sym) else {
+            let Some((corporations, from)) = crate::abilities::exchange(&self.title, &co.sym) else {
                 continue;
             };
             if !co.owner.is_player() || in_auction {

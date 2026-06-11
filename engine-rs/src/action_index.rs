@@ -122,7 +122,7 @@ fn build_layout() -> SlotLayout {
     let mut company_lay_tile_blocks: Vec<CompanyLayBlock> = Vec::new();
     let mut company_lay_n: u32 = 0;
     for sym in &company_offsets {
-        if let Some((hexes, tiles)) = crate::abilities::teleport(sym) {
+        if let Some((hexes, tiles)) = crate::abilities::teleport("1830", sym) {
             company_lay_tile_blocks.push(CompanyLayBlock {
                 sym,
                 hexes,
@@ -134,7 +134,7 @@ fn build_layout() -> SlotLayout {
         }
     }
     for sym in &company_offsets {
-        if let Some((hexes, tiles, _, _)) = crate::abilities::tile_lay(sym) {
+        if let Some((hexes, tiles, _, _)) = crate::abilities::tile_lay("1830", sym) {
             company_lay_tile_blocks.push(CompanyLayBlock {
                 sym,
                 hexes,
@@ -149,7 +149,7 @@ fn build_layout() -> SlotLayout {
     // One CompanyPlaceToken slot per teleport company (DH on F16).
     let mut company_place_token_offsets: Vec<(&'static str, u32)> = Vec::new();
     for sym in &company_offsets {
-        if crate::abilities::teleport(sym).is_some() {
+        if crate::abilities::teleport("1830", sym).is_some() {
             company_place_token_offsets.push((sym, company_place_token_offsets.len() as u32));
         }
     }
@@ -312,7 +312,7 @@ pub fn legal_action_to_index(la: &LegalAction) -> Option<u32> {
         // A company exchange (private with an Exchange ability targeting this
         // corp, 1830: MH -> NYC) routes through the CompanyBuyShares block.
         if let Some(private) = la.entity.get("private").and_then(s_to_json_str) {
-            if let Some((corporations, _)) = crate::abilities::exchange(private) {
+            if let Some((corporations, _)) = crate::abilities::exchange("1830", private) {
                 if corporations.contains(&corp_sym) {
                     let li = pos(&lo.share_location_offsets, &source)?;
                     return Some(lo.action_offsets["CompanyBuyShares"] + li as u32);

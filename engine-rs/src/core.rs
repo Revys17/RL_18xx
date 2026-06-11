@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::title::g1830;
+use crate::title::{g1830, MarketZone};
 
 /// A share price cell on the stock market.
 #[pyclass]
@@ -110,11 +110,11 @@ impl StockMarket {
                             row: row_idx as u8,
                             column: col_idx as u8,
                             zone: match c.zone {
-                                g1830::MarketZone::Normal => "normal".to_string(),
-                                g1830::MarketZone::Par => "par".to_string(),
-                                g1830::MarketZone::Yellow => "no_cert_limit".to_string(),
-                                g1830::MarketZone::Orange => "unlimited".to_string(),
-                                g1830::MarketZone::Brown => "multiple_buy".to_string(),
+                                MarketZone::Normal => "normal".to_string(),
+                                MarketZone::Par => "par".to_string(),
+                                MarketZone::Yellow => "no_cert_limit".to_string(),
+                                MarketZone::Orange => "unlimited".to_string(),
+                                MarketZone::Brown => "multiple_buy".to_string(),
                             },
                         })
                     })

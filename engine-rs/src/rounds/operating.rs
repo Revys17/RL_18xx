@@ -239,7 +239,7 @@ impl BaseGame {
                             && !self.corporations[ci].tokens[0].used;
                         // Handle as HomeToken if the home token needs placement
                         // AND the target hex is the corp's home hex.
-                        let corp_defs = crate::title::g1830::corporations();
+                        let corp_defs = self.title_def().corporations();
                         let is_home_hex = corp_defs.iter()
                             .find(|cd| cd.sym == corp_sym)
                             .map_or(false, |cd| {
@@ -540,7 +540,7 @@ impl BaseGame {
         if !old_cities.is_empty() && !needs_token_choice {
             if new_tile.cities.is_empty() {
                 // Catalog had no cities; check tile_cities fallback
-                if let Some(city_slots) = crate::title::g1830::tile_cities(base_tile_id) {
+                if let Some(city_slots) = self.title_def().tile_cities(base_tile_id) {
                     for (i, &slots) in city_slots.iter().enumerate() {
                         if i < old_cities.len() {
                             let mut city = old_cities[i].clone();
@@ -1361,7 +1361,7 @@ impl BaseGame {
         // closes when its corporation buys its first train (1830: BO closes
         // on B&O's first train).
         if self.corporations[corp_idx].trains.len() == 1 {
-            if let Some(co_sym) = crate::abilities::close_on_bought_train(&corp_sym) {
+            if let Some(co_sym) = crate::abilities::close_on_bought_train(&self.title, &corp_sym) {
                 if let Some(&co_idx) = self.company_idx.get(co_sym) {
                     if !self.companies[co_idx].closed {
                         self.companies[co_idx].closed = true;
@@ -1999,7 +1999,7 @@ impl BaseGame {
             // corps use city-level reservations which don't trigger tile.reserved_by.
             // So we block only when: home hex is E11, tile has paths (upgraded),
             // and the tile has multiple cities (choice is meaningful).
-            let corp_defs = crate::title::g1830::corporations();
+            let corp_defs = self.title_def().corporations();
             let mut needs_choice = false;
             if let Some(cd) = corp_defs.iter().find(|cd| cd.sym == sym) {
                 let has_tile_reservation = cd.home_hex == "E11";

@@ -1,5 +1,283 @@
 pub mod g1830;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::steps::{FinishedRound, RoundTransition, StepDesc};
+use crate::tiles::TileDef;
+
+// ---------------------------------------------------------------------------
+// The GameTitle trait — THE title-dispatch funnel.
+//
+// Everything the shared rules engine needs from a title goes through this
+// trait: the static game data (corporations, companies, trains, phases, map,
+// tiles) and the per-title machinery descriptions (ordered step lists, the
+// round-flow function). One impl per title; `resolve()` maps the game's
+// `title` string to the impl. Engine code must not call `g1830::*` directly
+// (the per-title AlphaZero bridge — action layout, encoder — is separate and
+// still 1830-pinned; see the multi-title roadmap).
+// ---------------------------------------------------------------------------
+
+pub trait GameTitle: Sync {
+    /// The title string stored on the game (`BaseGame.title`).
+    fn name(&self) -> &'static str;
+
+    // -- round/step machinery descriptions --
+    fn auction_steps(&self) -> &'static [StepDesc];
+    fn stock_steps(&self) -> &'static [StepDesc];
+    fn operating_steps(&self) -> &'static [StepDesc];
+    /// The title's round flow (Ruby/Python `next_round!`): the round that
+    /// just finished decides what starts next.
+    fn next_round(&self, finished: FinishedRound, phase_operating_rounds: u8) -> RoundTransition;
+
+    // -- static game data --
+    fn starting_cash(&self, num_players: u8) -> i32;
+    fn cert_limit(&self, num_players: u8) -> u8;
+    fn bank_cash(&self) -> i32;
+    fn companies(&self) -> Vec<CompanyDef>;
+    fn corporations(&self) -> Vec<CorporationDef>;
+    fn trains(&self) -> Vec<TrainDef>;
+    fn phases(&self) -> Vec<PhaseDef>;
+    fn hex_definitions(&self) -> Vec<HexDef>;
+    /// The preprinted tile DSL + color for a map hex, if any.
+    fn preprinted_hex_dsl(&self, coord: &str) -> Option<(&'static str, &'static str)>;
+    fn tile_counts(&self) -> Vec<(&'static str, u32)>;
+    /// City slot counts for a catalog tile id (fallback when the catalog
+    /// entry carries no city geometry).
+    fn tile_cities(&self, tile_id: &str) -> Option<Vec<u8>>;
+    fn tile_catalog(&self) -> Arc<HashMap<String, TileDef>>;
+}
+
+/// 1830: Railways & Robber Barons.
+pub struct G1830;
+
+impl GameTitle for G1830 {
+    fn name(&self) -> &'static str {
+        "1830"
+    }
+    fn auction_steps(&self) -> &'static [StepDesc] {
+        g1830::auction_steps()
+    }
+    fn stock_steps(&self) -> &'static [StepDesc] {
+        g1830::stock_steps()
+    }
+    fn operating_steps(&self) -> &'static [StepDesc] {
+        g1830::operating_steps()
+    }
+    fn next_round(&self, finished: FinishedRound, phase_operating_rounds: u8) -> RoundTransition {
+        g1830::next_round(finished, phase_operating_rounds)
+    }
+    fn starting_cash(&self, num_players: u8) -> i32 {
+        g1830::starting_cash(num_players)
+    }
+    fn cert_limit(&self, num_players: u8) -> u8 {
+        g1830::cert_limit(num_players)
+    }
+    fn bank_cash(&self) -> i32 {
+        g1830::BANK_CASH
+    }
+    fn companies(&self) -> Vec<CompanyDef> {
+        g1830::companies()
+    }
+    fn corporations(&self) -> Vec<CorporationDef> {
+        g1830::corporations()
+    }
+    fn trains(&self) -> Vec<TrainDef> {
+        g1830::trains()
+    }
+    fn phases(&self) -> Vec<PhaseDef> {
+        g1830::phases()
+    }
+    fn hex_definitions(&self) -> Vec<HexDef> {
+        g1830::hex_definitions()
+    }
+    fn preprinted_hex_dsl(&self, coord: &str) -> Option<(&'static str, &'static str)> {
+        g1830::preprinted_hex_dsl(coord)
+    }
+    fn tile_counts(&self) -> Vec<(&'static str, u32)> {
+        g1830::tile_counts()
+    }
+    fn tile_cities(&self, tile_id: &str) -> Option<Vec<u8>> {
+        g1830::tile_cities(tile_id)
+    }
+    fn tile_catalog(&self) -> Arc<HashMap<String, TileDef>> {
+        crate::tiles::tile_catalog_1830()
+    }
+}
+
+/// Every implemented title. New titles register here.
+pub fn all_titles() -> &'static [&'static dyn GameTitle] {
+    static TITLES: [&'static dyn GameTitle; 1] = [&G1830];
+    &TITLES
+}
+
+/// The title impl for a game's `title` string. Unknown names panic — the
+/// string is engine-internal (set from `GameTitle::name` at construction),
+/// so a miss is a bug, not user input.
+pub fn resolve(name: &str) -> &'static dyn GameTitle {
+    all_titles()
+        .iter()
+        .copied()
+        .find(|t| t.name() == name)
+        .unwrap_or_else(|| panic!("unknown game title: {name}"))
+}
+
+// ---------------------------------------------------------------------------
+// Shared hex-grid geometry (pointy-top, letter+number coordinates) — the
+// coordinate scheme tobymao/18xx titles share. Moved out of g1830.rs because
+// it is math over coordinates, not title data.
+// ---------------------------------------------------------------------------
+
+/// Parses a hex coordinate like "H12" into (row_letter_index, number).
+/// Letter part → x: A=0..K=10.  Number part → y (raw number).
+pub fn parse_coord(coord: &str) -> (i32, i32) {
+    let bytes = coord.as_bytes();
+    let letter = (bytes[0] - b'A') as i32;
+    let number: i32 = coord[1..].parse().expect("invalid hex coordinate number");
+    (letter, number)
+}
+
+/// Pointy-top hex direction deltas in (d_letter, d_number) space.
+///
+/// The Python engine's pointy-top direction deltas are in
+/// (dx, dy) = (d_number, d_letter) space:
+///   0:(-1,1), 1:(-2,0), 2:(-1,-1), 3:(1,-1), 4:(2,0), 5:(1,1)
+///
+/// We store coordinates as (letter_index, number), so we swap to (dy, dx):
+const HEX_DELTAS: [(i32, i32); 6] = [
+    (1, -1),  // 0: upper-right  (Python dx=-1, dy=+1)
+    (0, -2),  // 1: right        (Python dx=-2, dy= 0)
+    (-1, -1), // 2: lower-right  (Python dx=-1, dy=-1)
+    (-1, 1),  // 3: lower-left   (Python dx=+1, dy=-1)
+    (0, 2),   // 4: left         (Python dx=+2, dy= 0)
+    (1, 1),   // 5: upper-left   (Python dx=+1, dy=+1)
+];
+
+/// Format (letter_index, number) back to a coordinate string like "H12".
+fn format_coord(letter: i32, number: i32) -> String {
+    let ch = (b'A' + letter as u8) as char;
+    format!("{}{}", ch, number)
+}
+
+/// Compute hex adjacency from a set of hex coordinates.
+/// Returns hex_id -> { direction -> neighbor_hex_id } for all valid neighbors.
+pub fn compute_adjacency(coords: &[&str]) -> HashMap<String, HashMap<u8, String>> {
+    let coord_set: std::collections::HashSet<String> =
+        coords.iter().map(|c| c.to_string()).collect();
+
+    let mut adjacency: HashMap<String, HashMap<u8, String>> = HashMap::new();
+
+    for &coord in coords {
+        let (letter, number) = parse_coord(coord);
+        let mut neighbors = HashMap::new();
+
+        for (dir, (dl, dn)) in HEX_DELTAS.iter().enumerate() {
+            let nl = letter + dl;
+            let nn = number + dn;
+            if nl >= 0 {
+                let neighbor = format_coord(nl, nn);
+                if coord_set.contains(&neighbor) {
+                    neighbors.insert(dir as u8, neighbor);
+                }
+            }
+        }
+
+        adjacency.insert(coord.to_string(), neighbors);
+    }
+
+    adjacency
+}
+
+// ---------------------------------------------------------------------------
+// Title-agnostic definition structs — the shape every title's data module
+// fills in (moved here from g1830.rs so future titles share them).
+// ---------------------------------------------------------------------------
+
+pub struct CorporationDef {
+    pub sym: &'static str,
+    pub name: &'static str,
+    pub token_prices: &'static [i32],
+    pub home_hex: &'static str,
+    pub home_city_index: u8,
+    /// Whether the home hex tile is reserved for this corp (token placed after tile upgrade).
+    pub reserved: bool,
+}
+
+pub struct CompanyDef {
+    pub sym: &'static str,
+    pub name: &'static str,
+    pub value: i32,
+    pub revenue: i32,
+    /// Special powers, transcribed from the title data's `abilities` arrays.
+    /// Queried via `crate::abilities` — engine code must not key on company
+    /// syms.
+    pub abilities: &'static [AbilityDef],
+}
+
+pub struct TrainDef {
+    pub name: &'static str,
+    pub distance: u32,
+    pub price: i32,
+    pub count: u32,
+    pub rusts_on: Option<&'static str>,
+    /// The phase name on which this train becomes purchasable from the depot
+    /// even while it is not the head-of-queue train. Mirrors Python's
+    /// `Train.available_on` (entities.py:806); in 1830 only the D-train sets
+    /// it ("6").
+    pub available_on: Option<&'static str>,
+    /// Exchange discount: when the buyer trades in a train of the given name,
+    /// the depot price drops by the given amount. Mirrors the D-train's
+    /// `discount` map (g1830.py:589). Empty for trains without a discount.
+    pub discount: &'static [(&'static str, i32)],
+}
+
+pub struct PhaseDef {
+    pub name: &'static str,
+    pub train_limit: u8,
+    pub tiles: &'static [&'static str],
+    pub operating_rounds: u8,
+}
+
+pub struct MarketCell {
+    pub price: i32,
+    pub zone: MarketZone,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MarketZone {
+    Normal,
+    Par,
+    Yellow,
+    Orange,
+    Brown,
+}
+
+pub struct HexDef {
+    pub coord: &'static str,
+    pub hex_type: HexType,
+    pub terrain_cost: i32,
+}
+
+pub enum HexType {
+    Blank,
+    City {
+        revenue: i32,
+        slots: u8,
+    },
+    Town {
+        revenue: i32,
+    },
+    DoubleCity {
+        revenue: i32,
+    },
+    DoubleTown,
+    Offboard {
+        yellow_revenue: i32,
+        brown_revenue: i32,
+    },
+    Path,
+}
+
 // ---------------------------------------------------------------------------
 // Shared, title-agnostic private-company ability definitions.
 //

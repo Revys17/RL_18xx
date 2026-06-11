@@ -225,29 +225,28 @@ fn operating<'a>(snap: &'a Round) -> Option<&'a OperatingState> {
 // ---------------------------------------------------------------------------
 
 impl BaseGame {
-    /// The title's step list for the current round. (1830 is the only title;
-    /// when a second title lands this dispatches through the game's title.)
+    /// The title's step list for the current round, via the game's
+    /// [`GameTitle`](crate::title::GameTitle) impl.
     pub(crate) fn round_step_descs(&self, snap: &Round) -> &'static [StepDesc] {
         match snap {
-            Round::Auction(_) => crate::title::g1830::auction_steps(),
-            Round::Stock(_) => crate::title::g1830::stock_steps(),
+            Round::Auction(_) => self.title_def().auction_steps(),
+            Round::Stock(_) => self.title_def().stock_steps(),
             Round::Operating(_) => self.operating_step_descs(),
         }
     }
 
-    /// The title's OPERATING-round step list — the single title-dispatch point
+    /// The title's OPERATING-round step list — the single dispatch point
     /// for everything that walks the OR turn sequence (`skip_steps`, the pc
-    /// advance after a blocking Pass, the post-lay auto-advance). 1830-only
-    /// today; a second title dispatches here.
+    /// advance after a blocking Pass, the post-lay auto-advance).
     pub(crate) fn operating_step_descs(&self) -> &'static [StepDesc] {
-        crate::title::g1830::operating_steps()
+        self.title_def().operating_steps()
     }
 
-    /// The title's round-flow function — the title-dispatch point for the
-    /// round SEQUENCE (Ruby/Python `next_round!`). Drives
+    /// The title's round-flow function — the dispatch point for the round
+    /// SEQUENCE (Ruby/Python `next_round!`). Drives
     /// `transition_to_next_round`. 1830: SR → OR set → (`turn` += 1) → SR.
     pub(crate) fn title_next_round(&self, finished: FinishedRound) -> RoundTransition {
-        crate::title::g1830::next_round(finished, self.phase.operating_rounds)
+        self.title_def().next_round(finished, self.phase.operating_rounds)
     }
 
     /// THE shared `actions_for` accumulation loop (Python
@@ -628,7 +627,7 @@ impl BaseGame {
                 !co.closed
                     && co.ability_used
                     && co.owner == corp_eid
-                    && crate::abilities::teleport(&co.sym).is_some()
+                    && crate::abilities::teleport(&self.title, &co.sym).is_some()
             })
             .map(|co| co.sym.clone())
     }
@@ -701,7 +700,7 @@ impl BaseGame {
         if co.closed {
             return false;
         }
-        let Some((corporations, _)) = crate::abilities::exchange(&co.sym) else {
+        let Some((corporations, _)) = crate::abilities::exchange(&self.title, &co.sym) else {
             return false;
         };
         corporations.iter().any(|corp_sym| {
@@ -774,8 +773,8 @@ impl BaseGame {
                         && !co.closed
                         && !co.ability_used
                         && co.owner == corp_eid
-                        && (crate::abilities::tile_lay(&co.sym).is_some()
-                            || (crate::abilities::teleport(&co.sym).is_some()
+                        && (crate::abilities::tile_lay(&self.title, &co.sym).is_some()
+                            || (crate::abilities::teleport(&self.title, &co.sym).is_some()
                                 && s.step == OperatingStep::LayTile))
                 });
                 if usable {
@@ -1073,7 +1072,7 @@ impl BaseGame {
     /// from the old PlaceToken arm's `dh_token` gate.
     fn teleport_token_placeable(&self, s: &OperatingState, company_sym: &str) -> bool {
         let Some(op) = s.current_corp_sym() else { return false };
-        let slot_free = crate::abilities::teleport(company_sym).map_or(false, |(hexes, _)| {
+        let slot_free = crate::abilities::teleport(&self.title, company_sym).map_or(false, |(hexes, _)| {
             hexes.iter().any(|h| {
                 self.hex_idx.get(*h).map_or(false, |&hi| {
                     self.hexes[hi]
@@ -1101,7 +1100,7 @@ impl BaseGame {
             !c.closed
                 && !c.ability_used
                 && c.owner == corp_eid
-                && crate::abilities::tile_lay(&c.sym).is_some()
+                && crate::abilities::tile_lay(&self.title, &c.sym).is_some()
         })
     }
 }

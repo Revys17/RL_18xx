@@ -367,7 +367,7 @@ impl BaseGame {
     ) {
         // Shares ability with a normal (index > 0) share: give a free share of
         // the corporation to the buyer (CA -> PRR_1).
-        if let Some(corp_sym) = crate::abilities::share_grant(company_sym) {
+        if let Some(corp_sym) = crate::abilities::share_grant(&self.title, company_sym) {
             let player_eid = EntityId::player(player_id);
             if let Some(&corp_idx) = self.corp_idx.get(corp_sym) {
                 // Find a non-president share (from IPO or uninitialized) and transfer it
@@ -387,7 +387,7 @@ impl BaseGame {
 
         // Shares ability with the president's certificate (index 0): the buyer
         // must set the par price for the corporation (BO -> B&O).
-        if let Some(corp_sym) = crate::abilities::par_trigger(company_sym) {
+        if let Some(corp_sym) = crate::abilities::par_trigger(&self.title, company_sym) {
             state.pending_par = Some((corp_sym.to_string(), player_id));
         }
     }
