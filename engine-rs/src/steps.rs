@@ -157,25 +157,50 @@ pub fn next_operating_pc(steps: &[StepDesc], cur: &OperatingStep) -> OperatingSt
     OperatingStep::Done
 }
 
-/// One entry in a title's round-sequence description.
-///
-/// A title's game flow = an opening round (1830: the waterfall auction,
-/// constructed at game start) followed by the repeating
-/// [`round_cycle`](crate::title::g1830::round_cycle); the game's `turn`
-/// counter increments each time the cycle wraps. Future titles add kinds
-/// here (1867's `Merger` round between OR sets, 1822's `Choices` round) and
-/// list them in their cycle — `transition_to_next_round` only walks the
-/// title's list.
+// ---------------------------------------------------------------------------
+// Per-title round flow
+// ---------------------------------------------------------------------------
+//
+// A title's game flow = an opening round (1830: the waterfall auction,
+// constructed at game start) followed by transitions decided by the title's
+// `next_round` function — the Rust analogue of Ruby/Python's `next_round!`
+// case statement. A FUNCTION (finished round → next round), not a static
+// cycle list: that is what lets a title express 1867's merger rounds
+// interleaved within the OR set (SR → MR → OR → MR → OR) and OR counts that
+// depend on the phase at set start. Future titles add `RoundStart` variants
+// (1867's `Merger`, 1822's `Choices`) plus their own flow function;
+// `transition_to_next_round` only asks the title what comes next.
+
+/// The round that just finished, as seen by a title's round-flow function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RoundKind {
-    /// The opening (waterfall) auction. Constructed once at game start;
-    /// no 1830 cycle entry.
+pub enum FinishedRound {
+    /// The opening (waterfall) auction.
     Auction,
     /// A stock round.
     Stock,
-    /// A set of operating rounds (`phase.operating_rounds` of them; the
-    /// set-internal repetition lives in the OperatingState, not the cycle).
-    OperatingSet,
+    /// An operating round: its 1-based position in the current OR set and
+    /// the set's total (fixed when the set started).
+    Operating { round_num: u8, total_ors: u8 },
+}
+
+/// The round a title's flow function says to start next. Carries the
+/// per-kind setup payload; `BaseGame::start_round` has one arm per variant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoundStart {
+    /// A stock round.
+    Stock,
+    /// One operating round within a set of `total_ors`.
+    Operating { round_num: u8, total_ors: u8 },
+}
+
+/// A title's answer to "the round finished — what now?".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RoundTransition {
+    /// Whether the game's `turn` counter increments before the next round
+    /// starts (Ruby/Python bump `@turn` when the OR set hands back to the
+    /// stock round).
+    pub increment_turn: bool,
+    pub start: RoundStart,
 }
 
 /// The entity a step acts for / offers actions to. Players act in auction and
@@ -218,12 +243,11 @@ impl BaseGame {
         crate::title::g1830::operating_steps()
     }
 
-    /// The title's repeating round cycle — everything after the opening
-    /// auction. Drives `transition_to_next_round`; the title-dispatch point
-    /// for the round SEQUENCE. 1830: Stock → OR set → (wrap, `turn` += 1) →
-    /// Stock → ...
-    pub(crate) fn round_cycle(&self) -> &'static [RoundKind] {
-        crate::title::g1830::round_cycle()
+    /// The title's round-flow function — the title-dispatch point for the
+    /// round SEQUENCE (Ruby/Python `next_round!`). Drives
+    /// `transition_to_next_round`. 1830: SR → OR set → (`turn` += 1) → SR.
+    pub(crate) fn title_next_round(&self, finished: FinishedRound) -> RoundTransition {
+        crate::title::g1830::next_round(finished, self.phase.operating_rounds)
     }
 
     /// THE shared `actions_for` accumulation loop (Python
@@ -1826,14 +1850,33 @@ mod tests {
         assert_eq!(auction, vec![(CompanyPendingPar, true), (WaterfallAuction, true)]);
     }
 
-    /// Pin 1830's round cycle to the Python reference (base.py::next_round!):
-    /// opening auction (pre-cycle), then Stock → OR set, turn += 1 on wrap.
+    /// Pin 1830's round flow to the Python reference (base.py::next_round!):
+    /// auction → SR; SR → OR set of phase.operating_rounds; OR n<total →
+    /// OR n+1 (same total — a mid-set phase change must not stretch the
+    /// current set); last OR → SR with turn += 1.
     #[test]
-    fn g1830_round_cycle_mirrors_python() {
-        assert_eq!(
-            crate::title::g1830::round_cycle(),
-            &[RoundKind::Stock, RoundKind::OperatingSet]
-        );
+    fn g1830_round_flow_mirrors_python() {
+        use crate::title::g1830::next_round;
+        let no_turn = |start| RoundTransition { increment_turn: false, start };
+
+        assert_eq!(next_round(FinishedRound::Auction, 1), no_turn(RoundStart::Stock));
+        for total in 1..=3u8 {
+            assert_eq!(
+                next_round(FinishedRound::Stock, total),
+                no_turn(RoundStart::Operating { round_num: 1, total_ors: total })
+            );
+            for n in 1..total {
+                assert_eq!(
+                    // phase.operating_rounds=3 ignored mid-set: total_ors rules
+                    next_round(FinishedRound::Operating { round_num: n, total_ors: total }, 3),
+                    no_turn(RoundStart::Operating { round_num: n + 1, total_ors: total })
+                );
+            }
+            assert_eq!(
+                next_round(FinishedRound::Operating { round_num: total, total_ors: total }, 3),
+                RoundTransition { increment_turn: true, start: RoundStart::Stock }
+            );
+        }
     }
 
     /// The derived pc sequence equals the historical hardcoded

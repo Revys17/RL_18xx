@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use super::{AbilityDef, AbilityWhen, OwnerType, ShareSource};
-use crate::steps::{RoundKind, StepDesc, StepKind};
+use crate::steps::{FinishedRound, RoundStart, RoundTransition, StepDesc, StepKind};
 
 // ---------------------------------------------------------------------------
 // Round descriptions — the per-title ordered step lists
@@ -59,13 +59,31 @@ pub fn auction_steps() -> &'static [StepDesc] {
     STEPS
 }
 
-/// 1830's round sequence (base.py::next_round!): the opening waterfall
-/// auction (constructed at game start, before the cycle), then this cycle
-/// repeats forever — a stock round, then a set of `phase.operating_rounds`
-/// operating rounds. The game's `turn` counter increments on each wrap.
-pub fn round_cycle() -> &'static [RoundKind] {
-    const CYCLE: &[RoundKind] = &[RoundKind::Stock, RoundKind::OperatingSet];
-    CYCLE
+/// 1830's round flow (base.py::next_round!): the opening waterfall auction
+/// flows into the first stock round; a stock round starts a set of
+/// `phase.operating_rounds` operating rounds (the count fixed at set start);
+/// the set's last OR hands back to a stock round and the game's `turn`
+/// counter increments.
+pub fn next_round(finished: FinishedRound, phase_operating_rounds: u8) -> RoundTransition {
+    let (increment_turn, start) = match finished {
+        FinishedRound::Auction => (false, RoundStart::Stock),
+        FinishedRound::Stock => (
+            false,
+            RoundStart::Operating {
+                round_num: 1,
+                total_ors: phase_operating_rounds,
+            },
+        ),
+        FinishedRound::Operating { round_num, total_ors } if round_num < total_ors => (
+            false,
+            RoundStart::Operating {
+                round_num: round_num + 1,
+                total_ors,
+            },
+        ),
+        FinishedRound::Operating { .. } => (true, RoundStart::Stock),
+    };
+    RoundTransition { increment_turn, start }
 }
 
 // ---------------------------------------------------------------------------

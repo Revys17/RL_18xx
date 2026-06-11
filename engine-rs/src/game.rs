@@ -758,33 +758,14 @@ impl BaseGame {
 
     /// Transition to the next round after the current round finishes.
     ///
-    /// Table-driven (Python `next_round!`): the title's round-cycle
-    /// description (`crate::steps::RoundKind` list) supplies the SEQUENCE,
-    /// `start_round_kind` the per-kind setup. A repeat OR within the current
-    /// set stays inside the same OperatingSet cycle entry. Adding a round
-    /// type (1867's merger round between OR sets, 1822's choices round) =
-    /// write its setup arm + list it in the title's cycle.
+    /// The title's round-flow function (Python `next_round!`; the
+    /// `title_next_round` dispatch point in steps.rs) supplies the SEQUENCE —
+    /// including OR repetition within a set — and `start_round` the per-kind
+    /// setup. Adding a round type (1867's merger round interleaved in the OR
+    /// set, 1822's choices round) = a `RoundStart` variant + setup arm + the
+    /// title's flow function returning it.
     fn transition_to_next_round(&mut self) {
-        use crate::steps::RoundKind;
-
-        // Next OR within the same OR set: the same cycle entry continues.
-        if let Round::Operating(s) = &self.round {
-            if s.round_num < s.total_ors {
-                let round_num = s.round_num + 1;
-                let total_ors = s.total_ors;
-                let operating_order = self.compute_operating_order();
-                self.round = Round::Operating(crate::rounds::OperatingState::new(
-                    round_num,
-                    total_ors,
-                    operating_order,
-                ));
-                // OR setup: pay company revenues, start first corp's turn
-                self.payout_companies();
-                self.start_operating();
-                self.update_round_state();
-                return;
-            }
-        }
+        use crate::steps::FinishedRound;
 
         // Round-exit bookkeeping: Stock hands the (possibly moved) priority
         // deal on to the rest of the game.
@@ -792,42 +773,28 @@ impl BaseGame {
             self.priority_deal_player = s.priority_deal_player;
         }
 
-        // The finished round's position in the title's cycle. The opening
-        // auction sits BEFORE the cycle, so it flows into the cycle's first
-        // round (still turn 1 — the first stock round).
-        let cycle = self.round_cycle();
-        let pos = match &self.round {
-            Round::Auction(_) => None,
-            Round::Stock(_) => cycle.iter().position(|k| *k == RoundKind::Stock),
-            Round::Operating(_) => cycle.iter().position(|k| *k == RoundKind::OperatingSet),
+        let finished = match &self.round {
+            Round::Auction(_) => FinishedRound::Auction,
+            Round::Stock(_) => FinishedRound::Stock,
+            Round::Operating(s) => FinishedRound::Operating {
+                round_num: s.round_num,
+                total_ors: s.total_ors,
+            },
         };
-        let (next_kind, wrapped) = match pos {
-            None => (cycle[0], false),
-            Some(i) => {
-                let ni = (i + 1) % cycle.len();
-                (cycle[ni], ni == 0)
-            }
-        };
-        if wrapped {
-            // A full cycle completed — matches Python's turn counter.
+        let transition = self.title_next_round(finished);
+        if transition.increment_turn {
             self.turn += 1;
         }
-        self.start_round_kind(next_kind);
+        self.start_round(transition.start);
         self.update_round_state();
     }
 
     /// Per-kind round setup (Python's `new_stock_round` /
-    /// `new_operating_round`). One arm per round type a title can list in
-    /// its cycle.
-    fn start_round_kind(&mut self, kind: crate::steps::RoundKind) {
-        match kind {
-            crate::steps::RoundKind::Auction => {
-                // The opening auction is constructed at game start (build());
-                // no 1830 cycle entry lists it. A title that re-auctions
-                // mid-game adds its construction here.
-                unreachable!("Auction is an opening round, never a 1830 cycle entry")
-            }
-            crate::steps::RoundKind::Stock => {
+    /// `new_operating_round`). One arm per `RoundStart` variant a title's
+    /// flow function can return.
+    fn start_round(&mut self, start: crate::steps::RoundStart) {
+        match start {
+            crate::steps::RoundStart::Stock => {
                 let state =
                     crate::rounds::StockState::new(&self.player_order, self.priority_deal_player);
                 self.round = Round::Stock(state);
@@ -835,13 +802,11 @@ impl BaseGame {
                 // (mirrors Python's Stock.setup() → skip_steps → next_entity)
                 self.stock_start_entity();
             }
-            crate::steps::RoundKind::OperatingSet => {
-                let operating_order = self.compute_operating_order();
-                let total_ors = self.phase.operating_rounds;
+            crate::steps::RoundStart::Operating { round_num, total_ors } => {
                 self.round = Round::Operating(crate::rounds::OperatingState::new(
-                    1,
+                    round_num,
                     total_ors,
-                    operating_order,
+                    self.compute_operating_order(),
                 ));
                 // OR setup: pay company revenues, start first corp's turn
                 self.payout_companies();
