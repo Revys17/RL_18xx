@@ -1049,13 +1049,6 @@ impl BaseGame {
         let actual_from = if exchange.is_some() {
             "depot".to_string()
         } else if from == "depot" {
-            let depot_price = self
-                .depot
-                .trains
-                .iter()
-                .find(|t| t.name == base_name)
-                .map(|t| t.price);
-
             // Source detection priority (mirrors Python's ``train.owner``
             // semantics — the train's actual owner determines the source,
             // regardless of action.price):
@@ -1714,7 +1707,7 @@ impl BaseGame {
         // Transfer shares to market. When dumping the president, transfer the
         // non-president portion (= percent - president_face_value, i.e.
         // percent - 20 in 1830) first, then move the 20% president share to
-        // market. ``check_president_change`` below will then route the
+        // market. ``check_president_change_with_snapshot`` below will then route the
         // president to the new president and balance with two of their
         // normal shares moving to market.
         //
