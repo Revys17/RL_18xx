@@ -50,6 +50,33 @@ pub trait GameTitle: Sync {
     fn market_grid(&self) -> Vec<Vec<Option<MarketCell>>>;
     /// How share prices move on the market (Ruby's movement modules).
     fn market_movement(&self) -> MarketMovement;
+    /// Max percent of one corporation the open market pool may hold
+    /// (Ruby `market_share_limit`; 50 for 1830/1867).
+    fn market_pool_limit(&self) -> u8 {
+        50
+    }
+    /// The price grid step for auction bids (1830: bids move in $5 steps).
+    /// Used by the MCTS price sampler's snap grid.
+    fn bid_price_step(&self) -> i64 {
+        5
+    }
+
+    // -- AlphaZero-bridge orders (action layout + encoder) --
+    //
+    // The flat action layout and the encoder need a pinned iteration order
+    // for hexes and tiles. The defaults derive them from the title data
+    // (map order / tile-catalog order); 1830 OVERRIDES both with frozen
+    // historical orders (artifacts of the Python ActionMapper's original
+    // construction) because trained checkpoints depend on the exact slots.
+
+    /// Hex order for the flat action layout.
+    fn action_hex_order(&self) -> Vec<&'static str> {
+        self.hex_definitions().iter().map(|h| h.coord).collect()
+    }
+    /// Tile order for the flat action layout.
+    fn action_tile_order(&self) -> Vec<&'static str> {
+        self.tile_counts().iter().map(|(id, _)| *id).collect()
+    }
 }
 
 /// How share prices move on the stock market grid (Ruby's
@@ -124,6 +151,12 @@ impl GameTitle for G1830 {
     }
     fn market_movement(&self) -> MarketMovement {
         MarketMovement::TwoDimensional
+    }
+    fn action_hex_order(&self) -> Vec<&'static str> {
+        g1830::action_hex_order()
+    }
+    fn action_tile_order(&self) -> Vec<&'static str> {
+        g1830::action_tile_order()
     }
 }
 

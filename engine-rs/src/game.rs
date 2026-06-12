@@ -1733,7 +1733,7 @@ impl BaseGame {
 // Hex construction helpers
 // ---------------------------------------------------------------------------
 
-fn build_hex_from_def(title: &dyn GameTitle, def: &HexDef) -> Hex {
+pub(crate) fn build_hex_from_def(title: &dyn GameTitle, def: &HexDef) -> Hex {
     let coord = def.coord.to_string();
 
     // Check if this hex has a preprinted DSL definition with path data
@@ -3259,7 +3259,8 @@ impl BaseGame {
     fn encode_for_gnn(&self) -> (Vec<f32>, Vec<f32>, usize, usize, usize) {
         let (gs, nf) = self.encode_state();
         let enc_size = gs.len();
-        (gs, nf, enc_size, crate::encoder::NUM_HEXES, crate::encoder::NUM_NODE_FEATURES)
+        let spec = crate::encoder::spec_for(&self.title);
+        (gs, nf, enc_size, spec.num_hexes(), spec.num_node_features())
     }
 
     // -- Phase 4: Connectivity, Tile, Token, Routing --

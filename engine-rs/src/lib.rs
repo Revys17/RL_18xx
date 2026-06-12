@@ -52,6 +52,7 @@ fn engine_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<mcts::RustMCTSPlayer>()?;
     m.add_function(wrap_pyfunction!(action_index::action_offsets_py, m)?)?;
     m.add_function(wrap_pyfunction!(action_index::policy_size_py, m)?)?;
+    m.add_function(wrap_pyfunction!(action_index::policy_size_for_py, m)?)?;
     m.add_function(wrap_pyfunction!(action_index::legal_action_to_index_py, m)?)?;
 
     Ok(())

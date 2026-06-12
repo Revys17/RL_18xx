@@ -19,6 +19,15 @@ _GNN_CONFIG_DEPRECATION_MESSAGE = (
 )
 
 
+def _engine_policy_size() -> int:
+    """The 1830 flat action-space size, derived from the engine's action
+    layout (single source — mirrors Python ``ActionMapper.action_encoding_size``
+    and the Rust frozen-layout test)."""
+    import engine_rs
+
+    return int(engine_rs.policy_size_py())
+
+
 def _select_best_device() -> torch.device:
     """Select the best available device: CUDA > MPS > CPU."""
     if torch.cuda.is_available():
@@ -33,7 +42,7 @@ class ModelGNNConfig:
     device: Optional[torch.device] = None
     game_state_size: int = 390
     map_node_features: int = 50
-    policy_size: int = 26537
+    policy_size: int = field(default_factory=_engine_policy_size)
     # Number of player slots the value head emits. The legacy GNN architecture
     # defaults to 4 (the original AlphaZero-style 1830 setup); the active
     # Transformer architecture uses ``MAX_PLAYERS = 6``. ``value_size`` is kept
@@ -128,7 +137,7 @@ class ModelTransformerConfig:
     # have to know the precomputed sizes.
     game_state_size: int = 408  # max_players=6 layout size; recomputed in __post_init__.
     map_node_features: int = 50
-    policy_size: int = 26537
+    policy_size: int = field(default_factory=_engine_policy_size)
     # Number of player slots the value head emits — one logit per player slot
     # (active first via canonicalization, padded slots last). Loss masking
     # handles the padded slots. This is the canonical knob for the value head

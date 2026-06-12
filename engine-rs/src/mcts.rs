@@ -22,11 +22,11 @@ use pyo3::types::PyDict;
 use rand::SeedableRng;
 use rand_distr::{Dirichlet, Distribution, Normal};
 
-use crate::action_index::POLICY_SIZE;
 use crate::factored::LegalAction;
 use crate::game::BaseGame;
 
-const VALUE_SIZE: usize = 6;
+/// Value-head width — single-sourced from the encoder's player-slot cap.
+const VALUE_SIZE: usize = crate::encoder::MAX_PLAYERS;
 const C_PUCT_BASE: f32 = 19652.0;
 const C_PUCT_INIT: f32 = 1.25;
 
@@ -185,7 +185,12 @@ fn price_head_entity_key(action_index: u32, action_type: &str) -> Option<(String
 
 fn price_grid_step(action_type: &str) -> i64 {
     match action_type {
-        "Bid" => 5,
+        // The auction bid increment comes from the title data (1830: $5).
+        // The MCTS runs against the global 1830 layout today; a per-title
+        // MCTS threads its own layout here.
+        "Bid" => {
+            crate::title::resolve(crate::action_index::layout().title_name).bid_price_step()
+        }
         _ => 1,
     }
 }
@@ -482,11 +487,11 @@ impl RustMCTSPlayer {
             .collect()
     }
 
-    /// Full-size visit-count vector at the root (length POLICY_SIZE).
-    /// Non-legal slots stay 0.
+    /// Full-size visit-count vector at the root (length = the layout's
+    /// policy size). Non-legal slots stay 0.
     fn child_n_at_root(&self) -> Vec<f32> {
         let root = &self.arena[self.root_idx];
-        let mut out = vec![0.0f32; POLICY_SIZE as usize];
+        let mut out = vec![0.0f32; crate::action_index::layout().total as usize];
         for (i, &flat) in root.legal_action_indices.iter().enumerate() {
             out[flat as usize] = root.child_n[i];
         }
@@ -1027,11 +1032,12 @@ impl RustMCTSPlayer {
         price_components: Option<PyObject>,
     ) -> PyResult<()> {
         let probs_slice = probs.as_slice()?;
-        if probs_slice.len() != POLICY_SIZE as usize {
+        let policy_size = crate::action_index::layout().total;
+        if probs_slice.len() != policy_size as usize {
             return Err(PyValueError::new_err(format!(
-                "probs length {} != POLICY_SIZE {}",
+                "probs length {} != policy size {}",
                 probs_slice.len(),
-                POLICY_SIZE
+                policy_size
             )));
         }
         let value_slice = value.as_slice()?;
@@ -1213,11 +1219,11 @@ impl RustMCTSPlayer {
         Ok(())
     }
 
-    /// Compute a length-POLICY_SIZE visit-count policy at the root with
+    /// Compute a policy-size-length visit-count policy at the root with
     /// temperature scaling. Mirrors Python ``MCTSNode.children_as_pi``.
     pub fn pi_at_root(&self, temperature: f32) -> Vec<f32> {
         let root = &self.arena[self.root_idx];
-        let mut out = vec![0.0f32; POLICY_SIZE as usize];
+        let mut out = vec![0.0f32; crate::action_index::layout().total as usize];
         let num_legal = root.legal_action_indices.len();
         if num_legal == 0 {
             return out;

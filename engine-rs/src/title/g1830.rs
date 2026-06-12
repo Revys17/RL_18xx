@@ -1279,6 +1279,39 @@ pub fn hex_definitions() -> Vec<HexDef> {
 }
 
 // ---------------------------------------------------------------------------
+// Frozen action-layout orders (AlphaZero bridge)
+// ---------------------------------------------------------------------------
+
+/// Hex order of the flat action layout. A FROZEN artifact of the Python
+/// ActionMapper's original construction (mostly map order, with the
+/// multi-city/home hexes grouped at the end) — trained 1830 checkpoints
+/// depend on these exact slots, so this list must never change. Pinned by
+/// the frozen-layout cargo test.
+pub fn action_hex_order() -> Vec<&'static str> {
+    vec![
+        "F2", "I1", "J2", "A9", "A11", "K13", "B24", "D2", "F6", "E9", "H12", "D14", "C15", "K15",
+        "A17", "A19", "I19", "F24", "D24", "F4", "J14", "F22", "E7", "F8", "C11", "C13", "D12",
+        "B16", "C17", "B20", "D4", "F10", "I13", "D18", "B12", "B14", "B22", "C7", "C9", "C23",
+        "D8", "D16", "D20", "E3", "E13", "E15", "F12", "F14", "F18", "G3", "G5", "G9", "G11",
+        "H2", "H6", "H8", "H14", "I3", "I5", "I7", "I9", "J4", "J6", "J8", "G15", "C21", "D22",
+        "E17", "E21", "G13", "I11", "J10", "J12", "E19", "H4", "B10", "H10", "H16", "F16", "G7",
+        "G17", "F20", "D6", "I17", "B18", "C19", "E5", "D10", "E11", "H18", "I15", "G19", "E23",
+    ]
+}
+
+/// Tile order of the flat action layout. Like [`action_hex_order`], a FROZEN
+/// Python-ActionMapper artifact (set-iteration order) that checkpoints
+/// depend on. Same tile SET as `tile_counts()`, different order.
+pub fn action_tile_order() -> Vec<&'static str> {
+    vec![
+        "42", "4", "16", "70", "23", "7", "18", "24", "3", "55", "61", "54", "9", "41", "26",
+        "68", "57", "45", "1", "56", "44", "62", "63", "64", "40", "66", "20", "27", "39", "19",
+        "59", "25", "46", "28", "65", "43", "2", "53", "58", "14", "47", "8", "29", "69", "15",
+        "67",
+    ]
+}
+
+// ---------------------------------------------------------------------------
 // Location names
 // ---------------------------------------------------------------------------
 

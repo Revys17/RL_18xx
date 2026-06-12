@@ -3,103 +3,156 @@
 //! Returns raw `Vec<f32>` arrays — Python wraps them in torch tensors.
 //! This eliminates the ~2ms proxy overhead of the Python encoder on the Rust adapter.
 
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 use crate::entities::EntityId;
 use crate::game::BaseGame;
 use crate::tiles::PathEndpoint;
+use crate::title::GameTitle;
 
 // ---------------------------------------------------------------------------
-// Static ordered lists (must match Python encoder exactly)
+// Per-title encoder spec — the ordered lists and scales the feature layout is
+// built from, derived from the title data (the frozen 1830 values are pinned
+// by the spec_matches_frozen_1830_constants test).
 // ---------------------------------------------------------------------------
 
-pub const CORPORATION_IDS: &[&str] = &["PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M"];
-pub const PRIVATE_IDS: &[&str] = &["SV", "CS", "DH", "MH", "CA", "BO"];
-pub const TRAIN_TYPES: &[&str] = &["2", "3", "4", "5", "6", "D"];
-pub const PHASE_NAMES: &[&str] = &["2", "3", "4", "5", "6", "D"];
-pub const TILE_IDS: &[&str] = &[
-    "1", "2", "3", "4", "7", "8", "9", "14", "15", "16", "18", "19", "20", "23", "24", "25",
-    "26", "27", "28", "29", "39", "40", "41", "42", "43", "44", "45", "46", "47", "53", "54",
-    "55", "56", "57", "58", "59", "61", "62", "63", "64", "65", "66", "67", "68", "69", "70",
-];
-pub const HEX_COORDS: &[&str] = &[
-    "A11", "A17", "A19", "A9", "B10", "B12", "B14", "B16", "B18", "B20", "B22", "B24", "C11",
-    "C13", "C15", "C17", "C19", "C21", "C23", "C7", "C9", "D10", "D12", "D14", "D16", "D18",
-    "D2", "D20", "D22", "D24", "D4", "D6", "D8", "E11", "E13", "E15", "E17", "E19", "E21",
-    "E23", "E3", "E5", "E7", "E9", "F10", "F12", "F14", "F16", "F18", "F2", "F20", "F22",
-    "F24", "F4", "F6", "F8", "G11", "G13", "G15", "G17", "G19", "G3", "G5", "G7", "G9", "H10",
-    "H12", "H14", "H16", "H18", "H2", "H4", "H6", "H8", "I1", "I11", "I13", "I15", "I17",
-    "I19", "I3", "I5", "I7", "I9", "J10", "J12", "J14", "J2", "J4", "J6", "J8", "K13", "K15",
-];
-
-pub const TRAIN_COUNTS: &[u32] = &[6, 5, 4, 3, 2, 20]; // 2, 3, 4, 5, 6, D
-
-pub const NUM_CORPORATIONS: usize = CORPORATION_IDS.len();
-pub const NUM_PRIVATES: usize = PRIVATE_IDS.len();
-pub const NUM_TRAIN_TYPES: usize = TRAIN_TYPES.len();
-pub const NUM_HEXES: usize = HEX_COORDS.len();
-pub const NUM_TILE_IDS: usize = TILE_IDS.len();
-pub const NUM_PHASES: usize = PHASE_NAMES.len();
+/// Geometry constants (hexes have 6 edges; 15 = C(6,2) edge pairs).
 pub const NUM_TILE_EDGES: usize = 6;
 pub const NUM_PORT_PAIRS: usize = 15;
 
-pub const BANK_CASH: f32 = 12000.0;
+/// Maximum player slots the AlphaZero bridge supports — THE single source of
+/// the value-head width (Python ``ModelTransformerConfig.max_players`` and
+/// the MCTS ``VALUE_SIZE`` mirror this). 1822 supports 7 players; widening
+/// this means retraining (see the multi-title roadmap's player-count note).
+pub const MAX_PLAYERS: usize = 6;
+
+/// Normalization scales. Title-tunable in principle; shared today.
 pub const MAX_SHARE_PRICE: f32 = 350.0;
 pub const MAX_PRIVATE_REVENUE: f32 = 30.0;
 pub const MAX_HEX_REVENUE: f32 = 80.0;
 pub const MAX_LAY_COST: f32 = 120.0;
 
-pub const CERT_LIMIT: &[(u8, u8)] = &[(2, 28), (3, 20), (4, 16), (5, 13), (6, 11)];
-pub const STARTING_CASH: &[(u8, i32)] = &[(2, 1200), (3, 800), (4, 600), (5, 480), (6, 400)];
-
-pub const NUM_NODE_FEATURES: usize =
-    1 + 4 + 1 + 1 + NUM_CORPORATIONS * 2 + NUM_PORT_PAIRS + NUM_TILE_EDGES * 2;
-
 const MAX_ROUND_TYPE: f32 = 2.0;
 
-// Tile initial counts (TILE_IDS order):
-// 1:1, 2:1, 3:2, 4:2, 7:4, 8:8, 9:7, 14:3, 15:2, 16:1, 18:1, 19:1, 20:1, 23:3, 24:3, 25:1,
-// 26:1, 27:1, 28:1, 29:1, 39:1, 40:1, 41:2, 42:2, 43:2, 44:1, 45:2, 46:2, 47:1,
-// 53:2, 54:1, 55:1, 56:1, 57:4, 58:2, 59:2, 61:2, 62:1, 63:3, 64:1, 65:1, 66:1, 67:1, 68:1, 69:1, 70:1
-const TILE_INITIAL_COUNTS: &[u32] = &[
-    1, 1, 2, 2, 4, 8, 7, 3, 2, 1, 1, 1, 1, 3, 3, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 2, 2, 1,
-    2, 1, 1, 1, 4, 2, 2, 2, 1, 3, 1, 1, 1, 1, 1, 1, 1,
-];
-
-// ---------------------------------------------------------------------------
-// Lookup helpers
-// ---------------------------------------------------------------------------
-
-fn corp_idx(sym: &str) -> Option<usize> {
-    CORPORATION_IDS.iter().position(|&s| s == sym)
-}
-fn private_idx(sym: &str) -> Option<usize> {
-    PRIVATE_IDS.iter().position(|&s| s == sym)
-}
-fn train_idx(name: &str) -> Option<usize> {
-    TRAIN_TYPES.iter().position(|&s| s == name)
-}
-fn hex_idx(coord: &str) -> Option<usize> {
-    HEX_COORDS.iter().position(|&s| s == coord)
-}
-fn phase_idx(name: &str) -> Option<usize> {
-    PHASE_NAMES.iter().position(|&s| s == name)
-}
-fn cert_limit_for(n: usize) -> u8 {
-    CERT_LIMIT.iter().find(|(k, _)| *k as usize == n).map(|(_, v)| *v).unwrap_or(16)
-}
-fn starting_cash_for(n: usize) -> i32 {
-    STARTING_CASH.iter().find(|(k, _)| *k as usize == n).map(|(_, v)| *v).unwrap_or(600)
+pub struct EncoderSpec {
+    pub corporation_ids: Vec<&'static str>,
+    pub private_ids: Vec<&'static str>,
+    pub train_types: Vec<&'static str>,
+    pub phase_names: Vec<&'static str>,
+    /// Tile ids in title tile-catalog order.
+    pub tile_ids: Vec<&'static str>,
+    /// Hex coordinates, sorted lexicographically (the node ordering).
+    pub hex_coords: Vec<&'static str>,
+    pub train_counts: Vec<u32>,
+    pub tile_initial_counts: Vec<u32>,
+    pub bank_cash: f32,
+    /// (player count -> cert limit / starting cash) tables.
+    pub cert_limits: Vec<(u8, u8)>,
+    pub starting_cash: Vec<(u8, i32)>,
 }
 
-pub fn encoding_size(num_players: usize) -> usize {
-    let np = num_players;
-    let nc = NUM_CORPORATIONS;
-    let npv = NUM_PRIVATES;
-    let nt = NUM_TRAIN_TYPES;
-    let ntile = NUM_TILE_IDS;
+impl EncoderSpec {
+    fn build(title: &'static dyn GameTitle) -> Self {
+        let mut hex_coords: Vec<&'static str> =
+            title.hex_definitions().iter().map(|h| h.coord).collect();
+        hex_coords.sort_unstable();
+        EncoderSpec {
+            corporation_ids: title.corporations().iter().map(|c| c.sym).collect(),
+            private_ids: title.companies().iter().map(|c| c.sym).collect(),
+            train_types: title.trains().iter().map(|t| t.name).collect(),
+            phase_names: title.phases().iter().map(|p| p.name).collect(),
+            tile_ids: title.tile_counts().iter().map(|(id, _)| *id).collect(),
+            hex_coords,
+            train_counts: title.trains().iter().map(|t| t.count).collect(),
+            tile_initial_counts: title.tile_counts().iter().map(|(_, n)| *n).collect(),
+            bank_cash: title.bank_cash() as f32,
+            cert_limits: (2..=6).map(|n| (n, title.cert_limit(n))).collect(),
+            starting_cash: (2..=6).map(|n| (n, title.starting_cash(n))).collect(),
+        }
+    }
 
-    (np + nc) + np + 1 + 1 + np + 1 + np + np + np * nc + npv * (np + nc) + npv
-        + nc + nc + nc * nt + nc + nc * 2 + 2 * nc + 4 * nc + nt + nt + ntile
-        + npv * np + npv + npv + npv + 2 + 1 + npv + np
+    pub fn num_corporations(&self) -> usize {
+        self.corporation_ids.len()
+    }
+    pub fn num_privates(&self) -> usize {
+        self.private_ids.len()
+    }
+    pub fn num_train_types(&self) -> usize {
+        self.train_types.len()
+    }
+    pub fn num_hexes(&self) -> usize {
+        self.hex_coords.len()
+    }
+    pub fn num_tile_ids(&self) -> usize {
+        self.tile_ids.len()
+    }
+    pub fn num_phases(&self) -> usize {
+        self.phase_names.len()
+    }
+
+    pub fn corp_idx(&self, sym: &str) -> Option<usize> {
+        self.corporation_ids.iter().position(|&s| s == sym)
+    }
+    pub fn private_idx(&self, sym: &str) -> Option<usize> {
+        self.private_ids.iter().position(|&s| s == sym)
+    }
+    pub fn train_idx(&self, name: &str) -> Option<usize> {
+        self.train_types.iter().position(|&s| s == name)
+    }
+    pub fn hex_idx(&self, coord: &str) -> Option<usize> {
+        self.hex_coords.iter().position(|&s| s == coord)
+    }
+    pub fn phase_idx(&self, name: &str) -> Option<usize> {
+        self.phase_names.iter().position(|&s| s == name)
+    }
+    pub fn cert_limit_for(&self, n: usize) -> u8 {
+        self.cert_limits
+            .iter()
+            .find(|(k, _)| *k as usize == n)
+            .map(|(_, v)| *v)
+            .unwrap_or(16)
+    }
+    pub fn starting_cash_for(&self, n: usize) -> i32 {
+        self.starting_cash
+            .iter()
+            .find(|(k, _)| *k as usize == n)
+            .map(|(_, v)| *v)
+            .unwrap_or(600)
+    }
+
+    /// Per-hex node feature width.
+    pub fn num_node_features(&self) -> usize {
+        1 + 4 + 1 + 1 + self.num_corporations() * 2 + NUM_PORT_PAIRS + NUM_TILE_EDGES * 2
+    }
+
+    /// Flat game-state vector width for a player count.
+    pub fn encoding_size(&self, num_players: usize) -> usize {
+        let np = num_players;
+        let nc = self.num_corporations();
+        let npv = self.num_privates();
+        let nt = self.num_train_types();
+        let ntile = self.num_tile_ids();
+
+        (np + nc) + np + 1 + 1 + np + 1 + np + np + np * nc + npv * (np + nc) + npv
+            + nc + nc + nc * nt + nc + nc * 2 + 2 * nc + 4 * nc + nt + nt + ntile
+            + npv * np + npv + npv + npv + 2 + 1 + npv + np
+    }
+}
+
+/// The encoder spec for a title (memoized over the registry; panics on an
+/// unknown title string — engine-internal, same contract as `title::resolve`).
+pub fn spec_for(title_name: &str) -> &'static EncoderSpec {
+    static SPECS: OnceLock<HashMap<&'static str, EncoderSpec>> = OnceLock::new();
+    SPECS
+        .get_or_init(|| {
+            crate::title::all_titles()
+                .iter()
+                .map(|t| (t.name(), EncoderSpec::build(*t)))
+                .collect()
+        })
+        .get(title_name)
+        .unwrap_or_else(|| panic!("no encoder spec for title {title_name}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -113,12 +166,13 @@ impl BaseGame {
     }
 
     fn encode_game_state(&self) -> Vec<f32> {
+        let spec = spec_for(&self.title);
         let np = self.players.len();
-        let size = encoding_size(np);
+        let size = spec.encoding_size(np);
         let mut enc = vec![0.0f32; size];
         let mut off = 0;
-        let sc = starting_cash_for(np) as f32;
-        let cl = cert_limit_for(np) as f32;
+        let sc = spec.starting_cash_for(np) as f32;
+        let cl = spec.cert_limit_for(np) as f32;
 
         // Player id -> index (sorted by id)
         let mut pids: Vec<u32> = self.players.iter().map(|p| p.id).collect();
@@ -130,7 +184,7 @@ impl BaseGame {
             if let Some(pid) = eid.player_id() {
                 if let Some(i) = pidx(pid) { enc[off + i] = 1.0; }
             } else if let Some(sym) = eid.corp_sym() {
-                if let Some(i) = corp_idx(sym) { enc[off + np + i] = 1.0; }
+                if let Some(i) = spec.corp_idx(sym) { enc[off + np + i] = 1.0; }
             }
         };
 
@@ -147,7 +201,7 @@ impl BaseGame {
                 }
             }
         }
-        off += np + NUM_CORPORATIONS;
+        off += np + spec.num_corporations();
 
         // S2: Active President
         if !self.finished && self.round_state.active_entity_id.0.starts_with("corp:") {
@@ -170,8 +224,8 @@ impl BaseGame {
         off += 1;
 
         // S4: Game Phase
-        if let Some(i) = phase_idx(&self.phase.name) {
-            enc[off] = i as f32 / (NUM_PHASES as f32 - 1.0);
+        if let Some(i) = spec.phase_idx(&self.phase.name) {
+            enc[off] = i as f32 / (spec.num_phases() as f32 - 1.0);
         }
         off += 1;
 
@@ -183,7 +237,7 @@ impl BaseGame {
         off += np;
 
         // S6: Bank Cash
-        enc[off] = self.bank.cash as f32 / BANK_CASH;
+        enc[off] = self.bank.cash as f32 / spec.bank_cash;
         off += 1;
 
         // S7: Certs Remaining
@@ -205,78 +259,78 @@ impl BaseGame {
 
         // S9: Player Share Ownership
         for (ci_raw, corp) in self.corporations.iter().enumerate() {
-            if let Some(ci) = corp_idx(&corp.sym) {
+            if let Some(ci) = spec.corp_idx(&corp.sym) {
                 for p in &self.players {
                     if let Some(pi) = pidx(p.id) {
                         let pct = self.player_percent_of(p.id, ci_raw);
-                        enc[off + pi * NUM_CORPORATIONS + ci] = pct as f32 / 100.0;
+                        enc[off + pi * spec.num_corporations() + ci] = pct as f32 / 100.0;
                     }
                 }
             }
         }
-        off += np * NUM_CORPORATIONS;
+        off += np * spec.num_corporations();
 
         // S10: Private Ownership (skip closed companies — matches Python adapter)
-        let os = np + NUM_CORPORATIONS;
+        let os = np + spec.num_corporations();
         for co in &self.companies {
             if co.closed { continue; }
-            if let Some(pi) = private_idx(&co.sym) {
+            if let Some(pi) = spec.private_idx(&co.sym) {
                 if let Some(pid) = co.owner.player_id() {
                     if let Some(i) = pidx(pid) { enc[off + pi * os + i] = 1.0; }
                 } else if let Some(sym) = co.owner.corp_sym() {
-                    if let Some(i) = corp_idx(sym) { enc[off + pi * os + np + i] = 1.0; }
+                    if let Some(i) = spec.corp_idx(sym) { enc[off + pi * os + np + i] = 1.0; }
                 }
             }
         }
-        off += NUM_PRIVATES * os;
+        off += spec.num_privates() * os;
 
         // S11: Private Revenue
         for co in &self.companies {
-            if let Some(i) = private_idx(&co.sym) {
+            if let Some(i) = spec.private_idx(&co.sym) {
                 enc[off + i] = co.revenue as f32 / MAX_PRIVATE_REVENUE;
             }
         }
-        off += NUM_PRIVATES;
+        off += spec.num_privates();
 
         // S12: Corp Floated
         for c in &self.corporations {
-            if let Some(i) = corp_idx(&c.sym) {
+            if let Some(i) = spec.corp_idx(&c.sym) {
                 enc[off + i] = if c.floated { 1.0 } else { 0.0 };
             }
         }
-        off += NUM_CORPORATIONS;
+        off += spec.num_corporations();
 
         // S13: Corp Cash
         for c in &self.corporations {
-            if let Some(i) = corp_idx(&c.sym) { enc[off + i] = c.cash as f32 / sc; }
+            if let Some(i) = spec.corp_idx(&c.sym) { enc[off + i] = c.cash as f32 / sc; }
         }
-        off += NUM_CORPORATIONS;
+        off += spec.num_corporations();
 
         // S14: Corp Trains
         for c in &self.corporations {
-            if let Some(ci) = corp_idx(&c.sym) {
+            if let Some(ci) = spec.corp_idx(&c.sym) {
                 for t in &c.trains {
-                    if let Some(ti) = train_idx(&t.name) {
-                        enc[off + ci * NUM_TRAIN_TYPES + ti] += 1.0 / TRAIN_COUNTS[ti] as f32;
+                    if let Some(ti) = spec.train_idx(&t.name) {
+                        enc[off + ci * spec.num_train_types() + ti] += 1.0 / spec.train_counts[ti] as f32;
                     }
                 }
             }
         }
-        off += NUM_CORPORATIONS * NUM_TRAIN_TYPES;
+        off += spec.num_corporations() * spec.num_train_types();
 
         // S15: Corp Tokens Remaining
         for c in &self.corporations {
-            if let Some(i) = corp_idx(&c.sym) {
+            if let Some(i) = spec.corp_idx(&c.sym) {
                 let total = c.tokens.len() as f32;
                 let unused = c.tokens.iter().filter(|t| !t.used).count() as f32;
                 enc[off + i] = if total > 0.0 { unused / total } else { 0.0 };
             }
         }
-        off += NUM_CORPORATIONS;
+        off += spec.num_corporations();
 
         // S16: Corp Share Price
         for c in &self.corporations {
-            if let Some(i) = corp_idx(&c.sym) {
+            if let Some(i) = spec.corp_idx(&c.sym) {
                 if let Some(ref sp) = c.share_price {
                     let ipo = c.ipo_price.as_ref().map(|p| p.price).unwrap_or(0);
                     enc[off + i * 2] = ipo as f32 / MAX_SHARE_PRICE;
@@ -284,11 +338,11 @@ impl BaseGame {
                 }
             }
         }
-        off += NUM_CORPORATIONS * 2;
+        off += spec.num_corporations() * 2;
 
         // S17: Corp Shares (IPO + Market) — count in share UNITS (president=2)
         for c in &self.corporations {
-            if let Some(i) = corp_idx(&c.sym) {
+            if let Some(i) = spec.corp_idx(&c.sym) {
                 let share_units = |s: &crate::entities::Share| -> f32 {
                     if s.president { (s.percent / 10) as f32 } else { 1.0 }
                 };
@@ -306,11 +360,11 @@ impl BaseGame {
                 }
             }
         }
-        off += 2 * NUM_CORPORATIONS;
+        off += 2 * spec.num_corporations();
 
         // S18: Corp Market Zone
         for c in &self.corporations {
-            if let Some(i) = corp_idx(&c.sym) {
+            if let Some(i) = spec.corp_idx(&c.sym) {
                 if let Some(ref sp) = c.share_price {
                     let zone = self.market_zone_for(sp.row, sp.column);
                     let zi = match zone.as_str() {
@@ -323,30 +377,30 @@ impl BaseGame {
                 }
             }
         }
-        off += 4 * NUM_CORPORATIONS;
+        off += 4 * spec.num_corporations();
 
         // S19: Depot Trains
         for t in &self.depot.trains {
-            if let Some(ti) = train_idx(&t.name) {
-                enc[off + ti] += 1.0 / TRAIN_COUNTS[ti] as f32;
+            if let Some(ti) = spec.train_idx(&t.name) {
+                enc[off + ti] += 1.0 / spec.train_counts[ti] as f32;
             }
         }
-        off += NUM_TRAIN_TYPES;
+        off += spec.num_train_types();
 
         // S20: Market Pool Trains (Discarded)
         for t in &self.depot.discarded {
-            if let Some(ti) = train_idx(&t.name) {
-                enc[off + ti] += 1.0 / TRAIN_COUNTS[ti] as f32;
+            if let Some(ti) = spec.train_idx(&t.name) {
+                enc[off + ti] += 1.0 / spec.train_counts[ti] as f32;
             }
         }
-        off += NUM_TRAIN_TYPES;
+        off += spec.num_train_types();
 
         // S21: Depot Tiles
-        for (ti, name) in TILE_IDS.iter().enumerate() {
+        for (ti, name) in spec.tile_ids.iter().enumerate() {
             let ct = self.tile_counts_remaining.get(*name).copied().unwrap_or(0);
-            enc[off + ti] = ct as f32 / TILE_INITIAL_COUNTS[ti] as f32;
+            enc[off + ti] = ct as f32 / spec.tile_initial_counts[ti] as f32;
         }
-        off += NUM_TILE_IDS;
+        off += spec.num_tile_ids();
 
         // S22-24: Auction state
         let is_auction = matches!(&self.round, crate::rounds::Round::Auction(_));
@@ -354,7 +408,7 @@ impl BaseGame {
             if let crate::rounds::Round::Auction(ref a) = &self.round {
                 // S22: Bids
                 for (co_i, co) in self.companies.iter().enumerate() {
-                    if let Some(pi) = private_idx(&co.sym) {
+                    if let Some(pi) = spec.private_idx(&co.sym) {
                         for bid in a.bids.get(&co_i).unwrap_or(&Vec::new()) {
                             let (bid_pid, price) = (bid.player_id, bid.price);
                             if let Some(bi) = pidx(bid_pid) {
@@ -365,13 +419,13 @@ impl BaseGame {
                 }
             }
         }
-        off += NUM_PRIVATES * np;
+        off += spec.num_privates() * np;
 
         if is_auction {
             if let crate::rounds::Round::Auction(ref a) = &self.round {
                 // S23: Min bid
                 for (co_i, co) in self.companies.iter().enumerate() {
-                    if let Some(pi) = private_idx(&co.sym) {
+                    if let Some(pi) = spec.private_idx(&co.sym) {
                         if co.owner != EntityId::none() && !co.owner.0.is_empty() {
                             enc[off + pi] = -1.0;
                         } else {
@@ -383,22 +437,22 @@ impl BaseGame {
                 // S24: Available company
                 let cur = a.remaining_companies.first().copied().unwrap_or(usize::MAX);
                 if cur < self.companies.len() {
-                    if let Some(pi) = private_idx(&self.companies[cur].sym) {
-                        enc[off + NUM_PRIVATES + pi] = 1.0;
+                    if let Some(pi) = spec.private_idx(&self.companies[cur].sym) {
+                        enc[off + spec.num_privates() + pi] = 1.0;
                     }
                 }
             }
         }
-        off += NUM_PRIVATES; // min_bid
-        off += NUM_PRIVATES; // available
+        off += spec.num_privates(); // min_bid
+        off += spec.num_privates(); // available
 
         // S25: Face Value (always)
         for co in &self.companies {
-            if let Some(i) = private_idx(&co.sym) {
+            if let Some(i) = spec.private_idx(&co.sym) {
                 enc[off + i] = co.value as f32 / sc;
             }
         }
-        off += NUM_PRIVATES;
+        off += spec.num_privates();
 
         // S26: OR Structure
         if let crate::rounds::Round::Operating(_) = &self.round {
@@ -414,11 +468,11 @@ impl BaseGame {
 
         // S28: Private Closed
         for co in &self.companies {
-            if let Some(i) = private_idx(&co.sym) {
+            if let Some(i) = spec.private_idx(&co.sym) {
                 if co.closed { enc[off + i] = 1.0; }
             }
         }
-        off += NUM_PRIVATES;
+        off += spec.num_privates();
 
         // S29: Player Turn Order
         if matches!(&self.round, crate::rounds::Round::Stock(_)) && np > 1 {
@@ -439,11 +493,13 @@ impl BaseGame {
     }
 
     fn encode_node_features(&self) -> Vec<f32> {
-        let mut f = vec![0.0f32; NUM_HEXES * NUM_NODE_FEATURES];
+        let spec = spec_for(&self.title);
+        let nfw = spec.num_node_features();
+        let mut f = vec![0.0f32; spec.num_hexes() * nfw];
 
         for hex in &self.hexes {
-            let hi = match hex_idx(&hex.id) { Some(i) => i, None => continue };
-            let base = hi * NUM_NODE_FEATURES;
+            let hi = match spec.hex_idx(&hex.id) { Some(i) => i, None => continue };
+            let base = hi * nfw;
             let tile = &hex.tile;
             let mut o = 0;
 
@@ -481,12 +537,12 @@ impl BaseGame {
             for (ci, city) in tile.cities.iter().enumerate() {
                 if ci >= 2 { break; }
                 for tok in city.tokens.iter().flatten() {
-                    if let Some(idx) = corp_idx(&tok.corporation_id) {
+                    if let Some(idx) = spec.corp_idx(&tok.corporation_id) {
                         f[base + ts + idx * 2 + ci] = 1.0;
                     }
                 }
             }
-            o += NUM_CORPORATIONS * 2;
+            o += spec.num_corporations() * 2;
 
             // Edge connectivity + revenue connectivity
             let mut ec = [[0.0f32; NUM_TILE_EDGES]; NUM_TILE_EDGES];
@@ -526,7 +582,7 @@ impl BaseGame {
             }
             o += NUM_TILE_EDGES * 2;
 
-            debug_assert_eq!(o, NUM_NODE_FEATURES);
+            debug_assert_eq!(o, nfw);
         }
         f
     }
@@ -562,5 +618,74 @@ impl BaseGame {
             .filter(|s| s.owner == pid)
             .map(|s| s.percent as i32)
             .sum()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Frozen-1830 oracle
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The 1830 encoder feature layout is frozen: the Python encoder and
+    /// trained checkpoints depend on these exact orders and scales. The
+    /// title-derived spec must reproduce the historical constants verbatim.
+    #[test]
+    fn spec_matches_frozen_1830_constants() {
+        let spec = spec_for("1830");
+        assert_eq!(
+            spec.corporation_ids,
+            vec!["PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M"]
+        );
+        assert_eq!(spec.private_ids, vec!["SV", "CS", "DH", "MH", "CA", "BO"]);
+        assert_eq!(spec.train_types, vec!["2", "3", "4", "5", "6", "D"]);
+        assert_eq!(spec.phase_names, vec!["2", "3", "4", "5", "6", "D"]);
+        assert_eq!(spec.train_counts, vec![6, 5, 4, 3, 2, 20]);
+        assert_eq!(spec.bank_cash, 12000.0);
+        assert_eq!(spec.cert_limits, vec![(2, 28), (3, 20), (4, 16), (5, 13), (6, 11)]);
+        assert_eq!(
+            spec.starting_cash,
+            vec![(2, 1200), (3, 800), (4, 600), (5, 480), (6, 400)]
+        );
+
+        let frozen_tiles: Vec<&str> = vec![
+            "1", "2", "3", "4", "7", "8", "9", "14", "15", "16", "18", "19", "20", "23", "24",
+            "25", "26", "27", "28", "29", "39", "40", "41", "42", "43", "44", "45", "46", "47",
+            "53", "54", "55", "56", "57", "58", "59", "61", "62", "63", "64", "65", "66", "67",
+            "68", "69", "70",
+        ];
+        assert_eq!(spec.tile_ids, frozen_tiles);
+        assert_eq!(
+            spec.tile_initial_counts,
+            vec![
+                1, 1, 2, 2, 4, 8, 7, 3, 2, 1, 1, 1, 1, 3, 3, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 2,
+                2, 1, 2, 1, 1, 1, 4, 2, 2, 2, 1, 3, 1, 1, 1, 1, 1, 1, 1,
+            ]
+        );
+
+        let frozen_hexes: Vec<&str> = vec![
+            "A11", "A17", "A19", "A9", "B10", "B12", "B14", "B16", "B18", "B20", "B22", "B24",
+            "C11", "C13", "C15", "C17", "C19", "C21", "C23", "C7", "C9", "D10", "D12", "D14",
+            "D16", "D18", "D2", "D20", "D22", "D24", "D4", "D6", "D8", "E11", "E13", "E15",
+            "E17", "E19", "E21", "E23", "E3", "E5", "E7", "E9", "F10", "F12", "F14", "F16",
+            "F18", "F2", "F20", "F22", "F24", "F4", "F6", "F8", "G11", "G13", "G15", "G17",
+            "G19", "G3", "G5", "G7", "G9", "H10", "H12", "H14", "H16", "H18", "H2", "H4", "H6",
+            "H8", "I1", "I11", "I13", "I15", "I17", "I19", "I3", "I5", "I7", "I9", "J10", "J12",
+            "J14", "J2", "J4", "J6", "J8", "K13", "K15",
+        ];
+        assert_eq!(spec.hex_coords, frozen_hexes);
+
+        // Frozen widths: 93 hexes, 39 node features, 281 game-state floats
+        // for 4 players.
+        assert_eq!(spec.num_hexes(), 93);
+        assert_eq!(spec.num_node_features(), 1 + 4 + 1 + 1 + 16 + 15 + 12);
+        assert_eq!(spec.encoding_size(4), {
+            let (np, nc, npv, nt, ntile) = (4usize, 8usize, 6usize, 6usize, 46usize);
+            (np + nc) + np + 1 + 1 + np + 1 + np + np + np * nc + npv * (np + nc) + npv
+                + nc + nc + nc * nt + nc + nc * 2 + 2 * nc + 4 * nc + nt + nt + ntile
+                + npv * np + npv + npv + npv + 2 + 1 + npv + np
+        });
     }
 }

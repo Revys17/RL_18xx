@@ -17,7 +17,11 @@ use pyo3::types::{PyDict, PyTuple};
 
 use crate::factored::LegalAction;
 use crate::game::BaseGame;
+use crate::title::GameTitle;
 
+/// 1830's flat policy size — kept as a named constant because Python config
+/// and trained checkpoints pin it; [`SlotLayout::total`] is the derived
+/// per-title value (asserted equal for 1830 by the frozen-layout test).
 pub const POLICY_SIZE: u32 = 26537;
 
 // ----------------------------------------------------------------------------
@@ -25,6 +29,8 @@ pub const POLICY_SIZE: u32 = 26537;
 // ----------------------------------------------------------------------------
 
 pub struct SlotLayout {
+    /// The owning title's name (for per-title ability lookups during encode).
+    pub title_name: &'static str,
     pub company_offsets: Vec<&'static str>,
     pub corporation_offsets: Vec<&'static str>,
     pub par_price_offsets: Vec<i32>,
@@ -37,13 +43,21 @@ pub struct SlotLayout {
     pub tile_offsets: Vec<&'static str>,
     pub city_offsets: HashMap<(&'static str, usize), u32>,
     pub city_count: HashMap<&'static str, usize>,
+    /// SellShares slots per corporation (1830: 5 — up to pool-limit/unit
+    /// shares per sale).
+    pub sell_count_slots: usize,
     /// Per-company sub-blocks of the CompanyLayTile slot range, derived from
     /// the title's Teleport / TileLay ability data.
     pub company_lay_tile_blocks: Vec<CompanyLayBlock>,
     /// Per-company offsets within the CompanyPlaceToken slot range (one slot
     /// per teleport company).
     pub company_place_token_offsets: Vec<(&'static str, u32)>,
+    /// The depot train with an exchange discount, if any (1830: the D-train)
+    /// — it gets the two trailing full/trade-in disambiguation slots.
+    pub discount_train: Option<&'static str>,
     pub action_offsets: HashMap<&'static str, u32>,
+    /// Total slot count = the title's policy size.
+    pub total: u32,
 }
 
 /// One company's sub-block within the CompanyLayTile slot range:
@@ -60,16 +74,41 @@ pub struct CompanyLayBlock {
     pub teleport: bool,
 }
 
-static LAYOUT: OnceLock<SlotLayout> = OnceLock::new();
+static LAYOUTS: OnceLock<HashMap<&'static str, SlotLayout>> = OnceLock::new();
 
-pub fn layout() -> &'static SlotLayout {
-    LAYOUT.get_or_init(build_layout)
+/// The per-title slot layouts, built once over the title registry.
+fn layouts() -> &'static HashMap<&'static str, SlotLayout> {
+    LAYOUTS.get_or_init(|| {
+        crate::title::all_titles()
+            .iter()
+            .map(|t| (t.name(), build_layout(*t)))
+            .collect()
+    })
 }
 
-fn build_layout() -> SlotLayout {
-    let company_offsets = vec!["SV", "CS", "DH", "MH", "CA", "BO"];
-    let corporation_offsets = vec!["PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M"];
-    let par_price_offsets: Vec<i32> = vec![67, 71, 76, 82, 90, 100];
+/// The slot layout for a title (panics on an unknown title string —
+/// engine-internal, same contract as `title::resolve`).
+pub fn layout_for(title_name: &str) -> &'static SlotLayout {
+    layouts()
+        .get(title_name)
+        .unwrap_or_else(|| panic!("no action layout for title {title_name}"))
+}
+
+/// The 1830 layout. Callers without title context (the Python compat shims,
+/// 1830-pinned tests) use this; engine paths with a game in hand should use
+/// [`layout_for`] with the game's title.
+pub fn layout() -> &'static SlotLayout {
+    layout_for("1830")
+}
+
+fn build_layout(title: &'static dyn GameTitle) -> SlotLayout {
+    let company_offsets: Vec<&'static str> =
+        title.companies().iter().map(|c| c.sym).collect();
+    let corporation_offsets: Vec<&'static str> =
+        title.corporations().iter().map(|c| c.sym).collect();
+    // Par prices ascending, from the market grid's par-zone cells.
+    let par_price_offsets: Vec<i32> =
+        crate::core::StockMarket::new(title.market_grid(), title.market_movement()).par_prices();
     let share_location_offsets = vec!["ipo", "market"];
     let train_price_offsets = vec![
         "1", "20", "50", "100", "200", "300", "400", "500", "600", "700", "800", "900",
@@ -77,43 +116,56 @@ fn build_layout() -> SlotLayout {
     ];
     let dividend_offsets = vec!["payout", "withhold"];
     let buy_company_price_offsets = vec!["min", "max"];
-    let train_type_offsets = vec!["2", "3", "4", "5", "6", "D"];
+    let train_type_offsets: Vec<&'static str> =
+        title.trains().iter().map(|t| t.name).collect();
 
-    let hex_offsets = vec![
-        "F2", "I1", "J2", "A9", "A11", "K13", "B24", "D2", "F6", "E9", "H12", "D14", "C15", "K15",
-        "A17", "A19", "I19", "F24", "D24", "F4", "J14", "F22", "E7", "F8", "C11", "C13", "D12",
-        "B16", "C17", "B20", "D4", "F10", "I13", "D18", "B12", "B14", "B22", "C7", "C9", "C23",
-        "D8", "D16", "D20", "E3", "E13", "E15", "F12", "F14", "F18", "G3", "G5", "G9", "G11",
-        "H2", "H6", "H8", "H14", "I3", "I5", "I7", "I9", "J4", "J6", "J8", "G15", "C21", "D22",
-        "E17", "E21", "G13", "I11", "J10", "J12", "E19", "H4", "B10", "H10", "H16", "F16", "G7",
-        "G17", "F20", "D6", "I17", "B18", "C19", "E5", "D10", "E11", "H18", "I15", "G19", "E23",
-    ];
+    let hex_offsets = title.action_hex_order();
+    let tile_offsets = title.action_tile_order();
 
-    let tile_offsets = vec![
-        "42", "4", "16", "70", "23", "7", "18", "24", "3", "55", "61", "54", "9", "41", "26",
-        "68", "57", "45", "1", "56", "44", "62", "63", "64", "40", "66", "20", "27", "39", "19",
-        "59", "25", "46", "28", "65", "43", "2", "53", "58", "14", "47", "8", "29", "69", "15",
-        "67",
-    ];
+    // City tables, derived from each hex's INITIAL tile (preprinted DSL or
+    // white city/town def) in layout hex order: one PlaceToken slot per city.
+    let hex_defs = title.hex_definitions();
+    let mut city_count: HashMap<&'static str, usize> = HashMap::new();
+    let mut city_offsets: HashMap<(&'static str, usize), u32> = HashMap::new();
+    let mut city_off: u32 = 0;
+    for &coord in &hex_offsets {
+        let Some(def) = hex_defs.iter().find(|d| d.coord == coord) else {
+            continue;
+        };
+        let n = crate::game::build_hex_from_def(title, def).tile.cities.len();
+        if n > 0 {
+            city_count.insert(coord, n);
+            for c in 0..n {
+                city_offsets.insert((coord, c), city_off);
+                city_off += 1;
+            }
+        }
+    }
 
-    let city_count_entries: Vec<(&'static str, usize)> = vec![
-        ("D2", 1), ("F6", 1), ("H12", 1), ("D14", 1), ("K15", 1), ("A19", 1),
-        ("F4", 1), ("J14", 1), ("F22", 1), ("B16", 1), ("E19", 1), ("H4", 1),
-        ("B10", 1), ("H10", 1), ("H16", 1), ("F16", 1), ("E5", 2), ("D10", 2),
-        ("E11", 2), ("H18", 2), ("I15", 1), ("G19", 2), ("E23", 1),
-    ];
-    let city_count: HashMap<&'static str, usize> = city_count_entries.iter().copied().collect();
+    // SellShares: one slot per share count, up to pool-limit/unit shares
+    // per sale (1830: 50/10 = 5).
+    let min_unit = title
+        .corporations()
+        .iter()
+        .flat_map(|c| c.shares.iter().copied())
+        .min()
+        .unwrap_or(10);
+    let sell_count_slots = (title.market_pool_limit() / min_unit) as usize;
 
-    let city_offset_entries: Vec<((&'static str, usize), u32)> = vec![
-        (("D2", 0), 0), (("F6", 0), 1), (("H12", 0), 2), (("D14", 0), 3),
-        (("K15", 0), 4), (("A19", 0), 5), (("F4", 0), 6), (("J14", 0), 7),
-        (("F22", 0), 8), (("B16", 0), 9), (("E19", 0), 10), (("H4", 0), 11),
-        (("B10", 0), 12), (("H10", 0), 13), (("H16", 0), 14), (("F16", 0), 15),
-        (("E5", 0), 16), (("E5", 1), 17), (("D10", 0), 18), (("D10", 1), 19),
-        (("E11", 0), 20), (("E11", 1), 21), (("H18", 0), 22), (("H18", 1), 23),
-        (("I15", 0), 24), (("G19", 0), 25), (("G19", 1), 26), (("E23", 0), 27),
-    ];
-    let city_offsets: HashMap<(&'static str, usize), u32> = city_offset_entries.into_iter().collect();
+    // The depot train with an exchange discount gets the trailing full vs
+    // trade-in disambiguation slots (1830: the D-train). The layout shape
+    // supports at most one such train.
+    let discount_trains: Vec<&'static str> = title
+        .trains()
+        .iter()
+        .filter(|t| !t.discount.is_empty())
+        .map(|t| t.name)
+        .collect();
+    assert!(
+        discount_trains.len() <= 1,
+        "slot layout supports at most one discounted train, got {discount_trains:?}"
+    );
+    let discount_train = discount_trains.first().copied();
 
     // Company special-lay sub-blocks, derived from the ability data. Mirrors
     // ActionMapper.init_actions: teleport lays first (DH: 1 tile x 6
@@ -122,7 +174,7 @@ fn build_layout() -> SlotLayout {
     let mut company_lay_tile_blocks: Vec<CompanyLayBlock> = Vec::new();
     let mut company_lay_n: u32 = 0;
     for sym in &company_offsets {
-        if let Some((hexes, tiles)) = crate::abilities::teleport("1830", sym) {
+        if let Some((hexes, tiles)) = crate::abilities::teleport(title.name(), sym) {
             company_lay_tile_blocks.push(CompanyLayBlock {
                 sym,
                 hexes,
@@ -134,7 +186,7 @@ fn build_layout() -> SlotLayout {
         }
     }
     for sym in &company_offsets {
-        if let Some((hexes, tiles, _, _)) = crate::abilities::tile_lay("1830", sym) {
+        if let Some((hexes, tiles, _, _)) = crate::abilities::tile_lay(title.name(), sym) {
             company_lay_tile_blocks.push(CompanyLayBlock {
                 sym,
                 hexes,
@@ -149,7 +201,7 @@ fn build_layout() -> SlotLayout {
     // One CompanyPlaceToken slot per teleport company (DH on F16).
     let mut company_place_token_offsets: Vec<(&'static str, u32)> = Vec::new();
     for sym in &company_offsets {
-        if crate::abilities::teleport("1830", sym).is_some() {
+        if crate::abilities::teleport(title.name(), sym).is_some() {
             company_place_token_offsets.push((sym, company_place_token_offsets.len() as u32));
         }
     }
@@ -173,7 +225,7 @@ fn build_layout() -> SlotLayout {
     idx += (corporation_offsets.len() * share_location_offsets.len()) as u32; // 8 * 2
 
     action_offsets.insert("SellShares", idx);
-    idx += (corporation_offsets.len() * 5) as u32; // 8 * 5
+    idx += (corporation_offsets.len() * sell_count_slots) as u32; // 1830: 8 * 5
 
     action_offsets.insert("PlaceToken", idx);
     // PlaceToken: sum of city_count over hexes that appear in city_count
@@ -225,18 +277,17 @@ fn build_layout() -> SlotLayout {
     action_offsets.insert("CompanyPlaceToken", idx);
     idx += company_place_token_offsets.len() as u32;
 
-    // D-train depot disambiguation slots (appended last for backward-compat).
-    action_offsets.insert("BuyTrainDFull", idx);
-    idx += 1;
-    action_offsets.insert("BuyTrainDTradeIn", idx);
-    idx += 1;
-
-    debug_assert_eq!(
-        idx, POLICY_SIZE,
-        "action_index slot count diverges from Python ActionMapper"
-    );
+    // Discounted-train depot disambiguation slots, appended last for
+    // backward-compat (1830: the D-train's full-price vs trade-in buys).
+    if discount_train.is_some() {
+        action_offsets.insert("BuyTrainDFull", idx);
+        idx += 1;
+        action_offsets.insert("BuyTrainDTradeIn", idx);
+        idx += 1;
+    }
 
     SlotLayout {
+        title_name: title.name(),
         company_offsets,
         corporation_offsets,
         par_price_offsets,
@@ -249,9 +300,12 @@ fn build_layout() -> SlotLayout {
         tile_offsets,
         city_offsets,
         city_count,
+        sell_count_slots,
         company_lay_tile_blocks,
         company_place_token_offsets,
+        discount_train,
         action_offsets,
+        total: idx,
     }
 }
 
@@ -271,11 +325,16 @@ fn s_to_json_str(v: &serde_json::Value) -> Option<&str> {
 // Encode: legal action -> flat policy index
 // ----------------------------------------------------------------------------
 
-/// Rust port of Python `ActionMapper.index_for_factored`.
+/// Rust port of Python `ActionMapper.index_for_factored`, against the 1830
+/// layout. Title-aware callers use [`legal_action_to_index_in`].
 ///
 /// Returns `None` for unrecognized inputs (instead of panicking).
 pub fn legal_action_to_index(la: &LegalAction) -> Option<u32> {
-    let lo = layout();
+    legal_action_to_index_in(layout(), la)
+}
+
+/// Encode a legal action against a specific title's layout.
+pub fn legal_action_to_index_in(lo: &SlotLayout, la: &LegalAction) -> Option<u32> {
     let t = la.action_type.as_str();
 
     if t == "Pass" {
@@ -312,7 +371,7 @@ pub fn legal_action_to_index(la: &LegalAction) -> Option<u32> {
         // A company exchange (private with an Exchange ability targeting this
         // corp, 1830: MH -> NYC) routes through the CompanyBuyShares block.
         if let Some(private) = la.entity.get("private").and_then(s_to_json_str) {
-            if let Some((corporations, _)) = crate::abilities::exchange("1830", private) {
+            if let Some((corporations, _)) = crate::abilities::exchange(lo.title_name, private) {
                 if corporations.contains(&corp_sym) {
                     let li = pos(&lo.share_location_offsets, &source)?;
                     return Some(lo.action_offsets["CompanyBuyShares"] + li as u32);
@@ -338,7 +397,10 @@ pub fn legal_action_to_index(la: &LegalAction) -> Option<u32> {
         let corp_sym = la.entity.get("corp").and_then(s_to_json_str)?;
         let count = la.params.get("count").and_then(|v| v.as_i64())? as i32;
         let ci = pos(&lo.corporation_offsets, &corp_sym)?;
-        return Some(lo.action_offsets["SellShares"] + (ci * 5) as u32 + (count as u32) - 1);
+        return Some(
+            lo.action_offsets["SellShares"] + (ci * lo.sell_count_slots) as u32 + (count as u32)
+                - 1,
+        );
     }
 
     if t == "PlaceToken" {
@@ -418,7 +480,7 @@ pub fn legal_action_to_index(la: &LegalAction) -> Option<u32> {
     }
 
     if t == "BuyTrain" {
-        return index_for_factored_buy_train(la);
+        return index_for_factored_buy_train(lo, la);
     }
 
     if t == "DiscardTrain" {
@@ -444,8 +506,7 @@ pub fn legal_action_to_index(la: &LegalAction) -> Option<u32> {
     None
 }
 
-fn index_for_factored_buy_train(la: &LegalAction) -> Option<u32> {
-    let lo = layout();
+fn index_for_factored_buy_train(lo: &SlotLayout, la: &LegalAction) -> Option<u32> {
     let offset = lo.action_offsets["BuyTrain"];
     let source = la.entity.get("source").and_then(s_to_json_str)?;
     let train_name = la.entity.get("train").and_then(s_to_json_str)?;
@@ -469,7 +530,7 @@ fn index_for_factored_buy_train(la: &LegalAction) -> Option<u32> {
             let ti = pos(&lo.train_type_offsets, &train_name)?;
             return Some(offset + 1 + ti as u32);
         }
-        if train_name == "D" {
+        if lo.discount_train == Some(train_name) {
             if la.entity.get("exchange").is_some() {
                 return Some(lo.action_offsets["BuyTrainDTradeIn"]);
             }
@@ -507,10 +568,17 @@ pub fn action_offsets_py(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     Ok(d)
 }
 
-/// Total policy size (matches Python `ActionMapper().action_encoding_size`).
+/// Total 1830 policy size, derived from the layout (matches Python
+/// `ActionMapper().action_encoding_size`).
 #[pyfunction]
 pub fn policy_size_py() -> u32 {
-    POLICY_SIZE
+    layout().total
+}
+
+/// A title's policy size, derived from its layout.
+#[pyfunction]
+pub fn policy_size_for_py(title_name: &str) -> u32 {
+    layout_for(title_name).total
 }
 
 /// Compatibility shim so external callers can resolve a Python-side
@@ -611,6 +679,46 @@ mod tests {
             assert_eq!(lo.action_offsets[k], *v, "offset for {}", k);
         }
         assert_eq!(POLICY_SIZE, 26537);
+        assert_eq!(lo.total, POLICY_SIZE, "derived total != frozen POLICY_SIZE");
+        assert_eq!(lo.sell_count_slots, 5);
+        assert_eq!(lo.discount_train, Some("D"));
+        assert_eq!(lo.par_price_offsets, vec![67, 71, 76, 82, 90, 100]);
+        assert_eq!(lo.train_type_offsets, vec!["2", "3", "4", "5", "6", "D"]);
+        assert_eq!(lo.company_offsets, vec!["SV", "CS", "DH", "MH", "CA", "BO"]);
+        assert_eq!(
+            lo.corporation_offsets,
+            vec!["PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M"]
+        );
+
+        // The construction-derived city tables must reproduce the frozen
+        // PlaceToken sub-layout exactly (one slot per city, layout hex order).
+        let frozen_cities: Vec<((&str, usize), u32)> = vec![
+            (("D2", 0), 0), (("F6", 0), 1), (("H12", 0), 2), (("D14", 0), 3),
+            (("K15", 0), 4), (("A19", 0), 5), (("F4", 0), 6), (("J14", 0), 7),
+            (("F22", 0), 8), (("B16", 0), 9), (("E19", 0), 10), (("H4", 0), 11),
+            (("B10", 0), 12), (("H10", 0), 13), (("H16", 0), 14), (("F16", 0), 15),
+            (("E5", 0), 16), (("E5", 1), 17), (("D10", 0), 18), (("D10", 1), 19),
+            (("E11", 0), 20), (("E11", 1), 21), (("H18", 0), 22), (("H18", 1), 23),
+            (("I15", 0), 24), (("G19", 0), 25), (("G19", 1), 26), (("E23", 0), 27),
+        ];
+        assert_eq!(lo.city_offsets.len(), frozen_cities.len());
+        for ((h, c), off) in &frozen_cities {
+            assert_eq!(
+                lo.city_offsets.get(&(*h, *c)),
+                Some(off),
+                "city offset for ({h}, {c})"
+            );
+        }
+        let frozen_counts: Vec<(&str, usize)> = vec![
+            ("D2", 1), ("F6", 1), ("H12", 1), ("D14", 1), ("K15", 1), ("A19", 1),
+            ("F4", 1), ("J14", 1), ("F22", 1), ("B16", 1), ("E19", 1), ("H4", 1),
+            ("B10", 1), ("H10", 1), ("H16", 1), ("F16", 1), ("E5", 2), ("D10", 2),
+            ("E11", 2), ("H18", 2), ("I15", 1), ("G19", 2), ("E23", 1),
+        ];
+        assert_eq!(lo.city_count.len(), frozen_counts.len());
+        for (h, n) in &frozen_counts {
+            assert_eq!(lo.city_count.get(h), Some(n), "city count for {h}");
+        }
 
         // Company-ability sub-block sizes (1830):
         // CompanyBuyShares: 2 (MH -> NYC from ipo|market)
