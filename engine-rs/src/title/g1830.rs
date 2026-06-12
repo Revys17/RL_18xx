@@ -115,6 +115,8 @@ pub fn corporations() -> Vec<CorporationDef> {
             float_percent: 60,
             capitalization: Capitalization::Full,
             corp_type: CorpType::Major,
+            max_ownership_percent: 60,
+            always_market_price: false,
         },
         CorporationDef {
             sym: "NYC",
@@ -127,6 +129,8 @@ pub fn corporations() -> Vec<CorporationDef> {
             float_percent: 60,
             capitalization: Capitalization::Full,
             corp_type: CorpType::Major,
+            max_ownership_percent: 60,
+            always_market_price: false,
         },
         CorporationDef {
             sym: "CPR",
@@ -139,6 +143,8 @@ pub fn corporations() -> Vec<CorporationDef> {
             float_percent: 60,
             capitalization: Capitalization::Full,
             corp_type: CorpType::Major,
+            max_ownership_percent: 60,
+            always_market_price: false,
         },
         CorporationDef {
             sym: "B&O",
@@ -151,6 +157,8 @@ pub fn corporations() -> Vec<CorporationDef> {
             float_percent: 60,
             capitalization: Capitalization::Full,
             corp_type: CorpType::Major,
+            max_ownership_percent: 60,
+            always_market_price: false,
         },
         CorporationDef {
             sym: "C&O",
@@ -163,6 +171,8 @@ pub fn corporations() -> Vec<CorporationDef> {
             float_percent: 60,
             capitalization: Capitalization::Full,
             corp_type: CorpType::Major,
+            max_ownership_percent: 60,
+            always_market_price: false,
         },
         CorporationDef {
             sym: "ERIE",
@@ -175,6 +185,8 @@ pub fn corporations() -> Vec<CorporationDef> {
             float_percent: 60,
             capitalization: Capitalization::Full,
             corp_type: CorpType::Major,
+            max_ownership_percent: 60,
+            always_market_price: false,
         },
         CorporationDef {
             sym: "NYNH",
@@ -187,6 +199,8 @@ pub fn corporations() -> Vec<CorporationDef> {
             float_percent: 60,
             capitalization: Capitalization::Full,
             corp_type: CorpType::Major,
+            max_ownership_percent: 60,
+            always_market_price: false,
         },
         CorporationDef {
             sym: "B&M",
@@ -199,6 +213,8 @@ pub fn corporations() -> Vec<CorporationDef> {
             float_percent: 60,
             capitalization: Capitalization::Full,
             corp_type: CorpType::Major,
+            max_ownership_percent: 60,
+            always_market_price: false,
         },
     ]
 }
@@ -214,6 +230,7 @@ pub fn companies() -> Vec<CompanyDef> {
             name: "Schuylkill Valley",
             value: 20,
             revenue: 5,
+            discount: 0,
             abilities: &[AbilityDef::BlocksHexes {
                 owner_type: OwnerType::Player,
                 hexes: &["G15"],
@@ -224,6 +241,7 @@ pub fn companies() -> Vec<CompanyDef> {
             name: "Champlain & St.Lawrence",
             value: 40,
             revenue: 10,
+            discount: 0,
             abilities: &[
                 AbilityDef::BlocksHexes {
                     owner_type: OwnerType::Player,
@@ -243,6 +261,7 @@ pub fn companies() -> Vec<CompanyDef> {
             name: "Delaware & Hudson",
             value: 70,
             revenue: 15,
+            discount: 0,
             abilities: &[
                 AbilityDef::BlocksHexes {
                     owner_type: OwnerType::Player,
@@ -260,6 +279,7 @@ pub fn companies() -> Vec<CompanyDef> {
             name: "Mohawk & Hudson",
             value: 110,
             revenue: 20,
+            discount: 0,
             abilities: &[
                 AbilityDef::BlocksHexes {
                     owner_type: OwnerType::Player,
@@ -278,6 +298,7 @@ pub fn companies() -> Vec<CompanyDef> {
             name: "Camden & Amboy",
             value: 160,
             revenue: 25,
+            discount: 0,
             abilities: &[
                 AbilityDef::BlocksHexes {
                     owner_type: OwnerType::Player,
@@ -295,6 +316,7 @@ pub fn companies() -> Vec<CompanyDef> {
             name: "Baltimore & Ohio",
             value: 220,
             revenue: 30,
+            discount: 0,
             abilities: &[
                 AbilityDef::BlocksHexes {
                     owner_type: OwnerType::Player,
@@ -329,6 +351,8 @@ pub fn trains() -> Vec<TrainDef> {
             price: 80,
             count: 6,
             rusts_on: Some("4"),
+            multiplier: 1,
+            obsolete_on: None,
             available_on: None,
             discount: &[],
         },
@@ -339,6 +363,8 @@ pub fn trains() -> Vec<TrainDef> {
             price: 180,
             count: 5,
             rusts_on: Some("6"),
+            multiplier: 1,
+            obsolete_on: None,
             available_on: None,
             discount: &[],
         },
@@ -349,6 +375,8 @@ pub fn trains() -> Vec<TrainDef> {
             price: 300,
             count: 4,
             rusts_on: Some("D"),
+            multiplier: 1,
+            obsolete_on: None,
             available_on: None,
             discount: &[],
         },
@@ -359,6 +387,8 @@ pub fn trains() -> Vec<TrainDef> {
             price: 450,
             count: 3,
             rusts_on: None,
+            multiplier: 1,
+            obsolete_on: None,
             available_on: None,
             discount: &[],
         },
@@ -369,6 +399,8 @@ pub fn trains() -> Vec<TrainDef> {
             price: 630,
             count: 2,
             rusts_on: None,
+            multiplier: 1,
+            obsolete_on: None,
             available_on: None,
             discount: &[],
         },
@@ -379,6 +411,8 @@ pub fn trains() -> Vec<TrainDef> {
             price: 1100,
             count: 20,
             rusts_on: None,
+            multiplier: 1,
+            obsolete_on: None,
             available_on: Some("6"),
             discount: &[("4", 300), ("5", 300), ("6", 300)],
         },
@@ -398,6 +432,7 @@ pub fn phases() -> Vec<PhaseDef> {
             train_limit: 4,
             tiles: &["yellow"],
             operating_rounds: 1,
+            minor_train_limit: None,
         },
         PhaseDef {
             name: "3",
@@ -406,6 +441,7 @@ pub fn phases() -> Vec<PhaseDef> {
             train_limit: 4,
             tiles: &["yellow", "green"],
             operating_rounds: 2,
+            minor_train_limit: None,
         },
         PhaseDef {
             name: "4",
@@ -414,6 +450,7 @@ pub fn phases() -> Vec<PhaseDef> {
             train_limit: 3,
             tiles: &["yellow", "green"],
             operating_rounds: 2,
+            minor_train_limit: None,
         },
         PhaseDef {
             name: "5",
@@ -422,6 +459,7 @@ pub fn phases() -> Vec<PhaseDef> {
             train_limit: 2,
             tiles: &["yellow", "green", "brown"],
             operating_rounds: 3,
+            minor_train_limit: None,
         },
         PhaseDef {
             name: "6",
@@ -430,6 +468,7 @@ pub fn phases() -> Vec<PhaseDef> {
             train_limit: 2,
             tiles: &["yellow", "green", "brown"],
             operating_rounds: 3,
+            minor_train_limit: None,
         },
         PhaseDef {
             name: "D",
@@ -438,6 +477,7 @@ pub fn phases() -> Vec<PhaseDef> {
             train_limit: 2,
             tiles: &["yellow", "green", "brown"],
             operating_rounds: 3,
+            minor_train_limit: None,
         },
     ]
 }
@@ -745,6 +785,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 brown_revenue: 70,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "I1",
@@ -753,6 +794,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 brown_revenue: 60,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "J2",
@@ -761,6 +803,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 brown_revenue: 60,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "A9",
@@ -769,6 +812,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 brown_revenue: 50,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "A11",
@@ -777,6 +821,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 brown_revenue: 50,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "K13",
@@ -785,6 +830,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 brown_revenue: 40,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "B24",
@@ -793,6 +839,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 brown_revenue: 30,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         // --- Gray hexes (preprinted, not upgradable) ---
         HexDef {
@@ -802,6 +849,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "F6",
@@ -810,11 +858,13 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "E9",
             hex_type: Path,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "H12",
@@ -823,6 +873,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "D14",
@@ -831,11 +882,13 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "C15",
             hex_type: Town { revenue: 10 },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "K15",
@@ -844,11 +897,13 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "A17",
             hex_type: Path,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "A19",
@@ -857,42 +912,50 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "I19",
             hex_type: Town { revenue: 10 },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "F24",
             hex_type: Town { revenue: 10 },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "D24",
             hex_type: Path,
             terrain_cost: 0,
+            borders: &[],
         },
         // --- Yellow hexes (preprinted upgradable) ---
         HexDef {
             coord: "E5",
             hex_type: DoubleCity { revenue: 0 },
             terrain_cost: 80,
+            borders: &[],
         },
         HexDef {
             coord: "D10",
             hex_type: DoubleCity { revenue: 0 },
             terrain_cost: 80,
+            borders: &[],
         },
         HexDef {
             coord: "E11",
             hex_type: DoubleCity { revenue: 0 },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "H18",
             hex_type: DoubleCity { revenue: 0 },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "I15",
@@ -901,11 +964,13 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "G19",
             hex_type: DoubleCity { revenue: 40 },
             terrain_cost: 80,
+            borders: &[],
         },
         HexDef {
             coord: "E23",
@@ -914,6 +979,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         // --- White hexes: cities ---
         HexDef {
@@ -923,6 +989,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 80,
+            borders: &[],
         },
         HexDef {
             coord: "J14",
@@ -931,6 +998,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 80,
+            borders: &[],
         },
         HexDef {
             coord: "F22",
@@ -939,6 +1007,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 80,
+            borders: &[],
         },
         HexDef {
             coord: "B16",
@@ -947,6 +1016,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "E19",
@@ -955,6 +1025,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "H4",
@@ -963,6 +1034,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "B10",
@@ -971,6 +1043,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "H10",
@@ -979,6 +1052,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "H16",
@@ -987,6 +1061,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "F16",
@@ -995,297 +1070,355 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 120,
+            borders: &[],
         },
         // --- White hexes: towns ---
         HexDef {
             coord: "E7",
             hex_type: Town { revenue: 0 },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "B20",
             hex_type: Town { revenue: 0 },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "D4",
             hex_type: Town { revenue: 0 },
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "F10",
             hex_type: Town { revenue: 0 },
             terrain_cost: 0,
+            borders: &[],
         },
         // Double towns
         HexDef {
             coord: "G7",
             hex_type: DoubleTown,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "G17",
             hex_type: DoubleTown,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "F20",
             hex_type: DoubleTown,
             terrain_cost: 0,
+            borders: &[],
         },
         // --- White hexes: blank ---
         HexDef {
             coord: "I13",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "D18",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "B12",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "B14",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "B22",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "C7",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "C9",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "C23",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "D8",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "D16",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "D20",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "E3",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "E13",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "E15",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "F12",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "F14",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "F18",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "G3",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "G5",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "G9",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "G11",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "H2",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "H6",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "H8",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "H14",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "I3",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "I5",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "I7",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "I9",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "J4",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "J6",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "J8",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         // --- Mountains (cost=120) ---
         HexDef {
             coord: "G15",
             hex_type: Blank,
             terrain_cost: 120,
+            borders: &[],
         },
         HexDef {
             coord: "C21",
             hex_type: Blank,
             terrain_cost: 120,
+            borders: &[],
         },
         HexDef {
             coord: "D22",
             hex_type: Blank,
             terrain_cost: 120,
+            borders: &[],
         },
         HexDef {
             coord: "E17",
             hex_type: Blank,
             terrain_cost: 120,
+            borders: &[],
         },
         HexDef {
             coord: "E21",
             hex_type: Blank,
             terrain_cost: 120,
+            borders: &[],
         },
         HexDef {
             coord: "G13",
             hex_type: Blank,
             terrain_cost: 120,
+            borders: &[],
         },
         HexDef {
             coord: "I11",
             hex_type: Blank,
             terrain_cost: 120,
+            borders: &[],
         },
         HexDef {
             coord: "J10",
             hex_type: Blank,
             terrain_cost: 120,
+            borders: &[],
         },
         HexDef {
             coord: "J12",
             hex_type: Blank,
             terrain_cost: 120,
+            borders: &[],
         },
         HexDef {
             coord: "C17",
             hex_type: Blank,
             terrain_cost: 120,
+            borders: &[],
         },
         // --- Water (cost=80) ---
         HexDef {
             coord: "D6",
             hex_type: Blank,
             terrain_cost: 80,
+            borders: &[],
         },
         HexDef {
             coord: "I17",
             hex_type: Blank,
             terrain_cost: 80,
+            borders: &[],
         },
         HexDef {
             coord: "B18",
             hex_type: Blank,
             terrain_cost: 80,
+            borders: &[],
         },
         HexDef {
             coord: "C19",
             hex_type: Blank,
             terrain_cost: 80,
+            borders: &[],
         },
         // --- Special border hexes (blank with impassable borders) ---
         HexDef {
             coord: "F8",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "C11",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "C13",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
         HexDef {
             coord: "D12",
             hex_type: Blank,
             terrain_cost: 0,
+            borders: &[],
         },
     ]
 }

@@ -307,6 +307,12 @@ pub struct CorporationDef {
     pub capitalization: Capitalization,
     /// The corporation's class (1830: always Major).
     pub corp_type: CorpType,
+    /// Max percent one player may hold (Ruby `max_ownership_percent`;
+    /// 1830: 60. 1867 minors: 100).
+    pub max_ownership_percent: u8,
+    /// Treasury/IPO shares sell at market price instead of par (Ruby
+    /// `always_market_price`; 1867: true).
+    pub always_market_price: bool,
 }
 
 pub struct CompanyDef {
@@ -318,6 +324,9 @@ pub struct CompanyDef {
     /// Queried via `crate::abilities` — engine code must not key on company
     /// syms.
     pub abilities: &'static [AbilityDef],
+    /// Auction price-floor discount (1867's dutch single-item auction
+    /// lowers min_bid by $5/round via this; 0 = none).
+    pub discount: i32,
 }
 
 pub struct TrainDef {
@@ -326,6 +335,11 @@ pub struct TrainDef {
     pub price: i32,
     pub count: u32,
     pub rusts_on: Option<&'static str>,
+    /// Revenue multiplier (1867's 2+2 and 5+5E double route revenue; 1).
+    pub multiplier: u32,
+    /// Phase on which this train becomes obsolete (runs once more, then
+    /// removed — 1867's 6/7/8 vs the hard rust of `rusts_on`). None = never.
+    pub obsolete_on: Option<&'static str>,
     /// Event types fired when this train is bought (Ruby/Python `events:`;
     /// 1830: `close_companies` on the first 5-train).
     pub events: &'static [&'static str],
@@ -346,6 +360,9 @@ pub struct PhaseDef {
     /// None for the opening phase).
     pub on: Option<&'static str>,
     pub train_limit: u8,
+    /// Train limit for Minor-class corps when it differs (Ruby's per-type
+    /// `train_limit: {minor: 2, major: 4}`; None = same as `train_limit`).
+    pub minor_train_limit: Option<u8>,
     pub tiles: &'static [&'static str],
     pub operating_rounds: u8,
     /// Status flags active during this phase (Ruby/Python `status:`;
@@ -403,6 +420,20 @@ pub struct HexDef {
     pub coord: &'static str,
     pub hex_type: HexType,
     pub terrain_cost: i32,
+    /// Per-edge specialities (impassable borders, edge-crossing costs).
+    /// Empty for hexes without them (all of 1830's blocks are ability- or
+    /// geometry-derived; 1867 has impassable river edges + $80 waters).
+    pub borders: &'static [BorderDef],
+}
+
+/// One hex edge's border speciality (Ruby `borders:` entries).
+pub struct BorderDef {
+    pub edge: u8,
+    /// Cost to cross when laying track over this edge (None with
+    /// `impassable: false` is unused; None with `impassable: true` is a
+    /// hard wall).
+    pub cost: Option<i32>,
+    pub impassable: bool,
 }
 
 pub enum HexType {
@@ -500,6 +531,13 @@ pub enum AbilityDef {
     Shares {
         corporation: &'static str,
         share_index: u8,
+    },
+    /// +`amount` route revenue for routes visiting any of `hexes` while the
+    /// company is owned by an entity of `owner_type` (1867's NFB/MB/QB/SCT).
+    HexBonus {
+        owner_type: OwnerType,
+        hexes: &'static [&'static str],
+        amount: i32,
     },
     /// The company closes when the trigger fires (BO closes when B&O buys
     /// its first train).
