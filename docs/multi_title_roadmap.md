@@ -4,19 +4,24 @@ Plan for extending the engine beyond 1830 to the other 18xx titles we want to tr
 for: **1867: The Railways of Canada** and **1822 / 1822CA: The Railways of Great Britain
 (+ Canada)**.
 
-## STATUS (2026-06-11) — start here
+## STATUS (2026-06-12) — start here
 
-- **Branches:** `master` and `multi-title` are identical at the same commit; 1867 work
-  happens on `multi-title`, 1830 training fixes on `master`, rebase periodically.
+- **Branches:** 1867 work happens on `multi-title`, 1830 training fixes on `master`,
+  rebase periodically. Phase 0 is merged to master; Phase 0.5 lives on `multi-title`
+  (commits `ddeed22..c13dec6`).
 - **Phase 0 is DONE and merged to master** (ability system + step/round machinery, both
   verified 1830-behavior-preserving — see "Phase 0 outcomes & carry-forwards" at the
   bottom). The engine is also now *validating* (rejects malformed/ill-timed actions like
   Python does) and the 1830 verification rituals are documented and gated
   (`docs/verification_rituals.md`; pre-push hook runs pytest + cargo incl. the
   frozen-1830-action-layout test).
-- **Next up: Phase 0.5 (pre-1867 seams), then Phase 1 (1867).** Phase 0.5 is the
-  remaining title-parameterization work — do it FIRST, while the green 1830 gates are a
-  free regression oracle for every seam cut.
+- **Phase 0.5 is DONE on `multi-title`** (2026-06-12): all seven seams landed as
+  separate 1830-no-op commits, each green on the fast gate (cargo 91 + pytest 326) plus
+  strict random-walk parity slices; full-corpus 4-axis lockstep re-run at the end. See
+  the checked-off list below for what each seam produced.
+- **Next up: Phase 1 (1867)** — validation harness first (fixture replays + 18xx.games
+  corpus), then data translation, then mechanics. The `GameTitle` trait + round-flow
+  hook give g1867.rs its plug-in points.
 - **Validation strategy for new titles is fixture/corpus-based, NOT dual-engine** — the
   Python engine stays 1830-only (see "Per-title validation strategy" below). This
   supersedes the older "every title needs Python-vs-Rust parity" language.
@@ -129,38 +134,54 @@ table-driven `skip_steps`; `RoundKind` cycle description driving round transitio
 legacy dispatch frozen as an in-crate differential oracle; a frozen-1830-action-layout
 cargo test wired into the pre-push hook.
 
-## Phase 0.5 — Pre-1867 seams (do FIRST, each one 1830-behavior-preserving)
+## Phase 0.5 — Pre-1867 seams ✅ DONE (2026-06-12, branch `multi-title`, `ddeed22..c13dec6`)
 
-Every item here has the green 1830 gate suite as a free regression oracle; after 1867
-exists, every refactor must preserve two titles at once. Recommended order:
+All seams landed as separate 1830-no-op commits, each verified on the fast gate
+(+ strict random-walk parity slices for the money-math seams; full corpus 4-axis
+lockstep at the end). What each produced:
 
-- [ ] **Per-title round-flow hook** replacing the static `RoundKind` cycle (carry-forward
-  #1): `transition_to_next_round` walks a title-supplied flow that can express 1867's
-  SR → MR → OR → MR → OR interleaving and phase-dependent OR counts. Validate as a 1830
-  no-op (the 1830 flow re-expressed in the new shape).
-- [ ] **`GameTitle` trait** at the three `steps.rs` funnel points + `BaseGame::new()`
-  (+ title string, `title/mod.rs` dispatch). Pure plumbing; 1830 the only impl at first.
-- [ ] **Share-structure / float / capitalization parameterization**: `CorporationDef`
-  gains a shares array (Ruby's `shares: [40,20,...]` shape), `float_percent`, and a
-  capitalization mode (full vs incremental — hooks in `distribute_revenue` and the
-  float payout); kill the `percent/10` unit assumption in `entities.rs` /
-  `action_index.rs` / `decode.rs`.
-- [ ] **Stock-market movement policy** as title data/enum (2-D vs 1-D), with
-  `StockMarket::new_1830()` becoming the 1830 instance of a generic constructor.
-- [ ] **Wire phase/train data**: use the existing `TrainDef.rusts_on` (delete game.rs's
-  hardcoded rust/close/phase-trigger maps); add `PhaseDef.status`/`events`
-  (can_buy_companies, close_companies) and consume them where game.rs hardcodes phase
-  names.
-- [ ] **Action layout + encoder per title**: `build_layout()` takes title data;
-  `POLICY_SIZE` derived from the layout (replace `config.py`'s two literal 26537s with
-  the mapper-derived value); encoder consumes title data instead of its own const
-  copies; `mcts.rs` derives `price_head_entity_key`/`price_grid_step` from the layout
-  and single-sources `VALUE_SIZE`. Keep 1830's numbers byte-identical (the frozen-layout
-  test is the guard) so existing checkpoints still load.
-- [ ] **`next_operating_pc` duplicate-pc hazard** (carry-forward #2): either generalize
-  the pc walker to positional indices now, or document the overlay+blocking-override
-  pattern as the required shape for duplicate-pc steps (1822's minor-first-OR BuyTrain).
-- [ ] Green 1830 ritual after each seam (`docs/verification_rituals.md`).
+- [x] **Per-title round-flow hook** (`ddeed22`): `RoundKind`/`round_cycle()` deleted;
+  `FinishedRound`/`RoundStart`/`RoundTransition` + a per-title `next_round` FUNCTION
+  (Ruby `next_round!` shape). OR-set repetition flows through the hook too (no more
+  early-return). 1867 adds a `RoundStart::Merger` variant + its own flow fn.
+- [x] **`GameTitle` trait** (`f2a6ef4`): the full title-dispatch funnel in
+  `title/mod.rs` — machinery descriptions (step lists, round flow) + static data
+  (corps/companies/trains/phases/hexes/preprinted DSL/tile counts/catalog/cash/cert) +
+  `all_titles()` registry + `resolve()`; `BaseGame::title_def()` is the access point.
+  Def structs + hex geometry moved to `title/mod.rs`. Ability lookups are per-title
+  keyed (syms may collide across titles).
+- [x] **Share-structure / float / capitalization** (`69b21cf`): `CorporationDef.shares`
+  / `float_percent` / `Capitalization` (Full | Incremental); `Corporation` carries
+  unit/float/cap with helpers; ALL unit math (dividends, buy/sell pricing, price
+  drops, president dump/partial, par cost, bundles, decode count<->percent, factored
+  percent emissions) uses the corp's unit. Incremental cap is `unimplemented!()` until
+  1867 adds the buy-side treasury hook.
+- [x] **Stock-market movement policy** (`22e3f0e`): `MarketMovement`
+  (TwoDimensional | OneDimensional) + `market_grid()` on the trait;
+  `StockMarket::new(grid, movement)`; 1-D markets pin at row ends, no vertical moves.
+- [x] **Phase/train data wired** (`1f4332e`): `PhaseDef.on`/`status`,
+  `TrainDef.events` (mirrors g1830.py exactly); check_phase_advance, rusting, the
+  close_companies event, can_buy_companies gates and the discounted-train exchange all
+  data-driven.
+- [x] **Action layout + encoder per title** (`da28620`): `build_layout(title)` with
+  per-title memoized layouts; city tables DERIVED by constructing initial tiles; par
+  prices from the market grid; `SlotLayout.total` replaces derived POLICY_SIZE uses;
+  config.py's two 26537s now `engine_rs.policy_size_py()`; `EncoderSpec` replaces all
+  encoder const copies; `VALUE_SIZE` single-sourced from `encoder::MAX_PLAYERS`; Bid
+  price-grid step from title data. NOTE: 1830's layout hex/tile orders are FROZEN
+  Python-ActionMapper artifacts — `g1830::action_{hex,tile}_order()` override the
+  trait's clean default derivations; new titles get the clean defaults.
+- [x] **`next_operating_pc` duplicate-pc hazard** (`c13dec6`): the
+  overlay+blocking-override (SpecialToken) pattern is the documented, ENFORCED shape —
+  a registry-wide cargo test rejects any title listing two steps with one pc.
+- [x] Green 1830 ritual after each seam (`docs/verification_rituals.md`).
+
+Still intentionally 1830-pinned after Phase 0.5 (by design, for the 1867 RL layer to
+parameterize when it exists): `mcts.rs` runs against the global 1830 `layout()`;
+`action_index.rs`'s hardcoded company list inside the layout builder is gone but the
+Python `action_mapper.py`/encoder remain 1830-only (per-title Python mirroring is a
+Phase 1 RL-layer task); `BaseGame::build()` constructs only "1830" until a constructor
+title argument lands with g1867.
 
 ## Per-title validation strategy (supersedes "every title needs Python↔Rust parity")
 
