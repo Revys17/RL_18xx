@@ -2013,15 +2013,14 @@ impl BaseGame {
             .player_id()
             .ok_or_else(|| GameError::new(format!("Cannot buy {} (not owned by a player)", company_sym)))?;
 
-        // Validate price: between ceil(value/2) and 2x face value.
-        // Python: Company.min_price = (value//2)+(value%2) = ceil(value/2),
-        // max_price = value*2 (entities.py:938-939, get_max_price entities.py:1020).
+        // Validate price against the title's bounds (1830: ceil(value/2) ..
+        // 2× face, Python entities.py:938-939/get_max_price; 1867: $1 ..
+        // face via CompanyPriceUpToFace).
         let face_value = self.companies[company_idx].value;
-        let min_price = (face_value + 1) / 2;
-        let max_price = face_value * 2;
+        let (min_price, max_price) = self.title_def().company_buy_price_range(face_value);
         if price < min_price || price > max_price {
             return Err(GameError::new(format!(
-                "Price {} must be between {} and {} (2x face value)",
+                "Price {} must be between {} and {}",
                 price, min_price, max_price
             )));
         }
@@ -2334,9 +2333,12 @@ impl BaseGame {
                         true
                     } else {
                         let corp_cash = self.corporations[corp_idx].cash;
+                        let title = self.title_def();
                         let can_buy_company = self.companies.iter().any(|c| {
-                            !c.closed && !c.no_buy && c.owner.is_player()
-                                && corp_cash >= c.value / 2
+                            !c.closed
+                                && !c.no_buy
+                                && c.owner.is_player()
+                                && corp_cash >= title.company_buy_price_range(c.value).0
                         });
                         // A corp holding a company with an unused bonus
                         // tile_lay ability (CS) keeps the step blocking; a

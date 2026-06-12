@@ -1344,9 +1344,10 @@ impl BaseGame {
             if co.closed || co.no_buy || co.owner != pres_eid {
                 continue;
             }
-            // Python: Company.min_price = ceil(value/2), max_price = value*2.
-            let min_price = (co.value + 1) / 2;
-            let max_price = (co.value * 2).min(buying_power);
+            // Title price bounds (1830: ceil(value/2)..2×value).
+            let (min_p, max_p) = self.title_def().company_buy_price_range(co.value);
+            let min_price = min_p;
+            let max_price = max_p.min(buying_power);
             if max_price < min_price {
                 continue;
             }

@@ -562,11 +562,12 @@ impl BaseGame {
             .corp_idx
             .get(corp_sym)
             .map_or(0, |&ci| self.corporations[ci].cash);
+        let title = self.title_def();
         let min_price = self
             .companies
             .iter()
             .filter(|c| !c.closed && !c.no_buy && c.owner.is_player())
-            .map(|c| (c.value + 1) / 2)
+            .map(|c| title.company_buy_price_range(c.value).0)
             .min();
         min_price.map_or(false, |mp| mp <= corp_cash)
     }

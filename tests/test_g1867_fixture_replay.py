@@ -30,17 +30,17 @@ FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 
 # fixture stem -> minimum number of actions the engine must accept.
 # Current frontier: through OR1/SR2 into OR2 (loans, train market, minor
-# auto-dividends, engine-computed route revenue). ALL FOUR now stop on the
-# same two missing turn-end mechanics: the automatic LoanOperations step
-# (pay $5/loan interest, then forced loan repayment while cash >= $50 —
-# without it corps keep cash Ruby strips, so our BuyTrain blocks where
-# Ruby's skips) and the $1-min company price (CompanyPriceUpToFace: the
-# final blocking BuyCompany asks nearly-broke corps for a recorded pass).
+# auto-dividends, engine-computed route revenue, $1-min company prices).
+# ALL FOUR now stop on the missing turn-end loan mechanics: the automatic
+# LoanOperations step (pay $5/loan interest then forced loan repayment
+# while cash >= $50 — without it corps keep cash Ruby strips, so our
+# BuyTrain blocks where Ruby's skips) and its preceding blocking
+# BuyCompanyPreloan step (asks corps WITH loans for one more recorded pass).
 PREFIX_WATERMARK = {
-    "21268": 141,
+    "21268": 147,
     "hs_ahjzadkh_19792": 105,
-    "hs_wuveadew_21268": 141,
-    "nationalization_cash": 153,
+    "hs_wuveadew_21268": 147,
+    "nationalization_cash": 159,
 }
 
 

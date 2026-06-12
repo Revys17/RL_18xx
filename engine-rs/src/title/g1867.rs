@@ -154,6 +154,13 @@ impl GameTitle for G1867 {
     fn must_buy_train_always(&self) -> bool {
         true
     }
+    /// CompanyPriceUpToFace (game.rb:365, setup at :958): companies sell
+    /// between corporations for $1 up to face value. The $1 floor means the
+    /// final blocking BuyCompany asks even nearly-broke corps for a pass —
+    /// the fixtures record those passes.
+    fn company_buy_price_range(&self, value: i32) -> (i32, i32) {
+        (1, value)
+    }
     /// 1867 imports may record connections WITHOUT revenue — the engine
     /// prices every recorded route itself (compute_stops/revenue_for,
     /// game.rb:662-680, 706-739).

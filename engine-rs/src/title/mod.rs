@@ -127,6 +127,15 @@ pub trait GameTitle: Sync {
         false
     }
 
+    /// Company purchase price bounds for in-OR company buys, derived from
+    /// face value. Ruby base `Company`: ceil(value/2) .. 2×value; 1867's
+    /// `CompanyPriceUpToFace` setup module: $1 .. face. The lower bound also
+    /// gates whether the BuyCompany step blocks (a corp with $1 can always
+    /// be asked under up-to-face pricing).
+    fn company_buy_price_range(&self, value: i32) -> (i32, i32) {
+        ((value + 1) / 2, value * 2)
+    }
+
     /// Engine-computed revenue for a RECORDED route (its `connections`
     /// chains), replacing whatever the import carried. None = the recorded
     /// revenue is authoritative (1830: replay trusts the record; this hook

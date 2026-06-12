@@ -389,8 +389,14 @@ impl BaseGame {
             None => return false,
         };
         let president_eid = EntityId::player(president_id);
+        let title = self.title_def();
         self.companies.iter().any(|co| {
-            !co.closed && !co.no_buy && co.owner == president_eid && corp.cash >= co.value / 2
+            // 1830 values are all even, so the title hook's ceil(value/2)
+            // floor matches Python's value/2 here exactly.
+            !co.closed
+                && !co.no_buy
+                && co.owner == president_eid
+                && corp.cash >= title.company_buy_price_range(co.value).0
         })
     }
 
