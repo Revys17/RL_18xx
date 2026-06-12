@@ -154,6 +154,17 @@ impl GameTitle for G1867 {
     fn must_buy_train_always(&self) -> bool {
         true
     }
+    /// 1867 imports may record connections WITHOUT revenue — the engine
+    /// prices every recorded route itself (compute_stops/revenue_for,
+    /// game.rb:662-680, 706-739).
+    fn recorded_route_revenue(
+        &self,
+        game: &crate::game::BaseGame,
+        corp_sym: &str,
+        route: &crate::actions::RouteData,
+    ) -> Option<Result<i32, crate::actions::GameError>> {
+        Some(recorded_route_revenue(game, corp_sym, route))
+    }
     /// Two lays per OR turn: the second never an upgrade after an upgrade,
     /// costs $20, and must target a fresh hex (game.rb:330-333 TILE_LAYS).
     fn tile_lays(&self) -> &'static [super::TileLayDef] {
@@ -651,6 +662,81 @@ pub fn trains() -> Vec<TrainDef> {
             discount: PHASE8_DISCOUNT,
         },
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Recorded-route revenue (game.rb:662-680 revenue_for, 706-739 compute_stops)
+// ---------------------------------------------------------------------------
+
+/// Price one RECORDED route from its connection chains. 1867 rules: a train
+/// pays up to `distance` cities+offboards (offboards ONLY for the 5+5E) and
+/// runs through any number of towns free, filling spare paying capacity with
+/// the best towns; ×2 for multiplier trains; +$10 per hex_bonus company hex
+/// (flat); +$40 × multiplier when the route joins Timmins (D2) to a capital
+/// (Toronto/Montreal/Quebec).
+pub fn recorded_route_revenue(
+    game: &crate::game::BaseGame,
+    corp_sym: &str,
+    route: &crate::actions::RouteData,
+) -> Result<i32, crate::actions::GameError> {
+    use crate::actions::GameError;
+    use crate::revenue::{self, RouteBonuses, StopKind};
+
+    // Train instance id → type name: "2-0" → "2", "5+5E-1" → "5+5E".
+    let train_name = route
+        .train_name
+        .rsplit_once('-')
+        .map(|(name, _)| name)
+        .unwrap_or(&route.train_name);
+    let tdef = trains()
+        .into_iter()
+        .find(|t| t.name == train_name)
+        .ok_or_else(|| {
+            GameError::new(format!(
+                "recorded route for unknown train {:?}",
+                route.train_name
+            ))
+        })?;
+
+    // The 5+5E inverts the distance buckets: offboards are the counted
+    // stops, cities join towns as free fillers.
+    let counted: &[StopKind] = if tdef.name == "5+5E" {
+        &[StopKind::Offboard]
+    } else {
+        &[StopKind::City, StopKind::Offboard]
+    };
+
+    let stop_hexes = revenue::stop_hexes_from_connections(&route.connections)?;
+    let stops = stop_hexes
+        .iter()
+        .map(|h| revenue::classify_stop(game, h, corp_sym))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut bonuses = RouteBonuses {
+        capital_hexes: BONUS_CAPITALS.iter().map(|s| s.to_string()).collect(),
+        capital_partner: Some(BONUS_REVENUE.to_string()),
+        capital_amount: 40,
+        ..Default::default()
+    };
+    let corp_eid = crate::entities::EntityId::corporation(corp_sym);
+    for company in &game.companies {
+        if company.closed || company.owner != corp_eid {
+            continue;
+        }
+        for (hexes, amount) in crate::abilities::hex_bonuses("1867", &company.sym) {
+            bonuses
+                .hex_bonuses
+                .push((hexes.iter().map(|h| h.to_string()).collect(), amount));
+        }
+    }
+
+    revenue::price_bucketed_stops(
+        &stops,
+        tdef.distance as usize,
+        tdef.multiplier as i32,
+        counted,
+        &bonuses,
+    )
 }
 
 // ---------------------------------------------------------------------------

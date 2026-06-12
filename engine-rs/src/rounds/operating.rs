@@ -867,8 +867,18 @@ impl BaseGame {
             )));
         }
 
-        // Accept routes (route validation is Phase 4)
-        let total_revenue: i32 = routes.iter().map(|r| r.revenue).sum::<i32>() + extra_revenue;
+        // Price the routes. Titles whose imports record connections without
+        // revenue (1867) compute every route themselves via the title hook;
+        // otherwise the recorded revenue is authoritative (1830 — route
+        // validation is Phase 4).
+        let title = self.title_def();
+        let mut total_revenue: i32 = extra_revenue;
+        for r in routes {
+            total_revenue += match title.recorded_route_revenue(self, cur, r) {
+                Some(computed) => computed?,
+                None => r.revenue.unwrap_or(0),
+            };
+        }
 
         new_state.routes = routes.to_vec();
         new_state.revenue = total_revenue;

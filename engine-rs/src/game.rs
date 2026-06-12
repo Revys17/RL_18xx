@@ -309,6 +309,11 @@ impl BaseGame {
         crate::title::resolve(&self.title)
     }
 
+    /// Borrow a hex by coordinate (the pymethod `hex_by_id` clones).
+    pub(crate) fn hex_ref(&self, coord: &str) -> Option<&Hex> {
+        self.hex_idx.get(coord).map(|&i| &self.hexes[i])
+    }
+
     /// Whether the CURRENT phase carries a status flag (Ruby/Python
     /// `phase.status`; e.g. "can_buy_companies" in 1830's phases 3-4).
     pub(crate) fn phase_has_status(&self, status: &str) -> bool {
@@ -1637,6 +1642,8 @@ impl BaseGame {
         for od in &rotated.offboards {
             let mut ob = Offboard::new(od.yellow_revenue);
             ob.brown_revenue = Some(od.brown_revenue);
+            ob.green_revenue = od.green_revenue;
+            ob.gray_revenue = od.gray_revenue;
             tile.offboards.push(ob);
         }
         for ud in &rotated.upgrades {
@@ -2344,6 +2351,34 @@ impl BaseGame {
 
     fn hex_by_id(&self, coord: &str) -> Option<Hex> {
         self.hex_idx.get(coord).map(|&i| self.hexes[i].clone())
+    }
+
+    /// Engine-computed revenue for ONE recorded route (the title's
+    /// `recorded_route_revenue` hook), given the route's connection chains.
+    /// Exposed for the replay tests' computed-vs-recorded cross-check;
+    /// errors for titles whose recorded revenue is authoritative (1830).
+    fn route_revenue_py(
+        &self,
+        corp_sym: String,
+        train_id: String,
+        connections: Vec<Vec<String>>,
+    ) -> PyResult<i32> {
+        let route = crate::actions::RouteData {
+            train_name: train_id,
+            hexes: Vec::new(),
+            revenue: None,
+            connections,
+        };
+        match self
+            .title_def()
+            .recorded_route_revenue(self, &corp_sym, &route)
+        {
+            Some(res) => res.map_err(PyErr::from),
+            None => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "title {} does not compute recorded route revenue",
+                self.title
+            ))),
+        }
     }
 
     /// Returns the currently active player(s).

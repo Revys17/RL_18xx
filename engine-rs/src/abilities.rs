@@ -96,6 +96,22 @@ pub fn exchange(title: &str, sym: &str) -> Option<(&'static [&'static str], &'st
     })
 }
 
+/// The company's `hex_bonus` entries: `(hexes, amount)` — +amount route
+/// revenue per visited hex while corporation-owned (1867: NFB/MB/QB/SCT).
+pub fn hex_bonuses(title: &str, sym: &str) -> Vec<(&'static [&'static str], i32)> {
+    company_abilities(title, sym)
+        .iter()
+        .filter_map(|a| match a {
+            AbilityDef::HexBonus {
+                owner_type: OwnerType::Corporation,
+                hexes,
+                amount,
+            } => Some((*hexes, *amount)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Whether the company carries `no_buy` (1830: BO).
 pub fn no_buy(title: &str, sym: &str) -> bool {
     company_abilities(title, sym)

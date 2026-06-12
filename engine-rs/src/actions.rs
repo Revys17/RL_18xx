@@ -48,7 +48,14 @@ impl From<GameError> for PyErr {
 pub struct RouteData {
     pub train_name: String,
     pub hexes: Vec<String>,
-    pub revenue: i32,
+    /// Revenue as recorded in the imported action. None when the record
+    /// carries connections only (1867 imports) — the engine then computes
+    /// the revenue itself via `GameTitle::recorded_route_revenue`.
+    pub revenue: Option<i32>,
+    /// Recorded node-to-node hex chains (each chain runs from one revenue
+    /// center to the next; interior hexes are plain track).
+    #[serde(default)]
+    pub connections: Vec<Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -608,9 +615,14 @@ fn extract_routes(dict: &Bound<'_, PyDict>) -> Result<Vec<RouteData>, GameError>
     let mut result = Vec::with_capacity(routes_list.len());
     for route_dict in &routes_list {
         let train_name = extract_string(route_dict, "train")?;
-        let revenue = extract_optional_i32(route_dict, "revenue")?.unwrap_or(0);
+        let revenue = extract_optional_i32(route_dict, "revenue")?;
 
         let hexes: Vec<String> = match route_dict.get_item("hexes") {
+            Ok(Some(item)) => item.extract().unwrap_or_default(),
+            _ => Vec::new(),
+        };
+
+        let connections: Vec<Vec<String>> = match route_dict.get_item("connections") {
             Ok(Some(item)) => item.extract().unwrap_or_default(),
             _ => Vec::new(),
         };
@@ -619,6 +631,7 @@ fn extract_routes(dict: &Bound<'_, PyDict>) -> Result<Vec<RouteData>, GameError>
             train_name,
             hexes,
             revenue,
+            connections,
         });
     }
 

@@ -18,6 +18,7 @@ pub mod game;
 pub mod graph;
 pub mod map;
 pub mod mcts;
+pub mod revenue;
 pub mod rounds;
 pub mod router;
 pub mod steps;

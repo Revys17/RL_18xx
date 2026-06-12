@@ -59,9 +59,15 @@ def supported_titles() -> set[str]:
     return set(engine_rs.supported_titles_py())
 
 
-def replay_game(game: dict, max_actions: int | None = None) -> ReplayReport:
+def replay_game(
+    game: dict, max_actions: int | None = None, on_action=None
+) -> ReplayReport:
     """Replay one recorded 18xx.games/fixture game dict through the Rust
     engine. Raises TitleUnsupported / ReplayError; returns a ReplayReport.
+
+    ``on_action(rust, index, action)`` is called BEFORE each action is
+    applied (after player-id renumbering) — used by per-action oracle
+    checks such as the route-revenue cross-check.
     """
     title = game.get("title")
     if title not in supported_titles():
@@ -92,6 +98,8 @@ def replay_game(game: dict, max_actions: int | None = None) -> ReplayReport:
                 )
             action["entity"] = mapped
             action["user"] = mapped
+        if on_action is not None:
+            on_action(rust, i, action)
         try:
             rust.process_action(action)
         except BaseException as exc:  # incl. pyo3 PanicException

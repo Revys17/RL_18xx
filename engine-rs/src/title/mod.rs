@@ -127,6 +127,21 @@ pub trait GameTitle: Sync {
         false
     }
 
+    /// Engine-computed revenue for a RECORDED route (its `connections`
+    /// chains), replacing whatever the import carried. None = the recorded
+    /// revenue is authoritative (1830: replay trusts the record; this hook
+    /// exists because 1867 imports may record connections WITHOUT revenue).
+    /// Titles that implement it compute for EVERY recorded route — recorded
+    /// values then serve as a cross-check oracle in the replay tests.
+    fn recorded_route_revenue(
+        &self,
+        _game: &crate::game::BaseGame,
+        _corp_sym: &str,
+        _route: &crate::actions::RouteData,
+    ) -> Option<Result<i32, crate::actions::GameError>> {
+        None
+    }
+
     // -- AlphaZero-bridge orders (action layout + encoder) --
     //
     // The flat action layout and the encoder need a pinned iteration order

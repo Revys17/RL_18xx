@@ -183,7 +183,7 @@ impl BaseGame {
             Action::RunRoutes { routes, extra_revenue, .. } => {
                 let rlist: Vec<serde_json::Value> = routes
                     .iter()
-                    .map(|r| json!({"train": r.train_name, "revenue": r.revenue, "hexes": r.hexes}))
+                    .map(|r| json!({"train": r.train_name, "revenue": r.revenue.unwrap_or(0), "hexes": r.hexes}))
                     .collect();
                 m.insert("routes".to_string(), json!(rlist));
                 m.insert("extra_revenue".to_string(), json!(extra_revenue));
@@ -590,7 +590,8 @@ impl BaseGame {
                 let routes = vec![RouteData {
                     train_name: String::new(),
                     hexes: Vec::new(),
-                    revenue: total_revenue,
+                    revenue: Some(total_revenue),
+                    connections: Vec::new(),
                 }];
                 Ok(Action::RunRoutes {
                     entity_id: corp_sym,

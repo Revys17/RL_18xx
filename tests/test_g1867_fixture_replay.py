@@ -29,14 +29,16 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "1867"
 FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 
 # fixture stem -> minimum number of actions the engine must accept.
-# Current frontier: through OR1/SR2 into OR2 (loans + automatic loans,
-# cross-corp train trading, minor auto-dividends). Stops: the 3-train's
-# `green_minors_available` event (engine event arms — next), and
-# hs_ahjzadkh at a run_routes whose revenue the engine must COMPUTE from
-# the recorded connections (the 1867 router seam).
+# Current frontier: through OR1/SR2 into OR2 (loans, train market, minor
+# auto-dividends, engine-computed route revenue). ALL FOUR now stop on the
+# same two missing turn-end mechanics: the automatic LoanOperations step
+# (pay $5/loan interest, then forced loan repayment while cash >= $50 —
+# without it corps keep cash Ruby strips, so our BuyTrain blocks where
+# Ruby's skips) and the $1-min company price (CompanyPriceUpToFace: the
+# final blocking BuyCompany asks nearly-broke corps for a recorded pass).
 PREFIX_WATERMARK = {
     "21268": 141,
-    "hs_ahjzadkh_19792": 92,
+    "hs_ahjzadkh_19792": 105,
     "hs_wuveadew_21268": 141,
     "nationalization_cash": 153,
 }
@@ -63,6 +65,44 @@ def test_fixture_prefix_frontier(path):
         f"replay frontier regressed: {applied} < watermark {watermark}; "
         f"first rejection: {first_rejection}"
     )
+
+
+@pytest.mark.skipif(
+    "1867" not in supported_titles(),
+    reason="engine does not register the 1867 title yet (Phase 1 in progress)",
+)
+@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+def test_route_revenue_cross_check(path):
+    """The engine prices every 1867 route itself (recorded run_routes may
+    carry connections WITHOUT revenue) — so wherever the record DOES carry
+    revenue, the engine's computation must reproduce it exactly. This is
+    the per-route oracle for the revenue rules (towns fill spare capacity,
+    offboard phase tiers, multipliers, hex_bonus, capitals+Timmins).
+
+    Also holds 3668/3668 over the first 300 human-corpus games
+    (2026-06-12 sweep) — re-run that sweep when revenue rules change.
+    """
+    game = json.loads(path.read_text())
+    mismatches = []
+
+    def check(rust, i, action):
+        if action.get("type") != "run_routes":
+            return
+        for r in action.get("routes", []):
+            if "revenue" in r and r.get("connections"):
+                got = rust.route_revenue_py(
+                    action["entity"], r["train"], r["connections"]
+                )
+                if got != r["revenue"]:
+                    mismatches.append(
+                        (i, r["train"], got, r["revenue"], r.get("revenue_str"))
+                    )
+
+    try:
+        replay_game(game, on_action=check)
+    except ReplayError:
+        pass  # the frontier ratchet covers replay depth; we check what we reach
+    assert not mismatches, f"computed route revenue diverges: {mismatches}"
 
 
 @pytest.mark.xfail(

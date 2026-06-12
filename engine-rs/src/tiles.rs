@@ -128,6 +128,13 @@ pub struct TownDef {
 pub struct OffboardDef {
     pub yellow_revenue: i32,
     pub brown_revenue: i32,
+    /// 4-tier titles (1867) also price the green/gray phases; None = tier
+    /// not defined (the highest defined tier at or below the phase's latest
+    /// tile color applies).
+    #[serde(default)]
+    pub green_revenue: Option<i32>,
+    #[serde(default)]
+    pub gray_revenue: Option<i32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -479,17 +486,24 @@ pub fn parse_tile(name: &str, code: &str, color: TileColor) -> TileDef {
         } else if let Some(attrs) = trimmed.strip_prefix("offboard=") {
             let mut yellow_revenue = 0i32;
             let mut brown_revenue = 0i32;
+            let mut green_revenue = None;
+            let mut gray_revenue = None;
             for segment in attrs.split(',') {
                 let (k, v) = parse_kv(segment);
                 if k == "revenue" {
-                    // Format: "yellow_V|brown_V" (extra tiers like green_V /
-                    // gray_V are ignored), or a bare flat value "V" (1867's
-                    // blue lake ports pay the same at every phase).
+                    // Format: "yellow_V|green_V|brown_V|gray_V" (any subset;
+                    // 1830 uses yellow|brown, 1867 all four), or a bare flat
+                    // value "V" (1867's blue lake ports pay the same at every
+                    // phase).
                     for phase_rev in v.split('|') {
                         if let Some(val_str) = phase_rev.strip_prefix("yellow_") {
                             yellow_revenue = val_str.parse().unwrap_or(0);
+                        } else if let Some(val_str) = phase_rev.strip_prefix("green_") {
+                            green_revenue = val_str.parse().ok();
                         } else if let Some(val_str) = phase_rev.strip_prefix("brown_") {
                             brown_revenue = val_str.parse().unwrap_or(0);
+                        } else if let Some(val_str) = phase_rev.strip_prefix("gray_") {
+                            gray_revenue = val_str.parse().ok();
                         } else if let Ok(flat) = phase_rev.parse::<i32>() {
                             yellow_revenue = flat;
                             brown_revenue = flat;
@@ -500,6 +514,8 @@ pub fn parse_tile(name: &str, code: &str, color: TileColor) -> TileDef {
             offboards.push(OffboardDef {
                 yellow_revenue,
                 brown_revenue,
+                green_revenue,
+                gray_revenue,
             });
         } else if let Some(attrs) = trimmed.strip_prefix("path=") {
             let mut a_ref = "";

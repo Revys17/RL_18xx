@@ -55,6 +55,14 @@ pub struct Offboard {
     /// Brown-phase revenue (used when phase allows brown tiles).
     #[pyo3(get)]
     pub brown_revenue: Option<i32>,
+    /// Green/gray-phase revenue tiers (4-tier titles like 1867; None for
+    /// 1830's yellow|brown offboards).
+    #[pyo3(get)]
+    #[serde(default)]
+    pub green_revenue: Option<i32>,
+    #[pyo3(get)]
+    #[serde(default)]
+    pub gray_revenue: Option<i32>,
 }
 
 #[pymethods]
@@ -64,6 +72,8 @@ impl Offboard {
         Offboard {
             revenue,
             brown_revenue: None,
+            green_revenue: None,
+            gray_revenue: None,
         }
     }
 
@@ -71,16 +81,24 @@ impl Offboard {
 
 impl Offboard {
     /// Get phase-appropriate revenue based on available tile colors.
+    /// Ruby `RevenueCenter#revenue_for`: the revenue at the LATEST tile
+    /// color available in the phase that this center defines (yellow is the
+    /// base; an undefined tier falls through to the last defined one
+    /// below it).
     pub fn phase_revenue(&self, phase_tiles: &[String]) -> i32 {
-        if let Some(brown) = self.brown_revenue {
-            if phase_tiles.iter().any(|t| t == "brown") {
-                brown
-            } else {
-                self.revenue
+        let mut rev = self.revenue;
+        for color in phase_tiles {
+            let tier = match color.as_str() {
+                "green" => self.green_revenue,
+                "brown" => self.brown_revenue,
+                "gray" => self.gray_revenue,
+                _ => None,
+            };
+            if let Some(v) = tier {
+                rev = v;
             }
-        } else {
-            self.revenue
         }
+        rev
     }
 }
 
