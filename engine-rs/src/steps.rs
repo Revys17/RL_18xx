@@ -143,6 +143,14 @@ pub(crate) fn step_description(kind: StepKind) -> &'static str {
 /// the pc of the next listed step (after the one mapping to `cur`) that has a
 /// pc of its own; `Done` when the list is exhausted. Replaces the old
 /// hardcoded `OperatingStep::next()` enum-ordering function.
+///
+/// CONSTRAINT (pinned by `no_duplicate_operating_pcs_in_any_title`): a
+/// title's operating step list must not map two steps to the same pc — the
+/// walk below is first-match by pc, so a duplicate would mis-sequence the
+/// turn. A step that shares a pc with another (e.g. 1822's minor-first-OR
+/// BuyTrain in front of the normal BuyTrain) must instead be listed as a
+/// pc-less OVERLAY step gated by `step_active`/`step_blocking_override` —
+/// the SpecialToken pattern.
 pub fn next_operating_pc(steps: &[StepDesc], cur: &OperatingStep) -> OperatingStep {
     let pos = steps.iter().position(|d| d.operating_pc().as_ref() == Some(cur));
     let start = match pos {
@@ -1876,6 +1884,31 @@ mod tests {
                 next_round(FinishedRound::Operating { round_num: total, total_ors: total }, 3),
                 RoundTransition { increment_turn: true, start: RoundStart::Stock }
             );
+        }
+    }
+
+    /// Every registered title's operating step list maps at most ONE step to
+    /// each pc. `next_operating_pc` walks first-match-by-pc, so a duplicate
+    /// would silently mis-sequence the OR turn (Phase 0 carry-forward #2).
+    /// A step sharing another's pc must be a pc-less overlay gated by
+    /// `step_active`/`step_blocking_override` (the SpecialToken pattern) —
+    /// if this test fails, restructure the new title's list that way.
+    #[test]
+    fn no_duplicate_operating_pcs_in_any_title() {
+        for title in crate::title::all_titles() {
+            let mut seen: Vec<OperatingStep> = Vec::new();
+            for desc in title.operating_steps() {
+                if let Some(pc) = desc.operating_pc() {
+                    assert!(
+                        !seen.contains(&pc),
+                        "title {}: duplicate operating pc {:?} in step list — \
+                         use a pc-less overlay step (SpecialToken pattern) instead",
+                        title.name(),
+                        pc
+                    );
+                    seen.push(pc);
+                }
+            }
         }
     }
 
