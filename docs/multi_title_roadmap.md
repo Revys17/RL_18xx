@@ -180,8 +180,16 @@ Still intentionally 1830-pinned after Phase 0.5 (by design, for the 1867 RL laye
 parameterize when it exists): `mcts.rs` runs against the global 1830 `layout()`;
 `action_index.rs`'s hardcoded company list inside the layout builder is gone but the
 Python `action_mapper.py`/encoder remain 1830-only (per-title Python mirroring is a
-Phase 1 RL-layer task); `BaseGame::build()` constructs only "1830" until a constructor
-title argument lands with g1867.
+Phase 1 RL-layer task); the PUBLIC constructors build only "1830" until a constructor
+title argument lands with g1867 (in-crate code uses `BaseGame::build_titled`).
+
+**Abstraction smoke-tested pre-1867 (`ee78ea9`):** a synthetic `TEST-5SHARE` title
+(test-build registry only — 1830's map/data with 5-share corps in the 1867-major
+shape `[40,20,20,20]` and a ≥2-OR flow hook, clean default action orders) runs
+enumerate-apply random walks with cash-conservation asserted per action, pins the
+5-share par/float math, and proves per-title isolation (every frozen-1830 test now
+runs with two titles registered). g1867.rs gets working plug-in points + an executable
+harness pattern from day one.
 
 ## Per-title validation strategy (supersedes "every title needs Python↔Rust parity")
 
