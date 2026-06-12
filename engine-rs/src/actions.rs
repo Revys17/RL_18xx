@@ -66,6 +66,9 @@ pub struct RouteData {
 pub enum DividendKind {
     Payout,
     Withhold,
+    /// Half pay (1867 majors; Ruby Step::HalfPay): withhold
+    /// `(revenue/2/total_shares).floor × total_shares`, distribute the rest.
+    Half,
 }
 
 impl DividendKind {
@@ -73,6 +76,7 @@ impl DividendKind {
         match s {
             "payout" => Ok(DividendKind::Payout),
             "withhold" => Ok(DividendKind::Withhold),
+            "half" => Ok(DividendKind::Half),
             _ => Err(GameError::new(format!("Unknown dividend kind: {}", s))),
         }
     }
@@ -81,6 +85,7 @@ impl DividendKind {
         match self {
             DividendKind::Payout => "payout",
             DividendKind::Withhold => "withhold",
+            DividendKind::Half => "half",
         }
     }
 }
@@ -185,6 +190,28 @@ pub enum Action {
     Bankrupt {
         entity_id: String,
     },
+    /// 1867 merger round (G1867::Step::Merge). The SAME wire type "merge"
+    /// serves three meanings, disambiguated by step state: add a connected
+    /// minor to the merge set, name the major that ends a merge, or name
+    /// the major a conversion targets.
+    Merge {
+        entity_id: String,
+        corporation_sym: String,
+    },
+    /// 1867 merger round: a minor in the convert price range announces
+    /// conversion into a major (the follow-up `merge` names the major).
+    Convert {
+        entity_id: String,
+    },
+    /// 1867 merger round (ReduceTokens): the merged major drops a token.
+    /// `hex_id` uses the same encoding as PlaceToken (`__tile:<instance>`
+    /// when the record referenced a city id like "202-1-0").
+    RemoveToken {
+        entity_id: String,
+        hex_id: String,
+        city_index: u8,
+        slot: u8,
+    },
 }
 
 impl Action {
@@ -205,6 +232,9 @@ impl Action {
             Action::DiscardTrain { entity_id, .. } => entity_id,
             Action::BuyCompany { entity_id, .. } => entity_id,
             Action::Bankrupt { entity_id } => entity_id,
+            Action::Merge { entity_id, .. } => entity_id,
+            Action::Convert { entity_id } => entity_id,
+            Action::RemoveToken { entity_id, .. } => entity_id,
         }
     }
 
@@ -225,6 +255,9 @@ impl Action {
             Action::DiscardTrain { .. } => "discard_train",
             Action::BuyCompany { .. } => "buy_company",
             Action::Bankrupt { .. } => "bankrupt",
+            Action::Merge { .. } => "merge",
+            Action::Convert { .. } => "convert",
+            Action::RemoveToken { .. } => "remove_token",
         }
     }
 
@@ -334,25 +367,11 @@ impl Action {
 
             "place_token" => {
                 // Action may have 'hex' key directly, or 'city' key
-                // City format: "tile_base-tile_instance-city_index" e.g. "57-0-0"
                 let (hex_id, city_index) = if let Ok(hex) = extract_string(dict, "hex") {
                     let ci = extract_optional_i32(dict, "city_index")?.unwrap_or(0) as u8;
                     (hex, ci)
                 } else {
-                    let city_str = extract_string(dict, "city")?;
-                    let parts: Vec<&str> = city_str.split('-').collect();
-                    if parts.len() >= 3 {
-                        // "57-0-0" → tile instance "57-0", city index 0
-                        let tile_instance = format!("{}-{}", parts[0], parts[1]);
-                        let ci = parts[2].parse::<u8>().unwrap_or(0);
-                        (format!("__tile:{}", tile_instance), ci)
-                    } else if parts.len() == 2 {
-                        // "57-0" → tile name "57", city index 0
-                        let ci = parts[1].parse::<u8>().unwrap_or(0);
-                        (format!("__tile:{}", parts[0]), ci)
-                    } else {
-                        (format!("__tile:{}", city_str), 0)
-                    }
+                    parse_city_ref(&extract_string(dict, "city")?)
                 };
                 Ok(Action::PlaceToken {
                     entity_id,
@@ -413,6 +432,27 @@ impl Action {
             }
 
             "bankrupt" => Ok(Action::Bankrupt { entity_id }),
+
+            "merge" => {
+                let corporation_sym = extract_string(dict, "corporation")?;
+                Ok(Action::Merge {
+                    entity_id,
+                    corporation_sym,
+                })
+            }
+
+            "convert" => Ok(Action::Convert { entity_id }),
+
+            "remove_token" => {
+                let (hex_id, city_index) = parse_city_ref(&extract_string(dict, "city")?);
+                let slot = extract_optional_i32(dict, "slot")?.unwrap_or(0) as u8;
+                Ok(Action::RemoveToken {
+                    entity_id,
+                    hex_id,
+                    city_index,
+                    slot,
+                })
+            }
 
             _ => Err(GameError::new(format!(
                 "Unknown action type: {}",
@@ -520,9 +560,46 @@ impl Action {
                 map.insert("price".to_string(), price.to_string());
             }
             Action::Bankrupt { .. } => {}
+            Action::Merge {
+                corporation_sym, ..
+            } => {
+                map.insert("corporation".to_string(), corporation_sym.clone());
+            }
+            Action::Convert { .. } => {}
+            Action::RemoveToken {
+                hex_id,
+                city_index,
+                slot,
+                ..
+            } => {
+                map.insert("hex".to_string(), hex_id.clone());
+                map.insert("city_index".to_string(), city_index.to_string());
+                map.insert("slot".to_string(), slot.to_string());
+            }
         }
 
         map
+    }
+}
+
+/// Parse a recorded city id ("57-0-0" = tile 57, instance 0, city 0;
+/// preprinted tiles use the hex coordinate as the tile name, e.g.
+/// "L12-0-0") into the engine's (hex_id, city_index) shape. Tile-based refs
+/// become `__tile:<instance>` and are resolved against the live map by the
+/// handler (same encoding place_token has always used).
+fn parse_city_ref(city_str: &str) -> (String, u8) {
+    let parts: Vec<&str> = city_str.split('-').collect();
+    if parts.len() >= 3 {
+        // "57-0-0" → tile instance "57-0", city index 0
+        let tile_instance = format!("{}-{}", parts[0], parts[1]);
+        let ci = parts[2].parse::<u8>().unwrap_or(0);
+        (format!("__tile:{}", tile_instance), ci)
+    } else if parts.len() == 2 {
+        // "57-0" → tile name "57", city index 0
+        let ci = parts[1].parse::<u8>().unwrap_or(0);
+        (format!("__tile:{}", parts[0]), ci)
+    } else {
+        (format!("__tile:{}", city_str), 0)
     }
 }
 

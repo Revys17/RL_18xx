@@ -5,6 +5,7 @@
 
 pub mod auction;
 pub mod loans;
+pub mod merger;
 pub mod operating;
 pub mod single_auction;
 pub mod stock;
@@ -23,6 +24,9 @@ pub enum Round {
     Auction(AuctionState),
     Stock(StockState),
     Operating(OperatingState),
+    /// 1867's merger round, interleaved after every OR in phases 3-7
+    /// (G1867::Round::Merger; rounds/merger.rs).
+    Merger(MergerState),
 }
 
 impl Round {
@@ -31,6 +35,7 @@ impl Round {
             Round::Auction(_) => "Auction",
             Round::Stock(_) => "Stock",
             Round::Operating(_) => "Operating",
+            Round::Merger(_) => "Merger",
         }
     }
 
@@ -39,7 +44,92 @@ impl Round {
             Round::Auction(_) => 0,
             Round::Stock(_) => 0,
             Round::Operating(s) => s.round_num,
+            Round::Merger(s) => s.round_num,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Merger round state (1867)
+// ---------------------------------------------------------------------------
+
+/// The 1867 merger round (G1867::Round::Merger + Step::Merge round_state).
+/// Entities are the floated minors in operating order; each gets one turn
+/// to convert, start a merge, or pass. A completed convert/merge replaces
+/// the acting minor with the new major and opens share dealing
+/// (PostMergerShares), token reduction (ReduceTokens) and train discards
+/// before the round moves to the next minor.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MergerState {
+    /// Position of the OR this merger round followed within its set —
+    /// carried through so the title's flow function can resume the set
+    /// (Ruby passes `round_num: @round.round_num` to the merger round).
+    pub round_num: u8,
+    pub total_ors: u8,
+    /// Remaining round entities (minor syms; a merge target major replaces
+    /// its initiating minor — Ruby `@round.entities[@entity_index] = target`).
+    pub entities: Vec<String>,
+    pub entity_index: usize,
+    /// The Merge step passed for the current entity (Ruby `step.pass!` —
+    /// a passed step is inactive until the round moves on).
+    pub merge_passed: bool,
+    /// The current minor announced a conversion; the next `merge` action
+    /// names the target major (Ruby `@converting`).
+    pub converting: bool,
+    /// Minors accumulated into the in-progress merge, initiator first
+    /// (Ruby `@merging`).
+    pub merging: Vec<String>,
+    /// All merge candidates exhausted/declined; the next `merge` action
+    /// names the target major (Ruby `@merge_major`).
+    pub merge_major: bool,
+    /// The new major currently in post-merger share dealing
+    /// (Ruby round_state `converted`).
+    pub converted: Option<String>,
+    /// Whether `converted` came from a conversion (vs a multi-minor merge)
+    /// — drives the share-dealing phase rules (Ruby `merge_type`).
+    pub merge_type_convert: bool,
+    /// Players eligible to buy shares, in rotation order
+    /// (Ruby `share_dealing_players`).
+    pub share_dealing_players: Vec<u32>,
+    /// The subset who may buy MORE than one share (Ruby
+    /// `share_dealing_multiple`: convert = the old owner; merge = all
+    /// involved owners until phase D).
+    pub share_dealing_multiple: Vec<u32>,
+    /// Players who passed in the current share-dealing phase (Ruby player
+    /// `pass!` flags; cleared on phase change and when the round moves on).
+    pub passed_players: Vec<u32>,
+    /// `[survivor]` while the merged major must remove tokens
+    /// (Ruby `corporations_removing_tokens`; the closed minors hold no
+    /// tokens by this point so only the survivor is listed).
+    pub corporations_removing_tokens: Option<Vec<String>>,
+    pub finished: bool,
+}
+
+impl MergerState {
+    pub fn new(round_num: u8, total_ors: u8, entities: Vec<String>) -> Self {
+        let finished = entities.is_empty();
+        MergerState {
+            round_num,
+            total_ors,
+            entities,
+            entity_index: 0,
+            merge_passed: false,
+            converting: false,
+            merging: Vec::new(),
+            merge_major: false,
+            converted: None,
+            merge_type_convert: false,
+            share_dealing_players: Vec::new(),
+            share_dealing_multiple: Vec::new(),
+            passed_players: Vec::new(),
+            corporations_removing_tokens: None,
+            finished,
+        }
+    }
+
+    /// The minor (or post-merge major) whose turn it is.
+    pub fn current_entity_sym(&self) -> Option<&str> {
+        self.entities.get(self.entity_index).map(|s| s.as_str())
     }
 }
 

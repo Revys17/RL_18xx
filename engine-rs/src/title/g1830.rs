@@ -86,6 +86,9 @@ pub fn next_round(finished: FinishedRound, phase_operating_rounds: u8) -> RoundT
             },
         ),
         FinishedRound::Operating { .. } => (true, RoundStart::Stock),
+        // 1830 has no merger rounds — only a flow that returns
+        // `RoundStart::Merger` can ever be asked about one.
+        FinishedRound::Merger { .. } => unreachable!("no merger rounds in this title"),
     };
     RoundTransition { increment_turn, start }
 }

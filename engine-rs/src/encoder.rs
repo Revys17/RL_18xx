@@ -220,6 +220,9 @@ impl BaseGame {
             crate::rounds::Round::Auction(_) => 2.0,
             crate::rounds::Round::Stock(_) => 0.0,
             crate::rounds::Round::Operating(_) => 1.0,
+            // 1867-only; unreachable while the encoder is 1830-pinned
+            // (alphazero_bridge_ready gates it out). Placeholder value.
+            crate::rounds::Round::Merger(_) => 1.0,
         };
         enc[off] = rv / MAX_ROUND_TYPE;
         off += 1;
@@ -612,7 +615,7 @@ impl BaseGame {
         self.num_certs_internal(player_id)
     }
 
-    fn player_percent_of(&self, player_id: u32, corp_index: usize) -> i32 {
+    pub(crate) fn player_percent_of(&self, player_id: u32, corp_index: usize) -> i32 {
         let pid = EntityId::player(player_id);
         self.corporations[corp_index].shares.iter()
             .filter(|s| s.owner == pid)

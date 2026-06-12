@@ -322,6 +322,17 @@ pub struct Corporation {
     /// Ruby's Loan objects are just id + amount).
     #[serde(default)]
     pub loans: u32,
+    /// The corporation has left play permanently (1867 minors close when
+    /// merged/converted into a major). Ruby removes closed corps from
+    /// `@corporations`; engine indices are load-bearing, so we flag instead.
+    #[serde(default)]
+    pub closed: bool,
+    /// The corporation has completed at least one operating turn (Ruby
+    /// `Corporation#operated?` — operating_history written at the dividend
+    /// step, including the auto-skip arms). Gates sales under
+    /// SELL_AFTER=:operate (1867).
+    #[serde(default)]
+    pub ever_operated: bool,
 }
 
 fn default_share_unit_percent() -> u8 {
@@ -362,6 +373,8 @@ impl Corporation {
             max_ownership_percent: default_max_ownership_percent(),
             always_market_price: false,
             loans: 0,
+            closed: false,
+            ever_operated: false,
         }
     }
 

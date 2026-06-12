@@ -1404,6 +1404,9 @@ impl RustMCTSPlayer {
             crate::rounds::Round::Auction(_) => "Auction",
             crate::rounds::Round::Stock(_) => "Stock",
             crate::rounds::Round::Operating(_) => "Operating",
+            // 1867-only; MCTS is 1830-pinned, but the key falls through to
+            // the default c_puct anyway.
+            crate::rounds::Round::Merger(_) => "Merger",
         };
         self.c_puct_by_round
             .get(name)

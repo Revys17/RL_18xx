@@ -29,18 +29,19 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "1867"
 FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 
 # fixture stem -> minimum number of actions the engine must accept.
-# Current frontier: deep into the phase-3 ORs (loans + interest +
-# LoanOperations forced repayment, BuyCompanyPreloan, train market, minor
-# auto-dividends, engine-computed route revenue, $1-min company prices,
-# Track affordability gate, preprinted-multi-city upgrade token mapping).
-# ALL FOUR now stop at the MERGER ROUND boundary (hs_ahjzadkh on a literal
-# `merge` action) — the next big seam: a new round type interleaved after
-# every OR in phases 3-7, with merge/convert + the CN national.
+# Current frontier: the MERGER ROUND replays end to end (convert + merge +
+# post-merger share dealing + token reduction + train discards), along with
+# its OR/SR fallout: major dividends (half pay, treasury-share dividends,
+# the ≥-price right-move rule), distance-priced tokens, SELL_AFTER=:operate,
+# the :sell_buy auto-advance, and minors-before-majors operating order.
+# hs_ahjzadkh replays COMPLETELY; the other three stop at the first
+# trainless-nationalization consumer (post_train_buy after the 4-train
+# rusts the 2s) — the next seam: nationalize! + the CN national entity.
 PREFIX_WATERMARK = {
-    "21268": 196,
-    "hs_ahjzadkh_19792": 207,
-    "hs_wuveadew_21268": 196,
-    "nationalization_cash": 184,
+    "21268": 344,
+    "hs_ahjzadkh_19792": 220,
+    "hs_wuveadew_21268": 344,
+    "nationalization_cash": 437,
 }
 
 

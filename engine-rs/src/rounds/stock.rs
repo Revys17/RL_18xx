@@ -148,7 +148,7 @@ impl BaseGame {
             .get(corporation_sym)
             .ok_or_else(|| GameError::new(format!("Unknown corporation: {}", corporation_sym)))?;
 
-        if self.corporations[corp_idx].ipo_price.is_some() {
+        if self.corporations[corp_idx].ipo_price.is_some() || self.corporations[corp_idx].closed {
             return Err(GameError::new(format!(
                 "{} has already been parred",
                 corporation_sym
@@ -801,7 +801,9 @@ impl BaseGame {
             return true;
         }
         let player_eid = EntityId::player(player_id);
-        corp.percent_owned_by(&player_eid) <= 60
+        // Per-corp cap (1830: 60 everywhere; 1867 minors are single
+        // 100%-cert corps with max_ownership_percent 100).
+        corp.percent_owned_by(&player_eid) <= corp.max_ownership_percent
     }
 
     /// Faithful port of Python `BuySellParShares.must_sell(entity)`
@@ -1294,8 +1296,16 @@ impl BaseGame {
         let current_certs = self.num_certs_internal(player_id);
         let at_cert_limit = current_certs >= self.cert_limit as u32;
 
-        // 1830 SELL_AFTER="first": selling blocked in first stock round (turn == 1)
-        let sell_allowed = self.turn > 1;
+        // Ruby SELL_AFTER (check_sale_timing): :first (1830) blocks all
+        // sales during the first stock round; :operate (1867) gates per
+        // corp on `corporation.operated?` (checked inside the loop below).
+        // Ruby SELL_BUY_ORDER: in :sell_buy titles (1867) no sell may follow
+        // the turn's buy, so a post-buy turn has nothing left.
+        let sell_after = self.title_def().sell_after();
+        let sell_allowed = match sell_after {
+            crate::title::SellAfter::FirstStockRound => self.turn > 1,
+            crate::title::SellAfter::Operate => true,
+        } && (!bought || self.title_def().stock_sell_after_buy());
 
         // Can sell?
         // Mirrors Python's bundles_for_corporation + can_sell logic.
@@ -1304,6 +1314,9 @@ impl BaseGame {
         if sell_allowed {
             let can_sell = self.corporations.iter().any(|corp| {
                 if corp.ipo_price.is_none() || corp.share_price.is_none() {
+                    return false;
+                }
+                if sell_after == crate::title::SellAfter::Operate && !corp.ever_operated {
                     return false;
                 }
                 let pct = corp.percent_owned_by(&player_eid);

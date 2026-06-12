@@ -232,6 +232,10 @@ pub struct BaseGame {
     /// Train-purchase events that have fired (fire-once semantics; also
     /// consumed as flags, e.g. 1867's `minors_cannot_start`).
     pub(crate) events_fired: Vec<String>,
+    /// 1867 `@trainless_nationalization`: set by the train event, consumed
+    /// by `post_train_buy` AFTER rusting (so corps whose last train just
+    /// rusted are caught — Ruby game.rb:741-743, 1025-1045).
+    pub(crate) trainless_nationalization_pending: bool,
 }
 
 // crate-visible wrappers that forward to the (private) PyO3-exposed methods
@@ -469,6 +473,7 @@ impl BaseGame {
             priority_deal_player: self.priority_deal_player,
             loans_remaining: self.loans_remaining,
             events_fired: self.events_fired.clone(),
+            trainless_nationalization_pending: self.trainless_nationalization_pending,
         }
     }
 
@@ -728,6 +733,7 @@ impl BaseGame {
                     Round::Auction(s) => s.finished,
                     Round::Stock(s) => s.finished,
                     Round::Operating(s) => s.finished,
+                    Round::Merger(s) => s.finished,
                 };
                 if !round_finished {
                     break;
@@ -754,6 +760,7 @@ impl BaseGame {
             Round::Auction(_) => self.process_auction_action(action)?,
             Round::Stock(_) => self.process_stock_action(action)?,
             Round::Operating(_) => self.process_operating_action(action)?,
+            Round::Merger(_) => self.process_merger_action(action)?,
         }
 
         self.move_number += 1;
@@ -768,6 +775,7 @@ impl BaseGame {
                 Round::Auction(s) => s.finished,
                 Round::Stock(s) => s.finished,
                 Round::Operating(s) => s.finished,
+                Round::Merger(s) => s.finished,
             };
             if !round_finished {
                 break;
@@ -824,6 +832,28 @@ impl BaseGame {
                     self.round_state.active_entity_id = EntityId::corporation(sym);
                 }
             }
+            Round::Merger(s) => {
+                // Step-list order: token removal, then share dealing, then
+                // train discards, then the Merge step's current minor.
+                let s = s.clone();
+                if let Some(sym) = s
+                    .corporations_removing_tokens
+                    .as_ref()
+                    .and_then(|v| v.first())
+                {
+                    self.round_state.active_entity_id = EntityId::corporation(sym);
+                } else if let Some(pid) = s
+                    .converted
+                    .as_ref()
+                    .and_then(|_| self.merger_eligible_players(&s).first().copied())
+                {
+                    self.round_state.active_entity_id = EntityId::player(pid);
+                } else if let Some(sym) = self.merger_crowded_corps().first() {
+                    self.round_state.active_entity_id = EntityId::corporation(sym);
+                } else if let Some(sym) = s.current_entity_sym() {
+                    self.round_state.active_entity_id = EntityId::corporation(sym);
+                }
+            }
         }
     }
 
@@ -848,6 +878,10 @@ impl BaseGame {
             Round::Auction(_) => FinishedRound::Auction,
             Round::Stock(_) => FinishedRound::Stock,
             Round::Operating(s) => FinishedRound::Operating {
+                round_num: s.round_num,
+                total_ors: s.total_ors,
+            },
+            Round::Merger(s) => FinishedRound::Merger {
                 round_num: s.round_num,
                 total_ors: s.total_ors,
             },
@@ -894,7 +928,45 @@ impl BaseGame {
                 self.payout_companies();
                 self.start_operating();
             }
+            crate::steps::RoundStart::Merger { round_num, total_ors } => {
+                // Ruby G1867::Round::Merger: entities = the floated minors
+                // in operating order; with none the round finishes
+                // immediately (setup → next_entity! if finished?) and the
+                // transition loop moves straight on.
+                let state = crate::rounds::MergerState::new(
+                    round_num,
+                    total_ors,
+                    self.merge_corporations(),
+                );
+                self.round = Round::Merger(state);
+            }
         }
+    }
+
+    /// Ruby G1867 `post_train_buy` (game.rb:741-743): runs after EVERY
+    /// train purchase, once the purchase's events/phase change/rusting are
+    /// done. While the `trainless_nationalization` flag stands, every
+    /// OPERATED corp without a train is nationalized (minors) or queued
+    /// for the MajorTrainless choice (majors) —
+    /// `postevent_trainless_nationalization!` (game.rb:1030-1045).
+    /// TODO(1867-national): both arms need the CN national entity; fail
+    /// loudly rather than silently diverge.
+    pub(crate) fn post_train_buy(&mut self) {
+        if !self.trainless_nationalization_pending {
+            return;
+        }
+        let trainless: Vec<&str> = self
+            .corporations
+            .iter()
+            .filter(|c| c.floated && !c.closed && c.ever_operated && c.trains.is_empty())
+            .map(|c| c.sym.as_str())
+            .collect();
+        if !trainless.is_empty() {
+            unimplemented!(
+                "trainless_nationalization with trainless corps {trainless:?} — CN nationalization not implemented"
+            );
+        }
+        self.trainless_nationalization_pending = false;
     }
 
     /// Check if buying a certain train triggers a phase change, train
@@ -916,12 +988,21 @@ impl BaseGame {
             .map(|td| td.events)
             .unwrap_or(&[]);
         for event in events {
-            // Fire-once (Ruby's event semantics): nationalize_companies pays
-            // face value and must not repeat on later purchases of the name.
-            if self.events_fired.iter().any(|e| e == *event) {
+            // Fire-once PER TRAIN TYPE (Ruby fires a train's events at its
+            // first purchase): keyed by "train:event" because an event name
+            // can recur across tiers — 1867's trainless_nationalization
+            // fires on the first 4, 6 AND 8 (a plain name key would
+            // suppress the re-fires). The legacy plain-name keys stay valid
+            // (no 1830 event spans two trains).
+            let fired_key = format!("{}:{}", base_name, event);
+            if self
+                .events_fired
+                .iter()
+                .any(|e| e == &fired_key || e == *event)
+            {
                 continue;
             }
-            self.events_fired.push((*event).to_string());
+            self.events_fired.push(fired_key);
             match *event {
                 "close_companies" => self.close_all_companies(),
                 // -- 1867 events (game.rb event_* handlers) --
@@ -974,23 +1055,12 @@ impl BaseGame {
                         self.companies[i].closed = true;
                     }
                 }
-                // TODO(1867-national): nationalization into the CN. Safe to
-                // ignore while no floated corp is trainless at fire time;
-                // otherwise the consequences (forced nationalization /
-                // MajorTrainless choices) are unimplemented — fail loudly
-                // rather than silently diverge.
+                // Ruby event_trainless_nationalization! only sets a flag —
+                // the consequences run in `post_train_buy` AFTER this
+                // purchase's rusting (game.rb:741-743, 1025-1028), so corps
+                // whose last train just rusted are included.
                 "trainless_nationalization" => {
-                    let trainless: Vec<&str> = self
-                        .corporations
-                        .iter()
-                        .filter(|c| c.floated && c.trains.is_empty())
-                        .map(|c| c.sym.as_str())
-                        .collect();
-                    if !trainless.is_empty() {
-                        unimplemented!(
-                            "trainless_nationalization with trainless corps {trainless:?} — CN nationalization not implemented"
-                        );
-                    }
+                    self.trainless_nationalization_pending = true;
                 }
                 other => unimplemented!("train event {other}"),
             }
@@ -1096,7 +1166,15 @@ impl BaseGame {
             _ => return Ok(false),
         };
 
-        // Check if entity is a company (not a player or corp)
+        // Check if entity is a company (not a player or corp). A numeric id
+        // matching a SEATED player is the player, even when a company sym
+        // collides (1867's hidden company '3' vs player 3 — same rule as
+        // action_step_entity).
+        if let Ok(pid) = entity_id.parse::<u32>() {
+            if self.players.iter().any(|p| p.id == pid) {
+                return Ok(false);
+            }
+        }
         let company_idx = match self.company_idx.get(entity_id) {
             Some(&idx) => idx,
             None => return Ok(false), // Not a company entity — normal action
@@ -1719,7 +1797,22 @@ impl BaseGame {
                 .then(a.4.cmp(&b.4)) // earlier cell arrival first
                 .then(a.5.cmp(&b.5)) // alphabetical name
         });
-        corps.into_iter().map(|(sym, ..)| sym).collect()
+        let mut order: Vec<String> = corps.into_iter().map(|(sym, ..)| sym).collect();
+        // 1867 (Ruby G1867 `operating_order`): minors operate before majors,
+        // each class keeping the price sort — a stable partition after the
+        // sort. No-op until a second corp class exists.
+        if self.title_def().minors_operate_first() {
+            let (minors, majors): (Vec<String>, Vec<String>) = order.into_iter().partition(|sym| {
+                self.corp_idx
+                    .get(sym.as_str())
+                    .map_or(false, |&ci| {
+                        self.corporations[ci].corp_type == crate::title::CorpType::Minor
+                    })
+            });
+            order = minors;
+            order.extend(majors);
+        }
+        order
     }
 
     /// Re-sort the not-yet-operated tail of the current OR's operating_order.
@@ -1902,8 +1995,12 @@ pub(crate) fn build_hex_from_def(title: &dyn GameTitle, def: &HexDef) -> Hex {
         tile.id = format!("preprinted_{}", coord);
         tile.name = coord.clone();
 
-        // Add terrain upgrade cost if applicable
-        if def.terrain_cost > 0 {
+        // Add terrain upgrade cost if applicable — unless the preprinted
+        // DSL itself already declared one (1867 L12 Montreal carries
+        // `upgrade=cost:20,terrain:water` in its DSL AND a HexDef terrain
+        // cost; pushing both double-charged the lay). 1830-no-op: no 1830
+        // preprinted DSL has an `upgrade=` clause.
+        if def.terrain_cost > 0 && tile.upgrades.is_empty() {
             let terrain = if def.terrain_cost >= 120 {
                 "mountain".to_string()
             } else {
@@ -2221,6 +2318,7 @@ impl BaseGame {
             priority_deal_player: first_player_id,
             loans_remaining: title.num_loans(),
             events_fired: Vec::new(),
+            trainless_nationalization_pending: false,
         };
         if single_item_opener {
             // Put the first company up (the Ruby step's `setup`) — needs
@@ -2338,6 +2436,10 @@ impl BaseGame {
                 let step = format!("{:?}", s.step);
                 let corp = s.current_corp_sym().unwrap_or("none").to_string();
                 ("Operating".into(), s.round_num, step, corp)
+            }
+            crate::rounds::Round::Merger(s) => {
+                let corp = s.current_entity_sym().unwrap_or("none").to_string();
+                ("Merger".into(), s.round_num, "Merge".into(), corp)
             }
         }
     }
@@ -3008,6 +3110,18 @@ impl BaseGame {
             }
             Round::Stock(_) => "BuySellPar".to_string(),
             Round::Operating(s) => format!("{:?}", s.step),
+            // The merger round's blocking step, in step-list order.
+            Round::Merger(s) => {
+                if s.corporations_removing_tokens.is_some() {
+                    "ReduceTokens".to_string()
+                } else if s.converted.is_some() {
+                    "PostMergerShares".to_string()
+                } else if !self.merger_crowded_corps().is_empty() {
+                    "DiscardTrain".to_string()
+                } else {
+                    "Merge".to_string()
+                }
+            }
         }
     }
 
@@ -3328,13 +3442,13 @@ impl BaseGame {
         // 1830 SELL_BUY_ORDER = "sell_buy_sell": selling is always allowed
         // regardless of whether the player has already bought this turn.
 
-        // 1830 SELL_AFTER = "first": no selling in the first stock round.
-        // self.turn starts at 1 and increments when transitioning OR → Stock.
-        // Turn 1 = first stock round (no selling). Turn 2+ = selling allowed.
-        // Note: Python tracks per-rotation turns within a stock round; we use
-        // the coarser game-level turn which blocks selling for the entire first SR.
-        // This is slightly more restrictive but correct for the common case.
-        if self.turn <= 1 {
+        // Ruby SELL_AFTER (check_sale_timing): :first (1830) blocks the
+        // whole first stock round (self.turn starts at 1 and increments on
+        // OR → Stock; the coarser game-level turn is slightly more
+        // restrictive than Python's per-rotation tracking but correct for
+        // the common case); :operate (1867) gates per corp below.
+        let sell_after = self.title_def().sell_after();
+        if sell_after == crate::title::SellAfter::FirstStockRound && self.turn <= 1 {
             return Vec::new();
         }
 
@@ -3345,6 +3459,9 @@ impl BaseGame {
         for corp in &self.corporations {
             // Must be IPO'd (has par price) to sell
             if corp.ipo_price.is_none() {
+                continue;
+            }
+            if sell_after == crate::title::SellAfter::Operate && !corp.ever_operated {
                 continue;
             }
 
@@ -4773,6 +4890,8 @@ impl BaseGame {
         let round_snapshot = self.round.clone();
 
         match &round_snapshot {
+            // The oracle is frozen 1830 dispatch; 1830 has no merger round.
+            Round::Merger(_) => unreachable!("legacy oracle is 1830-only"),
             Round::Auction(s) => {
                 if s.pending_par.is_some() {
                     return vec!["par".to_string()];

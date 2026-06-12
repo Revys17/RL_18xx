@@ -29,9 +29,53 @@ pub trait GameTitle: Sync {
     fn auction_steps(&self) -> &'static [StepDesc];
     fn stock_steps(&self) -> &'static [StepDesc];
     fn operating_steps(&self) -> &'static [StepDesc];
+    /// The merger-round step list (1867). Only consulted while a
+    /// `Round::Merger` is live, which only a flow function returning
+    /// `RoundStart::Merger` can create.
+    fn merger_steps(&self) -> &'static [StepDesc] {
+        &[]
+    }
     /// The title's round flow (Ruby/Python `next_round!`): the round that
-    /// just finished decides what starts next.
-    fn next_round(&self, finished: FinishedRound, phase_operating_rounds: u8) -> RoundTransition;
+    /// just finished decides what starts next. `phase_name` lets flows
+    /// branch on the phase (1867 interleaves merger rounds in phases 3-7).
+    fn next_round(
+        &self,
+        finished: FinishedRound,
+        phase_name: &str,
+        phase_operating_rounds: u8,
+    ) -> RoundTransition;
+    /// Operating order: floated minors operate before majors (1867;
+    /// Ruby G1867 `operating_order` partitions after the price sort).
+    fn minors_operate_first(&self) -> bool {
+        false
+    }
+    /// Ruby `SELL_BUY_ORDER`: whether a player may still sell in the same
+    /// stock turn after buying (1830 `:sell_buy_sell` = true; 1867
+    /// `:sell_buy` = false — after the buy the turn has nothing left and
+    /// auto-advances with no recorded pass).
+    fn stock_sell_after_buy(&self) -> bool {
+        true
+    }
+    /// Major-corp dividend share-price movement: with `Standard` (1830,
+    /// base Step::Dividend) any positive distribution moves right and zero
+    /// moves left; with `RightIfGePrice` (1867, G1867::Step::Dividend) the
+    /// price only moves right when the distributed amount is at least the
+    /// share price, zero still moves left, anything between stays put.
+    fn dividend_movement(&self) -> DividendMovement {
+        DividendMovement::Standard
+    }
+    /// Token cost = charter price × straight-line hex distance from the
+    /// corp's nearest placed token (1867, G1867::Step::Token
+    /// `adjust_token_price_ability!`). Default: flat charter price.
+    fn token_price_by_distance(&self) -> bool {
+        false
+    }
+    /// Ruby `SELL_AFTER` (base check_sale_timing): when shares become
+    /// sellable. 1830 `:first` (any time after the first stock round);
+    /// 1867 `:operate` (only shares of corporations that have operated).
+    fn sell_after(&self) -> SellAfter {
+        SellAfter::FirstStockRound
+    }
 
     // -- static game data --
     fn starting_cash(&self, num_players: u8) -> i32;
@@ -233,7 +277,12 @@ impl GameTitle for G1830 {
     fn operating_steps(&self) -> &'static [StepDesc] {
         g1830::operating_steps()
     }
-    fn next_round(&self, finished: FinishedRound, phase_operating_rounds: u8) -> RoundTransition {
+    fn next_round(
+        &self,
+        finished: FinishedRound,
+        _phase_name: &str,
+        phase_operating_rounds: u8,
+    ) -> RoundTransition {
         g1830::next_round(finished, phase_operating_rounds)
     }
     fn starting_cash(&self, num_players: u8) -> i32 {
@@ -536,6 +585,26 @@ pub struct MarketCell {
     /// COMBINE them (e.g. `165zCm` = major par + convert range + minor
     /// price cap), which is why this is a list, not a single zone.
     pub zones: Vec<MarketZone>,
+}
+
+/// Sale-timing policy (Ruby `SELL_AFTER`; see [`GameTitle::sell_after`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SellAfter {
+    /// `:first` — no stock-round sales during the first stock round.
+    FirstStockRound,
+    /// `:operate` — only shares of corporations that have operated.
+    Operate,
+}
+
+/// Major-corp dividend price-movement policy (see
+/// [`GameTitle::dividend_movement`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DividendMovement {
+    /// Base Step::Dividend: positive distribution → right, zero → left.
+    Standard,
+    /// G1867: right only when the distribution ≥ the share price; zero →
+    /// left; in between → no movement.
+    RightIfGePrice,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

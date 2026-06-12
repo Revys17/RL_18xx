@@ -77,6 +77,17 @@ pub enum StepKind {
     BuyTrain,
     // Stock-round blocking step
     BuySellParShares,
+    // 1867 merger-round steps (G1867::Step::*; rounds/merger.rs). Listed in
+    // g1867::merger_steps() in Ruby's order: ReduceTokens,
+    // PostMergerShares, DiscardTrain, Merge.
+    /// Convert or merge minor corporations (the round's driving step).
+    Merge,
+    /// Post-merger/conversion share dealing: eligible players buy 10%
+    /// treasury shares of the new major at its fresh par.
+    PostMergerShares,
+    /// The merged major chooses which tokens to drop to reach the
+    /// after-merger limit (2 on-map tokens in distinct hexes).
+    ReduceTokens,
     // Auction-round steps
     CompanyPendingPar,
     WaterfallAuction,
@@ -151,6 +162,9 @@ pub(crate) fn step_description(kind: StepKind) -> &'static str {
         StepKind::BuyTrain => "Buy Trains",
         // 1830 SELL_BUY_ORDER = "sell_buy_sell" (g1830.py:441) → round.py:1560-1561.
         StepKind::BuySellParShares => "Sell/Buy/Sell Shares",
+        StepKind::Merge => "Convert or Merge Minor Corporation",
+        StepKind::PostMergerShares => "Buy Shares Post Merge",
+        StepKind::ReduceTokens => "Choose tokens to remove",
         StepKind::CompanyPendingPar => "Choose Corporation Par Value",
         StepKind::WaterfallAuction => "Bid on Companies",
         StepKind::SingleItemAuction => "Bid on Companies",
@@ -207,6 +221,9 @@ pub enum FinishedRound {
     /// An operating round: its 1-based position in the current OR set and
     /// the set's total (fixed when the set started).
     Operating { round_num: u8, total_ors: u8 },
+    /// A merger round (1867), carrying the OR-set position of the OR it
+    /// followed so the flow function can resume the set.
+    Merger { round_num: u8, total_ors: u8 },
 }
 
 /// The round a title's flow function says to start next. Carries the
@@ -217,6 +234,9 @@ pub enum RoundStart {
     Stock,
     /// One operating round within a set of `total_ors`.
     Operating { round_num: u8, total_ors: u8 },
+    /// A merger round (1867) interleaved within the OR set; the payload
+    /// remembers where the set resumes.
+    Merger { round_num: u8, total_ors: u8 },
 }
 
 /// A title's answer to "the round finished — what now?".
@@ -258,6 +278,7 @@ impl BaseGame {
             Round::Auction(_) => self.title_def().auction_steps(),
             Round::Stock(_) => self.title_def().stock_steps(),
             Round::Operating(_) => self.operating_step_descs(),
+            Round::Merger(_) => self.title_def().merger_steps(),
         }
     }
 
@@ -272,7 +293,8 @@ impl BaseGame {
     /// SEQUENCE (Ruby/Python `next_round!`). Drives
     /// `transition_to_next_round`. 1830: SR → OR set → (`turn` += 1) → SR.
     pub(crate) fn title_next_round(&self, finished: FinishedRound) -> RoundTransition {
-        self.title_def().next_round(finished, self.phase.operating_rounds)
+        self.title_def()
+            .next_round(finished, &self.phase.name, self.phase.operating_rounds)
     }
 
     /// THE shared `actions_for` accumulation loop (Python
@@ -608,9 +630,32 @@ impl BaseGame {
     /// HomeToken, CompanyPendingPar to gate on their pending state).
     fn step_active(&self, desc: &StepDesc, snap: &Round) -> bool {
         match desc.kind {
-            StepKind::DiscardTrain => {
-                operating(snap).map_or(false, |s| !s.crowded_corps.is_empty())
-            }
+            StepKind::DiscardTrain => match snap {
+                // Merger round: the merged major may exceed its train limit
+                // (computed live — Ruby's crowded_corps).
+                Round::Merger(_) => !self.merger_crowded_corps().is_empty(),
+                _ => operating(snap).map_or(false, |s| !s.crowded_corps.is_empty()),
+            },
+            // 1867 merger-round steps (rounds/merger.rs).
+            StepKind::Merge => match snap {
+                // Inactive once the current entity passed or a
+                // convert/merge completed (Ruby step.pass! / `return [] if
+                // @round.converted`).
+                Round::Merger(s) => {
+                    s.converted.is_none()
+                        && !s.merge_passed
+                        && s.entity_index < s.entities.len()
+                }
+                _ => false,
+            },
+            StepKind::PostMergerShares => match snap {
+                Round::Merger(s) => s.converted.is_some(),
+                _ => false,
+            },
+            StepKind::ReduceTokens => match snap {
+                Round::Merger(s) => s.corporations_removing_tokens.is_some(),
+                _ => false,
+            },
             StepKind::HomeToken => match snap {
                 // 1867: home tokens are chosen in the STOCK round
                 // (HOME_TOKEN_TIMING = :par, pushed at minor bid / major par).
@@ -662,9 +707,37 @@ impl BaseGame {
                     _ => None,
                 },
             },
-            StepKind::DiscardTrain => operating(snap)
-                .and_then(|s| s.crowded_corps.first())
-                .map(|c| StepEntity::Corp(c.clone())),
+            StepKind::DiscardTrain => match snap {
+                Round::Merger(_) => self
+                    .merger_crowded_corps()
+                    .first()
+                    .map(|c| StepEntity::Corp(c.clone())),
+                _ => operating(snap)
+                    .and_then(|s| s.crowded_corps.first())
+                    .map(|c| StepEntity::Corp(c.clone())),
+            },
+            // 1867 merger-round steps.
+            StepKind::Merge => match snap {
+                Round::Merger(s) => s
+                    .current_entity_sym()
+                    .map(|sym| StepEntity::Corp(sym.to_string())),
+                _ => None,
+            },
+            StepKind::PostMergerShares => match snap {
+                Round::Merger(s) => self
+                    .merger_eligible_players(s)
+                    .first()
+                    .map(|pid| StepEntity::Player(*pid)),
+                _ => None,
+            },
+            StepKind::ReduceTokens => match snap {
+                Round::Merger(s) => s
+                    .corporations_removing_tokens
+                    .as_ref()
+                    .and_then(|v| v.first())
+                    .map(|c| StepEntity::Corp(c.clone())),
+                _ => None,
+            },
             StepKind::SpecialToken => {
                 let s = operating(snap)?;
                 if !s.teleport_pending {
@@ -681,6 +754,9 @@ impl BaseGame {
                 Round::Stock(s) => Some(StepEntity::Player(s.current_player_id())),
                 Round::Operating(s) => s
                     .current_corp_sym()
+                    .map(|sym| StepEntity::Corp(sym.to_string())),
+                Round::Merger(s) => s
+                    .current_entity_sym()
                     .map(|sym| StepEntity::Corp(sym.to_string())),
             },
         }
@@ -760,6 +836,9 @@ impl BaseGame {
                 None => false,
             },
             Round::Auction(_) => false,
+            // No company specials act inside a merger round (the 1867 step
+            // lists carry none).
+            Round::Merger(_) => true,
         }
     }
 
@@ -1019,10 +1098,64 @@ impl BaseGame {
             StepKind::DiscardTrain => {
                 // Python DiscardTrain.actions (round.py:2685-2686): any corp
                 // in crowded_corps may discard.
-                let Some(s) = operating(snap) else { return vec![] };
                 let StepEntity::Corp(sym) = entity else { return vec![] };
+                if let Round::Merger(_) = snap {
+                    // Merger round: the merged major over its limit.
+                    return if self.merger_crowded_corps().iter().any(|c| c == sym) {
+                        vec!["discard_train"]
+                    } else {
+                        vec![]
+                    };
+                }
+                let Some(s) = operating(snap) else { return vec![] };
                 if s.crowded_corps.iter().any(|c| c == sym) {
                     vec!["discard_train"]
+                } else {
+                    vec![]
+                }
+            }
+            // -- 1867 merger round (rounds/merger.rs) ----------------------
+            StepKind::Merge => {
+                // Ruby Merge#actions: only the round's current minor (or the
+                // major while choosing a merge target) acts; `merge` is
+                // always offered, `convert` only before a merge set opens,
+                // `pass` always (the convert/merge-major phases are
+                // merge-only).
+                let Round::Merger(s) = snap else { return vec![] };
+                let StepEntity::Corp(sym) = entity else { return vec![] };
+                if s.current_entity_sym() != Some(sym.as_str()) {
+                    return vec![];
+                }
+                if s.converting || s.merge_major {
+                    return vec!["merge"];
+                }
+                let mut out = vec!["merge"];
+                if s.merging.is_empty() && self.merger_can_convert(sym) {
+                    out.push("convert");
+                }
+                out.push("pass");
+                out
+            }
+            StepKind::PostMergerShares => {
+                // Ruby PostMergerShares#actions: ANY player who can buy may
+                // act (turn order shapes active_entities, not legality).
+                let Round::Merger(s) = snap else { return vec![] };
+                let StepEntity::Player(pid) = entity else { return vec![] };
+                if self.merger_can_buy_any(s, *pid) {
+                    vec!["buy_shares", "pass"]
+                } else {
+                    vec![]
+                }
+            }
+            StepKind::ReduceTokens => {
+                let Round::Merger(s) = snap else { return vec![] };
+                let StepEntity::Corp(sym) = entity else { return vec![] };
+                let removing = s
+                    .corporations_removing_tokens
+                    .as_ref()
+                    .map_or(false, |v| v.first().map(|c| c.as_str()) == Some(sym));
+                if removing {
+                    vec!["remove_token"]
                 } else {
                     vec![]
                 }

@@ -209,6 +209,17 @@ impl BaseGame {
                 m.insert("company".to_string(), json!(company_sym));
                 m.insert("price".to_string(), json!(price));
             }
+            // 1867 merger-round actions — never produced by the (1830-only)
+            // factored decode; logged for completeness.
+            Action::Merge { corporation_sym, .. } => {
+                m.insert("corporation".to_string(), json!(corporation_sym));
+            }
+            Action::Convert { .. } => {}
+            Action::RemoveToken { hex_id, city_index, slot, .. } => {
+                m.insert("hex".to_string(), json!(hex_id));
+                m.insert("city_index".to_string(), json!(city_index));
+                m.insert("slot".to_string(), json!(slot));
+            }
         }
         serde_json::Value::Object(m)
     }

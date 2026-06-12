@@ -20,8 +20,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{
-    AbilityDef, BorderDef, Capitalization, CompanyDef, CorpType, CorporationDef, GameTitle,
-    HexDef, HexType, MarketCell, MarketMovement, MarketZone, OwnerType, PhaseDef, TrainDef,
+    AbilityDef, BorderDef, Capitalization, CompanyDef, CorpType, CorporationDef, DividendMovement,
+    GameTitle, HexDef, HexType, MarketCell, MarketMovement, MarketZone, OwnerType, PhaseDef,
+    SellAfter, TrainDef,
 };
 use crate::steps::{FinishedRound, RoundStart, RoundTransition, StepDesc, StepKind};
 use crate::tiles::TileDef;
@@ -42,8 +43,37 @@ impl GameTitle for G1867 {
     fn operating_steps(&self) -> &'static [StepDesc] {
         operating_steps()
     }
-    fn next_round(&self, finished: FinishedRound, phase_operating_rounds: u8) -> RoundTransition {
-        next_round(finished, phase_operating_rounds)
+    fn next_round(
+        &self,
+        finished: FinishedRound,
+        phase_name: &str,
+        phase_operating_rounds: u8,
+    ) -> RoundTransition {
+        next_round(finished, phase_name, phase_operating_rounds)
+    }
+    fn merger_steps(&self) -> &'static [StepDesc] {
+        merger_steps()
+    }
+    fn minors_operate_first(&self) -> bool {
+        true
+    }
+    /// SELL_BUY_ORDER = :sell_buy (game.rb:313).
+    fn stock_sell_after_buy(&self) -> bool {
+        false
+    }
+    /// step/dividend.rb share_price_change: majors move right only when
+    /// the distribution covers the share price.
+    fn dividend_movement(&self) -> DividendMovement {
+        DividendMovement::RightIfGePrice
+    }
+    /// step/token.rb adjust_token_price_ability!: $40 × hex distance from
+    /// the nearest placed token.
+    fn token_price_by_distance(&self) -> bool {
+        true
+    }
+    /// SELL_AFTER = :operate (game.rb:312).
+    fn sell_after(&self) -> SellAfter {
+        SellAfter::Operate
     }
     fn starting_cash(&self, num_players: u8) -> i32 {
         starting_cash(num_players)
@@ -255,18 +285,50 @@ pub fn operating_steps() -> &'static [StepDesc] {
     STEPS
 }
 
+/// 1867's merger round (game.rb:826-837 `merger_round`), Ruby step order
+/// (confirmed against GTG rules errata in the source comment):
+///   MajorTrainless, ReduceTokens (E), PostMergerShares (C & D),
+///   DiscardTrain (F), Merge.
+/// TODO(1867-trainless): MajorTrainless lands with CN nationalization.
+pub fn merger_steps() -> &'static [StepDesc] {
+    const STEPS: &[StepDesc] = &[
+        StepDesc::blocking(StepKind::ReduceTokens),
+        StepDesc::blocking(StepKind::PostMergerShares),
+        StepDesc::blocking(StepKind::DiscardTrain),
+        StepDesc::blocking(StepKind::Merge),
+    ];
+    STEPS
+}
+
 /// 1867's round flow (game.rb:876-897 `next_round!`):
 ///   auction → SR; SR → OR set (count from phase, final set 3);
-///   OR → next OR / SR (turn++).
+///   OR → MERGER ROUND in phases 3-7 (SR → OR → MR → OR → MR → SR),
+///   plain OR flow otherwise; MR → next OR / SR (turn++; `new_or!`).
 ///
-/// TODO(1867-merger): in phases 3-7 a MERGER ROUND follows every OR
-/// (SR → OR1 → MR → OR2 → MR → SR); needs a `RoundStart::Merger` variant +
-/// `FinishedRound::Merger` arm here. Until the merger round lands this is
-/// the phase-2/8 flow for all phases.
 /// TODO(1867-export): `or_round_finished` exports a train to the CN in
 /// phases 4-7 (depot.export! + phase change as if purchased) — lands with
 /// the train-export work.
-pub fn next_round(finished: FinishedRound, phase_operating_rounds: u8) -> RoundTransition {
+pub fn next_round(
+    finished: FinishedRound,
+    phase_name: &str,
+    phase_operating_rounds: u8,
+) -> RoundTransition {
+    // Ruby `new_or!`: the next OR of the set, or hand back to the stock
+    // round and bump the turn counter.
+    let new_or = |round_num: u8, total_ors: u8| {
+        if round_num < total_ors {
+            (
+                false,
+                RoundStart::Operating {
+                    round_num: round_num + 1,
+                    total_ors,
+                },
+            )
+        } else {
+            (true, RoundStart::Stock)
+        }
+    };
+    let phase_num: u8 = phase_name.parse().unwrap_or(0);
     let (increment_turn, start) = match finished {
         FinishedRound::Auction => (false, RoundStart::Stock),
         FinishedRound::Stock => (
@@ -276,14 +338,13 @@ pub fn next_round(finished: FinishedRound, phase_operating_rounds: u8) -> RoundT
                 total_ors: phase_operating_rounds,
             },
         ),
-        FinishedRound::Operating { round_num, total_ors } if round_num < total_ors => (
-            false,
-            RoundStart::Operating {
-                round_num: round_num + 1,
-                total_ors,
-            },
-        ),
-        FinishedRound::Operating { .. } => (true, RoundStart::Stock),
+        // Phases 3-7: a merger round follows EVERY operating round
+        // (game.rb:886-890 `phase.name.to_i < 3 || >= 8`).
+        FinishedRound::Operating { round_num, total_ors } if (3..8).contains(&phase_num) => {
+            (false, RoundStart::Merger { round_num, total_ors })
+        }
+        FinishedRound::Operating { round_num, total_ors } => new_or(round_num, total_ors),
+        FinishedRound::Merger { round_num, total_ors } => new_or(round_num, total_ors),
     };
     RoundTransition { increment_turn, start }
 }

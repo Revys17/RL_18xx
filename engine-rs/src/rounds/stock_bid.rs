@@ -48,7 +48,7 @@ impl BaseGame {
             return false;
         }
         // `minors_cannot_start` (first 5-train) closes the founding window.
-        if self.events_fired.iter().any(|e| e == "minors_cannot_start") {
+        if self.events_fired.iter().any(|e| e.ends_with("minors_cannot_start")) {
             return false;
         }
         if self.player_cash(player_id) < MIN_BID {
@@ -142,7 +142,7 @@ impl BaseGame {
                     corporation_sym
                 )));
             }
-            if corp.ipo_price.is_some() {
+            if corp.ipo_price.is_some() || corp.closed {
                 return Err(GameError::new(format!(
                     "{} has already been started",
                     corporation_sym
@@ -151,7 +151,7 @@ impl BaseGame {
             if !self
                 .title_def()
                 .corporation_startable(corporation_sym, &self.phase.name)
-                || self.events_fired.iter().any(|e| e == "minors_cannot_start")
+                || self.events_fired.iter().any(|e| e.ends_with("minors_cannot_start"))
             {
                 return Err(GameError::new(format!(
                     "{} is not available in phase {}",

@@ -41,7 +41,12 @@ impl GameTitle for Test5Share {
         g1830::operating_steps()
     }
     /// A flow that DIFFERS from 1830: OR sets always run at least 2 ORs.
-    fn next_round(&self, finished: FinishedRound, phase_operating_rounds: u8) -> RoundTransition {
+    fn next_round(
+        &self,
+        finished: FinishedRound,
+        _phase_name: &str,
+        phase_operating_rounds: u8,
+    ) -> RoundTransition {
         g1830::next_round(finished, phase_operating_rounds.max(2))
     }
     fn starting_cash(&self, num_players: u8) -> i32 {

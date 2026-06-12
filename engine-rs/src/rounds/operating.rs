@@ -818,6 +818,25 @@ impl BaseGame {
             .token_slot_for(&resolved_hex_id, city_index as usize, &corp_sym)
             .ok_or_else(|| GameError::new("No empty token slots"))?;
 
+        // 1867 (G1867::Step::Token adjust_token_price_ability!): the token
+        // costs its charter price × the straight-line hex distance from the
+        // corp's NEAREST placed token. Re-check affordability at the real
+        // cost (the early check used the base price).
+        let token_cost = if self.title_def().token_price_by_distance() {
+            let dist = self
+                .min_token_hex_distance(corp_idx, &resolved_hex_id)
+                .unwrap_or(1);
+            token_cost * dist
+        } else {
+            token_cost
+        };
+        if self.corporations[corp_idx].cash < token_cost {
+            return Err(GameError::new(format!(
+                "{} cannot afford token cost {}",
+                corp_sym, token_cost
+            )));
+        }
+
         let city = self.hexes[hex_idx]
             .tile
             .cities
@@ -854,6 +873,18 @@ impl BaseGame {
         self.round = crate::rounds::Round::Operating(new_state);
         self.update_round_state();
         Ok(())
+    }
+
+    /// Straight-line hex distance from the corp's nearest placed token to
+    /// `target_hex` (Ruby Hex#distance via [`hex_crow_distance`]).
+    fn min_token_hex_distance(&self, corp_idx: usize, target_hex: &str) -> Option<i32> {
+        let flat = self.title_def().hex_layout() == crate::title::HexLayout::Flat;
+        self.corporations[corp_idx]
+            .tokens
+            .iter()
+            .filter(|t| t.used && !t.city_hex_id.is_empty())
+            .filter_map(|t| hex_crow_distance(&t.city_hex_id, target_hex, flat))
+            .min()
     }
 
     fn or_process_run_routes(
@@ -925,34 +956,75 @@ impl BaseGame {
         let corp_idx = self.corp_idx[&corp_sym];
         let revenue = new_state.revenue;
 
-        match kind {
-            DividendKind::Payout => {
-                self.distribute_revenue(corp_idx, revenue)?;
-                // Move share price right
-                if let Some(sp) = self.corporations[corp_idx].share_price.clone() {
-                    let (new_row, new_col) = self.stock_market.move_right(sp.row, sp.column);
-                    if let Some(new_sp) = self.stock_market.share_price_at(new_row, new_col) {
-                        self.corporations[corp_idx].share_price = Some(new_sp);
-                        self.update_market_cell(&corp_sym, sp.row, sp.column, new_row, new_col);
-                    }
+        // Ruby writes operating_history at process_dividend — the corp has
+        // now "operated" (gates SELL_AFTER=:operate sales).
+        self.corporations[corp_idx].ever_operated = true;
+
+        // The corporation-withheld part per kind (Ruby dividend_options:
+        // withhold keeps all, half keeps `(rev/2/total).floor × total` —
+        // Step::HalfPay — and payout keeps nothing); the rest distributes
+        // per share.
+        let withheld = match kind {
+            DividendKind::Payout => 0,
+            DividendKind::Withhold => revenue,
+            DividendKind::Half => {
+                let total = self.corporations[corp_idx].num_share_units();
+                (revenue / 2 / total) * total
+            }
+        };
+        if withheld > 0 {
+            self.corporations[corp_idx].cash += withheld;
+            self.bank.cash -= withheld;
+        }
+        let distributed = revenue - withheld;
+        if distributed > 0 {
+            self.distribute_revenue(corp_idx, distributed)?;
+        }
+
+        // Share-price movement on the DISTRIBUTED amount (Ruby
+        // change_share_price gets `revenue - payout[:corporation]`).
+        let movement = match self.title_def().dividend_movement() {
+            crate::title::DividendMovement::Standard => {
+                if distributed > 0 {
+                    Some(true) // right
+                } else {
+                    Some(false) // left
                 }
             }
-            DividendKind::Withhold => {
-                // Corp keeps all revenue
-                self.corporations[corp_idx].cash += revenue;
-                self.bank.cash -= revenue;
-                // Move share price left
-                if let Some(sp) = self.corporations[corp_idx].share_price.clone() {
-                    let (new_row, new_col) = self.stock_market.move_left(sp.row, sp.column);
-                    if let Some(new_sp) = self.stock_market.share_price_at(new_row, new_col) {
-                        self.corporations[corp_idx].share_price = Some(new_sp);
-                        self.update_market_cell(&corp_sym, sp.row, sp.column, new_row, new_col);
-                    }
+            crate::title::DividendMovement::RightIfGePrice => {
+                let price = self.corporations[corp_idx]
+                    .share_price
+                    .as_ref()
+                    .map_or(0, |sp| sp.price);
+                if distributed <= 0 {
+                    Some(false)
+                } else if distributed >= price {
+                    Some(true)
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(right) = movement {
+            if let Some(sp) = self.corporations[corp_idx].share_price.clone() {
+                let (new_row, new_col) = if right {
+                    self.stock_market.move_right(sp.row, sp.column)
+                } else {
+                    self.stock_market.move_left(sp.row, sp.column)
+                };
+                if let Some(new_sp) = self.stock_market.share_price_at(new_row, new_col) {
+                    self.corporations[corp_idx].share_price = Some(new_sp);
+                    self.update_market_cell(&corp_sym, sp.row, sp.column, new_row, new_col);
                 }
             }
         }
 
-        new_state.step = OperatingStep::BuyTrain;
+        // Next pc from the title's step list (1830: BuyTrain via the
+        // auto-skipped DiscardTrain; 1867: the BuyCompanyPreloan window +
+        // LoanOperations come first for majors). The post-action skip_steps
+        // pass advances through whatever doesn't ask.
+        new_state.step =
+            crate::steps::next_operating_pc(self.operating_step_descs(), &OperatingStep::Dividend);
 
         self.round = crate::rounds::Round::Operating(new_state);
         self.update_round_state();
@@ -985,13 +1057,19 @@ impl BaseGame {
             }
         }
 
-        // In 1830, market pool shares generate revenue paid to the corporation.
-        // IPO shares generate no revenue.
-        let market_eid = EntityId::market();
-        let market_pct = corp.percent_owned_by(&market_eid);
-        if market_pct > 0 {
-            let market_shares = market_pct as i32 / share_unit;
-            let corp_payout = market_shares * per_share;
+        // The corporation's own cut (Ruby Step::Dividend
+        // `holder_for_corporation`): full capitalization (1830) → the
+        // market pool's shares pay the corp and IPO shares pay no one;
+        // incremental (1867) → the corp's TREASURY shares pay the corp and
+        // pool shares pay no one.
+        let holder_eid = match corp.capitalization {
+            crate::title::Capitalization::Full => EntityId::market(),
+            crate::title::Capitalization::Incremental => EntityId::ipo(&corp.sym),
+        };
+        let holder_pct = corp.percent_owned_by(&holder_eid);
+        if holder_pct > 0 {
+            let holder_shares = holder_pct as i32 / share_unit;
+            let corp_payout = holder_shares * per_share;
             self.corporations[corp_idx].cash += corp_payout;
             self.bank.cash -= corp_payout;
         }
@@ -1473,6 +1551,11 @@ impl BaseGame {
             new_state.step = OperatingStep::DiscardTrain;
         }
 
+        // Ruby runs `post_train_buy` after EVERY purchase (depot or
+        // inter-corp), once events/phase/rusting are settled — the 1867
+        // trainless-nationalization consumer (no-op elsewhere).
+        self.post_train_buy();
+
         self.round = crate::rounds::Round::Operating(new_state);
         self.update_round_state();
         Ok(())
@@ -1658,11 +1741,21 @@ impl BaseGame {
             bundle_cert_pcts = pcts;
         }
 
-        // -- check_sale_timing (base.py:1511-1515, SELL_AFTER = "first") ----
-        // `turn > 1 or round.operating`: stock-round sales are forbidden in
-        // the first stock round; OR sales always pass the timing check.
-        if operating_corp.is_none() && self.turn <= 1 {
-            return Err(reject());
+        // -- check_sale_timing (base.rb:1171-1188) --------------------------
+        // SELL_AFTER :first (1830): `turn > 1 or round.operating` — no
+        // first-stock-round sales, OR sales always pass. :operate (1867):
+        // only shares of corporations that have operated, in any round.
+        match self.title_def().sell_after() {
+            crate::title::SellAfter::FirstStockRound => {
+                if operating_corp.is_none() && self.turn <= 1 {
+                    return Err(reject());
+                }
+            }
+            crate::title::SellAfter::Operate => {
+                if !corp.ever_operated {
+                    return Err(reject());
+                }
+            }
         }
 
         // -- fit_in_bank (entities.py:455-458): pool capped at 50% ----------
@@ -2303,6 +2396,10 @@ impl BaseGame {
                         crate::rounds::Round::Operating(s) => s.revenue,
                         _ => 0,
                     };
+                    // Both auto arms ARE the dividend step running — Ruby
+                    // Dividend#skip! calls process_dividend, which writes
+                    // operating_history ("operated", SELL_AFTER=:operate).
+                    self.corporations[corp_idx].ever_operated = true;
                     if revenue == 0 {
                         if let Some(sp) = self.corporations[corp_idx].share_price.clone() {
                             let (nr, nc) = self.stock_market.move_left(sp.row, sp.column);
@@ -2566,4 +2663,63 @@ impl BaseGame {
 
         Ok(())
     }
+}
+
+/// Ruby Hex#distance ("as the crow flies"): with dx = |letter Δ| and
+/// dy = |number Δ|, pointy layouts (double-width numbers) give
+/// dy + max(0,(dx-dy)/2) and flat layouts (double-height numbers) give
+/// dx + max(0,(dy-dx)/2) — the non-doubled axis steps once per row, the
+/// doubled axis twice per hex. Drives 1867's distance-priced tokens.
+pub(crate) fn hex_crow_distance(a: &str, b: &str, flat: bool) -> Option<i32> {
+    fn parse(coord: &str) -> Option<(i32, i32)> {
+        let letter_len = coord.chars().take_while(|c| c.is_ascii_alphabetic()).count();
+        if letter_len == 0 || letter_len > 2 {
+            return None;
+        }
+        let letters: Vec<char> = coord[..letter_len].chars().collect();
+        let x = if letters.len() == 1 {
+            letters[0] as i32 - 'A' as i32
+        } else {
+            26 + (letters[1] as i32 - 'A' as i32)
+        };
+        let y: i32 = coord[letter_len..].parse().ok()?;
+        Some((x, y))
+    }
+    let (ax, ay) = parse(a)?;
+    let (bx, by) = parse(b)?;
+    let dx = (ax - bx).abs();
+    let dy = (ay - by).abs();
+    Some(if flat {
+        dx + 0.max((dy - dx) / 2)
+    } else {
+        dy + 0.max((dx - dy) / 2)
+    })
+}
+
+#[cfg(test)]
+mod hex_distance_tests {
+    use super::hex_crow_distance;
+
+    /// Flat-top (1867): adjacency deltas are (0,±2) and (±1,±1) in
+    /// (letter, number) space — all six neighbors are distance 1.
+    #[test]
+    fn flat_neighbors_are_distance_one() {
+        for n in ["L10", "L14", "K11", "K13", "M11", "M13"] {
+            assert_eq!(hex_crow_distance("L12", n, true), Some(1), "L12->{n}");
+        }
+    }
+
+    #[test]
+    fn flat_straight_line_and_diagonals() {
+        // Same letter row: two number steps per hex.
+        assert_eq!(hex_crow_distance("L12", "L20", true), Some(4));
+        // Pure letter steps.
+        assert_eq!(hex_crow_distance("D2", "H2", true), Some(4));
+        // Mixed: the 1867 CNR probe case shape (e.g. M9 -> I13).
+        assert_eq!(hex_crow_distance("M9", "I13", true), Some(4));
+        assert_eq!(hex_crow_distance("A1", "A1", true), Some(0));
+    }
+
+    // No pointy-top assertions: that branch is Ruby Hex#distance verbatim
+    // and no supported pointy title (1830) prices anything by hex distance.
 }

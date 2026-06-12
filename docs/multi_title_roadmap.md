@@ -239,12 +239,29 @@ rules-incomplete — `alphazero_bridge_ready() = false` keeps the action-layout/
   minors have numeric-string ids ("1".."16") — the decode/entity-classification layer
   already resolves ids against game collections (fixed 2026-06-09), but watch for any
   remaining parses-as-int assumptions.
-- [ ] **Merger round** + steps: `merge`, `post_merger_shares`, `reduce_tokens`,
-  `major_trainless` — new `RoundKind` + `StepKind`s listed in g1867's descriptions,
-  injected via the Phase 0.5 round-flow hook. **← THE frontier blocker
-  (2026-06-12): all four fixtures now stop exactly at the first phase-3 merger
-  round (watermarks 196/207/196/184; hs_ahjzadkh on a literal `merge` action —
-  CV merging minors into the CNR major with `remove_token` follow-ups).**
+- [x] **Merger round** + steps *(done 2026-06-12: `Round::Merger(MergerState)` via
+  the round-flow hook (phases 3-7: SR → OR → MR → OR → MR), `StepKind::{Merge,
+  PostMergerShares, ReduceTokens}` + DiscardTrain in `g1867::merger_steps()`;
+  convert (par = greatest par/par_2 ≤ minor price, president cert to owner) and
+  multi-minor merge (connected-by-track candidates ≤10/≤6-per-owner via the corp
+  graph, auto-finish when candidates dry up, par = min(200, max(100, min+max))
+  snapped down, 10%-grants with the 20% presidency swap, duplicate-token removal,
+  ≤2-tokens + $40 third-token normalization, remove_token with the two-hex rule)
+  + post-merger share dealing (phase C owners-multiple → phase D everyone-once,
+  treasury-paid, presidency swap) + crowded-major train discards. Minors close
+  via a `closed` flag. With it landed the OR/SR rules its fallout exposed:
+  major dividends (half pay, treasury-share dividends under incremental cap,
+  price right only when distribution ≥ price), $40×hex-distance token pricing,
+  SELL_AFTER=:operate (`Corporation.ever_operated`), SELL_BUY_ORDER=:sell_buy
+  post-buy auto-advance, minors-before-majors operating order, per-corp
+  max_ownership in must_sell, L12 double-charged terrain fix, per-train-type
+  event re-fires, and `post_train_buy` running the trainless check AFTER
+  rusting. `major_trainless` (the choose step) lands with nationalization.)*
+  **← NEW frontier (watermarks 344/220/344/437): hs_ahjzadkh replays
+  COMPLETELY; the other three stop at the first `trainless_nationalization`
+  consumer — minors nationalizing into the CN at the 4-train. Corpus: 17/300
+  games already replay to exact recorded final scores; 206 stop at
+  nationalization.**
 - [ ] Variable share structures (5-share and 10-share corps) — depends on Phase 0.5
   parameterization.
 - [x] Loans & interest *(done 2026-06-12: rounds/loans.rs take/auto-take/repay +
