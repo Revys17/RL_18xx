@@ -29,14 +29,16 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "1867"
 FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 
 # fixture stem -> minimum number of actions the engine must accept.
-# Current frontier: auction + SR1 + OR1 track phases (two-lay rule,
-# flat-top map geometry); every fixture stops at a train purchase that
-# needs 1867's automatic loans — the loan model is the next mechanic.
+# Current frontier: through OR1/SR2 into OR2 (loans + automatic loans,
+# cross-corp train trading, minor auto-dividends). Stops: the 3-train's
+# `green_minors_available` event (engine event arms — next), and
+# hs_ahjzadkh at a run_routes whose revenue the engine must COMPUTE from
+# the recorded connections (the 1867 router seam).
 PREFIX_WATERMARK = {
-    "21268": 78,
-    "hs_ahjzadkh_19792": 72,
-    "hs_wuveadew_21268": 78,
-    "nationalization_cash": 80,
+    "21268": 139,
+    "hs_ahjzadkh_19792": 92,
+    "hs_wuveadew_21268": 139,
+    "nationalization_cash": 151,
 }
 
 

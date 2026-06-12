@@ -4,6 +4,7 @@
 //! Each round type has its own state and action processing logic.
 
 pub mod auction;
+pub mod loans;
 pub mod operating;
 pub mod single_auction;
 pub mod stock;

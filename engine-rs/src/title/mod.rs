@@ -87,6 +87,46 @@ pub trait GameTitle: Sync {
         HexLayout::Pointy
     }
 
+    // -- loans (Ruby InterestOnLoans titles; zero/off for 1830) --
+
+    /// Face value of one loan; 0 = the title has no loans.
+    fn loan_value(&self) -> i32 {
+        0
+    }
+    /// Interest per loan per OR. Taking a loan nets `value - interest`
+    /// (1867: $50 - $5 = $45); repaying costs the full value.
+    fn loan_interest_rate(&self) -> i32 {
+        0
+    }
+    /// Total loans in the bank pool (1867: 72).
+    fn num_loans(&self) -> u32 {
+        0
+    }
+    /// Max loans a corporation of the given class may hold.
+    fn max_loans(&self, _corp_type: CorpType) -> u32 {
+        0
+    }
+
+    // -- train-market rules --
+
+    /// Whether a corp may buy trains from corps with a DIFFERENT president
+    /// (Ruby `ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS`; 1830 false, 1867 true).
+    fn train_buy_from_other_players(&self) -> bool {
+        false
+    }
+    /// Whether the president may fund an emergency train buy from hand
+    /// (1830's EMR). False for loans-only EMR titles (1867: no share
+    /// selling, no president cash — loans are the emergency money).
+    fn ebuy_president_may_contribute(&self) -> bool {
+        true
+    }
+    /// Ruby `MUST_BUY_TRAIN`: `:route` (1830 — the obligation needs a
+    /// runnable route) vs `:always` (1867 — a trainless corp must buy
+    /// regardless of routes; true here).
+    fn must_buy_train_always(&self) -> bool {
+        false
+    }
+
     // -- AlphaZero-bridge orders (action layout + encoder) --
     //
     // The flat action layout and the encoder need a pinned iteration order

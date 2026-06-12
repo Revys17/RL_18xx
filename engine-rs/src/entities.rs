@@ -318,6 +318,10 @@ pub struct Corporation {
     /// Treasury (IPO) shares sell at MARKET price instead of par (1867).
     #[serde(default)]
     pub always_market_price: bool,
+    /// Outstanding loans (1867: each $50 face; the count is the state —
+    /// Ruby's Loan objects are just id + amount).
+    #[serde(default)]
+    pub loans: u32,
 }
 
 fn default_share_unit_percent() -> u8 {
@@ -357,6 +361,7 @@ impl Corporation {
             corp_type: crate::title::CorpType::default(),
             max_ownership_percent: default_max_ownership_percent(),
             always_market_price: false,
+            loans: 0,
         }
     }
 

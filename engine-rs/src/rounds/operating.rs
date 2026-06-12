@@ -509,6 +509,11 @@ impl BaseGame {
                 .ok_or_else(|| GameError::new("No current corp"))?
                 .to_string();
             let corp_idx = self.corp_idx[&corp_sym];
+            // 1867's Track step includes AutomaticLoan: lay costs beyond
+            // cash are loan-funded (no-op for titles without loans).
+            if self.title_def().loan_value() > 0 {
+                self.auto_take_loans(corp_idx, terrain_cost);
+            }
             if self.corporations[corp_idx].cash < terrain_cost {
                 return Err(GameError::new(format!(
                     "{} cannot afford terrain cost {}",
@@ -1060,14 +1065,17 @@ impl BaseGame {
             for t in &self.depot.discarded {
                 legal_ids.insert(t.id.clone());
             }
-            // other_trains(entity): other-corp trains, same president only
-            // (ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS == False for 1830).
+            // other_trains(entity): other-corp trains. 1830 restricts to
+            // sellers with the SAME president (ALLOW_TRAIN_BUY_FROM_OTHER_
+            // PLAYERS == false); 1867 trades trains between any corps.
+            let cross_president = self.title_def().train_buy_from_other_players();
             let buyer_pres = self.corporations[corp_idx].president_id();
             for other in &self.corporations {
                 if other.sym == corp_sym {
                     continue;
                 }
-                if buyer_pres.is_none() || other.president_id() != buyer_pres {
+                if !cross_president && (buyer_pres.is_none() || other.president_id() != buyer_pres)
+                {
                     continue;
                 }
                 for t in &other.trains {
@@ -1197,6 +1205,17 @@ impl BaseGame {
             // branch, round.py:582-583).
             let actual_price = price;
 
+            // 1867 AutomaticLoan (step/buy_train.rb try_take_loan): when the
+            // corp MUST buy a train and it comes from the DEPOT, loans are
+            // taken implicitly until the price is covered. Other shortfalls
+            // (optional buys, inter-corp) stay errors for loans titles.
+            if self.title_def().loan_value() > 0
+                && self.corporations[corp_idx].cash < actual_price
+                && self.operating_must_buy_train(&corp_sym)
+            {
+                self.auto_take_loans(corp_idx, actual_price);
+            }
+
             // Check if corp can afford; if not, president contributes.
             let corp_pays = self.corporations[corp_idx].cash.min(actual_price);
             let president_pays = actual_price - corp_pays;
@@ -1205,8 +1224,11 @@ impl BaseGame {
                 // `president_may_contribute(entity)` — i.e. `must_buy_train`
                 // (round.py:550-551, 576-577). Otherwise the contribution
                 // block is skipped and `entity.spend(price)` raises on the
-                // corp's insufficient cash.
-                if !self.president_may_contribute_pub(&corp_sym) {
+                // corp's insufficient cash. Loans-EMR titles (1867) never
+                // let the president contribute.
+                if !self.title_def().ebuy_president_may_contribute()
+                    || !self.president_may_contribute_pub(&corp_sym)
+                {
                     return Err(GameError::new(format!(
                         "{} cannot afford {} for the {} train (has {}) and the president may not contribute",
                         corp_sym, actual_price, train_name, self.corporations[corp_idx].cash
@@ -1370,7 +1392,9 @@ impl BaseGame {
             let corp_pays = self.corporations[corp_idx].cash.min(price);
             if corp_pays < price {
                 let president_pays = price - corp_pays;
-                if !self.president_may_contribute_pub(&corp_sym) {
+                if !self.title_def().ebuy_president_may_contribute()
+                    || !self.president_may_contribute_pub(&corp_sym)
+                {
                     return Err(GameError::new(format!(
                         "{} cannot afford {} for the {} train (has {}) and the president may not contribute",
                         corp_sym, price, train_name, self.corporations[corp_idx].cash
@@ -1424,7 +1448,7 @@ impl BaseGame {
 
         // Also check if the buying corp is now over the train limit
         // (can happen when buying at the limit — Python allows buy+discard).
-        let train_limit = self.phase.train_limit as usize;
+        let train_limit = self.corp_train_limit(corp_idx);
         if self.corporations[corp_idx].trains.len() > train_limit {
             if !new_state.crowded_corps.contains(&corp_sym) {
                 new_state.crowded_corps.push(corp_sym.clone());
@@ -1930,7 +1954,7 @@ impl BaseGame {
         self.depot.discarded.push(train);
 
         // Remove this corp from crowded_corps if it's now within the limit
-        let train_limit = self.phase.train_limit as usize;
+        let train_limit = self.corp_train_limit(corp_idx);
         if self.corporations[corp_idx].trains.len() <= train_limit {
             new_state.crowded_corps.retain(|s| s != &corp_sym);
         }
@@ -2248,6 +2272,31 @@ impl BaseGame {
                             }
                         }
                         true
+                    } else if self.corporations[corp_idx].corp_type
+                        == crate::title::CorpType::Minor
+                    {
+                        // 1867 minors have NO dividend choice (G1867 Dividend
+                        // step: actions [] + skip! auto-payout): revenue/2 to
+                        // the treasury, the rest to the owner, base price
+                        // movement (right on payout).
+                        let corp_half = revenue / 2;
+                        let owner_half = revenue - corp_half;
+                        self.corporations[corp_idx].cash += corp_half;
+                        self.bank.cash -= corp_half;
+                        if let Some(pid) = self.corporations[corp_idx].owner_id.player_id() {
+                            if let Some(pi) = self.player_index(pid) {
+                                self.players[pi].cash += owner_half;
+                                self.bank.cash -= owner_half;
+                            }
+                        }
+                        if let Some(sp) = self.corporations[corp_idx].share_price.clone() {
+                            let (nr, nc) = self.stock_market.move_right(sp.row, sp.column);
+                            if let Some(new_sp) = self.stock_market.share_price_at(nr, nc) {
+                                self.corporations[corp_idx].share_price = Some(new_sp);
+                                self.update_market_cell(&corp_sym, sp.row, sp.column, nr, nc);
+                            }
+                        }
+                        true
                     } else {
                         false
                     }
@@ -2262,7 +2311,7 @@ impl BaseGame {
                     if has_crowded {
                         false // blocking — a corp needs to discard
                     } else {
-                        let train_limit = self.phase.train_limit as usize;
+                        let train_limit = self.corp_train_limit(corp_idx);
                         self.corporations[corp_idx].trains.len() <= train_limit
                     }
                 }
@@ -2291,10 +2340,31 @@ impl BaseGame {
                     // A corp must buy a train only if it has no trains AND has a
                     // legal revenue route. No legal route = no obligation to own a
                     // train, so BuyTrain is optional (and skippable if unaffordable).
+                    // NOTE: OPTIONAL buys use plain cash even for loans
+                    // titles (Ruby 1867 buy_train.rb buying_power: full only
+                    // when must_buy — loans only back the obligation).
                     let corp_cash = self.corporations[corp_idx].cash;
                     let has_trains = !self.corporations[corp_idx].trains.is_empty();
 
-                    let must_buy = !has_trains && self.can_run_route(&corp_sym);
+                    // Loans-EMR titles (1867): the buy obligation only holds
+                    // when a depot train is affordable with max loans.
+                    let obligation_affordable = self.title_def().ebuy_president_may_contribute()
+                        || {
+                            let min_depot = self
+                                .depot
+                                .trains
+                                .first()
+                                .map(|t| t.price)
+                                .into_iter()
+                                .chain(self.depot.discarded.iter().map(|t| t.price))
+                                .min()
+                                .unwrap_or(i32::MAX);
+                            self.corp_buying_power_full(corp_idx) >= min_depot
+                        };
+                    let must_buy = !has_trains
+                        && (self.title_def().must_buy_train_always()
+                            || self.can_run_route(&corp_sym))
+                        && obligation_affordable;
 
                     if must_buy {
                         false // blocking — forced buy, president must sell shares
@@ -2340,19 +2410,21 @@ impl BaseGame {
                                     })
                             });
 
-                        // Can buy inter-corp (same president)?
+                        // Can buy inter-corp? 1830: same president only;
+                        // 1867: any corp's trains are buyable (from $1).
+                        let cross = self.title_def().train_buy_from_other_players();
                         let pres_id = self.corporations[corp_idx].president_id();
                         let can_buy_inter_corp = corp_cash > 0
-                            && pres_id.is_some_and(|pid| {
-                                self.corporations.iter().any(|other| {
-                                    other.sym != corp_sym
-                                        && other.president_id() == Some(pid)
-                                        && !other.trains.is_empty()
-                                })
+                            && self.corporations.iter().any(|other| {
+                                other.sym != corp_sym
+                                    && !other.trains.is_empty()
+                                    && (cross
+                                        || (pres_id.is_some()
+                                            && other.president_id() == pres_id))
                             });
 
                         let has_room = self.corporations[corp_idx].trains.len()
-                            < self.phase.train_limit as usize;
+                            < self.corp_train_limit(corp_idx);
 
                         !((has_room && (can_buy_from_depot || can_buy_from_discard || can_buy_inter_corp)) || can_exchange)
                     }

@@ -227,6 +227,8 @@ pub struct BaseGame {
     pub(crate) player_order: Vec<u32>,
     /// Priority deal player id.
     pub(crate) priority_deal_player: u32,
+    /// Loans left in the bank pool (1867: 72; 0 for titles without loans).
+    pub(crate) loans_remaining: u32,
 }
 
 // crate-visible wrappers that forward to the (private) PyO3-exposed methods
@@ -425,6 +427,7 @@ impl BaseGame {
             game_end_triggered: self.game_end_triggered,
             player_order: self.player_order.clone(),
             priority_deal_player: self.priority_deal_player,
+            loans_remaining: self.loans_remaining,
         }
     }
 
@@ -909,10 +912,22 @@ impl BaseGame {
             // definition order (base.py:2443) — NOT operating order. The
             // ``self.corporations`` Vec mirrors this.
             let train_limit = phase_def.train_limit as usize;
+            // Per-class limits (1867 phases carry {minor: N, major: M}).
+            let minor_limit = phase_def
+                .minor_train_limit
+                .map(|l| l as usize)
+                .unwrap_or(train_limit);
             let crowded: Vec<String> = self
                 .corporations
                 .iter()
-                .filter(|c| c.floated && c.trains.len() > train_limit)
+                .filter(|c| {
+                    let limit = if c.corp_type == crate::title::CorpType::Minor {
+                        minor_limit
+                    } else {
+                        train_limit
+                    };
+                    c.floated && c.trains.len() > limit
+                })
                 .map(|c| c.sym.clone())
                 .collect();
             if !crowded.is_empty() {
@@ -2076,6 +2091,7 @@ impl BaseGame {
             game_end_triggered: false,
             player_order: player_ids.clone(),
             priority_deal_player: first_player_id,
+            loans_remaining: title.num_loans(),
         };
         if single_item_opener {
             // Put the first company up (the Ruby step's `setup`) — needs

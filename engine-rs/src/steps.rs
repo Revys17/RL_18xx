@@ -492,6 +492,11 @@ impl BaseGame {
                     if s.step != OperatingStep::BuyTrain {
                         return vec![];
                     }
+                    // Loans-EMR titles (1867): players never sell shares for
+                    // a train (step/buy_train.rb can_sell? false).
+                    if !self.title_def().ebuy_president_may_contribute() {
+                        return vec![];
+                    }
                     let owner = s
                         .current_corp_sym()
                         .and_then(|sym| self.corp_idx.get(sym))
@@ -982,8 +987,14 @@ impl BaseGame {
                 // Python BuyTrain.actions (round.py:792-805): when the corp
                 // MUST buy a train, `president_may_contribute` holds and the
                 // step returns [SellShares, BuyTrain] — Pass is excluded.
+                // Loans-EMR titles (1867) never sell shares: must-buy is
+                // [buy_train] alone (step/buy_train.rb actions).
                 if self.operating_must_buy_train(sym) {
-                    vec!["buy_train", "sell_shares"]
+                    if self.title_def().ebuy_president_may_contribute() {
+                        vec!["buy_train", "sell_shares"]
+                    } else {
+                        vec!["buy_train"]
+                    }
                 } else {
                     vec!["buy_train", "pass"]
                 }
@@ -1154,7 +1165,30 @@ impl BaseGame {
             .get(corp_sym)
             .map_or(true, |&ci| self.corporations[ci].trains.is_empty());
         let depot_has_trains = !self.depot.trains.is_empty() || !self.depot.discarded.is_empty();
-        no_trains && depot_has_trains && self.must_buy_train_pub(corp_sym)
+        // Ruby MUST_BUY_TRAIN: :route (1830, needs a runnable route) vs
+        // :always (1867).
+        let obliged = self.title_def().must_buy_train_always() || self.must_buy_train_pub(corp_sym);
+        if !(no_trains && depot_has_trains && obliged) {
+            return false;
+        }
+        // Loans-EMR titles (1867, step/buy_train.rb must_buy_train?): the
+        // obligation only holds if the corp can afford a depot train WITH
+        // max loans; otherwise it may pass (→ nationalization, later seam).
+        if !self.title_def().ebuy_president_may_contribute() {
+            if let Some(&ci) = self.corp_idx.get(corp_sym) {
+                let min_depot = self
+                    .depot
+                    .trains
+                    .first()
+                    .map(|t| t.price)
+                    .into_iter()
+                    .chain(self.depot.discarded.iter().map(|t| t.price))
+                    .min()
+                    .unwrap_or(i32::MAX);
+                return self.corp_buying_power_full(ci) >= min_depot;
+            }
+        }
+        true
     }
 
     /// Whether the teleport company's token can actually be placed: a free

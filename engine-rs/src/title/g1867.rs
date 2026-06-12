@@ -122,6 +122,38 @@ impl GameTitle for G1867 {
     fn hex_layout(&self) -> super::HexLayout {
         super::HexLayout::Flat
     }
+    /// Loans (game.rb:376-378, 444-446, 499-530, 899-907): 72 × $50, taking
+    /// nets $45; majors hold ≤5, minors ≤2.
+    fn loan_value(&self) -> i32 {
+        LOAN_VALUE
+    }
+    fn loan_interest_rate(&self) -> i32 {
+        INTEREST_RATE
+    }
+    fn num_loans(&self) -> u32 {
+        NUM_LOANS
+    }
+    fn max_loans(&self, corp_type: CorpType) -> u32 {
+        match corp_type {
+            CorpType::Major => MAXIMUM_LOANS_MAJOR,
+            CorpType::Minor => MAXIMUM_LOANS_MINOR,
+            CorpType::National => 0,
+        }
+    }
+    /// Trains trade between ANY corporations (base default; 1830 restricts
+    /// to same-president).
+    fn train_buy_from_other_players(&self) -> bool {
+        true
+    }
+    /// 1867's EMR is loans-only: no share selling, no president cash
+    /// (step/buy_train.rb `president_may_contribute?` / `can_sell?` false).
+    fn ebuy_president_may_contribute(&self) -> bool {
+        false
+    }
+    /// MUST_BUY_TRAIN = :always (game.rb:308) — no route requirement.
+    fn must_buy_train_always(&self) -> bool {
+        true
+    }
     /// Two lays per OR turn: the second never an upgrade after an upgrade,
     /// costs $20, and must target a fresh hex (game.rb:330-333 TILE_LAYS).
     fn tile_lays(&self) -> &'static [super::TileLayDef] {
