@@ -714,6 +714,138 @@ mod tests {
         assert_eq!(cn_tokens_on(&game, "J12"), 1);
     }
 
+    // -- train export (game.rs or_round_finished; Ruby g_1867 game.rb:858-864
+    //    + depot.rb:20-25). The OR-end export and the game-end timing it can
+    //    latch are pinned here next to the nationalization machinery they
+    //    feed. --
+
+    /// Pin the game's phase to a named PhaseDef (test surgery — fixtures
+    /// reach phases through purchases).
+    fn set_phase(game: &mut BaseGame, name: &str) {
+        let pd = game
+            .title_def()
+            .phases()
+            .into_iter()
+            .find(|p| p.name == name)
+            .unwrap();
+        game.phase = crate::core::Phase::new(
+            pd.name.to_string(),
+            pd.operating_rounds,
+            pd.train_limit,
+            pd.tiles.iter().map(|s| s.to_string()).collect(),
+        );
+    }
+
+    /// Discard depot trains until `head` is the next to sell (simulates the
+    /// earlier tiers having been bought).
+    fn drain_depot_until(game: &mut BaseGame, head: &str) {
+        while game.depot.trains.first().map(|t| t.name.as_str()) != Some(head) {
+            game.depot.trains.remove(0);
+        }
+    }
+
+    /// No 'export_train' status (phases 2/3/8) → or_round_finished no-ops.
+    #[test]
+    fn export_only_in_export_phases() {
+        let mut game = new_4p_game();
+        let n0 = game.depot.trains.len();
+        game.or_round_finished(); // phase 2
+        assert_eq!(game.depot.trains.len(), n0);
+        assert_eq!(game.phase.name, "2");
+    }
+
+    /// Depot#export!: the depot head leaves the game AS IF PURCHASED — the
+    /// phase changes and the train's first-instance events fire.
+    #[test]
+    fn export_removes_head_and_changes_phase() {
+        let mut game = new_4p_game();
+        set_phase(&mut game, "4");
+        drain_depot_until(&mut game, "5");
+        game.or_round_finished();
+        assert_eq!(game.phase.name, "5");
+        assert_eq!(game.depot.trains.first().unwrap().id, "5-1");
+        assert!(game
+            .events_fired
+            .iter()
+            .any(|e| e == "5:minors_cannot_start"));
+        assert!(!game.game_end_triggered);
+    }
+
+    /// An exported 8 runs the full purchase machinery: phase 8, the 4s
+    /// rust, post_train_buy queues the now-trainless major, and
+    /// game_end_check latches final_phase with final_turn = turn + 1
+    /// BEFORE the round transition bumps the turn.
+    #[test]
+    fn export_eight_rusts_fours_queues_majors_and_latches_end() {
+        let mut game = new_4p_game();
+        set_phase(&mut game, "7");
+        rig_floated(&mut game, "GTR", 14, "J12");
+        let gtr = game.corp_idx["GTR"];
+        game.corporations[gtr]
+            .trains
+            .push(crate::entities::Train::new("4".into(), 4, 350));
+        drain_depot_until(&mut game, "8");
+        let turn0 = game.turn;
+
+        game.or_round_finished();
+
+        assert_eq!(game.phase.name, "8");
+        assert!(game.corporations[gtr].trains.is_empty(), "the 4 rusts");
+        assert_eq!(game.trainless_major, vec!["GTR".to_string()]);
+        assert!(game.game_end_triggered);
+        assert_eq!(game.final_turn, Some(turn0 + 1));
+        // game_end_set_final_turn! (game.rb:787-790): the final OR set has
+        // 3 rounds — the next SR→OR transition builds it.
+        use crate::steps::{FinishedRound, RoundStart};
+        let t = game.title_next_round(FinishedRound::Stock);
+        assert_eq!(
+            t.start,
+            RoundStart::Operating {
+                round_num: 1,
+                total_ors: 3
+            }
+        );
+    }
+
+    /// GAME_END_CHECK bank: :current_or — a broken bank ends the game with
+    /// the NEXT operating round to finish, mid-set included.
+    #[test]
+    fn bank_break_ends_with_current_or() {
+        let mut game = new_4p_game();
+        let mut s = crate::rounds::OperatingState::new(1, 2, Vec::new());
+        s.finished = true;
+        game.round = crate::rounds::Round::Operating(s);
+        assert!(!game.should_end_now());
+        game.bank.cash = 0;
+        game.check_game_end();
+        assert!(game.bank_broken && game.game_end_triggered);
+        assert!(game.should_end_now(), "OR 1 of 2 already ends the game");
+    }
+
+    /// GAME_END_CHECK final_phase: :one_more_full_or_set — the final set
+    /// of turn `final_turn` completes first (and bank, when also latched,
+    /// wins with its earlier :current_or timing).
+    #[test]
+    fn final_phase_ends_after_one_more_full_or_set() {
+        let mut game = new_4p_game();
+        set_phase(&mut game, "8");
+        game.check_game_end();
+        assert_eq!(game.final_turn, Some(game.turn + 1));
+        let mut s = crate::rounds::OperatingState::new(3, 3, Vec::new());
+        s.finished = true;
+        game.round = crate::rounds::Round::Operating(s);
+        // Same turn: not yet — the FINAL set belongs to final_turn.
+        assert!(!game.should_end_now());
+        game.turn += 1;
+        assert!(game.should_end_now());
+        // A bank break supersedes: :current_or ends even a mid-set OR.
+        game.turn += 1; // past final_turn — one_more_full_or_set alone says no
+        assert!(!game.should_end_now());
+        game.bank.cash = -1;
+        game.check_game_end();
+        assert!(game.should_end_now());
+    }
+
     /// The pass arm: a queued major declines and stays on the map.
     #[test]
     fn trainless_major_may_decline() {

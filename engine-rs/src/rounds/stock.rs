@@ -1251,6 +1251,15 @@ impl BaseGame {
     /// Resets per-turn state and checks if the player has valid actions.
     /// If not, marks them as passed and recurses to next_entity.
     pub(crate) fn stock_start_entity(&mut self) {
+        // 1867 MajorTrainless: while trainless majors owe a decision, the
+        // step (listed FIRST in the stock list too) blocks the whole round
+        // — no player may be auto-passed before the queue drains. A stock
+        // round can START frozen (e.g. an 8 exported during the OR→SR
+        // transition rusts the 4s); the choice interceptor re-runs this
+        // once the queue drains (game.rs process_action_internal).
+        if !self.trainless_major.is_empty() {
+            return;
+        }
         // Reset step state for new player (Python: step.unpass(), step.setup())
         // bought_this_turn and acted_this_turn are already reset by advance_to_next_player
 

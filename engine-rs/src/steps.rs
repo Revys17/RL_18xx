@@ -299,8 +299,21 @@ impl BaseGame {
     /// SEQUENCE (Ruby/Python `next_round!`). Drives
     /// `transition_to_next_round`. 1830: SR → OR set → (`turn` += 1) → SR.
     pub(crate) fn title_next_round(&self, finished: FinishedRound) -> RoundTransition {
-        self.title_def()
-            .next_round(finished, &self.phase.name, self.phase.operating_rounds)
+        // Ruby next_round! sizes an OR set at the SR→OR transition:
+        // `@operating_rounds = @final_operating_rounds ||
+        // @phase.operating_rounds` (g_1867 game.rb:880-881) — once a
+        // game-end trigger has latched, titles with `game_end_final_ors`
+        // build the FINAL set with that many ORs (1867: 3). Mid-set
+        // rounds carry their `total_ors` in `FinishedRound`, so this only
+        // affects the Stock arm.
+        let ors = if self.game_end_triggered {
+            self.title_def()
+                .game_end_final_ors()
+                .unwrap_or(self.phase.operating_rounds)
+        } else {
+            self.phase.operating_rounds
+        };
+        self.title_def().next_round(finished, &self.phase.name, ors)
     }
 
     /// THE shared `actions_for` accumulation loop (Python

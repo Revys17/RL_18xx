@@ -223,8 +223,19 @@ pub struct BaseGame {
     /// history including process'd action dicts.
     pub(crate) action_log: Vec<serde_json::Value>,
 
-    // Game end tracking
+    // Game end tracking (Ruby base.rb game_end_check: triggers LATCH —
+    // @game_end_trigger persists — and `end_now?` resolves their timing
+    // when a round finishes).
     pub(crate) game_end_triggered: bool,
+    /// Latched when the bank first breaks (Ruby Bank#break!: the flag
+    /// survives bank cash flowing back in). Reason granularity for
+    /// `should_end_now`'s timing resolution (bank vs final_phase).
+    pub(crate) bank_broken: bool,
+    /// Ruby `@final_turn`: under :one_more_full_or_set timing the game ends
+    /// with this turn's final OR. Pinned to `turn + 1` when the first
+    /// trigger latches on titles with `game_end_final_ors` (1867:
+    /// game.rb:787-790; never set for 1830).
+    pub(crate) final_turn: Option<u32>,
     /// The player order for the current game (ids, in seating order).
     pub(crate) player_order: Vec<u32>,
     /// Priority deal player id.
@@ -479,6 +490,8 @@ impl BaseGame {
             },
             action_log: self.action_log.clone(),
             game_end_triggered: self.game_end_triggered,
+            bank_broken: self.bank_broken,
+            final_turn: self.final_turn,
             player_order: self.player_order.clone(),
             priority_deal_player: self.priority_deal_player,
             loans_remaining: self.loans_remaining,
@@ -612,6 +625,13 @@ impl BaseGame {
                             self.start_operating();
                         }
                     }
+                }
+                // A stock round that STARTED frozen (an exported 8 filled
+                // the queue during the OR→SR transition) skipped its
+                // start auto-advance — run it now that the queue drained
+                // (stock_start_entity returns early while frozen).
+                if matches!(&self.round, Round::Stock(_)) {
+                    self.stock_start_entity();
                 }
                 for _ in 0..20 {
                     let round_finished = match &self.round {
@@ -854,13 +874,37 @@ impl BaseGame {
         Ok(())
     }
 
-    /// Check if the game should end now based on the end timing.
-    /// 1830: bankruptcy = immediate (handled above), bank = full_or.
-    fn should_end_now(&self) -> bool {
-        // "full_or" timing: end after the last OR of the current set
-        match &self.round {
-            Round::Operating(s) => s.round_num >= s.total_ors,
-            _ => false,
+    /// Whether the just-finished round ends the game (Ruby base.rb:3023-3036
+    /// `end_now?`, called while `@round.finished?`). Resolves the latched
+    /// triggers' timing — several may be latched at once; the EARLIEST
+    /// timing wins (GAME_END_TIMING_PRIORITY, base.rb:2972-2977) — then
+    /// applies it. All timings here require the finished round to be an
+    /// OPERATING round (base.rb:3027 `round.is_a?(round_end)`); bankruptcy
+    /// (1830 :immediate) is handled in the Bankrupt action arm.
+    pub(crate) fn should_end_now(&self) -> bool {
+        use crate::title::GameEndTiming;
+        let Round::Operating(s) = &self.round else {
+            return false;
+        };
+        let mut timing: Option<GameEndTiming> = None;
+        if self.bank_broken {
+            timing = Some(self.title_def().bank_game_end_timing());
+        }
+        if self.title_def().final_phase_game_end() && self.in_final_phase() {
+            let t = GameEndTiming::OneMoreFullOrSet;
+            timing = Some(timing.map_or(t, |prev| prev.min(t)));
+        }
+        match timing {
+            // :current_or — this OR is the last, wherever it sits in the set.
+            Some(GameEndTiming::CurrentOr) => true,
+            // :full_or — the set completes first.
+            Some(GameEndTiming::FullOr) => s.round_num >= s.total_ors,
+            // :one_more_full_or_set — the final (3-OR in 1867) set of
+            // `final_turn` completes (base.rb:3033 `@turn == @final_turn`).
+            Some(GameEndTiming::OneMoreFullOrSet) => {
+                s.round_num >= s.total_ors && Some(self.turn) == self.final_turn
+            }
+            None => false,
         }
     }
 
@@ -956,12 +1000,61 @@ impl BaseGame {
                 total_ors: s.total_ors,
             },
         };
+        // Ruby next_round! runs `or_round_finished` when an OPERATING round
+        // ends, BEFORE deciding merger-vs-OR-vs-SR (g_1867 game.rb:883-890)
+        // — so an exported train's phase change steers that decision.
+        if matches!(finished, FinishedRound::Operating { .. }) {
+            self.or_round_finished();
+        }
         let transition = self.title_next_round(finished);
         if transition.increment_turn {
             self.turn += 1;
         }
         self.start_round(transition.start);
         self.update_round_state();
+    }
+
+    /// Ruby G1867 `or_round_finished` (game.rb:858-864): in the
+    /// 'export_train' phases (4-7) EVERY operating round's end exports the
+    /// next depot train — Depot#export! (depot.rb:20-25) removes it from
+    /// the game and runs `phase.buying_train!` AS IF PURCHASED: the phase
+    /// change, the train's first-instance events and rusting all fire
+    /// (`check_phase_advance`). Then `post_train_buy` (the trainless-
+    /// nationalization consumer, AFTER rusting) and `game_end_check` run.
+    /// Phases without the status (all of 1830's; 1867's 2/3/8) are a no-op.
+    pub(crate) fn or_round_finished(&mut self) {
+        let exporting = self
+            .title_def()
+            .phases()
+            .iter()
+            .find(|p| p.name == self.phase.name)
+            .is_some_and(|p| p.status.contains(&"export_train"));
+        if !exporting {
+            return;
+        }
+        // Depot#export!: the head of the depot queue (Ruby @upcoming.first
+        // — bought trains have already left `depot.trains`). The depot
+        // can't run dry while the status holds (the 8 pool is effectively
+        // unlimited and phase 8 drops the status), so an empty depot here
+        // is a real bug — fail loudly like Ruby's nil crash would.
+        assert!(
+            !self.depot.trains.is_empty(),
+            "or_round_finished: export from an empty depot"
+        );
+        let train = self.depot.trains.remove(0);
+        // phase.buying_train!(nil, train, depot) (phase.rb:19-30): phase
+        // next!, the train's events, rusting — exactly the bought-train
+        // machinery.
+        self.check_phase_advance(&train.name);
+        // post_train_buy AFTER rusting (game.rb:741-743, 862): the export
+        // can leave operated corps trainless — minors nationalize now,
+        // majors queue for the MajorTrainless choice, FREEZING the round
+        // being started until the queue drains.
+        self.post_train_buy();
+        // game_end_check (game.rb:863): an exported 8 latches final_phase
+        // with `final_turn = turn + 1` BEFORE the transition bumps `turn`;
+        // the nationalization payouts above can break the bank.
+        self.check_game_end();
     }
 
     /// Per-kind round setup (Python's `new_stock_round` /
@@ -1629,11 +1722,46 @@ impl BaseGame {
         }
     }
 
-    /// Check if the game should end.
-    fn check_game_end(&mut self) {
-        // Bank breaks → end after current set of ORs
-        if self.bank.cash <= 0 && !self.game_end_triggered {
-            self.game_end_triggered = true;
+    /// Latch game-end triggers (Ruby base.rb:2969-2986 `game_end_check`,
+    /// run after every action — and from `or_round_finished`, whose
+    /// in-transition latch is load-bearing: it must pin `final_turn` to
+    /// the CURRENT turn + 1 before the transition increments it).
+    /// `should_end_now` resolves the latched triggers' timing when a round
+    /// finishes.
+    pub(crate) fn check_game_end(&mut self) {
+        // GAME_END_CHECK `bank:` (1830 full_or, 1867 current_or).
+        if self.bank.cash <= 0 && !self.bank_broken {
+            self.bank_broken = true;
+            self.latch_game_end();
+        }
+        // GAME_END_CHECK `final_phase:` (base.rb:3012-3014: the current
+        // phase is the title's last — 1867's phase 8, one_more_full_or_set).
+        // Pure predicate (phases never regress), so no latch field; the
+        // latch_game_end side effects are idempotent.
+        if self.title_def().final_phase_game_end() && self.in_final_phase() {
+            self.latch_game_end();
+        }
+    }
+
+    /// Whether the current phase is the title's last (Ruby
+    /// `game_end_check_final_phase?`, base.rb:3012-3014).
+    fn in_final_phase(&self) -> bool {
+        self.title_def()
+            .phases()
+            .last()
+            .is_some_and(|p| p.name == self.phase.name)
+    }
+
+    /// A game-end trigger latched: Ruby `game_end_set_final_turn!`. The
+    /// 1867 override (game.rb:787-790) runs for ANY trigger: the final OR
+    /// set becomes `game_end_final_ors` (consumed at the next SR→OR
+    /// transition, steps.rs `title_next_round`) and `final_turn ||= turn+1`.
+    /// 1830 (`game_end_final_ors` = None) keeps the base no-op: full_or
+    /// timing never consults `final_turn`.
+    fn latch_game_end(&mut self) {
+        self.game_end_triggered = true;
+        if self.title_def().game_end_final_ors().is_some() && self.final_turn.is_none() {
+            self.final_turn = Some(self.turn + 1);
         }
     }
 
@@ -2386,6 +2514,8 @@ impl BaseGame {
             recent_actions: Vec::new(),
             action_log: Vec::new(),
             game_end_triggered: false,
+            bank_broken: false,
+            final_turn: None,
             player_order: player_ids.clone(),
             priority_deal_player: first_player_id,
             loans_remaining: title.num_loans(),

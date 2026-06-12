@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use super::{
     AbilityDef, BorderDef, Capitalization, CompanyDef, CorpType, CorporationDef, DividendMovement,
-    GameTitle, HexDef, HexType, MarketCell, MarketMovement, MarketZone, OwnerType, PhaseDef,
-    SellAfter, TrainDef,
+    GameEndTiming, GameTitle, HexDef, HexType, MarketCell, MarketMovement, MarketZone, OwnerType,
+    PhaseDef, SellAfter, TrainDef,
 };
 use crate::steps::{FinishedRound, RoundStart, RoundTransition, StepDesc, StepKind};
 use crate::tiles::TileDef;
@@ -74,6 +74,19 @@ impl GameTitle for G1867 {
     /// SELL_AFTER = :operate (game.rb:312).
     fn sell_after(&self) -> SellAfter {
         SellAfter::Operate
+    }
+    /// GAME_END_CHECK = { bank: :current_or, final_phase:
+    /// :one_more_full_or_set } (game.rb:315).
+    fn bank_game_end_timing(&self) -> GameEndTiming {
+        GameEndTiming::CurrentOr
+    }
+    fn final_phase_game_end(&self) -> bool {
+        true
+    }
+    /// game_end_set_final_turn! (game.rb:787-790): any latched trigger
+    /// makes the final OR set 3 rounds and pins final_turn = turn + 1.
+    fn game_end_final_ors(&self) -> Option<u8> {
+        Some(3)
     }
     fn starting_cash(&self, num_players: u8) -> i32 {
         starting_cash(num_players)
@@ -308,9 +321,10 @@ pub fn merger_steps() -> &'static [StepDesc] {
 ///   OR → MERGER ROUND in phases 3-7 (SR → OR → MR → OR → MR → SR),
 ///   plain OR flow otherwise; MR → next OR / SR (turn++; `new_or!`).
 ///
-/// TODO(1867-export): `or_round_finished` exports a train to the CN in
-/// phases 4-7 (depot.export! + phase change as if purchased) — lands with
-/// the train-export work.
+/// `or_round_finished` (the phase-4-7 train export) runs in
+/// `transition_to_next_round` (game.rs) BEFORE this function — its phase
+/// change steers the merger-vs-OR decision below, exactly Ruby's ordering
+/// (next_round! evaluates `phase.name` AFTER or_round_finished).
 pub fn next_round(
     finished: FinishedRound,
     phase_name: &str,
@@ -861,12 +875,11 @@ pub fn recorded_route_revenue(
 // the MAJOR limit, `minor_train_limit` the minor one. Phase '2' has no
 // major limit in Ruby (majors cannot exist before phase 4) — the minor
 // value is mirrored into both fields. Every phase has operating_rounds 2;
-// phases 3-7 interleave a merger round after each OR
-// (TODO(1867-merger)) and the final OR set is 3
-// (game_end_set_final_turn!, game.rb:787-790 — TODO(1867-endgame)).
+// phases 3-7 interleave a merger round after each OR and the final OR set
+// is 3 (game_end_set_final_turn!, game.rb:787-790 — `game_end_final_ors`).
 // 'export_train' status (phases 4-7): at the end of each OR the next depot
 // train is exported to the CN, triggering phase change as if purchased
-// (game.rb:323-327, 858-864 — TODO(1867-export)).
+// (game.rb:323-327, 858-864 — `or_round_finished` in game.rs).
 // ---------------------------------------------------------------------------
 
 pub fn phases() -> Vec<PhaseDef> {

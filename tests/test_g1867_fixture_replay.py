@@ -29,20 +29,21 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "1867"
 FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 
 # fixture stem -> minimum number of actions the engine must accept.
-# Current frontier: CN NATIONALIZATION replays (the CN national entity with
-# its setup tokens/neutral greens/Montreal reservation, nationalize! for
-# trainless minors at the 4-train with loan repayment + price drops +
-# shareholder payouts + CN token replacement, and the MajorTrainless
-# choose/pass queue). hs_ahjzadkh replays COMPLETELY (scores still diverge
-# on the endgame loan valuation — the xfail below); 21268/hs_wuveadew stop
-# at the first phase-4 TRAIN EXPORT (or_round_finished depot.export! shifts
-# the depot, so the next recorded buy names a train we still hold);
-# nationalization_cash stops one OR later on the X3→X6 brown-Montreal
-# upgrade displacing a token (3 cities → 2+1 slots city merge).
+# Current frontier: TRAIN EXPORT replays (or_round_finished: every OR end
+# in the 'export_train' phases 4-7 exports the depot head as if purchased —
+# phase change, events, rusting, post_train_buy, game_end_check; verified
+# cash/bank/CN-token exact against Ruby at 21268 file id 606).
+# hs_ahjzadkh replays COMPLETELY (scores still diverge on the endgame loan
+# valuation — the xfail below); 21268/hs_wuveadew stop at the X3→X6
+# brown-Montreal lay (L12): the engine mis-skips the unimplemented
+# RedeemShares step (Ruby has NYC redeeming pool shares there), so the
+# preceding pass is consumed by Track and the recorded lay arrives at
+# Place-a-Token; nationalization_cash stops one OR later on the same
+# X3→X6 upgrade displacing a token (3 cities → 2+1 slots city merge).
 PREFIX_WATERMARK = {
-    "21268": 402,
+    "21268": 468,
     "hs_ahjzadkh_19792": 220,
-    "hs_wuveadew_21268": 402,
+    "hs_wuveadew_21268": 468,
     "nationalization_cash": 494,
 }
 

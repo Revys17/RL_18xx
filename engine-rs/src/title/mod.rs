@@ -181,6 +181,31 @@ pub trait GameTitle: Sync {
         false
     }
 
+    // -- game-end timing (Ruby GAME_END_CHECK; base.rb game_end_check /
+    //    end_now?) --
+
+    /// GAME_END_CHECK `bank:` — when a broken bank actually ends the game.
+    /// 1830: `:full_or` (the current OR SET completes). 1867: `:current_or`
+    /// (the next operating round to finish is the last).
+    fn bank_game_end_timing(&self) -> GameEndTiming {
+        GameEndTiming::FullOr
+    }
+    /// GAME_END_CHECK `final_phase:` — whether reaching the LAST phase is a
+    /// game-end trigger (1867: `:one_more_full_or_set`; 1830 has none).
+    /// The timing is always OneMoreFullOrSet for titles that use it.
+    fn final_phase_game_end(&self) -> bool {
+        false
+    }
+    /// `game_end_set_final_turn!` override (g_1867 game.rb:787-790): once
+    /// ANY game-end trigger latches, the FINAL OR set built at the next
+    /// SR→OR transition has this many ORs (1867: 3) and `final_turn` is
+    /// pinned to `turn + 1`. None (default) = the base no-op: set size
+    /// stays `phase.operating_rounds` and `final_turn` is only consulted
+    /// by titles that set it here.
+    fn game_end_final_ors(&self) -> Option<u8> {
+        None
+    }
+
     /// Company purchase price bounds for in-OR company buys, derived from
     /// face value. Ruby base `Company`: ceil(value/2) .. 2×value; 1867's
     /// `CompanyPriceUpToFace` setup module: $1 .. face. The lower bound also
@@ -628,6 +653,22 @@ pub enum SellAfter {
     FirstStockRound,
     /// `:operate` — only shares of corporations that have operated.
     Operate,
+}
+
+/// When a latched game-end trigger actually ends the game (Ruby
+/// GAME_END_CHECK values; base.rb:3023-3036 `end_now?`). Ordered by Ruby's
+/// GAME_END_TIMING_PRIORITY — when several triggers are latched the
+/// EARLIEST timing wins (base.rb:2977 keeps the lower priority index), so
+/// `min` over this enum resolves the active timing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum GameEndTiming {
+    /// `:current_or` — the next operating round to finish is the last.
+    CurrentOr,
+    /// `:full_or` — the current OR SET completes first.
+    FullOr,
+    /// `:one_more_full_or_set` — one more FULL OR set after this turn
+    /// (`final_turn = turn + 1`, base.rb:2987-2989).
+    OneMoreFullOrSet,
 }
 
 /// Major-corp dividend price-movement policy (see
