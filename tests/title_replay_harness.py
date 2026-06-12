@@ -106,6 +106,34 @@ def replay_game(
             raise ReplayError(
                 f"action {i} ({action.get('type')}) rejected: {exc}", i, action
             ) from exc
+        # Server-generated auto actions (programmed passes, 1867's
+        # BuyCompanyPreloan auto-pass for loan-free corps, ...) are embedded
+        # in their parent action and processed right after it — exactly how
+        # Ruby replays them (base.rb process_action: `action.auto_actions
+        # .each { process_single_action }`).
+        for j, auto in enumerate(action.get("auto_actions") or []):
+            auto = dict(auto)
+            if auto.get("type") == "message":
+                continue
+            if auto.get("entity_type") == "player":
+                mapped = player_mapping.get(auto.get("entity"))
+                if mapped is None:
+                    raise ReplayError(
+                        f"action {i} auto[{j}]: unknown player entity"
+                        f" {auto.get('entity')!r}",
+                        i,
+                        auto,
+                    )
+                auto["entity"] = mapped
+                auto["user"] = mapped
+            try:
+                rust.process_action(auto)
+            except BaseException as exc:
+                raise ReplayError(
+                    f"action {i} auto[{j}] ({auto.get('type')}) rejected: {exc}",
+                    i,
+                    auto,
+                ) from exc
         applied += 1
 
     result = {

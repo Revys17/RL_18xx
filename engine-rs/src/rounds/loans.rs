@@ -6,10 +6,13 @@
 //! minors ≤2, the bank pool holds 72. `AutomaticLoan` steps (Track,
 //! BuyTrain) take loans implicitly while a cost exceeds cash.
 //!
-//! TODO(1867-interest): interest snapshots at OR start + the LoanOperations
-//! auto-step (pay interest → nationalize if unpayable → auto-repay) land
-//! with the loan-operations seam; this module is the take/spend half the
-//! OR1 frontier needs.
+//! Interest (the automatic LoanOperations step — step/loan_operations.rb +
+//! game/interest_on_loans.rb): each OR snapshots loans-per-corp at round
+//! start (`calculate_interest`); when a corp's turn passes the
+//! LoanOperations position it pays $5 × snapshot (taking loans to cover a
+//! shortfall — interest owed does NOT grow on those), then FORCIBLY repays
+//! loans while cash covers the $50 face, then re-snapshots
+//! (`calculate_corporation_interest`).
 
 use crate::actions::GameError;
 use crate::game::BaseGame;
@@ -73,6 +76,64 @@ impl BaseGame {
         while self.corporations[corp_idx].cash < cost && self.corp_can_take_loan(corp_idx) {
             let _ = self.take_loan(corp_idx);
         }
+    }
+
+    /// Ruby `repay_loan`: the corp pays the full face value back to the
+    /// bank; the loan returns to the pool.
+    pub(crate) fn repay_loan(&mut self, corp_idx: usize) {
+        let value = self.title_def().loan_value();
+        self.corporations[corp_idx].cash -= value;
+        self.bank.cash += value;
+        self.corporations[corp_idx].loans -= 1;
+        self.loans_remaining += 1;
+    }
+
+    /// The LoanOperations auto-step's whole effect for the corp whose turn
+    /// is passing it (G1867::Step::LoanOperations#skip! + InterestOnLoans#
+    /// pay_interest!): pay interest on `loans_at_or_start` (the OR-start
+    /// snapshot), taking loans to cover a shortfall; then forcibly repay
+    /// loans while cash covers the face value. Returns the corp's NEW
+    /// snapshot count (Ruby `calculate_corporation_interest`).
+    pub(crate) fn loan_operations_auto(
+        &mut self,
+        corp_idx: usize,
+        loans_at_or_start: u32,
+    ) -> u32 {
+        let title = self.title_def();
+        let rate = title.loan_interest_rate();
+        let face = title.loan_value();
+
+        let owed = rate * loans_at_or_start as i32;
+        if owed > 0 {
+            // Interest is owed on the SNAPSHOT — taking loans here covers
+            // the cash but does not increase what is owed this OR.
+            while owed > self.corporations[corp_idx].cash && self.corp_can_take_loan(corp_idx) {
+                let _ = self.take_loan(corp_idx);
+            }
+            if owed > self.corporations[corp_idx].cash {
+                // Ruby interest_unpaid! → nationalize!(entity). No corp can
+                // reach this before CN nationalization exists: a corp with a
+                // loan slot free covers $5-per-loan interest by taking one
+                // ($45), and at max loans it earned at least the prior
+                // repayments. Loud failure until TODO(1867-nationalize).
+                unimplemented!(
+                    "1867 nationalization: {} owes ${} interest with ${} cash",
+                    self.corporations[corp_idx].sym,
+                    owed,
+                    self.corporations[corp_idx].cash
+                );
+            }
+            self.corporations[corp_idx].cash -= owed;
+            self.bank.cash += owed;
+        }
+
+        // Forced repayment (LoanOperations#skip!: `repay_loan while
+        // can_payoff?` — cash >= face and loans outstanding).
+        while self.corporations[corp_idx].loans > 0 && self.corporations[corp_idx].cash >= face {
+            self.repay_loan(corp_idx);
+        }
+
+        self.corporations[corp_idx].loans
     }
 
     /// The current train limit for THIS corp: the phase's per-class limit

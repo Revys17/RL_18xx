@@ -474,6 +474,12 @@ pub enum OperatingStep {
     PlaceToken,
     RunRoutes,
     Dividend,
+    /// 1867: the blocking company-buy window BEFORE loan operations
+    /// (buying pre-repayment is a real decision for a corp with loans).
+    BuyCompanyPreloan,
+    /// 1867: automatic interest payment + forced loan repayment. Always
+    /// auto-skips (the skip arm IS the mechanic); never blocks.
+    LoanOperations,
     DiscardTrain,
     BuyTrain,
     BuyCompany,
@@ -534,6 +540,13 @@ pub struct OperatingState {
     /// the teleport completes (token placed or passed → `teleport_complete()`).
     #[serde(default)]
     pub teleport_pending: bool,
+    /// Loans held per corp at OR START (Ruby `calculate_interest`,
+    /// g_1867/game.rb:425-429): interest is owed on THIS snapshot, so loans
+    /// taken mid-OR are interest-free until the next OR. Re-snapshotted per
+    /// corp by its LoanOperations step (`calculate_corporation_interest`).
+    /// Empty for titles without loans.
+    #[serde(default)]
+    pub interest_snapshot: std::collections::HashMap<String, u32>,
 }
 
 impl OperatingState {
@@ -555,6 +568,7 @@ impl OperatingState {
             finished: false,
             last_share_sold_price: None,
             teleport_pending: false,
+            interest_snapshot: std::collections::HashMap::new(),
         }
     }
 

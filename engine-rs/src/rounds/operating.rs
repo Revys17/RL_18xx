@@ -603,7 +603,14 @@ impl BaseGame {
                 // the new city whose exits are a superset of the old city's exits.
                 // This handles OO tile upgrades where city ordering changes.
                 let old_tile_base = old_tile_name.split('-').next().unwrap_or(&old_tile_name);
-                let old_exits = self.city_exits_from_catalog(old_tile_base, old_tile_rotation);
+                let mut old_exits = self.city_exits_from_catalog(old_tile_base, old_tile_rotation);
+                if old_exits.is_empty() {
+                    // Preprinted tiles aren't in the catalog — derive from
+                    // the live tile (1867 Montreal/Ottawa: the preprinted
+                    // city order differs from the green tiles', so the
+                    // positional fallback would misplace home tokens).
+                    old_exits = crate::game::BaseGame::city_exits_from_tile(&self.hexes[hex_idx].tile);
+                }
                 let new_exits = self.city_exits_from_catalog(base_tile_id, rotation);
 
                 for (old_ci, old_city) in old_cities.iter().enumerate() {
@@ -2239,8 +2246,32 @@ impl BaseGame {
         {
             let should_skip = match kind {
                 StepKind::Track => {
-                    // Always blocking — requires explicit lay_tile or pass
-                    false
+                    // Ruby Tracker#can_lay_tile?: the step blocks while the
+                    // NEXT lay-allowance slot is usable and its slot cost is
+                    // within buying power — FULL power on AutomaticLoan
+                    // titles (probed on 21268: minor CA, $10 cash + 2
+                    // takeable loans, IS asked for the $20 second lay; minor
+                    // BO, $1 cash + 0 takeable, is NOT). 1830's single free
+                    // slot always blocks pre-lay; its pc advances on the lay
+                    // itself, so this arm is 1830-inert.
+                    let (laid, upgraded) = match &self.round {
+                        crate::rounds::Round::Operating(s) => {
+                            (s.num_laid_track as usize, s.upgraded_this_turn)
+                        }
+                        _ => (0, false),
+                    };
+                    match self.title_def().tile_lays().get(laid) {
+                        None => true, // allowance exhausted
+                        Some(entry) => {
+                            let upgrade_ok = match entry.upgrade {
+                                crate::title::UpgradeAllowance::Yes => true,
+                                crate::title::UpgradeAllowance::No => false,
+                                crate::title::UpgradeAllowance::NotIfUpgraded => !upgraded,
+                            };
+                            let usable = entry.lay || upgrade_ok;
+                            !usable || self.corp_buying_power_full(corp_idx) < entry.cost
+                        }
+                    }
                 }
                 StepKind::Token => {
                     // Check for pending tokens from OO upgrade
@@ -2347,6 +2378,40 @@ impl BaseGame {
                         let has_ability = self.corp_has_unused_lay_ability(&corp_sym);
                         !can_buy_company && !has_ability
                     }
+                }
+                StepKind::BuyCompanyPreloan => {
+                    // Base BuyCompany actionability at the pre-LoanOperations
+                    // window (1867). Ruby auto-passes loan-free corps but
+                    // that pass is server-generated INTO the record — replay
+                    // blocks here either way and consumes it.
+                    if !self.phase_has_status("can_buy_companies") {
+                        true
+                    } else {
+                        let corp_cash = self.corporations[corp_idx].cash;
+                        let title = self.title_def();
+                        let can_buy_company = self.companies.iter().any(|c| {
+                            !c.closed
+                                && !c.no_buy
+                                && c.owner.is_player()
+                                && corp_cash >= title.company_buy_price_range(c.value).0
+                        });
+                        !can_buy_company
+                    }
+                }
+                StepKind::LoanOperations => {
+                    // The skip IS the mechanic: pay interest on the OR-start
+                    // snapshot, then forced repayment, then re-snapshot.
+                    let loans_at_start = match &self.round {
+                        crate::rounds::Round::Operating(s) => {
+                            s.interest_snapshot.get(&corp_sym).copied().unwrap_or(0)
+                        }
+                        _ => 0,
+                    };
+                    let new_count = self.loan_operations_auto(corp_idx, loans_at_start);
+                    if let crate::rounds::Round::Operating(ref mut s) = self.round {
+                        s.interest_snapshot.insert(corp_sym.clone(), new_count);
+                    }
+                    true
                 }
                 StepKind::BuyTrain => {
                     // A corp must buy a train only if it has no trains AND has a

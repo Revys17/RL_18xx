@@ -314,6 +314,32 @@ impl BaseGame {
         self.hex_idx.get(coord).map(|&i| &self.hexes[i])
     }
 
+    /// Per-city exit edges of a LIVE tile (paths already rotated). Covers
+    /// tiles the catalog can't resolve — preprinted multi-city hexes like
+    /// 1867's Montreal/Ottawa, whose token-preserving upgrades need
+    /// exit-based city mapping.
+    pub(crate) fn city_exits_from_tile(tile: &crate::graph::Tile) -> Vec<Vec<u8>> {
+        let num_cities = tile.cities.len();
+        let mut exits: Vec<Vec<u8>> = vec![Vec::new(); num_cities];
+        for path in &tile.paths {
+            let (city_idx, edge) = match (&path.a, &path.b) {
+                (crate::tiles::PathEndpoint::City(ci), crate::tiles::PathEndpoint::Edge(e)) => {
+                    (Some(*ci), Some(*e))
+                }
+                (crate::tiles::PathEndpoint::Edge(e), crate::tiles::PathEndpoint::City(ci)) => {
+                    (Some(*ci), Some(*e))
+                }
+                _ => (None, None),
+            };
+            if let (Some(ci), Some(e)) = (city_idx, edge) {
+                if ci < num_cities {
+                    exits[ci].push(e);
+                }
+            }
+        }
+        exits
+    }
+
     /// Whether the CURRENT phase carries a status flag (Ruby/Python
     /// `phase.status`; e.g. "can_buy_companies" in 1830's phases 3-4).
     pub(crate) fn phase_has_status(&self, status: &str) -> bool {
@@ -848,11 +874,22 @@ impl BaseGame {
                 self.stock_start_entity();
             }
             crate::steps::RoundStart::Operating { round_num, total_ors } => {
-                self.round = Round::Operating(crate::rounds::OperatingState::new(
+                let mut state = crate::rounds::OperatingState::new(
                     round_num,
                     total_ors,
                     self.compute_operating_order(),
-                ));
+                );
+                // Ruby `calculate_interest` (g_1867 operating_round): loans
+                // held at OR START owe this OR's interest — loans taken
+                // mid-OR don't. No-op for titles without loans.
+                if self.title_def().loan_value() > 0 {
+                    state.interest_snapshot = self
+                        .corporations
+                        .iter()
+                        .map(|c| (c.sym.clone(), c.loans))
+                        .collect();
+                }
+                self.round = Round::Operating(state);
                 // OR setup: pay company revenues, start first corp's turn
                 self.payout_companies();
                 self.start_operating();
@@ -5121,6 +5158,9 @@ impl BaseGame {
                         }
                         types.push("pass".to_string());
                     }
+                    // 1867-only pcs — unreachable in this 1830 oracle.
+                    crate::rounds::OperatingStep::BuyCompanyPreloan
+                    | crate::rounds::OperatingStep::LoanOperations => {}
                     crate::rounds::OperatingStep::Done => {}
                 }
                 types

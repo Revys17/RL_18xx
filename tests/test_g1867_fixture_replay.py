@@ -29,18 +29,18 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "1867"
 FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 
 # fixture stem -> minimum number of actions the engine must accept.
-# Current frontier: through OR1/SR2 into OR2 (loans, train market, minor
-# auto-dividends, engine-computed route revenue, $1-min company prices).
-# ALL FOUR now stop on the missing turn-end loan mechanics: the automatic
-# LoanOperations step (pay $5/loan interest then forced loan repayment
-# while cash >= $50 — without it corps keep cash Ruby strips, so our
-# BuyTrain blocks where Ruby's skips) and its preceding blocking
-# BuyCompanyPreloan step (asks corps WITH loans for one more recorded pass).
+# Current frontier: deep into the phase-3 ORs (loans + interest +
+# LoanOperations forced repayment, BuyCompanyPreloan, train market, minor
+# auto-dividends, engine-computed route revenue, $1-min company prices,
+# Track affordability gate, preprinted-multi-city upgrade token mapping).
+# ALL FOUR now stop at the MERGER ROUND boundary (hs_ahjzadkh on a literal
+# `merge` action) — the next big seam: a new round type interleaved after
+# every OR in phases 3-7, with merge/convert + the CN national.
 PREFIX_WATERMARK = {
-    "21268": 147,
-    "hs_ahjzadkh_19792": 105,
-    "hs_wuveadew_21268": 147,
-    "nationalization_cash": 159,
+    "21268": 196,
+    "hs_ahjzadkh_19792": 207,
+    "hs_wuveadew_21268": 196,
+    "nationalization_cash": 184,
 }
 
 

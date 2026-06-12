@@ -241,13 +241,39 @@ rules-incomplete — `alphazero_bridge_ready() = false` keeps the action-layout/
   remaining parses-as-int assumptions.
 - [ ] **Merger round** + steps: `merge`, `post_merger_shares`, `reduce_tokens`,
   `major_trainless` — new `RoundKind` + `StepKind`s listed in g1867's descriptions,
-  injected via the Phase 0.5 round-flow hook.
+  injected via the Phase 0.5 round-flow hook. **← THE frontier blocker
+  (2026-06-12): all four fixtures now stop exactly at the first phase-3 merger
+  round (watermarks 196/207/196/184; hs_ahjzadkh on a literal `merge` action —
+  CV merging minors into the CNR major with `remove_token` follow-ups).**
 - [ ] Variable share structures (5-share and 10-share corps) — depends on Phase 0.5
   parameterization.
-- [ ] Loans & interest (`loan_operations`, `buy_company_preloan`), share `redeem`/issue.
-  NOTE: loan interest depends on route revenue detail — check whether the native
-  RunRoutes decode's single-synthetic-route collapse (decode.rs) suffices or needs
-  per-train routes for 1867.
+- [x] Loans & interest *(done 2026-06-12: rounds/loans.rs take/auto-take/repay +
+  `StepKind::{BuyCompanyPreloan, LoanOperations}` with their own pcs; interest is
+  $5 × the OR-START loan snapshot (`OperatingState.interest_snapshot`, Ruby
+  `calculate_interest`) paid at the LoanOperations position, taking loans to cover
+  a shortfall, then FORCED repayment while cash ≥ $50, then re-snapshot; unpayable
+  interest = loud `unimplemented!` until nationalization lands)*. Share
+  `redeem`/issue still open (major-only — lands with majors/merger work).
+- [x] **Engine-computed route revenue** *(done 2026-06-12: revenue.rs + the
+  `GameTitle::recorded_route_revenue` hook — recorded `connections` chains →
+  phase-priced stops → Ruby `compute_stops` bucketed allocation (towns fill spare
+  pay, 5+5E offboards-only + tokened-stop) → multiplier / hex_bonus / Timmins-
+  capital bonuses. Oracle: recorded revenues cross-check exactly — 28/28 fixture
+  routes reached + 3668/3668 over 300 corpus games; pytest
+  test_route_revenue_cross_check is the regression gate. 4-tier offboard revenue
+  (green/gray) landed with it.)*
+- [x] Company prices $1-to-face (`CompanyPriceUpToFace`) via
+  `GameTitle::company_buy_price_range` *(2026-06-12)*.
+- [x] Track-step affordability gate *(Ruby `can_lay_tile?`: blocks only while the
+  next lay-allowance slot is usable and its cost ≤ FULL buying power — cash +
+  takeable loans × $45; probed both directions on fixture 21268)* and
+  preprinted-multi-city upgrade token mapping *(L12 Montreal → X3: exit-based
+  city matching now also derives the PREPRINTED tile's per-city exits from the
+  live tile — positional fallback misplaced home tokens, killing routes)*.
+- [x] Embedded `auto_actions` replay *(harness: each recorded action's
+  server-generated auto actions — programmed passes, BuyCompanyPreloan
+  auto-passes for loan-free corps — are processed right after their parent,
+  exactly like Ruby's `process_action`)*.
 - [x] `single_item_auction` setup *(done: rounds/single_auction.rs — ascending + dutch
   fallback + $0 force-buy; whole opening auction replays on all 4 fixtures and 300/300
   sampled corpus games)*; — [ ] CN (national) formation / end-game.

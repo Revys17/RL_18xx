@@ -59,6 +59,15 @@ pub enum StepKind {
     SpecialTrack,
     SpecialToken,
     BuyCompany,
+    /// 1867: the BLOCKING company-buy window between Dividend and
+    /// LoanOperations (G1867::Step::BuyCompanyPreloan — buying before the
+    /// forced repayment is a real decision for a corp with loans; Ruby
+    /// auto-passes loan-free corps, and those passes are in the record).
+    BuyCompanyPreloan,
+    /// 1867: automatic interest payment + forced loan repayment
+    /// (G1867::Step::LoanOperations#skip!). Never asks — the skip arm IS
+    /// the mechanic.
+    LoanOperations,
     HomeToken,
     Track,
     Token,
@@ -109,6 +118,8 @@ impl StepDesc {
             StepKind::Token => Some(OperatingStep::PlaceToken),
             StepKind::Route => Some(OperatingStep::RunRoutes),
             StepKind::Dividend => Some(OperatingStep::Dividend),
+            StepKind::BuyCompanyPreloan if self.blocks => Some(OperatingStep::BuyCompanyPreloan),
+            StepKind::LoanOperations => Some(OperatingStep::LoanOperations),
             StepKind::DiscardTrain => Some(OperatingStep::DiscardTrain),
             StepKind::BuyTrain => Some(OperatingStep::BuyTrain),
             StepKind::BuyCompany if self.blocks => Some(OperatingStep::BuyCompany),
@@ -129,6 +140,8 @@ pub(crate) fn step_description(kind: StepKind) -> &'static str {
         StepKind::SpecialTrack => "Lay Track",
         StepKind::SpecialToken => "Place teleport token",
         StepKind::BuyCompany => "Buy Companies",
+        StepKind::BuyCompanyPreloan => "Buy Companies",
+        StepKind::LoanOperations => "Loan Operations",
         StepKind::HomeToken => "Place Home Token",
         StepKind::Track => "Lay Track",
         StepKind::Token => "Place a Token",
@@ -531,6 +544,23 @@ impl BaseGame {
                     vec![]
                 }
             }
+            StepKind::BuyCompanyPreloan => {
+                // Like the blocking BuyCompany dispatch arm, at its own pc:
+                // companies owned by ANY player (Ruby purchasable_companies).
+                let Some(s) = operating(snap) else { return vec![] };
+                if s.step != OperatingStep::BuyCompanyPreloan {
+                    return vec![];
+                }
+                let StepEntity::Corp(sym) = entity else { return vec![] };
+                if Some(sym.as_str()) != s.current_corp_sym() {
+                    return vec![];
+                }
+                if self.dispatch_can_buy_company(sym) {
+                    vec!["buy_company", "pass"]
+                } else {
+                    vec!["pass"]
+                }
+            }
             StepKind::WaterfallAuction => {
                 let Round::Auction(s) = snap else { return vec![] };
                 if s.pending_par.is_some() || s.remaining_companies.is_empty() {
@@ -877,6 +907,27 @@ impl BaseGame {
                     vec![]
                 }
             }
+            StepKind::BuyCompanyPreloan => {
+                // The 1867 pre-LoanOperations buy window: base BuyCompany
+                // semantics at its own pc. (Ruby's auto-pass for loan-free
+                // corps is generated server-side and lands IN the record —
+                // replay consumes it here like any pass.)
+                let Some(s) = operating(snap) else { return vec![] };
+                if s.step != OperatingStep::BuyCompanyPreloan {
+                    return vec![];
+                }
+                let StepEntity::Corp(sym) = entity else { return vec![] };
+                if Some(sym.as_str()) != s.current_corp_sym() {
+                    return vec![];
+                }
+                if self.has_buyable_companies(s) {
+                    vec!["buy_company", "pass"]
+                } else {
+                    vec!["pass"]
+                }
+            }
+            // Never asks — pure skip side-effect (interest + repayment).
+            StepKind::LoanOperations => vec![],
             StepKind::HomeToken => {
                 // Pending home-token choice. The placement is mandatory —
                 // no Pass. Operating round: 1830's ERIE E11 OO hex; stock

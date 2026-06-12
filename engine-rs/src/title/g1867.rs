@@ -242,6 +242,12 @@ pub fn operating_steps() -> &'static [StepDesc] {
         StepDesc::blocking(StepKind::Token),
         StepDesc::blocking(StepKind::Route),
         StepDesc::blocking(StepKind::Dividend),
+        // The pre-LoanOperations buy window, then the automatic interest/
+        // repayment step (round/operating.rb:839-856 step order:
+        // BuyCompanyPreloan{blocks} → LoanOperations → DiscardTrain →
+        // BuyTrain → BuyCompany{blocks}).
+        StepDesc::blocking(StepKind::BuyCompanyPreloan),
+        StepDesc::blocking(StepKind::LoanOperations),
         StepDesc::blocking(StepKind::DiscardTrain),
         StepDesc::blocking(StepKind::BuyTrain),
         StepDesc::blocking(StepKind::BuyCompany),
