@@ -840,6 +840,271 @@ pub fn tile_catalog_1830() -> Arc<HashMap<String, TileDef>> {
     Arc::new(catalog)
 }
 
+// ---------------------------------------------------------------------------
+// Tile catalog for 1867
+// ---------------------------------------------------------------------------
+
+/// Build the complete tile catalog for 1867: 60 standard tile types (the ids
+/// in g1867::tile_counts; DSL transcribed verbatim from tobymao/18xx
+/// lib/engine/config/tile.rb) plus the 8 custom 1867 tiles X1-X8 (map.rb
+/// TILES; X1-X4 green Montreal, X5-X7 brown Montreal, X8 gray Ottawa).
+/// Tile ids 1867 shares with 1830 are cloned from `tile_catalog_1830` so the
+/// definitions can never drift apart.
+pub fn tile_catalog_1867() -> Arc<HashMap<String, TileDef>> {
+    let base = tile_catalog_1830();
+    let mut catalog = HashMap::new();
+
+    // === Standard ids shared with 1830 (clone, don't re-transcribe) ===
+    const SHARED_WITH_1830: &[&str] = &[
+        "3", "4", "7", "8", "9", "14", "15", "16", "18", "19", "20", "23", "24", "25", "26", "27",
+        "28", "29", "39", "40", "41", "42", "43", "44", "45", "46", "47", "57", "58", "63", "70",
+    ];
+    for &id in SHARED_WITH_1830 {
+        catalog.insert(
+            id.to_string(),
+            base.get(id)
+                .unwrap_or_else(|| panic!("tile {id} missing from the 1830 catalog"))
+                .clone(),
+        );
+    }
+
+    // === Yellow tiles (1867-only ids) ===
+    let y = TileColor::Yellow;
+    catalog.insert(
+        "5".into(),
+        parse_tile("5", "city=revenue:20;path=a:0,b:_0;path=a:1,b:_0", y),
+    );
+    catalog.insert(
+        "6".into(),
+        parse_tile("6", "city=revenue:20;path=a:0,b:_0;path=a:2,b:_0", y),
+    );
+    catalog.insert(
+        "201".into(),
+        parse_tile("201", "city=revenue:30;path=a:0,b:_0;path=a:1,b:_0;label=Y", y),
+    );
+    catalog.insert(
+        "202".into(),
+        parse_tile("202", "city=revenue:30;path=a:0,b:_0;path=a:2,b:_0;label=Y", y),
+    );
+    catalog.insert(
+        "621".into(),
+        parse_tile("621", "city=revenue:30;path=a:0,b:_0;path=a:_0,b:3;label=Y", y),
+    );
+
+    // === Green tiles (1867-only ids) ===
+    let g = TileColor::Green;
+    catalog.insert("17".into(), parse_tile("17", "path=a:1,b:3;path=a:0,b:4", g));
+    catalog.insert("21".into(), parse_tile("21", "path=a:0,b:2;path=a:3,b:4", g));
+    catalog.insert("22".into(), parse_tile("22", "path=a:0,b:4;path=a:2,b:3", g));
+    catalog.insert("30".into(), parse_tile("30", "path=a:0,b:4;path=a:0,b:1", g));
+    catalog.insert("31".into(), parse_tile("31", "path=a:0,b:2;path=a:0,b:5", g));
+    catalog.insert(
+        "87".into(),
+        parse_tile(
+            "87",
+            "town=revenue:10;path=a:0,b:_0;path=a:1,b:_0;path=a:2,b:_0;path=a:3,b:_0",
+            g,
+        ),
+    );
+    catalog.insert(
+        "88".into(),
+        parse_tile(
+            "88",
+            "town=revenue:10;path=a:0,b:_0;path=a:1,b:_0;path=a:3,b:_0;path=a:4,b:_0",
+            g,
+        ),
+    );
+    catalog.insert(
+        "120".into(),
+        parse_tile(
+            "120",
+            "city=revenue:60;city=revenue:60;path=a:0,b:_0;path=a:_0,b:1;path=a:2,b:_1;path=a:_1,b:3;label=T",
+            g,
+        ),
+    );
+    catalog.insert(
+        "204".into(),
+        parse_tile(
+            "204",
+            "town=revenue:10;path=a:0,b:_0;path=a:2,b:_0;path=a:3,b:_0;path=a:4,b:_0",
+            g,
+        ),
+    );
+    catalog.insert(
+        "207".into(),
+        parse_tile(
+            "207",
+            "city=revenue:40,slots:2;path=a:0,b:_0;path=a:1,b:_0;path=a:2,b:_0;path=a:3,b:_0;label=Y",
+            g,
+        ),
+    );
+    catalog.insert(
+        "208".into(),
+        parse_tile(
+            "208",
+            "city=revenue:40,slots:2;path=a:0,b:_0;path=a:1,b:_0;path=a:3,b:_0;path=a:4,b:_0;label=Y",
+            g,
+        ),
+    );
+    catalog.insert(
+        "619".into(),
+        parse_tile(
+            "619",
+            "city=revenue:30,slots:2;path=a:0,b:_0;path=a:2,b:_0;path=a:3,b:_0;path=a:4,b:_0",
+            g,
+        ),
+    );
+    catalog.insert(
+        "622".into(),
+        parse_tile(
+            "622",
+            "city=revenue:40,slots:2;path=a:0,b:_0;path=a:2,b:_0;path=a:3,b:_0;path=a:4,b:_0;label=Y",
+            g,
+        ),
+    );
+    catalog.insert("624".into(), parse_tile("624", "path=a:0,b:1;path=a:1,b:2", g));
+    catalog.insert("625".into(), parse_tile("625", "path=a:0,b:1;path=a:2,b:3", g));
+    catalog.insert("626".into(), parse_tile("626", "path=a:0,b:1;path=a:3,b:4", g));
+    catalog.insert(
+        "637".into(),
+        parse_tile(
+            "637",
+            "city=revenue:50,loc:0.5;city=revenue:50,loc:2.5;city=revenue:50,loc:4.5;path=a:0,b:_0;path=a:_0,b:1;path=a:4,b:_2;path=a:_2,b:5;path=a:2,b:_1;path=a:_1,b:3;label=M",
+            g,
+        ),
+    );
+    catalog.insert(
+        "X1".into(),
+        parse_tile(
+            "X1",
+            "city=revenue:50;city=revenue:50;city=revenue:50;path=a:0,b:_0;path=a:_0,b:3;path=a:1,b:_1;path=a:_1,b:4;path=a:2,b:_2;path=a:_2,b:5;label=M",
+            g,
+        ),
+    );
+    catalog.insert(
+        "X2".into(),
+        parse_tile(
+            "X2",
+            "city=revenue:50;city=revenue:50;city=revenue:50;path=a:0,b:_0;path=a:_0,b:3;path=a:1,b:_1;path=a:_1,b:5;path=a:2,b:_2;path=a:_2,b:4;label=M",
+            g,
+        ),
+    );
+    catalog.insert(
+        "X3".into(),
+        parse_tile(
+            "X3",
+            "city=revenue:50;city=revenue:50;city=revenue:50;path=a:0,b:_0;path=a:_0,b:4;path=a:1,b:_1;path=a:_1,b:2;path=a:3,b:_2;path=a:_2,b:5;label=M",
+            g,
+        ),
+    );
+    catalog.insert(
+        "X4".into(),
+        parse_tile(
+            "X4",
+            "city=revenue:50;city=revenue:50;city=revenue:50;path=a:0,b:_0;path=a:_0,b:3;path=a:1,b:_1;path=a:_1,b:2;path=a:4,b:_2;path=a:_2,b:5;label=M",
+            g,
+        ),
+    );
+
+    // === Brown tiles (1867-only ids) ===
+    let b = TileColor::Brown;
+    catalog.insert(
+        "122".into(),
+        parse_tile(
+            "122",
+            "city=revenue:80,slots:2;city=revenue:80,slots:2;path=a:0,b:_0;path=a:_0,b:1;path=a:2,b:_1;path=a:_1,b:3;label=T",
+            b,
+        ),
+    );
+    catalog.insert(
+        "611".into(),
+        parse_tile(
+            "611",
+            "city=revenue:40,slots:2;path=a:0,b:_0;path=a:1,b:_0;path=a:2,b:_0;path=a:3,b:_0;path=a:4,b:_0",
+            b,
+        ),
+    );
+    catalog.insert(
+        "623".into(),
+        parse_tile(
+            "623",
+            "city=revenue:50,slots:2;path=a:0,b:_0;path=a:1,b:_0;path=a:2,b:_0;path=a:3,b:_0;path=a:4,b:_0;path=a:5,b:_0;label=Y",
+            b,
+        ),
+    );
+    catalog.insert(
+        "801".into(),
+        parse_tile(
+            "801",
+            "city=revenue:50,slots:2;path=a:0,b:_0;path=a:1,b:_0;path=a:2,b:_0;path=a:3,b:_0;label=Y",
+            b,
+        ),
+    );
+    catalog.insert(
+        "911".into(),
+        parse_tile(
+            "911",
+            "town=revenue:10;path=a:0,b:_0;path=a:1,b:_0;path=a:2,b:_0;path=a:3,b:_0;path=a:4,b:_0",
+            b,
+        ),
+    );
+    catalog.insert(
+        "X5".into(),
+        parse_tile(
+            "X5",
+            "city=revenue:70,slots:2;city=revenue:70;path=a:0,b:_1;path=a:1,b:_0;path=a:2,b:_0;path=a:3,b:_1;path=a:4,b:_0;path=a:5,b:_0;label=M",
+            b,
+        ),
+    );
+    catalog.insert(
+        "X6".into(),
+        parse_tile(
+            "X6",
+            "city=revenue:70,slots:2;city=revenue:70;path=a:0,b:_0;path=a:3,b:_0;path=a:4,b:_0;path=a:5,b:_0;path=a:1,b:_1;path=a:2,b:_1;label=M",
+            b,
+        ),
+    );
+    catalog.insert(
+        "X7".into(),
+        parse_tile(
+            "X7",
+            "city=revenue:70,slots:2;city=revenue:70;path=a:0,b:_0;path=a:1,b:_0;path=a:2,b:_1;path=a:3,b:_0;path=a:4,b:_1;path=a:5,b:_0;label=M",
+            b,
+        ),
+    );
+
+    // === Gray tiles (1867-only ids) ===
+    let gr = TileColor::Gray;
+    catalog.insert(
+        "124".into(),
+        parse_tile(
+            "124",
+            "city=revenue:100,slots:4;path=a:0,b:_0;path=a:1,b:_0;path=a:2,b:_0;path=a:3,b:_0;label=T",
+            gr,
+        ),
+    );
+    // Laying 639 on Montreal triggers the CN national-reservation token
+    // (game.rb:651-660 place_639_token) — hook lands with the CN work.
+    catalog.insert(
+        "639".into(),
+        parse_tile(
+            "639",
+            "city=revenue:100,slots:4;path=a:0,b:_0;path=a:1,b:_0;path=a:2,b:_0;path=a:3,b:_0;path=a:4,b:_0;path=a:5,b:_0;label=M",
+            gr,
+        ),
+    );
+    catalog.insert(
+        "X8".into(),
+        parse_tile(
+            "X8",
+            "city=revenue:60,slots:3;path=a:0,b:_0;path=a:1,b:_0;path=a:2,b:_0;path=a:3,b:_0;path=a:4,b:_0;path=a:5,b:_0;label=O",
+            gr,
+        ),
+    );
+
+    Arc::new(catalog)
+}
+
 /// Parse a preprinted hex DSL string (for red/gray/yellow hexes on initial map).
 /// Returns a TileDef with the appropriate color.
 pub fn parse_preprinted_tile(hex_id: &str, code: &str, color: TileColor) -> TileDef {
@@ -853,6 +1118,59 @@ pub fn parse_preprinted_tile(hex_id: &str, code: &str, color: TileColor) -> Tile
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 1867 catalog parses completely and carries the load-bearing
+    /// geometry: every id present, shared ids identical to 1830's, the
+    /// custom Montreal/Ottawa/Toronto tiles with the right city counts,
+    /// slots and labels.
+    #[test]
+    fn tile_catalog_1867_complete() {
+        let catalog = tile_catalog_1867();
+        assert_eq!(catalog.len(), 68);
+
+        // Shared ids are clones of the 1830 definitions.
+        let base = tile_catalog_1830();
+        for id in ["3", "7", "14", "23", "39", "57", "63", "70"] {
+            assert_eq!(catalog[id].paths.len(), base[id].paths.len(), "tile {id}");
+            assert_eq!(catalog[id].color, base[id].color, "tile {id}");
+        }
+
+        // X1-X4: green Montreal triple cities (3 × 1-slot, label M).
+        for id in ["X1", "X2", "X3", "X4"] {
+            let t = &catalog[id];
+            assert_eq!(t.color, TileColor::Green, "{id}");
+            assert_eq!(t.cities.len(), 3, "{id}");
+            assert!(t.cities.iter().all(|c| c.slots == 1 && c.revenue == 50), "{id}");
+            assert_eq!(t.label.as_deref(), Some("M"), "{id}");
+            assert_eq!(t.paths.len(), 6, "{id}");
+        }
+        // X5-X7: brown Montreal (2+1 slots, revenue 70).
+        for id in ["X5", "X6", "X7"] {
+            let t = &catalog[id];
+            assert_eq!(t.color, TileColor::Brown, "{id}");
+            assert_eq!(t.cities.len(), 2, "{id}");
+            assert_eq!(t.cities[0].slots, 2, "{id}");
+            assert_eq!(t.cities[1].slots, 1, "{id}");
+        }
+        // X8: gray Ottawa, 3 slots, label O.
+        let x8 = &catalog["X8"];
+        assert_eq!(x8.color, TileColor::Gray);
+        assert_eq!(x8.cities[0].slots, 3);
+        assert_eq!(x8.label.as_deref(), Some("O"));
+        // 639: the gray Montreal tile whose lay claims the CN reservation.
+        let t639 = &catalog["639"];
+        assert_eq!(t639.cities[0].slots, 4);
+        assert_eq!(t639.label.as_deref(), Some("M"));
+        assert_eq!(t639.edges, vec![0, 1, 2, 3, 4, 5]);
+        // 637: green Montreal triple city from the standard set.
+        assert_eq!(catalog["637"].cities.len(), 3);
+
+        // 1830-only ids must NOT leak in (1867 has no 1/2/55/56/69, no
+        // B/NY/OO label tiles).
+        for id in ["1", "2", "53", "54", "55", "56", "59", "61", "62", "64", "69"] {
+            assert!(!catalog.contains_key(id), "1830-only tile {id} leaked into 1867");
+        }
+    }
 
     #[test]
     fn parse_simple_path_tile() {
