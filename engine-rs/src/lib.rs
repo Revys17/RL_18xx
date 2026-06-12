@@ -1,5 +1,11 @@
 use pyo3::prelude::*;
 
+/// The titles this engine build can construct (`BaseGame.new_titled`).
+#[pyfunction]
+fn supported_titles_py() -> Vec<&'static str> {
+    title::all_titles().iter().map(|t| t.name()).collect()
+}
+
 pub mod abilities;
 pub mod action_index;
 pub mod actions;
@@ -53,6 +59,7 @@ fn engine_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(action_index::action_offsets_py, m)?)?;
     m.add_function(wrap_pyfunction!(action_index::policy_size_py, m)?)?;
     m.add_function(wrap_pyfunction!(action_index::policy_size_for_py, m)?)?;
+    m.add_function(wrap_pyfunction!(supported_titles_py, m)?)?;
     m.add_function(wrap_pyfunction!(action_index::legal_action_to_index_py, m)?)?;
 
     Ok(())

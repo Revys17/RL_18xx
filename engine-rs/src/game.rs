@@ -2050,6 +2050,27 @@ impl BaseGame {
         Ok(Self::build(player_ids, names))
     }
 
+    /// Construct a game of any registered title (the title-aware sibling of
+    /// `new`). Raises ValueError for an unknown title — callers (e.g. the
+    /// per-title replay harnesses) probe `supported_titles_py()` first.
+    #[staticmethod]
+    fn new_titled(title: &str, player_names: &Bound<'_, PyDict>) -> PyResult<Self> {
+        if !crate::title::all_titles().iter().any(|t| t.name() == title) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "unknown game title: {title}"
+            )));
+        }
+        let mut player_ids: Vec<u32> = Vec::new();
+        let mut names: HashMap<u32, String> = HashMap::new();
+        for (k, v) in player_names.iter() {
+            let id: u32 = k.extract()?;
+            let name: String = v.extract()?;
+            player_ids.push(id);
+            names.insert(id, name);
+        }
+        Ok(Self::build_titled(title, player_ids, names))
+    }
+
     // -- Getters --
 
     #[getter]
