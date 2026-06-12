@@ -216,6 +216,11 @@ pub struct Company {
     pub no_buy: bool,
     /// True once the company's special ability has been used (e.g., CS tile_lay).
     pub ability_used: bool,
+    /// Auction price-floor discount: `min_bid = value - discount` (Ruby
+    /// `Company#min_bid`). Seeded from `CompanyDef.discount`; 1867's dutch
+    /// single-item auction raises it by $5 per all-pass round.
+    #[serde(default)]
+    pub discount: i32,
     pub owner: EntityId,
 }
 
@@ -232,8 +237,15 @@ impl Company {
             closed: false,
             no_buy: false,
             ability_used: false,
+            discount: 0,
             owner: EntityId::none(),
         }
+    }
+
+    /// The auction price floor (Ruby `Company#min_bid`): face value minus
+    /// the accumulated discount, never below zero.
+    pub fn min_bid(&self) -> i32 {
+        (self.value - self.discount).max(0)
     }
 
     /// Owner as entity ID string (e.g., "player:1", "corp:PRR", "").

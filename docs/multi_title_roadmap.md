@@ -221,14 +221,18 @@ action must apply cleanly, mirroring the slot=None lesson) is the compensating c
 ## Phase 1 — 1867: The Railways of Canada
 
 **Validation harness FIRST:**
-- [ ] Fixture-replay harness (Ruby `public/fixtures/1867/*.json` → replay → assert final
+- [x] Fixture-replay harness (Ruby `public/fixtures/1867/*.json` → replay → assert final
   scores + per-action acceptance); download an 1867 human corpus from 18xx.games and
   stand up the outcome-replay audit. Build these before/alongside the first mechanics so
-  every new step lands against an executable oracle.
+  every new step lands against an executable oracle. *(Done: tests/title_replay_harness.py;
+  fixture gate runs as a prefix-watermark RATCHET — tests/test_g1867_fixture_replay.py —
+  with the full-score assertion xfailed until the ruleset completes.)*
 
 **Data translation (mechanical):** map, hexes, tiles, trains (incl. permanent), phases,
 market, minors + majors, privates → `title/g1867.rs` (Rust only — no `g1867.py`; the
-Python engine stays 1830-only per the validation strategy above).
+Python engine stays 1830-only per the validation strategy above). *(Done: title registers,
+rules-incomplete — `alphazero_bridge_ready() = false` keeps the action-layout/encoder maps
+1830+TEST-5SHARE only; tile catalog in tiles::tile_catalog_1867.)*
 
 **New mechanics (the hard part):**
 - [ ] `Minor` entity + minor operating/ownership; minors→majors conversion. NOTE: 1867
@@ -244,7 +248,9 @@ Python engine stays 1830-only per the validation strategy above).
   NOTE: loan interest depends on route revenue detail — check whether the native
   RunRoutes decode's single-synthetic-route collapse (decode.rs) suffices or needs
   per-train routes for 1867.
-- [ ] `single_item_auction` setup; CN (national) formation / end-game.
+- [x] `single_item_auction` setup *(done: rounds/single_auction.rs — ascending + dutch
+  fallback + $0 force-buy; whole opening auction replays on all 4 fixtures and 300/300
+  sampled corpus games)*; — [ ] CN (national) formation / end-game.
 
 **RL layer (per-title):**
 - [ ] New encoder feature set + a per-title action layout (Phase 0.5's parameterized

@@ -71,6 +71,10 @@ pub enum StepKind {
     // Auction-round steps
     CompanyPendingPar,
     WaterfallAuction,
+    /// 1867's opening auction: companies one at a time, cheapest first,
+    /// with a dutch fallback when everyone declines
+    /// (G1867::Step::SingleItemAuction; rounds/single_auction.rs).
+    SingleItemAuction,
 }
 
 /// A step as listed in a title's round description.
@@ -136,6 +140,7 @@ pub(crate) fn step_description(kind: StepKind) -> &'static str {
         StepKind::BuySellParShares => "Sell/Buy/Sell Shares",
         StepKind::CompanyPendingPar => "Choose Corporation Par Value",
         StepKind::WaterfallAuction => "Bid on Companies",
+        StepKind::SingleItemAuction => "Bid on Companies",
     }
 }
 
@@ -415,12 +420,19 @@ impl BaseGame {
 
     /// Resolve an action's `entity` id to the step-entity it acts as: a
     /// company sym (CS/DH/MH/... special abilities), a corporation sym, or a
-    /// numeric player id. 1830 syms never collide with numeric player ids.
-    /// An unresolvable id maps to a company sym no step will ever accept,
-    /// reproducing Python's behavior for an unknown entity (no step's
-    /// `actions` contains the type → the blocking step rejects it).
+    /// numeric player id. A numeric id matching a SEATED player resolves to
+    /// that player even when a company sym collides (1867's hidden company
+    /// '3' vs player 3; 1830 has no numeric syms, so its resolution is
+    /// unchanged). An unresolvable id maps to a company sym no step will
+    /// ever accept, reproducing Python's behavior for an unknown entity (no
+    /// step's `actions` contains the type → the blocking step rejects it).
     fn action_step_entity(&self, action: &Action) -> StepEntity {
         let id = action.entity_id();
+        if let Ok(pid) = id.parse::<u32>() {
+            if self.players.iter().any(|p| p.id == pid) {
+                return StepEntity::Player(pid);
+            }
+        }
         if self.company_idx.contains_key(id) {
             return StepEntity::Company(id.to_string());
         }
@@ -1005,6 +1017,21 @@ impl BaseGame {
                 } else {
                     vec![]
                 }
+            }
+            // Ruby G1867::Step::SingleItemAuction#actions: `[bid, pass]` for
+            // the current entity whenever companies remain — no
+            // can-afford-a-bid gate (min/max rejection lives in the handler,
+            // rounds/single_auction.rs), unlike the waterfall arm below.
+            StepKind::SingleItemAuction => {
+                let Round::Auction(s) = snap else { return vec![] };
+                if s.remaining_companies.is_empty() {
+                    return vec![];
+                }
+                let StepEntity::Player(pid) = entity else { return vec![] };
+                if *pid != s.active_player_id() {
+                    return vec![];
+                }
+                vec!["bid", "pass"]
             }
             StepKind::WaterfallAuction => {
                 let Round::Auction(s) = snap else { return vec![] };

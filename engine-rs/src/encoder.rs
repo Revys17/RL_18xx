@@ -148,6 +148,7 @@ pub fn spec_for(title_name: &str) -> &'static EncoderSpec {
         .get_or_init(|| {
             crate::title::all_titles()
                 .iter()
+                .filter(|t| t.alphazero_bridge_ready())
                 .map(|t| (t.name(), EncoderSpec::build(*t)))
                 .collect()
         })

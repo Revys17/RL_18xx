@@ -231,6 +231,7 @@ pub fn companies() -> Vec<CompanyDef> {
             value: 20,
             revenue: 5,
             discount: 0,
+            auctionable: true,
             abilities: &[AbilityDef::BlocksHexes {
                 owner_type: OwnerType::Player,
                 hexes: &["G15"],
@@ -242,6 +243,7 @@ pub fn companies() -> Vec<CompanyDef> {
             value: 40,
             revenue: 10,
             discount: 0,
+            auctionable: true,
             abilities: &[
                 AbilityDef::BlocksHexes {
                     owner_type: OwnerType::Player,
@@ -262,6 +264,7 @@ pub fn companies() -> Vec<CompanyDef> {
             value: 70,
             revenue: 15,
             discount: 0,
+            auctionable: true,
             abilities: &[
                 AbilityDef::BlocksHexes {
                     owner_type: OwnerType::Player,
@@ -280,6 +283,7 @@ pub fn companies() -> Vec<CompanyDef> {
             value: 110,
             revenue: 20,
             discount: 0,
+            auctionable: true,
             abilities: &[
                 AbilityDef::BlocksHexes {
                     owner_type: OwnerType::Player,
@@ -299,6 +303,7 @@ pub fn companies() -> Vec<CompanyDef> {
             value: 160,
             revenue: 25,
             discount: 0,
+            auctionable: true,
             abilities: &[
                 AbilityDef::BlocksHexes {
                     owner_type: OwnerType::Player,
@@ -317,6 +322,7 @@ pub fn companies() -> Vec<CompanyDef> {
             value: 220,
             revenue: 30,
             discount: 0,
+            auctionable: true,
             abilities: &[
                 AbilityDef::BlocksHexes {
                     owner_type: OwnerType::Player,

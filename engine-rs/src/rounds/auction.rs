@@ -15,6 +15,25 @@ use crate::rounds::{AuctionState, Bid};
 impl BaseGame {
     /// Process an action during the auction round.
     pub fn process_auction_action(&mut self, action: &Action) -> Result<(), GameError> {
+        // Single-item-auction titles (1867) bypass the waterfall logic
+        // entirely — see rounds/single_auction.rs.
+        let is_single_item =
+            matches!(&self.round, crate::rounds::Round::Auction(s) if s.single_item.is_some());
+        if is_single_item {
+            return match action {
+                Action::Bid {
+                    entity_id,
+                    company_sym,
+                    price,
+                } => self.process_single_auction_bid(entity_id, company_sym, *price),
+                Action::Pass { entity_id } => self.process_single_auction_pass(entity_id),
+                _ => Err(GameError::new(format!(
+                    "Invalid action in auction: {}",
+                    action.action_type()
+                ))),
+            };
+        }
+
         // Check if there's a pending par (CompanyPendingPar step)
         let has_pending_par =
             matches!(&self.round, crate::rounds::Round::Auction(s) if s.pending_par.is_some());
@@ -433,19 +452,19 @@ impl BaseGame {
 
     // -- Helpers --
 
-    fn get_auction_state(&self) -> Result<AuctionState, GameError> {
+    pub(crate) fn get_auction_state(&self) -> Result<AuctionState, GameError> {
         match &self.round {
             crate::rounds::Round::Auction(s) => Ok(s.clone()),
             _ => Err(GameError::new("Not in auction round")),
         }
     }
 
-    fn set_auction_state(&mut self, state: AuctionState) {
+    pub(crate) fn set_auction_state(&mut self, state: AuctionState) {
         self.round = crate::rounds::Round::Auction(state);
         self.update_round_state();
     }
 
-    fn player_cash(&self, player_id: u32) -> i32 {
+    pub(crate) fn player_cash(&self, player_id: u32) -> i32 {
         self.players
             .iter()
             .find(|p| p.id == player_id)

@@ -5,6 +5,7 @@
 
 pub mod auction;
 pub mod operating;
+pub mod single_auction;
 pub mod stock;
 
 use std::collections::HashMap;
@@ -85,6 +86,30 @@ pub struct AuctionState {
     pub last_purchaser_id: Option<u32>,
     /// Whether the auction is complete.
     pub finished: bool,
+    /// Single-item-auction sub-state (1867's opening format). `Some` iff the
+    /// title's auction step is `StepKind::SingleItemAuction`; the waterfall
+    /// logic in rounds/auction.rs never runs while this is set.
+    #[serde(default)]
+    pub single_item: Option<SingleItemState>,
+}
+
+/// State specific to the single-item auction format (Ruby PassableAuction +
+/// G1867::Step::SingleItemAuction; rounds/single_auction.rs). Rides on
+/// [`AuctionState`]: `remaining_companies` is the value-sorted queue,
+/// `auctioning` the company currently up, `bids` its standing bids and
+/// `entity_index` the rotation base (winner + 1 after each lot).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SingleItemState {
+    /// Players still in the current company's auction, in rotation order
+    /// (re-seeded from `entity_index` each time a company goes up;
+    /// Ruby `@active_bidders`).
+    pub active_bidders: Vec<u32>,
+    /// Players who declined to OPEN the bidding on the current company
+    /// (Ruby `@declined_bids`; cleared by any bid and on dutch transition).
+    pub declined: Vec<u32>,
+    /// Dutch mode: the price drops $5 per all-pass round and any bid buys
+    /// the company outright (Ruby `@dutch_mode`).
+    pub dutch_mode: bool,
 }
 
 impl AuctionState {
@@ -104,7 +129,24 @@ impl AuctionState {
             pending_par: None,
             last_purchaser_id: None,
             finished: false,
+            single_item: None,
         }
+    }
+
+    /// Construct the single-item-auction variant (1867): `company_order` is
+    /// the value-sorted queue of auctionable company indices. The first
+    /// company is put up by `BaseGame::single_auction_start` once the game
+    /// is assembled (affordability partitioning needs player cash).
+    pub fn new_single_item(player_ids: &[u32], company_order: Vec<usize>) -> Self {
+        let mut state = AuctionState::new(player_ids, 0);
+        state.remaining_companies = company_order;
+        state.current_auction_company = None;
+        state.single_item = Some(SingleItemState {
+            active_bidders: Vec::new(),
+            declined: Vec::new(),
+            dutch_mode: false,
+        });
+        state
     }
 
     /// The current player in the waterfall (non-auction) phase.
@@ -139,6 +181,34 @@ impl AuctionState {
         // Pending par takes priority
         if let Some((_, player_id)) = &self.pending_par {
             return *player_id;
+        }
+        // Single-item format (Ruby SingleItemAuction#active_entities): with a
+        // standing high bid, the active bidder AFTER the high bidder acts;
+        // otherwise the first active bidder who has not yet declined.
+        if let Some(si) = &self.single_item {
+            if let Some(ci) = self.auctioning {
+                if !si.active_bidders.is_empty() {
+                    let high = self
+                        .bids
+                        .get(&ci)
+                        .and_then(|bids| bids.iter().max_by_key(|b| b.price));
+                    if let Some(high) = high {
+                        if let Some(i) =
+                            si.active_bidders.iter().position(|&p| p == high.player_id)
+                        {
+                            return si.active_bidders[(i + 1) % si.active_bidders.len()];
+                        }
+                    }
+                    if let Some(&p) = si
+                        .active_bidders
+                        .iter()
+                        .find(|p| !si.declined.contains(p))
+                    {
+                        return p;
+                    }
+                }
+            }
+            return self.current_player_id();
         }
         self.active_auction_player()
             .unwrap_or_else(|| self.current_player_id())

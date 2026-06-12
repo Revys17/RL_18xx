@@ -76,11 +76,14 @@ pub struct CompanyLayBlock {
 
 static LAYOUTS: OnceLock<HashMap<&'static str, SlotLayout>> = OnceLock::new();
 
-/// The per-title slot layouts, built once over the title registry.
+/// The per-title slot layouts, built once over the title registry —
+/// bridge-ready titles only (1867 registers rules-first; its action layout
+/// is a later roadmap phase).
 fn layouts() -> &'static HashMap<&'static str, SlotLayout> {
     LAYOUTS.get_or_init(|| {
         crate::title::all_titles()
             .iter()
+            .filter(|t| t.alphazero_bridge_ready())
             .map(|t| (t.name(), build_layout(*t)))
             .collect()
     })

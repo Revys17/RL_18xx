@@ -1,4 +1,5 @@
 pub mod g1830;
+pub mod g1867;
 #[cfg(test)]
 pub mod test_title;
 
@@ -70,6 +71,17 @@ pub trait GameTitle: Sync {
     // (map order / tile-catalog order); 1830 OVERRIDES both with frozen
     // historical orders (artifacts of the Python ActionMapper's original
     // construction) because trained checkpoints depend on the exact slots.
+
+    /// Whether the AlphaZero bridge (flat action layout + encoder spec) can
+    /// be derived for this title. A RULES title can register without it —
+    /// 1867 plays/replays long before its action space and encoder land
+    /// (the roadmap's per-title action-layout phase; the current slot
+    /// layout cannot express 1867's three discounted trains, choose/merge
+    /// actions, …). While false, `action_index::layout_for` /
+    /// `encoder::spec_for` panic for this title instead of mis-deriving.
+    fn alphazero_bridge_ready(&self) -> bool {
+        true
+    }
 
     /// Hex order for the flat action layout.
     fn action_hex_order(&self) -> Vec<&'static str> {
@@ -169,12 +181,13 @@ impl GameTitle for G1830 {
 pub fn all_titles() -> &'static [&'static dyn GameTitle] {
     #[cfg(test)]
     {
-        static TITLES: [&'static dyn GameTitle; 2] = [&G1830, &test_title::Test5Share];
+        static TITLES: [&'static dyn GameTitle; 3] =
+            [&G1830, &g1867::G1867, &test_title::Test5Share];
         &TITLES
     }
     #[cfg(not(test))]
     {
-        static TITLES: [&'static dyn GameTitle; 1] = [&G1830];
+        static TITLES: [&'static dyn GameTitle; 2] = [&G1830, &g1867::G1867];
         &TITLES
     }
 }
@@ -327,6 +340,10 @@ pub struct CompanyDef {
     /// Auction price-floor discount (1867's dutch single-item auction
     /// lowers min_bid by $5/round via this; 0 = none).
     pub discount: i32,
+    /// Whether the company is offered in the opening auction (false for
+    /// 1867's hidden '3' phase blocker, which exists as an entity but is
+    /// never auctioned or owned).
+    pub auctionable: bool,
 }
 
 pub struct TrainDef {

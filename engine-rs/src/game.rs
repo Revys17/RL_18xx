@@ -1881,6 +1881,8 @@ impl BaseGame {
                 if crate::abilities::no_buy(title.name(), cd.sym) {
                     company.no_buy = true;
                 }
+                // Auction price floor (1867: min_bid = value - discount).
+                company.discount = cd.discount;
                 company
             })
             .collect();
@@ -1920,8 +1922,14 @@ impl BaseGame {
         let mut depot = Depot::new();
         let mut train_instance_counters: std::collections::HashMap<String, u32> =
             std::collections::HashMap::new();
+        // Ruby `num: 'unlimited'` (1867's 8/2+2/5+5E) is `u32::MAX` in the
+        // title data; materialize a pool no real game can exhaust (8 majors
+        // × train limit 2 in phase 8, plus per-OR exports) instead of four
+        // billion structs. Finite counts (all of 1830's) are unaffected.
+        const UNLIMITED_TRAIN_POOL: u32 = 40;
         for td in &train_defs {
-            for _ in 0..td.count {
+            let materialized = td.count.min(UNLIMITED_TRAIN_POOL);
+            for _ in 0..materialized {
                 let instance = train_instance_counters
                     .entry(td.name.to_string())
                     .or_insert(0);
@@ -1963,7 +1971,26 @@ impl BaseGame {
             round_num: 0,
             active_entity_id: EntityId::player(first_player_id),
         };
-        let auction_state = crate::rounds::AuctionState::new(&player_ids, companies.len());
+        // The title's auction step picks the opening-auction format: 1830's
+        // waterfall over all companies, or 1867's single-item auction over a
+        // value-sorted queue of the auctionable ones (the hidden '3' phase
+        // blocker exists as an entity but is never offered).
+        let single_item_opener = title
+            .auction_steps()
+            .iter()
+            .any(|d| d.kind == crate::steps::StepKind::SingleItemAuction);
+        let auction_state = if single_item_opener {
+            let mut order: Vec<usize> = company_defs
+                .iter()
+                .enumerate()
+                .filter(|(_, cd)| cd.auctionable)
+                .map(|(i, _)| i)
+                .collect();
+            order.sort_by_key(|&i| companies[i].value);
+            crate::rounds::AuctionState::new_single_item(&player_ids, order)
+        } else {
+            crate::rounds::AuctionState::new(&player_ids, companies.len())
+        };
         let round = Round::Auction(auction_state);
 
         // 9b. Stock market
@@ -1998,7 +2025,7 @@ impl BaseGame {
             .map(|(i, h)| (h.id.clone(), i))
             .collect();
 
-        BaseGame {
+        let mut game = BaseGame {
             players,
             corporations,
             companies,
@@ -2028,7 +2055,14 @@ impl BaseGame {
             game_end_triggered: false,
             player_order: player_ids.clone(),
             priority_deal_player: first_player_id,
+        };
+        if single_item_opener {
+            // Put the first company up (the Ruby step's `setup`) — needs
+            // player cash for the affordability partition, so it runs on the
+            // assembled game.
+            game.single_auction_start();
         }
+        game
     }
 }
 

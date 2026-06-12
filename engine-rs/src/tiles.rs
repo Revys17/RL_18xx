@@ -482,12 +482,17 @@ pub fn parse_tile(name: &str, code: &str, color: TileColor) -> TileDef {
             for segment in attrs.split(',') {
                 let (k, v) = parse_kv(segment);
                 if k == "revenue" {
-                    // Format: "yellow_V|brown_V"
+                    // Format: "yellow_V|brown_V" (extra tiers like green_V /
+                    // gray_V are ignored), or a bare flat value "V" (1867's
+                    // blue lake ports pay the same at every phase).
                     for phase_rev in v.split('|') {
                         if let Some(val_str) = phase_rev.strip_prefix("yellow_") {
                             yellow_revenue = val_str.parse().unwrap_or(0);
                         } else if let Some(val_str) = phase_rev.strip_prefix("brown_") {
                             brown_revenue = val_str.parse().unwrap_or(0);
+                        } else if let Ok(flat) = phase_rev.parse::<i32>() {
+                            yellow_revenue = flat;
+                            brown_revenue = flat;
                         }
                     }
                 }
