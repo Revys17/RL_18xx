@@ -46,6 +46,22 @@ pub trait GameTitle: Sync {
     /// entry carries no city geometry).
     fn tile_cities(&self, tile_id: &str) -> Option<Vec<u8>>;
     fn tile_catalog(&self) -> Arc<HashMap<String, TileDef>>;
+    /// The raw stock-market grid (rows of cells; None = empty cell).
+    fn market_grid(&self) -> Vec<Vec<Option<MarketCell>>>;
+    /// How share prices move on the market (Ruby's movement modules).
+    fn market_movement(&self) -> MarketMovement;
+}
+
+/// How share prices move on the stock market grid (Ruby's
+/// `TwoDimensionalMovement` / `OneDimensionalMovement` modules).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarketMovement {
+    /// 2-D grid (1830): right/up on gains, left/down on losses; an edge
+    /// move falls back to the perpendicular direction (right→up, left→down).
+    TwoDimensional,
+    /// Single-row market (1867): prices only move along the row; there is
+    /// no vertical movement and no edge fallback.
+    OneDimensional,
 }
 
 /// 1830: Railways & Robber Barons.
@@ -102,6 +118,12 @@ impl GameTitle for G1830 {
     }
     fn tile_catalog(&self) -> Arc<HashMap<String, TileDef>> {
         crate::tiles::tile_catalog_1830()
+    }
+    fn market_grid(&self) -> Vec<Vec<Option<MarketCell>>> {
+        g1830::market_grid()
+    }
+    fn market_movement(&self) -> MarketMovement {
+        MarketMovement::TwoDimensional
     }
 }
 

@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::title::{g1830, MarketZone};
+use crate::title::{g1830, MarketMovement, MarketZone};
 
 /// A share price cell on the stock market.
 #[pyclass]
@@ -92,12 +92,13 @@ pub struct MarketCell {
 pub struct StockMarket {
     /// Grid[row][col] = Option<MarketCell>. None = empty/invalid cell.
     pub grid: Vec<Vec<Option<MarketCell>>>,
+    /// The title's movement policy (2-D fallback moves vs a 1-D row).
+    pub movement: MarketMovement,
 }
 
 impl StockMarket {
-    /// Build from the static 1830 market data.
-    pub fn new_1830() -> Self {
-        let raw = g1830::market_grid();
+    /// Build from a title's raw market grid + movement policy.
+    pub fn new(raw: Vec<Vec<Option<crate::title::MarketCell>>>, movement: MarketMovement) -> Self {
         let grid: Vec<Vec<Option<MarketCell>>> = raw
             .iter()
             .enumerate()
@@ -121,7 +122,13 @@ impl StockMarket {
                     .collect()
             })
             .collect();
-        StockMarket { grid }
+        StockMarket { grid, movement }
+    }
+
+    /// The 1830 market (kept for tests; production goes through the title's
+    /// `market_grid()`/`market_movement()`).
+    pub fn new_1830() -> Self {
+        Self::new(g1830::market_grid(), MarketMovement::TwoDimensional)
     }
 
     /// Find the cell at a given row/column.
@@ -177,35 +184,47 @@ impl StockMarket {
 
     /// Move share price right (price increase). Returns new position.
     /// Used when: corporation's shares are sold out, or payout dividend.
-    /// 1830 uses TwoDimensionalMovement: at the right edge, fall back to move_up.
+    /// TwoDimensional (1830): at the right edge, fall back to move_up.
+    /// OneDimensional (1867): stay at the right edge.
     pub fn move_right(&self, row: u8, col: u8) -> (u8, u8) {
         let new_col = col + 1;
         if self.cell_at(row, new_col).is_some() {
             (row, new_col)
         } else {
-            // Right edge — move up instead (1830 TwoDimensionalMovement)
-            self.move_up(row, col)
+            match self.movement {
+                MarketMovement::TwoDimensional => self.move_up(row, col),
+                MarketMovement::OneDimensional => (row, col),
+            }
         }
     }
 
     /// Move share price left (price decrease). Returns new position.
     /// Used when: shares are sold to the market, or corporation withholds.
-    /// 1830 uses TwoDimensionalMovement: at the left edge, fall back to move_down.
+    /// TwoDimensional (1830): at the left edge, fall back to move_down.
+    /// OneDimensional (1867): stay at the left edge.
     pub fn move_left(&self, row: u8, col: u8) -> (u8, u8) {
+        let fallback = |s: &Self| match s.movement {
+            MarketMovement::TwoDimensional => s.move_down(row, col),
+            MarketMovement::OneDimensional => (row, col),
+        };
         if col == 0 {
-            return self.move_down(row, col);
+            return fallback(self);
         }
         let new_col = col - 1;
         if self.cell_at(row, new_col).is_some() {
             (row, new_col)
         } else {
-            self.move_down(row, col)
+            fallback(self)
         }
     }
 
     /// Move share price down (price decrease). Returns new position.
-    /// Used when: corporation withholds revenue.
+    /// Used when: corporation withholds revenue. A 1-D market has no
+    /// vertical movement.
     pub fn move_down(&self, row: u8, col: u8) -> (u8, u8) {
+        if self.movement == MarketMovement::OneDimensional {
+            return (row, col);
+        }
         let new_row = row + 1;
         if self.cell_at(new_row, col).is_some() {
             (new_row, col)
@@ -214,9 +233,10 @@ impl StockMarket {
         }
     }
 
-    /// Move share price up (price increase). Returns new position.
+    /// Move share price up (price increase). A 1-D market has no vertical
+    /// movement.
     pub fn move_up(&self, row: u8, col: u8) -> (u8, u8) {
-        if row == 0 {
+        if row == 0 || self.movement == MarketMovement::OneDimensional {
             return (row, col);
         }
         let new_row = row - 1;

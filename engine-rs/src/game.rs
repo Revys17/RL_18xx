@@ -1932,7 +1932,7 @@ impl BaseGame {
         let round = Round::Auction(auction_state);
 
         // 9b. Stock market
-        let stock_market = StockMarket::new_1830();
+        let stock_market = StockMarket::new(title.market_grid(), title.market_movement());
 
         // 10. Tile counts
         let tile_counts_remaining: HashMap<String, u32> = title
