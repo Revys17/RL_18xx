@@ -343,9 +343,8 @@ impl BaseGame {
         // S17: Corp Shares (IPO + Market) — count in share UNITS (president=2)
         for c in &self.corporations {
             if let Some(i) = spec.corp_idx(&c.sym) {
-                let share_units = |s: &crate::entities::Share| -> f32 {
-                    if s.president { (s.percent / 10) as f32 } else { 1.0 }
-                };
+                let share_units =
+                    |s: &crate::entities::Share| -> f32 { c.share_units_of(s) as f32 };
                 let total: f32 = c.shares.iter().map(|s| share_units(s)).sum();
                 if total > 0.0 {
                     let ipo_eid = EntityId::ipo(&c.sym);

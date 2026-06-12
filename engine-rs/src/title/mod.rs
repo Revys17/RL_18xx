@@ -1,4 +1,6 @@
 pub mod g1830;
+#[cfg(test)]
+pub mod test_title;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -160,10 +162,21 @@ impl GameTitle for G1830 {
     }
 }
 
-/// Every implemented title. New titles register here.
+/// Every implemented title. New titles register here. Test builds also
+/// register the synthetic `TEST-5SHARE` title (see `test_title.rs`) so the
+/// per-title memoized maps (abilities, layouts, encoder specs) and the
+/// frozen-1830 pins are exercised with MORE than one title.
 pub fn all_titles() -> &'static [&'static dyn GameTitle] {
-    static TITLES: [&'static dyn GameTitle; 1] = [&G1830];
-    &TITLES
+    #[cfg(test)]
+    {
+        static TITLES: [&'static dyn GameTitle; 2] = [&G1830, &test_title::Test5Share];
+        &TITLES
+    }
+    #[cfg(not(test))]
+    {
+        static TITLES: [&'static dyn GameTitle; 1] = [&G1830];
+        &TITLES
+    }
 }
 
 /// The title impl for a game's `title` string. Unknown names panic — the

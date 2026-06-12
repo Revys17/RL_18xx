@@ -1835,9 +1835,20 @@ impl BaseGame {
     /// is the seating order (it becomes the priority/turn order); `player_names`
     /// maps id -> name. Used by the PyO3 `new` (below) and by Rust unit tests.
     pub(crate) fn build(player_ids: Vec<u32>, player_names: HashMap<u32, String>) -> Self {
-        // 1830 is the only title constructible today; a second title adds a
-        // title argument to the public constructors and passes it through.
-        let title = crate::title::resolve("1830");
+        // 1830 is the only title the PUBLIC constructors build today; a
+        // second production title adds a title argument and passes it
+        // through. In-crate tests construct other registered titles via
+        // `build_titled`.
+        Self::build_titled("1830", player_ids, player_names)
+    }
+
+    /// Construct a game of any registered title.
+    pub(crate) fn build_titled(
+        title_name: &str,
+        player_ids: Vec<u32>,
+        player_names: HashMap<u32, String>,
+    ) -> Self {
+        let title = crate::title::resolve(title_name);
         let num_players = player_names.len() as u8;
         let cash = title.starting_cash(num_players);
         let cert_lim = title.cert_limit(num_players);
