@@ -602,7 +602,7 @@ impl BaseGame {
 
     fn market_zone_for(&self, row: u8, col: u8) -> String {
         self.stock_market.cell_at(row, col)
-            .map(|c| c.zone.clone())
+            .map(|c| c.zone().to_string())
             .unwrap_or_else(|| "normal".to_string())
     }
 

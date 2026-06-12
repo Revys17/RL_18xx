@@ -355,16 +355,48 @@ pub struct PhaseDef {
 
 pub struct MarketCell {
     pub price: i32,
-    pub zone: MarketZone,
+    /// The cell's type flags. 1830 cells carry at most one; 1867 cells
+    /// COMBINE them (e.g. `165zCm` = major par + convert range + minor
+    /// price cap), which is why this is a list, not a single zone.
+    pub zones: Vec<MarketZone>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MarketZone {
     Normal,
+    /// Par cell (1830; 1867's `p` = par for every corp class).
     Par,
+    /// Minor-class par (1867 `x`, Ruby `par_1`).
+    Par1,
+    /// Major-class par (1867 `z`, Ruby `par_2`).
+    Par2,
+    /// Minor→major conversion price range (1867 `C`).
+    ConvertRange,
+    /// Price cap for minor pars (1867 `m`, Ruby `max_price`).
+    MaxPrice,
+    /// No-cert-limit zone (1830 yellow).
     Yellow,
+    /// Unlimited-holdings zone (1830 orange).
     Orange,
+    /// Multiple-buy zone (1830 brown).
     Brown,
+}
+
+impl MarketZone {
+    /// The Ruby/Python type string (`SharePrice.types` entries).
+    pub fn type_str(&self) -> &'static str {
+        match self {
+            MarketZone::Normal => "normal",
+            MarketZone::Par => "par",
+            MarketZone::Par1 => "par_1",
+            MarketZone::Par2 => "par_2",
+            MarketZone::ConvertRange => "convert_range",
+            MarketZone::MaxPrice => "max_price",
+            MarketZone::Yellow => "no_cert_limit",
+            MarketZone::Orange => "unlimited",
+            MarketZone::Brown => "multiple_buy",
+        }
+    }
 }
 
 pub struct HexDef {

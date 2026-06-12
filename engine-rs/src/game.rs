@@ -3272,7 +3272,7 @@ impl BaseGame {
         for (row_idx, row) in self.stock_market.grid.iter().enumerate() {
             for (col_idx, cell) in row.iter().enumerate() {
                 if let Some(sp) = cell {
-                    if sp.zone == "par" {
+                    if sp.has_type("par") {
                         result.push((sp.price, row_idx, col_idx));
                     }
                 }

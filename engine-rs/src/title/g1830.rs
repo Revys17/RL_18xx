@@ -478,7 +478,10 @@ pub const BANK_CASH: i32 = 12000;
 /// `None` = empty cell (below-market dead zone).
 pub fn market_grid() -> Vec<Vec<Option<MarketCell>>> {
     fn mc(price: i32, zone: MarketZone) -> Option<MarketCell> {
-        Some(MarketCell { price, zone })
+        Some(MarketCell {
+            price,
+            zones: vec![zone],
+        })
     }
 
     use MarketZone::*;

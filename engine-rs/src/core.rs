@@ -84,7 +84,20 @@ pub struct MarketCell {
     pub price: i32,
     pub row: u8,
     pub column: u8,
-    pub zone: String,
+    /// Type strings (Ruby `SharePrice.types`); 1830 cells carry exactly
+    /// one, 1867 cells combine several (par_2 + convert_range + ...).
+    pub types: Vec<String>,
+}
+
+impl MarketCell {
+    /// The primary type string (1830's single zone; first flag otherwise).
+    pub fn zone(&self) -> &str {
+        self.types.first().map(String::as_str).unwrap_or("normal")
+    }
+
+    pub fn has_type(&self, t: &str) -> bool {
+        self.types.iter().any(|x| x == t)
+    }
 }
 
 /// The stock market grid. Handles price lookups and share price movements.
@@ -110,13 +123,7 @@ impl StockMarket {
                             price: c.price,
                             row: row_idx as u8,
                             column: col_idx as u8,
-                            zone: match c.zone {
-                                MarketZone::Normal => "normal".to_string(),
-                                MarketZone::Par => "par".to_string(),
-                                MarketZone::Yellow => "no_cert_limit".to_string(),
-                                MarketZone::Orange => "unlimited".to_string(),
-                                MarketZone::Brown => "multiple_buy".to_string(),
-                            },
+                            types: c.zones.iter().map(|z| z.type_str().to_string()).collect(),
                         })
                     })
                     .collect()
@@ -145,7 +152,7 @@ impl StockMarket {
             price: c.price,
             row: c.row,
             column: c.column,
-            types: vec![c.zone.clone()],
+            types: c.types.clone(),
         })
     }
 
@@ -155,12 +162,12 @@ impl StockMarket {
         // Par prices are in column 6 (the "Par" zone column in 1830)
         for row in &self.grid {
             for cell in row.iter().flatten() {
-                if cell.price == price && cell.zone == "par" {
+                if cell.price == price && cell.has_type("par") {
                     return Some(SharePrice {
                         price: cell.price,
                         row: cell.row,
                         column: cell.column,
-                        types: vec![cell.zone.clone()],
+                        types: cell.types.clone(),
                     });
                 }
             }
@@ -173,7 +180,7 @@ impl StockMarket {
         let mut prices = Vec::new();
         for row in &self.grid {
             for cell in row.iter().flatten() {
-                if cell.zone == "par" {
+                if cell.has_type("par") {
                     prices.push(cell.price);
                 }
             }
