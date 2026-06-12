@@ -292,8 +292,11 @@ impl BaseGame {
             ));
         }
 
-        // IPO shares are sold at par price, market shares at current market price
-        let unit_price = if actual_source == "ipo" {
+        // IPO shares are sold at par price, market shares at current market
+        // price — except `always_market_price` corps (1867), whose treasury
+        // shares also sell at the CURRENT market price (Ruby
+        // share.rb `price_per_share`).
+        let unit_price = if actual_source == "ipo" && !self.corporations[corp_idx].always_market_price {
             self.corporations[corp_idx]
                 .ipo_price
                 .as_ref()
@@ -330,10 +333,11 @@ impl BaseGame {
                         .iter()
                         .any(|t| t == "multiple_buy" || t == "unlimited")
                 });
-        if !in_unlimited_zone && current_pct + percent > 60 {
+        let max_ownership = self.corporations[corp_idx].max_ownership_percent;
+        if !in_unlimited_zone && current_pct + percent > max_ownership {
             return Err(GameError::new(format!(
-                "Would exceed 60% ownership of {}",
-                corporation_sym
+                "Would exceed {}% ownership of {}",
+                max_ownership, corporation_sym
             )));
         }
 
@@ -347,10 +351,20 @@ impl BaseGame {
             .map(|s| s.owner.clone())
             .collect();
 
-        // Transfer
+        // Transfer. Under incremental capitalization (1867) a treasury-share
+        // buy pays the CORPORATION (Ruby SharePool#buy_shares routes to the
+        // corporation when `corporation.capitalization != :full`); market
+        // shares and full-cap titles pay the bank.
         self.corporations[corp_idx].set_share_owner(share_idx, player_eid.clone());
         self.players[player_idx].cash -= price;
-        self.bank.cash += price;
+        let incremental_treasury_buy = actual_source == "ipo"
+            && self.corporations[corp_idx].capitalization
+                == crate::title::Capitalization::Incremental;
+        if incremental_treasury_buy {
+            self.corporations[corp_idx].cash += price;
+        } else {
+            self.bank.cash += price;
+        }
 
         // Check float
         self.check_float(corp_idx);
@@ -778,19 +792,20 @@ impl BaseGame {
         let corp = &self.corporations[corp_idx];
         if !corp.floated && corp.check_floated() {
             if let Some(ref ipo_price) = corp.ipo_price {
-                let treasury = match corp.capitalization {
+                match corp.capitalization {
                     // Full capitalization: par × total share units from the
                     // bank on float (1830).
-                    crate::title::Capitalization::Full => ipo_price.price * corp.num_share_units(),
-                    // Incremental capitalization pays into the treasury per
-                    // share SOLD (at buy time), not on float — no registered
-                    // title sets it yet; the buy-side hook lands with 1867.
-                    crate::title::Capitalization::Incremental => {
-                        unimplemented!("incremental capitalization lands with 1867")
+                    crate::title::Capitalization::Full => {
+                        let treasury = ipo_price.price * corp.num_share_units();
+                        self.corporations[corp_idx].cash = treasury;
+                        self.bank.cash -= treasury;
                     }
-                };
-                self.corporations[corp_idx].cash = treasury;
-                self.bank.cash -= treasury;
+                    // Incremental capitalization (1867): the treasury accrues
+                    // per share SOLD (the buy-side routing below) — floating
+                    // brings no lump sum and must not clobber cash already
+                    // there (a minor's founding bid).
+                    crate::title::Capitalization::Incremental => {}
+                }
                 self.corporations[corp_idx].floated = true;
                 // Home token is placed at the start of the corp's operating turn,
                 // not here during the stock round.

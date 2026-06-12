@@ -312,12 +312,21 @@ pub struct Corporation {
     /// and merger rules on this.
     #[serde(default)]
     pub corp_type: crate::title::CorpType,
+    /// Max percent one player may hold (1830: 60; 1867 minors: 100).
+    #[serde(default = "default_max_ownership_percent")]
+    pub max_ownership_percent: u8,
+    /// Treasury (IPO) shares sell at MARKET price instead of par (1867).
+    #[serde(default)]
+    pub always_market_price: bool,
 }
 
 fn default_share_unit_percent() -> u8 {
     10
 }
 fn default_float_percent() -> u8 {
+    60
+}
+fn default_max_ownership_percent() -> u8 {
     60
 }
 
@@ -346,6 +355,8 @@ impl Corporation {
             float_percent: default_float_percent(),
             capitalization: crate::title::Capitalization::default(),
             corp_type: crate::title::CorpType::default(),
+            max_ownership_percent: default_max_ownership_percent(),
+            always_market_price: false,
         }
     }
 

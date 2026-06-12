@@ -1499,6 +1499,68 @@ mod tests {
         assert!(auction(&g1830).single_item.is_none());
     }
 
+    /// Incremental capitalization: floating brings NO lump sum and must not
+    /// clobber treasury cash already there (a minor's founding bid).
+    #[test]
+    fn incremental_float_keeps_treasury_no_bank_grant() {
+        let mut game = new_4p_game();
+        let ci = game.corp_idx["NO"];
+        let par = game.stock_market.par_price(100).expect("par 100");
+        game.corporations[ci].ipo_price = Some(par.clone());
+        game.corporations[ci].share_price = Some(par);
+        game.corporations[ci].cash = 110; // the founding bid
+        // The single 100% cert sold: 100% from IPO → floats.
+        game.corporations[ci].set_share_owner(0, crate::entities::EntityId::player(2));
+        assert!(game.corporations[ci].check_floated());
+        let bank_before = game.bank.cash;
+        game.check_float(ci);
+        assert!(game.corporations[ci].floated);
+        assert_eq!(game.corporations[ci].cash, 110, "no lump sum, bid kept");
+        assert_eq!(game.bank.cash, bank_before, "bank untouched on incremental float");
+    }
+
+    /// Treasury-share buys pay the CORPORATION at the current MARKET price
+    /// (incremental capitalization + always_market_price), not the bank at
+    /// par.
+    #[test]
+    fn treasury_buy_pays_corporation_at_market_price() {
+        let mut game = new_4p_game();
+        let ci = game.corp_idx["CNR"];
+        assert!(game.corporations[ci].always_market_price);
+        // Par CNR at 80; the market price has since dropped to 70.
+        let par = game.stock_market.par_price(80).expect("par 80");
+        let market = game.stock_market.par_price(70).expect("cell 70");
+        game.corporations[ci].ipo_price = Some(par);
+        game.corporations[ci].share_price = Some(market);
+        let ipo = crate::entities::EntityId::ipo("CNR");
+        let n = game.corporations[ci].shares.len();
+        for i in 0..n {
+            game.corporations[ci].set_share_owner(i, ipo.clone());
+        }
+        game.corporations[ci].set_share_owner(0, crate::entities::EntityId::player(2));
+        game.corporations[ci].owner_id = crate::entities::EntityId::player(2);
+        // Player 1's stock turn.
+        game.round = Round::Stock(crate::rounds::StockState::new(&[1, 2, 3, 4], 1));
+        game.update_round_state();
+        let bank_before = game.bank.cash;
+        game.process_action_internal(&Action::BuyShares {
+            entity_id: "1".into(),
+            corporation_sym: "CNR".into(),
+            shares: Vec::new(),
+            percent: 10,
+            source: "ipo".into(),
+            share_indices: vec![1],
+        })
+        .expect("treasury buy");
+        // Paid the market price (70, not par 80), into the corp's treasury.
+        assert_eq!(game.players[0].cash, 315 - 70);
+        assert_eq!(game.corporations[ci].cash, 70);
+        assert_eq!(game.bank.cash, bank_before, "bank untouched on treasury buy");
+        // 20% president + 10% = 30% sold ≥ float 20% → floated, still no
+        // lump sum.
+        assert!(game.corporations[ci].floated);
+    }
+
     /// A bidder who can no longer afford the raised minimum is dropped from
     /// the auction automatically (PassableAuction#add_bid).
     #[test]

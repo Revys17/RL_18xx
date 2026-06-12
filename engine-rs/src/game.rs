@@ -1913,6 +1913,8 @@ impl BaseGame {
                 corp.float_percent = cd.float_percent;
                 corp.capitalization = cd.capitalization;
                 corp.corp_type = cd.corp_type;
+                corp.max_ownership_percent = cd.max_ownership_percent;
+                corp.always_market_price = cd.always_market_price;
                 corp
             })
             .collect();
