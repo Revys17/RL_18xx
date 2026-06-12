@@ -229,6 +229,9 @@ pub struct BaseGame {
     pub(crate) priority_deal_player: u32,
     /// Loans left in the bank pool (1867: 72; 0 for titles without loans).
     pub(crate) loans_remaining: u32,
+    /// Train-purchase events that have fired (fire-once semantics; also
+    /// consumed as flags, e.g. 1867's `minors_cannot_start`).
+    pub(crate) events_fired: Vec<String>,
 }
 
 // crate-visible wrappers that forward to the (private) PyO3-exposed methods
@@ -428,6 +431,7 @@ impl BaseGame {
             player_order: self.player_order.clone(),
             priority_deal_player: self.priority_deal_player,
             loans_remaining: self.loans_remaining,
+            events_fired: self.events_fired.clone(),
         }
     }
 
@@ -864,8 +868,82 @@ impl BaseGame {
             .map(|td| td.events)
             .unwrap_or(&[]);
         for event in events {
+            // Fire-once (Ruby's event semantics): nationalize_companies pays
+            // face value and must not repeat on later purchases of the name.
+            if self.events_fired.iter().any(|e| e == *event) {
+                continue;
+            }
+            self.events_fired.push((*event).to_string());
             match *event {
                 "close_companies" => self.close_all_companies(),
+                // -- 1867 events (game.rb event_* handlers) --
+                "green_minors_available" => {
+                    // Green minors join (phase-derived via
+                    // corporation_startable). The hidden phase-blocker
+                    // companies (the '3') close, unblocking their hexes.
+                    // TODO(1867-national): also removes the CN neutral green
+                    // tokens (D2 / L12 third city) once those exist.
+                    let hidden: Vec<String> = self
+                        .title_def()
+                        .companies()
+                        .iter()
+                        .filter(|cd| !cd.auctionable)
+                        .map(|cd| cd.sym.to_string())
+                        .collect();
+                    for sym in hidden {
+                        if let Some(&ci) = self.company_idx.get(&sym) {
+                            self.companies[ci].closed = true;
+                        }
+                    }
+                }
+                // Phase-derived (corporation_startable gates majors on
+                // phase ≥ 4); the event itself needs no state change.
+                "majors_can_ipo" => {}
+                // Consumed as a flag by the stock-round minor-founding gate.
+                "minors_cannot_start" => {}
+                // Trade-in usability is phase-8-gated where the discounts
+                // are consumed — TODO(1867-trains): enforce in BuyTrain.
+                "train_trade_allowed" => {}
+                // Privates close, owners paid FACE VALUE by the bank
+                // (game.rb:1047-1062 — unlike 1830's uncompensated close).
+                "nationalize_companies" => {
+                    for i in 0..self.companies.len() {
+                        if self.companies[i].closed {
+                            continue;
+                        }
+                        let value = self.companies[i].value;
+                        if let Some(pid) = self.companies[i].owner.player_id() {
+                            if let Some(pi) = self.player_index(pid) {
+                                self.players[pi].cash += value;
+                                self.bank.cash -= value;
+                            }
+                        } else if let Some(sym) = self.companies[i].owner.corp_sym() {
+                            if let Some(&ci) = self.corp_idx.get(sym) {
+                                self.corporations[ci].cash += value;
+                                self.bank.cash -= value;
+                            }
+                        }
+                        self.companies[i].closed = true;
+                    }
+                }
+                // TODO(1867-national): nationalization into the CN. Safe to
+                // ignore while no floated corp is trainless at fire time;
+                // otherwise the consequences (forced nationalization /
+                // MajorTrainless choices) are unimplemented — fail loudly
+                // rather than silently diverge.
+                "trainless_nationalization" => {
+                    let trainless: Vec<&str> = self
+                        .corporations
+                        .iter()
+                        .filter(|c| c.floated && c.trains.is_empty())
+                        .map(|c| c.sym.as_str())
+                        .collect();
+                    if !trainless.is_empty() {
+                        unimplemented!(
+                            "trainless_nationalization with trainless corps {trainless:?} — CN nationalization not implemented"
+                        );
+                    }
+                }
                 other => unimplemented!("train event {other}"),
             }
         }
@@ -2092,6 +2170,7 @@ impl BaseGame {
             player_order: player_ids.clone(),
             priority_deal_player: first_player_id,
             loans_remaining: title.num_loans(),
+            events_fired: Vec::new(),
         };
         if single_item_opener {
             // Put the first company up (the Ruby step's `setup`) — needs

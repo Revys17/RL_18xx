@@ -35,10 +35,10 @@ FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 # hs_ahjzadkh at a run_routes whose revenue the engine must COMPUTE from
 # the recorded connections (the 1867 router seam).
 PREFIX_WATERMARK = {
-    "21268": 139,
+    "21268": 141,
     "hs_ahjzadkh_19792": 92,
-    "hs_wuveadew_21268": 139,
-    "nationalization_cash": 151,
+    "hs_wuveadew_21268": 141,
+    "nationalization_cash": 153,
 }
 
 

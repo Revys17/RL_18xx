@@ -47,6 +47,10 @@ impl BaseGame {
         if state.bought_this_turn || state.parred_this_turn || state.bid_auction.is_some() {
             return false;
         }
+        // `minors_cannot_start` (first 5-train) closes the founding window.
+        if self.events_fired.iter().any(|e| e == "minors_cannot_start") {
+            return false;
+        }
         if self.player_cash(player_id) < MIN_BID {
             return false;
         }
@@ -147,6 +151,7 @@ impl BaseGame {
             if !self
                 .title_def()
                 .corporation_startable(corporation_sym, &self.phase.name)
+                || self.events_fired.iter().any(|e| e == "minors_cannot_start")
             {
                 return Err(GameError::new(format!(
                     "{} is not available in phase {}",
