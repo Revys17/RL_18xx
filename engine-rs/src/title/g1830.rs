@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use super::{
+    CorpType,
     AbilityDef, AbilityWhen, Capitalization, CompanyDef, CorporationDef, HexDef, HexType,
     MarketCell, MarketZone, OwnerType, PhaseDef, ShareSource, TrainDef,
 };
@@ -113,6 +114,7 @@ pub fn corporations() -> Vec<CorporationDef> {
             shares: SHARES_1830,
             float_percent: 60,
             capitalization: Capitalization::Full,
+            corp_type: CorpType::Major,
         },
         CorporationDef {
             sym: "NYC",
@@ -124,6 +126,7 @@ pub fn corporations() -> Vec<CorporationDef> {
             shares: SHARES_1830,
             float_percent: 60,
             capitalization: Capitalization::Full,
+            corp_type: CorpType::Major,
         },
         CorporationDef {
             sym: "CPR",
@@ -135,6 +138,7 @@ pub fn corporations() -> Vec<CorporationDef> {
             shares: SHARES_1830,
             float_percent: 60,
             capitalization: Capitalization::Full,
+            corp_type: CorpType::Major,
         },
         CorporationDef {
             sym: "B&O",
@@ -146,6 +150,7 @@ pub fn corporations() -> Vec<CorporationDef> {
             shares: SHARES_1830,
             float_percent: 60,
             capitalization: Capitalization::Full,
+            corp_type: CorpType::Major,
         },
         CorporationDef {
             sym: "C&O",
@@ -157,6 +162,7 @@ pub fn corporations() -> Vec<CorporationDef> {
             shares: SHARES_1830,
             float_percent: 60,
             capitalization: Capitalization::Full,
+            corp_type: CorpType::Major,
         },
         CorporationDef {
             sym: "ERIE",
@@ -168,6 +174,7 @@ pub fn corporations() -> Vec<CorporationDef> {
             shares: SHARES_1830,
             float_percent: 60,
             capitalization: Capitalization::Full,
+            corp_type: CorpType::Major,
         },
         CorporationDef {
             sym: "NYNH",
@@ -179,6 +186,7 @@ pub fn corporations() -> Vec<CorporationDef> {
             shares: SHARES_1830,
             float_percent: 60,
             capitalization: Capitalization::Full,
+            corp_type: CorpType::Major,
         },
         CorporationDef {
             sym: "B&M",
@@ -190,6 +198,7 @@ pub fn corporations() -> Vec<CorporationDef> {
             shares: SHARES_1830,
             float_percent: 60,
             capitalization: Capitalization::Full,
+            corp_type: CorpType::Major,
         },
     ]
 }

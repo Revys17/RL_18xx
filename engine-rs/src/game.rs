@@ -1910,6 +1910,7 @@ impl BaseGame {
                 corp.share_unit_percent = cd.shares.iter().copied().min().unwrap_or(10);
                 corp.float_percent = cd.float_percent;
                 corp.capitalization = cd.capitalization;
+                corp.corp_type = cd.corp_type;
                 corp
             })
             .collect();

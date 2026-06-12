@@ -295,6 +295,11 @@ pub struct Corporation {
     /// How the treasury is funded (1830: full capitalization on float).
     #[serde(default)]
     pub capitalization: crate::title::Capitalization,
+    /// The corporation's class (1830: always Major). Titles mixing classes
+    /// (1867 minors/national) gate train limits, operating order, dividend
+    /// and merger rules on this.
+    #[serde(default)]
+    pub corp_type: crate::title::CorpType,
 }
 
 fn default_share_unit_percent() -> u8 {
@@ -328,6 +333,7 @@ impl Corporation {
             share_unit_percent: default_share_unit_percent(),
             float_percent: default_float_percent(),
             capitalization: crate::title::Capitalization::default(),
+            corp_type: crate::title::CorpType::default(),
         }
     }
 

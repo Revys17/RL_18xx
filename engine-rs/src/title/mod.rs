@@ -261,6 +261,21 @@ pub fn compute_adjacency(coords: &[&str]) -> HashMap<String, HashMap<u8, String>
 // fills in (moved here from g1830.rs so future titles share them).
 // ---------------------------------------------------------------------------
 
+/// A corporation's class (Ruby `type:`). Drives per-type train limits,
+/// operating order, dividend/par/merger rules in titles that mix classes
+/// (1867: 16 minors + 8 majors + the CN national). Every 1830 corp is a
+/// Major.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CorpType {
+    #[default]
+    Major,
+    /// Single-cert (100%) player-owned company that operates like a small
+    /// corporation (1867 minors).
+    Minor,
+    /// A non-operating national corporation (1867's CN).
+    National,
+}
+
 /// How a corporation's treasury is funded (Ruby `capitalization:`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Capitalization {
@@ -290,6 +305,8 @@ pub struct CorporationDef {
     /// (Ruby `float_percent:`; 1830: 60).
     pub float_percent: u8,
     pub capitalization: Capitalization,
+    /// The corporation's class (1830: always Major).
+    pub corp_type: CorpType,
 }
 
 pub struct CompanyDef {
