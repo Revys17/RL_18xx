@@ -70,9 +70,7 @@ impl BaseGame {
                         crate::rounds::Round::Operating(s) if !s.finished && s.step == OperatingStep::Done
                     );
                     if is_done {
-                        if let crate::rounds::Round::Operating(ref mut s) = self.round {
-                            s.advance_to_next_corp();
-                        }
+                        self.or_advance_to_next_corp();
                         if !matches!(&self.round, crate::rounds::Round::Operating(s) if s.finished) {
                             self.start_operating();
                         }
@@ -213,9 +211,7 @@ impl BaseGame {
                     crate::rounds::Round::Operating(s) if !s.finished && s.step == OperatingStep::Done
                 );
                 if is_done {
-                    if let crate::rounds::Round::Operating(ref mut s) = self.round {
-                        s.advance_to_next_corp();
-                    }
+                    self.or_advance_to_next_corp();
                     if !matches!(&self.round, crate::rounds::Round::Operating(s) if s.finished) {
                         self.start_operating();
                     }
@@ -311,9 +307,7 @@ impl BaseGame {
                                     crate::rounds::Round::Operating(s) if !s.finished && s.step == OperatingStep::Done
                                 );
                                 if is_done {
-                                    if let crate::rounds::Round::Operating(ref mut s) = self.round {
-                                        s.advance_to_next_corp();
-                                    }
+                                    self.or_advance_to_next_corp();
                                     if !matches!(&self.round, crate::rounds::Round::Operating(s) if s.finished) {
                                         self.start_operating();
                                     }
@@ -413,9 +407,7 @@ impl BaseGame {
             crate::rounds::Round::Operating(s) if !s.finished && s.step == OperatingStep::Done
         );
         if is_done {
-            if let crate::rounds::Round::Operating(ref mut s) = self.round {
-                s.advance_to_next_corp();
-            }
+            self.or_advance_to_next_corp();
             if !matches!(&self.round, crate::rounds::Round::Operating(s) if s.finished) {
                 self.start_operating();
             }
@@ -705,6 +697,12 @@ impl BaseGame {
         }
 
         self.clear_graph_cache();
+
+        // Laying the gray Montreal tile claims the CN's reserved token
+        // (Ruby G1867::Step::Track: `place_639_token if tile.name == '639'`).
+        if base_tile_id == "639" {
+            self.place_639_token(hex_id);
+        }
 
         // Decrement tile count
         let base_id = base_tile_id.to_string();
@@ -1551,12 +1549,33 @@ impl BaseGame {
             new_state.step = OperatingStep::DiscardTrain;
         }
 
+        self.round = crate::rounds::Round::Operating(new_state);
+
         // Ruby runs `post_train_buy` after EVERY purchase (depot or
         // inter-corp), once events/phase/rusting are settled — the 1867
-        // trainless-nationalization consumer (no-op elsewhere).
+        // trainless-nationalization consumer (no-op elsewhere). It runs
+        // AFTER the new state is installed: nationalizing minors must not
+        // be clobbered by the `new_state` write, and while the resulting
+        // MajorTrainless queue is non-empty the round freezes as-is.
         self.post_train_buy();
 
-        self.round = crate::rounds::Round::Operating(new_state);
+        // If the purchase's events nationalized the BUYING corp itself
+        // (`minors_nationalized` on the first 8 can hit a minor buyer),
+        // its turn is over — Ruby `@round.force_next_entity!`.
+        let buyer_dead = self
+            .corp_idx
+            .get(corp_sym.as_str())
+            .map_or(false, |&ci| {
+                self.corporations[ci].closed || !self.corporations[ci].floated
+            });
+        if buyer_dead {
+            if let crate::rounds::Round::Operating(ref mut s) = self.round {
+                if s.current_corp_sym() == Some(corp_sym.as_str()) {
+                    s.step = OperatingStep::Done;
+                }
+            }
+        }
+
         self.update_round_state();
         Ok(())
     }
@@ -2252,9 +2271,7 @@ impl BaseGame {
             }
 
             // This corp had nothing to do — advance to next
-            if let crate::rounds::Round::Operating(ref mut s) = self.round {
-                s.advance_to_next_corp();
-            }
+            self.or_advance_to_next_corp();
 
             if matches!(&self.round, crate::rounds::Round::Operating(s) if s.finished) {
                 break;
@@ -2274,6 +2291,14 @@ impl BaseGame {
     /// to a title = write its predicate arm + list it in the title's round
     /// description; this loop never changes.
     pub(crate) fn skip_steps(&mut self) {
+        // 1867 MajorTrainless: while trainless majors owe a decision the
+        // step (listed FIRST) blocks the whole round — Ruby's skip walk
+        // `break if step.blocking?` stops before anything auto-skips. The
+        // frozen turn resumes from the choice interceptor once the queue
+        // drains (game.rs process_action_internal).
+        if !self.trainless_major.is_empty() {
+            return;
+        }
         let descs = self.operating_step_descs();
         for _iteration in 0..20 {
             let (step, corp_sym) = match &self.round {
@@ -2504,11 +2529,26 @@ impl BaseGame {
                         }
                         _ => 0,
                     };
-                    let new_count = self.loan_operations_auto(corp_idx, loans_at_start);
-                    if let crate::rounds::Round::Operating(ref mut s) = self.round {
-                        s.interest_snapshot.insert(corp_sym.clone(), new_count);
+                    match self.loan_operations_auto(corp_idx, loans_at_start) {
+                        Some(new_count) => {
+                            if let crate::rounds::Round::Operating(ref mut s) = self.round {
+                                s.interest_snapshot.insert(corp_sym.clone(), new_count);
+                            }
+                            true
+                        }
+                        None => {
+                            // Unpayable interest NATIONALIZED the corp mid-
+                            // turn (Ruby interest_unpaid! → nationalize! →
+                            // force_next_entity!). Its turn is over: park
+                            // the pc at Done and stop skipping — the
+                            // caller's advance machinery moves to the next
+                            // living corp.
+                            if let crate::rounds::Round::Operating(ref mut s) = self.round {
+                                s.step = OperatingStep::Done;
+                            }
+                            false
+                        }
                     }
-                    true
                 }
                 StepKind::BuyTrain => {
                     // A corp must buy a train only if it has no trains AND has a
@@ -2631,9 +2671,10 @@ impl BaseGame {
         }
 
         if new_state.step == OperatingStep::BuyCompany {
-            // Pass from final BuyCompany ends the corp's turn
-            new_state.advance_to_next_corp();
+            // Pass from final BuyCompany ends the corp's turn (advance via
+            // the dead-corp-skipping wrapper, after installing the state).
             self.round = crate::rounds::Round::Operating(new_state);
+            self.or_advance_to_next_corp();
             self.update_round_state();
             if !matches!(&self.round, crate::rounds::Round::Operating(s) if s.finished) {
                 self.start_operating();

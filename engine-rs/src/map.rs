@@ -897,6 +897,16 @@ fn is_city_blocked(
         return false;
     }
 
+    // A neutral token (1867's CN green placeholders) keeps the city open
+    // for everyone (Ruby City#blocks?).
+    if city
+        .tokens
+        .iter()
+        .any(|t| t.as_ref().is_some_and(|tok| tok.token_type == "neutral"))
+    {
+        return false;
+    }
+
     // All slots full — blocked unless corp has a token here
     !city
         .tokens

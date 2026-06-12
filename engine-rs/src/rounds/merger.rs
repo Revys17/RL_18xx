@@ -728,8 +728,11 @@ impl BaseGame {
     }
 
     /// Ruby `close_corporation` for a merged/converted minor: the corp
-    /// leaves play — certs vanish, the market cell is vacated.
-    fn merger_close_minor(&mut self, corp_idx: usize) {
+    /// leaves play — certs vanish, the market cell is vacated. Also the
+    /// bookkeeping tail of nationalization's `close_corporation`
+    /// (rounds/national.rs), which handles map tokens/trains/companies
+    /// first (the merger flow has already moved or removed those).
+    pub(crate) fn merger_close_minor(&mut self, corp_idx: usize) {
         let sym = self.corporations[corp_idx].sym.clone();
         if let Some(sp) = self.corporations[corp_idx].share_price.clone() {
             if let Some(corps) = self.market_cell_corps.get_mut(&(sp.row, sp.column)) {

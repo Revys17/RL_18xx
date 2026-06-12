@@ -220,6 +220,9 @@ impl BaseGame {
                 m.insert("city_index".to_string(), json!(city_index));
                 m.insert("slot".to_string(), json!(slot));
             }
+            Action::Choose { choice, .. } => {
+                m.insert("choice".to_string(), json!(choice));
+            }
         }
         serde_json::Value::Object(m)
     }

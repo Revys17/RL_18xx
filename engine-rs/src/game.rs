@@ -6,7 +6,9 @@ use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 
 use crate::actions::{Action, GameError};
 use crate::core::{Phase, StockMarket};
-use crate::entities::{Bank, Company, Corporation, Depot, EntityId, Player, Share, Token, Train};
+use crate::entities::{Bank, Company, Corporation, Depot, EntityId, Player, Share, Train};
+#[cfg(test)]
+use crate::entities::Token;
 use crate::graph::{City, Edge, Hex, Offboard, Tile, Town, Upgrade};
 use crate::map::{GraphCache, NodeId, NodeType};
 use crate::rounds::Round;
@@ -236,6 +238,14 @@ pub struct BaseGame {
     /// by `post_train_buy` AFTER rusting (so corps whose last train just
     /// rusted are caught — Ruby game.rb:741-743, 1025-1045).
     pub(crate) trainless_nationalization_pending: bool,
+    /// 1867 `@trainless_major`: operated-but-trainless majors queued for
+    /// the MajorTrainless nationalize-or-pass choice, in operating order.
+    /// While non-empty the MajorTrainless step blocks every round.
+    pub(crate) trainless_major: Vec<String>,
+    /// 1867 `@national_reservations`: hex ids where a CN token is held in
+    /// reserve (Montreal L12) — consumed by `place_639_token` or by
+    /// nationalization on that hex.
+    pub(crate) national_reservations: Vec<String>,
 }
 
 // crate-visible wrappers that forward to the (private) PyO3-exposed methods
@@ -474,6 +484,8 @@ impl BaseGame {
             loans_remaining: self.loans_remaining,
             events_fired: self.events_fired.clone(),
             trainless_nationalization_pending: self.trainless_nationalization_pending,
+            trainless_major: self.trainless_major.clone(),
+            national_reservations: self.national_reservations.clone(),
         }
     }
 
@@ -575,6 +587,54 @@ impl BaseGame {
             return Ok(());
         }
 
+        // 1867 MajorTrainless (rounds/national.rs): while trainless majors
+        // owe a nationalize-or-pass decision, the step blocks every round
+        // (the dispatch gate above admits only the queued majors'
+        // pass/choose) and the round state is FROZEN — skip_steps and the
+        // round-transition loops hold until the queue drains, mirroring
+        // Ruby's blocking-step semantics. The queue's pass/choose actions
+        // are processed here, outside normal round dispatch.
+        if self.try_process_trainless_choice(action)? {
+            self.move_number += 1;
+            if self.trainless_major.is_empty() {
+                // The queue drained — resume the frozen turn: finish any
+                // auto-skippable operating steps, advance a finished corp
+                // turn, and let a finished round transition.
+                if matches!(&self.round, Round::Operating(_)) {
+                    self.skip_steps();
+                    let is_done = matches!(
+                        &self.round,
+                        Round::Operating(s) if !s.finished && s.step == crate::rounds::OperatingStep::Done
+                    );
+                    if is_done {
+                        self.or_advance_to_next_corp();
+                        if !matches!(&self.round, Round::Operating(s) if s.finished) {
+                            self.start_operating();
+                        }
+                    }
+                }
+                for _ in 0..20 {
+                    let round_finished = match &self.round {
+                        Round::Auction(s) => s.finished,
+                        Round::Stock(s) => s.finished,
+                        Round::Operating(s) => s.finished,
+                        Round::Merger(s) => s.finished,
+                    };
+                    if !round_finished {
+                        break;
+                    }
+                    if self.game_end_triggered && self.should_end_now() {
+                        self.end_game();
+                        return Ok(());
+                    }
+                    self.transition_to_next_round();
+                }
+            }
+            self.check_game_end();
+            self.update_round_state();
+            return Ok(());
+        }
+
         // Handle company exchange actions (e.g., MH exchange for NYC share).
         // These can happen in any round and bypass normal round dispatch.
         if self.try_process_company_exchange(action)? {
@@ -594,9 +654,7 @@ impl BaseGame {
                     crate::rounds::Round::Operating(s) if !s.finished && s.step == crate::rounds::OperatingStep::Done
                 );
                 if is_done {
-                    if let crate::rounds::Round::Operating(ref mut s) = self.round {
-                        s.advance_to_next_corp();
-                    }
+                    self.or_advance_to_next_corp();
                     if !matches!(&self.round, crate::rounds::Round::Operating(s) if s.finished) {
                         self.start_operating();
                     }
@@ -717,9 +775,7 @@ impl BaseGame {
                         Round::Operating(s) if !s.finished && s.step == crate::rounds::OperatingStep::Done
                     );
                     if is_done {
-                        if let Round::Operating(ref mut s) = self.round {
-                            s.advance_to_next_corp();
-                        }
+                        self.or_advance_to_next_corp();
                         if !matches!(&self.round, Round::Operating(s) if s.finished) {
                             self.start_operating();
                         }
@@ -735,7 +791,10 @@ impl BaseGame {
                     Round::Operating(s) => s.finished,
                     Round::Merger(s) => s.finished,
                 };
-                if !round_finished {
+                // A finished round holds while trainless majors owe their
+                // nationalize-or-pass decision (1867 MajorTrainless blocks
+                // every round; reachable once train export lands).
+                if !round_finished || !self.trainless_major.is_empty() {
                     break;
                 }
                 if self.game_end_triggered && self.should_end_now() {
@@ -777,7 +836,10 @@ impl BaseGame {
                 Round::Operating(s) => s.finished,
                 Round::Merger(s) => s.finished,
             };
-            if !round_finished {
+            // A finished round holds while trainless majors owe their
+            // nationalize-or-pass decision (1867 MajorTrainless blocks
+            // every round; reachable once train export lands).
+            if !round_finished || !self.trainless_major.is_empty() {
                 break;
             }
             if self.game_end_triggered && self.should_end_now() {
@@ -806,6 +868,14 @@ impl BaseGame {
     pub(crate) fn update_round_state(&mut self) {
         self.round_state.round_type = self.round.round_type_str().to_string();
         self.round_state.round_num = self.round.round_num();
+
+        // 1867 MajorTrainless overlay: while trainless majors owe their
+        // nationalize-or-pass decision, the queue's first major acts —
+        // whatever the round.
+        if let Some(sym) = self.trainless_major.first() {
+            self.round_state.active_entity_id = EntityId::corporation(sym);
+            return;
+        }
 
         match &self.round {
             Round::Auction(s) => {
@@ -948,25 +1018,13 @@ impl BaseGame {
     /// done. While the `trainless_nationalization` flag stands, every
     /// OPERATED corp without a train is nationalized (minors) or queued
     /// for the MajorTrainless choice (majors) —
-    /// `postevent_trainless_nationalization!` (game.rb:1030-1045).
-    /// TODO(1867-national): both arms need the CN national entity; fail
-    /// loudly rather than silently diverge.
+    /// `postevent_trainless_nationalization!` (rounds/national.rs).
     pub(crate) fn post_train_buy(&mut self) {
         if !self.trainless_nationalization_pending {
             return;
         }
-        let trainless: Vec<&str> = self
-            .corporations
-            .iter()
-            .filter(|c| c.floated && !c.closed && c.ever_operated && c.trains.is_empty())
-            .map(|c| c.sym.as_str())
-            .collect();
-        if !trainless.is_empty() {
-            unimplemented!(
-                "trainless_nationalization with trainless corps {trainless:?} — CN nationalization not implemented"
-            );
-        }
         self.trainless_nationalization_pending = false;
+        self.postevent_trainless_nationalization();
     }
 
     /// Check if buying a certain train triggers a phase change, train
@@ -1009,9 +1067,9 @@ impl BaseGame {
                 "green_minors_available" => {
                     // Green minors join (phase-derived via
                     // corporation_startable). The hidden phase-blocker
-                    // companies (the '3') close, unblocking their hexes.
-                    // TODO(1867-national): also removes the CN neutral green
-                    // tokens (D2 / L12 third city) once those exist.
+                    // companies (the '3') close, unblocking their hexes,
+                    // and the CN's neutral green tokens leave the map
+                    // (D2 / L12 third city — game.rb:976-984).
                     let hidden: Vec<String> = self
                         .title_def()
                         .companies()
@@ -1024,6 +1082,7 @@ impl BaseGame {
                             self.companies[ci].closed = true;
                         }
                     }
+                    self.remove_neutral_tokens();
                 }
                 // Phase-derived (corporation_startable gates majors on
                 // phase ≥ 4); the event itself needs no state change.
@@ -1033,11 +1092,21 @@ impl BaseGame {
                 // Trade-in usability is phase-8-gated where the discounts
                 // are consumed — TODO(1867-trains): enforce in BuyTrain.
                 "train_trade_allowed" => {}
-                // Privates close, owners paid FACE VALUE by the bank
-                // (game.rb:1047-1062 — unlike 1830's uncompensated close).
+                // Privates are nationalized: owners paid FACE VALUE by the
+                // bank, and the companies pass to the CN — they stay OPEN
+                // (game.rb:1047-1062), so their revenue keeps draining the
+                // bank into the CN's dead treasury every OR (this affects
+                // bank-break timing, GAME_END_CHECK bank: :current_or).
                 "nationalize_companies" => {
+                    let national_eid = self
+                        .title_def()
+                        .national_setup()
+                        .map(|ns| EntityId::corporation(ns.sym));
                     for i in 0..self.companies.len() {
                         if self.companies[i].closed {
+                            continue;
+                        }
+                        if national_eid.as_ref() == Some(&self.companies[i].owner) {
                             continue;
                         }
                         let value = self.companies[i].value;
@@ -1052,7 +1121,10 @@ impl BaseGame {
                                 self.bank.cash -= value;
                             }
                         }
-                        self.companies[i].closed = true;
+                        match &national_eid {
+                            Some(eid) => self.companies[i].owner = eid.clone(),
+                            None => self.companies[i].closed = true,
+                        }
                     }
                 }
                 // Ruby event_trainless_nationalization! only sets a flag —
@@ -1061,6 +1133,12 @@ impl BaseGame {
                 // whose last train just rusted are included.
                 "trainless_nationalization" => {
                     self.trainless_nationalization_pending = true;
+                }
+                // First 8-train: all remaining minors leave play — floated
+                // ones nationalize into the CN (their 4-trains haven't
+                // rusted yet; Ruby fires events before rusting too).
+                "minors_nationalized" => {
+                    self.event_minors_nationalized();
                 }
                 other => unimplemented!("train event {other}"),
             }
@@ -1601,6 +1679,31 @@ impl BaseGame {
         }
     }
 
+    /// Advance the OR to the next corp, skipping any that left play
+    /// mid-round (closed minors / reset majors after 1867 nationalization
+    /// — Ruby `Operating#skip_entity?` skips closed round entities). The
+    /// plain `advance_to_next_corp` only steps the index.
+    pub(crate) fn or_advance_to_next_corp(&mut self) {
+        let dead: Vec<String> = self
+            .corporations
+            .iter()
+            .filter(|c| c.closed || !c.floated)
+            .map(|c| c.sym.clone())
+            .collect();
+        if let Round::Operating(ref mut s) = self.round {
+            loop {
+                s.advance_to_next_corp();
+                if s.finished {
+                    break;
+                }
+                match s.current_corp_sym() {
+                    Some(sym) if dead.iter().any(|d| d == sym) => continue,
+                    _ => break,
+                }
+            }
+        }
+    }
+
     /// Get a corp's position within its market cell (for operating order tiebreak).
     pub(crate) fn market_cell_position(&self, corp_sym: &str, row: u8, col: u8) -> usize {
         self.market_cell_corps
@@ -2137,45 +2240,14 @@ impl BaseGame {
             })
             .collect();
 
-        // 4. Corporations (with tokens and shares)
+        // 4. Corporations (with tokens and shares; certificates from the
+        // title's shares array, president first — 1830: 20% + 8×10%).
+        // Construction shared with `reset_corporation` (a nationalized 1867
+        // major is replaced by its unstarted self).
         let corp_defs = title.corporations();
         let corporations: Vec<Corporation> = corp_defs
             .iter()
-            .map(|cd| {
-                let tokens: Vec<Token> = cd
-                    .token_prices
-                    .iter()
-                    .map(|&price| Token::new(cd.sym.to_string(), price))
-                    .collect();
-
-                // Certificates from the title's shares array (president
-                // first; 1830: 20% + 8×10%).
-                let mut shares = Vec::with_capacity(cd.shares.len());
-                for (si, &pct) in cd.shares.iter().enumerate() {
-                    let mut s = Share::new(cd.sym.to_string(), pct, si == 0);
-                    s.index = si;
-                    shares.push(s);
-                }
-
-                let mut corp =
-                    Corporation::new(cd.sym.to_string(), cd.name.to_string(), tokens, shares);
-                // Ruby Corporation#share_percent: the second cert's percent,
-                // or HALF the president's when the president cert is the
-                // only one (1867 minors: [100] → unit 50, "size 2" — the
-                // president cert is 2 shares). Identical to min() for every
-                // multi-cert structure (1830, 1867 majors, TEST-5SHARE).
-                corp.share_unit_percent = cd
-                    .shares
-                    .get(1)
-                    .copied()
-                    .unwrap_or_else(|| cd.shares.first().copied().unwrap_or(20) / 2);
-                corp.float_percent = cd.float_percent;
-                corp.capitalization = cd.capitalization;
-                corp.corp_type = cd.corp_type;
-                corp.max_ownership_percent = cd.max_ownership_percent;
-                corp.always_market_price = cd.always_market_price;
-                corp
-            })
+            .map(crate::rounds::national::build_corporation_from_def)
             .collect();
 
         // 5. Depot (trains)
@@ -2319,7 +2391,13 @@ impl BaseGame {
             loans_remaining: title.num_loans(),
             events_fired: Vec::new(),
             trainless_nationalization_pending: false,
+            trainless_major: Vec::new(),
+            national_reservations: title
+                .national_setup()
+                .map(|ns| ns.reservations.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default(),
         };
+        game.setup_national();
         if single_item_opener {
             // Put the first company up (the Ruby step's `setup`) — needs
             // player cash for the affordability partition, so it runs on the

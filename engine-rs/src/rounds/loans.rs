@@ -93,12 +93,15 @@ impl BaseGame {
     /// pay_interest!): pay interest on `loans_at_or_start` (the OR-start
     /// snapshot), taking loans to cover a shortfall; then forcibly repay
     /// loans while cash covers the face value. Returns the corp's NEW
-    /// snapshot count (Ruby `calculate_corporation_interest`).
+    /// snapshot count (Ruby `calculate_corporation_interest`) — or `None`
+    /// when the corp couldn't pay even at max loans and was NATIONALIZED
+    /// (Ruby `interest_unpaid!` → `nationalize!`; nothing is paid, no
+    /// forced repayment, no re-snapshot).
     pub(crate) fn loan_operations_auto(
         &mut self,
         corp_idx: usize,
         loans_at_or_start: u32,
-    ) -> u32 {
+    ) -> Option<u32> {
         let title = self.title_def();
         let rate = title.loan_interest_rate();
         let face = title.loan_value();
@@ -111,17 +114,9 @@ impl BaseGame {
                 let _ = self.take_loan(corp_idx);
             }
             if owed > self.corporations[corp_idx].cash {
-                // Ruby interest_unpaid! → nationalize!(entity). No corp can
-                // reach this before CN nationalization exists: a corp with a
-                // loan slot free covers $5-per-loan interest by taking one
-                // ($45), and at max loans it earned at least the prior
-                // repayments. Loud failure until TODO(1867-nationalize).
-                unimplemented!(
-                    "1867 nationalization: {} owes ${} interest with ${} cash",
-                    self.corporations[corp_idx].sym,
-                    owed,
-                    self.corporations[corp_idx].cash
-                );
+                let sym = self.corporations[corp_idx].sym.clone();
+                self.nationalize_corporation(&sym);
+                return None;
             }
             self.corporations[corp_idx].cash -= owed;
             self.bank.cash += owed;
@@ -133,7 +128,7 @@ impl BaseGame {
             self.repay_loan(corp_idx);
         }
 
-        self.corporations[corp_idx].loans
+        Some(self.corporations[corp_idx].loans)
     }
 
     /// The current train limit for THIS corp: the phase's per-class limit

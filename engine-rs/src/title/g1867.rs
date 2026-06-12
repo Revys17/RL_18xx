@@ -139,13 +139,15 @@ impl GameTitle for G1867 {
         if GREEN_CORPORATIONS.contains(&sym) {
             return phase >= 3;
         }
-        if corporations()
-            .iter()
-            .any(|cd| cd.sym == sym && cd.corp_type == CorpType::Major)
-        {
-            return phase >= MAJOR_PHASE;
+        match corporations().iter().find(|cd| cd.sym == sym).map(|cd| cd.corp_type) {
+            Some(CorpType::Major) => phase >= MAJOR_PHASE,
+            // The CN exists only to hold tokens — never started by anyone.
+            Some(CorpType::National) => false,
+            _ => true,
         }
-        true
+    }
+    fn national_setup(&self) -> Option<&'static super::NationalSetup> {
+        Some(&NATIONAL_SETUP)
     }
     /// 1867 is a FLAT-top map (game.rb:220 `LAYOUT = :flat`) — every edge
     /// number in the map DSL, borders and stubs is relative to it.
@@ -241,11 +243,11 @@ pub fn auction_steps() -> &'static [StepDesc] {
 ///   MajorTrainless, DiscardTrain, HomeToken, BuySellParShares (via bid).
 ///
 /// The via-bid behavior (in-SR minor founding) and the stock-round
-/// HomeToken choice live in rounds/stock_bid.rs.
-/// TODO(1867-trainless): the MajorTrainless choose step lands with CN
-/// nationalization.
+/// HomeToken choice live in rounds/stock_bid.rs; the MajorTrainless
+/// nationalize-or-pass choice in rounds/national.rs.
 pub fn stock_steps() -> &'static [StepDesc] {
     const STEPS: &[StepDesc] = &[
+        StepDesc::blocking(StepKind::MajorTrainless),
         StepDesc::blocking(StepKind::DiscardTrain),
         StepDesc::blocking(StepKind::HomeToken),
         StepDesc::blocking(StepKind::BuySellParShares),
@@ -265,6 +267,7 @@ pub fn stock_steps() -> &'static [StepDesc] {
 /// mechanic.
 pub fn operating_steps() -> &'static [StepDesc] {
     const STEPS: &[StepDesc] = &[
+        StepDesc::blocking(StepKind::MajorTrainless),
         StepDesc::non_blocking(StepKind::Bankrupt),
         StepDesc::non_blocking(StepKind::BuyCompany),
         StepDesc::blocking(StepKind::HomeToken),
@@ -289,9 +292,9 @@ pub fn operating_steps() -> &'static [StepDesc] {
 /// (confirmed against GTG rules errata in the source comment):
 ///   MajorTrainless, ReduceTokens (E), PostMergerShares (C & D),
 ///   DiscardTrain (F), Merge.
-/// TODO(1867-trainless): MajorTrainless lands with CN nationalization.
 pub fn merger_steps() -> &'static [StepDesc] {
     const STEPS: &[StepDesc] = &[
+        StepDesc::blocking(StepKind::MajorTrainless),
         StepDesc::blocking(StepKind::ReduceTokens),
         StepDesc::blocking(StepKind::PostMergerShares),
         StepDesc::blocking(StepKind::DiscardTrain),
@@ -454,6 +457,42 @@ fn minor(sym: &'static str, name: &'static str) -> CorporationDef {
     }
 }
 
+/// The CN national (entities.rb:381-390): 8 zero-cost tokens, one nominal
+/// 100% cert that setup strips (the engine builds it with NO shares — Ruby
+/// `@national.shares.clear`). It never operates, never floats, and exists
+/// purely as a token holder for nationalization.
+fn national(sym: &'static str, name: &'static str) -> CorporationDef {
+    CorporationDef {
+        sym,
+        name,
+        token_prices: &[0, 0, 0, 0, 0, 0, 0, 0],
+        home_hex: "",
+        home_city_index: 0,
+        reserved: false,
+        shares: SHARES_1867_MINOR,
+        float_percent: 100,
+        capitalization: Capitalization::Incremental,
+        corp_type: CorpType::National,
+        max_ownership_percent: 100,
+        always_market_price: false,
+    }
+}
+
+/// game.rb:956-971 `setup` + 913-930 `add_neutral_tokens`: one CN token is
+/// reserved for Montreal (NATIONAL_RESERVATIONS); neutral green tokens sit
+/// on Timmins (D2, first city) and Montreal's third city (L12, last city)
+/// until `green_minors_available` removes them; CN's first real token
+/// starts on Toronto (F16, first city).
+const NATIONAL_SETUP: super::NationalSetup = super::NationalSetup {
+    sym: "CN",
+    reservations: NATIONAL_RESERVATIONS,
+    tokens: &[
+        super::NationalTokenSpot { hex: "D2", last_city: false, neutral: true },
+        super::NationalTokenSpot { hex: "L12", last_city: true, neutral: true },
+        super::NationalTokenSpot { hex: "F16", last_city: false, neutral: false },
+    ],
+};
+
 pub fn corporations() -> Vec<CorporationDef> {
     vec![
         // -- the 8 majors (entities.rb:97-188) --
@@ -483,6 +522,8 @@ pub fn corporations() -> Vec<CorporationDef> {
         minor("PM", "Pere Marquette Railway"),
         minor("QLS", "Quebec and Lake St. John"),
         minor("THB", "Toronto, Hamilton and Buffalo"),
+        // -- the CN national (entities.rb:381-390), last like Ruby's list --
+        national("CN", "Canadian National"),
     ]
 }
 
@@ -1498,11 +1539,35 @@ mod tests {
     fn construction_smoke() {
         let game = new_4p_game();
         assert_eq!(game.title, TITLE);
-        // 8 majors + 16 minors (no CN yet — lands with nationalization).
-        assert_eq!(game.corporations.len(), 24);
+        // 8 majors + 16 minors + the CN national.
+        assert_eq!(game.corporations.len(), 25);
         let majors = game.corporations.iter().filter(|c| c.corp_type == CorpType::Major).count();
         let minors = game.corporations.iter().filter(|c| c.corp_type == CorpType::Minor).count();
         assert_eq!((majors, minors), (8, 16));
+        // The CN national (game.rb:956-971 setup): certless token holder —
+        // never floats, never startable; one of its 8 tokens starts on
+        // Toronto (F16 city 0); neutral green placeholders fill Timmins
+        // (D2) and Montreal's third city (L12); one token is reserved for
+        // Montreal.
+        let cn = &game.corporations[game.corp_idx["CN"]];
+        assert_eq!(cn.corp_type, CorpType::National);
+        assert!(cn.shares.is_empty());
+        assert!(!cn.floated);
+        assert_eq!(cn.tokens.len(), 8);
+        assert_eq!(cn.tokens.iter().filter(|t| t.used).count(), 1);
+        assert_eq!(cn.tokens[0].city_hex_id, "F16");
+        assert!({
+            use crate::title::GameTitle as _;
+            !super::G1867.corporation_startable("CN", "8")
+        });
+        let f16 = &game.hexes[game.hex_idx["F16"]].tile.cities[0];
+        let tok = f16.tokens[0].as_ref().expect("CN token on Toronto");
+        assert_eq!((tok.corporation_id.as_str(), tok.token_type.as_str()), ("CN", "normal"));
+        let d2 = &game.hexes[game.hex_idx["D2"]].tile.cities[0];
+        assert_eq!(d2.tokens[0].as_ref().unwrap().token_type, "neutral");
+        let l12 = &game.hexes[game.hex_idx["L12"]].tile.cities[2];
+        assert_eq!(l12.tokens[0].as_ref().unwrap().token_type, "neutral");
+        assert_eq!(game.national_reservations, vec!["L12".to_string()]);
         // Majors: 10-share, president 20%, float at 20%. Minors: one 100%
         // cert, unit 100, float at 100%.
         let cnr = &game.corporations[game.corp_idx["CNR"]];

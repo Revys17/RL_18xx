@@ -151,6 +151,16 @@ pub trait GameTitle: Sync {
         0
     }
 
+    // -- national corporation (1867's CN; Ruby G1867 setup/add_neutral_tokens) --
+
+    /// The title's non-operating national corporation, if any: which corp
+    /// def is the national, the map spots its setup tokens occupy, and the
+    /// hexes where a token is held in reserve (Ruby `NATIONAL_RESERVATIONS`).
+    /// `None` (default) = the title has no national.
+    fn national_setup(&self) -> Option<&'static NationalSetup> {
+        None
+    }
+
     // -- train-market rules --
 
     /// Whether a corp may buy trains from corps with a DIFFERENT president
@@ -479,6 +489,30 @@ pub enum CorpType {
     Minor,
     /// A non-operating national corporation (1867's CN).
     National,
+}
+
+/// One map spot a national token occupies from setup (Ruby G1867
+/// `add_neutral_tokens`, game.rb:913-930).
+pub struct NationalTokenSpot {
+    pub hex: &'static str,
+    /// Which city on the hex: false = `cities.first`, true = `cities.last`
+    /// (1867: L12 Montreal's THIRD city holds the neutral token).
+    pub last_city: bool,
+    /// A `type: :neutral` placeholder token (removed at
+    /// `green_minors_available`; never blocks route traversal) vs one of
+    /// the national's own tokens (F16 Toronto holds CN's first).
+    pub neutral: bool,
+}
+
+/// A title's national-corporation setup (Ruby G1867 `setup`): the corp def
+/// whose `corp_type` is [`CorpType::National`] plus its map presence.
+pub struct NationalSetup {
+    pub sym: &'static str,
+    /// Hex ids where a national token is RESERVED for later placement
+    /// (Ruby `NATIONAL_RESERVATIONS`; 1867: Montreal L12 — consumed by
+    /// `place_639_token` or nationalization on that hex).
+    pub reservations: &'static [&'static str],
+    pub tokens: &'static [NationalTokenSpot],
 }
 
 /// How a corporation's treasury is funded (Ruby `capitalization:`).

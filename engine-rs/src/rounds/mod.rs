@@ -6,6 +6,7 @@
 pub mod auction;
 pub mod loans;
 pub mod merger;
+pub mod national;
 pub mod operating;
 pub mod single_auction;
 pub mod stock;

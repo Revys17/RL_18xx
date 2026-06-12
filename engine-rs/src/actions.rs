@@ -212,6 +212,12 @@ pub enum Action {
         city_index: u8,
         slot: u8,
     },
+    /// A named choice offered by a step (Ruby `Engine::Action::Choose`).
+    /// 1867: the MajorTrainless step's `{choice: "nationalize"}`.
+    Choose {
+        entity_id: String,
+        choice: String,
+    },
 }
 
 impl Action {
@@ -235,6 +241,7 @@ impl Action {
             Action::Merge { entity_id, .. } => entity_id,
             Action::Convert { entity_id } => entity_id,
             Action::RemoveToken { entity_id, .. } => entity_id,
+            Action::Choose { entity_id, .. } => entity_id,
         }
     }
 
@@ -258,6 +265,7 @@ impl Action {
             Action::Merge { .. } => "merge",
             Action::Convert { .. } => "convert",
             Action::RemoveToken { .. } => "remove_token",
+            Action::Choose { .. } => "choose",
         }
     }
 
@@ -443,6 +451,11 @@ impl Action {
 
             "convert" => Ok(Action::Convert { entity_id }),
 
+            "choose" => {
+                let choice = extract_string(dict, "choice")?;
+                Ok(Action::Choose { entity_id, choice })
+            }
+
             "remove_token" => {
                 let (hex_id, city_index) = parse_city_ref(&extract_string(dict, "city")?);
                 let slot = extract_optional_i32(dict, "slot")?.unwrap_or(0) as u8;
@@ -575,6 +588,9 @@ impl Action {
                 map.insert("hex".to_string(), hex_id.clone());
                 map.insert("city_index".to_string(), city_index.to_string());
                 map.insert("slot".to_string(), slot.to_string());
+            }
+            Action::Choose { choice, .. } => {
+                map.insert("choice".to_string(), choice.clone());
             }
         }
 

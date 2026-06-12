@@ -88,6 +88,11 @@ pub enum StepKind {
     /// The merged major chooses which tokens to drop to reach the
     /// after-merger limit (2 on-map tokens in distinct hexes).
     ReduceTokens,
+    /// 1867: each operating-but-trainless major decides whether to be
+    /// nationalized into the CN (G1867::Step::MajorTrainless; pass/choose).
+    /// Listed FIRST in the stock, operating AND merger rounds — while
+    /// `game.trainless_major` is non-empty it blocks everything else.
+    MajorTrainless,
     // Auction-round steps
     CompanyPendingPar,
     WaterfallAuction,
@@ -165,6 +170,7 @@ pub(crate) fn step_description(kind: StepKind) -> &'static str {
         StepKind::Merge => "Convert or Merge Minor Corporation",
         StepKind::PostMergerShares => "Buy Shares Post Merge",
         StepKind::ReduceTokens => "Choose tokens to remove",
+        StepKind::MajorTrainless => "Choose if Major is nationalized",
         StepKind::CompanyPendingPar => "Choose Corporation Par Value",
         StepKind::WaterfallAuction => "Bid on Companies",
         StepKind::SingleItemAuction => "Bid on Companies",
@@ -630,6 +636,10 @@ impl BaseGame {
     /// HomeToken, CompanyPendingPar to gate on their pending state).
     fn step_active(&self, desc: &StepDesc, snap: &Round) -> bool {
         match desc.kind {
+            // 1867: active while any trainless major still owes a
+            // nationalize-or-pass decision (step/major_trainless.rb
+            // `active?` — round-agnostic).
+            StepKind::MajorTrainless => !self.trainless_major.is_empty(),
             StepKind::DiscardTrain => match snap {
                 // Merger round: the merged major may exceed its train limit
                 // (computed live — Ruby's crowded_corps).
@@ -692,6 +702,11 @@ impl BaseGame {
     /// the player owing a par.
     fn step_current_entity(&self, desc: &StepDesc, snap: &Round) -> Option<StepEntity> {
         match desc.kind {
+            // 1867 MajorTrainless: the FIRST queued trainless major decides.
+            StepKind::MajorTrainless => self
+                .trainless_major
+                .first()
+                .map(|sym| StepEntity::Corp(sym.clone())),
             // A stock-round pending home token acts for the CORPORATION
             // being founded (1867); the operating-round variant falls
             // through to the default (the operating corp).
@@ -877,6 +892,18 @@ impl BaseGame {
         snap: &Round,
     ) -> Vec<&'static str> {
         match desc.kind {
+            // 1867 MajorTrainless (step/major_trainless.rb): `actions` offers
+            // pass/choose to ANY queued trainless major; `active_entities`
+            // (= the blocking entity) is the queue's FIRST. Round-agnostic —
+            // the kind is listed in 1867's stock, operating and merger lists.
+            StepKind::MajorTrainless => {
+                let StepEntity::Corp(sym) = entity else { return vec![] };
+                if self.trainless_major.iter().any(|m| m == sym) {
+                    vec!["pass", "choose"]
+                } else {
+                    vec![]
+                }
+            }
             // -- operating: non-blocking specials --------------------------
             StepKind::Bankrupt => {
                 // Bankrupt surfaces only during a forced train buy where the

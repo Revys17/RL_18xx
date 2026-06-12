@@ -29,19 +29,21 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "1867"
 FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 
 # fixture stem -> minimum number of actions the engine must accept.
-# Current frontier: the MERGER ROUND replays end to end (convert + merge +
-# post-merger share dealing + token reduction + train discards), along with
-# its OR/SR fallout: major dividends (half pay, treasury-share dividends,
-# the ≥-price right-move rule), distance-priced tokens, SELL_AFTER=:operate,
-# the :sell_buy auto-advance, and minors-before-majors operating order.
-# hs_ahjzadkh replays COMPLETELY; the other three stop at the first
-# trainless-nationalization consumer (post_train_buy after the 4-train
-# rusts the 2s) — the next seam: nationalize! + the CN national entity.
+# Current frontier: CN NATIONALIZATION replays (the CN national entity with
+# its setup tokens/neutral greens/Montreal reservation, nationalize! for
+# trainless minors at the 4-train with loan repayment + price drops +
+# shareholder payouts + CN token replacement, and the MajorTrainless
+# choose/pass queue). hs_ahjzadkh replays COMPLETELY (scores still diverge
+# on the endgame loan valuation — the xfail below); 21268/hs_wuveadew stop
+# at the first phase-4 TRAIN EXPORT (or_round_finished depot.export! shifts
+# the depot, so the next recorded buy names a train we still hold);
+# nationalization_cash stops one OR later on the X3→X6 brown-Montreal
+# upgrade displacing a token (3 cities → 2+1 slots city merge).
 PREFIX_WATERMARK = {
-    "21268": 344,
+    "21268": 402,
     "hs_ahjzadkh_19792": 220,
-    "hs_wuveadew_21268": 344,
-    "nationalization_cash": 437,
+    "hs_wuveadew_21268": 402,
+    "nationalization_cash": 494,
 }
 
 
