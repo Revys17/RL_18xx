@@ -140,6 +140,10 @@ impl BaseGame {
                 m.insert("company".to_string(), json!(company_sym));
                 m.insert("price".to_string(), json!(price));
             }
+            Action::CorporationBid { corporation_sym, price, .. } => {
+                m.insert("corporation".to_string(), json!(corporation_sym));
+                m.insert("price".to_string(), json!(price));
+            }
             Action::Par { corporation_sym, share_price, .. } => {
                 m.insert("corporation".to_string(), json!(corporation_sym));
                 m.insert("share_price".to_string(), json!(share_price));

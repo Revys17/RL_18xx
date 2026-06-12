@@ -29,14 +29,15 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "1867"
 FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 
 # fixture stem -> minimum number of actions the engine must accept.
-# Current frontier: the COMPLETE opening single-item auction; every fixture
-# stops at its first stock-round action (a minor-founding bid that carries
-# `corporation` — the incremental-capitalization/SR-bid mechanic, next).
+# Current frontier: the COMPLETE opening auction + the COMPLETE first stock
+# round (minor bid-founding, home-token choices, incremental treasuries);
+# every fixture stops in OR1 — minor operating order / 1867 BuyTrain rules
+# are the next mechanics.
 PREFIX_WATERMARK = {
-    "21268": 35,
-    "hs_ahjzadkh_19792": 38,
-    "hs_wuveadew_21268": 35,
-    "nationalization_cash": 34,
+    "21268": 74,
+    "hs_ahjzadkh_19792": 68,
+    "hs_wuveadew_21268": 74,
+    "nationalization_cash": 75,
 }
 
 

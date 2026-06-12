@@ -63,6 +63,12 @@ pub trait GameTitle: Sync {
     fn bid_price_step(&self) -> i64 {
         5
     }
+    /// Whether a corporation may be STARTED (parred / bid-founded) in the
+    /// given phase (1867: the six green minors join from phase 3, majors
+    /// from phase 4). Default: always startable (1830).
+    fn corporation_startable(&self, _sym: &str, _phase_name: &str) -> bool {
+        true
+    }
 
     // -- AlphaZero-bridge orders (action layout + encoder) --
     //

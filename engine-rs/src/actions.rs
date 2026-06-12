@@ -105,6 +105,14 @@ pub enum Action {
         company_sym: String,
         price: i32,
     },
+    /// A `bid` whose target is a CORPORATION (1867's in-stock-round minor
+    /// founding; the JSON carries `corporation` instead of `company`).
+    /// Same wire type string ("bid") as [`Action::Bid`].
+    CorporationBid {
+        entity_id: String,
+        corporation_sym: String,
+        price: i32,
+    },
     Par {
         entity_id: String,
         corporation_sym: String,
@@ -178,6 +186,7 @@ impl Action {
         match self {
             Action::Pass { entity_id } => entity_id,
             Action::Bid { entity_id, .. } => entity_id,
+            Action::CorporationBid { entity_id, .. } => entity_id,
             Action::Par { entity_id, .. } => entity_id,
             Action::BuyShares { entity_id, .. } => entity_id,
             Action::SellShares { entity_id, .. } => entity_id,
@@ -197,6 +206,7 @@ impl Action {
         match self {
             Action::Pass { .. } => "pass",
             Action::Bid { .. } => "bid",
+            Action::CorporationBid { .. } => "bid",
             Action::Par { .. } => "par",
             Action::BuyShares { .. } => "buy_shares",
             Action::SellShares { .. } => "sell_shares",
@@ -231,8 +241,18 @@ impl Action {
             "pass" => Ok(Action::Pass { entity_id }),
 
             "bid" => {
-                let company_sym = extract_string(dict, "company")?;
                 let price = extract_i32(dict, "price")?;
+                // The wire shape distinguishes the target: `company` for
+                // private-company auctions, `corporation` for 1867's
+                // in-stock-round minor founding.
+                if let Some(corporation_sym) = extract_optional_string(dict, "corporation")? {
+                    return Ok(Action::CorporationBid {
+                        entity_id,
+                        corporation_sym,
+                        price,
+                    });
+                }
+                let company_sym = extract_string(dict, "company")?;
                 Ok(Action::Bid {
                     entity_id,
                     company_sym,
@@ -406,6 +426,14 @@ impl Action {
                 company_sym, price, ..
             } => {
                 map.insert("company".to_string(), company_sym.clone());
+                map.insert("price".to_string(), price.to_string());
+            }
+            Action::CorporationBid {
+                corporation_sym,
+                price,
+                ..
+            } => {
+                map.insert("corporation".to_string(), corporation_sym.clone());
                 map.insert("price".to_string(), price.to_string());
             }
             Action::Par {

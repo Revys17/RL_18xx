@@ -575,9 +575,12 @@ impl BaseGame {
             StepKind::DiscardTrain => {
                 operating(snap).map_or(false, |s| !s.crowded_corps.is_empty())
             }
-            StepKind::HomeToken => {
-                operating(snap).map_or(false, |s| !s.pending_tokens.is_empty())
-            }
+            StepKind::HomeToken => match snap {
+                // 1867: home tokens are chosen in the STOCK round
+                // (HOME_TOKEN_TIMING = :par, pushed at minor bid / major par).
+                Round::Stock(s) => !s.pending_home_tokens.is_empty(),
+                _ => operating(snap).map_or(false, |s| !s.pending_tokens.is_empty()),
+            },
             StepKind::CompanyPendingPar => match snap {
                 Round::Auction(s) => s.pending_par.is_some(),
                 _ => false,
@@ -608,6 +611,21 @@ impl BaseGame {
     /// the player owing a par.
     fn step_current_entity(&self, desc: &StepDesc, snap: &Round) -> Option<StepEntity> {
         match desc.kind {
+            // A stock-round pending home token acts for the CORPORATION
+            // being founded (1867); the operating-round variant falls
+            // through to the default (the operating corp).
+            StepKind::HomeToken => match snap {
+                Round::Stock(s) => s
+                    .pending_home_tokens
+                    .first()
+                    .map(|(sym, _)| StepEntity::Corp(sym.clone())),
+                _ => match snap {
+                    Round::Operating(s) => s
+                        .current_corp_sym()
+                        .map(|sym| StepEntity::Corp(sym.to_string())),
+                    _ => None,
+                },
+            },
             StepKind::DiscardTrain => operating(snap)
                 .and_then(|s| s.crowded_corps.first())
                 .map(|c| StepEntity::Corp(c.clone())),
@@ -854,8 +872,17 @@ impl BaseGame {
                 }
             }
             StepKind::HomeToken => {
-                // Pending home-token choice (1830: ERIE's E11 OO hex). The
-                // placement is mandatory — no Pass.
+                // Pending home-token choice. The placement is mandatory —
+                // no Pass. Operating round: 1830's ERIE E11 OO hex; stock
+                // round: 1867's chosen homes (the action's entity is the
+                // CORPORATION being founded).
+                if let Round::Stock(s) = snap {
+                    let StepEntity::Corp(sym) = entity else { return vec![] };
+                    return match s.pending_home_tokens.first() {
+                        Some((pending_sym, _)) if pending_sym == sym => vec!["place_token"],
+                        _ => vec![],
+                    };
+                }
                 let Some(s) = operating(snap) else { return vec![] };
                 let StepEntity::Corp(sym) = entity else { return vec![] };
                 if Some(sym.as_str()) != s.current_corp_sym() {
@@ -965,6 +992,20 @@ impl BaseGame {
             StepKind::BuySellParShares => {
                 let Round::Stock(s) = snap else { return vec![] };
                 let StepEntity::Player(pid) = entity else { return vec![] };
+                // 1867 overlays: the HomeToken step blocks while a home
+                // token is pending; a live minor auction narrows the round
+                // to bid/pass for the auction's active player (ViaBid
+                // `actions`).
+                if !s.pending_home_tokens.is_empty() {
+                    return vec![];
+                }
+                if let Some(auction) = &s.bid_auction {
+                    return if self.stock_bid_active_player(auction) == Some(*pid) {
+                        vec!["bid", "pass"]
+                    } else {
+                        vec![]
+                    };
+                }
                 if *pid != s.current_player_id() {
                     return vec![];
                 }
@@ -984,9 +1025,16 @@ impl BaseGame {
                     v.push("buy_shares");
                 }
                 if !s.bought_this_turn {
+                    // Minors are never parred directly (1867: bid-founded);
+                    // titles may gate startability by phase (1867 majors:
+                    // phase 4+). No-op for 1830 (all Majors, always
+                    // startable).
+                    let title = self.title_def();
                     let can_par = certs < self.cert_limit as u32
                         && self.corporations.iter().any(|c| {
                             c.ipo_price.is_none()
+                                && c.corp_type != crate::title::CorpType::Minor
+                                && title.corporation_startable(&c.sym, &self.phase.name)
                                 && self.players.iter().find(|p| p.id == pid).map_or(false, |p| {
                                     // parring buys the president's cert
                                     // (its unit count × par)
@@ -1003,6 +1051,12 @@ impl BaseGame {
                     if can_par {
                         v.push("par");
                     }
+                }
+                // 1867: opening a bid auction on a startable minor is a buy
+                // action (ViaBid `can_bid_any?`). No-op for titles without
+                // minors.
+                if self.stock_can_bid_minor(s, pid) {
+                    v.push("bid");
                 }
                 v.push("pass");
                 v

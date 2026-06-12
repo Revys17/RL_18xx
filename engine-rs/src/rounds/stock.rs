@@ -19,7 +19,43 @@ impl BaseGame {
             _ => return Err(GameError::new("Not in stock round")),
         };
 
+        // 1867 overlays on the stock round (rounds/stock_bid.rs): a pending
+        // home token blocks everything; a live minor auction narrows the
+        // round to bid/pass.
+        if !state.pending_home_tokens.is_empty() {
+            return match action {
+                Action::PlaceToken {
+                    entity_id,
+                    hex_id,
+                    city_index,
+                } => self.process_stock_home_token(entity_id, hex_id, *city_index),
+                _ => Err(GameError::new(format!(
+                    "A home token must be placed before {}",
+                    action.action_type()
+                ))),
+            };
+        }
+        if state.bid_auction.is_some() {
+            return match action {
+                Action::CorporationBid {
+                    entity_id,
+                    corporation_sym,
+                    price,
+                } => self.process_corporation_bid(entity_id, corporation_sym, *price),
+                Action::Pass { entity_id } => self.process_stock_bid_pass(entity_id),
+                _ => Err(GameError::new(format!(
+                    "Invalid action during corporation auction: {}",
+                    action.action_type()
+                ))),
+            };
+        }
+
         match action {
+            Action::CorporationBid {
+                entity_id,
+                corporation_sym,
+                price,
+            } => self.process_corporation_bid(entity_id, corporation_sym, *price),
             Action::Par {
                 entity_id,
                 corporation_sym,
@@ -78,6 +114,27 @@ impl BaseGame {
 
         if new_state.bought_this_turn {
             return Err(GameError::new("Already bought this turn"));
+        }
+
+        // Minors are never parred directly (1867 founds them by bid in the
+        // stock round); titles may gate startability by phase (1867 majors:
+        // phase 4+). Both are no-ops for 1830.
+        if let Some(&ci) = self.corp_idx.get(corporation_sym) {
+            if self.corporations[ci].corp_type == crate::title::CorpType::Minor {
+                return Err(GameError::new(format!(
+                    "{} cannot be started by par (founded by bid)",
+                    corporation_sym
+                )));
+            }
+        }
+        if !self
+            .title_def()
+            .corporation_startable(corporation_sym, &self.phase.name)
+        {
+            return Err(GameError::new(format!(
+                "{} is not available in phase {}",
+                corporation_sym, self.phase.name
+            )));
         }
 
         // Validate the par price
@@ -1152,14 +1209,26 @@ impl BaseGame {
     /// Advance to the next entity in the stock round.
     /// If all players are passed, finish the round.
     /// Otherwise, start the next player's turn and auto-skip if they can't act.
-    fn stock_next_entity(&mut self) {
-        // Check if round is finished (all players passed)
-        let all_passed = match &self.round {
-            crate::rounds::Round::Stock(s) => s.all_players_passed(),
+    pub(crate) fn stock_next_entity(&mut self) {
+        // Check if round is finished (all players passed). A pending home
+        // token or live auction keeps the round open even when every player
+        // has passed (1867: the HomeToken step stays active — Ruby's
+        // `finished? = !active_step`): the round WAITS for the blocking
+        // action instead of finishing — and must not advance/auto-skip
+        // either, or this would recurse forever. `process_stock_home_token`
+        // re-runs the finish check once the token lands.
+        let (all_passed, overlay_blocked) = match &self.round {
+            crate::rounds::Round::Stock(s) => (
+                s.all_players_passed(),
+                !s.pending_home_tokens.is_empty() || s.bid_auction.is_some(),
+            ),
             _ => return,
         };
 
         if all_passed {
+            if overlay_blocked {
+                return;
+            }
             self.check_sold_out_price_increases();
             if let crate::rounds::Round::Stock(ref mut s) = self.round {
                 s.finished = true;
@@ -1428,12 +1497,26 @@ impl BaseGame {
         }
 
         // Can par? (parring buys the president's cert: its unit count × par)
+        // Minors are never parred directly (1867 founds them by bid) and a
+        // title may gate startability by phase (1867 majors: phase 4+).
         let par_prices = self.stock_market.par_prices();
         if let Some(&min_par) = par_prices.iter().min() {
+            let title = self.title_def();
             let can_par = self.corporations.iter().any(|c| {
-                c.ipo_price.is_none() && player_cash >= min_par * c.president_share_units()
+                c.ipo_price.is_none()
+                    && c.corp_type != crate::title::CorpType::Minor
+                    && title.corporation_startable(&c.sym, &self.phase.name)
+                    && player_cash >= min_par * c.president_share_units()
             });
             if can_par {
+                return true;
+            }
+        }
+
+        // 1867: opening a bid auction on a startable minor is a buy action
+        // (ViaBid `can_bid_any?`). No-op for titles without minors.
+        if let crate::rounds::Round::Stock(s) = &self.round {
+            if self.stock_can_bid_minor(s, player_id) {
                 return true;
             }
         }

@@ -99,6 +99,24 @@ impl GameTitle for G1867 {
     fn alphazero_bridge_ready(&self) -> bool {
         false
     }
+    /// Phase availability windows (game.rb): green minors join when the
+    /// first 3-train fires `green_minors_available`; majors can IPO from
+    /// phase 4 (`majors_can_ipo`).
+    /// TODO(1867-events): `minors_cannot_start` (first 5-train) closes the
+    /// minor window again — needs event state, lands with the event work.
+    fn corporation_startable(&self, sym: &str, phase_name: &str) -> bool {
+        let phase: u8 = phase_name.parse().unwrap_or(2);
+        if GREEN_CORPORATIONS.contains(&sym) {
+            return phase >= 3;
+        }
+        if corporations()
+            .iter()
+            .any(|cd| cd.sym == sym && cd.corp_type == CorpType::Major)
+        {
+            return phase >= MAJOR_PHASE;
+        }
+        true
+    }
     // NOTE: no action_hex_order / action_tile_order overrides — 1867 uses
     // the trait's clean derivations (no trained checkpoints to preserve).
 }
@@ -117,15 +135,14 @@ pub fn auction_steps() -> &'static [StepDesc] {
 /// 1867's stock round (game.rb:812-819 `stock_round`), Ruby order:
 ///   MajorTrainless, DiscardTrain, HomeToken, BuySellParShares (via bid).
 ///
-/// TODO(1867-stock): placeholder — the in-SR minor bid auction, home-token
-/// choice, majors-par-from-phase-4 and the MajorTrainless choose step land
-/// with the incremental-capitalization work. Until then the 1830-style
-/// BuySellParShares step holds the round state well-defined; 1867 SR
-/// actions (corporation bids) fail decode, so fixture replay stops at the
-/// stock round rather than mis-applying anything.
+/// The via-bid behavior (in-SR minor founding) and the stock-round
+/// HomeToken choice live in rounds/stock_bid.rs.
+/// TODO(1867-trainless): the MajorTrainless choose step lands with CN
+/// nationalization.
 pub fn stock_steps() -> &'static [StepDesc] {
     const STEPS: &[StepDesc] = &[
         StepDesc::blocking(StepKind::DiscardTrain),
+        StepDesc::blocking(StepKind::HomeToken),
         StepDesc::blocking(StepKind::BuySellParShares),
     ];
     STEPS
@@ -1276,7 +1293,11 @@ mod tests {
         assert_eq!(cnr.float_percent, 20);
         let no = &game.corporations[game.corp_idx["NO"]];
         assert_eq!(no.shares.len(), 1);
-        assert_eq!(no.share_unit(), 100);
+        // Ruby's president/2 rule for single-cert corps: the 100% president
+        // cert is TWO 50% shares ("Minors are done as corporations with a
+        // size of 2", game.rb:368) — par costs 2×par, dividends split /2.
+        assert_eq!(no.share_unit(), 50);
+        assert_eq!(no.num_share_units(), 2);
         assert_eq!(no.float_percent, 100);
         // 4p economics.
         assert_eq!(game.starting_cash, 315);
@@ -1559,6 +1580,127 @@ mod tests {
         // 20% president + 10% = 30% sold ≥ float 20% → floated, still no
         // lump sum.
         assert!(game.corporations[ci].floated);
+    }
+
+    fn corp_bid(game: &mut BaseGame, pid: u32, corp: &str, price: i32) {
+        game.process_action_internal(&Action::CorporationBid {
+            entity_id: pid.to_string(),
+            corporation_sym: corp.to_string(),
+            price,
+        })
+        .unwrap_or_else(|e| panic!("corp bid {pid} {corp} {price}: {e}"));
+    }
+
+    /// Drive the opening auction to completion (each opener buys at
+    /// minimum): P1 C&SL $20, P2 NFB $30, P3 MB $40, P4 QB $50, P1 SCT $60;
+    /// priority deal to P2.
+    fn game_in_stock_round() -> BaseGame {
+        let mut game = new_4p_game();
+        for _ in 0..5 {
+            let opener = active_player(&game);
+            let sym = auctioning_sym(&game);
+            let min = game.companies[game.company_idx[&sym]].min_bid();
+            bid(&mut game, opener, &sym, min);
+            for _ in 0..3 {
+                let pid = active_player(&game);
+                pass(&mut game, pid);
+            }
+            if matches!(&game.round, Round::Stock(_)) {
+                break;
+            }
+        }
+        assert!(matches!(&game.round, Round::Stock(_)));
+        game
+    }
+
+    /// The full in-SR minor founding cycle: selection bid → immediate home
+    /// token choice → live auction → win pars at min(bid/2, 135) snapped
+    /// down to a par_1/par cell, with the FULL bid as the minor's treasury.
+    #[test]
+    fn minor_founded_by_bid_in_stock_round() {
+        let mut game = game_in_stock_round();
+        // Priority deal: P2 opens (P1 won the last auction lot).
+        let s = match &game.round {
+            Round::Stock(s) => s,
+            _ => unreachable!(),
+        };
+        assert_eq!(s.current_player_id(), 2);
+
+        corp_bid(&mut game, 2, "CV", 100);
+        // The opening bidder chooses the home city NOW; everything else is
+        // blocked until the token lands.
+        {
+            let s = match &game.round {
+                Round::Stock(s) => s,
+                _ => unreachable!(),
+            };
+            assert_eq!(s.pending_home_tokens, vec![("CV".to_string(), 2)]);
+        }
+        assert!(game
+            .process_action_internal(&Action::Pass { entity_id: "3".into() })
+            .is_err());
+        game.process_action_internal(&Action::PlaceToken {
+            entity_id: "CV".into(),
+            hex_id: "E15".into(),
+            city_index: 0,
+        })
+        .expect("home token");
+        // Token on the map, auction live: rotation from P2 → P3 acts.
+        assert!(game.hexes[game.hex_idx["E15"]].tile.cities[0]
+            .tokens
+            .iter()
+            .flatten()
+            .any(|t| t.corporation_id == "CV"));
+        corp_bid(&mut game, 3, "CV", 110);
+        pass(&mut game, 4);
+        pass(&mut game, 1);
+        pass(&mut game, 2); // P3 alone → wins at 110
+        let ci = game.corp_idx["CV"];
+        let cv = &game.corporations[ci];
+        // Par: min(110/2, 135) = 55 → the 55x (par_1) cell.
+        assert_eq!(cv.ipo_price.as_ref().unwrap().price, 55);
+        assert_eq!(cv.share_price.as_ref().unwrap().price, 55);
+        assert!(cv.shares[0].owner == EntityId::player(3));
+        assert_eq!(cv.owner_id, EntityId::player(3));
+        assert_eq!(cv.cash, 110, "the FULL bid funds the treasury");
+        assert!(cv.floated);
+        // P3 paid the bid (auction QB? no — P3 won MB at 40 in the opener).
+        assert_eq!(game.players[2].cash, 315 - 40 - 110);
+        // The winner's turn is consumed: P4 acts next.
+        let s = match &game.round {
+            Round::Stock(s) => s,
+            _ => unreachable!(),
+        };
+        assert!(s.bid_auction.is_none());
+        assert_eq!(s.current_player_id(), 4);
+        // Cash conservation across auction + founding.
+        let total: i64 = game.players.iter().map(|p| p.cash as i64).sum::<i64>()
+            + game.corporations.iter().map(|c| c.cash as i64).sum::<i64>()
+            + game.bank.cash as i64;
+        assert_eq!(total, 15_000);
+    }
+
+    /// Phase windows: green minors are not biddable in phase 2; majors are
+    /// not parrable before phase 4.
+    #[test]
+    fn phase_windows_gate_founding() {
+        let mut game = game_in_stock_round();
+        assert!(game
+            .process_action_internal(&Action::CorporationBid {
+                entity_id: "2".into(),
+                corporation_sym: "BBG".into(),
+                price: 100,
+            })
+            .is_err());
+        assert!(game
+            .process_action_internal(&Action::Par {
+                entity_id: "2".into(),
+                corporation_sym: "CNR".into(),
+                share_price: 80,
+            })
+            .is_err());
+        // A normal (non-green) minor bid still works afterwards.
+        corp_bid(&mut game, 2, "CV", 100);
     }
 
     /// A bidder who can no longer afford the raised minimum is dropped from

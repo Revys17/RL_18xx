@@ -7,6 +7,7 @@ pub mod auction;
 pub mod operating;
 pub mod single_auction;
 pub mod stock;
+pub mod stock_bid;
 
 use std::collections::HashMap;
 
@@ -339,6 +340,31 @@ pub struct StockState {
     /// Turn number (increments when player index wraps). Starts at 1.
     /// SELL_AFTER="first" in 1830 means no selling until turn > 1.
     pub turn: u32,
+    /// 1867's in-stock-round minor-founding auction (Ruby
+    /// BuySellParSharesViaBid). While `Some`, only bid/pass are legal and
+    /// the active player is auction-derived. See rounds/stock_bid.rs.
+    #[serde(default)]
+    pub bid_auction: Option<StockBidAuction>,
+    /// Home-token choices pending in the STOCK round (1867:
+    /// HOME_TOKEN_TIMING = :par — pushed when a minor is first bid on or a
+    /// major pars): (corporation sym, choosing player id). The HomeToken
+    /// step blocks while non-empty.
+    #[serde(default)]
+    pub pending_home_tokens: Vec<(String, u32)>,
+}
+
+/// The live in-SR auction for one corporation (1867 minors). Mirrors the
+/// PassableAuction trio used by the opening single-item auction
+/// ([`SingleItemState`]) minus dutch mode (no dutch in the stock round —
+/// an unsold minor is simply not founded).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StockBidAuction {
+    /// The corporation (minor) being auctioned.
+    pub corporation_sym: String,
+    /// Standing bids (≤ one per player; raises replace).
+    pub bids: Vec<Bid>,
+    /// Players still in the auction, in rotation order from the triggerer.
+    pub active_bidders: Vec<u32>,
 }
 
 impl StockState {
@@ -367,6 +393,8 @@ impl StockState {
             priority_deal_player,
             finished: false,
             turn: 1,
+            bid_auction: None,
+            pending_home_tokens: Vec::new(),
         }
     }
 

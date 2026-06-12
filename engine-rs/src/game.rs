@@ -760,7 +760,17 @@ impl BaseGame {
                 self.round_state.active_entity_id = EntityId::player(s.active_player_id());
             }
             Round::Stock(s) => {
-                self.round_state.active_entity_id = EntityId::player(s.current_player_id());
+                // 1867 overlays: a pending home token acts for the founded
+                // CORPORATION; a live minor auction for its active bidder.
+                if let Some((sym, _)) = s.pending_home_tokens.first() {
+                    self.round_state.active_entity_id = EntityId::corporation(sym);
+                } else if let Some(active) =
+                    s.bid_auction.as_ref().and_then(|a| self.stock_bid_active_player(a))
+                {
+                    self.round_state.active_entity_id = EntityId::player(active);
+                } else {
+                    self.round_state.active_entity_id = EntityId::player(s.current_player_id());
+                }
             }
             Round::Operating(s) => {
                 // If a corp must discard trains (crowded), it's the active entity.
@@ -1909,7 +1919,16 @@ impl BaseGame {
 
                 let mut corp =
                     Corporation::new(cd.sym.to_string(), cd.name.to_string(), tokens, shares);
-                corp.share_unit_percent = cd.shares.iter().copied().min().unwrap_or(10);
+                // Ruby Corporation#share_percent: the second cert's percent,
+                // or HALF the president's when the president cert is the
+                // only one (1867 minors: [100] → unit 50, "size 2" — the
+                // president cert is 2 shares). Identical to min() for every
+                // multi-cert structure (1830, 1867 majors, TEST-5SHARE).
+                corp.share_unit_percent = cd
+                    .shares
+                    .get(1)
+                    .copied()
+                    .unwrap_or_else(|| cd.shares.first().copied().unwrap_or(20) / 2);
                 corp.float_percent = cd.float_percent;
                 corp.capitalization = cd.capitalization;
                 corp.corp_type = cd.corp_type;

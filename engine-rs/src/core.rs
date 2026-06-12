@@ -189,6 +189,27 @@ impl StockMarket {
         prices
     }
 
+    /// Cells carrying ANY of the given type strings, sorted by price
+    /// DESCENDING (Ruby `StockMarket#share_prices_with_types` — callers
+    /// `.find(price <= target)` for the greatest qualifying cell; 1867
+    /// pars majors on `["par_2", "par"]` and minors on `["par_1", "par"]`).
+    pub fn share_prices_with_types(&self, types: &[&str]) -> Vec<SharePrice> {
+        let mut out: Vec<SharePrice> = self
+            .grid
+            .iter()
+            .flat_map(|row| row.iter().flatten())
+            .filter(|cell| types.iter().any(|t| cell.has_type(t)))
+            .map(|cell| SharePrice {
+                price: cell.price,
+                row: cell.row,
+                column: cell.column,
+                types: cell.types.clone(),
+            })
+            .collect();
+        out.sort_by(|a, b| b.price.cmp(&a.price));
+        out
+    }
+
     /// Move share price right (price increase). Returns new position.
     /// Used when: corporation's shares are sold out, or payout dividend.
     /// TwoDimensional (1830): at the right edge, fall back to move_up.
