@@ -98,8 +98,9 @@ impl BaseGame {
             )));
         }
 
-        // Player must afford 2x par price (president share is 20%)
-        let cost = share_price * 2;
+        // Player must afford the president's certificate (its unit count ×
+        // par; 1830: 2 × par for the 20% cert)
+        let cost = share_price * self.corporations[corp_idx].president_share_units();
         let player_idx = self.player_index(player_id).unwrap();
         if self.players[player_idx].cash < cost {
             return Err(GameError::new(format!(
@@ -306,7 +307,8 @@ impl BaseGame {
                 .price
         };
 
-        let price = (percent as i32 * unit_price) / 10;
+        // units bought × price-per-unit
+        let price = (percent as i32 * unit_price) / self.corporations[corp_idx].share_unit();
         let player_idx = self.player_index(player_id).unwrap();
 
         if self.players[player_idx].cash < price {
@@ -412,7 +414,7 @@ impl BaseGame {
             .shares
             .iter()
             .any(|s| s.president && s.owner == player_eid)
-            && remaining_after < 20;
+            && remaining_after < self.corporations[corp_idx].president_percent();
 
         // Snapshot pre-action owners of every share. This is used in two places:
         //   1. `handle_partial`: pick shares that were ALREADY in market before
@@ -519,13 +521,14 @@ impl BaseGame {
             }
         }
 
-        // Player receives money based on the percent value
-        let revenue = (percent as i32 * share_price.price) / 10;
+        // Player receives money (units sold × price-per-unit)
+        let share_unit = self.corporations[corp_idx].share_unit();
+        let revenue = (percent as i32 * share_price.price) / share_unit;
         self.players[player_idx].cash += revenue;
         self.bank.cash -= revenue;
 
-        // Share price drops: move DOWN once per 10% share sold (1830 SELL_MOVEMENT = "down_share")
-        let num_shares = percent as u32 / 10;
+        // Share price drops: move DOWN once per share unit sold (1830 SELL_MOVEMENT = "down_share")
+        let num_shares = percent as u32 / share_unit as u32;
         let (mut row, mut col) = (share_price.row, share_price.column);
         for _ in 0..num_shares {
             let (nr, nc) = self.stock_market.move_down(row, col);
@@ -568,7 +571,7 @@ impl BaseGame {
             let target_pct = remaining_after;
             if actual_pct < target_pct {
                 let deficit = target_pct - actual_pct;
-                let shares_to_return = deficit / 10;
+                let shares_to_return = deficit / share_unit as u8;
                 let mut returned = 0u8;
 
                 while returned < shares_to_return {
@@ -770,13 +773,22 @@ impl BaseGame {
         false
     }
 
-    /// Check if a corporation should float (60%+ sold from IPO).
+    /// Check if a corporation should float (`float_percent`+ sold from IPO).
     pub(crate) fn check_float(&mut self, corp_idx: usize) {
         let corp = &self.corporations[corp_idx];
         if !corp.floated && corp.check_floated() {
-            // Float: corporation receives par_price * total_shares (10) from bank
             if let Some(ref ipo_price) = corp.ipo_price {
-                let treasury = ipo_price.price * 10; // 10 total shares
+                let treasury = match corp.capitalization {
+                    // Full capitalization: par × total share units from the
+                    // bank on float (1830).
+                    crate::title::Capitalization::Full => ipo_price.price * corp.num_share_units(),
+                    // Incremental capitalization pays into the treasury per
+                    // share SOLD (at buy time), not on float — no registered
+                    // title sets it yet; the buy-side hook lands with 1867.
+                    crate::title::Capitalization::Incremental => {
+                        unimplemented!("incremental capitalization lands with 1867")
+                    }
+                };
                 self.corporations[corp_idx].cash = treasury;
                 self.bank.cash -= treasury;
                 self.corporations[corp_idx].floated = true;
@@ -856,7 +868,7 @@ impl BaseGame {
             }
         }
 
-        if max_percent < 20 {
+        if max_percent < corp.president_percent() {
             return;
         }
 
@@ -1233,8 +1245,9 @@ impl BaseGame {
                 //   partial variants at (normal_total + 20% - 10%) = (normal_total + 10%)
 
                 // Check normal-only bundles (no president involved)
+                let unit_pct = corp.share_unit_percent;
                 for n in 1..=num_normal {
-                    let bundle_pct = n * 10;
+                    let bundle_pct = n * unit_pct;
                     if market_pct + bundle_pct as u8 <= 50 {
                         return true; // Can sell n normal shares
                     }
@@ -1242,25 +1255,21 @@ impl BaseGame {
 
                 // Check bundles including the president share (requires can_dump)
                 if has_president {
-                    let pres_pct = corp
-                        .shares
-                        .iter()
-                        .find(|s| s.president)
-                        .map_or(20, |s| s.percent);
+                    let pres_pct = corp.president_percent();
                     let can_dump = self.players.iter().any(|p| {
                         p.id != player_id
                             && corp.percent_owned_by(&EntityId::player(p.id)) >= pres_pct
                     });
                     if can_dump {
                         // Full bundle: all normal + president
-                        let full_pct = num_normal * 10 + pres_pct;
+                        let full_pct = num_normal * unit_pct + pres_pct;
                         if market_pct + full_pct as u8 <= 50 {
                             return true;
                         }
-                        // Partial president bundles: reduce percent by 10 per step
-                        // In 1830: president is 20%, normal share is 10%, so 1 partial
-                        // bundle at (full_pct - 10)
-                        let normal_share_pct: u8 = 10; // corp.share_percent in Python
+                        // Partial president bundles: reduce percent by one
+                        // unit per step. In 1830: president is 20%, unit is
+                        // 10%, so 1 partial bundle at (full_pct - 10)
+                        let normal_share_pct = unit_pct; // corp.share_percent in Python
                         let num_partials = (pres_pct - normal_share_pct) / normal_share_pct;
                         for p in 1..=num_partials {
                             let partial_pct = full_pct - p * normal_share_pct;
@@ -1403,15 +1412,14 @@ impl BaseGame {
             return true;
         }
 
-        // Can par?
+        // Can par? (parring buys the president's cert: its unit count × par)
         let par_prices = self.stock_market.par_prices();
         if let Some(&min_par) = par_prices.iter().min() {
-            let min_par_cost = min_par * 2;
-            if player_cash >= min_par_cost {
-                let has_unparred = self.corporations.iter().any(|c| c.ipo_price.is_none());
-                if has_unparred {
-                    return true;
-                }
+            let can_par = self.corporations.iter().any(|c| {
+                c.ipo_price.is_none() && player_cash >= min_par * c.president_share_units()
+            });
+            if can_par {
+                return true;
             }
         }
 

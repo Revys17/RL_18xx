@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use super::{
-    AbilityDef, AbilityWhen, CompanyDef, CorporationDef, HexDef, HexType, MarketCell, MarketZone,
-    OwnerType, PhaseDef, ShareSource, TrainDef,
+    AbilityDef, AbilityWhen, Capitalization, CompanyDef, CorporationDef, HexDef, HexType,
+    MarketCell, MarketZone, OwnerType, PhaseDef, ShareSource, TrainDef,
 };
 use crate::steps::{FinishedRound, RoundStart, RoundTransition, StepDesc, StepKind};
 
@@ -97,6 +97,10 @@ pub fn next_round(finished: FinishedRound, phase_operating_rounds: u8) -> RoundT
 // Corporation data (8 corporations)
 // ---------------------------------------------------------------------------
 
+/// Every 1830 corporation is a 10-share corp: a 20% president's certificate
+/// + eight 10% certificates (g1830.py `shares: [20] + [10]*8`).
+const SHARES_1830: &[u8] = &[20, 10, 10, 10, 10, 10, 10, 10, 10];
+
 pub fn corporations() -> Vec<CorporationDef> {
     vec![
         CorporationDef {
@@ -106,6 +110,9 @@ pub fn corporations() -> Vec<CorporationDef> {
             home_hex: "H12",
             home_city_index: 0,
             reserved: false,
+            shares: SHARES_1830,
+            float_percent: 60,
+            capitalization: Capitalization::Full,
         },
         CorporationDef {
             sym: "NYC",
@@ -114,6 +121,9 @@ pub fn corporations() -> Vec<CorporationDef> {
             home_hex: "E19",
             home_city_index: 0,
             reserved: false,
+            shares: SHARES_1830,
+            float_percent: 60,
+            capitalization: Capitalization::Full,
         },
         CorporationDef {
             sym: "CPR",
@@ -122,6 +132,9 @@ pub fn corporations() -> Vec<CorporationDef> {
             home_hex: "A19",
             home_city_index: 0,
             reserved: false,
+            shares: SHARES_1830,
+            float_percent: 60,
+            capitalization: Capitalization::Full,
         },
         CorporationDef {
             sym: "B&O",
@@ -130,6 +143,9 @@ pub fn corporations() -> Vec<CorporationDef> {
             home_hex: "I15",
             home_city_index: 0,
             reserved: false,
+            shares: SHARES_1830,
+            float_percent: 60,
+            capitalization: Capitalization::Full,
         },
         CorporationDef {
             sym: "C&O",
@@ -138,6 +154,9 @@ pub fn corporations() -> Vec<CorporationDef> {
             home_hex: "F6",
             home_city_index: 0,
             reserved: false,
+            shares: SHARES_1830,
+            float_percent: 60,
+            capitalization: Capitalization::Full,
         },
         CorporationDef {
             sym: "ERIE",
@@ -146,6 +165,9 @@ pub fn corporations() -> Vec<CorporationDef> {
             home_hex: "E11",
             home_city_index: 0,
             reserved: true,
+            shares: SHARES_1830,
+            float_percent: 60,
+            capitalization: Capitalization::Full,
         },
         CorporationDef {
             sym: "NYNH",
@@ -154,6 +176,9 @@ pub fn corporations() -> Vec<CorporationDef> {
             home_hex: "G19",
             home_city_index: 1,
             reserved: false,
+            shares: SHARES_1830,
+            float_percent: 60,
+            capitalization: Capitalization::Full,
         },
         CorporationDef {
             sym: "B&M",
@@ -162,6 +187,9 @@ pub fn corporations() -> Vec<CorporationDef> {
             home_hex: "E23",
             home_city_index: 0,
             reserved: false,
+            shares: SHARES_1830,
+            float_percent: 60,
+            capitalization: Capitalization::Full,
         },
     ]
 }

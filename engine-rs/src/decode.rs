@@ -354,11 +354,17 @@ impl BaseGame {
                 };
                 let corporation_sym = s(&la.entity, "corp")
                     .ok_or_else(|| GameError::new("SellShares LegalAction missing 'corp'"))?;
+                // Count <-> percent conversion is in the corp's share UNIT
+                // (1830: 10%).
+                let unit = self
+                    .corp_idx
+                    .get(corporation_sym.as_str())
+                    .map_or(10, |&ci| self.corporations[ci].share_unit());
                 // The factored sell slot encodes the share count under "count"
-                // (see factored_sell_shares); fall back to percent/10 for any
-                // producer that only carries the percent.
+                // (see factored_sell_shares); fall back to percent/unit for
+                // any producer that only carries the percent.
                 let num = i(&la.params, "count")
-                    .or_else(|| i(&la.params, "percent").map(|p| p / 10))
+                    .or_else(|| i(&la.params, "percent").map(|p| p / unit as i64))
                     .ok_or_else(|| {
                         GameError::new("SellShares LegalAction missing 'count'/'percent'")
                     })?;
@@ -366,7 +372,7 @@ impl BaseGame {
                     entity_id,
                     corporation_sym,
                     shares: Vec::new(),
-                    percent: (num * 10) as u8,
+                    percent: (num * unit as i64) as u8,
                     share_indices: Vec::new(),
                 })
             }

@@ -1862,19 +1862,21 @@ impl BaseGame {
                     .map(|&price| Token::new(cd.sym.to_string(), price))
                     .collect();
 
-                let mut shares = Vec::with_capacity(9);
-                // President share (20%)
-                let mut pres = Share::new(cd.sym.to_string(), 20, true);
-                pres.index = 0;
-                shares.push(pres);
-                // 8 normal shares (10%)
-                for si in 1..=8 {
-                    let mut s = Share::new(cd.sym.to_string(), 10, false);
+                // Certificates from the title's shares array (president
+                // first; 1830: 20% + 8×10%).
+                let mut shares = Vec::with_capacity(cd.shares.len());
+                for (si, &pct) in cd.shares.iter().enumerate() {
+                    let mut s = Share::new(cd.sym.to_string(), pct, si == 0);
                     s.index = si;
                     shares.push(s);
                 }
 
-                Corporation::new(cd.sym.to_string(), cd.name.to_string(), tokens, shares)
+                let mut corp =
+                    Corporation::new(cd.sym.to_string(), cd.name.to_string(), tokens, shares);
+                corp.share_unit_percent = cd.shares.iter().copied().min().unwrap_or(10);
+                corp.float_percent = cd.float_percent;
+                corp.capitalization = cd.capitalization;
+                corp
             })
             .collect();
 
@@ -3087,13 +3089,14 @@ impl BaseGame {
                 .map(|s| s.percent)
                 .sum();
 
-            // Base per-10%-share market price (`Share.price_per_share()` for a
+            // Base per-unit market price (`Share.price_per_share()` for a
             // player-owned share == share_price.price * price_multiplier; 1830
             // has price_multiplier == 1). A share/bundle of `pct`% is priced
-            // `ceil(P * pct / 10)`, mirroring `Share.price` / `ShareBundle.price`.
+            // `ceil(P * pct / unit)`, mirroring `Share.price` / `ShareBundle.price`.
             let per_share_price = corp.share_price.as_ref().map_or(0, |sp| sp.price);
+            let unit = corp.share_unit() as i64;
             let price_for_pct =
-                |pct: u8| -> i32 { ((per_share_price as i64 * pct as i64 + 9) / 10) as i32 };
+                |pct: u8| -> i32 { ((per_share_price as i64 * pct as i64 + unit - 1) / unit) as i32 };
 
             // Build cumulative bundles
             let mut cum_percent: u8 = 0;
@@ -3128,11 +3131,7 @@ impl BaseGame {
                 // President dump check: if bundle includes president share,
                 // another player must hold >= 20% (president's share percent)
                 if includes_president {
-                    let presidents_pct = corp
-                        .shares
-                        .iter()
-                        .find(|s| s.president)
-                        .map_or(20, |s| s.percent);
+                    let presidents_pct = corp.president_percent();
 
                     // Find max other player holding
                     let max_other = self
@@ -3152,7 +3151,7 @@ impl BaseGame {
                 // which is ``ceil(percent / corp.share_percent)`` (== ``percent / 10``
                 // in 1830). The president share at 20% counts as 2 "share-equivalents",
                 // so a (president,) bundle reports count=2 not count=1.
-                let bundle_shares = (cum_percent as usize + 9) / 10;
+                let bundle_shares = (cum_percent as usize + unit as usize - 1) / unit as usize;
                 result.push(SellableBundle {
                     corp_sym: corp.sym.clone(),
                     num_shares: bundle_shares,
@@ -3163,20 +3162,16 @@ impl BaseGame {
             }
 
             // Partial president bundles: if the last share is the president share,
-            // add a bundle for (total - 10%) representing selling half the president.
-            // In 1830: president=20%, normal=10%, so one partial bundle at cum_percent-10.
+            // add a bundle for (total - one unit) representing selling half the president.
+            // In 1830: president=20%, unit=10%, so one partial bundle at cum_percent-10.
             // Python builds it from the FULL share list (`bundle[:]`) at a reduced
             // percent, so its `bundle.price` is the partial-percent price while the
             // cheapest member share is still the smallest of all the player's shares.
-            if includes_president && cum_percent > 10 {
-                let partial_pct = cum_percent - 10;
+            if includes_president && cum_percent > corp.share_unit_percent {
+                let partial_pct = cum_percent - corp.share_unit_percent;
                 if market_pct + partial_pct <= 50 {
                     // Check dump for the partial bundle too
-                    let presidents_pct = corp
-                        .shares
-                        .iter()
-                        .find(|s| s.president)
-                        .map_or(20, |s| s.percent);
+                    let presidents_pct = corp.president_percent();
                     let max_other = self
                         .players
                         .iter()
@@ -3186,7 +3181,7 @@ impl BaseGame {
                         .unwrap_or(0);
                     if max_other >= presidents_pct {
                         // Same num_shares convention as the main loop.
-                        let partial_shares = (partial_pct as usize + 9) / 10;
+                        let partial_shares = (partial_pct as usize + unit as usize - 1) / unit as usize;
                         result.push(SellableBundle {
                             corp_sym: corp.sym.clone(),
                             num_shares: partial_shares,

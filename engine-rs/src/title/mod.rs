@@ -193,6 +193,19 @@ pub fn compute_adjacency(coords: &[&str]) -> HashMap<String, HashMap<u8, String>
 // fills in (moved here from g1830.rs so future titles share them).
 // ---------------------------------------------------------------------------
 
+/// How a corporation's treasury is funded (Ruby `capitalization:`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Capitalization {
+    /// On float the corporation receives par × total shares from the bank
+    /// (1830).
+    #[default]
+    Full,
+    /// The corporation receives par × shares sold as each share is bought
+    /// from the IPO; no lump sum on float (1867). Not yet implemented — no
+    /// registered title sets it.
+    Incremental,
+}
+
 pub struct CorporationDef {
     pub sym: &'static str,
     pub name: &'static str,
@@ -201,6 +214,14 @@ pub struct CorporationDef {
     pub home_city_index: u8,
     /// Whether the home hex tile is reserved for this corp (token placed after tile upgrade).
     pub reserved: bool,
+    /// Certificate sizes in percent, president first (Ruby `shares:`;
+    /// 1830: 20,10×8). The share UNIT is the smallest entry; a cert's unit
+    /// count is `percent / unit` (1830 president = 2 units of 10%).
+    pub shares: &'static [u8],
+    /// Percent of shares that must leave the IPO for the corp to float
+    /// (Ruby `float_percent:`; 1830: 60).
+    pub float_percent: u8,
+    pub capitalization: Capitalization,
 }
 
 pub struct CompanyDef {

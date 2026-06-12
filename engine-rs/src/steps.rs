@@ -969,6 +969,8 @@ impl BaseGame {
                         && self.corporations.iter().any(|c| {
                             c.ipo_price.is_none()
                                 && self.players.iter().find(|p| p.id == pid).map_or(false, |p| {
+                                    // parring buys the president's cert
+                                    // (its unit count × par)
                                     p.cash
                                         >= self
                                             .stock_market
@@ -976,7 +978,7 @@ impl BaseGame {
                                             .first()
                                             .copied()
                                             .unwrap_or(0)
-                                            * 2
+                                            * c.president_share_units()
                                 })
                         });
                     if can_par {

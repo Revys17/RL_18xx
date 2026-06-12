@@ -905,16 +905,16 @@ impl BaseGame {
         }
 
         let corp = &self.corporations[corp_idx];
-        let total_shares = 10i32; // 1830: all corps have 10 shares (president = 2 shares)
+        let share_unit = corp.share_unit();
+        let total_shares = corp.num_share_units();
         let per_share = revenue / total_shares;
 
-        // Pay each shareholder based on their number of shares
+        // Pay each shareholder based on their number of share units
         for player in &mut self.players {
             let eid = EntityId::player(player.id);
             let percent = corp.percent_owned_by(&eid);
             if percent > 0 {
-                // percent / 10 = number of shares (10% = 1 share, 20% = 2 shares)
-                let num_shares = percent as i32 / 10;
+                let num_shares = percent as i32 / share_unit;
                 let payout = num_shares * per_share;
                 player.cash += payout;
                 self.bank.cash -= payout;
@@ -926,7 +926,7 @@ impl BaseGame {
         let market_eid = EntityId::market();
         let market_pct = corp.percent_owned_by(&market_eid);
         if market_pct > 0 {
-            let market_shares = market_pct as i32 / 10;
+            let market_shares = market_pct as i32 / share_unit;
             let corp_payout = market_shares * per_share;
             self.corporations[corp_idx].cash += corp_payout;
             self.bank.cash -= corp_payout;
@@ -1623,8 +1623,13 @@ impl BaseGame {
             // short. needed_cash = depot.min_depot_price
             // (EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST), available_cash =
             // seller.cash + operating corp cash (round.py:664-668).
+            // ceil(units × price): price is per share unit
+            let unit = self
+                .corp_idx
+                .get(corporation_sym)
+                .map_or(10, |&i| self.corporations[i].share_unit()) as i64;
             let price_for_pct =
-                |pct: u8| -> i32 { ((share_price as i64 * pct as i64 + 9) / 10) as i32 };
+                |pct: u8| -> i32 { ((share_price as i64 * pct as i64 + unit - 1) / unit) as i32 };
             let bundle_price = price_for_pct(percent);
             let min_share_price = bundle_cert_pcts
                 .iter()
@@ -1695,14 +1700,14 @@ impl BaseGame {
 
         // Determine if the president share is being dumped — same condition
         // as the stock-round sell logic: player has the president and would
-        // be left with < 20% after the sale.
+        // be left with less than the president's percent after the sale.
         let player_total = self.corporations[corp_idx].percent_owned_by(&player_eid);
         let remaining_after = player_total.saturating_sub(percent);
         let includes_president = self.corporations[corp_idx]
             .shares
             .iter()
             .any(|s| s.president && s.owner == player_eid)
-            && remaining_after < 20;
+            && remaining_after < self.corporations[corp_idx].president_percent();
 
         // Transfer shares to market. When dumping the president, transfer the
         // non-president portion (= percent - president_face_value, i.e.
@@ -1780,13 +1785,14 @@ impl BaseGame {
             }
         }
 
-        // Player receives money
-        let revenue = (percent as i32 * share_price.price) / 10;
+        // Player receives money (units sold × price-per-unit)
+        let share_unit = self.corporations[corp_idx].share_unit();
+        let revenue = (percent as i32 * share_price.price) / share_unit;
         self.players[player_idx].cash += revenue;
         self.bank.cash -= revenue;
 
-        // Share price drops: move DOWN once per 10% share sold
-        let num_shares = percent as u32 / 10;
+        // Share price drops: move DOWN once per share unit sold
+        let num_shares = percent as u32 / share_unit as u32;
         let (mut row, mut col) = (share_price.row, share_price.column);
         for _ in 0..num_shares {
             let (nr, nc) = self.stock_market.move_down(row, col);
@@ -1821,7 +1827,7 @@ impl BaseGame {
             let target_pct = remaining_after;
             if actual_pct < target_pct {
                 let deficit = target_pct - actual_pct;
-                let shares_to_return = deficit / 10;
+                let shares_to_return = deficit / share_unit as u8;
                 let mut returned = 0u8;
                 while returned < shares_to_return {
                     let oldest = self.corporations[corp_idx].oldest_market_share_index();

@@ -284,6 +284,24 @@ pub struct Corporation {
     /// insertion order.
     #[serde(default)]
     pub share_event_counter: u64,
+    /// Percent of ONE share unit (the title's smallest certificate for this
+    /// corp). A cert's unit count is `percent / share_unit_percent`
+    /// (1830: 10; the 20% president = 2 units).
+    #[serde(default = "default_share_unit_percent")]
+    pub share_unit_percent: u8,
+    /// Percent that must leave the IPO for the corp to float (1830: 60).
+    #[serde(default = "default_float_percent")]
+    pub float_percent: u8,
+    /// How the treasury is funded (1830: full capitalization on float).
+    #[serde(default)]
+    pub capitalization: crate::title::Capitalization,
+}
+
+fn default_share_unit_percent() -> u8 {
+    10
+}
+fn default_float_percent() -> u8 {
+    60
 }
 
 #[pymethods]
@@ -305,6 +323,11 @@ impl Corporation {
             home_token_ever_placed: false,
             market_order: Vec::new(),
             share_event_counter: 0,
+            // 1830 defaults; BaseGame::build overrides from the title's
+            // CorporationDef.
+            share_unit_percent: default_share_unit_percent(),
+            float_percent: default_float_percent(),
+            capitalization: crate::title::Capitalization::default(),
         }
     }
 
@@ -334,33 +357,32 @@ impl Corporation {
         self.ipo_price.clone()
     }
 
-    /// Number of share units in the IPO (president counts as 2, includes uninitialized).
+    /// Number of share units in the IPO (president counts as
+    /// `president_percent / unit`, includes uninitialized).
     fn num_ipo_shares(&self) -> usize {
         let ipo_id = EntityId::ipo(&self.sym);
         self.shares
             .iter()
             .filter(|s| s.owner == ipo_id || s.owner.is_none())
-            .map(|s| if s.president { (s.percent / 10) as usize } else { 1 })
+            .map(|s| self.share_units_of(s))
             .sum()
     }
 
-    /// Number of share units in the open market (president counts as 2).
+    /// Number of share units in the open market.
     fn num_market_shares(&self) -> usize {
         let market_id = EntityId::market();
         self.shares
             .iter()
             .filter(|s| s.owner == market_id)
-            .map(|s| if s.president { (s.percent / 10) as usize } else { 1 })
+            .map(|s| self.share_units_of(s))
             .sum()
     }
 
-    /// Total number of shares (president share counts as 2x normal).
-    /// In 1830: 1 president (20%) + 8 normal (10%) = 10 share units.
+    /// Total number of share units.
+    /// In 1830: 1 president (20% = 2 units) + 8 normal (10%) = 10 units.
     #[getter]
     fn total_shares(&self) -> usize {
-        self.shares.iter().map(|s| {
-            if s.president { (s.percent / 10) as usize } else { 1 }
-        }).sum()
+        self.num_share_units() as usize
     }
 
     /// Tokens not yet placed on the map.
@@ -386,6 +408,38 @@ impl Corporation {
 }
 
 impl Corporation {
+    /// The percent of one share unit, as i32 (1830: 10).
+    pub fn share_unit(&self) -> i32 {
+        self.share_unit_percent as i32
+    }
+
+    /// How many share units a certificate spans (1830: president 2, rest 1).
+    pub fn share_units_of(&self, share: &Share) -> usize {
+        (share.percent / self.share_unit_percent) as usize
+    }
+
+    /// Total share units across all certificates (1830: 10).
+    pub fn num_share_units(&self) -> i32 {
+        self.shares
+            .iter()
+            .map(|s| (s.percent / self.share_unit_percent) as i32)
+            .sum()
+    }
+
+    /// The president certificate's percent (1830: 20).
+    pub fn president_percent(&self) -> u8 {
+        self.shares
+            .iter()
+            .find(|s| s.president)
+            .map(|s| s.percent)
+            .unwrap_or(self.share_unit_percent * 2)
+    }
+
+    /// How many share units the president's certificate spans (1830: 2).
+    pub fn president_share_units(&self) -> i32 {
+        (self.president_percent() / self.share_unit_percent) as i32
+    }
+
     /// Move a share's owner, maintaining `market_order` and `acquired_seq`
     /// so that share ordering mirrors Python's per-owner insertion order.
     pub fn set_share_owner(&mut self, share_idx: usize, new_owner: EntityId) {
@@ -543,12 +597,12 @@ impl Corporation {
         self.percent_owned_by(&EntityId::market())
     }
 
-    /// Check if the corporation has floated (60%+ sold from IPO).
-    /// A corp floats when players own >= 60% of its shares.
+    /// Check if the corporation has floated (`float_percent`+ sold from IPO;
+    /// 1830: 60%).
     pub fn check_floated(&self) -> bool {
         let ipo_percent = self.ipo_shares_percent();
-        // 100% total - IPO remaining = sold percent. Float at 60%+.
-        (100 - ipo_percent) >= 60
+        // 100% total - IPO remaining = sold percent.
+        (100 - ipo_percent) >= self.float_percent
     }
 
     /// Find the president share.
@@ -602,9 +656,10 @@ impl Player {
                 c.ipo_price.as_ref()?;
                 let percent = c.percent_owned_by(&player_eid);
                 if percent > 0 {
+                    // units held × price-per-unit
                     c.share_price
                         .as_ref()
-                        .map(|sp| (percent as i32 * sp.price) / 10)
+                        .map(|sp| (percent as i32 * sp.price) / c.share_unit())
                 } else {
                     None
                 }

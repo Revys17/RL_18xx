@@ -392,11 +392,16 @@ impl BaseGame {
             if !seen.insert((corp_sym.clone(), source.clone())) {
                 continue;
             }
+            // one share unit (1830: 10%)
+            let unit = self
+                .corp_idx
+                .get(corp_sym.as_str())
+                .map_or(10, |&ci| self.corporations[ci].share_unit());
             let mut a = LegalAction::new("BuyShares");
             a.entity = entity_desc.clone();
             a.entity.insert("corp".to_string(), json!(corp_sym));
             a.params.insert("source".to_string(), json!(source));
-            a.params.insert("percent".to_string(), json!(10));
+            a.params.insert("percent".to_string(), json!(unit));
             out.push(a);
         }
         out
@@ -1712,7 +1717,8 @@ impl BaseGame {
                     .share_price
                     .as_ref()
                     .is_some_and(|sp| sp.types.iter().any(|t| OWNERSHIP_EXEMPT.contains(&t.as_str())));
-                if !(zone_exempt || owner_pct + 10 <= 60) {
+                let unit = target.share_unit_percent;
+                if !(zone_exempt || owner_pct + unit <= 60) {
                     continue;
                 }
                 // Pre-par, this engine hasn't materialised the corp's
@@ -1738,7 +1744,7 @@ impl BaseGame {
                     a.entity.insert("private".to_string(), json!(co.sym.clone()));
                     a.entity.insert("corp".to_string(), json!(*corp_sym));
                     a.params.insert("source".to_string(), json!("ipo"));
-                    a.params.insert("percent".to_string(), json!(10));
+                    a.params.insert("percent".to_string(), json!(unit));
                     out.push(a);
                 }
                 if has_market_share {
@@ -1746,7 +1752,7 @@ impl BaseGame {
                     a.entity.insert("private".to_string(), json!(co.sym.clone()));
                     a.entity.insert("corp".to_string(), json!(*corp_sym));
                     a.params.insert("source".to_string(), json!("market"));
-                    a.params.insert("percent".to_string(), json!(10));
+                    a.params.insert("percent".to_string(), json!(unit));
                     out.push(a);
                 }
             }
