@@ -2225,8 +2225,11 @@ impl BaseGame {
                     }
                 }
                 StepKind::BuyCompany => {
-                    let phase_num: u8 = self.phase.name.parse().unwrap_or(0);
-                    if phase_num < 3 {
+                    // phase.status gate: skip outright unless the phase
+                    // allows company purchases (1830: phases 3-4). In later
+                    // phases all companies are closed, so the else-branch
+                    // checks below would skip anyway.
+                    if !self.phase_has_status("can_buy_companies") {
                         true
                     } else {
                         let corp_cash = self.corporations[corp_idx].cash;
@@ -2267,43 +2270,33 @@ impl BaseGame {
                             .iter()
                             .any(|t| corp_cash >= t.price);
 
-                        // Can exchange for discounted D?
-                        // D-trains become purchasable once phase 6 is reached
-                        // (D-trains have available_on="6"). They're also available
-                        // in phase D. Check phase name for "6" or "D".
-                        let d_available = self.phase.name == "D" || self.phase.name == "6";
+                        // Can exchange for a discounted train (1830: the D,
+                        // available_on="6", trades in a 4/5/6 for 300 off)?
                         // Python's `discountable_trains_for` looks at
                         // `depot.depot_trains()` — the VISIBLE upcoming trains
-                        // PLUS the discarded pool — not just the upcoming queue.
-                        // Once the last upcoming D is bought the queue empties,
-                        // but discarded D-trains remain exchangeable, so the
-                        // BuyTrain step must stay blocking (the corp can still
-                        // exchange an owned 4/5/6 for a discounted discarded D).
-                        // Find a D across both upcoming and discarded.
-                        let d_train_price = self
+                        // PLUS the discarded pool — not just the upcoming
+                        // queue. Once the last upcoming D is bought the queue
+                        // empties, but discarded D-trains remain exchangeable,
+                        // so the BuyTrain step must stay blocking (the corp
+                        // can still exchange an owned 4/5/6 for a discounted
+                        // discarded D). Both the discount map and the
+                        // availability phase come from the train data.
+                        let can_exchange = self
                             .depot
                             .trains
                             .iter()
                             .chain(self.depot.discarded.iter())
-                            .find(|t| t.name == "D")
-                            .map(|t| t.price);
-                        let can_exchange = if d_available {
-                            if let Some(d_price) = d_train_price {
-                                let discount = 300;
-                                let exchange_price = d_price - discount;
-                                corp_cash >= exchange_price
-                                    && self.corporations[corp_idx]
-                                        .trains
-                                        .iter()
-                                        .any(|t| {
-                                            t.name == "4" || t.name == "5" || t.name == "6"
+                            .filter(|t| !t.discount.is_empty())
+                            .any(|dt| {
+                                let available = self
+                                    .phase_available(dt.available_on.as_deref());
+                                available
+                                    && self.corporations[corp_idx].trains.iter().any(|owned| {
+                                        dt.discount.iter().any(|(name, disc)| {
+                                            name == &owned.name && corp_cash >= dt.price - disc
                                         })
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
+                                    })
+                            });
 
                         // Can buy inter-corp (same president)?
                         let pres_id = self.corporations[corp_idx].president_id();

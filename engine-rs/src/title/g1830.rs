@@ -315,6 +315,7 @@ pub fn trains() -> Vec<TrainDef> {
     vec![
         TrainDef {
             name: "2",
+            events: &[],
             distance: 2,
             price: 80,
             count: 6,
@@ -324,6 +325,7 @@ pub fn trains() -> Vec<TrainDef> {
         },
         TrainDef {
             name: "3",
+            events: &[],
             distance: 3,
             price: 180,
             count: 5,
@@ -333,6 +335,7 @@ pub fn trains() -> Vec<TrainDef> {
         },
         TrainDef {
             name: "4",
+            events: &[],
             distance: 4,
             price: 300,
             count: 4,
@@ -342,6 +345,7 @@ pub fn trains() -> Vec<TrainDef> {
         },
         TrainDef {
             name: "5",
+            events: &["close_companies"],
             distance: 5,
             price: 450,
             count: 3,
@@ -351,6 +355,7 @@ pub fn trains() -> Vec<TrainDef> {
         },
         TrainDef {
             name: "6",
+            events: &[],
             distance: 6,
             price: 630,
             count: 2,
@@ -360,6 +365,7 @@ pub fn trains() -> Vec<TrainDef> {
         },
         TrainDef {
             name: "D",
+            events: &[],
             distance: 999,
             price: 1100,
             count: 20,
@@ -378,36 +384,48 @@ pub fn phases() -> Vec<PhaseDef> {
     vec![
         PhaseDef {
             name: "2",
+            on: None,
+            status: &[],
             train_limit: 4,
             tiles: &["yellow"],
             operating_rounds: 1,
         },
         PhaseDef {
             name: "3",
+            on: Some("3"),
+            status: &["can_buy_companies"],
             train_limit: 4,
             tiles: &["yellow", "green"],
             operating_rounds: 2,
         },
         PhaseDef {
             name: "4",
+            on: Some("4"),
+            status: &["can_buy_companies"],
             train_limit: 3,
             tiles: &["yellow", "green"],
             operating_rounds: 2,
         },
         PhaseDef {
             name: "5",
+            on: Some("5"),
+            status: &[],
             train_limit: 2,
             tiles: &["yellow", "green", "brown"],
             operating_rounds: 3,
         },
         PhaseDef {
             name: "6",
+            on: Some("6"),
+            status: &[],
             train_limit: 2,
             tiles: &["yellow", "green", "brown"],
             operating_rounds: 3,
         },
         PhaseDef {
             name: "D",
+            on: Some("D"),
+            status: &[],
             train_limit: 2,
             tiles: &["yellow", "green", "brown"],
             operating_rounds: 3,

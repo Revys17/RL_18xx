@@ -304,6 +304,16 @@ impl BaseGame {
         crate::title::resolve(&self.title)
     }
 
+    /// Whether the CURRENT phase carries a status flag (Ruby/Python
+    /// `phase.status`; e.g. "can_buy_companies" in 1830's phases 3-4).
+    pub(crate) fn phase_has_status(&self, status: &str) -> bool {
+        self.title_def()
+            .phases()
+            .iter()
+            .find(|p| p.name == self.phase.name)
+            .map_or(false, |p| p.status.contains(&status))
+    }
+
     /// Get active company special-lay abilities for the current operating corp.
     /// Returns the syms of owned, open companies whose TileLay (bonus lay,
     /// available at any OR step) or Teleport (lay at the LayTile step) ability
@@ -349,9 +359,10 @@ impl BaseGame {
     }
 
     /// Check if the active corp's president owns CS or DH with unused ability.
-    /// 1830 rules: corps can only buy privates from their president, in phases 3-4.
+    /// 1830 rules: corps can only buy privates from their president, while the
+    /// phase carries "can_buy_companies" (phases 3-4).
     pub(crate) fn has_buyable_companies(&self, s: &crate::rounds::OperatingState) -> bool {
-        if self.phase.name != "3" && self.phase.name != "4" {
+        if !self.phase_has_status("can_buy_companies") {
             return false;
         }
         let corp_sym = match s.current_corp_sym() {
@@ -821,22 +832,36 @@ impl BaseGame {
         }
     }
 
-    /// Check if buying a certain train triggers a phase change.
+    /// Check if buying a certain train triggers a phase change, train
+    /// rusting, or a train-purchase event — all driven by the title data
+    /// (`PhaseDef.on`, `TrainDef.rusts_on`, `TrainDef.events`).
     pub(crate) fn check_phase_advance(&mut self, train_name: &str) {
         let phase_defs = self.title_def().phases();
+        let train_defs = self.title_def().trains();
 
         // Strip instance suffix (e.g., "3-0" → "3")
         let base_name = train_name.split('-').next().unwrap_or(train_name);
 
-        // Find the phase that this train triggers
-        let new_phase_name = match base_name {
-            "3" => Some("3"),
-            "4" => Some("4"),
-            "5" => Some("5"),
-            "6" => Some("6"),
-            "D" => Some("D"),
-            _ => None,
-        };
+        // The bought train's purchase events (1830: the 5-train closes all
+        // private companies). Idempotent, so firing on every purchase of the
+        // name mirrors Ruby's fire-once semantics.
+        let events = train_defs
+            .iter()
+            .find(|td| td.name == base_name)
+            .map(|td| td.events)
+            .unwrap_or(&[]);
+        for event in events {
+            match *event {
+                "close_companies" => self.close_all_companies(),
+                other => unimplemented!("train event {other}"),
+            }
+        }
+
+        // Find the phase this train triggers (PhaseDef.on)
+        let new_phase_name = phase_defs
+            .iter()
+            .find(|p| p.on == Some(base_name))
+            .map(|p| p.name);
 
         if let Some(name) = new_phase_name {
             // Only advance if we're in an earlier phase
@@ -858,17 +883,15 @@ impl BaseGame {
                 phase_def.tiles.iter().map(|s| s.to_string()).collect(),
             );
 
-            // Rust trains
-            match name {
-                "4" => self.rust_trains("2"),
-                "6" => self.rust_trains("3"),
-                "D" => self.rust_trains("4"),
-                _ => {}
-            }
-
-            // Phase 5: close all private companies
-            if name == "5" {
-                self.close_all_companies();
+            // Rust every train whose `rusts_on` is the bought train
+            // (1830: 4 rusts the 2s, 6 the 3s, D the 4s).
+            let to_rust: Vec<&'static str> = train_defs
+                .iter()
+                .filter(|td| td.rusts_on == Some(base_name))
+                .map(|td| td.name)
+                .collect();
+            for name in to_rust {
+                self.rust_trains(name);
             }
 
             // Check for corps over the new train limit (they must discard).

@@ -529,9 +529,8 @@ impl BaseGame {
     ///   `min(company.min_price) <= buying_power(corp)` (cheapest is
     ///   affordable; `min_price = ceil(value / 2)`, entities.py).
     fn dispatch_can_buy_company(&self, corp_sym: &str) -> bool {
-        // 1830 phase.status: phases 3 and 4 carry ["can_buy_companies"]
-        // (g1830.py:539,547).
-        if self.phase.name != "3" && self.phase.name != "4" {
+        // phase.status gate (g1830.py:539,547: phases 3-4 carry it).
+        if !self.phase_has_status("can_buy_companies") {
             return false;
         }
         let corp_cash = self

@@ -263,6 +263,9 @@ pub struct TrainDef {
     pub price: i32,
     pub count: u32,
     pub rusts_on: Option<&'static str>,
+    /// Event types fired when this train is bought (Ruby/Python `events:`;
+    /// 1830: `close_companies` on the first 5-train).
+    pub events: &'static [&'static str],
     /// The phase name on which this train becomes purchasable from the depot
     /// even while it is not the head-of-queue train. Mirrors Python's
     /// `Train.available_on` (entities.py:806); in 1830 only the D-train sets
@@ -276,9 +279,15 @@ pub struct TrainDef {
 
 pub struct PhaseDef {
     pub name: &'static str,
+    /// The train purchase that triggers this phase (Ruby/Python `on:`;
+    /// None for the opening phase).
+    pub on: Option<&'static str>,
     pub train_limit: u8,
     pub tiles: &'static [&'static str],
     pub operating_rounds: u8,
+    /// Status flags active during this phase (Ruby/Python `status:`;
+    /// 1830: `can_buy_companies` in phases 3-4).
+    pub status: &'static [&'static str],
 }
 
 pub struct MarketCell {
