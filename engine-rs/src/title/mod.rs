@@ -69,6 +69,23 @@ pub trait GameTitle: Sync {
     fn corporation_startable(&self, _sym: &str, _phase_name: &str) -> bool {
         true
     }
+    /// The per-OR-turn tile-lay allowance (Ruby `TILE_LAYS`), one slot per
+    /// permitted lay in order. Default: 1830's single unrestricted lay.
+    fn tile_lays(&self) -> &'static [TileLayDef] {
+        const ONE: &[TileLayDef] = &[TileLayDef {
+            lay: true,
+            upgrade: UpgradeAllowance::Yes,
+            cost: 0,
+            cannot_reuse_same_hex: false,
+        }];
+        ONE
+    }
+    /// The map's hex orientation (Ruby `LAYOUT`). Edge numbers in tile DSL,
+    /// borders and stubs are all relative to it. 1830: pointy-top;
+    /// 1867: flat-top.
+    fn hex_layout(&self) -> HexLayout {
+        HexLayout::Pointy
+    }
 
     // -- AlphaZero-bridge orders (action layout + encoder) --
     //
@@ -97,6 +114,31 @@ pub trait GameTitle: Sync {
     fn action_tile_order(&self) -> Vec<&'static str> {
         self.tile_counts().iter().map(|(id, _)| *id).collect()
     }
+}
+
+/// One slot of a title's per-OR-turn tile-lay allowance (one Ruby
+/// `TILE_LAYS` entry; 1867: `[{lay, upgrade}, {lay, upgrade:
+/// :not_if_upgraded, cost: 20, cannot_reuse_same_hex: true}]`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TileLayDef {
+    /// May this slot lay a NEW (yellow) tile?
+    pub lay: bool,
+    /// May this slot upgrade an existing tile?
+    pub upgrade: UpgradeAllowance,
+    /// Extra cost for using this slot (1867: $20 for the second lay).
+    pub cost: i32,
+    /// This slot may not target a hex already laid this turn (1867's
+    /// second lay).
+    pub cannot_reuse_same_hex: bool,
+}
+
+/// Whether a tile-lay slot may upgrade (Ruby's `upgrade:` values).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpgradeAllowance {
+    Yes,
+    No,
+    /// Allowed unless an EARLIER lay this turn was an upgrade (1867).
+    NotIfUpgraded,
 }
 
 /// How share prices move on the stock market grid (Ruby's
@@ -224,6 +266,16 @@ pub fn parse_coord(coord: &str) -> (i32, i32) {
     (letter, number)
 }
 
+/// A map's hex orientation (Ruby `Engine::Hex::DIRECTIONS` keys / a title's
+/// `LAYOUT`). Determines which neighbor sits across each numbered edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HexLayout {
+    /// Pointy-top hexes (1830).
+    Pointy,
+    /// Flat-top hexes (1867).
+    Flat,
+}
+
 /// Pointy-top hex direction deltas in (d_letter, d_number) space.
 ///
 /// The Python engine's pointy-top direction deltas are in
@@ -240,6 +292,23 @@ const HEX_DELTAS: [(i32, i32); 6] = [
     (1, 1),   // 5: upper-left   (Python dx=+1, dy=+1)
 ];
 
+/// Flat-top hex direction deltas in (d_letter, d_number) space.
+///
+/// Ruby `Hex::DIRECTIONS[:flat]` maps `[other.x - x, other.y - y]` to the
+/// edge number with x = letter index, y = number:
+///   [0,2]=>0, [-1,1]=>1, [-1,-1]=>2, [0,-2]=>3, [1,-1]=>4, [1,1]=>5
+/// (verified against the 1867 map: G15's `stub=edge:1` points at Toronto
+/// F16; F16's city paths a:1 → E17 Hamilton and a:4 → G15 Peterborough;
+/// D2 Timmins' a:1 pairs with C3's a:4.)
+const HEX_DELTAS_FLAT: [(i32, i32); 6] = [
+    (0, 2),   // 0
+    (-1, 1),  // 1
+    (-1, -1), // 2
+    (0, -2),  // 3
+    (1, -1),  // 4
+    (1, 1),   // 5
+];
+
 /// Format (letter_index, number) back to a coordinate string like "H12".
 fn format_coord(letter: i32, number: i32) -> String {
     let ch = (b'A' + letter as u8) as char;
@@ -248,7 +317,11 @@ fn format_coord(letter: i32, number: i32) -> String {
 
 /// Compute hex adjacency from a set of hex coordinates.
 /// Returns hex_id -> { direction -> neighbor_hex_id } for all valid neighbors.
-pub fn compute_adjacency(coords: &[&str]) -> HashMap<String, HashMap<u8, String>> {
+pub fn compute_adjacency(coords: &[&str], layout: HexLayout) -> HashMap<String, HashMap<u8, String>> {
+    let deltas = match layout {
+        HexLayout::Pointy => &HEX_DELTAS,
+        HexLayout::Flat => &HEX_DELTAS_FLAT,
+    };
     let coord_set: std::collections::HashSet<String> =
         coords.iter().map(|c| c.to_string()).collect();
 
@@ -258,7 +331,7 @@ pub fn compute_adjacency(coords: &[&str]) -> HashMap<String, HashMap<u8, String>
         let (letter, number) = parse_coord(coord);
         let mut neighbors = HashMap::new();
 
-        for (dir, (dl, dn)) in HEX_DELTAS.iter().enumerate() {
+        for (dir, (dl, dn)) in deltas.iter().enumerate() {
             let nl = letter + dl;
             let nn = number + dn;
             if nl >= 0 {

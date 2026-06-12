@@ -117,6 +117,31 @@ impl GameTitle for G1867 {
         }
         true
     }
+    /// 1867 is a FLAT-top map (game.rb:220 `LAYOUT = :flat`) — every edge
+    /// number in the map DSL, borders and stubs is relative to it.
+    fn hex_layout(&self) -> super::HexLayout {
+        super::HexLayout::Flat
+    }
+    /// Two lays per OR turn: the second never an upgrade after an upgrade,
+    /// costs $20, and must target a fresh hex (game.rb:330-333 TILE_LAYS).
+    fn tile_lays(&self) -> &'static [super::TileLayDef] {
+        use super::{TileLayDef, UpgradeAllowance};
+        const TWO: &[TileLayDef] = &[
+            TileLayDef {
+                lay: true,
+                upgrade: UpgradeAllowance::Yes,
+                cost: 0,
+                cannot_reuse_same_hex: false,
+            },
+            TileLayDef {
+                lay: true,
+                upgrade: UpgradeAllowance::NotIfUpgraded,
+                cost: 20,
+                cannot_reuse_same_hex: true,
+            },
+        ];
+        TWO
+    }
     // NOTE: no action_hex_order / action_tile_order overrides — 1867 uses
     // the trait's clean derivations (no trained checkpoints to preserve).
 }
@@ -1678,6 +1703,87 @@ mod tests {
             + game.corporations.iter().map(|c| c.cash as i64).sum::<i64>()
             + game.bank.cash as i64;
         assert_eq!(total, 15_000);
+    }
+
+    /// Flat-top adjacency (LAYOUT = :flat): the map relationships that
+    /// pinned the delta table — G15's stub edge 1 faces Toronto F16;
+    /// Toronto's city paths exit a:1 → E17 Hamilton and a:4 → G15;
+    /// D2 Timmins edge 1 pairs with C3's edge 4.
+    #[test]
+    fn flat_layout_adjacency() {
+        let game = new_4p_game();
+        let n = |hex: &str, dir: u8| game.hex_adjacency[hex].get(&dir).cloned();
+        assert_eq!(n("G15", 1), Some("F16".to_string()));
+        assert_eq!(n("F16", 4), Some("G15".to_string()));
+        assert_eq!(n("F16", 1), Some("E17".to_string()));
+        assert_eq!(n("D2", 1), Some("C3".to_string()));
+        assert_eq!(n("C3", 4), Some("D2".to_string()));
+        assert_eq!(n("D2", 0), Some("D4".to_string()));
+        // 1830 stays pointy: H12 dir 0 (upper-right) is I11 there.
+        let mut players = HashMap::new();
+        players.insert(1, "A".to_string());
+        players.insert(2, "B".to_string());
+        let g1830 = BaseGame::build(vec![1, 2], players);
+        assert_eq!(g1830.hex_adjacency["H12"].get(&0).cloned(), Some("I11".to_string()));
+    }
+
+    /// The 1867 two-lay rule: a second yellow lay costs $20 and must hit a
+    /// fresh hex; a third lay is rejected; an explicit pass after one lay
+    /// moves the turn on (the fixture pattern).
+    #[test]
+    fn two_tile_lays_with_surcharge() {
+        let mut game = game_in_stock_round();
+        // Found CV (home E15 Guelph) and let everyone else pass the SR.
+        corp_bid(&mut game, 2, "CV", 100);
+        game.process_action_internal(&Action::PlaceToken {
+            entity_id: "CV".into(),
+            hex_id: "E15".into(),
+            city_index: 0,
+        })
+        .expect("home token");
+        for _ in 0..3 {
+            let s = match &game.round {
+                Round::Stock(s) => s.clone(),
+                _ => unreachable!(),
+            };
+            let pid = s
+                .bid_auction
+                .as_ref()
+                .and_then(|a| game.stock_bid_active_player(a))
+                .unwrap();
+            pass(&mut game, pid);
+        }
+        // Everyone passes out of the SR → OR1 with CV operating.
+        loop {
+            match &game.round {
+                Round::Stock(s) => {
+                    let pid = s.current_player_id();
+                    pass(&mut game, pid);
+                }
+                Round::Operating(_) => break,
+                _ => unreachable!(),
+            }
+        }
+        let lay = |game: &mut BaseGame, hex: &str, tile: &str, rot: u8| {
+            game.process_action_internal(&Action::LayTile {
+                entity_id: "CV".into(),
+                hex_id: hex.into(),
+                tile_id: tile.into(),
+                rotation: rot,
+            })
+        };
+        // First lay: yellow city on the home hex (free).
+        lay(&mut game, "E15", "5", 0).expect("first lay");
+        assert_eq!(game.corporations[game.corp_idx["CV"]].cash, 100);
+        // Reusing the same hex is forbidden for the second slot.
+        assert!(lay(&mut game, "E15", "6", 0).is_err());
+        // Second lay on a fresh connected hex costs $20.
+        // E15 tile 5 rot 0 exits edges 0 (→E17) and 1 (→D16).
+        lay(&mut game, "E17", "5", 3).expect("second lay");
+        assert_eq!(game.corporations[game.corp_idx["CV"]].cash, 80);
+        // The allowance is exhausted: pc moved off Track (a third lay is
+        // rejected by the dispatch gate).
+        assert!(lay(&mut game, "D14", "9", 0).is_err());
     }
 
     /// Phase windows: green minors are not biddable in phase 2; majors are

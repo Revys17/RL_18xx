@@ -493,6 +493,13 @@ pub struct OperatingState {
     pub step: OperatingStep,
     /// Number of tiles laid this turn (normally max 1).
     pub num_laid_track: u8,
+    /// Hexes laid on this turn (1867's second lay must target a fresh hex).
+    #[serde(default)]
+    pub laid_hexes: Vec<String>,
+    /// Whether any lay this turn was an UPGRADE (1867's second lay may not
+    /// upgrade after an upgrade).
+    #[serde(default)]
+    pub upgraded_this_turn: bool,
     /// Number of tokens placed this turn (normally max 1).
     pub num_placed_token: u8,
     /// Routes selected for this turn.
@@ -537,6 +544,8 @@ impl OperatingState {
             operating_order,
             step: OperatingStep::LayTile,
             num_laid_track: 0,
+            laid_hexes: Vec::new(),
+            upgraded_this_turn: false,
             num_placed_token: 0,
             routes: Vec::new(),
             crowded_corps: Vec::new(),
@@ -560,6 +569,8 @@ impl OperatingState {
         self.entity_index += 1;
         self.step = OperatingStep::LayTile;
         self.num_laid_track = 0;
+        self.laid_hexes.clear();
+        self.upgraded_this_turn = false;
         self.num_placed_token = 0;
         self.routes.clear();
         self.pending_tokens.clear();

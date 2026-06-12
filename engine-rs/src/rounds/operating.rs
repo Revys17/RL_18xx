@@ -450,8 +450,42 @@ impl BaseGame {
             )));
         }
 
-        if new_state.num_laid_track >= 1 {
+        // The title's per-turn lay allowance (Ruby TILE_LAYS; 1830: one
+        // unrestricted lay, 1867: two with a constrained second).
+        let lays = self.title_def().tile_lays();
+        let Some(slot) = lays.get(new_state.num_laid_track as usize).copied() else {
             return Err(GameError::new("Already laid a tile this turn"));
+        };
+        if slot.cannot_reuse_same_hex && new_state.laid_hexes.iter().any(|h| h == hex_id) {
+            return Err(GameError::new(format!(
+                "Cannot lay on {} again this turn",
+                hex_id
+            )));
+        }
+        // An upgrade = laying a non-yellow tile (yellow only ever goes on
+        // untiled white hexes; green/brown/gray replace existing track).
+        let is_upgrade = {
+            let base = tile_id.split('-').next().unwrap_or(tile_id);
+            self.tile_catalog
+                .get(base)
+                .map_or(false, |td| td.color != crate::tiles::TileColor::Yellow)
+        };
+        match slot.upgrade {
+            crate::title::UpgradeAllowance::Yes => {}
+            crate::title::UpgradeAllowance::No if is_upgrade => {
+                return Err(GameError::new("This lay may not be an upgrade"));
+            }
+            crate::title::UpgradeAllowance::NotIfUpgraded
+                if is_upgrade && new_state.upgraded_this_turn =>
+            {
+                return Err(GameError::new(
+                    "Cannot upgrade twice in one turn",
+                ));
+            }
+            _ => {}
+        }
+        if !slot.lay && !is_upgrade {
+            return Err(GameError::new("This lay may not place a new tile"));
         }
 
         let hex_idx = *self
@@ -459,13 +493,15 @@ impl BaseGame {
             .get(hex_id)
             .ok_or_else(|| GameError::new(format!("Unknown hex: {}", hex_id)))?;
 
-        // Pay terrain cost
+        // Pay terrain cost (+ the lay slot's surcharge — 1867's $20 second
+        // lay).
         let terrain_cost: i32 = self.hexes[hex_idx]
             .tile
             .upgrades
             .iter()
             .map(|u| u.cost)
-            .sum();
+            .sum::<i32>()
+            + slot.cost;
 
         if terrain_cost > 0 {
             let corp_sym = new_state
@@ -673,9 +709,15 @@ impl BaseGame {
         }
 
         new_state.num_laid_track += 1;
+        new_state.laid_hexes.push(hex_id.to_string());
+        if is_upgrade {
+            new_state.upgraded_this_turn = true;
+        }
 
-        // Auto-pass Track step if no more tiles can be laid (1 per turn in 1830)
-        if new_state.num_laid_track >= 1 {
+        // Advance off the Track step once the title's lay allowance is
+        // exhausted (1830: after the single lay; 1867: after the second —
+        // an explicit pass moves on earlier).
+        if (new_state.num_laid_track as usize) >= self.title_def().tile_lays().len() {
             new_state.step = crate::steps::next_operating_pc(self.operating_step_descs(), &new_state.step);
         }
 

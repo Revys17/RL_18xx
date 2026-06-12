@@ -1973,7 +1973,7 @@ impl BaseGame {
 
         // 7. Hex adjacency
         let coords: Vec<&str> = hex_defs.iter().map(|h| h.coord).collect();
-        let adjacency = crate::title::compute_adjacency(&coords);
+        let adjacency = crate::title::compute_adjacency(&coords, title.hex_layout());
 
         // 8. Phase
         let phase_defs = title.phases();
