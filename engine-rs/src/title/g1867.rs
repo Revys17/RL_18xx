@@ -273,16 +273,14 @@ pub fn stock_steps() -> &'static [StepDesc] {
 ///   Dividend, BuyCompanyPreloan(blocks), LoanOperations, DiscardTrain,
 ///   BuyTrain, BuyCompany(blocks).
 ///
-/// TODO(1867-or): placeholder with the steps the engine has today; the
-/// 1867-specific steps (RedeemShares, BuyCompanyPreloan, LoanOperations,
-/// MajorTrainless) and the rule deltas (two tile lays, distance token
-/// pricing, half-pay dividends, loan-EMR BuyTrain) land mechanic by
-/// mechanic.
 pub fn operating_steps() -> &'static [StepDesc] {
     const STEPS: &[StepDesc] = &[
         StepDesc::blocking(StepKind::MajorTrainless),
         StepDesc::non_blocking(StepKind::Bankrupt),
         StepDesc::non_blocking(StepKind::BuyCompany),
+        // Pool-share redemption window BEFORE Track (game.rb:844): the
+        // corp buys its own market shares at market price, or passes.
+        StepDesc::blocking(StepKind::RedeemShares),
         StepDesc::blocking(StepKind::HomeToken),
         StepDesc::blocking(StepKind::Track),
         StepDesc::blocking(StepKind::Token),

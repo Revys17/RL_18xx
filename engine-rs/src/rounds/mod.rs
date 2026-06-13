@@ -561,6 +561,13 @@ impl StockState {
 /// positions a turn can stop at.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum OperatingStep {
+    /// 1867: the corp may buy its OWN shares back from the market pool at
+    /// market price, BEFORE Track (G1867::Step::RedeemShares, listed between
+    /// BuyCompany and Track in game.rb:839-856). Blocks only while the pool
+    /// holds an affordable share of the corp — pass-attribution depends on
+    /// it (a recorded pass belongs here, not to Track, whenever the corp
+    /// could redeem).
+    RedeemShares,
     LayTile,
     PlaceToken,
     RunRoutes,

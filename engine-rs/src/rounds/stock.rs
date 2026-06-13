@@ -1133,11 +1133,19 @@ impl BaseGame {
             if !corp.floated {
                 continue;
             }
+            // Ruby Stock#corporations_to_move_price skips :minor types
+            // (round/stock.rb:94-96) and G1867::Round::Stock#sold_out?
+            // additionally requires :major — 1867 minors (100% player
+            // ownable) never get the sold-out bump. 1830-inert (all Major).
+            if corp.corp_type != crate::title::CorpType::Major {
+                continue;
+            }
             let ipo_pct = corp.ipo_shares_percent();
             let market_pct = corp.market_shares_percent();
             if ipo_pct == 0 && market_pct == 0 {
                 if let Some(ref sp) = corp.share_price.clone() {
-                    // 1830: sold_out_stock_movement is move_up
+                    // sold_out_stock_movement is move_up (base.rb:1347-1349);
+                    // on 1867's 1-D market `up` resolves to RIGHT (core.rs).
                     let (new_row, new_col) = self.stock_market.move_up(sp.row, sp.column);
                     if let Some(new_sp) = self.stock_market.share_price_at(new_row, new_col) {
                         let sym = self.corporations[corp_idx].sym.clone();

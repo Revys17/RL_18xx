@@ -261,10 +261,14 @@ impl StockMarket {
         }
     }
 
-    /// Move share price up (price increase). A 1-D market has no vertical
-    /// movement.
+    /// Move share price up (price increase). On a 1-D market `up` IS
+    /// `right` (Ruby OneDimensionalMovement#up, stock_movement.rb:97-99 —
+    /// the 1867 sold-out bump goes right one cell).
     pub fn move_up(&self, row: u8, col: u8) -> (u8, u8) {
-        if row == 0 || self.movement == MarketMovement::OneDimensional {
+        if self.movement == MarketMovement::OneDimensional {
+            return self.move_right(row, col);
+        }
+        if row == 0 {
             return (row, col);
         }
         let new_row = row - 1;

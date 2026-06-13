@@ -195,11 +195,14 @@ impl BaseGame {
                 } else {
                     false
                 };
+                let first_pc = crate::steps::first_operating_pc(self.operating_step_descs());
                 if let crate::rounds::Round::Operating(ref mut s) = self.round {
                     s.pending_tokens.remove(0);
-                    // Home token: reset to LayTile for normal operating turn
+                    // Home token: back to the start of the normal operating
+                    // turn (the title's first pc — 1830 LayTile, 1867
+                    // RedeemShares).
                     if was_home_token && s.pending_tokens.is_empty() {
-                        s.step = OperatingStep::LayTile;
+                        s.step = first_pc;
                     }
                 }
                 self.update_round_state();
@@ -287,10 +290,14 @@ impl BaseGame {
                                 }
                             }
                             self.clear_graph_cache();
+                            let first_pc =
+                                crate::steps::first_operating_pc(self.operating_step_descs());
                             if let crate::rounds::Round::Operating(ref mut s) = self.round {
                                 if s.num_laid_track == 0 {
-                                    // Start of turn — advance to LayTile
-                                    s.step = OperatingStep::LayTile;
+                                    // Start of turn — back to the title's
+                                    // first pc (1830 LayTile, 1867
+                                    // RedeemShares).
+                                    s.step = first_pc;
                                 }
                                 // Mid-turn: step stays at PlaceToken.
                                 // Don't increment num_placed_token — home token
@@ -352,6 +359,19 @@ impl BaseGame {
                 company_sym,
                 price,
             } => self.or_process_buy_company(&state, entity_id, company_sym, *price),
+            Action::BuyShares {
+                entity_id,
+                corporation_sym,
+                percent,
+                share_indices,
+                ..
+            } => self.or_process_redeem_shares(
+                &state,
+                entity_id,
+                corporation_sym,
+                *percent,
+                share_indices,
+            ),
             Action::LayTile {
                 entity_id,
                 hex_id,
@@ -590,10 +610,30 @@ impl BaseGame {
                     new_tile.cities = old_cities.clone();
                 }
             } else {
-                // Transfer tokens from old cities to new cities.
-                // Use exit-based mapping: match old city to new city by finding
-                // the new city whose exits are a superset of the old city's exits.
-                // This handles OO tile upgrades where city ordering changes.
+                // Transfer tokens from old cities to new cities — Ruby
+                // Hex#lay (hex.rb:115-153) + city_map_for (hex.rb:258-292):
+                //
+                //   1. With NO exits on any old city (and equal counts),
+                //      cities map by index.
+                //   2. Otherwise each old city maps to the first new city
+                //      whose exits are a SUPERSET of its own (old ⊆ new) —
+                //      subset, not mere overlap: 1867's X3→X5/X6/X7 brown
+                //      Montreal merges three 1-slot cities into 2+1 slots,
+                //      and a partial-overlap first-match can pick the wrong
+                //      survivor city.
+                //   3. Unmapped old cities fall back to the same index when
+                //      that city is still unclaimed, else the first
+                //      unclaimed new city (hex.rb:279-287).
+                //
+                // Tokens then move per DESTINATION city in old-city order
+                // via City#exchange_token → get_slot (city.rb:125-133,
+                // 172-190): the corp's own reservation slot if any, else
+                // the first open un-reserved slot — NOT the token's old
+                // slot index (two old cities merging into one would
+                // collide and silently drop a token). When the merge
+                // overflows the city, Ruby places a "cheater" token in an
+                // appended extra slot (move_tokens_to_new_tile_multi_city!,
+                // hex.rb:294-330).
                 let old_tile_base = old_tile_name.split('-').next().unwrap_or(&old_tile_name);
                 let mut old_exits = self.city_exits_from_catalog(old_tile_base, old_tile_rotation);
                 if old_exits.is_empty() {
@@ -604,39 +644,87 @@ impl BaseGame {
                     old_exits = crate::game::BaseGame::city_exits_from_tile(&self.hexes[hex_idx].tile);
                 }
                 let new_exits = self.city_exits_from_catalog(base_tile_id, rotation);
+                let n_new = new_tile.cities.len();
 
+                // city_map[old_ci] = Some(new_ci) | None (no destination).
+                let mut city_map: Vec<Option<usize>> = vec![None; old_cities.len()];
+                if old_exits.iter().all(|e| e.is_empty()) && old_cities.len() == n_new {
+                    for (old_ci, slot) in city_map.iter_mut().enumerate() {
+                        *slot = Some(old_ci);
+                    }
+                } else {
+                    for (old_ci, oe) in old_exits.iter().enumerate().take(old_cities.len()) {
+                        if !oe.is_empty() {
+                            city_map[old_ci] = new_exits
+                                .iter()
+                                .position(|ne| oe.iter().all(|e| ne.contains(e)));
+                        }
+                    }
+                    let mut claimed: Vec<usize> = city_map.iter().flatten().copied().collect();
+                    for old_ci in 0..old_cities.len() {
+                        if city_map[old_ci].is_some() {
+                            continue;
+                        }
+                        let dest = if old_ci < n_new && !claimed.contains(&old_ci) {
+                            Some(old_ci)
+                        } else {
+                            (0..n_new).find(|j| !claimed.contains(j))
+                        };
+                        city_map[old_ci] = dest;
+                        if let Some(d) = dest {
+                            claimed.push(d);
+                        }
+                    }
+                }
+
+                // Group the moving tokens by destination city, old-city order.
+                let mut moved: Vec<Vec<crate::entities::Token>> = vec![Vec::new(); n_new];
                 for (old_ci, old_city) in old_cities.iter().enumerate() {
-                    let has_token = old_city.tokens.iter().any(|t| t.is_some());
-                    if !has_token {
+                    let toks: Vec<_> = old_city.tokens.iter().flatten().cloned().collect();
+                    if toks.is_empty() {
                         continue;
                     }
-
-                    // Find the matching new city by exit overlap
-                    let old_city_exits = old_exits.get(old_ci).cloned().unwrap_or_default();
-                    let target_new_ci = if old_city_exits.is_empty() {
-                        // No exit info — fall back to positional mapping
-                        Some(old_ci)
-                    } else {
-                        new_exits.iter().enumerate().find_map(|(nci, ne)| {
-                            if old_city_exits.iter().any(|oe| ne.contains(oe)) {
-                                Some(nci)
-                            } else {
-                                None
-                            }
-                        })
+                    let Some(dest_ci) = city_map[old_ci] else {
+                        // Ruby raises here too (hex.rb:303-307).
+                        return Err(GameError::new(format!(
+                            "No city found on new tile {} for tokens from {} city {}",
+                            tile_id, hex_id, old_ci
+                        )));
                     };
+                    moved[dest_ci].extend(toks);
+                }
 
-                    let dest_ci = target_new_ci.unwrap_or(old_ci);
-                    if dest_ci < new_tile.cities.len() {
-                        for (j, old_tok) in old_city.tokens.iter().enumerate() {
-                            if let Some(tok) = old_tok {
-                                let new_city = &mut new_tile.cities[dest_ci];
-                                if j < new_city.tokens.len() {
-                                    new_city.tokens[j] = Some(tok.clone());
-                                } else {
-                                    new_city.tokens.push(Some(tok.clone()));
-                                    new_city.slots += 1;
-                                }
+                // Positional reservation model (see token_slot_for): a live
+                // home reservation occupies slot 0 of its city.
+                let home_res = self.home_reservations();
+                for (nci, toks) in moved.into_iter().enumerate() {
+                    let mut reservations: Vec<Option<String>> =
+                        vec![None; new_tile.cities[nci].tokens.len()];
+                    for (rh, rc, rsym) in &home_res {
+                        if rh == hex_id && *rc == nci && !reservations.is_empty() {
+                            reservations[0] = Some(rsym.clone());
+                        }
+                    }
+                    for tok in toks {
+                        let city = &mut new_tile.cities[nci];
+                        let own_res = reservations
+                            .iter()
+                            .position(|r| r.as_deref() == Some(tok.corporation_id.as_str()));
+                        let slot = own_res.or_else(|| {
+                            city.tokens
+                                .iter()
+                                .enumerate()
+                                .position(|(i, t)| t.is_none() && reservations[i].is_none())
+                        });
+                        match slot {
+                            Some(i) => city.tokens[i] = Some(tok),
+                            None => {
+                                // Cheater token: an appended extra slot
+                                // beyond normal_slots (city.rb:130,190 —
+                                // @tokens[@tokens.size]); `slots` stays the
+                                // printed slot count, Ruby's normal_slots.
+                                city.tokens.push(Some(tok));
+                                reservations.push(None);
                             }
                         }
                     }
@@ -2363,6 +2451,11 @@ impl BaseGame {
         let corp_sym = corp_sym.to_string();
         {
             let should_skip = match kind {
+                StepKind::RedeemShares => {
+                    // Ruby G1867::Step::RedeemShares#actions: empty (→ the
+                    // base skip) unless redeemable_shares(corp) is non-empty.
+                    !self.corp_can_redeem_share(corp_idx)
+                }
                 StepKind::Track => {
                     // Ruby Tracker#can_lay_tile?: the step blocks while the
                     // NEXT lay-allowance slot is usable and its slot cost is
@@ -2651,6 +2744,155 @@ impl BaseGame {
         }
     }
 
+    /// Ruby G1867 `redeemable_shares` (g_1867/game.rb:484-489): bundles of
+    /// the corp's OWN shares held by the market pool (percent > 0), minus
+    /// those the treasury cannot afford. Bundles are cumulative over shares
+    /// sorted by [president?, percent] (base.rb `all_bundles_for_corporation`),
+    /// so a non-empty result == the corp affords its CHEAPEST single pool
+    /// cert at market price (Share#price = market price × percent/unit).
+    pub(crate) fn corp_can_redeem_share(&self, corp_idx: usize) -> bool {
+        let corp = &self.corporations[corp_idx];
+        let Some(price) = corp.share_price.as_ref().map(|sp| sp.price) else {
+            return false;
+        };
+        let unit = corp.share_unit_percent.max(1) as i32;
+        corp.shares
+            .iter()
+            .filter(|s| s.owner.is_market() && s.percent > 0)
+            .map(|s| price * s.percent as i32 / unit)
+            .min()
+            .map_or(false, |cheapest| corp.cash >= cheapest)
+    }
+
+    /// 1867 RedeemShares (redeem_shares.rb < step/issue_shares.rb): the
+    /// operating corp buys a bundle of its OWN shares from the market pool.
+    /// Money: corp → BANK (share_pool.rb:104-126: the pool isn't a
+    /// corporation or player, so the receiver falls through to the bank) at
+    /// market price per share. Shares: pool → treasury (transfer to the
+    /// corp; 1867's default `ipo_owner == self`, corporation.rb:39, makes
+    /// the corp-owned bucket the IPO/treasury bucket — `EntityId::ipo` here,
+    /// same convention as the merger round's treasury dealing). One bundle
+    /// per turn: `process_buy_shares` ends with `pass!`.
+    fn or_process_redeem_shares(
+        &mut self,
+        state: &OperatingState,
+        entity_id: &str,
+        corporation_sym: &str,
+        percent: u8,
+        share_indices: &[usize],
+    ) -> Result<(), GameError> {
+        let mut new_state = state.clone();
+
+        if new_state.step != OperatingStep::RedeemShares {
+            return Err(GameError::new("Not in Redeem Shares step"));
+        }
+        let cur = new_state
+            .current_corp_sym()
+            .ok_or_else(|| GameError::new("No current corp"))?
+            .to_string();
+        if entity_id != cur {
+            return Err(GameError::new(format!(
+                "buy_shares entity {} does not match current operator {}",
+                entity_id, cur
+            )));
+        }
+        // Ruby redeemable_shares only ever bundles the corp's own shares.
+        if corporation_sym != cur {
+            return Err(GameError::new(format!(
+                "{} may only redeem its own shares, not {}",
+                cur, corporation_sym
+            )));
+        }
+        let corp_idx = self.corp_idx[cur.as_str()];
+
+        // Honor the recorded certs when they are redeemable pool shares —
+        // keeps per-cert identity aligned with Ruby. Otherwise (defensive:
+        // recorded games always carry the certs) rebuild the bundle the way
+        // Ruby sorts it: president last, percent ascending, market pool
+        // insertion order as the tiebreak.
+        let market = crate::entities::EntityId::market();
+        let unit = self.corporations[corp_idx].share_unit_percent.max(1) as i32;
+        let mut chosen: Vec<usize> = share_indices
+            .iter()
+            .copied()
+            .filter(|&i| {
+                self.corporations[corp_idx]
+                    .shares
+                    .get(i)
+                    .map_or(false, |sh| sh.owner == market && sh.percent > 0)
+            })
+            .collect();
+        let chosen_percent: i32 = chosen
+            .iter()
+            .map(|&i| self.corporations[corp_idx].shares[i].percent as i32)
+            .sum();
+        if chosen_percent != percent as i32 {
+            let mut pool: Vec<usize> = self.corporations[corp_idx]
+                .market_order
+                .iter()
+                .copied()
+                .filter(|&i| {
+                    self.corporations[corp_idx]
+                        .shares
+                        .get(i)
+                        .map_or(false, |sh| sh.owner == market && sh.percent > 0)
+                })
+                .collect();
+            pool.sort_by_key(|&i| {
+                let sh = &self.corporations[corp_idx].shares[i];
+                (sh.president, sh.percent)
+            });
+            chosen.clear();
+            let mut acc = 0i32;
+            for i in pool {
+                if acc >= percent as i32 {
+                    break;
+                }
+                acc += self.corporations[corp_idx].shares[i].percent as i32;
+                chosen.push(i);
+            }
+            if acc != percent as i32 {
+                return Err(GameError::new(format!(
+                    "{} cannot redeem {}% — the market holds {}%",
+                    cur, percent, acc
+                )));
+            }
+        }
+
+        // Bundle price at MARKET price (Share#price_per_share: pool shares
+        // use corporation.share_price, share.rb:47-50).
+        let market_price = self.corporations[corp_idx]
+            .share_price
+            .as_ref()
+            .map(|sp| sp.price)
+            .ok_or_else(|| GameError::new("Corporation has no share price"))?;
+        let price: i32 = chosen
+            .iter()
+            .map(|&i| market_price * self.corporations[corp_idx].shares[i].percent as i32 / unit)
+            .sum();
+        if self.corporations[corp_idx].cash < price {
+            return Err(GameError::new(format!(
+                "{} cannot afford to redeem: price {} > cash {}",
+                cur, price, self.corporations[corp_idx].cash
+            )));
+        }
+
+        self.corporations[corp_idx].cash -= price;
+        self.bank.cash += price;
+        let treasury = crate::entities::EntityId::ipo(&cur);
+        for &i in &chosen {
+            self.corporations[corp_idx].set_share_owner(i, treasury.clone());
+        }
+
+        // Ruby process_buy_shares ends with pass!: one bundle per turn,
+        // then the turn moves on toward Track.
+        new_state.step =
+            crate::steps::next_operating_pc(self.operating_step_descs(), &new_state.step);
+        self.round = crate::rounds::Round::Operating(new_state);
+        self.update_round_state();
+        Ok(())
+    }
+
     /// Check if a corporation can place a token anywhere on the board.
     /// Requires: at least one unplaced token, enough cash to pay for it,
     /// and at least one reachable city with an open token slot.
@@ -2763,4 +3005,211 @@ mod hex_distance_tests {
 
     // No pointy-top assertions: that branch is Ruby Hex#distance verbatim
     // and no supported pointy title (1830) prices anything by hex distance.
+}
+
+#[cfg(test)]
+mod g1867_or_tests {
+    use super::*;
+    use crate::entities::EntityId;
+    use crate::game::BaseGame;
+    use std::collections::HashMap;
+
+    fn new_4p_game() -> BaseGame {
+        let mut players = HashMap::new();
+        players.insert(1, "Alice".to_string());
+        players.insert(2, "Bob".to_string());
+        players.insert(3, "Carol".to_string());
+        players.insert(4, "Dave".to_string());
+        BaseGame::build_titled("1867", vec![1, 2, 3, 4], players)
+    }
+
+    /// Float `sym` by surgery: priced at market column `col`, all certs to
+    /// player 1 (tests move them around afterwards).
+    fn rig_floated(game: &mut BaseGame, sym: &str, col: u8) {
+        let ci = game.corp_idx[sym];
+        let sp = game.stock_market.share_price_at(0, col).unwrap();
+        game.corporations[ci].share_price = Some(sp.clone());
+        game.corporations[ci].ipo_price = Some(sp.clone());
+        game.update_market_cell(sym, 0, col, 0, col);
+        game.corporations[ci].floated = true;
+        game.corporations[ci].ever_operated = true;
+        let n = game.corporations[ci].shares.len();
+        for i in 0..n {
+            game.corporations[ci].set_share_owner(i, EntityId::player(1));
+        }
+    }
+
+    /// Park the game in an OR whose only operator is `sym`, at the 1867
+    /// turn-start pc (RedeemShares — `first_operating_pc`).
+    fn enter_or(game: &mut BaseGame, sym: &str) {
+        let mut s = crate::rounds::OperatingState::new(1, 2, vec![sym.to_string()]);
+        s.step = crate::steps::first_operating_pc(game.operating_step_descs());
+        game.round = crate::rounds::Round::Operating(s);
+        game.update_round_state();
+    }
+
+    /// 1867 operating turns START at RedeemShares (game.rb:839-856 lists it
+    /// before Track); 1830 turns still start at LayTile.
+    #[test]
+    fn first_pc_is_redeem_for_1867_lay_tile_for_1830() {
+        assert_eq!(
+            crate::steps::first_operating_pc(crate::title::g1867::operating_steps()),
+            OperatingStep::RedeemShares
+        );
+        assert_eq!(
+            crate::steps::first_operating_pc(crate::title::g1830::operating_steps()),
+            OperatingStep::LayTile
+        );
+    }
+
+    /// redeem_shares.rb + share_pool.rb:104-126: the corp buys its own pool
+    /// cert at market price, pays the BANK, the share joins the treasury,
+    /// and the step passes (pc moves on toward Track).
+    #[test]
+    fn redeem_buys_pool_cert_at_market_price_then_passes() {
+        let mut game = new_4p_game();
+        rig_floated(&mut game, "CPR", 10);
+        let ci = game.corp_idx["CPR"];
+        let price = game.corporations[ci].share_price.as_ref().unwrap().price;
+        game.corporations[ci].set_share_owner(3, EntityId::market());
+        game.corporations[ci].cash = price + 7;
+        enter_or(&mut game, "CPR");
+        let bank0 = game.bank.cash;
+
+        game.process_action_internal(&crate::actions::Action::BuyShares {
+            entity_id: "CPR".into(),
+            corporation_sym: "CPR".into(),
+            shares: Vec::new(),
+            percent: 10,
+            source: "market".into(),
+            share_indices: vec![3],
+        })
+        .unwrap();
+
+        let corp = &game.corporations[game.corp_idx["CPR"]];
+        assert_eq!(corp.cash, 7);
+        assert_eq!(game.bank.cash, bank0 + price);
+        assert_eq!(corp.shares[3].owner, EntityId::ipo("CPR"));
+        assert_eq!(corp.market_shares_percent(), 0);
+        // pass! — the turn moved past RedeemShares (Track blocks or later).
+        if let crate::rounds::Round::Operating(s) = &game.round {
+            assert_ne!(s.step, OperatingStep::RedeemShares);
+        } else {
+            panic!("expected operating round");
+        }
+    }
+
+    /// actions(entity) gate: with NO affordable pool share the step is
+    /// empty and auto-skips (the turn opens at Track); with one, the step
+    /// BLOCKS and a recorded pass is consumed by RedeemShares, advancing
+    /// the pc without touching cash.
+    #[test]
+    fn redeem_blocks_only_while_pool_share_affordable() {
+        let mut game = new_4p_game();
+        rig_floated(&mut game, "CPR", 10);
+        let ci = game.corp_idx["CPR"];
+
+        // No pool shares: auto-skip to LayTile.
+        game.corporations[ci].cash = 1000;
+        enter_or(&mut game, "CPR");
+        game.skip_steps();
+        if let crate::rounds::Round::Operating(s) = &game.round {
+            assert_eq!(s.step, OperatingStep::LayTile);
+        }
+
+        // Pool share but unaffordable: still skips.
+        let price = game.corporations[ci].share_price.as_ref().unwrap().price;
+        game.corporations[ci].set_share_owner(3, EntityId::market());
+        game.corporations[ci].cash = price - 1;
+        enter_or(&mut game, "CPR");
+        game.skip_steps();
+        if let crate::rounds::Round::Operating(s) = &game.round {
+            assert_eq!(s.step, OperatingStep::LayTile);
+        }
+
+        // Affordable: blocks at RedeemShares; the pass is consumed there.
+        game.corporations[ci].cash = price;
+        enter_or(&mut game, "CPR");
+        game.skip_steps();
+        if let crate::rounds::Round::Operating(s) = &game.round {
+            assert_eq!(s.step, OperatingStep::RedeemShares);
+        }
+        let cash0 = game.corporations[ci].cash;
+        game.process_action_internal(&crate::actions::Action::Pass {
+            entity_id: "CPR".into(),
+        })
+        .unwrap();
+        assert_eq!(game.corporations[game.corp_idx["CPR"]].cash, cash0);
+        assert_eq!(
+            game.corporations[game.corp_idx["CPR"]].market_shares_percent(),
+            10
+        );
+    }
+
+    /// The X3→X6 brown-Montreal merge, pinned against the actual Ruby
+    /// engine on nationalization_cash file id 449 (X3 rot 2 → X6 rot 2):
+    /// old cities {2,0}/{3,4}/{5,1} map by EXIT SUBSET into X6's
+    /// {2,5,0,1}(2 slots)/{3,4}(1 slot) — Ruby city_map_for, hex.rb:258-292
+    /// — so city 0 ends [TGB, NO] and city 1 [CPR]. The pre-port slot
+    /// logic wrote both city-0 tokens to slot 0 and silently DROPPED one.
+    #[test]
+    fn x3_to_x6_token_transfer_matches_ruby() {
+        let mut game = new_4p_game();
+        for sym in ["TGB", "CPR", "NO"] {
+            rig_floated(&mut game, sym, 8);
+        }
+        // Install X3 rot 2 on L12 with TGB/CPR/NO tokens in cities 0/1/2.
+        let hi = game.hex_idx["L12"];
+        let x3 = game.tile_catalog.get("X3").unwrap().clone();
+        game.hexes[hi].tile = BaseGame::tile_from_def(&x3, 2);
+        game.hexes[hi].tile.name = "X3-0".into();
+        for (city_i, sym) in [(0usize, "TGB"), (1, "CPR"), (2, "NO")] {
+            let ci = game.corp_idx[sym];
+            let ti = game.corporations[ci].next_token_index().unwrap();
+            game.corporations[ci].tokens[ti].used = true;
+            game.corporations[ci].tokens[ti].city_hex_id = "L12".into();
+            let tok = game.corporations[ci].tokens[ti].clone();
+            game.hexes[hi].tile.cities[city_i].tokens[0] = Some(tok);
+        }
+
+        enter_or(&mut game, "TGB");
+        let state = match &game.round {
+            crate::rounds::Round::Operating(s) => {
+                let mut s = s.clone();
+                s.step = OperatingStep::LayTile;
+                s
+            }
+            _ => unreachable!(),
+        };
+        game.corporations[game.corp_idx["TGB"]].cash = 100;
+        game.or_process_lay_tile(&state, "TGB", "L12", "X6-0", 2)
+            .unwrap();
+
+        let tile = &game.hexes[game.hex_idx["L12"]].tile;
+        let names = |ci: usize| -> Vec<String> {
+            tile.cities[ci]
+                .tokens
+                .iter()
+                .map(|t| t.as_ref().map_or("-".into(), |t| t.corporation_id.clone()))
+                .collect()
+        };
+        assert_eq!(names(0), vec!["TGB".to_string(), "NO".to_string()]);
+        assert_eq!(names(1), vec!["CPR".to_string()]);
+        // All three corp token records survived onto the new tile.
+        for sym in ["TGB", "CPR", "NO"] {
+            let ci = game.corp_idx[sym];
+            assert!(
+                game.corporations[ci]
+                    .tokens
+                    .iter()
+                    .any(|t| t.used && t.city_hex_id == "L12"),
+                "{} token lost in the X3→X6 transfer",
+                sym
+            );
+        }
+        // Nothing was displaced into pending_tokens.
+        if let crate::rounds::Round::Operating(s) = &game.round {
+            assert!(s.pending_tokens.is_empty());
+        }
+    }
 }

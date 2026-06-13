@@ -68,6 +68,14 @@ pub enum StepKind {
     /// (G1867::Step::LoanOperations#skip!). Never asks — the skip arm IS
     /// the mechanic.
     LoanOperations,
+    /// 1867: the corp buys its OWN shares back from the market pool at
+    /// market price, between BuyCompany and Track
+    /// (G1867::Step::RedeemShares < Engine::Step::IssueShares; only the
+    /// buy side — `actions` never offers sell_shares). Blocks exactly
+    /// while `redeemable_shares(corp)` is non-empty (pool holds a share of
+    /// the corp the treasury can afford), so a recorded pass from a corp
+    /// that COULD redeem is consumed HERE, not by Track.
+    RedeemShares,
     HomeToken,
     Track,
     Token,
@@ -130,6 +138,7 @@ impl StepDesc {
     /// out-of-turn, the non-blocking specials) overlay other pcs.
     pub fn operating_pc(&self) -> Option<OperatingStep> {
         match self.kind {
+            StepKind::RedeemShares => Some(OperatingStep::RedeemShares),
             StepKind::Track => Some(OperatingStep::LayTile),
             StepKind::Token => Some(OperatingStep::PlaceToken),
             StepKind::Route => Some(OperatingStep::RunRoutes),
@@ -158,6 +167,7 @@ pub(crate) fn step_description(kind: StepKind) -> &'static str {
         StepKind::BuyCompany => "Buy Companies",
         StepKind::BuyCompanyPreloan => "Buy Companies",
         StepKind::LoanOperations => "Loan Operations",
+        StepKind::RedeemShares => "Redeem Shares",
         StepKind::HomeToken => "Place Home Token",
         StepKind::Track => "Lay Track",
         StepKind::Token => "Place a Token",
@@ -175,6 +185,17 @@ pub(crate) fn step_description(kind: StepKind) -> &'static str {
         StepKind::WaterfallAuction => "Bid on Companies",
         StepKind::SingleItemAuction => "Bid on Companies",
     }
+}
+
+/// The pc an operating TURN starts at: the first listed step that has a pc
+/// of its own. 1830's list starts at Track → `LayTile` (the old hardcoded
+/// start); 1867's RedeemShares sits BEFORE Track in the list
+/// (game.rb:839-856), so its turns start at `RedeemShares`.
+pub fn first_operating_pc(steps: &[StepDesc]) -> OperatingStep {
+    steps
+        .iter()
+        .find_map(|d| d.operating_pc())
+        .unwrap_or(OperatingStep::Done)
 }
 
 /// The next operating-turn pc after `cur`, DERIVED from the title's step list:
@@ -1071,6 +1092,27 @@ impl BaseGame {
                 }
             }
             // -- operating: the regular turn-sequence steps -----------------
+            StepKind::RedeemShares => {
+                // Ruby G1867::Step::RedeemShares#actions (redeem_shares.rb):
+                // [buy_shares] while redeemable_shares(corp) is non-empty,
+                // plus pass (blocks? is true); EMPTY otherwise — the step
+                // then auto-skips and a recorded pass falls through to
+                // Track, exactly Ruby's pass attribution.
+                let Some(s) = operating(snap) else { return vec![] };
+                if s.step != OperatingStep::RedeemShares {
+                    return vec![];
+                }
+                let StepEntity::Corp(sym) = entity else { return vec![] };
+                if Some(sym.as_str()) != s.current_corp_sym() {
+                    return vec![];
+                }
+                let Some(&ci) = self.corp_idx.get(sym.as_str()) else { return vec![] };
+                if self.corp_can_redeem_share(ci) {
+                    vec!["buy_shares", "pass"]
+                } else {
+                    vec![]
+                }
+            }
             StepKind::Track => {
                 let Some(s) = operating(snap) else { return vec![] };
                 if s.step != OperatingStep::LayTile {

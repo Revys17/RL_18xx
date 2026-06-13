@@ -1076,6 +1076,9 @@ impl BaseGame {
                     total_ors,
                     self.compute_operating_order(),
                 );
+                // First corp turn starts at the title's first pc (1867:
+                // RedeemShares before Track; 1830 unchanged at LayTile).
+                state.step = crate::steps::first_operating_pc(self.operating_step_descs());
                 // Ruby `calculate_interest` (g_1867 operating_round): loans
                 // held at OR START owe this OR's interest — loans taken
                 // mid-OR don't. No-op for titles without loans.
@@ -1818,9 +1821,14 @@ impl BaseGame {
             .filter(|c| c.closed || !c.floated)
             .map(|c| c.sym.clone())
             .collect();
+        // The fresh turn starts at the title's FIRST pc (1830: LayTile;
+        // 1867: RedeemShares sits before Track) — `advance_to_next_corp`
+        // itself only knows the LayTile default.
+        let first_pc = crate::steps::first_operating_pc(self.operating_step_descs());
         if let Round::Operating(ref mut s) = self.round {
             loop {
                 s.advance_to_next_corp();
+                s.step = first_pc.clone();
                 if s.finished {
                     break;
                 }
@@ -5486,7 +5494,8 @@ impl BaseGame {
                         types.push("pass".to_string());
                     }
                     // 1867-only pcs — unreachable in this 1830 oracle.
-                    crate::rounds::OperatingStep::BuyCompanyPreloan
+                    crate::rounds::OperatingStep::RedeemShares
+                    | crate::rounds::OperatingStep::BuyCompanyPreloan
                     | crate::rounds::OperatingStep::LoanOperations => {}
                     crate::rounds::OperatingStep::Done => {}
                 }

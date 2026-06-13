@@ -29,22 +29,21 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "1867"
 FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 
 # fixture stem -> minimum number of actions the engine must accept.
-# Current frontier: TRAIN EXPORT replays (or_round_finished: every OR end
-# in the 'export_train' phases 4-7 exports the depot head as if purchased —
-# phase change, events, rusting, post_train_buy, game_end_check; verified
-# cash/bank/CN-token exact against Ruby at 21268 file id 606).
+# Current frontier: REDEEM SHARES + the X3→X6 brown-Montreal token merge
+# replay (RedeemShares pc before Track consuming corp buy_shares/pass;
+# Ruby city_map_for exit-SUBSET token transfer; the 1-D sold-out bump
+# up==right). The fixtures' MajorTrainless `choose` actions now replay.
+# Verified exact against Ruby: 21268 cash/bank at file id 857, L12 city
+# layout at 619; nationalization_cash cash/bank/CN tokens at 555.
 # hs_ahjzadkh replays COMPLETELY (scores still diverge on the endgame loan
-# valuation — the xfail below); 21268/hs_wuveadew stop at the X3→X6
-# brown-Montreal lay (L12): the engine mis-skips the unimplemented
-# RedeemShares step (Ruby has NYC redeeming pool shares there), so the
-# preceding pass is consumed by Track and the recorded lay arrives at
-# Place-a-Token; nationalization_cash stops one OR later on the same
-# X3→X6 upgrade displacing a token (3 cities → 2+1 slots city merge).
+# valuation — the xfail below); the other three stop on a `par` at $200 —
+# the phase-gated PAR_PRICE_GRID (Ruby G1867 par prices 135-200 unlock by
+# phase) is the next seam.
 PREFIX_WATERMARK = {
-    "21268": 468,
+    "21268": 626,
     "hs_ahjzadkh_19792": 220,
-    "hs_wuveadew_21268": 468,
-    "nationalization_cash": 494,
+    "hs_wuveadew_21268": 626,
+    "nationalization_cash": 600,
 }
 
 
