@@ -28,6 +28,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.title_replay_harness import ReplayError, TitleUnsupported, replay_game
 
 
+def align_recorded_keys(
+    recorded: dict[str, int], game: dict, engine_names: set[str]
+) -> dict[str, int]:
+    """Re-key the file's ``result`` onto the seat names the harness reports.
+
+    Corpus files key ``result`` by player NAME as of the final snapshot;
+    the ``players`` list (which the harness maps seats from) can carry a
+    LATER rename (e.g. 21111: result 'coleman07' vs players
+    'seancoleman07'). Align by player ID when the key is numeric (fixture
+    convention), exact name otherwise; a single leftover key on each side
+    is then paired — score equality is still required afterwards, so the
+    pairing can only un-flag a spurious mismatch, never mask a real one.
+    """
+    id_to_name = {str(p["id"]): p["name"] for p in game.get("players", [])}
+    out: dict[str, int] = {}
+    leftovers: dict[str, int] = {}
+    for key, score in recorded.items():
+        if key in id_to_name:
+            out[id_to_name[key]] = score
+        elif key in engine_names:
+            out[key] = score
+        else:
+            leftovers[key] = score
+    unclaimed = engine_names - set(out)
+    if len(leftovers) == 1 and len(unclaimed) == 1:
+        out[next(iter(unclaimed))] = next(iter(leftovers.values()))
+    else:
+        out.update(leftovers)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--glob", default="human_games/1867/*.json")
@@ -72,6 +103,7 @@ def main() -> int:
             )
             continue
         recorded = {k: int(v) for k, v in (game.get("result") or {}).items()}
+        recorded = align_recorded_keys(recorded, game, set(report.result))
         if recorded and report.result != recorded:
             counts["result_mismatch"] += 1
             failures.append(

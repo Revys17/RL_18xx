@@ -634,6 +634,38 @@ impl BaseGame {
                 }
                 vec!["bid", "pass"]
             }
+            StepKind::ReduceTokens => {
+                // RULES-VERSION accommodation (1867 merger round). Current
+                // Ruby lists ReduceTokens BEFORE PostMergerShares
+                // (g_1867/game.rb:826-837, per GTG errata confirmed in
+                // tobymao/18xx#9655) — that order is this engine's canonical
+                // blocking order, pinned by the vendored fixtures (merge →
+                // remove_token → buy_shares). But games recorded BEFORE that
+                // upstream swap deal shares FIRST (merge → buy_shares/pass →
+                // remove_token; the whole 2020-21 corpus — probed on 20693:
+                // current Ruby rejects its own record with "Blocking step
+                // Choose tokens to remove cannot process action buy_shares").
+                // Both phases are state-independent (dealing never reads the
+                // token state and vice versa; the round resumes Merge only
+                // once BOTH clear in merger_after_process), so while BOTH
+                // pend the gate also admits the share-dealing actions —
+                // dispatch-only: enumeration still reports remove_token
+                // alone, keeping self-play on the current rules.
+                let out = self.step_actions(desc, entity, snap);
+                if !out.is_empty() {
+                    return out;
+                }
+                if let Round::Merger(s) = snap {
+                    if s.converted.is_some() {
+                        return self.step_actions(
+                            &StepDesc::blocking(StepKind::PostMergerShares),
+                            entity,
+                            snap,
+                        );
+                    }
+                }
+                vec![]
+            }
             _ => self.step_actions(desc, entity, snap),
         }
     }
@@ -1440,18 +1472,16 @@ impl BaseGame {
         }
         // Loans-EMR titles (1867, step/buy_train.rb must_buy_train?): the
         // obligation only holds if the corp can afford a depot train WITH
-        // max loans; otherwise it may pass (→ nationalization, later seam).
+        // max loans; otherwise it may pass (→ nationalization on the pass).
+        // needed_cash = Ruby Depot#min_depot_price (depot.rb:61-65): min
+        // over the upcoming HEAD, phase-available later upcoming trains and
+        // the discarded pool — NOT just the head (probed on 20289: depot
+        // [8 @1000, 2+2 @600] in phase 8, CNR full power 744 ≥ 600 IS
+        // obliged and loan-funds the 2+2).
         if !self.title_def().ebuy_president_may_contribute() {
             if let Some(&ci) = self.corp_idx.get(corp_sym) {
-                let min_depot = self
-                    .depot
-                    .trains
-                    .first()
-                    .map(|t| t.price)
-                    .into_iter()
-                    .chain(self.depot.discarded.iter().map(|t| t.price))
-                    .min()
-                    .unwrap_or(i32::MAX);
+                let min_depot = self.min_depot_price_for_emr();
+                let min_depot = if min_depot > 0 { min_depot } else { i32::MAX };
                 return self.corp_buying_power_full(ci) >= min_depot;
             }
         }

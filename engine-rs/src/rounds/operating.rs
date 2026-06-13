@@ -2653,25 +2653,10 @@ impl BaseGame {
                     let corp_cash = self.corporations[corp_idx].cash;
                     let has_trains = !self.corporations[corp_idx].trains.is_empty();
 
-                    // Loans-EMR titles (1867): the buy obligation only holds
-                    // when a depot train is affordable with max loans.
-                    let obligation_affordable = self.title_def().ebuy_president_may_contribute()
-                        || {
-                            let min_depot = self
-                                .depot
-                                .trains
-                                .first()
-                                .map(|t| t.price)
-                                .into_iter()
-                                .chain(self.depot.discarded.iter().map(|t| t.price))
-                                .min()
-                                .unwrap_or(i32::MAX);
-                            self.corp_buying_power_full(corp_idx) >= min_depot
-                        };
-                    let must_buy = !has_trains
-                        && (self.title_def().must_buy_train_always()
-                            || self.can_run_route(&corp_sym))
-                        && obligation_affordable;
+                    // The shared obligation predicate (steps.rs): Python's
+                    // must_buy_train + the loans-EMR affordability arm (Ruby
+                    // G1867 must_buy_train?, needed_cash = min_depot_price).
+                    let must_buy = self.operating_must_buy_train(&corp_sym);
 
                     if must_buy {
                         false // blocking — forced buy, president must sell shares
@@ -2733,7 +2718,29 @@ impl BaseGame {
                         let has_room = self.corporations[corp_idx].trains.len()
                             < self.corp_train_limit(corp_idx);
 
-                        !((has_room && (can_buy_from_depot || can_buy_from_discard || can_buy_inter_corp)) || can_exchange)
+                        let can_buy_any = (has_room
+                            && (can_buy_from_depot || can_buy_from_discard || can_buy_inter_corp))
+                            || can_exchange;
+                        if !can_buy_any
+                            && !has_trains
+                            && self.title_def().buy_train_pass_nationalizes()
+                        {
+                            // Ruby Base#skip! == pass! (step/base.rb:60-63),
+                            // and G1867 BuyTrain#pass! nationalizes a
+                            // trainless corp: one that can buy NOTHING (no
+                            // obligation, nothing affordable — not even a $1
+                            // inter-corp train) folds into the CN without
+                            // any recorded action. Park the pc at Done
+                            // (turn over) exactly like the LoanOperations
+                            // unpayable-interest arm.
+                            self.nationalize_corporation(&corp_sym);
+                            if let crate::rounds::Round::Operating(ref mut s) = self.round {
+                                s.step = OperatingStep::Done;
+                            }
+                            false
+                        } else {
+                            !can_buy_any
+                        }
                     }
                 }
                 // Steps with no auto-skip hook (HomeToken; future kinds)
@@ -2927,14 +2934,39 @@ impl BaseGame {
             // [SellShares, BuyTrain] — Pass is EXCLUDED (round.py:805-810). A
             // Pass at that point is rejected by Python's blocking-step guard
             // (round.py:5356-5357) and now propagates as a real error (neither
-            // engine swallows failed passes). The enumerator never offers this
-            // pass, so reaching here signals a bad caller; reject it.
-            if new_state.step == OperatingStep::BuyTrain
-                && self.president_may_contribute_pub(cur)
-            {
-                return Err(GameError::new(
-                    "Blocking step Buy Trains cannot process action Pass",
-                ));
+            // engine swallows failed passes). The gate uses the SAME predicate
+            // as the enumeration/dispatch arms (`operating_must_buy_train` ==
+            // Python's `must_buy_train`, round.py:550-551 — graph
+            // `route_train_purchase`, not the looser `route_available`; for
+            // loans-EMR titles it carries the affordable-with-max-loans arm of
+            // Ruby G1867 must_buy_train?, so a corp that cannot raise
+            // `min_depot_price` even with max loans MAY pass).
+            if new_state.step == OperatingStep::BuyTrain {
+                let cur_sym = cur.to_string();
+                if self.operating_must_buy_train(&cur_sym) {
+                    return Err(GameError::new(
+                        "Blocking step Buy Trains cannot process action Pass",
+                    ));
+                }
+                // Ruby G1867::Step::BuyTrain#pass! (step/buy_train.rb:28-31):
+                // a corp that passes the buy still trainless is nationalized
+                // on the spot. Its turn is over — the closed minor / reset
+                // major has no further steps (Ruby's round walks past a
+                // closed entity) — so park the pc at Done and let the
+                // caller's advance machinery move to the next living corp
+                // (same shape as the LoanOperations unpayable-interest arm).
+                if self.title_def().buy_train_pass_nationalizes()
+                    && self
+                        .corp_idx
+                        .get(cur_sym.as_str())
+                        .map_or(false, |&ci| self.corporations[ci].trains.is_empty())
+                {
+                    self.nationalize_corporation(&cur_sym);
+                    new_state.step = OperatingStep::Done;
+                    self.round = crate::rounds::Round::Operating(new_state);
+                    self.update_round_state();
+                    return Ok(());
+                }
             }
             // Pass from any blocking step: advance to the next pc per the
             // title's step list.
@@ -3211,5 +3243,132 @@ mod g1867_or_tests {
         if let crate::rounds::Round::Operating(s) = &game.round {
             assert!(s.pending_tokens.is_empty());
         }
+    }
+
+    /// Park `sym`'s turn at the BuyTrain pc.
+    fn enter_buy_train(game: &mut BaseGame, sym: &str) {
+        let mut s = crate::rounds::OperatingState::new(1, 2, vec![sym.to_string()]);
+        s.step = OperatingStep::BuyTrain;
+        game.round = crate::rounds::Round::Operating(s);
+        game.update_round_state();
+    }
+
+    /// Ruby G1867 BuyTrain (step/buy_train.rb): a trainless corp whose FULL
+    /// buying power (cash + takeable loans × $45) cannot reach
+    /// `min_depot_price` is NOT obliged (`must_buy_train?` :41-44) — it may
+    /// pass while a $1 inter-corp train keeps the step blocking — and the
+    /// pass nationalizes it (`pass!` :28-31). Probed on 20229 file id 211:
+    /// minor CA, $105 + 2 loans = $195 < $225 depot 3-train, recorded pass,
+    /// CA closed with its token turned into a CN token.
+    #[test]
+    fn buy_train_pass_without_obligation_nationalizes_trainless_corp() {
+        let mut game = new_4p_game();
+        rig_floated(&mut game, "BO", 8); // minor: max 2 loans
+        rig_floated(&mut game, "CPR", 8);
+        let ci = game.corp_idx["BO"];
+        // Depot head = 2-train ($100); full power 5 + 2×45 = 95 < 100.
+        game.corporations[ci].cash = 5;
+        assert!(!game.operating_must_buy_train("BO"));
+        // A cross-corp train keeps BuyTrain blocking ($1 buys are legal).
+        let mut train = game.depot.trains[0].clone();
+        train.owner = EntityId::corporation("CPR");
+        let cpr = game.corp_idx["CPR"];
+        game.corporations[cpr].trains.push(train);
+
+        enter_buy_train(&mut game, "BO");
+        let price0 = game.corporations[ci].share_price.as_ref().unwrap().price;
+        let p1_0 = game.players[0].cash;
+        game.process_action_internal(&crate::actions::Action::Pass {
+            entity_id: "BO".into(),
+        })
+        .unwrap();
+
+        let ci = game.corp_idx["BO"];
+        assert!(game.corporations[ci].closed, "trainless pass must nationalize");
+        // Owner paid 2 × the once-left price (minor = two share units).
+        assert!(game.players[0].cash > p1_0);
+        assert!(game.players[0].cash - p1_0 < 2 * price0);
+    }
+
+    /// Ruby Base#skip! == pass! (step/base.rb:60-63): a trainless corp with
+    /// NOTHING buyable (no obligation, no affordable depot/discard/inter-corp
+    /// train) never blocks at BuyTrain — the auto-skip itself nationalizes
+    /// it, with no recorded action.
+    #[test]
+    fn buy_train_auto_skip_nationalizes_trainless_corp() {
+        let mut game = new_4p_game();
+        rig_floated(&mut game, "BO", 8);
+        let ci = game.corp_idx["BO"];
+        game.corporations[ci].cash = 0; // can't even take a $1 inter-corp train
+
+        enter_buy_train(&mut game, "BO");
+        game.skip_steps();
+
+        let ci = game.corp_idx["BO"];
+        assert!(game.corporations[ci].closed, "skip must nationalize");
+        if let crate::rounds::Round::Operating(s) = &game.round {
+            assert_eq!(s.step, OperatingStep::Done, "turn parked at Done");
+        } else {
+            panic!("expected operating round");
+        }
+    }
+
+    /// A corp with trains that passes BuyTrain is NOT nationalized (the
+    /// pass!-hook fires only on `trains.empty?`).
+    #[test]
+    fn buy_train_pass_with_trains_does_not_nationalize() {
+        let mut game = new_4p_game();
+        rig_floated(&mut game, "BO", 8);
+        rig_floated(&mut game, "CPR", 8);
+        let ci = game.corp_idx["BO"];
+        game.corporations[ci].cash = 500;
+        let mut train = game.depot.trains[0].clone();
+        train.owner = EntityId::corporation("BO");
+        game.corporations[ci].trains.push(train);
+        // Another corp's train keeps the step blocking (optional buy).
+        let mut other = game.depot.trains[0].clone();
+        other.owner = EntityId::corporation("CPR");
+        let cpr = game.corp_idx["CPR"];
+        game.corporations[cpr].trains.push(other);
+
+        enter_buy_train(&mut game, "BO");
+        game.process_action_internal(&crate::actions::Action::Pass {
+            entity_id: "BO".into(),
+        })
+        .unwrap();
+        assert!(!game.corporations[game.corp_idx["BO"]].closed);
+    }
+
+    /// `needed_cash` for the obligation is Ruby Depot#min_depot_price
+    /// (depot.rb:61-65): the cheapest of the upcoming HEAD, phase-available
+    /// later upcoming trains and the discarded pool — not the head alone.
+    /// Probed on 20289 file id 654: depot [8 @1000, 2+2 @600] in phase 8,
+    /// CNR $519 + 5 loans = $744 ≥ 600 IS obliged (and loan-funds the 2+2);
+    /// the old head-only check read $1000 and wrongly let it pass.
+    #[test]
+    fn must_buy_obligation_uses_ruby_min_depot_price() {
+        let mut game = new_4p_game();
+        rig_floated(&mut game, "BO", 8); // minor: full power = cash + 2×45
+        let ci = game.corp_idx["BO"];
+        game.corporations[ci].cash = 200; // full = 290
+
+        // Price the head (every 2-train: the visible-upcoming filter matches
+        // by NAME) out of reach; a discarded train IS reachable.
+        let mut cheap = game.depot.trains[0].clone();
+        for t in game.depot.trains.iter_mut() {
+            if t.name == "2" {
+                t.price = 1000;
+            }
+        }
+        cheap.price = 80;
+        game.depot.discarded.push(cheap);
+        assert!(
+            game.operating_must_buy_train("BO"),
+            "min_depot_price = $80 via the discard pool; full power 290 covers it"
+        );
+
+        // Discard also out of reach → the obligation lapses (may pass).
+        game.depot.discarded[0].price = 400;
+        assert!(!game.operating_must_buy_train("BO"));
     }
 }

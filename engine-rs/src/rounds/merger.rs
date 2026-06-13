@@ -1181,3 +1181,159 @@ mod tests {
         assert_eq!(snap_par(120), 120);
     }
 }
+
+/// The ReduceTokens / PostMergerShares step-ORDER fork. Current Ruby lists
+/// ReduceTokens first (g_1867/game.rb:826-837, per the GTG errata in
+/// tobymao/18xx#9655) — the engine's canonical blocking order, pinned by
+/// the vendored fixtures. Games recorded BEFORE the upstream swap dealt
+/// shares first; the dispatch gate admits that interleaving while BOTH
+/// phases pend (probed on corpus game 20693: current Ruby rejects its own
+/// record at file id 366). See steps.rs `step_actions_dispatch`.
+#[cfg(test)]
+mod g1867_merger_order_tests {
+    use crate::entities::EntityId;
+    use crate::game::BaseGame;
+    use std::collections::HashMap;
+
+    fn new_4p_game() -> BaseGame {
+        let mut players = HashMap::new();
+        players.insert(1, "Alice".to_string());
+        players.insert(2, "Bob".to_string());
+        players.insert(3, "Carol".to_string());
+        players.insert(4, "Dave".to_string());
+        BaseGame::build_titled("1867", vec![1, 2, 3, 4], players)
+    }
+
+    /// The post-merge moment with BOTH phases pending: merged major CNR
+    /// holds three placed tokens (above the keep-2 limit ⇒
+    /// corporations_removing_tokens) and the share dealing is open
+    /// (converted + the dealing rotation). Player 1 took the presidency
+    /// (a president cert still in treasury stalls check_merge).
+    fn rig_both_pending(game: &mut BaseGame) {
+        let ci = game.corp_idx["CNR"];
+        let sp = game.stock_market.share_price_at(0, 10).unwrap();
+        game.corporations[ci].share_price = Some(sp.clone());
+        game.corporations[ci].ipo_price = Some(sp.clone());
+        game.update_market_cell("CNR", 0, 10, 0, 10);
+        game.corporations[ci].floated = true;
+        game.corporations[ci].set_share_owner(0, EntityId::player(1));
+        game.corporations[ci].owner_id = EntityId::player(1);
+        // The rest of the certs sit in the treasury (merger_set_par_cell
+        // initializes a merge target's unowned shares as IPO).
+        let ipo = EntityId::ipo("CNR");
+        let n = game.corporations[ci].shares.len();
+        for i in 1..n {
+            game.corporations[ci].set_share_owner(i, ipo.clone());
+        }
+        for hex in ["M9", "J12", "I15"] {
+            let ti = game.corporations[ci].next_token_index().unwrap();
+            game.corporations[ci].tokens[ti].used = true;
+            game.corporations[ci].tokens[ti].city_hex_id = hex.to_string();
+            let tok = game.corporations[ci].tokens[ti].clone();
+            let hi = game.hex_idx[hex];
+            let city = &mut game.hexes[hi].tile.cities[0];
+            let slot = city.tokens.iter().position(|t| t.is_none()).unwrap();
+            city.tokens[slot] = Some(tok);
+        }
+        for p in game.players.iter_mut() {
+            p.cash = 1000;
+        }
+        let mut s = crate::rounds::MergerState::new(1, 2, vec!["CNR".to_string()]);
+        s.converted = Some("CNR".to_string());
+        s.share_dealing_players = vec![1, 2, 3, 4];
+        s.share_dealing_multiple = vec![1, 2, 3, 4];
+        s.corporations_removing_tokens = Some(vec!["CNR".to_string()]);
+        game.round = crate::rounds::Round::Merger(s);
+        game.update_round_state();
+    }
+
+    fn buy_shares(pid: u32) -> crate::actions::Action {
+        crate::actions::Action::BuyShares {
+            entity_id: pid.to_string(),
+            corporation_sym: "CNR".into(),
+            shares: Vec::new(),
+            percent: 10,
+            source: "ipo".into(),
+            share_indices: vec![1],
+        }
+    }
+
+    /// Pre-#9655 records: buy_shares / pass while the token removal still
+    /// pends are ACCEPTED, change only the dealing state, and the removal
+    /// still completes afterwards.
+    #[test]
+    fn old_order_share_dealing_accepted_while_tokens_pend() {
+        let mut game = new_4p_game();
+        rig_both_pending(&mut game);
+        let price = game.corporations[game.corp_idx["CNR"]]
+            .share_price
+            .as_ref()
+            .unwrap()
+            .price;
+
+        // ENUMERATION stays canonical (current rules): the blocking step is
+        // ReduceTokens, offering remove_token alone.
+        assert_eq!(game.step_action_types_impl(), vec!["remove_token".to_string()]);
+
+        game.process_action_internal(&buy_shares(2)).unwrap();
+        assert_eq!(game.players[1].cash, 1000 - price);
+        game.process_action_internal(&crate::actions::Action::Pass {
+            entity_id: "3".into(),
+        })
+        .unwrap();
+
+        // Both still pending; the buy went to the treasury share.
+        let crate::rounds::Round::Merger(s) = &game.round else {
+            panic!("expected merger round")
+        };
+        assert!(s.corporations_removing_tokens.is_some());
+        assert_eq!(s.converted.as_deref(), Some("CNR"));
+        assert!(s.passed_players.contains(&3));
+
+        // The removal completes as usual (down to 2 hexes), dealing stays
+        // open for the remaining players.
+        let slot = {
+            let hi = game.hex_idx["M9"];
+            game.hexes[hi].tile.cities[0]
+                .tokens
+                .iter()
+                .position(|t| t.as_ref().map_or(false, |t| t.corporation_id == "CNR"))
+                .unwrap()
+        };
+        game.process_action_internal(&crate::actions::Action::RemoveToken {
+            entity_id: "CNR".into(),
+            hex_id: "M9".into(),
+            city_index: 0,
+            slot: slot as u8,
+        })
+        .unwrap();
+        let crate::rounds::Round::Merger(s) = &game.round else {
+            panic!("expected merger round")
+        };
+        assert!(s.corporations_removing_tokens.is_none());
+        assert_eq!(s.converted.as_deref(), Some("CNR"));
+        // fix_token_count!: the charter is topped back up to 3 tokens.
+        assert_eq!(game.corporations[game.corp_idx["CNR"]].tokens.len(), 3);
+    }
+
+    /// The accommodation is NARROW: without an open share dealing, player
+    /// actions at a pending ReduceTokens stay rejected.
+    #[test]
+    fn dealing_actions_rejected_when_only_tokens_pend() {
+        let mut game = new_4p_game();
+        rig_both_pending(&mut game);
+        if let crate::rounds::Round::Merger(ref mut s) = game.round {
+            s.converted = None;
+            s.share_dealing_players.clear();
+            s.share_dealing_multiple.clear();
+        }
+        game.update_round_state();
+        let err = game.process_action_internal(&buy_shares(2)).unwrap_err();
+        assert!(
+            err.message
+                .contains("Blocking step Choose tokens to remove cannot process action buy_shares"),
+            "got: {}",
+            err.message
+        );
+    }
+}

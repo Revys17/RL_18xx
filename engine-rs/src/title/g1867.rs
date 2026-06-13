@@ -213,6 +213,14 @@ impl GameTitle for G1867 {
     fn must_buy_train_always(&self) -> bool {
         true
     }
+    /// A corp that leaves BuyTrain trainless is nationalized
+    /// (step/buy_train.rb:28-31 pass! → game.nationalize!). The obligation
+    /// gate (must_buy_train? :41-44) already exempts corps that cannot
+    /// raise `min_depot_price` even with max loans — those may pass, and
+    /// THIS is what folds them into the CN.
+    fn buy_train_pass_nationalizes(&self) -> bool {
+        true
+    }
     /// CompanyPriceUpToFace (game.rb:365, setup at :958): companies sell
     /// between corporations for $1 up to face value. The $1 floor means the
     /// final blocking BuyCompany asks even nearly-broke corps for a pass —

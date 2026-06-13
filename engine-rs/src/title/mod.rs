@@ -188,6 +188,17 @@ pub trait GameTitle: Sync {
     fn must_buy_train_always(&self) -> bool {
         false
     }
+    /// Whether ending the BuyTrain step still trainless nationalizes the
+    /// corp on the spot (Ruby G1867::Step::BuyTrain#pass!,
+    /// g_1867/step/buy_train.rb:28-31: `@game.nationalize!(current_entity)
+    /// if current_entity.trains.empty?`). Fires on an explicit pass AND on
+    /// the step's auto-skip — Ruby `Base#skip!` (step/base.rb:60-63) just
+    /// calls `pass!`, so a trainless corp that cannot buy anything (no
+    /// obligation, nothing affordable) is nationalized without any
+    /// recorded action. 1830: false (no national, EMR forces the buy).
+    fn buy_train_pass_nationalizes(&self) -> bool {
+        false
+    }
 
     // -- game-end timing (Ruby GAME_END_CHECK; base.rb game_end_check /
     //    end_now?) --
