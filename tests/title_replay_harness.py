@@ -153,7 +153,13 @@ def check_fixture(path: Path) -> ReplayReport:
     """Replay a vendored Ruby fixture and assert the recorded final scores."""
     game = json.loads(path.read_text())
     report = replay_game(game)
-    recorded = {name: int(score) for name, score in (game.get("result") or {}).items()}
+    # Fixture results key players by ID; the report keys by seat NAME
+    # (identical for the hs_* fixtures, distinct for 21268).
+    id_to_name = {str(p["id"]): p["name"] for p in game.get("players", [])}
+    recorded = {
+        id_to_name.get(str(key), str(key)): int(score)
+        for key, score in (game.get("result") or {}).items()
+    }
     if recorded and report.result != recorded:
         raise AssertionError(
             f"fixture {path.name}: final scores diverge\n"

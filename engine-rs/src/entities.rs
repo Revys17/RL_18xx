@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::core::SharePrice;
 
@@ -695,7 +696,12 @@ impl Player {
 
     /// Calculate this player's total value: cash + share values (at market price).
     /// Does not include company face values — use company_value() separately.
-    pub fn value(&self, corps: &[Corporation]) -> i32 {
+    ///
+    /// `price_overrides` maps corp sym → valuation price replacing the
+    /// market price (Ruby G1867#player_value values a corp with loans at
+    /// the cell one step left per loan; empty for 1830). The caller
+    /// (`BaseGame::calculate_results`) computes the walk.
+    pub fn value(&self, corps: &[Corporation], price_overrides: &HashMap<String, i32>) -> i32 {
         let player_eid = EntityId::player(self.id);
         let share_value: i32 = corps
             .iter()
@@ -704,9 +710,11 @@ impl Player {
                 let percent = c.percent_owned_by(&player_eid);
                 if percent > 0 {
                     // units held × price-per-unit
-                    c.share_price
-                        .as_ref()
-                        .map(|sp| (percent as i32 * sp.price) / c.share_unit())
+                    let price = price_overrides
+                        .get(&c.sym)
+                        .copied()
+                        .or_else(|| c.share_price.as_ref().map(|sp| sp.price))?;
+                    Some((percent as i32 * price) / c.share_unit())
                 } else {
                     None
                 }

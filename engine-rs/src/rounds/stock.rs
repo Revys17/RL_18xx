@@ -116,16 +116,19 @@ impl BaseGame {
             return Err(GameError::new("Already bought this turn"));
         }
 
+        let corp_idx = *self
+            .corp_idx
+            .get(corporation_sym)
+            .ok_or_else(|| GameError::new(format!("Unknown corporation: {}", corporation_sym)))?;
+
         // Minors are never parred directly (1867 founds them by bid in the
         // stock round); titles may gate startability by phase (1867 majors:
         // phase 4+). Both are no-ops for 1830.
-        if let Some(&ci) = self.corp_idx.get(corporation_sym) {
-            if self.corporations[ci].corp_type == crate::title::CorpType::Minor {
-                return Err(GameError::new(format!(
-                    "{} cannot be started by par (founded by bid)",
-                    corporation_sym
-                )));
-            }
+        if self.corporations[corp_idx].corp_type == crate::title::CorpType::Minor {
+            return Err(GameError::new(format!(
+                "{} cannot be started by par (founded by bid)",
+                corporation_sym
+            )));
         }
         if !self
             .title_def()
@@ -137,16 +140,19 @@ impl BaseGame {
             )));
         }
 
-        // Validate the par price
+        // Validate the par price against the title's legal par cells for
+        // this corporation class (Ruby G1867::Step::BuySellParShares
+        // #get_all_par_prices: majors par on `%i[par_2 par]` — the
+        // $150-200 z cells are major-legal; 1830 keeps plain `par` cells).
+        let par_types = self
+            .title_def()
+            .par_price_types(self.corporations[corp_idx].corp_type);
         let par_sp = self
             .stock_market
-            .par_price(share_price)
+            .share_prices_with_types(par_types)
+            .into_iter()
+            .find(|sp| sp.price == share_price)
             .ok_or_else(|| GameError::new(format!("Invalid par price: {}", share_price)))?;
-
-        let corp_idx = *self
-            .corp_idx
-            .get(corporation_sym)
-            .ok_or_else(|| GameError::new(format!("Unknown corporation: {}", corporation_sym)))?;
 
         if self.corporations[corp_idx].ipo_price.is_some() || self.corporations[corp_idx].closed {
             return Err(GameError::new(format!(
@@ -192,15 +198,40 @@ impl BaseGame {
         self.corporations[corp_idx]
             .set_share_owner(0, player_eid.clone());
 
-        // Player pays
+        // Player pays. Under incremental capitalization (1867) the
+        // president's-cert payment goes to the CORPORATION (Ruby
+        // SharePool#buy_shares: receiver = bundle.owner when capitalization
+        // is :incremental and the cert sits in the corp's own treasury-IPO,
+        // share_pool.rb:104-115); full-cap titles (1830) pay the bank.
         self.players[player_idx].cash -= cost;
-        self.bank.cash += cost;
+        if self.corporations[corp_idx].capitalization == crate::title::Capitalization::Incremental {
+            self.corporations[corp_idx].cash += cost;
+        } else {
+            self.bank.cash += cost;
+        }
 
         // Set president
         self.corporations[corp_idx].owner_id = player_eid;
 
         // Check float
         self.check_float(corp_idx);
+
+        // HOME_TOKEN_TIMING = :par with no fixed home (1867 majors,
+        // CorporationDef.home_hex == ""): the parring player chooses the
+        // home city NOW — queue the pending token and let the HomeToken
+        // step block the round until the corp's place_token lands (the
+        // same machinery as bid-founded minors, rounds/stock_bid.rs).
+        let needs_home_choice = self
+            .title_def()
+            .corporations()
+            .iter()
+            .find(|cd| cd.sym == corporation_sym)
+            .map_or(false, |cd| cd.home_hex.is_empty());
+        if needs_home_choice {
+            new_state
+                .pending_home_tokens
+                .push((corporation_sym.to_string(), player_id));
+        }
 
         // Update state
         new_state.bought_this_turn = true;
@@ -213,7 +244,11 @@ impl BaseGame {
 
         self.round = crate::rounds::Round::Stock(new_state);
         self.update_round_state();
-        self.stock_after_process();
+        if !needs_home_choice {
+            // With a home choice pending the turn does NOT auto-advance —
+            // process_stock_home_token resumes it after the token lands.
+            self.stock_after_process();
+        }
         Ok(())
     }
 
@@ -1552,5 +1587,123 @@ impl BaseGame {
         }
 
         false
+    }
+}
+
+#[cfg(test)]
+mod g1867_par_tests {
+    use crate::game::BaseGame;
+    use crate::rounds::{Round, StockState};
+    use std::collections::HashMap;
+
+    fn new_4p_1867() -> BaseGame {
+        let mut players = HashMap::new();
+        players.insert(1, "Alice".to_string());
+        players.insert(2, "Bob".to_string());
+        players.insert(3, "Carol".to_string());
+        players.insert(4, "Dave".to_string());
+        BaseGame::build_titled("1867", vec![1, 2, 3, 4], players)
+    }
+
+    fn set_phase(game: &mut BaseGame, name: &str) {
+        let pd = game
+            .title_def()
+            .phases()
+            .into_iter()
+            .find(|p| p.name == name)
+            .unwrap();
+        game.phase = crate::core::Phase::new(
+            pd.name.to_string(),
+            pd.operating_rounds,
+            pd.train_limit,
+            pd.tiles.iter().map(|s| s.to_string()).collect(),
+        );
+    }
+
+    fn enter_stock_round(game: &mut BaseGame) {
+        let order = game.player_order.clone();
+        game.round = Round::Stock(StockState::new(&order, order[0]));
+        game.update_round_state();
+    }
+
+    fn try_par(game: &mut BaseGame, sym: &str, price: i32) -> Result<(), crate::actions::GameError> {
+        let state = match &game.round {
+            Round::Stock(s) => s.clone(),
+            _ => panic!("not in stock round"),
+        };
+        let pid = state.current_player_id().to_string();
+        game.stock_process_par(&state, &pid, sym, price)
+    }
+
+    /// The 1867 major par ladder is CLASS-typed, not phase-widened
+    /// (g_1867/step/buy_sell_par_shares.rb get_all_par_prices): majors
+    /// par on z+p cells $70-200. A $200 par pays the CORP 2 × par
+    /// (incremental capitalization) and queues the SR home-token choice
+    /// (HOME_TOKEN_TIMING = :par, no fixed home hex); the turn does not
+    /// advance until the corp's place_token lands, then auto-advances
+    /// (sell_buy — no recorded pass).
+    #[test]
+    fn major_pars_on_z_cell_pays_corp_and_pends_home_choice() {
+        let mut game = new_4p_1867();
+        set_phase(&mut game, "4");
+        enter_stock_round(&mut game);
+        game.players[0].cash = 1000;
+        let bank0 = game.bank.cash;
+
+        try_par(&mut game, "CPR", 200).unwrap();
+
+        let ci = game.corp_idx["CPR"];
+        assert_eq!(game.corporations[ci].ipo_price.as_ref().unwrap().price, 200);
+        assert_eq!(game.corporations[ci].cash, 400, "par pays the corp, not the bank");
+        assert_eq!(game.players[0].cash, 1000 - 400);
+        assert_eq!(game.bank.cash, bank0);
+        let Round::Stock(s) = &game.round else { panic!() };
+        assert_eq!(s.pending_home_tokens, vec![("CPR".to_string(), 1)]);
+        assert_eq!(s.current_player_id(), 1, "turn waits for the home choice");
+
+        // The parring player chooses the home city; the turn then
+        // auto-advances to the next player.
+        game.process_stock_home_token("CPR", "M9", 0).unwrap();
+        let Round::Stock(s) = &game.round else { panic!() };
+        assert!(s.pending_home_tokens.is_empty());
+        assert_eq!(s.current_player_id(), 2);
+        assert!(game.corporations[ci].tokens[0].used);
+    }
+
+    /// Off-ladder prices stay rejected: $50 is a minor-only x cell
+    /// (par_1), $145 is no market cell at all, minors are never parred
+    /// directly, and majors stay locked before phase 4.
+    #[test]
+    fn par_ladder_rejections() {
+        let mut game = new_4p_1867();
+        set_phase(&mut game, "4");
+        enter_stock_round(&mut game);
+        game.players[0].cash = 1000;
+
+        let err = try_par(&mut game, "CPR", 50).unwrap_err();
+        assert!(err.to_string().contains("Invalid par price"), "{}", err);
+        let err = try_par(&mut game, "CPR", 145).unwrap_err();
+        assert!(err.to_string().contains("Invalid par price"), "{}", err);
+        let err = try_par(&mut game, "BBG", 70).unwrap_err();
+        assert!(err.to_string().contains("founded by bid"), "{}", err);
+
+        set_phase(&mut game, "3");
+        let err = try_par(&mut game, "CPR", 200).unwrap_err();
+        assert!(err.to_string().contains("not available in phase"), "{}", err);
+    }
+
+    /// The full major ladder per Ruby get_all_par_prices(%i[par_2 par]):
+    /// all seven p cells ($70-135) plus the four z cells ($150-200).
+    #[test]
+    fn major_par_ladder_is_z_plus_p() {
+        let game = new_4p_1867();
+        let types = game.title_def().par_price_types(crate::title::CorpType::Major);
+        let prices: Vec<i32> = game
+            .stock_market
+            .share_prices_with_types(types)
+            .iter()
+            .map(|sp| sp.price)
+            .collect();
+        assert_eq!(prices, vec![200, 180, 165, 150, 135, 120, 110, 100, 90, 80, 70]);
     }
 }

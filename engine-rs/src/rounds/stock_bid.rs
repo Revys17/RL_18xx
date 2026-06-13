@@ -309,15 +309,21 @@ impl BaseGame {
 
         let mut new_state = state;
         new_state.pending_home_tokens.remove(0);
-        let round_over = new_state.pending_home_tokens.is_empty()
-            && new_state.bid_auction.is_none()
-            && new_state.all_players_passed();
+        let drained =
+            new_state.pending_home_tokens.is_empty() && new_state.bid_auction.is_none();
+        let round_over = drained && new_state.all_players_passed();
         self.round = crate::rounds::Round::Stock(new_state);
         self.update_round_state();
         if round_over {
             // The pending token was the only thing keeping the round open
             // (everyone had already passed) — finish it now.
             self.stock_next_entity();
+        } else if drained {
+            // No auction live (a par-pended major home token, or the
+            // founding bid won outright): the current player's turn
+            // resumes — after a par there is nothing left in a sell_buy
+            // turn, so this auto-advances without a recorded pass.
+            self.stock_after_process();
         }
         Ok(())
     }

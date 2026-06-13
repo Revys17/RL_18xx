@@ -1769,16 +1769,71 @@ impl BaseGame {
     }
 
     /// End the game and calculate final scores.
+    ///
+    /// Ruby G1867#end_game! (game.rb:764-783): before scoring, every
+    /// corporation with outstanding loans "pays them off" by REALLY
+    /// moving its share price left one step per loan and returning the
+    /// loans to the pool — so a FINISHED game's `result()` needs no
+    /// virtual loan adjustment. Inert for 1830 (loans are always 0).
     fn end_game(&mut self) {
+        if self.finished {
+            return; // Ruby end_game!: `return if @finished`
+        }
+        for ci in 0..self.corporations.len() {
+            let n = self.corporations[ci].loans;
+            // Closed corps left Ruby's @corporations list (their loans
+            // were settled when they nationalized) — skip them.
+            if n == 0 || self.corporations[ci].closed {
+                continue;
+            }
+            let sym = self.corporations[ci].sym.clone();
+            for _ in 0..n {
+                if let Some(sp) = self.corporations[ci].share_price.clone() {
+                    let (nr, nc) = self.stock_market.move_left(sp.row, sp.column);
+                    if let Some(new_sp) = self.stock_market.share_price_at(nr, nc) {
+                        self.corporations[ci].share_price = Some(new_sp);
+                        self.update_market_cell(&sym, sp.row, sp.column, nr, nc);
+                    }
+                }
+            }
+            // Ruby: `@loans << corporation.loans.pop` per step — the
+            // loans go back to the bank pool.
+            self.corporations[ci].loans = 0;
+            self.loans_remaining += n;
+        }
         self.finished = true;
     }
 
     /// Calculate final results: player_id -> total value.
     /// Value = cash + share values at current market price + face value of owned companies.
+    ///
+    /// Ruby G1867#player_value (game.rb:744-762): shares of a corporation
+    /// with outstanding loans are valued at the cell reached by walking
+    /// LEFT once per loan (`find_share_price` — a virtual walk; the corp
+    /// does not move). Inert for 1830 (no loans) and for a finished game
+    /// (the `end_game` settlement already moved the prices for real and
+    /// returned the loans).
     pub fn calculate_results(&self) -> HashMap<u32, i32> {
+        let mut loan_adjusted: HashMap<String, i32> = HashMap::new();
+        for corp in &self.corporations {
+            if corp.loans == 0 || corp.closed {
+                continue;
+            }
+            let Some(sp) = corp.share_price.as_ref() else {
+                continue;
+            };
+            let (mut r, mut c) = (sp.row, sp.column);
+            for _ in 0..corp.loans {
+                (r, c) = self.stock_market.move_left(r, c);
+            }
+            if let Some(adj) = self.stock_market.share_price_at(r, c) {
+                loan_adjusted.insert(corp.sym.clone(), adj.price);
+            }
+        }
         let mut results = HashMap::new();
         for player in &self.players {
-            let value = player.value(&self.corporations) + player.company_value(&self.companies);
+            let value = player.value(&self.corporations, &loan_adjusted)
+                + player.company_value(&self.companies);
             results.insert(player.id, value);
         }
         results
@@ -5081,6 +5136,103 @@ mod tests {
             "NYC should reach D20's city. Connected nodes: {:?}",
             graph.connected_nodes
         );
+    }
+}
+
+#[cfg(test)]
+mod g1867_loan_valuation_tests {
+    //! Seam B: the 1867 loan-adjusted player valuation (Ruby G1867
+    //! #player_value, game.rb:744-762) and the end-game loan settlement
+    //! (#end_game!, game.rb:764-783).
+
+    use super::*;
+    use crate::entities::EntityId;
+
+    fn new_4p_1867() -> BaseGame {
+        let mut players = HashMap::new();
+        players.insert(1, "Alice".to_string());
+        players.insert(2, "Bob".to_string());
+        players.insert(3, "Carol".to_string());
+        players.insert(4, "Dave".to_string());
+        BaseGame::build_titled("1867", vec![1, 2, 3, 4], players)
+    }
+
+    /// Par `sym` at the column-market cell priced `price` and hand player
+    /// 1 the president cert + one 10% cert (30%).
+    fn rig_corp_at(game: &mut BaseGame, sym: &str, price: i32) -> usize {
+        let ci = game.corp_idx[sym];
+        let col = (0u8..)
+            .take_while(|&c| game.stock_market.share_price_at(0, c).is_some())
+            .find(|&c| game.stock_market.share_price_at(0, c).unwrap().price == price)
+            .unwrap();
+        let sp = game.stock_market.share_price_at(0, col).unwrap();
+        game.corporations[ci].ipo_price = Some(sp.clone());
+        game.corporations[ci].share_price = Some(sp.clone());
+        game.update_market_cell(sym, 0, col, 0, col);
+        game.corporations[ci].set_share_owner(0, EntityId::player(1)); // 20% president
+        game.corporations[ci].set_share_owner(1, EntityId::player(1)); // 10%
+        ci
+    }
+
+    /// Mid-game result(): shares of a loan-carrying corp are valued at
+    /// the price walked LEFT once per loan — a VIRTUAL walk, the corp's
+    /// market price does not move (Ruby find_share_price).
+    #[test]
+    fn player_value_walks_left_once_per_loan() {
+        let mut game = new_4p_1867();
+        let ci = rig_corp_at(&mut game, "CPR", 135);
+        let base = game.calculate_results()[&1];
+
+        // 135 → 120 → 110 on the 1-D column market.
+        game.corporations[ci].loans = 2;
+        let adjusted = game.calculate_results()[&1];
+        assert_eq!(base - adjusted, 30 * (135 - 110) / 10);
+        assert_eq!(
+            game.corporations[ci].share_price.as_ref().unwrap().price,
+            135,
+            "the valuation walk must not move the market price"
+        );
+    }
+
+    /// Walking left clamps at the leftmost cell ($35) on the 1-D market.
+    #[test]
+    fn player_value_loan_walk_clamps_at_left_edge() {
+        let mut game = new_4p_1867();
+        let ci = rig_corp_at(&mut game, "CPR", 40);
+        game.corporations[ci].loans = 5;
+        let adjusted = game.calculate_results()[&1];
+        game.corporations[ci].loans = 0;
+        let base = game.calculate_results()[&1];
+        assert_eq!(base - adjusted, 30 * (40 - 35) / 10);
+    }
+
+    /// end_game settles loans for REAL: price left per loan, loans back
+    /// to the pool — so the finished game's result() equals the virtual
+    /// valuation taken just before the end, with no adjustment left.
+    #[test]
+    fn end_game_settles_loans_to_match_virtual_valuation() {
+        let mut game = new_4p_1867();
+        let ci = rig_corp_at(&mut game, "CPR", 135);
+        game.corporations[ci].loans = 2;
+        let pool0 = game.loans_remaining;
+        let before = game.calculate_results();
+
+        game.end_game();
+
+        assert!(game.finished);
+        assert_eq!(game.corporations[ci].loans, 0);
+        assert_eq!(game.loans_remaining, pool0 + 2);
+        assert_eq!(
+            game.corporations[ci].share_price.as_ref().unwrap().price,
+            110,
+            "settlement really moves the price"
+        );
+        assert_eq!(game.calculate_results(), before);
+
+        // Ruby `return if @finished`: a second end_game is a no-op.
+        game.corporations[ci].loans = 1;
+        game.end_game();
+        assert_eq!(game.corporations[ci].loans, 1);
     }
 }
 

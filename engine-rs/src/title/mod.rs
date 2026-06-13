@@ -113,6 +113,14 @@ pub trait GameTitle: Sync {
     fn corporation_startable(&self, _sym: &str, _phase_name: &str) -> bool {
         true
     }
+    /// Market zone types whose cells are legal par prices for a
+    /// corporation of the given class (Ruby G1867::Step::BuySellParShares
+    /// #get_all_par_prices: majors par on `%i[par_2 par]`, minors on
+    /// `%i[par_1 par]`). 1830's market carries only plain `p` cells, so
+    /// the default `["par"]` is exact there.
+    fn par_price_types(&self, _corp_type: CorpType) -> &'static [&'static str] {
+        &["par"]
+    }
     /// The per-OR-turn tile-lay allowance (Ruby `TILE_LAYS`), one slot per
     /// permitted lay in order. Default: 1830's single unrestricted lay.
     fn tile_lays(&self) -> &'static [TileLayDef] {

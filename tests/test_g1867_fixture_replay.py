@@ -1,15 +1,14 @@
 """1867 fixture-replay gate (Phase 1 validation strategy, leg 1).
 
-Two layers while Phase 1 lands mechanic by mechanic:
+Two layers:
 
 1. ``test_fixture_prefix_frontier`` — the RATCHET. Each fixture must replay
-   at least as far as the pinned watermark (the action index where the
-   engine currently stops, at the boundary of the next unimplemented
-   mechanic). Landing a mechanic moves the frontier forward: bump the
-   watermark in the same commit. A regression below the watermark is red.
+   at least as far as the pinned watermark. All four fixtures now replay
+   END TO END, so the watermarks sit at the full action counts — any
+   rejection anywhere is red.
 2. ``test_fixture_replays_to_recorded_result`` — the FINISH LINE: every
-   action accepted and exact final scores. xfail (non-strict) until the
-   full ruleset lands; drop the marker when it first passes.
+   action accepted and exact final scores. PASSING since the par-ladder +
+   loan-valuation seams (2026-06-13); the former xfail marker is gone.
 """
 
 import json
@@ -29,21 +28,18 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "1867"
 FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 
 # fixture stem -> minimum number of actions the engine must accept.
-# Current frontier: REDEEM SHARES + the X3→X6 brown-Montreal token merge
-# replay (RedeemShares pc before Track consuming corp buy_shares/pass;
-# Ruby city_map_for exit-SUBSET token transfer; the 1-D sold-out bump
-# up==right). The fixtures' MajorTrainless `choose` actions now replay.
-# Verified exact against Ruby: 21268 cash/bank at file id 857, L12 city
-# layout at 619; nationalization_cash cash/bank/CN tokens at 555.
-# hs_ahjzadkh replays COMPLETELY (scores still diverge on the endgame loan
-# valuation — the xfail below); the other three stop on a `par` at $200 —
-# the phase-gated PAR_PRICE_GRID (Ruby G1867 par prices 135-200 unlock by
-# phase) is the next seam.
+# ALL FOUR fixtures replay END TO END since the class-typed par ladder
+# (majors par on the z+p cells $70-200 — get_all_par_prices, NOT
+# phase-gated; pars pay the corp under incremental cap and queue the SR
+# home-token choice) and the loan valuation/settlement (player_value
+# values loan-carrying corps one price-step left per loan; end_game
+# really moves the prices) landed. The watermarks are the FULL filtered
+# action counts — any rejection anywhere is a regression.
 PREFIX_WATERMARK = {
-    "21268": 626,
+    "21268": 736,
     "hs_ahjzadkh_19792": 220,
-    "hs_wuveadew_21268": 626,
-    "nationalization_cash": 600,
+    "hs_wuveadew_21268": 736,
+    "nationalization_cash": 720,
 }
 
 
@@ -108,10 +104,6 @@ def test_route_revenue_cross_check(path):
     assert not mismatches, f"computed route revenue diverges: {mismatches}"
 
 
-@pytest.mark.xfail(
-    reason="1867 Phase 1 in progress — mechanics landing seam by seam",
-    strict=False,
-)
 @pytest.mark.skipif(
     "1867" not in supported_titles(),
     reason="engine does not register the 1867 title yet (Phase 1 in progress)",

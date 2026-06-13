@@ -159,6 +159,20 @@ impl GameTitle for G1867 {
             _ => true,
         }
     }
+    /// Majors par on the z+p cells, $70-200 (g_1867/step/
+    /// buy_sell_par_shares.rb:57-60 `get_all_par_prices`: `%i[par_2 par]`)
+    /// — the par LADDER is class-typed, not phase-gated; the only phase
+    /// gate is `corporation_startable` (majors from phase 4). Minors are
+    /// founded by bid on the x+p cells, $50-135 (`%i[par_1 par]`,
+    /// rounds/stock_bid.rs) and are never parred directly.
+    fn par_price_types(&self, corp_type: CorpType) -> &'static [&'static str] {
+        match corp_type {
+            CorpType::Major => &["par_2", "par"],
+            CorpType::Minor => &["par_1", "par"],
+            // The CN is never started, so it never pars.
+            CorpType::National => &[],
+        }
+    }
     fn national_setup(&self) -> Option<&'static super::NationalSetup> {
         Some(&NATIONAL_SETUP)
     }
