@@ -7,7 +7,8 @@ for: **1867: The Railways of Canada** and **1822 / 1822CA: The Railways of Great
 ## STATUS (2026-08-02) — start here
 
 - **Phase 1 (1867 RULES ENGINE) is substantially DONE and merged to `master`**
-  (`multi-title` fast-forwarded at `86a011b`). All four Ruby fixtures replay END TO
+  (`multi-title` fast-forwarded; hashes rewritten by the 2026-08-02
+  filter-repo purge — find seam commits by subject line). All four Ruby fixtures replay END TO
   END with exact recorded final scores; the 300-game human-corpus audit stands at
   114 exact-outcome / 95 rejected / 64 result_mismatch / 27 not_finished, with a
   game-by-game no-regression diff maintained across every seam commit.

@@ -1,7 +1,10 @@
 # 1867 — status checkpoint & remaining work
 
-*Checkpoint written 2026-08-02 at `multi-title` = `86a011b` (about to be
-fast-forwarded into `master`). This is the resume-point doc for the 1867
+*Checkpoint written 2026-08-02; merged to `master` the same day. NOTE: the
+full local history was rewritten on 2026-08-02 (git filter-repo purge of
+the scraped-game archives) — commit hashes cited in older docs/memory
+predate the rewrite; the seam commits are identifiable by their subject
+lines (`git log --oneline --grep=1867`). This is the resume-point doc for the 1867
 port; the full history and architecture rationale live in
 `docs/multi_title_roadmap.md` and the per-commit bodies of `git log`
 (every seam commit carries a dense description).*
