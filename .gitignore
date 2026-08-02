@@ -154,3 +154,6 @@ loop.lock
 
 # IDE / tools
 .claude/
+
+# Raw scraped game archives (kept locally; human_games/ is already ignored)
+*.tar.gz
