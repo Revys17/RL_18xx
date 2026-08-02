@@ -4,27 +4,25 @@ Plan for extending the engine beyond 1830 to the other 18xx titles we want to tr
 for: **1867: The Railways of Canada** and **1822 / 1822CA: The Railways of Great Britain
 (+ Canada)**.
 
-## STATUS (2026-06-12) — start here
+## STATUS (2026-08-02) — start here
 
-- **Branches:** 1867 work happens on `multi-title`, 1830 training fixes on `master`,
-  rebase periodically. Phase 0 is merged to master; Phase 0.5 lives on `multi-title`
-  (commits `ddeed22..c13dec6`).
-- **Phase 0 is DONE and merged to master** (ability system + step/round machinery, both
-  verified 1830-behavior-preserving — see "Phase 0 outcomes & carry-forwards" at the
-  bottom). The engine is also now *validating* (rejects malformed/ill-timed actions like
-  Python does) and the 1830 verification rituals are documented and gated
-  (`docs/verification_rituals.md`; pre-push hook runs pytest + cargo incl. the
-  frozen-1830-action-layout test).
-- **Phase 0.5 is DONE on `multi-title`** (2026-06-12): all seven seams landed as
-  separate 1830-no-op commits, each green on the fast gate (cargo 91 + pytest 326) plus
-  strict random-walk parity slices; full-corpus 4-axis lockstep re-run at the end. See
-  the checked-off list below for what each seam produced.
-- **Next up: Phase 1 (1867)** — validation harness first (fixture replays + 18xx.games
-  corpus), then data translation, then mechanics. The `GameTitle` trait + round-flow
-  hook give g1867.rs its plug-in points.
+- **Phase 1 (1867 RULES ENGINE) is substantially DONE and merged to `master`**
+  (`multi-title` fast-forwarded at `86a011b`). All four Ruby fixtures replay END TO
+  END with exact recorded final scores; the 300-game human-corpus audit stands at
+  114 exact-outcome / 95 rejected / 64 result_mismatch / 27 not_finished, with a
+  game-by-game no-regression diff maintained across every seam commit.
+  **Resume point: `docs/g1867_remaining_work.md`** — the checkpoint doc listing the
+  remaining rejection classes (share-price movement divergence is the dominant one),
+  known failure points, probe rig, and per-commit gates. The 1867 **RL bridge**
+  (action layout / encoder / MCTS / self-play; `alphazero_bridge_ready` is still
+  false) is the remaining Phase 1 deliverable before 1867 training.
+- **Phase 0 + 0.5** (ability system, step/round machinery, validating engine, the
+  seven pre-1867 seams) are DONE — see "Phase 0 outcomes & carry-forwards" below.
+  1830 verification rituals: `docs/verification_rituals.md` (pre-push hook runs
+  pytest + cargo incl. the frozen-1830-action-layout test).
 - **Validation strategy for new titles is fixture/corpus-based, NOT dual-engine** — the
-  Python engine stays 1830-only (see "Per-title validation strategy" below). This
-  supersedes the older "every title needs Python-vs-Rust parity" language.
+  Python engine stays 1830-only (see "Per-title validation strategy" below), with the
+  real Ruby engine (dockerized) as the per-action oracle for divergences.
 
 Reference rules: the Ruby source at
 [tobymao/18xx](https://github.com/tobymao/18xx/tree/master/lib/engine/game) —
