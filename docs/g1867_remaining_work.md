@@ -111,8 +111,10 @@ player valuation + end-game loan settlement.
   (`parity_runner --random 0:100` + full pytest + the frozen-1830-layout
   cargo pin). Before long 1830 training runs on a new engine build, run
   the full-corpus ritual (`docs/verification_rituals.md`):
-  `tests/index_parity_corpus.py` (expect exactly the standing 87895
-  python_error) — hours, background it.
+  `tests/index_parity_corpus.py` (expect a fully clean exit-0 run — the
+  historical 87895 baseline entry was resolved 2026-08-02 by excising a
+  single inert dangling bid from the local corpus copy) — hours,
+  background it.
 - **Trainless-major freeze semantics**: while `trainless_major` is
   non-empty the whole round freezes (Ruby blocking-step behavior) —
   skip_steps/transition guards + the choose interceptor in

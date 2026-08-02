@@ -24,9 +24,12 @@ strict cleaning lockstep on small human games, encoder parity, adapter compat.
 ```bash
 # Strict 4-axis lockstep over ALL human games (state, enumeration,
 # policy-index, native decode). Exits 1 on any BAD status.
-# NOTE: game 87895 is a standing python_error (Python-oracle WaterfallAuction
-# limitation, not a Rust divergence), so a full-corpus run exits 1 with exactly
-# that one entry — inspect the counts, don't trust the exit code blindly.
+# NOTE: a clean full-corpus run now exits 0 with ZERO bad entries. (The
+# historical 87895 python_error baseline is gone: that game's record carried a
+# single dangling auction bid — a stale-client submit on an already-won lot,
+# inert under Ruby, rejected by both our ports — and the offending action was
+# excised from the local corpus copy on 2026-08-02 after verifying the rest of
+# the game reaches full parity without it.)
 uv run python tests/index_parity_corpus.py --json /tmp/index_parity.json
 
 # Strict runner: human-game imports and/or random walks. Exits 1 on failures.
