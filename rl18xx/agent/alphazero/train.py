@@ -2,14 +2,14 @@ import math
 import numpy as np
 from rl18xx.agent.alphazero.model import AlphaZeroModel
 from rl18xx.agent.alphazero.config import TrainingConfig
-from rl18xx.agent.alphazero.dataset import SelfPlayDataset
+from rl18xx.agent.alphazero.dataset import SelfPlayDataset, collate_examples
 from rl18xx.agent.alphazero.checkpointer import get_latest_model, save_model, save_optimizer_state, load_optimizer_state
 
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import Dataset
-from torch_geometric.loader import DataLoader
+from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 import logging
 from dataclasses import dataclass, field
@@ -369,6 +369,47 @@ def _compute_price_nll_loss(
     return price_loss, diagnostics
 
 
+def build_optimizer(model: AlphaZeroModel, config: TrainingConfig) -> optim.Optimizer:
+    """AdamW over the model, value heads at ``lr * value_lr_multiplier``.
+
+    Weight decay is decoupled (AdamW), and biases, norm gains and embeddings
+    are exempt. Plain ``Adam(weight_decay=...)`` folds the L2 term into the
+    gradient, which Adam then normalizes: any parameter whose loss gradient is
+    small shrinks by ~``lr`` per step whatever the decay coefficient. That drove
+    the economic transformer, the fusion cross-attention and the score head to
+    exactly zero within an epoch, and shrank the rest of the trunk ~95%.
+
+    Param group 0 is always the base-LR decayed group (callers log its LR).
+    """
+    no_decay_ids = set()
+    for module in model.modules():
+        if isinstance(module, (torch.nn.LayerNorm, torch.nn.Embedding)):
+            no_decay_ids.update(id(p) for p in module.parameters(recurse=False))
+
+    # Value heads use the elevated LR (Item 5): with the KataGo-style dual
+    # head, both ``win_loss_head`` and ``score_head`` are small final MLPs that
+    # are slower than policy/trunk to specialize.
+    groups = {(value, decay): [] for value in (False, True) for decay in (True, False)}
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        is_value = "win_loss_head" in name or "score_head" in name
+        decay = param.ndim >= 2 and id(param) not in no_decay_ids
+        groups[(is_value, decay)].append(param)
+
+    param_groups = []
+    for (is_value, decay), params in groups.items():
+        if params:
+            param_groups.append(
+                {
+                    "params": params,
+                    "lr": config.lr * (config.value_lr_multiplier if is_value else 1.0),
+                    "weight_decay": config.weight_decay if decay else 0.0,
+                }
+            )
+    return optim.AdamW(param_groups, betas=(0.9, 0.999), eps=1e-8)
+
+
 def compute_losses(
     model: AlphaZeroModel,
     game_state_data: torch.Tensor,
@@ -576,26 +617,7 @@ def train_model(
     graph: bool = False,
     model_checkpoint_dir: str = "model_checkpoints",
 ) -> TrainingMetrics:
-    # Separate learning rate for value heads (Item 5). With the KataGo-style
-    # dual head, both ``win_loss_head`` and ``score_head`` use the elevated LR
-    # — they replace the legacy ``value_head`` and the rationale (small final
-    # MLP, slower than policy/trunk to specialize) applies to both.
-    value_head_params = []
-    other_params = []
-    for name, param in model.named_parameters():
-        if "win_loss_head" in name or "score_head" in name:
-            value_head_params.append(param)
-        else:
-            other_params.append(param)
-    optimizer = optim.Adam(
-        [
-            {"params": other_params, "lr": config.lr},
-            {"params": value_head_params, "lr": config.lr * config.value_lr_multiplier},
-        ],
-        weight_decay=config.weight_decay,
-        betas=(0.9, 0.999),
-        eps=1e-8,
-    )
+    optimizer = build_optimizer(model, config)
     metrics = TrainingMetrics()
 
     if len(train_dataset) == 0:
@@ -603,7 +625,12 @@ def train_model(
         return metrics
 
     train_loader = DataLoader(
-        train_dataset, batch_size=config.batch_size, shuffle=config.shuffle_examples, num_workers=0, pin_memory=False
+        train_dataset,
+        batch_size=config.batch_size,
+        shuffle=config.shuffle_examples,
+        num_workers=0,
+        pin_memory=False,
+        collate_fn=collate_examples,
     )
 
     total_steps = len(train_loader) * config.num_epochs

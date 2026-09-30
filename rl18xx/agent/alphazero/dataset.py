@@ -4,7 +4,7 @@ import lmdb
 import torch
 import numpy as np
 from tqdm import tqdm
-from torch_geometric.data import Data
+from torch_geometric.data import Batch, Data
 from torch.utils.data import Dataset
 import logging
 import io
@@ -15,6 +15,52 @@ import lz4.frame
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
 
 LOGGER = logging.getLogger(__name__)
+
+
+def canonicalize_value_target(state, value):
+    """Rotate a stored value target into the encoder's canonical player frame.
+
+    The encoder rotates the game-state vector so the active player sits at
+    slot 0, and the network's value heads learn (and MCTS unrotates) values in
+    that frame. Two stored layouts exist:
+
+    - **Self-play rows** keep only ``encoded_state[:6]`` and store the value
+      already rotated (``TrainingExampleProcessor.make_dataset_from_selfplay``).
+    - **Human-game rows** (pretraining, autoresearch) keep the full 8-tuple
+      ``encoded_state`` — including ``rotation`` at index 6 — and store the
+      value in absolute (player-id-sorted) order.
+
+    So a row whose state still carries ``rotation`` gets rotated here; a
+    6-tuple row is returned unchanged.
+    """
+    if len(state) <= 6 or not isinstance(value, torch.Tensor):
+        return value
+    rotation = int(state[6])
+    if rotation == 0:
+        return value
+    return torch.roll(value, shifts=-rotation, dims=0)
+
+
+def collate_examples(batch):
+    """Collate dataset rows into a training batch, keeping price targets per example.
+
+    Rows are ``(game_state, data, legal_action_mask, pi, value, price_targets)``.
+    Tensors stack, the PyG ``Data`` graphs batch, and ``price_targets`` stays
+    a list with one (possibly empty) target list per example — the shape
+    ``_compute_price_nll_loss`` expects. PyG's default ``Collater`` instead
+    zips the per-example lists together, which truncates to the shortest one:
+    any batch containing an example with no price target (i.e. nearly every
+    batch) lost all its price targets, so the price head never trained.
+    """
+    game_state, data, legal_action_mask, pi, value, price_targets = zip(*batch)
+    return (
+        torch.stack(game_state),
+        Batch.from_data_list(list(data)),
+        torch.stack(legal_action_mask),
+        torch.stack(pi),
+        torch.stack(value),
+        [list(t) if t else [] for t in price_targets],
+    )
 
 
 class Dataset_1830(Dataset):
@@ -104,6 +150,7 @@ class SelfPlayDataset(Dataset_1830):
         legal_action_mask = torch.from_numpy(self.action_mapper.convert_indices_to_mask(legal_actions))
         # Encoder returns (game_state, node_data, edge_index, edge_attr, [round_type_idx, active_player_idx])
         game_state_data, node_data, edge_index, edge_attr = state[0], state[1], state[2], state[3]
+        value = canonicalize_value_target(state, value)
 
         data = Data(x=node_data, edge_index=edge_index, edge_attr=edge_attr)
         return game_state_data, data, legal_action_mask, pi, value, price_targets
@@ -180,6 +227,7 @@ class HumanPlayDataset(Dataset_1830):
             game_state[2],
             game_state[3],
         )
+        value = canonicalize_value_target(game_state, value)
         data = Data(x=node_data, edge_index=edge_index, edge_attr=edge_attr)
         return game_state_data, data, legal_action_mask, pi, value, price_targets
 
@@ -221,6 +269,8 @@ class TrainingExampleProcessor:
             # The encoder now canonicalizes the game-state vector itself so that the
             # active player sits at slot 0 (active_player_idx == 0). We still need to
             # rotate the per-player value target into the same canonical frame.
+            # Only ``encoded_state[:6]`` is stored below, so readers know this
+            # row's value is already canonical (see ``canonicalize_value_target``).
             rotation = encoded_state[6]
 
             value = result

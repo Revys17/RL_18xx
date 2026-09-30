@@ -231,6 +231,20 @@ def _instantiate_model(checkpoint_dict: dict, checkpoint_path: str) -> AlphaZero
     # the in-memory model (e.g. logging which checkpoint a worker loaded).
     model.config.model_checkpoint_file = checkpoint_path
     state_dict = _pad_policy_head_state_dict(checkpoint_dict[STATE_DICT_KEY], model)
+    # Value heads became per-seat (input ``[player token, trunk]``, one output):
+    # older checkpoints' value-head tensors don't fit, so those heads start
+    # fresh while the trunk and policy load. Other shape mismatches still raise.
+    current = model.state_dict()
+    stale_value_keys = [
+        k for k, v in state_dict.items()
+        if k.startswith(("win_loss_head.", "score_head.")) and k in current and current[k].shape != v.shape
+    ]
+    if stale_value_keys:
+        LOGGER.warning(
+            f"Checkpoint {checkpoint_path} predates the per-seat value heads; "
+            f"re-initializing {len(stale_value_keys)} value-head tensors."
+        )
+        state_dict = {k: v for k, v in state_dict.items() if k not in stale_value_keys}
     # ``strict=False`` lets dropped legacy buffers (e.g. ``other_indices``) be
     # served by the freshly-initialized model copy.
     model.load_state_dict(state_dict, strict=False)

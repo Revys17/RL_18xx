@@ -842,7 +842,8 @@ class EconomicStateTransformer(nn.Module):
 class CrossModalFusion(nn.Module):
     """Two-stage fusion: cross-attention (econ → map) then concat + project.
 
-    Stage A: Economic entities attend to map node embeddings.
+    Stage A: Economic entities attend to map node embeddings (residual, so each
+        entity token keeps its own economic state alongside the map context).
     Stage B: Concatenate fused economic embedding with pooled map embedding, project to trunk dim.
     """
 
@@ -894,8 +895,12 @@ class CrossModalFusion(nn.Module):
         q = self.q_proj(entity_embeds)
         k = self.k_proj(node_embeds)
         v = self.v_proj(node_embeds)
-        cross_out, _ = self.cross_attn(q, k, v)  # (B, num_entity_groups, d_attn)
-        cross_out = self.cross_attn_ln(cross_out)
+        attn_out, _ = self.cross_attn(q, k, v)  # (B, num_entity_groups, d_attn)
+        # Residual: the attention output is a mix of *map* values, so without
+        # adding the entity embedding back, per-entity economic state (cash,
+        # holdings, share prices) only reaches the trunk as attention weights
+        # — and the value head can't tell who is ahead.
+        cross_out = self.cross_attn_ln(entity_embeds + attn_out)
         if entity_key_padding_mask is not None:
             valid = (~entity_key_padding_mask).unsqueeze(-1).float()
             cross_out = cross_out * valid
@@ -981,6 +986,8 @@ class ContinuousPriceHead(nn.Module):
     _TRAIN_TYPES = ("2", "3", "4", "5", "6", "D")
 
     LOG_STD_INIT = 3.0  # exp(3) ≈ 20 — reasonable starting spread for $-prices
+    PRICE_CENTER = 150.0  # $ — mean at a zero MLP output
+    PRICE_SCALE = 100.0  # $ per unit of MLP output
 
     def __init__(self, d_trunk: int):
         super().__init__()
@@ -1031,7 +1038,11 @@ class ContinuousPriceHead(nn.Module):
         """
         B = trunk.shape[0]
         raw = self.mlp(trunk).view(B, self.num_slots, 2)
-        mean = raw[..., 0]
+        # The MLP output is O(1); observed prices are $1-$1000. Emitting the
+        # mean in raw dollars put the initial mean ~$150+ from every target
+        # and the price NLL in the tens of thousands, so map it through a
+        # dollar-scale affine instead (consumers still read dollars).
+        mean = self.PRICE_CENTER + self.PRICE_SCALE * raw[..., 0]
         log_std = raw[..., 1] + self.LOG_STD_INIT
         return mean, log_std
 
@@ -1616,11 +1627,15 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         # the slot layout.
         self.price_head = ContinuousPriceHead(c.d_trunk)
 
-        # 6. Dual Value Head (KataGo-style; per-player, LayerNorm) — no
-        # active-player one-hot. The encoder canonicalizes game state so the
-        # active player always sits at slot 0, which makes the one-hot
-        # indicator a constant input. Both heads share the same MLP topology
-        # but are trained with different targets/losses:
+        # 6. Dual Value Head (KataGo-style), evaluated per seat: seat i's
+        # output reads player i's economic token alongside the shared trunk,
+        # with one set of weights for every seat. The trunk alone is a pooled
+        # summary that keeps little per-player detail (a linear probe on it
+        # barely beats chance at naming the winner, vs ~57% on the player
+        # tokens). The encoder canonicalizes game state so the active player
+        # always sits at slot 0; the tokens' id embeddings tell seats apart.
+        # Both heads share the same MLP topology but are trained with
+        # different targets/losses:
         #   - win_loss_head: KL-div against share-of-winners. Backed up by MCTS.
         #   - score_head:    MSE against normalized net-worth fractions.
         #                    Auxiliary signal for the trunk; not used by MCTS.
@@ -1640,16 +1655,20 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
             self._initialize_weights()
 
     def _build_value_head_mlp(self) -> nn.Sequential:
-        """Build the shared MLP topology used by both win-loss and score heads."""
+        """Build the per-seat MLP shared by the win-loss and score heads.
+
+        Input is ``[player token, trunk]`` for one seat; output is that seat's
+        scalar (logit or score).
+        """
         c = self.config
         head_hidden = c.d_trunk // 2
         layers = []
-        in_dim = c.d_trunk
+        in_dim = c.d_entity + c.d_trunk
         for _ in range(c.value_head_layers - 1):
             out_dim = head_hidden
             layers.extend([nn.Linear(in_dim, out_dim), nn.LayerNorm(out_dim), nn.GELU()])
             in_dim = out_dim
-        layers.append(nn.Linear(in_dim, c.num_players))
+        layers.append(nn.Linear(in_dim, 1))
         return nn.Sequential(*layers)
 
     def _initialize_weights(self):
@@ -1662,6 +1681,14 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
             elif isinstance(m, nn.LayerNorm):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
+        # Zero the output layers of the value, score and price heads so they
+        # start at their priors (equal odds, equal shares, $PRICE_CENTER with
+        # sigma ~exp(LOG_STD_INIT)). The trunk isn't normalized, so Kaiming
+        # output layers start with logits of std ~4 (a confident random
+        # winner) and price NLLs in the hundreds of thousands.
+        for final in (self.win_loss_head[-1], self.score_head[-1], self.price_head.mlp[-1]):
+            nn.init.zeros_(final.weight)
+            nn.init.zeros_(final.bias)
 
     def architecture_name(self) -> str:
         return "AlphaZeroTransformer"
@@ -1796,18 +1823,14 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         # built with max_players=6), pad each row up to the max-N layout. This
         # mirrors what ``_forward_encoded_batch`` does on the inference path.
         if game_state_data.shape[1] != self.config.game_state_size:
+            # Every row shares the width, hence the player count: pad the whole
+            # batch in one pass (a per-row loop costs thousands of tiny kernels).
             inferred = self._infer_num_players_from_state_size(game_state_data.shape[1])
-            padded_rows = []
-            inferred_t = torch.full(
-                (batch_size,), inferred, dtype=torch.long, device=game_state_data.device
-            )
-            for b in range(batch_size):
-                padded_rows.append(
-                    _pad_state_to_max_players(game_state_data[b], inferred, MAX_PLAYERS)
-                )
-            game_state_data = torch.stack(padded_rows, dim=0)
+            game_state_data = _pad_state_to_max_players(game_state_data, inferred, MAX_PLAYERS)
             if num_players is None:
-                num_players = inferred_t
+                num_players = torch.full(
+                    (batch_size,), inferred, dtype=torch.long, device=game_state_data.device
+                )
 
         # Extract round type from game state if not provided. ``active_player_idx``
         # is no longer consumed by the value head (state is canonicalized so the
@@ -1885,8 +1908,19 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         # player at slot 0), no explicit indicator. MCTS softmaxes
         # ``win_loss_logits`` and backs it up through the tree; ``score_pred``
         # is auxiliary and discarded at inference time.
-        win_loss_logits = self.win_loss_head(x)
-        score_pred = self.score_head(x)
+        econ = self.econ_transformer
+        player_tokens = entity_embeds[:, econ.player_token_start:econ.player_token_end]  # (B, P, d_entity)
+        seat_input = torch.cat([player_tokens, x.unsqueeze(1).expand(-1, player_tokens.shape[1], -1)], dim=-1)
+        win_loss_logits = self.win_loss_head(seat_input).squeeze(-1)  # (B, P)
+        score_pred = self.score_head(seat_input).squeeze(-1)
+        # Seats past the game's player count don't exist: keep them out of the
+        # win-loss softmax (-1e4 rather than -inf so AMP stays finite) and pin
+        # their score prediction to the zero the padded target holds.
+        if num_players is not None:
+            seat_idx = torch.arange(win_loss_logits.shape[1], device=win_loss_logits.device)
+            padded_seat = seat_idx.unsqueeze(0) >= num_players.to(win_loss_logits.device).unsqueeze(1)
+            win_loss_logits = win_loss_logits.masked_fill(padded_seat, -1e4)
+            score_pred = score_pred.masked_fill(padded_seat, 0.0)
 
         # 7. Auxiliary Heads
         aux_action_count_pred = self.aux_action_count_head(x)

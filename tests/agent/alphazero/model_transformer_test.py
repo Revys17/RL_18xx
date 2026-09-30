@@ -164,6 +164,24 @@ def test_cross_modal_fusion_shapes():
     assert out.shape == (B, d_trunk)
 
 
+def test_cross_modal_fusion_carries_entity_state():
+    """With identical map nodes the cross-attention output is the same for any
+    query, so the fused vector can only differ between samples if the entity
+    embeddings themselves pass through (the residual). Without it, economic
+    state never reaches the trunk and the value head can't learn who is ahead."""
+    d_entity, d_map, d_trunk = 64, 128, 256
+    fusion = CrossModalFusion(d_entity, d_map, d_trunk, num_heads=4)
+    fusion.eval()
+
+    node_embeds = torch.randn(1, 1, d_map).expand(2, NUM_HEXES, d_map)
+    map_pool = torch.randn(1, d_map).expand(2, d_map)
+    entity_embeds = torch.randn(2, NUM_ENTITY_GROUPS, d_entity)
+
+    with torch.no_grad():
+        out = fusion(entity_embeds, node_embeds, map_pool)
+    assert not torch.allclose(out[0], out[1], atol=1e-4)
+
+
 def test_film_res_block():
     """FiLM residual block preserves shape and starts as identity."""
     d_trunk, d_film = 256, 32

@@ -11,7 +11,7 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
-from torch_geometric.loader import DataLoader
+from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
@@ -26,6 +26,7 @@ from rl18xx.agent.alphazero.encoder import Encoder_1830
 from rl18xx.agent.alphazero.model import AlphaZeroModel
 from rl18xx.agent.alphazero.train import (
     TrainingMetrics,
+    build_optimizer,
     compute_losses,
     move_batch_to_device,
 )
@@ -42,7 +43,7 @@ from rl18xx.game.engine.actions import (
 )
 from rl18xx.game.engine.game import BaseGame
 from rl18xx.game.gamemap import GameMap
-from rl18xx.agent.alphazero.dataset import HumanPlayDataset, TrainingExampleProcessor
+from rl18xx.agent.alphazero.dataset import HumanPlayDataset, TrainingExampleProcessor, collate_examples
 from rl18xx.game.engine.round import (
     BuyCompany as BuyCompanyStep,
     BuyTrain as BuyTrainStep,
@@ -200,6 +201,25 @@ def _bucket_cache_path(dataset):
         return Path(env.path()) / "player_buckets.json"
     except Exception:
         return None
+
+
+def _value_head_batch_stats(outputs: dict, value: torch.Tensor) -> Tuple[int, float]:
+    """Per-batch win-loss head diagnostics, as sums over the batch.
+
+    Returns ``(winner_hits, uniform_ce_sum)``:
+    - ``winner_hits``: samples whose argmax seat is one of the actual winners.
+    - ``uniform_ce_sum``: the value loss a head predicting equal odds over the
+      real seats would score (``ln(num_players)`` per sample). A value loss at
+      or above this baseline means the head has learned nothing usable.
+
+    ``value`` is the stored target before padding, so its width is the batch's
+    player count (the bucket sampler keeps it uniform within a batch).
+    """
+    win_loss_target = outputs["win_loss_target"]
+    pred_seat = outputs["win_loss_logits"].argmax(dim=1, keepdim=True)
+    winner_hits = int((win_loss_target.gather(1, pred_seat) > 0).sum().item())
+    uniform_ce_sum = float(np.log(value.shape[1]) * value.shape[0])
+    return winner_hits, uniform_ce_sum
 
 
 def _make_num_players_fn(dataset):
@@ -1574,6 +1594,9 @@ def convert_game_to_training_data(
             action, fresh_game_state, factored, action_mapper, action_index
         )
 
+        # ``actual_value`` stays in absolute (player-id-sorted) order; the full
+        # ``encoded_game_state`` keeps its ``rotation`` so readers rotate the
+        # value into the canonical frame (``canonicalize_value_target``).
         save_array.append((encoded_game_state, legal_action_indices, pi, actual_value, price_targets))
         fresh_game_state.process_action(action)
 
@@ -1689,25 +1712,17 @@ def pretrain_model(
 
     device = model.device
 
+    # The step is matmul-bound once batches are staged on the GPU: run the
+    # forward in bf16 (same range as fp32, so no GradScaler) and let any fp32
+    # matmuls use TF32 tensor cores.
+    use_amp = config.use_fp16_training and device.type == "cuda"
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    LOGGER.info(f"Pretraining mixed precision: {'bf16 autocast' if use_amp else 'off'}")
+
     # --- Optimizer + cosine LR (fresh; no load_optimizer_state) ---
-    # Dual value head: both ``win_loss_head`` and ``score_head`` get the
-    # elevated LR (same rationale as the legacy single ``value_head``).
-    value_head_params = []
-    other_params = []
-    for name, param in model.named_parameters():
-        if "win_loss_head" in name or "score_head" in name:
-            value_head_params.append(param)
-        else:
-            other_params.append(param)
-    optimizer = optim.Adam(
-        [
-            {"params": other_params, "lr": config.lr},
-            {"params": value_head_params, "lr": config.lr * config.value_lr_multiplier},
-        ],
-        weight_decay=config.weight_decay,
-        betas=(0.9, 0.999),
-        eps=1e-8,
-    )
+    optimizer = build_optimizer(model, config)
 
     # Variable-N pretraining bucket sampler: each yielded batch has uniform
     # ``num_players``, and bucket selection is uniform across observed player
@@ -1725,7 +1740,11 @@ def pretrain_model(
     # dataset opens a per-process LMDB handle lazily, so worker processes
     # can prefetch batches concurrently with GPU compute.
     loader_workers = min(8, os.cpu_count() or 1)
-    loader_kwargs: dict = {"num_workers": loader_workers, "pin_memory": torch.cuda.is_available()}
+    loader_kwargs: dict = {
+        "num_workers": loader_workers,
+        "pin_memory": torch.cuda.is_available(),
+        "collate_fn": collate_examples,
+    }
     if loader_workers > 0:
         loader_kwargs["persistent_workers"] = True
         loader_kwargs["prefetch_factor"] = 4
@@ -1808,6 +1827,11 @@ def pretrain_model(
     epoch_val_value_losses: list = []
     epoch_val_top1_accuracy: list = []
     epoch_val_top5_accuracy: list = []
+    # Win-loss head diagnostics: how often the argmax seat is an actual
+    # winner, and the equal-odds value loss the head has to beat.
+    epoch_winner_accuracy: list = []
+    epoch_val_winner_accuracy: list = []
+    epoch_val_value_baseline: list = []
 
     for epoch in range(config.num_epochs):
         # ---------------------------- TRAIN PASS ----------------------------
@@ -1816,11 +1840,14 @@ def pretrain_model(
         train_policy_losses = []
         train_value_losses = []
         train_score_losses = []
+        train_price_losses = []
         train_aux_losses = []
         train_entropies = []
         epoch_top1_correct = 0
         epoch_top5_correct = 0
         epoch_total_samples = 0
+        epoch_winner_hits = 0
+        epoch_uniform_ce_sum = 0.0
 
         optimizer.zero_grad()
         train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config.num_epochs} [Pretrain]", leave=False)
@@ -1828,10 +1855,11 @@ def pretrain_model(
             global_step += 1
             game_state_data, batch_data, legal_action_mask, pi, value, price_targets = move_batch_to_device(batch, device)
 
-            outputs = compute_losses(
-                model, game_state_data, batch_data, legal_action_mask, pi, value, config,
-                price_targets=price_targets,
-            )
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+                outputs = compute_losses(
+                    model, game_state_data, batch_data, legal_action_mask, pi, value, config,
+                    price_targets=price_targets,
+                )
             total_loss = outputs["total_loss"]
             if not torch.isfinite(total_loss):
                 LOGGER.warning(
@@ -1850,6 +1878,8 @@ def pretrain_model(
             train_policy_losses.append(outputs["policy_loss"].item())
             train_value_losses.append(outputs["value_loss"].item())
             train_score_losses.append(outputs["score_loss"].item())
+            if outputs["price_diagnostics"]["price_count"]:
+                train_price_losses.append(outputs["price_loss"].item())
             train_aux_losses.append(outputs["aux_loss"].item())
             train_entropies.append(outputs["entropy"].item())
 
@@ -1862,6 +1892,8 @@ def pretrain_model(
             summary_writer.add_scalar("train/loss_policy", outputs["policy_loss"].item(), global_step)
             summary_writer.add_scalar("train/loss_value", outputs["value_loss"].item(), global_step)
             summary_writer.add_scalar("train/loss_score", outputs["score_loss"].item(), global_step)
+            if outputs["price_diagnostics"]["price_count"]:
+                summary_writer.add_scalar("train/loss_price", outputs["price_loss"].item(), global_step)
             summary_writer.add_scalar("train/loss_aux", outputs["aux_loss"].item(), global_step)
             summary_writer.add_scalar("train/entropy", outputs["entropy"].item(), global_step)
             summary_writer.add_scalar("train/lr", optimizer.param_groups[0]["lr"], global_step)
@@ -1875,6 +1907,9 @@ def pretrain_model(
                 target_expanded = target_top1.unsqueeze(1).expand_as(pred_top5)
                 epoch_top5_correct += (pred_top5 == target_expanded).any(dim=1).sum().item()
                 epoch_total_samples += pi.size(0)
+                winner_hits, uniform_ce_sum = _value_head_batch_stats(outputs, value)
+                epoch_winner_hits += winner_hits
+                epoch_uniform_ce_sum += uniform_ce_sum
 
             train_pbar.set_postfix(
                 {
@@ -1887,10 +1922,14 @@ def pretrain_model(
         avg_train_policy = float(np.mean(train_policy_losses)) if train_policy_losses else 0.0
         avg_train_value = float(np.mean(train_value_losses)) if train_value_losses else 0.0
         avg_train_score = float(np.mean(train_score_losses)) if train_score_losses else 0.0
+        avg_train_price = float(np.mean(train_price_losses)) if train_price_losses else 0.0
         avg_train_aux = float(np.mean(train_aux_losses)) if train_aux_losses else 0.0
         avg_train_entropy = float(np.mean(train_entropies)) if train_entropies else 0.0
         top1_acc = epoch_top1_correct / max(epoch_total_samples, 1)
         top5_acc = epoch_top5_correct / max(epoch_total_samples, 1)
+        train_winner_acc = epoch_winner_hits / max(epoch_total_samples, 1)
+        train_value_baseline = epoch_uniform_ce_sum / max(epoch_total_samples, 1)
+        epoch_winner_accuracy.append(train_winner_acc)
 
         metrics.epoch_losses.append(avg_train_loss)
         metrics.epoch_policy_losses.append(avg_train_policy)
@@ -1925,6 +1964,9 @@ def pretrain_model(
                         "epoch_val_value_losses": list(epoch_val_value_losses),
                         "epoch_val_top1_accuracy": list(epoch_val_top1_accuracy),
                         "epoch_val_top5_accuracy": list(epoch_val_top5_accuracy),
+                        "epoch_winner_accuracy": list(epoch_winner_accuracy),
+                        "epoch_val_winner_accuracy": list(epoch_val_winner_accuracy),
+                        "epoch_val_value_baseline": list(epoch_val_value_baseline),
                         "best_val_loss": best_val_loss if best_val_loss != float("inf") else None,
                         "best_checkpoint_num": best_checkpoint_num,
                     },
@@ -1938,10 +1980,13 @@ def pretrain_model(
         summary_writer.add_scalar("train_epoch/loss_policy", avg_train_policy, epoch)
         summary_writer.add_scalar("train_epoch/loss_value", avg_train_value, epoch)
         summary_writer.add_scalar("train_epoch/loss_score", avg_train_score, epoch)
+        summary_writer.add_scalar("train_epoch/loss_price", avg_train_price, epoch)
         summary_writer.add_scalar("train_epoch/loss_aux", avg_train_aux, epoch)
         summary_writer.add_scalar("train_epoch/entropy", avg_train_entropy, epoch)
         summary_writer.add_scalar("train_epoch/top1_acc", top1_acc, epoch)
         summary_writer.add_scalar("train_epoch/top5_acc", top5_acc, epoch)
+        summary_writer.add_scalar("train_epoch/value_winner_acc", train_winner_acc, epoch)
+        summary_writer.add_scalar("train_epoch/value_loss_uniform_baseline", train_value_baseline, epoch)
 
         # ------------------------- VALIDATION PASS --------------------------
         val_loss = float("inf")
@@ -1959,20 +2004,26 @@ def pretrain_model(
             val_score_se_sum = torch.zeros(model.config.value_size, dtype=torch.float64)
             val_value_count = 0
             val_score_loss_sum = 0.0
+            val_price_losses = []
+            val_winner_hits = 0
+            val_uniform_ce_sum = 0.0
             with torch.no_grad():
                 val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{config.num_epochs} [Val]", leave=False)
                 for batch in val_pbar:
                     game_state_data, batch_data, legal_action_mask, pi, value, price_targets = move_batch_to_device(batch, device)
-                    outputs = compute_losses(
-                        model, game_state_data, batch_data, legal_action_mask, pi, value, config,
-                        price_targets=price_targets,
-                    )
+                    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+                        outputs = compute_losses(
+                            model, game_state_data, batch_data, legal_action_mask, pi, value, config,
+                            price_targets=price_targets,
+                        )
                     val_losses.append(outputs["total_loss"].item())
                     val_policy_losses.append(outputs["policy_loss"].item())
                     val_value_losses.append(outputs["value_loss"].item())
                     val_aux_losses.append(outputs["aux_loss"].item())
                     val_entropies.append(outputs["entropy"].item())
                     val_score_loss_sum += outputs["score_loss"].item()
+                    if outputs["price_diagnostics"]["price_count"]:
+                        val_price_losses.append(outputs["price_loss"].item())
 
                     policy_probs = outputs["policy_probs"]
                     target_top1 = pi.argmax(dim=1)
@@ -1998,6 +2049,10 @@ def pretrain_model(
                     score_se = ((score_pred - score_target) ** 2).sum(dim=0).double().cpu()
                     val_score_se_sum += score_se
 
+                    winner_hits, uniform_ce_sum = _value_head_batch_stats(outputs, value)
+                    val_winner_hits += winner_hits
+                    val_uniform_ce_sum += uniform_ce_sum
+
                     val_value_count += pi.size(0)
 
             val_loss = float(np.mean(val_losses)) if val_losses else float("inf")
@@ -2010,15 +2065,21 @@ def pretrain_model(
             val_top5_acc = val_top5_correct / max(val_total_samples, 1)
             val_value_mse = (val_value_se_sum / max(val_value_count, 1)).tolist()
             val_score_mse = (val_score_se_sum / max(val_value_count, 1)).tolist()
+            val_winner_acc = val_winner_hits / max(val_value_count, 1)
+            val_value_baseline = val_uniform_ce_sum / max(val_value_count, 1)
 
             summary_writer.add_scalar("val/loss_total", val_loss, epoch)
             summary_writer.add_scalar("val/loss_policy", val_policy, epoch)
             summary_writer.add_scalar("val/loss_value", val_value, epoch)
             summary_writer.add_scalar("val/loss_score", val_score, epoch)
+            val_price = float(np.mean(val_price_losses)) if val_price_losses else 0.0
+            summary_writer.add_scalar("val/loss_price", val_price, epoch)
             summary_writer.add_scalar("val/loss_aux", val_aux, epoch)
             summary_writer.add_scalar("val/entropy", val_entropy, epoch)
             summary_writer.add_scalar("val/top1_acc", val_top1_acc, epoch)
             summary_writer.add_scalar("val/top5_acc", val_top5_acc, epoch)
+            summary_writer.add_scalar("val/value_winner_acc", val_winner_acc, epoch)
+            summary_writer.add_scalar("val/value_loss_uniform_baseline", val_value_baseline, epoch)
             for p_idx, p_mse in enumerate(val_value_mse):
                 summary_writer.add_scalar(f"val/value_mse_p{p_idx}", p_mse, epoch)
             for p_idx, p_mse in enumerate(val_score_mse):
@@ -2029,12 +2090,21 @@ def pretrain_model(
             epoch_val_value_losses.append(val_value)
             epoch_val_top1_accuracy.append(val_top1_acc)
             epoch_val_top5_accuracy.append(val_top5_acc)
+            epoch_val_winner_accuracy.append(val_winner_acc)
+            epoch_val_value_baseline.append(val_value_baseline)
 
             LOGGER.info(
                 f"Pretrain epoch {epoch+1}/{config.num_epochs}: "
                 f"train_loss={avg_train_loss:.4f} val_loss={val_loss:.4f} "
                 f"val_top1={val_top1_acc:.3f} val_top5={val_top5_acc:.3f} "
                 f"lr={optimizer.param_groups[0]['lr']:.2e}"
+            )
+            LOGGER.info(
+                f"Pretrain epoch {epoch+1} value head: "
+                f"train_value={avg_train_value:.4f} (uniform {train_value_baseline:.4f}, "
+                f"winner_acc {train_winner_acc:.3f}) | "
+                f"val_value={val_value:.4f} (uniform {val_value_baseline:.4f}, "
+                f"winner_acc {val_winner_acc:.3f}) | price NLL train {avg_train_price:.3f} val {val_price:.3f}"
             )
         else:
             LOGGER.info(
@@ -2107,6 +2177,9 @@ def pretrain_model(
                     "epoch_val_value_losses": list(epoch_val_value_losses),
                     "epoch_val_top1_accuracy": list(epoch_val_top1_accuracy),
                     "epoch_val_top5_accuracy": list(epoch_val_top5_accuracy),
+                    "epoch_winner_accuracy": list(epoch_winner_accuracy),
+                    "epoch_val_winner_accuracy": list(epoch_val_winner_accuracy),
+                    "epoch_val_value_baseline": list(epoch_val_value_baseline),
                 },
                 f,
                 indent=2,
