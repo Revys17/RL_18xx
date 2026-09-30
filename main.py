@@ -37,13 +37,18 @@ def cmd_train(args):
 
 
 def cmd_pretrain(args):
+    import logging
+
+    # Surface the per-epoch summaries (train/val loss, accuracy, value-head
+    # diagnostics, checkpoint saves) on stderr alongside the progress bars.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     from rl18xx.agent.alphazero.pretraining import do_pretraining
     from rl18xx.agent.alphazero.config import TrainingConfig
     from rl18xx.agent.alphazero.loop import ensure_seed_model
 
     # Seed the model directory so do_pretraining's get_latest_model() call
     # works on a fresh checkout (it would otherwise FileNotFoundError).
-    ensure_seed_model(model_type=args.model_type)
+    ensure_seed_model(model_type=args.model_type, force=args.fresh)
 
     config = TrainingConfig(
         num_epochs=args.epochs,
@@ -188,6 +193,10 @@ def build_parser():
     p.add_argument("--epochs", type=int, default=10, help="Training epochs (default: 10)")
     p.add_argument("--batch-size", type=int, default=256, help="Batch size (default: 256)")
     p.add_argument("--lr", type=float, default=0.001, help="Learning rate (default: 0.001)")
+    p.add_argument(
+        "--fresh", action="store_true",
+        help="Start from a newly initialized model instead of the latest checkpoint",
+    )
     p.add_argument(
         "--value-lr-multiplier", type=float, default=3.0,
         help="Value-head LR multiplier relative to --lr (default: 3.0; try 1.0 if the value head overfits)"

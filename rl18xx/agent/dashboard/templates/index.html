@@ -320,6 +320,10 @@
                     <div class="panel"><h2>Top-K Accuracy (train vs validation)</h2><div class="chart-container"><canvas id="c-pretrain-acc"></canvas></div></div>
                 </div>
                 <div class="charts-row">
+                    <div class="panel"><h2>Value Loss vs Equal-Odds Baseline</h2><div class="chart-container"><canvas id="c-pretrain-value"></canvas></div></div>
+                    <div class="panel"><h2>Value Head Winner Accuracy</h2><div class="chart-container"><canvas id="c-pretrain-winner"></canvas></div></div>
+                </div>
+                <div class="charts-row">
                     <div class="panel"><h2>Loss Components (validation)</h2><div class="chart-container"><canvas id="c-pretrain-val-components"></canvas></div></div>
                     <div class="panel"><h2>Learning Rate</h2><div class="chart-container"><canvas id="c-pretrain-lr"></canvas></div></div>
                 </div>
@@ -403,6 +407,8 @@
         C.schedule=new Chart(document.getElementById('c-schedule'),{type:'line',data:{labels:[],datasets:[ds('Max Game Length','#6c8cff'),ds('Readouts','#fb923c',{yAxisID:'y2'})]},options:{...BASE,scales:{x:X_AXIS,y:{grid:GRID,title:{display:true,text:'Moves',color:'#5c6078'}},y2:{position:'right',grid:{drawOnChartArea:false},title:{display:true,text:'Readouts',color:'#5c6078'}}}}});
         C.pretrainLoss=new Chart(document.getElementById('c-pretrain-loss'),{type:'line',data:{labels:[],datasets:[ds('Train','#6c8cff'),dsDash('Validation','#f87171')]},options:opts('Loss',{min:0})});
         C.pretrainAcc=new Chart(document.getElementById('c-pretrain-acc'),{type:'line',data:{labels:[],datasets:[ds('Train Top-1','#4ade80'),ds('Train Top-5','#22d3ee'),dsDash('Val Top-1','#fb923c'),dsDash('Val Top-5','#a78bfa')]},options:opts('Accuracy',{min:0,max:1})});
+        C.pretrainValue=new Chart(document.getElementById('c-pretrain-value'),{type:'line',data:{labels:[],datasets:[ds('Train Value','#6c8cff'),dsDash('Val Value','#f87171'),dsDash('Equal-Odds Baseline','#8b8fa3',{pointRadius:0})]},options:opts('Loss',{min:0})});
+        C.pretrainWinner=new Chart(document.getElementById('c-pretrain-winner'),{type:'line',data:{labels:[],datasets:[ds('Train','#4ade80'),dsDash('Validation','#fb923c')]},options:opts('Accuracy',{min:0,max:1})});
         C.pretrainValComponents=new Chart(document.getElementById('c-pretrain-val-components'),{type:'line',data:{labels:[],datasets:[ds('Val Total','#6c8cff'),ds('Val Policy','#4ade80'),ds('Val Value','#fb923c')]},options:opts('Loss',{min:0})});
         C.pretrainLR=new Chart(document.getElementById('c-pretrain-lr'),{type:'line',data:{labels:[],datasets:[ds('Learning Rate','#6c8cff')]},options:opts('LR')});
     }
@@ -454,6 +460,15 @@
         C.pretrainAcc.data.datasets[2].data=summary.epoch_val_top1_accuracy||[];
         C.pretrainAcc.data.datasets[3].data=summary.epoch_val_top5_accuracy||[];
         C.pretrainAcc.update('none');
+        C.pretrainValue.data.labels=epochs;
+        C.pretrainValue.data.datasets[0].data=summary.epoch_value_losses||[];
+        C.pretrainValue.data.datasets[1].data=summary.epoch_val_value_losses||[];
+        C.pretrainValue.data.datasets[2].data=summary.epoch_val_value_baseline||[];
+        C.pretrainValue.update('none');
+        C.pretrainWinner.data.labels=epochs;
+        C.pretrainWinner.data.datasets[0].data=summary.epoch_winner_accuracy||[];
+        C.pretrainWinner.data.datasets[1].data=summary.epoch_val_winner_accuracy||[];
+        C.pretrainWinner.update('none');
         C.pretrainValComponents.data.labels=epochs;
         C.pretrainValComponents.data.datasets[0].data=summary.epoch_val_losses||[];
         C.pretrainValComponents.data.datasets[1].data=summary.epoch_val_policy_losses||[];

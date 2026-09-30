@@ -604,8 +604,12 @@ def evaluate_candidate(
     return win_rate
 
 
-def ensure_seed_model(model_type: str = "transformer"):
-    """Create an initial model checkpoint if none exists."""
+def ensure_seed_model(model_type: str = "transformer", force: bool = False):
+    """Create an initial model checkpoint if none exists.
+
+    ``force=True`` always creates a new seed session, which becomes the latest
+    session and therefore the model the next pretrain / training run picks up.
+    """
     p = Path(MODEL_CHECKPOINT_DIR)
     # Check for any session directories (new format: <arch>/<session>/)
     has_checkpoints = False
@@ -615,10 +619,10 @@ def ensure_seed_model(model_type: str = "transformer"):
                 has_checkpoints = True
                 break
 
-    if has_checkpoints:
+    if has_checkpoints and not force:
         return
 
-    LOGGER.info(f"No model checkpoints found. Creating fresh {model_type} model...")
+    LOGGER.info(f"Creating fresh {model_type} model (existing checkpoints: {has_checkpoints})...")
     if model_type == "transformer":
         from rl18xx.agent.alphazero.config import ModelTransformerConfig
         from rl18xx.agent.alphazero.model_transformer import AlphaZeroTransformerModel
