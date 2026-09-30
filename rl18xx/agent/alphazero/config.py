@@ -272,6 +272,10 @@ class TrainingConfig:
     use_fp16_training: bool = True  # use mixed-precision (FP16) training on CUDA
     pretrain_label_smoothing: float = 0.03  # epsilon for smoothing policy targets during pretraining
     pretrain_validation_percentage: float = 0.05  # per-game probability of routing a game to validation
+    # Stop pretraining after this many consecutive epochs without a val-loss
+    # improvement (0 = disabled). Guards against value-head memorization
+    # blowups burning the rest of a long epoch budget.
+    pretrain_early_stop_patience: int = 4
 
     def __post_init__(self):
         if self.train_dir is not None:
@@ -298,6 +302,7 @@ class TrainingConfig:
             "use_fp16_training": self.use_fp16_training,
             "pretrain_label_smoothing": self.pretrain_label_smoothing,
             "pretrain_validation_percentage": self.pretrain_validation_percentage,
+            "pretrain_early_stop_patience": self.pretrain_early_stop_patience,
         }
 
     @classmethod

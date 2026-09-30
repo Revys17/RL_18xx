@@ -1,7 +1,7 @@
 {
     "num_loop_iterations": 1,
     "num_games_per_iteration": 1,
-    "num_threads": 1,
+    "num_threads": 2,
     "training_config": {
         "train_dir": null,
         "val_dir": null,
@@ -21,7 +21,17 @@
         "pretrain_label_smoothing": 0.03,
         "pretrain_validation_percentage": 0.05
     },
-    "num_readouts": 65,
-    "target_experiences": 30,
-    "player_count_distribution": null
+    "num_readouts": 8,
+    "target_experiences": 20,
+    "player_count_distribution": null,
+    "enable_resign": true,
+    "resign_window": 8,
+    "resign_high_threshold": 0.65,
+    "resign_gap_threshold": 0.3,
+    "noresign_holdout_rate": 0.1,
+    "resign_high_threshold_min": 0.45,
+    "use_inference_server": false,
+    "inference_batch_size": 64,
+    "inference_batch_timeout_ms": 2.0,
+    "selfplay_tensorboard": true
 }

@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 from dataclasses import dataclass, asdict
 from rl18xx.agent.alphazero.checkpointer import (
+    _find_latest_session,
     get_latest_model,
     save_model,
     save_optimizer_state,
@@ -19,6 +20,7 @@ from rl18xx.agent.alphazero.metrics import Metrics
 from rl18xx.agent.alphazero.self_play import MCTSPlayer, SelfPlay, SELF_PLAY_GAMES_STATUS_PATH
 from rl18xx.agent.alphazero.train import train
 from rl18xx.shared.atomic_io import atomic_write_json
+from multiprocessing import resource_tracker
 from pathlib import Path
 from typing import Optional
 import signal
@@ -121,6 +123,11 @@ class LoopConfig:
     use_inference_server: bool = False
     inference_batch_size: int = 64
     inference_batch_timeout_ms: float = 2.0
+    # Per-game self-play TensorBoard logging (per-move scalars + MCTS
+    # histograms under runs/.../game_L<loop>_G<idx>). Off by default because
+    # the event files grow quickly over thousands of games. Hot-reloadable:
+    # flip to true in loop_config.json to inspect a run in flight.
+    selfplay_tensorboard: bool = False
 
 
 @dataclass
@@ -188,6 +195,7 @@ def load_loop_config(
                 "resign_gap_threshold",
                 "noresign_holdout_rate",
                 "resign_high_threshold_min",
+                "selfplay_tensorboard",
             ):
                 if key in file_config and file_config[key] is not None:
                     resign_overrides[key] = file_config[key]
@@ -343,11 +351,16 @@ def run_self_play(
                 if key in file_cfg and file_cfg[key] is not None:
                     server_kwargs[key] = file_cfg[key]
 
+    # Per-game TensorBoard logging is opt-in via ``selfplay_tensorboard`` in
+    # loop_config.json — event files get large over long runs.
+    selfplay_metrics = None
+    if file_cfg and file_cfg.get("selfplay_tensorboard"):
+        selfplay_metrics = Metrics(os.path.join(tb_log_dir, f"game_L{loop}_G{game_idx_in_iteration}"))
+
     try:
-        # Tensorboard logging is disabled for now because it's using up too much space on disk
         self_play_config = SelfPlayConfig(
             network=model,
-            metrics=None,  # Metrics(os.path.join(tb_log_dir, f"game_L{loop}_G{game_idx_in_iteration}")),
+            metrics=selfplay_metrics,
             global_step=loop,
             game_idx_in_iteration=game_idx_in_iteration,
             game_id=f"L{loop}_G{game_idx_in_iteration}",
@@ -368,6 +381,8 @@ def run_self_play(
         logging.error(f"Error during self-play game L{loop}/G{game_idx_in_iteration}: {e_proc}", exc_info=True)
         raise  # Re-raise to be caught by the main process's future.result()
     finally:
+        if selfplay_metrics is not None:
+            selfplay_metrics.close()
         # Clean up handlers for this process to ensure files are flushed and closed.
         for handler in process_root_logger.handlers[:]:
             handler.close()
@@ -375,9 +390,18 @@ def run_self_play(
 
 
 def cleanup_and_exit(signum=None, frame=None):
-    LOGGER.info("--- Received interrupt signal, cleaning up ---")
+    if signum is not None:
+        LOGGER.info(f"--- Received signal {signum}, cleaning up ---")
+    else:
+        LOGGER.info("--- Exiting, cleaning up any stray child processes ---")
+
+    # multiprocessing's resource_tracker must outlive this process so it can
+    # reap semaphores at interpreter shutdown; killing it makes multiprocessing
+    # relaunch a fresh tracker that KeyErrors on the dead one's registrations.
+    tracker_pid = getattr(resource_tracker._resource_tracker, "_pid", None)
+
     parent = psutil.Process(os.getpid())
-    children = parent.children(recursive=True)
+    children = [c for c in parent.children(recursive=True) if c.pid != tracker_pid]
 
     for child in children:
         try:
@@ -1437,7 +1461,11 @@ def main(
 
     ensure_seed_model(model_type)
 
-    tb_log_dir = os.path.join(TENSORBOARD_LOG_DIR_BASE, f"experiment_{timestamp}")
+    # Key TensorBoard output to the model lineage: runs land under
+    # <session>/experiment_<timestamp> so curves from restarts of the same
+    # model group together and different lineages never mix.
+    session_name = _find_latest_session(MODEL_CHECKPOINT_DIR).name
+    tb_log_dir = os.path.join(TENSORBOARD_LOG_DIR_BASE, session_name, f"experiment_{timestamp}")
     metrics = Metrics(tb_log_dir)
     self_play_logs_path = Path("logs/self_play")
     self_play_logs_path.mkdir(parents=True, exist_ok=True)
@@ -1485,16 +1513,10 @@ def main(
     loop = 0
     try:
         while True:
-            LOGGER.info(f"--- Starting loop {loop+1}/{num_loop_iterations} ---")
-
             # Compute scheduled values based on persistent checkpoint count
             checkpoint_count = _get_checkpoint_count()
             scheduled_game_length = get_scheduled_value(checkpoint_count, game_length_schedule)
             scheduled_readouts = get_scheduled_value(checkpoint_count, readout_schedule)
-            LOGGER.info(
-                f"Loop {loop+1}: Schedule (checkpoint {checkpoint_count}): "
-                f"max_game_length={scheduled_game_length}, num_readouts={scheduled_readouts}"
-            )
 
             num_games_estimate = max(1, target_experiences // scheduled_game_length)
             loop_config = load_loop_config(
@@ -1508,6 +1530,12 @@ def main(
 
             if loop_config.num_loop_iterations > 0 and loop >= loop_config.num_loop_iterations:
                 break
+
+            LOGGER.info(f"--- Starting loop {loop+1}/{num_loop_iterations} ---")
+            LOGGER.info(
+                f"Loop {loop+1}: Schedule (checkpoint {checkpoint_count}): "
+                f"max_game_length={scheduled_game_length}, num_readouts={scheduled_readouts}"
+            )
 
             LOGGER.info(
                 f"Loop {loop+1}: Targeting {loop_config.target_experiences} experiences "

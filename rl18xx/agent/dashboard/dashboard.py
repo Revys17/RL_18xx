@@ -153,7 +153,8 @@ def get_games_in_progress(loop=None):
 def list_pretrain_runs():
     """Return per-run pretrain summaries (newest first).
 
-    Each run directory is ``runs/alphazero_runs/pretrain_{ts}/`` and (if
+    Each run directory is ``runs/alphazero_runs/<session>/pretrain_{ts}/``
+    (legacy runs sit directly under the root without a session dir) and (if
     pretraining wrote a sidecar) contains ``pretrain_summary.json`` with
     per-epoch loss/accuracy arrays. Returns a list of summary dicts with
     an extra ``run_name`` field. Runs without a sidecar are skipped.
@@ -161,7 +162,8 @@ def list_pretrain_runs():
     if not PRETRAIN_RUNS_ROOT.exists():
         return []
     runs = []
-    for run_dir in sorted(PRETRAIN_RUNS_ROOT.glob("pretrain_*")):
+    run_dirs = list(PRETRAIN_RUNS_ROOT.glob("pretrain_*")) + list(PRETRAIN_RUNS_ROOT.glob("*/pretrain_*"))
+    for run_dir in run_dirs:
         if not run_dir.is_dir():
             continue
         sidecar = run_dir / "pretrain_summary.json"
@@ -172,10 +174,10 @@ def list_pretrain_runs():
                 summary = json.load(f)
         except (json.JSONDecodeError, OSError):
             continue
-        summary["run_name"] = run_dir.name
+        summary["run_name"] = str(run_dir.relative_to(PRETRAIN_RUNS_ROOT))
         runs.append(summary)
-    # Newest first (directory names sort lexicographically by timestamp).
-    runs.reverse()
+    # Newest first, by the pretrain_{ts} leaf name regardless of nesting.
+    runs.sort(key=lambda r: r["run_name"].rsplit("/", 1)[-1], reverse=True)
     return runs
 
 

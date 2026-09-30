@@ -8,6 +8,7 @@ from torch_geometric.data import Data
 from torch.utils.data import Dataset
 import logging
 import io
+import os
 from pathlib import Path
 from typing import Any, Union, List, Tuple
 import lz4.frame
@@ -25,11 +26,35 @@ class SelfPlayDataset(Dataset_1830):
         if isinstance(lmdb_path, Path):
             lmdb_path = lmdb_path.as_posix()
 
-        self.env = lmdb.open(lmdb_path, readonly=True, lock=False, readahead=False, meminit=False)
+        self.lmdb_path = lmdb_path
+        self._env = None
+        self._env_pid = None
         self.start_index = start_index
         with self.env.begin() as txn:
             total_entries = txn.stat()["entries"]
         self.length = total_entries - self.start_index
+
+    @property
+    def env(self):
+        """Per-process LMDB handle.
+
+        LMDB environments are neither fork-safe nor picklable, so each
+        process (the parent or a DataLoader worker) lazily opens its own
+        handle on first use. This is what allows ``num_workers > 0``.
+        """
+        pid = os.getpid()
+        if self._env is None or self._env_pid != pid:
+            self._env = lmdb.open(
+                self.lmdb_path, readonly=True, lock=False, readahead=False, meminit=False
+            )
+            self._env_pid = pid
+        return self._env
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_env"] = None
+        state["_env_pid"] = None
+        return state
 
     def _maybe_pad_pi(self, pi):
         """Zero-pad legacy 26535-wide pi vectors to the current action space."""

@@ -48,6 +48,9 @@ def cmd_pretrain(args):
     config = TrainingConfig(
         num_epochs=args.epochs,
         batch_size=args.batch_size,
+        lr=args.lr,
+        value_lr_multiplier=args.value_lr_multiplier,
+        value_loss_weight=args.value_loss_weight,
     )
     do_pretraining(
         model_dir=args.model_dir,
@@ -184,6 +187,15 @@ def build_parser():
     p.add_argument("--model-dir", type=str, default="model_checkpoints", help="Model checkpoint directory")
     p.add_argument("--epochs", type=int, default=10, help="Training epochs (default: 10)")
     p.add_argument("--batch-size", type=int, default=256, help="Batch size (default: 256)")
+    p.add_argument("--lr", type=float, default=0.001, help="Learning rate (default: 0.001)")
+    p.add_argument(
+        "--value-lr-multiplier", type=float, default=3.0,
+        help="Value-head LR multiplier relative to --lr (default: 3.0; try 1.0 if the value head overfits)"
+    )
+    p.add_argument(
+        "--value-loss-weight", type=float, default=1.0,
+        help="Weight of the value loss in the total (default: 1.0)"
+    )
     p.add_argument(
         "--model-type", type=str, default="transformer", choices=["gnn", "transformer"],
         help="Model architecture if no seed checkpoint exists (default: transformer)",

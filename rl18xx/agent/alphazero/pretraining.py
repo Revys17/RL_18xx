@@ -1,6 +1,7 @@
 from pathlib import Path
 import copy
 import json
+import os
 import random
 from datetime import datetime
 from typing import Any, Optional, Tuple, Union
@@ -81,21 +82,54 @@ class PlayerCountBatchSampler:
           (e.g. ``random.seed(...)``) for deterministic shuffling.
     """
 
-    def __init__(self, dataset, batch_size: int, num_players_fn):
+    def __init__(self, dataset, batch_size: int, num_players_fn, cache_path=None):
         self.dataset = dataset
         self.batch_size = int(batch_size)
         if self.batch_size <= 0:
             raise ValueError(f"batch_size must be positive, got {batch_size}")
         self.num_players_fn = num_players_fn
-        # Build buckets: {num_players: [example_idx, ...]} by walking the
-        # dataset once at construction. We extract the player count via
-        # ``num_players_fn`` so the sampler stays decoupled from the precise
-        # example layout (which differs between SelfPlayDataset and
-        # HumanPlayDataset in subtle ways).
-        self.buckets: dict = {}
-        for idx in range(len(dataset)):
-            n = int(num_players_fn(dataset[idx]))
-            self.buckets.setdefault(n, []).append(idx)
+        # Build buckets: {num_players: [example_idx, ...]}. The scan decodes
+        # every example once, which takes minutes on a large LMDB, so the
+        # result is cached next to the data (keyed by example count) and
+        # reused on subsequent launches.
+        self.buckets = self._load_bucket_cache(cache_path)
+        if self.buckets is None:
+            self.buckets = {}
+            for idx in tqdm(range(len(dataset)), desc="Bucketing examples by player count", unit="ex"):
+                n = int(num_players_fn(dataset[idx]))
+                self.buckets.setdefault(n, []).append(idx)
+            self._save_bucket_cache(cache_path)
+        LOGGER.info(
+            "Player-count buckets: %s",
+            {n: len(b) for n, b in sorted(self.buckets.items())},
+        )
+
+    def _load_bucket_cache(self, cache_path):
+        if cache_path is None or not Path(cache_path).exists():
+            return None
+        try:
+            with open(cache_path, "r") as f:
+                cached = json.load(f)
+            if cached.get("num_examples") != len(self.dataset):
+                LOGGER.info(f"Bucket cache {cache_path} is for a different dataset size; rescanning.")
+                return None
+            LOGGER.info(f"Loaded player-count buckets from cache {cache_path}")
+            return {int(n): idxs for n, idxs in cached["buckets"].items()}
+        except Exception as e:
+            LOGGER.warning(f"Could not read bucket cache {cache_path} ({e}); rescanning.")
+            return None
+
+    def _save_bucket_cache(self, cache_path):
+        if cache_path is None:
+            return
+        try:
+            atomic_write_json(
+                Path(cache_path),
+                {"num_examples": len(self.dataset), "buckets": self.buckets},
+            )
+            LOGGER.info(f"Saved player-count bucket cache to {cache_path}")
+        except Exception as e:
+            LOGGER.warning(f"Could not write bucket cache {cache_path}: {e}")
 
     def _batched(self, indices):
         # Shuffle in place each pass so successive epochs see different
@@ -151,6 +185,21 @@ def _infer_num_players_from_state_size(size: int) -> int:
         f"defaulting to 4 for bucket sampling."
     )
     return 4
+
+
+def _bucket_cache_path(dataset):
+    """Cache location for a dataset's player-count buckets: alongside the LMDB.
+
+    Returns None for datasets without a backing LMDB directory (e.g. Subset
+    views from ``_split_dataset``), which disables caching for them.
+    """
+    env = getattr(dataset, "env", None)
+    if env is None:
+        return None
+    try:
+        return Path(env.path()) / "player_buckets.json"
+    except Exception:
+        return None
 
 
 def _make_num_players_fn(dataset):
@@ -1668,25 +1717,34 @@ def pretrain_model(
     # signal even though the variable-N model (Task #38) supports them.
     num_players_fn = _make_num_players_fn(train_dataset)
     train_sampler = PlayerCountBatchSampler(
-        train_dataset, batch_size=config.batch_size, num_players_fn=num_players_fn
+        train_dataset, batch_size=config.batch_size, num_players_fn=num_players_fn,
+        cache_path=_bucket_cache_path(train_dataset),
     )
+    # LMDB decode is the epoch bottleneck when done inline (the GPU idles
+    # while the main thread reads + LZ4-decompresses each batch). The
+    # dataset opens a per-process LMDB handle lazily, so worker processes
+    # can prefetch batches concurrently with GPU compute.
+    loader_workers = min(8, os.cpu_count() or 1)
+    loader_kwargs: dict = {"num_workers": loader_workers, "pin_memory": torch.cuda.is_available()}
+    if loader_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = 4
     train_loader = DataLoader(
         train_dataset,
         batch_sampler=train_sampler,
-        num_workers=0,
-        pin_memory=False,
+        **loader_kwargs,
     )
     val_loader = None
     if val_dataset is not None and len(val_dataset) > 0:
         val_num_players_fn = _make_num_players_fn(val_dataset)
         val_sampler = PlayerCountBatchSampler(
-            val_dataset, batch_size=config.batch_size, num_players_fn=val_num_players_fn
+            val_dataset, batch_size=config.batch_size, num_players_fn=val_num_players_fn,
+            cache_path=_bucket_cache_path(val_dataset),
         )
         val_loader = DataLoader(
             val_dataset,
             batch_sampler=val_sampler,
-            num_workers=0,
-            pin_memory=False,
+            **loader_kwargs,
         )
     else:
         LOGGER.warning("Validation dataset is empty or None; pretraining will skip val pass.")
@@ -1699,15 +1757,57 @@ def pretrain_model(
     # That makes pretrain curves visible in the same TB instance the
     # self-play loop populates.
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tb_dir = Path("runs") / "alphazero_runs" / f"pretrain_{timestamp}"
+    tb_dir = Path("runs") / "alphazero_runs" / session_name_for(model) / f"pretrain_{timestamp}"
     tb_dir.mkdir(parents=True, exist_ok=True)
     summary_writer = SummaryWriter(str(tb_dir))
     LOGGER.info(f"Pretraining TensorBoard logs: {tb_dir}")
+
+    # Write the sidecar immediately so the dashboard shows the run from
+    # launch rather than only after the first epoch completes.
+    try:
+        with open(tb_dir / "pretrain_summary.json", "w") as _f:
+            json.dump(
+                {
+                    "kind": "pretrain",
+                    "timestamp": timestamp,
+                    "model_session": session_name_for(model),
+                    "in_progress": True,
+                    "epochs_planned": config.num_epochs,
+                    "epochs_trained": 0,
+                    "training_examples": len(train_dataset),
+                    "epoch_losses": [],
+                    "epoch_policy_losses": [],
+                    "epoch_value_losses": [],
+                    "epoch_top1_accuracy": [],
+                    "epoch_top5_accuracy": [],
+                    "epoch_lr": [],
+                    "epoch_val_losses": [],
+                    "epoch_val_policy_losses": [],
+                    "epoch_val_value_losses": [],
+                    "epoch_val_top1_accuracy": [],
+                    "epoch_val_top5_accuracy": [],
+                    "best_val_loss": None,
+                    "best_checkpoint_num": None,
+                },
+                _f,
+                indent=2,
+            )
+    except Exception as _e:
+        LOGGER.debug(f"Could not write initial pretrain_summary.json: {_e}")
 
     metrics.training_examples = len(train_dataset)
     best_val_loss = float("inf")
     best_checkpoint_num: Optional[int] = None
     global_step = 0
+    epochs_since_improve = 0
+    epochs_completed = config.num_epochs
+    # Per-epoch validation curves for the sidecar, so the dashboard can show
+    # train/val divergence without parsing TensorBoard event files.
+    epoch_val_losses: list = []
+    epoch_val_policy_losses: list = []
+    epoch_val_value_losses: list = []
+    epoch_val_top1_accuracy: list = []
+    epoch_val_top5_accuracy: list = []
 
     for epoch in range(config.num_epochs):
         # ---------------------------- TRAIN PASS ----------------------------
@@ -1809,6 +1909,7 @@ def pretrain_model(
                     {
                         "kind": "pretrain",
                         "timestamp": timestamp,
+                        "model_session": session_name_for(model),
                         "in_progress": True,
                         "epochs_planned": config.num_epochs,
                         "epochs_trained": epoch + 1,
@@ -1819,6 +1920,13 @@ def pretrain_model(
                         "epoch_top1_accuracy": list(metrics.epoch_top1_accuracy),
                         "epoch_top5_accuracy": list(metrics.epoch_top5_accuracy),
                         "epoch_lr": list(metrics.epoch_lr),
+                        "epoch_val_losses": list(epoch_val_losses),
+                        "epoch_val_policy_losses": list(epoch_val_policy_losses),
+                        "epoch_val_value_losses": list(epoch_val_value_losses),
+                        "epoch_val_top1_accuracy": list(epoch_val_top1_accuracy),
+                        "epoch_val_top5_accuracy": list(epoch_val_top5_accuracy),
+                        "best_val_loss": best_val_loss if best_val_loss != float("inf") else None,
+                        "best_checkpoint_num": best_checkpoint_num,
                     },
                     _f,
                     indent=2,
@@ -1916,6 +2024,12 @@ def pretrain_model(
             for p_idx, p_mse in enumerate(val_score_mse):
                 summary_writer.add_scalar(f"val/score_mse_p{p_idx}", p_mse, epoch)
 
+            epoch_val_losses.append(val_loss)
+            epoch_val_policy_losses.append(val_policy)
+            epoch_val_value_losses.append(val_value)
+            epoch_val_top1_accuracy.append(val_top1_acc)
+            epoch_val_top5_accuracy.append(val_top5_acc)
+
             LOGGER.info(
                 f"Pretrain epoch {epoch+1}/{config.num_epochs}: "
                 f"train_loss={avg_train_loss:.4f} val_loss={val_loss:.4f} "
@@ -1933,6 +2047,7 @@ def pretrain_model(
         improved = val_loss < best_val_loss if val_loader is not None else True
         if improved:
             best_val_loss = val_loss if val_loader is not None else best_val_loss
+            epochs_since_improve = 0
             try:
                 best_checkpoint_num = save_model(model, model_dir)
                 metrics.checkpoint_num = best_checkpoint_num
@@ -1942,8 +2057,19 @@ def pretrain_model(
                 )
             except Exception as e:
                 LOGGER.warning(f"Failed to save pretraining checkpoint: {e}")
+        else:
+            epochs_since_improve += 1
+            patience = getattr(config, "pretrain_early_stop_patience", 0)
+            if val_loader is not None and patience and epochs_since_improve >= patience:
+                LOGGER.warning(
+                    f"Early stopping after epoch {epoch + 1}: val loss has not improved for "
+                    f"{epochs_since_improve} consecutive epochs "
+                    f"(best {best_val_loss:.4f} @ checkpoint {best_checkpoint_num})."
+                )
+                epochs_completed = epoch + 1
+                break
 
-    metrics.epochs_trained = config.num_epochs
+    metrics.epochs_trained = epochs_completed
     if metrics.epoch_losses:
         metrics.avg_total_loss = float(np.mean(metrics.epoch_losses))
         metrics.avg_policy_loss = float(np.mean(metrics.epoch_policy_losses))
@@ -1959,6 +2085,7 @@ def pretrain_model(
                 {
                     "kind": "pretrain",
                     "timestamp": timestamp,
+                    "model_session": session_name_for(model),
                     "best_val_loss": best_val_loss if best_val_loss != float("inf") else None,
                     "best_checkpoint_num": best_checkpoint_num,
                     "epochs_trained": metrics.epochs_trained,
@@ -1975,6 +2102,11 @@ def pretrain_model(
                     "epoch_top1_accuracy": list(metrics.epoch_top1_accuracy),
                     "epoch_top5_accuracy": list(metrics.epoch_top5_accuracy),
                     "epoch_lr": list(metrics.epoch_lr),
+                    "epoch_val_losses": list(epoch_val_losses),
+                    "epoch_val_policy_losses": list(epoch_val_policy_losses),
+                    "epoch_val_value_losses": list(epoch_val_value_losses),
+                    "epoch_val_top1_accuracy": list(epoch_val_top1_accuracy),
+                    "epoch_val_top5_accuracy": list(epoch_val_top5_accuracy),
                 },
                 f,
                 indent=2,
@@ -1994,6 +2126,24 @@ def pretrain_model(
                 arch=model.architecture_name(),
                 session=session_name_for(model),
                 checkpoint_num=best_checkpoint_num,
+            )
+            # Record the promotion in the same lineage history the loop
+            # writes, so pretrain promotions show up in the dashboard's
+            # model lineage instead of silently jumping checkpoint numbers.
+            from rl18xx.agent.alphazero.loop import append_model_history
+
+            append_model_history(
+                {
+                    "loop": None,
+                    "timestamp": datetime.now().isoformat(),
+                    "checkpoint_num": best_checkpoint_num,
+                    "architecture": model.architecture_name(),
+                    "session": session_name_for(model),
+                    "promoted": True,
+                    "win_rate": None,
+                    "gate_games": 0,
+                    "reason": "pretrain_best_val",
+                }
             )
         except Exception as e:
             LOGGER.warning(f"Could not update current_best pointer: {e}")
@@ -2055,10 +2205,24 @@ def do_pretraining(model_dir: str, game_data_dir: str, config: TrainingConfig) -
             return None
         sample = ds[0]
         gs_dim = sample[0].shape[-1]
-        expected_dim = model.config.game_state_size
-        if gs_dim != expected_dim:
+        # The encoder emits a per-game layout sized by that game's player
+        # count; the transformer pads to its max-players layout at forward
+        # time (``_pad_state_to_max_players``). So stored dims are valid if
+        # they match *any* player-count layout the model supports, not just
+        # the padded max layout.
+        from rl18xx.agent.alphazero.encoder import Encoder_1830Graph
+
+        max_players = getattr(model.config, "max_players", None)
+        if max_players:
+            valid_dims = {
+                Encoder_1830Graph.compute_section_layout(n)[1] for n in range(2, max_players + 1)
+            }
+        else:
+            valid_dims = {model.config.game_state_size}
+        if gs_dim not in valid_dims:
             LOGGER.warning(
-                f"LMDB data has game_state_size={gs_dim} but model expects {expected_dim}. "
+                f"LMDB data has game_state_size={gs_dim}, which is not any player-count "
+                f"layout this model supports ({sorted(valid_dims)}). "
                 f"Skipping stale LMDB; will re-convert from raw JSON."
             )
             ds.env.close()
@@ -2087,8 +2251,9 @@ def do_pretraining(model_dir: str, game_data_dir: str, config: TrainingConfig) -
                 )
             return _run(train_dataset, val_dataset)
 
-    # ---- Case 2: known LMDB subdirectory layouts ----
-    for lmdb_subdir in ["lmdb_transformer", "lmdb"]:
+    # ---- Case 2: known LMDB layouts. "." covers passing an LMDB root
+    # directly (e.g. human_games/lmdb_v2 containing training/validation). ----
+    for lmdb_subdir in [".", "lmdb_transformer", "lmdb"]:
         lmdb_root = data_path / lmdb_subdir
         lmdb_training = lmdb_root / "training"
         if (lmdb_training / "data.mdb").exists():

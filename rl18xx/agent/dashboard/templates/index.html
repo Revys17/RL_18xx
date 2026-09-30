@@ -111,6 +111,17 @@
         ::-webkit-scrollbar { width: 6px; height: 6px; } ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; } ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
         .no-data-msg { color: var(--text-dim); font-size: 0.85rem; text-align: center; padding: 40px 0; }
+
+        .tab-bar { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+        .tab-btn { padding: 8px 18px; background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--text-muted); font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+        .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+        .tab-btn:hover { color: var(--text); }
+
+        .metric-section { margin-bottom: 16px; }
+        .metric-section-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; padding: 8px 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+        .metric-section-header h2 { font-size: 0.95rem; font-weight: 600; }
+        .metric-section-header .section-hint { font-size: 0.75rem; color: var(--text-dim); margin-left: 10px; font-weight: 400; }
+        .metric-section-body.collapsed { display: none; }
     </style>
 </head>
 <body>
@@ -133,6 +144,12 @@
 
         {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endif %}{% endwith %}
 
+        <div class="tab-bar">
+            <button class="tab-btn active" data-tab="selfplay" onclick="showTab('selfplay')">Self-Play Loop</button>
+            <button class="tab-btn" data-tab="pretrain" onclick="showTab('pretrain')">Pretraining <span id="pretrain-tab-hint" style="font-size:0.7rem;color:var(--orange);"></span></button>
+        </div>
+
+        <div id="tab-selfplay">
         <div class="health-cards" id="health-cards">
             <div class="health-card neutral" id="card-learning"><div class="health-card-label">Learning</div><div class="health-card-value">--</div><div class="health-card-delta delta-neutral">waiting for data</div></div>
             <div class="health-card neutral" id="card-total-loss"><div class="health-card-label">Total Loss</div><div class="health-card-value">--</div><div class="health-card-delta delta-neutral"></div></div>
@@ -146,69 +163,80 @@
             <div class="health-card neutral" id="card-iter-time"><div class="health-card-label">Iteration Time</div><div class="health-card-value">--</div><div class="health-card-delta delta-neutral"></div></div>
         </div>
 
-        <!-- Pretraining panel (hidden when no pretrain runs exist) -->
-        <div id="pretrain-section" style="display:none;">
-            <div class="charts-row" style="margin-bottom:6px;">
-                <div class="panel" style="padding:8px 14px;">
-                    <h2 style="margin:0 0 4px 0;">Pretraining
-                        <span id="pretrain-status" style="font-weight:normal;font-size:0.8em;margin-left:8px;color:#8b8fa3;">--</span>
-                    </h2>
-                    <div style="display:flex;gap:18px;font-size:0.85em;color:#8b8fa3;">
-                        <div><span style="color:#6c8cff;">Run:</span> <span id="pretrain-run">--</span></div>
-                        <div><span style="color:#6c8cff;">Epochs:</span> <span id="pretrain-epochs">--</span></div>
-                        <div><span style="color:#6c8cff;">Examples:</span> <span id="pretrain-examples">--</span></div>
-                        <div><span style="color:#6c8cff;">Top-1:</span> <span id="pretrain-top1">--</span></div>
-                        <div><span style="color:#6c8cff;">Top-5:</span> <span id="pretrain-top5">--</span></div>
-                        <div><span style="color:#6c8cff;">Best val:</span> <span id="pretrain-best-val">--</span></div>
-                    </div>
+        <!-- Category 1: the charts that answer "is the model getting better?" -->
+        <div class="metric-section">
+            <div class="metric-section-header" onclick="toggleSection(this)"><h2>Key Progress<span class="section-hint">is the model getting better?</span></h2><span class="config-toggle open">&#x25BC;</span></div>
+            <div class="metric-section-body">
+                <div class="charts-row">
+                    <div class="panel"><h2>Losses</h2><div class="chart-container"><canvas id="c-losses"></canvas></div></div>
+                    <div class="panel"><h2>Gating Win Rate</h2><div class="chart-container"><canvas id="c-gating"></canvas></div></div>
                 </div>
-            </div>
-            <div class="charts-row">
-                <div class="panel"><h2>Pretrain Loss (per epoch)</h2><div class="chart-container"><canvas id="c-pretrain-loss"></canvas></div></div>
-                <div class="panel"><h2>Pretrain Top-K Accuracy</h2><div class="chart-container"><canvas id="c-pretrain-acc"></canvas></div></div>
+                <div class="charts-row">
+                    <div class="panel"><h2>Policy Accuracy</h2><div class="chart-container"><canvas id="c-policy-acc"></canvas></div></div>
+                    <div class="panel"><h2>Value Quality</h2><div class="chart-container"><canvas id="c-value-quality"></canvas></div></div>
+                </div>
             </div>
         </div>
 
-        <h2 style="margin:18px 0 6px 0;border-bottom:1px solid #2a2e3a;padding-bottom:4px;">Self-Play / Training Loop</h2>
-        <!-- Row 1 --><div class="charts-row">
-            <div class="panel"><h2>Losses</h2><div class="chart-container"><canvas id="c-losses"></canvas></div></div>
-            <div class="panel"><h2>Entropy &amp; KL</h2><div class="chart-container"><canvas id="c-entropy"></canvas></div></div>
+        <!-- Category 2: training-health diagnostics — where issues show up first -->
+        <div class="metric-section">
+            <div class="metric-section-header" onclick="toggleSection(this)"><h2>Model Diagnostics<span class="section-hint">entropy, gradients, value/aux heads</span></h2><span class="config-toggle">&#x25BC;</span></div>
+            <div class="metric-section-body collapsed">
+                <div class="charts-row">
+                    <div class="panel"><h2>Entropy &amp; KL</h2><div class="chart-container"><canvas id="c-entropy"></canvas></div></div>
+                    <div class="panel"><h2>Gradient Norms</h2><div class="chart-container"><canvas id="c-grad-norms"></canvas></div></div>
+                </div>
+                <div class="charts-row">
+                    <div class="panel"><h2>Gradient Stability (CV)</h2><div class="chart-container"><canvas id="c-grad-cv"></canvas></div></div>
+                    <div class="panel"><h2>Value Error</h2><div class="chart-container"><canvas id="c-value-error"></canvas></div></div>
+                </div>
+                <div class="charts-row">
+                    <div class="panel"><h2>Value Distribution</h2><div class="chart-container"><canvas id="c-value-dist"></canvas></div></div>
+                    <div class="panel"><h2>Aux Head: Pred vs Target</h2><div class="chart-container"><canvas id="c-aux-pt"></canvas></div></div>
+                </div>
+                <div class="charts-row">
+                    <div class="panel"><h2>Aux Head: Correlation</h2><div class="chart-container"><canvas id="c-aux-corr"></canvas></div></div>
+                    <div class="panel"><h2>Learning Rate</h2><div class="chart-container"><canvas id="c-lr"></canvas></div></div>
+                </div>
+                <div class="charts-row">
+                    <div class="panel"><h2>Mean Legal Actions</h2><div class="chart-container"><canvas id="c-legal-actions"></canvas></div></div>
+                    <div class="panel"></div>
+                </div>
+            </div>
         </div>
-        <!-- Row 2 --><div class="charts-row">
-            <div class="panel"><h2>Policy Accuracy</h2><div class="chart-container"><canvas id="c-policy-acc"></canvas></div></div>
-            <div class="panel"><h2>Value Quality</h2><div class="chart-container"><canvas id="c-value-quality"></canvas></div></div>
+
+        <!-- Category 3: what self-play is producing -->
+        <div class="metric-section">
+            <div class="metric-section-header" onclick="toggleSection(this)"><h2>Games &amp; Data<span class="section-hint">game length, phase mix, data volume, schedule</span></h2><span class="config-toggle">&#x25BC;</span></div>
+            <div class="metric-section-body collapsed">
+                <div class="charts-row">
+                    <div class="panel"><h2>Game Length</h2><div class="chart-container"><canvas id="c-game-length"></canvas></div></div>
+                    <div class="panel"><h2>Phase Move Mix</h2><div class="chart-container"><canvas id="c-phase-mix"></canvas></div></div>
+                </div>
+                <div class="charts-row">
+                    <div class="panel"><h2>Games per Iteration</h2><div class="chart-container"><canvas id="c-games-count"></canvas></div></div>
+                    <div class="panel"><h2>Experiences per Iteration</h2><div class="chart-container"><canvas id="c-experiences"></canvas></div></div>
+                </div>
+                <div class="charts-row">
+                    <div class="panel"><h2>Cumulative Training Data</h2><div class="chart-container"><canvas id="c-cumulative"></canvas></div></div>
+                    <div class="panel"><h2>Curriculum Schedule</h2><div class="chart-container"><canvas id="c-schedule"></canvas></div></div>
+                </div>
+            </div>
         </div>
-        <!-- Row 3 --><div class="charts-row">
-            <div class="panel"><h2>Value Error</h2><div class="chart-container"><canvas id="c-value-error"></canvas></div></div>
-            <div class="panel"><h2>Value Distribution</h2><div class="chart-container"><canvas id="c-value-dist"></canvas></div></div>
-        </div>
-        <!-- Row 4 --><div class="charts-row">
-            <div class="panel"><h2>Gradient Norms</h2><div class="chart-container"><canvas id="c-grad-norms"></canvas></div></div>
-            <div class="panel"><h2>Gradient Stability (CV)</h2><div class="chart-container"><canvas id="c-grad-cv"></canvas></div></div>
-        </div>
-        <!-- Row 5: Performance Timing --><div class="charts-row">
-            <div class="panel"><h2>Iteration Time Breakdown</h2><div class="chart-container"><canvas id="c-iter-timing"></canvas></div></div>
-            <div class="panel"><h2>Self-Play Breakdown (avg/game)</h2><div class="chart-container"><canvas id="c-selfplay-timing"></canvas></div></div>
-        </div>
-        <!-- Row 6: Throughput --><div class="charts-row">
-            <div class="panel"><h2>Throughput</h2><div class="chart-container"><canvas id="c-throughput"></canvas></div></div>
-            <div class="panel"><h2>Moves per Second</h2><div class="chart-container"><canvas id="c-moves-per-sec"></canvas></div></div>
-        </div>
-        <!-- Row 7 --><div class="charts-row">
-            <div class="panel"><h2>Game Length</h2><div class="chart-container"><canvas id="c-game-length"></canvas></div></div>
-            <div class="panel"><h2>Games per Iteration</h2><div class="chart-container"><canvas id="c-games-count"></canvas></div></div>
-        </div>
-        <!-- Row 8 --><div class="charts-row">
-            <div class="panel"><h2>Experiences per Iteration</h2><div class="chart-container"><canvas id="c-experiences"></canvas></div></div>
-            <div class="panel"><h2>Cumulative Training Data</h2><div class="chart-container"><canvas id="c-cumulative"></canvas></div></div>
-        </div>
-        <!-- Row 7 --><div class="charts-row">
-            <div class="panel"><h2>Aux Head: Pred vs Target</h2><div class="chart-container"><canvas id="c-aux-pt"></canvas></div></div>
-            <div class="panel"><h2>Aux Head: Correlation</h2><div class="chart-container"><canvas id="c-aux-corr"></canvas></div></div>
-        </div>
-        <!-- Row 8 --><div class="charts-row">
-            <div class="panel"><h2>Learning Rate</h2><div class="chart-container"><canvas id="c-lr"></canvas></div></div>
-            <div class="panel"><h2>Mean Legal Actions</h2><div class="chart-container"><canvas id="c-legal-actions"></canvas></div></div>
+
+        <!-- Category 4: throughput and wall-clock -->
+        <div class="metric-section">
+            <div class="metric-section-header" onclick="toggleSection(this)"><h2>Performance<span class="section-hint">timing and throughput</span></h2><span class="config-toggle">&#x25BC;</span></div>
+            <div class="metric-section-body collapsed">
+                <div class="charts-row">
+                    <div class="panel"><h2>Iteration Time Breakdown</h2><div class="chart-container"><canvas id="c-iter-timing"></canvas></div></div>
+                    <div class="panel"><h2>Self-Play Breakdown (avg/game)</h2><div class="chart-container"><canvas id="c-selfplay-timing"></canvas></div></div>
+                </div>
+                <div class="charts-row">
+                    <div class="panel"><h2>Throughput</h2><div class="chart-container"><canvas id="c-throughput"></canvas></div></div>
+                    <div class="panel"><h2>Moves per Second</h2><div class="chart-container"><canvas id="c-moves-per-sec"></canvas></div></div>
+                </div>
+            </div>
         </div>
 
         <div class="main-grid">
@@ -265,6 +293,38 @@
                 </form>
             </div>
         </div>
+        </div><!-- /tab-selfplay -->
+
+        <div id="tab-pretrain" style="display:none;">
+            <div id="pretrain-nodata" class="no-data-msg">No pretraining runs found.</div>
+            <div id="pretrain-section" style="display:none;">
+                <div class="charts-row" style="margin-bottom:6px;">
+                    <div class="panel" style="padding:8px 14px;">
+                        <h2 style="margin:0 0 4px 0;">Pretraining
+                            <span id="pretrain-status" style="font-weight:normal;font-size:0.8em;margin-left:8px;color:#8b8fa3;">--</span>
+                        </h2>
+                        <div style="display:flex;gap:18px;font-size:0.85em;color:#8b8fa3;flex-wrap:wrap;">
+                            <div><span style="color:#6c8cff;">Run:</span> <span id="pretrain-run">--</span></div>
+                            <div><span style="color:#6c8cff;">Session:</span> <span id="pretrain-session">--</span></div>
+                            <div><span style="color:#6c8cff;">Epochs:</span> <span id="pretrain-epochs">--</span></div>
+                            <div><span style="color:#6c8cff;">Examples:</span> <span id="pretrain-examples">--</span></div>
+                            <div><span style="color:#6c8cff;">Top-1:</span> <span id="pretrain-top1">--</span></div>
+                            <div><span style="color:#6c8cff;">Top-5:</span> <span id="pretrain-top5">--</span></div>
+                            <div><span style="color:#6c8cff;">Best val:</span> <span id="pretrain-best-val">--</span></div>
+                            <div><span style="color:#6c8cff;">Best ckpt:</span> <span id="pretrain-best-ckpt">--</span></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="charts-row">
+                    <div class="panel"><h2>Loss (train vs validation)</h2><div class="chart-container"><canvas id="c-pretrain-loss"></canvas></div></div>
+                    <div class="panel"><h2>Top-K Accuracy (train vs validation)</h2><div class="chart-container"><canvas id="c-pretrain-acc"></canvas></div></div>
+                </div>
+                <div class="charts-row">
+                    <div class="panel"><h2>Loss Components (validation)</h2><div class="chart-container"><canvas id="c-pretrain-val-components"></canvas></div></div>
+                    <div class="panel"><h2>Learning Rate</h2><div class="chart-container"><canvas id="c-pretrain-lr"></canvas></div></div>
+                </div>
+            </div>
+        </div><!-- /tab-pretrain -->
     </div>
 
     <script>
@@ -298,7 +358,7 @@
     function dsRange(label,color){return ds(label,color,{borderWidth:1,pointRadius:0,borderDash:[3,3]});}
 
     function initCharts(){
-        C.losses=new Chart(document.getElementById('c-losses'),{type:'line',data:{labels:[],datasets:[ds('Total','#6c8cff'),ds('Policy','#4ade80'),ds('Value (KL)','#fb923c')]},options:opts('Loss')});
+        C.losses=new Chart(document.getElementById('c-losses'),{type:'line',data:{labels:[],datasets:[ds('Total','#6c8cff'),ds('Policy','#4ade80'),ds('Value (KL)','#fb923c')]},options:opts('Loss',{min:0})});
         C.entropy=new Chart(document.getElementById('c-entropy'),{type:'line',data:{labels:[],datasets:[ds('Entropy Bonus','#a78bfa'),ds('Net Entropy','#6c8cff'),ds('MCTS Target','#4ade80'),ds('KL Divergence','#f87171')]},options:opts('Entropy / KL')});
         C.policyAcc=new Chart(document.getElementById('c-policy-acc'),{type:'line',data:{labels:[],datasets:[ds('Top-1','#4ade80'),ds('Top-5','#22d3ee'),dsDash('Max Prob','#fb923c')]},options:opts('Probability',{min:0,max:1})});
         C.valueQuality=new Chart(document.getElementById('c-value-quality'),{type:'line',data:{labels:[],datasets:[ds('Correlation','#a78bfa'),ds('Explained Variance','#4ade80')]},options:opts('Quality',{min:-1,max:1})});
@@ -330,16 +390,46 @@
         C.auxCorr=new Chart(document.getElementById('c-aux-corr'),{type:'line',data:{labels:[],datasets:[ds('Correlation','#a78bfa')]},options:opts('Correlation',{min:-1,max:1})});
         C.lr=new Chart(document.getElementById('c-lr'),{type:'line',data:{labels:[],datasets:[ds('Learning Rate','#6c8cff')]},options:opts('LR')});
         C.legalActions=new Chart(document.getElementById('c-legal-actions'),{type:'line',data:{labels:[],datasets:[ds('Mean Legal Actions','#4ade80')]},options:opts('Actions')});
-        C.pretrainLoss=new Chart(document.getElementById('c-pretrain-loss'),{type:'line',data:{labels:[],datasets:[ds('Total','#6c8cff'),ds('Policy','#4ade80'),ds('Value','#fb923c')]},options:opts('Loss')});
-        C.pretrainAcc=new Chart(document.getElementById('c-pretrain-acc'),{type:'line',data:{labels:[],datasets:[ds('Top-1','#4ade80'),ds('Top-5','#22d3ee')]},options:opts('Accuracy',{min:0,max:1})});
+        C.gating=new Chart(document.getElementById('c-gating'),{type:'line',data:{labels:[],datasets:[ds('Gate Win Rate','#4ade80'),dsDash('Promote Threshold','#f87171',{pointRadius:0})]},options:opts('Win Rate',{min:0,max:1})});
+        const PHASE_KEYS=['Auction','WaterfallAuction','Stock','Operating','Other'];
+        C.phaseMix=new Chart(document.getElementById('c-phase-mix'),{type:'bar',data:{labels:[],datasets:[
+            {label:'Auction',data:[],backgroundColor:'rgba(167,139,250,0.7)',stack:'ph'},
+            {label:'WaterfallAuction',data:[],backgroundColor:'rgba(108,140,255,0.7)',stack:'ph'},
+            {label:'Stock',data:[],backgroundColor:'rgba(74,222,128,0.7)',stack:'ph'},
+            {label:'Operating',data:[],backgroundColor:'rgba(251,146,60,0.7)',stack:'ph'},
+            {label:'Other',data:[],backgroundColor:'rgba(92,96,120,0.7)',stack:'ph'}
+        ]},options:{...BASE,scales:{x:X_AXIS,y:{grid:GRID,stacked:true,title:{display:true,text:'Moves',color:'#5c6078'}}}}});
+        C.phaseMix._phaseKeys=PHASE_KEYS;
+        C.schedule=new Chart(document.getElementById('c-schedule'),{type:'line',data:{labels:[],datasets:[ds('Max Game Length','#6c8cff'),ds('Readouts','#fb923c',{yAxisID:'y2'})]},options:{...BASE,scales:{x:X_AXIS,y:{grid:GRID,title:{display:true,text:'Moves',color:'#5c6078'}},y2:{position:'right',grid:{drawOnChartArea:false},title:{display:true,text:'Readouts',color:'#5c6078'}}}}});
+        C.pretrainLoss=new Chart(document.getElementById('c-pretrain-loss'),{type:'line',data:{labels:[],datasets:[ds('Train','#6c8cff'),dsDash('Validation','#f87171')]},options:opts('Loss',{min:0})});
+        C.pretrainAcc=new Chart(document.getElementById('c-pretrain-acc'),{type:'line',data:{labels:[],datasets:[ds('Train Top-1','#4ade80'),ds('Train Top-5','#22d3ee'),dsDash('Val Top-1','#fb923c'),dsDash('Val Top-5','#a78bfa')]},options:opts('Accuracy',{min:0,max:1})});
+        C.pretrainValComponents=new Chart(document.getElementById('c-pretrain-val-components'),{type:'line',data:{labels:[],datasets:[ds('Val Total','#6c8cff'),ds('Val Policy','#4ade80'),ds('Val Value','#fb923c')]},options:opts('Loss',{min:0})});
+        C.pretrainLR=new Chart(document.getElementById('c-pretrain-lr'),{type:'line',data:{labels:[],datasets:[ds('Learning Rate','#6c8cff')]},options:opts('LR')});
+    }
+
+    function showTab(name){
+        document.getElementById('tab-selfplay').style.display=name==='selfplay'?'block':'none';
+        document.getElementById('tab-pretrain').style.display=name==='pretrain'?'block':'none';
+        document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
+        try{localStorage.setItem('dashTab',name);}catch(e){}
+        requestAnimationFrame(()=>Object.values(C).forEach(ch=>{try{ch.resize();}catch(e){}}));
+    }
+    function toggleSection(hdr){
+        hdr.nextElementSibling.classList.toggle('collapsed');
+        hdr.querySelector('.config-toggle').classList.toggle('open');
+        requestAnimationFrame(()=>Object.values(C).forEach(ch=>{try{ch.resize();}catch(e){}}));
     }
 
     function updatePretrainPanel(summary){
         const section=document.getElementById('pretrain-section');
-        if(!summary||!summary.run_name){section.style.display='none';return;}
-        section.style.display='block';
+        const nodata=document.getElementById('pretrain-nodata');
+        const hint=document.getElementById('pretrain-tab-hint');
+        if(!summary||!summary.run_name){section.style.display='none';nodata.style.display='block';hint.textContent='';return;}
+        section.style.display='block';nodata.style.display='none';
         document.getElementById('pretrain-run').textContent=summary.run_name;
+        document.getElementById('pretrain-session').textContent=summary.model_session||'--';
         const inProg=!!summary.in_progress;
+        hint.textContent=inProg?'● running':'';
         document.getElementById('pretrain-status').textContent=inProg?'(in progress)':'(completed)';
         document.getElementById('pretrain-status').style.color=inProg?'#fb923c':'#4ade80';
         const planned=summary.epochs_planned||summary.epochs_trained||0;
@@ -350,17 +440,28 @@
         document.getElementById('pretrain-top5').textContent=top5!=null?(top5*100).toFixed(2)+'%':'--';
         const bv=summary.best_val_loss;
         document.getElementById('pretrain-best-val').textContent=bv!=null?bv.toFixed(4):'--';
+        const bc=summary.best_checkpoint_num;
+        document.getElementById('pretrain-best-ckpt').textContent=bc!=null?('#'+bc):'--';
         // Chart updates.
         const epochs=(summary.epoch_losses||[]).map((_,i)=>i+1);
         C.pretrainLoss.data.labels=epochs;
         C.pretrainLoss.data.datasets[0].data=summary.epoch_losses||[];
-        C.pretrainLoss.data.datasets[1].data=summary.epoch_policy_losses||[];
-        C.pretrainLoss.data.datasets[2].data=summary.epoch_value_losses||[];
+        C.pretrainLoss.data.datasets[1].data=summary.epoch_val_losses||[];
         C.pretrainLoss.update('none');
         C.pretrainAcc.data.labels=epochs;
         C.pretrainAcc.data.datasets[0].data=summary.epoch_top1_accuracy||[];
         C.pretrainAcc.data.datasets[1].data=summary.epoch_top5_accuracy||[];
+        C.pretrainAcc.data.datasets[2].data=summary.epoch_val_top1_accuracy||[];
+        C.pretrainAcc.data.datasets[3].data=summary.epoch_val_top5_accuracy||[];
         C.pretrainAcc.update('none');
+        C.pretrainValComponents.data.labels=epochs;
+        C.pretrainValComponents.data.datasets[0].data=summary.epoch_val_losses||[];
+        C.pretrainValComponents.data.datasets[1].data=summary.epoch_val_policy_losses||[];
+        C.pretrainValComponents.data.datasets[2].data=summary.epoch_val_value_losses||[];
+        C.pretrainValComponents.update('none');
+        C.pretrainLR.data.labels=epochs;
+        C.pretrainLR.data.datasets[0].data=summary.epoch_lr||[];
+        C.pretrainLR.update('none');
     }
 
     function fetchPretrainSummary(){fetch('/api/pretrain_runs?latest=true').then(r=>r.json()).then(updatePretrainPanel).catch(()=>{});}
@@ -411,6 +512,13 @@
         apply(C.auxCorr,['aux_correlation']);
         apply(C.lr,['learning_rate']);
         apply(C.legalActions,['mean_legal_actions']);
+        apply(C.gating,['gate_win_rate']);
+        C.gating.data.datasets[1].data=history.map(()=>0.55);
+        C.gating.update('none');
+        C.phaseMix.data.labels=L;
+        C.phaseMix._phaseKeys.forEach((p,i)=>{C.phaseMix.data.datasets[i].data=history.map(r=>(r.phase_move_counts||{})[p]||0);});
+        C.phaseMix.update('none');
+        apply(C.schedule,['scheduled_max_game_length','num_readouts']);
     }
 
     function updateLineage(history){
@@ -420,8 +528,9 @@
         history.forEach((e,i)=>{
             const dc=e.reason==='first_iteration'?'seed':e.promoted?'promoted':e.reason==='gating_disabled'?'skipped':'rejected';
             const wr=e.win_rate!=null?'WR '+(e.win_rate*100).toFixed(0)+'%':'';
+            const lbl=e.reason==='pretrain_best_val'?'Pretrain':(e.loop!=null?'L'+e.loop:'--');
             if(i>0)html+='<div class="lineage-arrow"></div>';
-            html+=`<div class="lineage-node"><div class="lineage-dot ${dc}">#${e.checkpoint_num||'?'}</div><div class="lineage-label">L${e.loop}</div><div class="lineage-wr">${wr}</div></div>`;
+            html+=`<div class="lineage-node"><div class="lineage-dot ${dc}">#${e.checkpoint_num||'?'}</div><div class="lineage-label">${lbl}</div><div class="lineage-wr">${wr}</div></div>`;
         });
         el.innerHTML=html;
     }
@@ -487,7 +596,10 @@
     function fetchStatus(){fetch('/api/current_status').then(r=>r.json()).then(s=>{updateHeaderStatus(s);}).catch(()=>{});}
 
     document.addEventListener('DOMContentLoaded',function(){
-        initCharts();fetchStatus();fetchGamesStatus();fetchMetricsHistory();fetchModelHistory();fetchPretrainSummary();updateSystemMetrics();
+        initCharts();
+        let savedTab='selfplay';try{savedTab=localStorage.getItem('dashTab')||'selfplay';}catch(e){}
+        showTab(savedTab);
+        fetchStatus();fetchGamesStatus();fetchMetricsHistory();fetchModelHistory();fetchPretrainSummary();updateSystemMetrics();
         setInterval(fetchGamesStatus,1000);setInterval(fetchStatus,2000);setInterval(updateSystemMetrics,3000);setInterval(fetchMetricsHistory,5000);setInterval(fetchModelHistory,10000);setInterval(fetchPretrainSummary,5000);
     });
     </script>
