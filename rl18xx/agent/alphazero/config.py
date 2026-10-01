@@ -387,6 +387,12 @@ class SelfPlayHyperparams:
     """
 
     max_game_length: int = 1000
+    # Abandon a game (no training data) still in the initial private auction
+    # after this many engine moves; 0 disables. Bids can lock up with every
+    # player's cash committed and nobody able to buy the next private, so
+    # every round is all-pass until max_game_length. Human 1830 auctions run
+    # a median of 18 actions (p99 43, max 59).
+    auction_stall_moves: int = 150
     c_puct_base: float = 19652
     c_puct_init: float = 1.25
     c_puct_by_round: dict = field(default_factory=_default_c_puct_by_round)

@@ -738,6 +738,10 @@ def _ingest_completed_selfplay_game(
         games_completed_count += 1
         game_file = SELF_PLAY_GAMES_STATUS_PATH / f"L{loop}_G{game_idx}.json"
         gdata = _safe_read_json(game_file) if game_file.exists() else None
+        if gdata and gdata.get("termination") == "auction_stall":
+            # Abandoned without training data; doesn't count toward the target.
+            LOGGER.info(f"Loop {loop+1}: Game {game_idx} abandoned (stalled auction).")
+            return games_completed_count, experiences_this_iteration
         if gdata:
             moves = gdata.get("moves_played", 0)
             experiences_this_iteration += moves

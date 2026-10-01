@@ -1234,6 +1234,36 @@ class SelfPlay:
                 move_time_this_move = time.time() - start_time_for_move_processing
                 total_move_time_for_game += move_time_this_move
 
+                # A locked-up private auction (all cash committed to bids on a
+                # company that isn't next in line, so every round is all-pass)
+                # is legal but never ends before max_game_length, and the
+                # private owners' revenue then "wins" on net worth. Abandon it.
+                stall_moves = int(getattr(self.config, "auction_stall_moves", 0) or 0)
+                if (
+                    stall_moves
+                    and "Auction" in round_class_name
+                    and player.root.game_object.move_number >= stall_moves
+                ):
+                    LOGGER.info(
+                        f"Abandoning game: still in the private auction after "
+                        f"{player.root.game_object.move_number} engine moves ({move_counter} decisions)."
+                    )
+                    player.termination = "auction_stall"
+                    self.update_self_play_game_progress(
+                        game_id=self.config.game_id,
+                        loop_number=self.config.global_step,
+                        game_number=self.config.game_idx_in_iteration,
+                        moves_played=move_counter,
+                        max_moves=self.config.max_game_length,
+                        current_round="Abandoned",
+                        last_action=player.root.game_object.actions[-1].description(),
+                        game_start_time_unix=game_start_time,
+                        status="Abandoned",
+                        phase_move_counts=phase_move_counts,
+                        termination=player.termination,
+                    )
+                    break
+
                 self.add_metric("SelfPlay/Tree_Search_Time_ms", tree_search_duration_this_move * 1000)
                 self.add_metric("SelfPlay/Pick_Move_Time_ms", pick_move_duration_this_move * 1000)
                 self.add_metric("SelfPlay/Play_Move_Time_ms", play_move_duration_this_move * 1000)
@@ -1332,6 +1362,7 @@ class SelfPlay:
         # Phase 2: resign indicator. Averaging across games yields the resign rate.
         self.add_metric("SelfPlay/Game_Ended_By_Resign", float(game_ended_by_resign))
         self.add_metric("self_play/resigned", float(game_ended_by_resign))
+        self.add_metric("SelfPlay/Game_Abandoned_Auction_Stall", float(player.termination == "auction_stall"))
 
         if player.result is not None and len(player.result) > 0:
             for i, score in enumerate(player.result):
@@ -1361,6 +1392,10 @@ class SelfPlay:
         os.makedirs(self.config.selfplay_dir, exist_ok=True)
 
         player = self.play()
+
+        if player.termination == "auction_stall":
+            LOGGER.info(f"Game {self.config.game_id} abandoned in a stalled auction; no training data written.")
+            return
 
         LOGGER.info(f"Player result: {player.result}")
         LOGGER.info(f"Game actions: {player.root.game_object.raw_actions}")

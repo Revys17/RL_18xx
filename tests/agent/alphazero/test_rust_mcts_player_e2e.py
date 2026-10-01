@@ -218,3 +218,27 @@ def test_game_result_reads_the_current_root_not_the_starting_position():
     assert root_idx != 0
     assert np.allclose(player.root.game_result()[:4], current)
     assert player._is_root_terminal() == player._rust_player.is_terminal(root_idx)
+
+
+def test_stalled_private_auction_is_abandoned_without_training_data(tmp_path, monkeypatch):
+    """A game still in the initial private auction after ``auction_stall_moves``
+    engine moves is abandoned: no training examples, termination recorded."""
+    import json
+
+    from rl18xx.agent.alphazero import self_play
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(self_play, "SELF_PLAY_GAMES_STATUS_PATH", tmp_path / "status")
+    (tmp_path / "status").mkdir()
+
+    class EvalDummyNet(DummyNet):
+        def eval(self):
+            return self
+
+    config = _make_config(network=EvalDummyNet(), auction_stall_moves=3, game_id="stall")
+    self_play.SelfPlay(config).run_game()
+
+    status = json.loads((tmp_path / "status" / "stall.json").read_text())
+    assert status["termination"] == "auction_stall"
+    assert status["status"] == "Abandoned"
+    assert not list((tmp_path / "training_examples").rglob("data.mdb"))
