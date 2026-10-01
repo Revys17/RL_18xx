@@ -197,6 +197,9 @@ def load_loop_config(
                 "noresign_holdout_rate",
                 "resign_high_threshold_min",
                 "selfplay_tensorboard",
+                "use_inference_server",
+                "inference_batch_size",
+                "inference_batch_timeout_ms",
             ):
                 if key in file_config and file_config[key] is not None:
                     resign_overrides[key] = file_config[key]
@@ -1421,6 +1424,7 @@ def main(
     batch_size: int = 256,
     game_length_schedule: tuple[int, int, int] = (150, 1000, 150),
     readout_schedule: tuple[int, int, int] = (64, 200, 150),
+    inference_server: bool = False,
 ):
     if cleanup:
         cleanup_files()
@@ -1471,7 +1475,9 @@ def main(
         readout_schedule[0],
         target_experiences,
     )
-    if initial_loop_config.use_inference_server:
+    # The server is chosen at startup (CLI flag or ``use_inference_server`` in
+    # loop_config.json); it isn't hot-reloadable like the other file keys.
+    if inference_server or initial_loop_config.use_inference_server:
         from rl18xx.agent.alphazero.inference_server import start_inference_server
         LOGGER.info(
             f"Spawning inference server (batch_size={initial_loop_config.inference_batch_size}, "

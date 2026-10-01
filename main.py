@@ -33,6 +33,7 @@ def cmd_train(args):
         batch_size=args.batch_size,
         game_length_schedule=tuple(args.game_length_schedule),
         readout_schedule=tuple(args.readout_schedule),
+        inference_server=args.inference_server,
     )
 
 
@@ -186,6 +187,10 @@ def build_parser():
         "--readout-schedule", type=int, nargs=3, metavar=("START", "END", "RAMP"),
         default=[64, 200, 150],
         help="MCTS readout schedule: start end ramp_checkpoints (default: 64 200 150)"
+    )
+    p.add_argument(
+        "--inference-server", action="store_true",
+        help="Route self-play inference through one shared GPU server process (cross-game batching)",
     )
 
     # pretrain
