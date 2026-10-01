@@ -462,3 +462,27 @@ def test_mcts_tree_search_runs_through_inference_client():
         assert player.root.N >= 1
     finally:
         _shutdown(server, control_q, thread)
+
+
+def test_spawned_server_control_ops_round_trip():
+    """The coordinator drives a *spawned* server (as the training loop does):
+    pause, reload, health and shutdown must all get replies. Control replies
+    used to travel in a fresh mp.Queue nested inside each message, which
+    multiprocessing refuses to pickle, so every op failed and the loop never
+    reloaded the trained model into the server."""
+    from rl18xx.agent.alphazero.inference_server import start_inference_server
+
+    handle = start_inference_server(
+        num_workers=1, model_factory=_mock_factory, checkpoint_path=None, batch_size=4, batch_timeout_ms=2.0
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while handle.health(timeout_s=30).state != "ACCEPTING":
+            assert time.monotonic() < deadline, "spawned server never reached ACCEPTING"
+            time.sleep(0.1)
+        assert handle.pause(timeout_s=30) == {"ok": True}
+        assert handle.reload(None, timeout_s=30) == {"ok": True}
+        assert handle.health(timeout_s=30).state == "ACCEPTING"
+    finally:
+        handle.shutdown(timeout_s=30)
+    assert not handle.process.is_alive()

@@ -66,7 +66,11 @@ class InferenceRequest:
 
     request_id: int
     worker_id: int
-    encoded_state: Any  # the encoded-state tuple emitted by Encoder_1830Graph / _rust_encode
+    encoded_state: Any = None  # the encoded-state tuple emitted by Encoder_1830Graph / _rust_encode
+    # A whole ``run_many_encoded`` call in one message (``InferenceClient``):
+    # one queue round trip per MCTS batch instead of one per leaf. Answered
+    # by a single ``batched`` reply.
+    encoded_states: Optional[list] = None
 
 
 @dataclass
@@ -78,6 +82,12 @@ class InferenceReply:
     log_probs: np.ndarray          # (POLICY_SIZE,) log-softmax
     value: np.ndarray              # (VALUE_SIZE,) per-player softmaxed win/loss
     price_components: Optional[dict]  # per-leaf sliced (1D tensors or None)
+    # Batched replies (to ``encoded_states`` requests) stack the leaves:
+    # probs (n, POLICY_SIZE) float16, value (n, VALUE_SIZE), log_probs None
+    # (MCTS uses only probs; dropping log_probs and halving the dtype cuts
+    # the ~210 KB/leaf payload ~4x), price_components the model's batched
+    # dict as numpy (slot_index sent once).
+    batched: bool = False
 
 
 @dataclass
@@ -86,7 +96,11 @@ class ControlMessage:
 
     op: str  # "pause" | "reload" | "shutdown" | "health"
     payload: Optional[dict] = None
-    reply_q: Optional[Any] = None  # mp.Queue (proxy / shared) for synchronous ops
+    # In-process (thread) servers may carry a reply queue on the message. A
+    # spawned server can't — multiprocessing queues only pass to a child at
+    # creation — so it replies on its ``control_reply_q`` tagged with ``seq``.
+    reply_q: Optional[Any] = None
+    seq: Optional[int] = None
 
 
 @dataclass
@@ -124,6 +138,34 @@ def _slice_price_components_for_reply(batched: Optional[dict], leaf_index: int) 
     return {
         "price_mean": means[leaf_index].detach().cpu().numpy(),
         "price_log_std": log_stds[leaf_index].detach().cpu().numpy(),
+        "slot_index": batched.get("slot_index"),
+        "num_slots": batched.get("num_slots"),
+    }
+
+
+def _rows_to_numpy(batch: Any, start: int, n: int, dtype: torch.dtype) -> np.ndarray:
+    """Rows ``[start, start + n)`` of a ``(B, ...)`` tensor (or list of row
+    tensors) as one numpy array. The dtype conversion happens on the source
+    device before a single transfer — numpy's float32→float16 cast runs at
+    ~60 ns/element, ~0.4 s for a 256-leaf policy batch."""
+    rows = batch[start:start + n]
+    if not isinstance(rows, torch.Tensor):
+        rows = torch.stack([torch.as_tensor(r) for r in rows])
+    return rows.detach().to(dtype).cpu().numpy()
+
+
+def _slice_price_rows_for_reply(batched: Optional[dict], start: int, n: int) -> Optional[dict]:
+    """Rows ``[start, start + n)`` of the model's batched price components, as
+    numpy, for a batched reply (``slot_index`` / ``num_slots`` sent once)."""
+    if batched is None:
+        return None
+    means = batched.get("price_mean")
+    log_stds = batched.get("price_log_std")
+    if means is None or log_stds is None:
+        return None
+    return {
+        "price_mean": means[start:start + n].detach().float().cpu().numpy(),
+        "price_log_std": log_stds[start:start + n].detach().float().cpu().numpy(),
         "slot_index": batched.get("slot_index"),
         "num_slots": batched.get("num_slots"),
     }
@@ -168,10 +210,12 @@ class InferenceServer:
         batch_timeout_ms: float = 2.0,
         autocast_device: Optional[str] = None,
         idle_poll_ms: float = 1.0,
+        control_reply_q: Optional[Any] = None,
     ):
         self.request_q = request_q
         self.reply_qs = reply_qs
         self.control_q = control_q
+        self.control_reply_q = control_reply_q
         self.model_factory = model_factory
         self.checkpoint_path = checkpoint_path
         self.batch_size = batch_size
@@ -253,10 +297,11 @@ class InferenceServer:
         LOGGER.warning(f"InferenceServer: unknown control op {op!r}")
 
     def _reply_control(self, msg: ControlMessage, payload: Any):
-        if msg.reply_q is None:
-            return
         try:
-            msg.reply_q.put(payload)
+            if msg.reply_q is not None:
+                msg.reply_q.put(payload)
+            elif self.control_reply_q is not None:
+                self.control_reply_q.put((msg.seq, payload))
         except Exception as e:
             LOGGER.warning(f"InferenceServer: control reply put failed: {e}")
 
@@ -268,11 +313,17 @@ class InferenceServer:
 
     # --- request batching --------------------------------------------------
 
-    def _collect_batch(self) -> list:
-        """Drain up to ``batch_size`` requests, waiting at most ``batch_timeout_ms``.
+    @staticmethod
+    def _request_size(req: InferenceRequest) -> int:
+        return len(req.encoded_states) if req.encoded_states is not None else 1
 
-        Returns the (possibly empty) batch. Falls through quickly when the
-        queue is empty so the control loop stays responsive.
+    def _collect_batch(self) -> list:
+        """Gather requests until ``batch_size`` leaves, waiting at most ``batch_timeout_ms``.
+
+        Requests already queued are always taken (the timeout only bounds
+        waiting on an empty queue — deserializing a backlog must not cut the
+        batch short). Returns the (possibly empty) batch. Falls through
+        quickly when the queue is empty so the control loop stays responsive.
         """
         deadline = time.monotonic() + (self.batch_timeout_ms / 1000.0)
         batch: list[InferenceRequest] = []
@@ -283,21 +334,29 @@ class InferenceServer:
         except queue.Empty:
             return batch
 
-        # Subsequent requests: drain without further blocking until either
-        # the batch fills or the timeout expires.
-        while len(batch) < self.batch_size:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
+        size = self._request_size(req)
+        while size < self.batch_size:
             try:
-                req = self.request_q.get(timeout=remaining)
-                batch.append(req)
+                req = self.request_q.get_nowait()
             except queue.Empty:
-                break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    req = self.request_q.get(timeout=remaining)
+                except queue.Empty:
+                    break
+            batch.append(req)
+            size += self._request_size(req)
         return batch
 
     def _run_forward(self, batch: list[InferenceRequest]) -> list[InferenceReply]:
-        encoded_states = [req.encoded_state for req in batch]
+        encoded_states: list = []
+        spans: list[tuple[int, int]] = []
+        for req in batch:
+            items = req.encoded_states if req.encoded_states is not None else [req.encoded_state]
+            spans.append((len(encoded_states), len(items)))
+            encoded_states.extend(items)
         autocast_ctx = (
             torch.amp.autocast(self.autocast_device)
             if self.autocast_device
@@ -310,14 +369,26 @@ class InferenceServer:
         # serializes cleanly.
         batched_price_components = getattr(self._model, "last_price_components", None)
         replies: list[InferenceReply] = []
-        for i, req in enumerate(batch):
+        for req, (start, n) in zip(batch, spans):
+            if req.encoded_states is None:
+                replies.append(
+                    InferenceReply(
+                        request_id=req.request_id,
+                        probs=_to_numpy(probs[start]),
+                        log_probs=_to_numpy(log_probs[start]),
+                        value=_to_numpy(values[start]),
+                        price_components=_slice_price_components_for_reply(batched_price_components, start),
+                    )
+                )
+                continue
             replies.append(
                 InferenceReply(
                     request_id=req.request_id,
-                    probs=_to_numpy(probs[i]),
-                    log_probs=_to_numpy(log_probs[i]),
-                    value=_to_numpy(values[i]),
-                    price_components=_slice_price_components_for_reply(batched_price_components, i),
+                    probs=_rows_to_numpy(probs, start, n, torch.float16),
+                    log_probs=None,
+                    value=_rows_to_numpy(values, start, n, torch.float32),
+                    price_components=_slice_price_rows_for_reply(batched_price_components, start, n),
+                    batched=True,
                 )
             )
         return replies
@@ -377,9 +448,10 @@ class InferenceServer:
             replies = self._run_forward(batch)
             elapsed_ms = (time.monotonic() - t0) * 1000.0
             self._dispatch_replies(batch, replies)
+            leaves = sum(self._request_size(req) for req in batch)
             self.stats.batches_served += 1
-            self.stats.requests_served += len(batch)
-            self.stats.total_batch_size += len(batch)
+            self.stats.requests_served += leaves
+            self.stats.total_batch_size += leaves
             self.stats.total_forward_ms += elapsed_ms
 
         LOGGER.info("InferenceServer.run: exited cleanly")
@@ -467,54 +539,57 @@ class InferenceClient:
 
     def run_encoded(self, encoded_game_state):
         """Single-leaf path (used by SelfPlay.play's first-node expansion)."""
-        probs, log_probs, values = self.run_many_encoded([encoded_game_state])
-        return probs[0], log_probs[0], values[0]
+        probs, _log_probs, values = self.run_many_encoded([encoded_game_state])
+        return probs[0], None, values[0]
 
     def run_many_encoded(self, encoded_game_states: list):
-        """Submit one request per encoded state, collect replies in order."""
+        """Submit all leaves as one request and unpack the batched reply.
+
+        Returns ``(probs, None, values)`` like the model's API minus
+        log-probs, which aren't shipped (no MCTS caller uses them).
+        """
         if not encoded_game_states:
             raise ValueError("Received no game states to run.")
-        # Submit all requests up-front so the server can batch them.
-        handles: list[int] = []
-        for state in encoded_game_states:
-            rid = self._next_request_id
-            self._next_request_id += 1
-            self.request_q.put(InferenceRequest(rid, self.worker_id, state))
-            handles.append(rid)
+        rid = self._next_request_id
+        self._next_request_id += 1
+        self.request_q.put(
+            InferenceRequest(request_id=rid, worker_id=self.worker_id, encoded_states=list(encoded_game_states))
+        )
 
-        # Collect replies. The reply queue is per-worker so every message
-        # we pull is for us. Order is recovered by request_id.
-        pending = set(handles)
-        gathered: dict[int, InferenceReply] = {}
+        # The reply queue is per-worker; anything else on it is a stale reply
+        # to an earlier timed-out request.
         deadline = time.monotonic() + self.client_config.request_timeout_s
-        while pending:
+        while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(
                     f"InferenceClient: timeout after {self.client_config.request_timeout_s}s "
-                    f"waiting for {len(pending)}/{len(handles)} replies"
+                    f"waiting for a reply to {len(encoded_game_states)} leaves"
                 )
             try:
                 reply = self.reply_q.get(timeout=min(remaining, 1.0))
             except queue.Empty:
                 continue
-            if reply.request_id in pending:
-                gathered[reply.request_id] = reply
-                pending.discard(reply.request_id)
-            else:
-                # Stale reply (shouldn't happen with per-worker queues, but
-                # be defensive against unanticipated paths).
-                LOGGER.debug(
-                    f"InferenceClient(worker={self.worker_id}): discarding stale "
-                    f"reply for request {reply.request_id}"
-                )
+            if reply.request_id == rid:
+                break
+            LOGGER.debug(
+                f"InferenceClient(worker={self.worker_id}): discarding stale reply for request {reply.request_id}"
+            )
 
-        ordered = [gathered[rid] for rid in handles]
-        probs_list = [torch.from_numpy(r.probs) for r in ordered]
-        log_probs_list = [torch.from_numpy(r.log_probs) for r in ordered]
-        values_list = [torch.from_numpy(r.value) for r in ordered]
-        self.last_price_components = _stack_price_components([r.price_components for r in ordered])
-        return probs_list, log_probs_list, values_list
+        probs = torch.from_numpy(reply.probs.astype(np.float32))
+        values = torch.from_numpy(np.asarray(reply.value, dtype=np.float32))
+        pc = reply.price_components
+        self.last_price_components = (
+            None
+            if pc is None
+            else {
+                "price_mean": torch.from_numpy(pc["price_mean"]),
+                "price_log_std": torch.from_numpy(pc["price_log_std"]),
+                "slot_index": pc.get("slot_index"),
+                "num_slots": pc.get("num_slots"),
+            }
+        )
+        return list(probs), None, list(values)
 
 
 def _stack_price_components(per_leaf: list[Optional[dict]]) -> Optional[dict]:
@@ -564,15 +639,26 @@ class ServerHandle:
     ticket_q: Any
     num_workers: int
     ctx: Any  # mp context
+    control_reply_q: Any = None
+    _seq: int = 0
 
     def _send(self, op: str, payload: Optional[dict] = None, timeout_s: float = 30.0) -> Any:
-        reply_q = self.ctx.Queue()
-        msg = ControlMessage(op=op, payload=payload, reply_q=reply_q)
-        self.control_q.put(msg)
-        try:
-            return reply_q.get(timeout=timeout_s)
-        except queue.Empty:
-            raise TimeoutError(f"ServerHandle.{op}: no reply in {timeout_s}s")
+        # Replies come back on the server's one control reply queue, tagged
+        # with the request's seq; a reply to an earlier timed-out op is skipped.
+        self._seq += 1
+        seq = self._seq
+        self.control_q.put(ControlMessage(op=op, payload=payload, seq=seq))
+        deadline = time.monotonic() + timeout_s
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"ServerHandle.{op}: no reply in {timeout_s}s")
+            try:
+                reply_seq, reply = self.control_reply_q.get(timeout=remaining)
+            except queue.Empty:
+                raise TimeoutError(f"ServerHandle.{op}: no reply in {timeout_s}s")
+            if reply_seq == seq:
+                return reply
 
     def pause(self, timeout_s: float = 30.0):
         return self._send("pause", timeout_s=timeout_s)
@@ -604,12 +690,14 @@ def _server_main(
     batch_size: int,
     batch_timeout_ms: float,
     autocast_device: Optional[str],
+    control_reply_q: Any = None,
 ):
     """Entry point for the inference server child process."""
     server = InferenceServer(
         request_q=request_q,
         reply_qs=reply_qs,
         control_q=control_q,
+        control_reply_q=control_reply_q,
         model_factory=model_factory,
         checkpoint_path=checkpoint_path,
         batch_size=batch_size,
@@ -639,6 +727,7 @@ def start_inference_server(
     request_q = ctx.Queue()
     reply_qs = [ctx.Queue() for _ in range(num_workers)]
     control_q = ctx.Queue()
+    control_reply_q = ctx.Queue()
     ticket_q = ctx.Queue()
     for i in range(num_workers):
         ticket_q.put(i)
@@ -649,6 +738,7 @@ def start_inference_server(
             request_q=request_q,
             reply_qs=reply_qs,
             control_q=control_q,
+            control_reply_q=control_reply_q,
             model_factory=model_factory,
             checkpoint_path=checkpoint_path,
             batch_size=batch_size,
@@ -667,6 +757,7 @@ def start_inference_server(
         ticket_q=ticket_q,
         num_workers=num_workers,
         ctx=ctx,
+        control_reply_q=control_reply_q,
     )
 
 

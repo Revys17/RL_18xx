@@ -9,7 +9,8 @@ from torch.utils.tensorboard import SummaryWriter
 import rl18xx.agent.alphazero.mcts as mcts
 from rl18xx.agent.alphazero.model_transformer import AlphaZeroTransformerModel
 from rl18xx.agent.alphazero.config import SelfPlayConfig, ModelTransformerConfig
-from rl18xx.agent.alphazero.checkpointer import get_latest_model
+from rl18xx.agent.alphazero.checkpointer import _find_latest_session, get_current_best, get_latest_model
+from rl18xx.agent.alphazero.encoder import Encoder_1830
 from rl18xx.agent.alphazero.dataset import TrainingExampleProcessor
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.agent import Agent
@@ -1007,10 +1008,33 @@ class MCTSPlayer(Agent):
 class SelfPlay:
     def __init__(self, config: SelfPlayConfig, model_config: Optional[ModelTransformerConfig] = None):
         self.config = config
-        assert config.network is not None or model_config is not None, "Network must be provided"
+        # Behind the inference server a worker holds no model: the server
+        # process owns it and the client stands in for inference.
+        server_backed = config.network is None and getattr(config, "inference_client", None) is not None
+        assert config.network is not None or model_config is not None or server_backed, "Network must be provided"
         if model_config is not None:
             self.config.network = AlphaZeroTransformerModel(model_config)
-        self.config.network.eval()
+        if self.config.network is not None:
+            self.config.network.eval()
+
+    def _training_data_target(self):
+        """``(model name, encoder)`` for this game's training examples.
+
+        A server-backed worker has no model, so the name comes from the
+        checkpoint the server loads (the current-best pointer, else the latest
+        session — as ``get_latest_model`` resolves it) and the encoder from the
+        client's encoder type.
+        """
+        network = self.config.network
+        if network is not None:
+            return network.get_name(), network.encoder
+        best = get_current_best("model_checkpoints")
+        if best is not None:
+            name = f"{best['arch']}_{best['session']}"
+        else:
+            session = _find_latest_session("model_checkpoints")
+            name = f"{session.parent.name}_{session.name}"
+        return name, Encoder_1830.get_encoder_for_model(self.config.inference_client)
 
     def add_metric(self, name, value):
         if self.config.metrics is None:
@@ -1409,9 +1433,10 @@ class SelfPlay:
         extraction_start = time.time()
         game_data = player.extract_data()
 
-        save_path = self.config.selfplay_dir / self.config.network.get_name()
+        model_name, encoder = self._training_data_target()
+        save_path = self.config.selfplay_dir / model_name
 
-        processor = TrainingExampleProcessor(self.config.network.encoder)
+        processor = TrainingExampleProcessor(encoder)
         processor.write_lmdb(game_data, save_path)
         extraction_duration = time.time() - extraction_start
 
