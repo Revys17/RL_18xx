@@ -584,6 +584,8 @@ class MCTSPlayer(Agent):
                 LOGGER.info(f"tree_search: Found finished game for leaf. Result: {leaf.game_result_string()}")
                 self.add_metric("MCTS/Finished_Games", 1)
                 value = leaf.game_result()
+                if self.config.use_score_values:
+                    value = mcts.terminal_backup_value(value, len(leaf.game_object.players))
                 leaf.backup_value(value, up_to=self.root)
                 if trace is not None:
                     trace.leaf_terminal = True

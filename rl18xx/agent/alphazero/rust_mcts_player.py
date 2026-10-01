@@ -28,6 +28,7 @@ from rl18xx.agent.alphazero.mcts import (
     POLICY_SIZE,
     VALUE_SIZE,
     _rust_encode,
+    terminal_backup_value,
     unrotate_value,
 )
 from rl18xx.agent.alphazero.self_play import _compute_net_worth, _slice_price_components
@@ -347,6 +348,8 @@ class RustMCTSPlayer:
 
             if self._rust_player.is_terminal(idx):
                 value = self._compute_terminal_value(idx)
+                if self.config.use_score_values:
+                    value = terminal_backup_value(value, self._num_players)
                 self._rust_player.backup_value(idx, value.astype(np.float32).tolist())
                 if trace is not None:
                     trace.leaf_terminal = True

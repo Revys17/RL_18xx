@@ -136,6 +136,25 @@ def unrotate_value(value: np.ndarray, rotation: int, num_players: int) -> np.nda
     return out
 
 
+def terminal_backup_value(result: np.ndarray, num_players: int) -> np.ndarray:
+    """Value to back up through the search tree for a finished game.
+
+    ``game_result()`` with ``use_score_values`` holds net-worth fractions —
+    the stored training value, from which ``train._derive_dual_value_targets``
+    builds both heads' targets. But the value MCTS backs up for every other
+    leaf is the win-loss head: a softmaxed share-of-winners. Backing up raw
+    net-worth fractions at terminal leaves put finished games on a much
+    flatter scale than the network's estimate one move earlier (a clear
+    leader saw ~0.35 for ending the game against ~0.9 for playing on), so
+    convert to the same share-of-winners the win-loss head is trained on.
+    """
+    out = np.zeros(len(result), dtype=np.float32)
+    real = np.asarray(result[:num_players], dtype=np.float32)
+    winners = (real >= real.max() - 1e-6).astype(np.float32)
+    out[:num_players] = winners / winners.sum()
+    return out
+
+
 def _snap_price(price: float, action_type: str, price_min: int, price_max: int) -> int:
     """Snap a continuous price sample to the legal grid for ``action_type``.
 
@@ -1049,11 +1068,12 @@ class MCTSNode:
 
         Returns a length-``VALUE_SIZE`` array that serves two roles:
 
-        1. **MCTS backup**: backed up through the tree via ``backup_value``
-           and accumulated into ``child_W`` for the win-loss head's PUCT
-           signal. With ``use_score_values=True`` (the default) this is the
-           normalized net-worth fractions; with ``use_score_values=False``
-           it falls back to the legacy {-1, 0, +1} win/loss vector.
+        1. **MCTS backup**: with ``use_score_values=True`` (the default)
+           this is the normalized net-worth fractions, which search converts
+           with ``terminal_backup_value`` to the win-loss head's
+           share-of-winners scale before backing up; with
+           ``use_score_values=False`` it is the legacy {-1, 0, +1} win/loss
+           vector, backed up as is.
 
         2. **Training data**: also written to the training tuple's ``value``
            slot in ``self_play.extract_data``. The KataGo-style dual value

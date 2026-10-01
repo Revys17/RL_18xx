@@ -270,6 +270,17 @@ def test_unrotate_value_rotates_only_the_real_seats():
     assert np.allclose(absolute, [0.2, 0.1, 0.4, 0.3, 0.0, 0.0])
 
 
+def test_terminal_backup_value_is_share_of_winners():
+    """Finished games back up on the win-loss head's scale (what the network
+    returns for every other leaf), not as raw net-worth fractions."""
+    from rl18xx.agent.alphazero.mcts import terminal_backup_value
+
+    fractions = np.array([0.30, 0.25, 0.40, 0.05, 0.0, 0.0], dtype=np.float32)
+    assert np.allclose(terminal_backup_value(fractions, 4), [0, 0, 1, 0, 0, 0])
+    tied = np.array([0.4, 0.4, 0.2, 0.0, 0.0, 0.0], dtype=np.float32)
+    assert np.allclose(terminal_backup_value(tied, 3), [0.5, 0.5, 0, 0, 0, 0])
+
+
 def test_network_values_are_backed_up_in_absolute_seat_order():
     """The network's value is in the leaf's canonical frame (seat 0 = the
     leaf's active player). A net that always says "the player to move wins"
