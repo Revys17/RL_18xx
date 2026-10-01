@@ -147,6 +147,8 @@ econ_entities (19 × d_entity) cross-attend to node_embeds (93 × d_map)
 
 This lets the economic encoder ask "what does PRR's map position look like?" by attending to the hexes where PRR has tokens. Much richer than gating two pooled vectors. The Hex Transformer's per-node embeddings (`node_embeds`) serve as keys/values here.
 
+> **As implemented (2026-09):** Stage A is residual — `LN(entity + CrossAttn(entity → map))` — and the pool is an attention pool. Without the residual the attention output (a mix of *map* values) replaced the entity tokens, so economic state only reached the trunk as attention weights.
+
 **Stage B — Concatenate and project**:
 ```
 concat(econ_fused, map_pool) → Linear → LayerNorm → trunk_input (d_trunk)
@@ -270,6 +272,8 @@ This means downstream code never sees raw logits for illegal actions. Softmax co
 
 ### 6. Value Head
 
+> **As implemented (2026-09):** the win-loss and score heads are evaluated *per seat*: seat i's logit is `MLP([player_token_i, trunk])` with weights shared across seats (player tokens from the economic transformer; the canonical frame puts the active player at seat 0). The pooled trunk alone kept too little per-player detail for the value head to learn who is ahead. Output layers of the value/score/price heads are zero-initialized, and seats beyond the game's player count are masked out of the softmax. The sketch below is the original design.
+
 Keep v1's improvements (per-player indicator, 3 layers) but with LayerNorm instead of no normalization:
 ```python
 value_input = concat(trunk, one_hot_player)  # (B, d_trunk + 4)
@@ -308,7 +312,7 @@ This is especially bad early in training when the network is changing rapidly.
 
 **However**, with 0.0 dropout and ~7M parameters (after fixing the bilinear), you'll overfit to the limited self-play data. Options:
 
-- **Weight decay** (already using 1e-4) — this is the primary regularizer and fine for RL
+- **Weight decay** (already using 1e-4) — this is the primary regularizer and fine for RL. It must be *decoupled* (AdamW, as `train.build_optimizer` does, with biases/norms/embeddings exempt): with plain `Adam(weight_decay=...)` the L2 term is normalized along with the gradient, and weakly-gradiented modules were driven to exactly zero within an epoch
 - **Spectral normalization** — constrains layer Lipschitz constants, no train/eval gap
 - **Stochastic depth** (drop entire res blocks during training) — coarser than dropout, less distribution mismatch
 - **Data augmentation** — player permutation symmetry: for any training position, permuting the player indices gives a valid training example with permuted value targets. This is free 4x data augmentation.

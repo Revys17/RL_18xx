@@ -37,6 +37,8 @@ uv run black --line-length 120 <file>
 # Entry points (all via main.py)
 uv run python main.py train              # AlphaZero training loop (self-play + training)
 uv run python main.py pretrain           # Pre-train from human game data
+uv run python main.py pretrain --fresh --data-dir human_games/lmdb_v3  # Fresh model on the pre-converted LMDB
+uv run python scripts/eval_value_head.py # Value-head quality by game stage (current_best by default)
 uv run python main.py arena              # Run agent vs agent matches
 uv run python main.py dashboard          # Start training dashboard (port 5001)
 uv run python main.py replay <log_file>  # Replay a game in the browser
@@ -81,7 +83,7 @@ A PyO3 crate that re-implements the engine for speed (it recently reached full 1
 - **Loop** (`loop.py`): Orchestrates self-play → train → gate iterations. Configured via `loop_config.json` (hot-reloaded), status in `loop_status.json`.
 - **Config** (`config.py`): `ModelConfig`, `TrainingConfig`, `SelfPlayConfig` dataclasses.
 - **Checkpointer** (`checkpointer.py`): Model save/load with versioned directories under `model_checkpoints/`.
-- **Pretraining** (`pretraining.py`): Supervised pre-training from human game data (JSON exports from 18xx.games; cleaning uses the Rust engine).
+- **Pretraining** (`pretraining.py`): Supervised pre-training from human game data (JSON exports from 18xx.games; cleaning uses the Rust engine). Two-stage by default: a joint run with a small value-loss weight, early-stopped on validation loss, then the value heads are re-fit on the frozen best checkpoint (`_refit_value_heads`) because on ~2,900 games the value head memorizes after under an epoch while the policy keeps improving. Logs value winner accuracy vs. the equal-odds baseline each epoch.
 - **Inference server** (`inference_server.py`), **Metrics** (`metrics.py`).
 
 ### Client (`rl18xx/client/`)
