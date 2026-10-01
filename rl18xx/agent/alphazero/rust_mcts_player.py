@@ -485,18 +485,11 @@ class RustMCTSPlayer:
 
     def play_move(self, action_index: int) -> bool:
         rust_root_game = self._rust_player.root_game_object()
-        # Temperature keys off the ENGINE move number (action-log length,
-        # which includes forced-chain actions) — Python MCTSPlayer.play_move
-        # uses ``game_object.move_number``, NOT the decision count.
-        move_number = self._rust_player.root_move_number()
-        temperature = (
-            1.0 if move_number < self.config.softpick_move_cutoff else 0.0
-        )
 
-        # Snapshot the search-policy vector before advancing the root.
-        pi = np.asarray(
-            self._rust_player.pi_at_root(temperature), dtype=np.float32
-        )
+        # Snapshot the search-policy vector before advancing the root. The
+        # training target is the full visit distribution at every move;
+        # ``softpick_move_cutoff`` only governs how ``pick_move`` chooses.
+        pi = np.asarray(self._rust_player.pi_at_root(1.0), dtype=np.float32)
         self.searches_pi.append(pi)
 
         # Native price range for the chosen slot (replaces the Python

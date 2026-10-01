@@ -105,6 +105,22 @@ def test_rust_mcts_player_short_loop_no_crash():
     assert abs(pi.sum() - 1.0) < 1e-4 or pi.sum() == 0.0
 
 
+def test_policy_target_is_the_visit_distribution_after_the_softpick_cutoff():
+    """Past ``softpick_move_cutoff`` the move is the argmax, but the training
+    target stays the full visit distribution, not a one-hot of that move."""
+    from rl18xx.agent.alphazero.loop import _create_fresh_game
+
+    player = RustMCTSPlayer(_make_config(num_readouts=16, softpick_move_cutoff=0))
+    player.initialize_game(_create_fresh_game(4))
+    while player.root.N < 16:
+        player.tree_search()
+    visits = np.asarray(player._rust_player.child_n_at_root(), dtype=np.float32)
+    assert (visits > 0).sum() > 1
+    player.play_move(player.pick_move())
+    pi = player.searches_pi[0]
+    assert np.allclose(np.sort(pi[pi > 0]), np.sort(visits[visits > 0] / visits.sum()))
+
+
 def test_rust_mcts_player_short_game_extracts_data():
     """Drive ~30 moves through the SelfPlay.play() pattern and verify
     extract_data yields at least one tuple of the expected shape."""

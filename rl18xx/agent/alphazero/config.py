@@ -404,7 +404,14 @@ class SelfPlayHyperparams:
     # so larger action spaces get a flatter prior. Default of 10 matches the
     # value used historically by AlphaZero-style 1830 self-play.
     dirichlet_noise_concentration: float = 10.0
-    softpick_move_cutoff: int = 500
+    # Engine moves (forced ones included) during which the played move is
+    # sampled in proportion to visit counts; argmax after. At 64 readouts the
+    # root visits sit close to the noised prior, so sampling is near-random
+    # play: at 500 (most of a game; human 4p games median 587 actions) most
+    # self-play games ran to max_game_length on aimless share trading, at 100
+    # (auction + first stock round) they ended on their own in 480-960 moves.
+    # Training targets are the visit distribution either way.
+    softpick_move_cutoff: int = 100
     num_readouts: int = 200
     min_readouts: int = 50
     parallel_readouts: int = 32

@@ -372,8 +372,9 @@ class MCTSPlayer(Agent):
           `inject_noise` calls.
         """
         self.log_memory_usage(stage_name="MCTSPlayer.play_move")
-        temperature = 1.0 if self.root.game_object.move_number < self.config.softpick_move_cutoff else 0.0
-        self.searches_pi.append(self.root.children_as_pi(temperature=temperature))
+        # Train on the full visit distribution at every move; the softpick
+        # cutoff only governs how ``pick_move`` chooses.
+        self.searches_pi.append(self.root.children_as_pi(temperature=1.0))
 
         # If the picked categorical slot is price-bearing, descend to the
         # most-visited price grandchild and commit to its concrete price.
@@ -451,8 +452,9 @@ class MCTSPlayer(Agent):
         matches the committed actions, keeping its subtree; otherwise the tree
         restarts from the committed position.
         """
-        temperature = 1.0 if self.root.game_object.move_number < self.config.softpick_move_cutoff else 0.0
-        self.searches_pi.append(self.root.children_as_pi(temperature=temperature))
+        # Train on the full visit distribution at every move; the softpick
+        # cutoff only governs how ``pick_move`` chooses.
+        self.searches_pi.append(self.root.children_as_pi(temperature=1.0))
 
         raw_before = len(self.root.game_object.raw_actions)
         committed_game = self.root.game_object.pickle_clone()
