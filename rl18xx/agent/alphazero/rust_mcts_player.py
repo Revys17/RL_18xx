@@ -248,7 +248,9 @@ class RustMCTSPlayer:
 
     # -------------------------------------------------------- core MCTS API
     def _is_root_terminal(self) -> bool:
-        return bool(self._rust_player.is_terminal(0))
+        # The root moves through the arena as moves are played; slot 0 is the
+        # starting position, not the root.
+        return bool(self._rust_player.is_terminal(self._rust_player.root_idx))
 
     def _compute_terminal_value(self, leaf_idx: int) -> np.ndarray:
         """Compute the per-player terminal value vector at a leaf.
@@ -839,7 +841,7 @@ class _RootShim:
     def game_result(self):
         """Return per-player value vector for the terminal root (mirrors
         ``MCTSNode.game_result``). Used by ``SelfPlay.play()`` after is_done()."""
-        return self._player._compute_terminal_value(0)
+        return self._player._compute_terminal_value(self._player._rust_player.root_idx)
 
     def game_result_string(self) -> Optional[str]:
         return self._player.result_string

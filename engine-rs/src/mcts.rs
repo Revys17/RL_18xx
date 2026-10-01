@@ -1118,6 +1118,13 @@ impl RustMCTSPlayer {
         self.arena.len()
     }
 
+    /// Arena index of the current search root. `advance_root` moves it to the
+    /// chosen child; arena slot 0 stays the position the player started from.
+    #[getter(root_idx)]
+    fn get_root_idx(&self) -> usize {
+        self.root_idx
+    }
+
     /// Whether the leaf at `arena_idx` is terminal (finished game).
     fn is_terminal(&self, arena_idx: usize) -> PyResult<bool> {
         if arena_idx >= self.arena.len() {

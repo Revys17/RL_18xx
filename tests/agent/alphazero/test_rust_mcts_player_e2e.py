@@ -193,3 +193,28 @@ def test_rust_mcts_player_check_resign_disabled_when_flag_off():
     should, info = player.check_resign()
     assert should is False
     assert info is None
+
+
+def test_game_result_reads_the_current_root_not_the_starting_position():
+    """``advance_root`` moves the root through the arena; slot 0 stays the
+    starting position. The self-play value target (``root.game_result()``)
+    and the root-terminal check must read the current root — reading slot 0
+    gave every game the opening's equal net-worth split as its target."""
+    from rl18xx.agent.alphazero.loop import _create_fresh_game
+
+    player = RustMCTSPlayer(_make_config(use_score_values=True))
+    player.initialize_game(_create_fresh_game(4))
+    start = player.root.game_result()[:4].copy()
+
+    for _ in range(200):
+        player.play_move(player.suggest_move())
+        root_idx = player._rust_player.root_idx
+        current = player._compute_terminal_value(root_idx)[:4]
+        if not np.allclose(current, start):
+            break
+    else:
+        pytest.fail("net-worth split never moved off the starting position in 200 moves")
+
+    assert root_idx != 0
+    assert np.allclose(player.root.game_result()[:4], current)
+    assert player._is_root_terminal() == player._rust_player.is_terminal(root_idx)
