@@ -1222,8 +1222,11 @@ class SelfPlay:
                         f"gap_min={resign_info['gap_min']:.3f}"
                     )
                     # Reuse the truncation-style end path: mark engine done,
-                    # set termination reason, let the is_done() block below
-                    # record the result and break.
+                    # set termination reason, let the end-of-game block below
+                    # record the result and break. (On the Rust player
+                    # ``root.game_object`` is a fresh clone, so end_game() can't
+                    # make the root report done — the block keys off the
+                    # termination too, or the search loops on this position.)
                     player.root.game_object.end_game()
                     player.termination = "resigned"
                     game_ended_by_resign = 1
@@ -1297,7 +1300,7 @@ class SelfPlay:
                 self.add_metric("SelfPlay/Num_MCTS_Moves", sim_count_this_move)
                 self.add_metric("SelfPlay/Total_Sims_For_MCTS_Moves", total_sims_for_mcts_moves)
 
-                if player.root.is_done():
+                if player.termination == "resigned" or player.root.is_done():
                     if player.termination == "resigned":
                         # Already end_game'd above; do not double-flag as truncation.
                         net_worth = _compute_net_worth(player.root.game_object)

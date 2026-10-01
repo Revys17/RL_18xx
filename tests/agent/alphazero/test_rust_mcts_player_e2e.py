@@ -243,6 +243,34 @@ def test_stalled_private_auction_is_abandoned_without_training_data(tmp_path, mo
     assert not list((tmp_path / "training_examples").rglob("data.mdb"))
 
 
+def test_resignation_ends_the_game(tmp_path, monkeypatch):
+    """A resign ends the game. ``end_game()`` lands on a clone of the Rust
+    root, so the end-of-game block must key off the termination: before, the
+    loop re-searched the resigned position forever, growing the tree until
+    the OOM killer took the worker."""
+    from rl18xx.agent.alphazero import self_play
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(self_play, "SELF_PLAY_GAMES_STATUS_PATH", tmp_path / "status")
+    (tmp_path / "status").mkdir()
+    calls = []
+
+    def resign_on_third_search(self):
+        calls.append(1)
+        assert len(calls) <= 3, "kept searching after resigning"
+        return len(calls) == 3, {"leader": 0, "q_leader_min": 0.9, "gap_min": 0.5}
+
+    class EvalDummyNet(DummyNet):
+        def eval(self):
+            return self
+
+    monkeypatch.setattr(RustMCTSPlayer, "check_resign", resign_on_third_search)
+    player = self_play.SelfPlay(_make_config(network=EvalDummyNet(), game_id="resign")).play()
+    assert player.termination == "resigned"
+    assert len(calls) == 3
+    assert np.any(player.result != 0)  # scored at the resigned position
+
+
 def test_arena_keeps_only_the_current_subtree():
     """advance_root compacts the arena to the new root's subtree. Every node
     holds a full game clone, so an arena that kept the whole game's history
