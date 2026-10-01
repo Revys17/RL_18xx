@@ -117,3 +117,32 @@ def test_win_loss_head_masks_nonexistent_seats():
     assert torch.allclose(probs[:, :3].sum(dim=1), torch.ones(1), atol=1e-5)
     assert torch.all(probs[:, 3:] < 1e-6)
     assert torch.all(score_pred[:, 3:] == 0)
+
+
+def test_value_stop_grad_keeps_value_gradients_in_the_heads():
+    model = AlphaZeroTransformerModel(ModelTransformerConfig())
+    model.train()
+    game = GameMap().game_by_title("1830")({i + 1: f"Player {i + 1}" for i in range(4)})
+    model._compute_structural_matrices(game)
+    encoded = [model.encoder.encode(game)]
+    # The heads' output layers start at zero, which blocks upstream gradient
+    # regardless of stop-grad; give them weights so the comparison means something.
+    with torch.no_grad():
+        for head in (model.win_loss_head, model.score_head):
+            head[-1].weight.normal_(0, 0.1)
+
+    def value_grads(stop_grad):
+        model.zero_grad()
+        model.value_stop_grad = stop_grad
+        _, win_loss_logits, score_pred, _ = model._forward_encoded_batch(encoded)
+        (win_loss_logits[:, :4].logsumexp(1).sum() + score_pred.sum()).backward()
+        trunk = sum(p.grad.abs().sum() for n, p in model.named_parameters()
+                    if p.grad is not None and n.startswith(("econ_transformer.", "res_blocks.")))
+        head = sum(p.grad.abs().sum() for n, p in model.named_parameters()
+                   if p.grad is not None and n.startswith(("win_loss_head.", "score_head.")))
+        return float(trunk), float(head)
+
+    trunk, head = value_grads(stop_grad=True)
+    assert trunk == 0.0 and head > 0.0
+    trunk, _ = value_grads(stop_grad=False)
+    assert trunk > 0.0

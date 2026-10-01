@@ -16,6 +16,8 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.alphazero.checkpointer import (
+    STATE_DICT_KEY,
+    _get_session_dir,
     get_latest_model,
     save_model,
     session_name_for,
@@ -1678,6 +1680,120 @@ def convert_games_to_training_dataset(
     LOGGER.info(f"Conversion complete: {converted} converted, {skipped} already done, {errors} errors")
 
 
+def _refit_value_heads(
+    model: AlphaZeroModel,
+    model_dir: str,
+    checkpoint_num: int,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    config: TrainingConfig,
+    use_amp: bool,
+    summary_writer: SummaryWriter,
+) -> dict:
+    """Re-fit fresh value/score heads on the frozen trunk of a checkpoint.
+
+    With a few thousand training games the value head generalizes for about
+    an epoch and then memorizes games, while the policy keeps improving for
+    several more, so whichever epoch is kept, one of the two is off its best.
+    This loads ``checkpoint_num``, freezes everything but the value/score
+    heads, re-initializes them and trains them alone, validating every
+    ``pretrain_value_refit_eval_steps`` steps and keeping the best heads. The
+    result is saved as the session's next checkpoint.
+    """
+    session_dir = _get_session_dir(model, model_dir)
+    checkpoint = torch.load(session_dir / f"{checkpoint_num}.pth", map_location=model.device, weights_only=False)
+    model.load_state_dict(checkpoint[STATE_DICT_KEY], strict=False)
+    model.reset_value_heads()
+    heads = (model.win_loss_head, model.score_head)
+    head_params = [p for head in heads for p in head.parameters()]
+    head_ids = {id(p) for p in head_params}
+    trainable_before = {id(p): p.requires_grad for p in model.parameters()}
+    for p in model.parameters():
+        p.requires_grad = id(p) in head_ids
+    model.value_stop_grad = True
+    optimizer = optim.AdamW(head_params, lr=config.lr, weight_decay=config.weight_decay)
+
+    def evaluate() -> Tuple[float, float]:
+        model.eval()
+        ce_sum = hits = count = 0.0
+        with torch.no_grad():
+            for batch in val_loader:
+                game_state_data, batch_data, legal_action_mask, pi, value, price_targets = move_batch_to_device(batch, model.device)
+                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+                    outputs = compute_losses(
+                        model, game_state_data, batch_data, legal_action_mask, pi, value, config,
+                        price_targets=price_targets,
+                    )
+                n = value.shape[0]
+                ce_sum += outputs["value_loss"].item() * n
+                hits += _value_head_batch_stats(outputs, value)[0]
+                count += n
+        model.train()
+        return ce_sum / max(count, 1), hits / max(count, 1)
+
+    best_loss, best_acc = evaluate()
+    best_state = [copy.deepcopy(head.state_dict()) for head in heads]
+    LOGGER.info(f"Value refit from checkpoint {checkpoint_num}: fresh heads val value {best_loss:.4f}")
+    curve = []
+    step = evals_since_improve = 0
+    window_losses: list = []
+    model.train()
+    while step < config.pretrain_value_refit_max_steps and evals_since_improve < config.pretrain_value_refit_patience:
+        for batch in train_loader:
+            game_state_data, batch_data, legal_action_mask, pi, value, price_targets = move_batch_to_device(batch, model.device)
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+                outputs = compute_losses(
+                    model, game_state_data, batch_data, legal_action_mask, pi, value, config,
+                    price_targets=price_targets,
+                )
+                loss = outputs["value_loss"] + config.score_loss_weight * outputs["score_loss"]
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            window_losses.append(outputs["value_loss"].item())
+            step += 1
+            if step % config.pretrain_value_refit_eval_steps == 0 or step >= config.pretrain_value_refit_max_steps:
+                val_loss, val_acc = evaluate()
+                train_loss = float(np.mean(window_losses))
+                window_losses = []
+                curve.append({"step": step, "train_value": train_loss, "val_value": val_loss, "val_winner_acc": val_acc})
+                summary_writer.add_scalar("value_refit/train_value", train_loss, step)
+                summary_writer.add_scalar("value_refit/val_value", val_loss, step)
+                summary_writer.add_scalar("value_refit/val_winner_acc", val_acc, step)
+                improved = val_loss < best_loss
+                if improved:
+                    best_loss, best_acc, evals_since_improve = val_loss, val_acc, 0
+                    best_state = [copy.deepcopy(head.state_dict()) for head in heads]
+                else:
+                    evals_since_improve += 1
+                LOGGER.info(
+                    f"Value refit step {step}: train_value={train_loss:.4f} val_value={val_loss:.4f} "
+                    f"winner_acc={val_acc:.3f}{' (best)' if improved else ''}"
+                )
+                if evals_since_improve >= config.pretrain_value_refit_patience:
+                    break
+            if step >= config.pretrain_value_refit_max_steps:
+                break
+
+    for head, state in zip(heads, best_state):
+        head.load_state_dict(state)
+    model.value_stop_grad = False
+    for p in model.parameters():
+        p.requires_grad = trainable_before[id(p)]
+    new_checkpoint_num = save_model(model, model_dir)
+    LOGGER.info(
+        f"Value refit saved as checkpoint {new_checkpoint_num}: val value {best_loss:.4f}, winner acc {best_acc:.3f}"
+    )
+    return {
+        "from_checkpoint": checkpoint_num,
+        "checkpoint_num": new_checkpoint_num,
+        "val_value_loss": best_loss,
+        "val_winner_accuracy": best_acc,
+        "steps": step,
+        "curve": curve,
+    }
+
+
 def pretrain_model(
     model: AlphaZeroModel,
     train_dataset: Dataset,
@@ -1720,6 +1836,11 @@ def pretrain_model(
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
     LOGGER.info(f"Pretraining mixed precision: {'bf16 autocast' if use_amp else 'off'}")
+    # After ``pretrain_value_joint_epochs`` the value heads train on detached
+    # features (``value_stop_grad``, reset after the loop): value gradients
+    # from a few thousand games first teach the trunk who is ahead, then
+    # mostly teach it to recognize games.
+    value_joint_epochs = config.pretrain_value_joint_epochs
 
     # --- Optimizer + cosine LR (fresh; no load_optimizer_state) ---
     optimizer = build_optimizer(model, config)
@@ -1836,6 +1957,10 @@ def pretrain_model(
     for epoch in range(config.num_epochs):
         # ---------------------------- TRAIN PASS ----------------------------
         model.train()
+        detach_value = value_joint_epochs is not None and epoch >= value_joint_epochs
+        if detach_value and not model.value_stop_grad:
+            LOGGER.info(f"Epoch {epoch + 1}: value heads now train on detached features")
+        model.value_stop_grad = detach_value
         train_losses = []
         train_policy_losses = []
         train_value_losses = []
@@ -2139,11 +2264,29 @@ def pretrain_model(
                 epochs_completed = epoch + 1
                 break
 
+    model.value_stop_grad = False
     metrics.epochs_trained = epochs_completed
     if metrics.epoch_losses:
         metrics.avg_total_loss = float(np.mean(metrics.epoch_losses))
         metrics.avg_policy_loss = float(np.mean(metrics.epoch_policy_losses))
         metrics.avg_value_loss = float(np.mean(metrics.epoch_value_losses))
+
+    # Stage 2: re-fit the value heads on the frozen best checkpoint. The
+    # refit is the checkpoint that gets promoted below.
+    value_refit = None
+    if (
+        config.pretrain_value_refit
+        and best_checkpoint_num is not None
+        and val_loader is not None
+        and hasattr(model, "reset_value_heads")
+    ):
+        try:
+            value_refit = _refit_value_heads(
+                model, model_dir, best_checkpoint_num, train_loader, val_loader, config, use_amp, summary_writer
+            )
+            best_checkpoint_num = value_refit["checkpoint_num"]
+        except Exception as e:
+            LOGGER.warning(f"Value-head refit failed; keeping checkpoint {best_checkpoint_num}: {e}", exc_info=True)
 
     # Write a richer JSON sidecar so the dashboard (and external tooling)
     # can plot pretrain curves without parsing TensorBoard event files.
@@ -2180,6 +2323,7 @@ def pretrain_model(
                     "epoch_winner_accuracy": list(epoch_winner_accuracy),
                     "epoch_val_winner_accuracy": list(epoch_val_winner_accuracy),
                     "epoch_val_value_baseline": list(epoch_val_value_baseline),
+                    "value_refit": value_refit,
                 },
                 f,
                 indent=2,
@@ -2215,7 +2359,7 @@ def pretrain_model(
                     "promoted": True,
                     "win_rate": None,
                     "gate_games": 0,
-                    "reason": "pretrain_best_val",
+                    "reason": "pretrain_value_refit" if value_refit else "pretrain_best_val",
                 }
             )
         except Exception as e:

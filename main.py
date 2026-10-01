@@ -56,6 +56,8 @@ def cmd_pretrain(args):
         lr=args.lr,
         value_lr_multiplier=args.value_lr_multiplier,
         value_loss_weight=args.value_loss_weight,
+        pretrain_value_joint_epochs=None if args.value_joint_epochs < 0 else args.value_joint_epochs,
+        pretrain_value_refit=not args.no_value_refit,
     )
     do_pretraining(
         model_dir=args.model_dir,
@@ -197,13 +199,29 @@ def build_parser():
         "--fresh", action="store_true",
         help="Start from a newly initialized model instead of the latest checkpoint",
     )
+    # Value-head defaults come from the 2026-09 pretraining sweep: with ~2,900
+    # human games the value head generalizes for under an epoch and then
+    # memorizes games, while the policy keeps improving for ~5. So stage 1
+    # trains jointly with a small value weight (keeps value features in the
+    # trunk without letting value overfitting drive checkpoint selection), and
+    # stage 2 re-fits fresh value heads on the frozen best checkpoint with
+    # sub-epoch early stopping.
     p.add_argument(
-        "--value-lr-multiplier", type=float, default=3.0,
-        help="Value-head LR multiplier relative to --lr (default: 3.0; try 1.0 if the value head overfits)"
+        "--value-joint-epochs", type=int, default=-1,
+        help="Epochs during which value gradients reach the trunk; afterwards the value heads "
+        "train on detached features (default: -1 = joint throughout; 0 = detached from the start)",
     )
     p.add_argument(
-        "--value-loss-weight", type=float, default=1.0,
-        help="Weight of the value loss in the total (default: 1.0)"
+        "--value-lr-multiplier", type=float, default=1.0,
+        help="Value-head LR multiplier relative to --lr (default: 1.0)"
+    )
+    p.add_argument(
+        "--value-loss-weight", type=float, default=0.1,
+        help="Weight of the value loss in the total (default: 0.1)"
+    )
+    p.add_argument(
+        "--no-value-refit", action="store_true",
+        help="Skip re-fitting the value heads on the frozen best checkpoint after training",
     )
     p.add_argument(
         "--model-type", type=str, default="transformer", choices=["gnn", "transformer"],

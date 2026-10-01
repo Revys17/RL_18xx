@@ -1641,6 +1641,11 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         #                    Auxiliary signal for the trunk; not used by MCTS.
         self.win_loss_head = self._build_value_head_mlp()
         self.score_head = self._build_value_head_mlp()
+        # When set, the value/score heads train on detached features, so value
+        # gradients can't reshape the shared layers. Supervised pretraining on
+        # a few thousand games uses it to keep the trunk from memorizing game
+        # outcomes; a runtime switch, not part of the saved config.
+        self.value_stop_grad = False
 
         # 7. Auxiliary Heads — only the log-legal-action-count head is wired.
         # The phase-prediction head (`aux_phase_head` / `predict_phase`) was
@@ -1689,6 +1694,18 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         for final in (self.win_loss_head[-1], self.score_head[-1], self.price_head.mlp[-1]):
             nn.init.zeros_(final.weight)
             nn.init.zeros_(final.bias)
+
+    def reset_value_heads(self):
+        """Re-initialize the win-loss and score heads as at construction."""
+        for head in (self.win_loss_head, self.score_head):
+            for m in head.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="leaky_relu")
+                    nn.init.constant_(m.bias, 0)
+                elif isinstance(m, nn.LayerNorm):
+                    nn.init.constant_(m.weight, 1)
+                    nn.init.constant_(m.bias, 0)
+            nn.init.zeros_(head[-1].weight)
 
     def architecture_name(self) -> str:
         return "AlphaZeroTransformer"
@@ -1911,6 +1928,8 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         econ = self.econ_transformer
         player_tokens = entity_embeds[:, econ.player_token_start:econ.player_token_end]  # (B, P, d_entity)
         seat_input = torch.cat([player_tokens, x.unsqueeze(1).expand(-1, player_tokens.shape[1], -1)], dim=-1)
+        if self.value_stop_grad:
+            seat_input = seat_input.detach()
         win_loss_logits = self.win_loss_head(seat_input).squeeze(-1)  # (B, P)
         score_pred = self.score_head(seat_input).squeeze(-1)
         # Seats past the game's player count don't exist: keep them out of the

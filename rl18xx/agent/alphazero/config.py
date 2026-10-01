@@ -276,6 +276,19 @@ class TrainingConfig:
     # improvement (0 = disabled). Guards against value-head memorization
     # blowups burning the rest of a long epoch budget.
     pretrain_early_stop_patience: int = 4
+    # Epochs of pretraining during which value gradients reach the shared
+    # trunk; afterwards the value/score heads train on detached features.
+    # Early value gradients teach the trunk who is ahead, but with only a few
+    # thousand games, later ones mostly teach it to recognize games. None =
+    # joint throughout, 0 = detached from the start.
+    pretrain_value_joint_epochs: Optional[int] = None
+    # After pretraining, re-fit fresh value/score heads on the frozen best
+    # checkpoint, validating every ``pretrain_value_refit_eval_steps`` steps
+    # and keeping the best heads (see ``pretraining._refit_value_heads``).
+    pretrain_value_refit: bool = False
+    pretrain_value_refit_eval_steps: int = 250  # the best heads come within ~0.1-0.4 epoch
+    pretrain_value_refit_patience: int = 4  # val CE is noisy at this granularity (~127 games)
+    pretrain_value_refit_max_steps: int = 20000
 
     def __post_init__(self):
         if self.train_dir is not None:
@@ -303,6 +316,11 @@ class TrainingConfig:
             "pretrain_label_smoothing": self.pretrain_label_smoothing,
             "pretrain_validation_percentage": self.pretrain_validation_percentage,
             "pretrain_early_stop_patience": self.pretrain_early_stop_patience,
+            "pretrain_value_joint_epochs": self.pretrain_value_joint_epochs,
+            "pretrain_value_refit": self.pretrain_value_refit,
+            "pretrain_value_refit_eval_steps": self.pretrain_value_refit_eval_steps,
+            "pretrain_value_refit_patience": self.pretrain_value_refit_patience,
+            "pretrain_value_refit_max_steps": self.pretrain_value_refit_max_steps,
         }
 
     @classmethod

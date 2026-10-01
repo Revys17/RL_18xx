@@ -130,3 +130,42 @@ def test_pretrain_smoke_validation_and_checkpoint(tmp_path):
     #    surrogate is that ``epoch_losses`` is non-empty and finite.
     assert len(metrics.epoch_losses) == 1
     assert torch.isfinite(torch.tensor(metrics.epoch_losses[0]))
+
+
+def test_pretrain_value_refit_promotes_a_new_checkpoint(tmp_path):
+    """With ``pretrain_value_refit`` on, pretraining re-fits the value heads on
+    the frozen best checkpoint, saves the result as the session's next
+    checkpoint, promotes it, and leaves the model fully trainable again."""
+    from rl18xx.agent.alphazero.checkpointer import get_current_best
+
+    torch.manual_seed(0)
+    model = AlphaZeroTransformerModel(ModelTransformerConfig(device=torch.device("cpu")))
+    train_config = TrainingConfig(
+        batch_size=2,
+        lr=1e-4,
+        num_epochs=1,
+        weight_decay=0.0,
+        use_fp16_training=False,
+        pretrain_value_refit=True,
+        pretrain_value_refit_eval_steps=1,
+        pretrain_value_refit_max_steps=2,
+        pretrain_value_refit_patience=1,
+    )
+    model_dir = tmp_path / "pretrain_ckpts"
+    model_dir.mkdir()
+    trunk_before = model.econ_transformer.player_proj.weight.detach().clone()
+
+    metrics = pretrain_model(
+        model=model,
+        train_dataset=_build_2_row_dataset(),
+        val_dataset=_build_2_row_dataset(),
+        config=train_config,
+        model_dir=str(model_dir),
+    )
+
+    best = get_current_best(str(model_dir))
+    assert best["checkpoint_num"] == metrics.checkpoint_num + 1
+    assert all(p.requires_grad for p in model.parameters())
+    assert model.value_stop_grad is False
+    # The trunk the refit kept is the trained checkpoint's, not the init.
+    assert not torch.equal(model.econ_transformer.player_proj.weight.detach(), trunk_before)
