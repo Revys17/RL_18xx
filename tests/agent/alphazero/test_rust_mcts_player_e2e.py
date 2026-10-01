@@ -219,9 +219,37 @@ def test_game_result_reads_the_current_root_not_the_starting_position():
     assert player._is_root_terminal() == player._rust_player.is_terminal(root_idx)
 
 
-def test_stalled_private_auction_is_abandoned_without_training_data(tmp_path, monkeypatch):
+def test_locked_private_auction_settles_bids_at_their_prices():
+    """Every player's cash committed to bids with the next private (CS)
+    unbid: nobody can ever buy it, so the auction is settled — each bid-on
+    private to its high bidder at that bid."""
+    import engine_rs
+
+    from rl18xx.agent.alphazero.self_play import auction_lock_settlement
+    from rl18xx.rust_adapter import RustGameAdapter
+
+    rust_game = engine_rs.BaseGame({i: f"Player {i}" for i in range(1, 5)})
+    game = RustGameAdapter(rust_game)
+
+    def bid(player, company, price):
+        rust_game.process_action(
+            {"type": "bid", "entity": player, "entity_type": "player", "company": company, "price": price}
+        )
+
+    bid(1, "SV", 20)  # buys it: next in line
+    bid(2, "BO", 600)
+    bid(3, "CA", 600)
+    bid(4, "DH", 600)
+    assert auction_lock_settlement(game) is None  # P1 still has $580 free for the $40 CS
+    bid(1, "MH", 580)
+    # Net worth: cash + private face values, less each winning bid's premium over face.
+    assert auction_lock_settlement(game) == {1: 600 - 580 + 110, 2: 600 - 600 + 220, 3: 600 - 600 + 160, 4: 600 - 600 + 70}
+
+
+def test_stalled_private_auction_ends_scored_with_training_data(tmp_path, monkeypatch):
     """A game still in the initial private auction after ``auction_stall_moves``
-    engine moves is abandoned: no training examples, termination recorded."""
+    engine moves ends there, scored on net worth, and its moves are written
+    as training data like any finished game."""
     import json
 
     from rl18xx.agent.alphazero import self_play
@@ -230,17 +258,25 @@ def test_stalled_private_auction_is_abandoned_without_training_data(tmp_path, mo
     monkeypatch.setattr(self_play, "SELF_PLAY_GAMES_STATUS_PATH", tmp_path / "status")
     (tmp_path / "status").mkdir()
 
+    from rl18xx.agent.alphazero.encoder import Encoder_Transformer
+
     class EvalDummyNet(DummyNet):
+        encoder = Encoder_Transformer()
+
         def eval(self):
             return self
+
+        def get_name(self):
+            return "dummy"
 
     config = _make_config(network=EvalDummyNet(), auction_stall_moves=3, game_id="stall")
     self_play.SelfPlay(config).run_game()
 
     status = json.loads((tmp_path / "status" / "stall.json").read_text())
-    assert status["termination"] == "auction_stall"
-    assert status["status"] == "Abandoned"
-    assert not list((tmp_path / "training_examples").rglob("data.mdb"))
+    assert status["termination"] == "auction_lock"
+    assert status["status"] == "Completed"
+    assert sum(status["result_per_player"]) == pytest.approx(1.0)
+    assert list((tmp_path / "training_examples").rglob("data.mdb"))
 
 
 def test_resignation_ends_the_game(tmp_path, monkeypatch):

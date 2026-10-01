@@ -387,11 +387,12 @@ class SelfPlayHyperparams:
     """
 
     max_game_length: int = 1000
-    # Abandon a game (no training data) still in the initial private auction
-    # after this many engine moves; 0 disables. Bids can lock up with every
-    # player's cash committed and nobody able to buy the next private, so
-    # every round is all-pass until max_game_length. Human 1830 auctions run
-    # a median of 18 actions (p99 43, max 59).
+    # End a game still in the initial private auction after this many engine
+    # moves, scored on net worth with outstanding bids settled; 0 disables.
+    # A backstop: the usual never-ending auction — every player's cash
+    # committed to bids, nobody able to buy the next private — is detected
+    # and settled the moment it locks (``self_play.auction_lock_settlement``).
+    # Human 1830 auctions run a median of 18 actions (p99 43, max 59).
     auction_stall_moves: int = 150
     c_puct_base: float = 19652
     c_puct_init: float = 1.25
