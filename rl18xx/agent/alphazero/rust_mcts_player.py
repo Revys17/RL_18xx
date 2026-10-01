@@ -28,6 +28,7 @@ from rl18xx.agent.alphazero.mcts import (
     POLICY_SIZE,
     VALUE_SIZE,
     _rust_encode,
+    unrotate_value,
 )
 from rl18xx.agent.alphazero.self_play import _compute_net_worth, _slice_price_components
 from rl18xx.rust_adapter import RustGameAdapter
@@ -403,6 +404,11 @@ class RustMCTSPlayer:
                 if isinstance(value, torch.Tensor)
                 else np.asarray(value)
             ).astype(np.float32)
+            # The network's value is in the leaf's canonical frame (seat 0 =
+            # the leaf's active player); the Rust tree's W arrays and terminal
+            # values are in absolute seat order.
+            leaf_state = encoded_states[i]
+            value_np = unrotate_value(value_np, leaf_state[6], leaf_state[7])
             leaf_pc = _slice_price_components(batched_price_components, i)
             pc_arg = _coerce_price_components_for_rust(leaf_pc)
             self._rust_player.incorporate_results(
@@ -880,6 +886,8 @@ class _LeafShim:
             value_np = value.detach().cpu().numpy().astype(np.float32)
         else:
             value_np = np.asarray(value, dtype=np.float32)
+        if self.encoded_game_state is not None:
+            value_np = unrotate_value(value_np, self.encoded_game_state[6], self.encoded_game_state[7])
         pc_arg = _coerce_price_components_for_rust(price_components)
         # Re-select the leaf (the root) and incorporate.
         idx = self._player._rust_player.select_leaf()

@@ -260,3 +260,33 @@ def test_arena_keeps_only_the_current_subtree():
         assert player._rust_player.root_idx == 0
     # Without compaction this grows by >= num_readouts nodes per move.
     assert max(sizes) <= 64, f"arena kept growing: {sizes[-5:]}"
+
+
+def test_unrotate_value_rotates_only_the_real_seats():
+    from rl18xx.agent.alphazero.mcts import unrotate_value
+
+    canonical = np.array([0.4, 0.3, 0.2, 0.1, 0.0, 0.0], dtype=np.float32)  # 4 players, active = seat 2
+    absolute = unrotate_value(canonical, rotation=2, num_players=4)
+    assert np.allclose(absolute, [0.2, 0.1, 0.4, 0.3, 0.0, 0.0])
+
+
+def test_network_values_are_backed_up_in_absolute_seat_order():
+    """The network's value is in the leaf's canonical frame (seat 0 = the
+    leaf's active player). A net that always says "the player to move wins"
+    must credit the leaves' actual movers — at a fresh game's root, P1 moves
+    and the evaluated children mostly have P2 (seat 1) to move."""
+    from rl18xx.agent.alphazero.loop import _create_fresh_game
+
+    class MoverWinsNet(DummyNet):
+        def run_many_encoded(self, encoded_game_states):
+            probs, log_probs, _ = super().run_many_encoded(encoded_game_states)
+            value = torch.zeros(VALUE_SIZE, dtype=torch.float32)
+            value[0] = 1.0
+            return probs, log_probs, [value] * len(encoded_game_states)
+
+    player = RustMCTSPlayer(_make_config(network=MoverWinsNet(), num_readouts=16, parallel_readouts=4))
+    player.initialize_game(_create_fresh_game(4))
+    for _ in range(4):
+        player.tree_search()
+    q = np.asarray(player._rust_player.root_q_vector())
+    assert q.argmax() == 1, f"root value by seat: {q}"

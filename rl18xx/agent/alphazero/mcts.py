@@ -89,8 +89,9 @@ def _rust_encode(game: RustGameAdapter) -> tuple:
     """Encode a RustGameAdapter using the Rust-native encoder.
 
     Returns (game_state, node_features, edge_index, edge_attrs, round_type_idx,
-    active_player_idx, rotation). After canonicalization ``active_player_idx`` is
-    always 0; ``rotation`` is the original absolute active player index.
+    active_player_idx, rotation, num_players) — the encoder's 8-tuple. After
+    canonicalization ``active_player_idx`` is always 0; ``rotation`` is the
+    original absolute active player index.
     """
     global _cached_edge_index, _cached_edge_attrs
 
@@ -116,7 +117,23 @@ def _rust_encode(game: RustGameAdapter) -> tuple:
         gs_np = encoder.canonicalize_perspective(gs_np, rotation)
     gs_tensor = torch.from_numpy(gs_np).unsqueeze(0)
     nf_tensor = torch.tensor(nf_flat, dtype=torch.float32).reshape(num_hexes, num_nf)
-    return (gs_tensor, nf_tensor, _cached_edge_index, _cached_edge_attrs, round_type_idx, 0, rotation)
+    return (gs_tensor, nf_tensor, _cached_edge_index, _cached_edge_attrs, round_type_idx, 0, rotation, len(player_ids))
+
+
+def unrotate_value(value: np.ndarray, rotation: int, num_players: int) -> np.ndarray:
+    """Canonical-frame value vector → absolute seat order.
+
+    The network sees states rotated so the active player is seat 0, so its
+    value vector is in that frame: seats ``0..num_players-1`` rotated, the
+    padded seats after them (masked to ~0). Undo the rotation within the real
+    seats only — rolling the whole ``VALUE_SIZE`` vector would rotate padding
+    into real seats for any game with fewer than ``VALUE_SIZE`` players.
+    """
+    if rotation == 0:
+        return value
+    out = np.array(value, copy=True)
+    out[:num_players] = np.roll(np.asarray(value)[:num_players], int(rotation))
+    return out
 
 
 def _snap_price(price: float, action_type: str, price_min: int, price_max: int) -> int:
@@ -893,16 +910,18 @@ class MCTSNode:
         Rotation math:
             encoder did:  canonical[i] = absolute[(i + rotation) mod N]
             invert with:  absolute[i]  = canonical[(i - rotation) mod N]
-                        = np.roll(canonical, shift=+rotation)
+                        = np.roll(canonical[:N], shift=+rotation)
+            (N = the game's player count, not VALUE_SIZE)
         """
         if self.encoded_game_state is None or len(self.encoded_game_state) < 7:
             # No rotation recorded — assume the value is already in absolute order
             # (covers test stubs and any legacy callers that bypass the encoder).
             return value
         rotation = self.encoded_game_state[6]
-        if rotation == 0:
-            return value
-        return np.roll(value, shift=int(rotation))
+        num_players = (
+            int(self.encoded_game_state[7]) if len(self.encoded_game_state) > 7 else len(self.game_object.players)
+        )
+        return unrotate_value(value, rotation, num_players)
 
     def incorporate_results(self, move_probabilities, value, up_to, price_components=None):
         """Incorporate the network's prediction at this leaf.

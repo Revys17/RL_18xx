@@ -146,3 +146,19 @@ def test_value_stop_grad_keeps_value_gradients_in_the_heads():
     assert trunk == 0.0 and head > 0.0
     trunk, _ = value_grads(stop_grad=False)
     assert trunk > 0.0
+
+
+def test_self_play_writer_keeps_padding_after_the_real_seats():
+    """Self-play results are VALUE_SIZE wide with the padded seats at the end.
+    The writer rotates them into the canonical frame within the real seats
+    only — rotating all 6 put a 4-player game's padding into seats 3-4 and a
+    real player's share into seat 5, which the model masks (value loss ~3000)."""
+    from rl18xx.agent.alphazero.dataset import TrainingExampleProcessor
+
+    game = GameMap().game_by_title("1830")({1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"})
+    game.process_action(ActionHelper().get_all_choices(game)[0])  # P2 (seat 1) to move
+    pi = torch.zeros(ActionMapper().action_encoding_size)
+    result = torch.tensor([0.1, 0.4, 0.2, 0.3, 0.0, 0.0])
+
+    rows = TrainingExampleProcessor(Encoder_1830Graph()).make_dataset_from_selfplay([(game, [0], pi, result, [])])
+    assert torch.allclose(rows[0][3], torch.tensor([0.4, 0.2, 0.3, 0.1, 0.0, 0.0]))

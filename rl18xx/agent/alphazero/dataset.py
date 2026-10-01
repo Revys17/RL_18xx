@@ -273,9 +273,15 @@ class TrainingExampleProcessor:
             # row's value is already canonical (see ``canonicalize_value_target``).
             rotation = encoded_state[6]
 
-            value = result
+            # ``result`` is VALUE_SIZE wide with the padded seats after the
+            # game's players; rotate only the real seats so the padding stays
+            # at the end, where the model masks nonexistent seats.
+            value = torch.as_tensor(result)
             if rotation != 0:
-                value = torch.roll(result, shifts=-rotation, dims=0)
+                num_players = int(encoded_state[7])
+                rotated = value.clone()
+                rotated[:num_players] = torch.roll(value[:num_players], shifts=-rotation, dims=0)
+                value = rotated
 
             # ``price_targets`` are populated by ``MCTSPlayer.play_move`` for
             # price-bearing slots (Bid / cross-corp BuyTrain / BuyCompany) by
