@@ -75,17 +75,19 @@ def play_mcts_game(seed: int, max_actions: int = 3000, full_mcts: bool = False) 
 # pytest gate (fast, bounded) — the full 500-seed sweep stays available via
 # __main__.
 #
-# Seeds 43/50/51 run FULL games to completion through encode -> legal indices
-# -> map_index_to_action -> process_action. Several other seeds (42, 44-49)
-# hit the known mask-and-retry decode misses ("No exchangeable share found" /
-# "No discounted-D entry" / "No sellable shares"): map_index_to_action raises
-# a typed ValueError that production MCTS masks and retries, but this script
-# counts as MAP_ERROR because it does not mask. Tracked separately.
+# These seeds run FULL games to completion through encode -> legal indices
+# -> map_index_to_action -> process_action. 42/44/46-48 used to die on adapter
+# decode misses (exchange before par, D trade-ins, emergency sales); every legal
+# index now decodes (tests/test_adapter_decode_coverage.py). Seeds 45/49 still
+# stop on a PROCESS_ERROR because this script decodes price-bearing slots
+# WITHOUT a price: a cross-corp BuyTrain falls back to its $1 bucket, below an
+# emergency-spend minimum. MCTS always decodes those slots with a sampled price
+# from the slot's legal range.
 # ---------------------------------------------------------------------------
 import pytest  # noqa: E402
 
 
-@pytest.mark.parametrize("seed", [43, 50, 51])
+@pytest.mark.parametrize("seed", [42, 43, 44, 46, 47, 48, 50, 51])
 def test_mcts_flow_full_game_fast(seed):
     result = play_mcts_game(seed, max_actions=3000, full_mcts=False)
     assert result["status"] in ("FINISHED", "TIMEOUT"), (

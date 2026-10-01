@@ -92,17 +92,15 @@ def play_random_game(seed: int, max_actions: int = 2000, verbose: bool = False) 
 # ---------------------------------------------------------------------------
 # pytest gate (fast, bounded) — the full sweep stays available via __main__.
 #
-# Seeds 42/44 play FULL games to completion through the Rust factored helper +
-# ActionMapper decode on both engines. Other nearby seeds (43, 45-49) hit the
-# known mask-and-retry decode misses ("No exchangeable share found" /
-# "No discounted-D entry"): action_mapper.map_index_to_action raises a typed
-# ValueError that production MCTS masks and retries, but this script treats as
-# a crash because it does not mask. Tracked separately; not a state-parity bug.
+# Seeds 42-44 play FULL games to completion through the Rust factored helper +
+# ActionMapper decode on both engines. Seed 43 used to die on an adapter decode
+# miss ("No exchangeable share found" / "No discounted-D entry"); every legal
+# index now decodes (tests/test_adapter_decode_coverage.py).
 # ---------------------------------------------------------------------------
 import pytest  # noqa: E402
 
 
-@pytest.mark.parametrize("seed", [42, 44])
+@pytest.mark.parametrize("seed", [42, 43, 44])
 def test_rust_helper_full_game_parity_fast(seed):
     result = play_random_game(seed, max_actions=2000)
     assert result["ok"], (

@@ -1137,16 +1137,28 @@ class _ExchangeStepProxy:
         return []
 
     def exchangeable_shares(self, company):
-        """Exchange ability: target-corp shares from IPO or market (1830: MH -> NYC)."""
+        """Exchange ability: target-corp shares from IPO or market (1830: MH -> NYC).
+
+        Filtered like Python's ``can_gain(owner, bundle, exchange=True)``, whose
+        binding rule here is the 60% holding limit (lifted in multiple_buy /
+        unlimited market zones).
+        """
         sym = company.sym if hasattr(company, 'sym') else str(company)
         ability = _company_ability(sym, "exchange")
         if not ability:
             return []
+        co = self._game.company_by_id(sym)
+        owner_str = (co.owner or "") if co is not None else ""
         result = []
         sources = _exchange_sources(ability)
         for corp_sym in ability.get("corporations", ()):
             corp = self._game.corporation_by_id(corp_sym)
             if not corp:
+                continue
+            zone_exempt = corp.share_price is not None and any(
+                t in ("multiple_buy", "unlimited") for t in corp.share_price.types
+            )
+            if owner_str and not zone_exempt and corp.percent_owned_by_entity(owner_str) + 10 > 60:
                 continue
             if "ipo" in sources:
                 # Before the corp pars the engine leaves its certs unowned

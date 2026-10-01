@@ -1192,8 +1192,9 @@ class ActionMapper(metaclass=Singleton):
                 matching = [share for share in shares if share.owner == owner]
                 if not matching:
                     # Factored helper enumerated this as legal but the engine's
-                    # actual state has no matching share. Raise a typed error
-                    # so MCTS can mask the action and retry instead of crashing.
+                    # actual state has no matching share — a decode gap. MCTS
+                    # does not mask these (maybe_add_child re-raises); see
+                    # tests/test_adapter_decode_coverage.py.
                     raise ValueError(
                         f"No exchangeable share found for entity={entity}, "
                         f"corp={corp}, location={location}"
