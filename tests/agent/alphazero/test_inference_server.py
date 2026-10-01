@@ -486,3 +486,21 @@ def test_spawned_server_control_ops_round_trip():
     finally:
         handle.shutdown(timeout_s=30)
     assert not handle.process.is_alive()
+
+
+def test_packed_states_round_trip_real_encodings():
+    """Real encoded states survive PackedStates.pack/unpack with the fields the
+    transformer reads intact (graph edges are dropped)."""
+    from rl18xx.agent.alphazero.inference_server import PackedStates
+    from rl18xx.agent.alphazero.loop import _create_fresh_game
+    from rl18xx.agent.alphazero.mcts import _rust_encode
+
+    states = [_rust_encode(_create_fresh_game(4)) for _ in range(3)]
+    packed = PackedStates.pack(states)
+    assert packed is not None and len(packed) == 3
+    for original, restored in zip(states, packed.unpack()):
+        assert torch.equal(restored[0], original[0].reshape(1, -1))
+        assert torch.equal(restored[1], original[1])
+        assert restored[2] is None and restored[3] is None
+        assert tuple(restored[4:]) == tuple(original[4:])
+    assert PackedStates.pack([1, 2]) is None

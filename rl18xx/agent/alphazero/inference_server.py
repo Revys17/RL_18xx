@@ -61,6 +61,49 @@ class ServerState(str, Enum):
 
 
 @dataclass
+class PackedStates:
+    """A batch of encoded states as two stacked numpy arrays + small extras.
+
+    Torch tensors on an ``mp.Queue`` each travel as a shared-memory segment
+    passed by file descriptor — ~4.6 ms just to send 32 states (4 tensors
+    each) and more to receive, which made the single server process the
+    self-play bottleneck. Plain numpy pickles as bytes (~0.05 ms). Only the
+    fields the transformer reads are kept; the graph edges are dropped.
+    """
+
+    game_states: np.ndarray     # (n, D) flat state vectors (one player count per pack)
+    node_features: np.ndarray   # (n, num_hexes, features)
+    extras: list                # per state: encoded tuple from index 4 on (round type, active, rotation[, num_players])
+
+    def __len__(self) -> int:
+        return len(self.extras)
+
+    @classmethod
+    def pack(cls, encoded_states: list) -> Optional["PackedStates"]:
+        """Pack encoded tuples, or None if they aren't encoded tuples or
+        their state widths differ (the caller then sends them as a list)."""
+        if not all(isinstance(s, tuple) and len(s) >= 5 for s in encoded_states):
+            return None
+        rows = [_to_numpy(s[0]).reshape(-1) for s in encoded_states]
+        if len({r.shape[0] for r in rows}) != 1:
+            return None
+        return cls(
+            game_states=np.stack(rows),
+            node_features=np.stack([_to_numpy(s[1]) for s in encoded_states]),
+            extras=[tuple(s[4:]) for s in encoded_states],
+        )
+
+    def unpack(self) -> list:
+        """Encoded tuples ``(gs (1, D), nf, None, None, *extras)`` as tensor views."""
+        game_states = torch.from_numpy(self.game_states)
+        node_features = torch.from_numpy(self.node_features)
+        return [
+            (game_states[i:i + 1], node_features[i], None, None, *extra)
+            for i, extra in enumerate(self.extras)
+        ]
+
+
+@dataclass
 class InferenceRequest:
     """One inference request from a worker."""
 
@@ -68,9 +111,10 @@ class InferenceRequest:
     worker_id: int
     encoded_state: Any = None  # the encoded-state tuple emitted by Encoder_1830Graph / _rust_encode
     # A whole ``run_many_encoded`` call in one message (``InferenceClient``):
-    # one queue round trip per MCTS batch instead of one per leaf. Answered
-    # by a single ``batched`` reply.
-    encoded_states: Optional[list] = None
+    # one queue round trip per MCTS batch instead of one per leaf, as a
+    # ``PackedStates`` (or a plain list of encoded tuples). Answered by a
+    # single ``batched`` reply.
+    encoded_states: Optional[Any] = None
 
 
 @dataclass
@@ -354,7 +398,12 @@ class InferenceServer:
         encoded_states: list = []
         spans: list[tuple[int, int]] = []
         for req in batch:
-            items = req.encoded_states if req.encoded_states is not None else [req.encoded_state]
+            if isinstance(req.encoded_states, PackedStates):
+                items = req.encoded_states.unpack()
+            elif req.encoded_states is not None:
+                items = req.encoded_states
+            else:
+                items = [req.encoded_state]
             spans.append((len(encoded_states), len(items)))
             encoded_states.extend(items)
         autocast_ctx = (
@@ -552,8 +601,13 @@ class InferenceClient:
             raise ValueError("Received no game states to run.")
         rid = self._next_request_id
         self._next_request_id += 1
+        packed = PackedStates.pack(encoded_game_states)
         self.request_q.put(
-            InferenceRequest(request_id=rid, worker_id=self.worker_id, encoded_states=list(encoded_game_states))
+            InferenceRequest(
+                request_id=rid,
+                worker_id=self.worker_id,
+                encoded_states=packed if packed is not None else list(encoded_game_states),
+            )
         )
 
         # The reply queue is per-worker; anything else on it is a stale reply
