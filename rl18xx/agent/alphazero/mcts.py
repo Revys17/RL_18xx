@@ -166,17 +166,11 @@ def sample_price_for_pw(
 ) -> int:
     """Sample a snapped legal price from the head's truncated Normal.
 
-    Building block for the MCTS continuous-price progressive-widening flow.
-    Once the action mapper migration to ``FactoredActionHelper`` lands, the
-    expansion code path can call this for each (action_type, entity) child
-    whose ``price_range`` has min != max, snapping the sampled price to the
-    legal grid via ``_snap_price``.
-
-    Currently unused by the in-tree expansion code (the existing flat action
-    mapper still enumerates discrete (action, price) tuples), but exposed so
-    the FactoredActionHelper migration can drop it in without rebuilding
-    MCTS from scratch. See docs/step1_review.md "Continuous-price action
-    space via progressive widening".
+    Progressive widening calls this for each price-bearing slot whose
+    ``price_range`` has min != max; the draw comes from N(μ, σ) truncated to
+    the legal range (the distribution the price loss fits) and is snapped to
+    the legal grid via ``_snap_price``. Mirrored by ``sample_price_for_pw``
+    in ``engine-rs/src/mcts.rs``.
 
     Args:
         price_mean:    Network's predicted ``μ`` for this (type, entity) slot.
@@ -199,18 +193,51 @@ def sample_price_for_pw(
 
     sigma = float(np.exp(np.clip(price_log_std, -1.0, 8.5)))
     mu = float(price_mean)
+    z = _sample_truncated_std_normal((p_min - mu) / sigma, (p_max - mu) / sigma, rng)
+    return _snap_price(mu + sigma * z, action_type, int(p_min), int(p_max))
 
-    # Rejection-sample once or twice; if both fall outside, fall back to a
-    # uniform sample on the legal range so PW always returns a usable child.
-    # In practice the truncation tails are mild and rejection terminates fast.
-    for _ in range(8):
-        sample = rng.normal(mu, sigma)
-        if p_min - sigma <= sample <= p_max + sigma:
-            return _snap_price(sample, action_type, int(p_min), int(p_max))
-    # Last-ditch: uniform sample on the snap grid inside the legal range.
-    step = PRICE_GRID.get(action_type, 1)
-    n_choices = max(1, (int(p_max) - int(p_min)) // step + 1)
-    return int(p_min) + int(rng.integers(0, n_choices)) * step
+
+def _sample_truncated_std_normal(a: float, b: float, rng: np.random.Generator) -> float:
+    """One draw of a standard Normal truncated to ``[a, b]`` (Robert, 1995).
+
+    The price head is fit with the truncated-Normal NLL, so when observed
+    prices pile up at the legal minimum (opening bids) its ``μ`` sits below
+    ``price_min`` and almost all of the untruncated mass is out of range.
+    Plain rejection from N(0, 1) then rarely accepts — the old sampler gave
+    up after 8 tries and drew uniformly over the whole range, so ~2/3 of
+    B&O opening bids came out anywhere up to the bidder's entire cash.
+    Tails use an exponential proposal and short intervals a uniform one;
+    each accepts with probability bounded away from zero for any ``a < b``.
+    """
+    if a >= 0.0:
+        return _sample_std_normal_tail(a, b, rng)
+    if b <= 0.0:
+        return -_sample_std_normal_tail(-b, -a, rng)
+    if b - a >= 1.0:  # straddles 0 with at least ~38% of the mass
+        while True:
+            z = rng.standard_normal()
+            if a <= z <= b:
+                return float(z)
+    while True:  # short interval around 0: |z| < 1, acceptance > e^-1/2
+        z = rng.uniform(a, b)
+        if rng.random() <= math.exp(-0.5 * z * z):
+            return float(z)
+
+
+def _sample_std_normal_tail(a: float, b: float, rng: np.random.Generator) -> float:
+    """Standard Normal truncated to ``[a, b]`` with ``0 <= a < b``."""
+    if (b - a) * (b + a) < 2.0:
+        # Short interval: uniform proposal, acceptance >= e^-1.
+        while True:
+            z = rng.uniform(a, b)
+            if rng.random() <= math.exp(0.5 * (a * a - z * z)):
+                return float(z)
+    # Exponential proposal with the optimal rate for the tail beyond ``a``.
+    alpha = 0.5 * (a + math.sqrt(a * a + 4.0))
+    while True:
+        z = a + rng.exponential(1.0 / alpha)
+        if z <= b and rng.random() <= math.exp(-0.5 * (z - alpha) ** 2):
+            return float(z)
 
 
 def pw_target_children(visits: int, pw_c: float, pw_alpha: float, min_children: int = 1) -> int:

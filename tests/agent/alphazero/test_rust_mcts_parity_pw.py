@@ -203,7 +203,12 @@ def test_pw_grows_multiple_grandchildren_with_legal_snapped_prices():
     probs[target_slot] = 1.0
     probs /= probs.sum()
     zero_value = np.zeros(VALUE_SIZE, dtype=np.float32)
+    # A head with real spread over the slot's range: PW samples from N(μ, σ)
+    # truncated to it, so the zero head (σ = $1 centred at $0) would put
+    # every sample on the minimum and grow a single grandchild.
     price_components = _zero_price_components(0)
+    price_components["price_mean"][:] = (p_min + p_max) / 2
+    price_components["price_log_std"][:] = np.log((p_max - p_min) / 4)
 
     # Drive ~50 readouts and let PW grow grandchildren.
     READOUTS = 50

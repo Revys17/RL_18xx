@@ -20,7 +20,7 @@ use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rand::SeedableRng;
-use rand_distr::{Dirichlet, Distribution, Normal};
+use rand_distr::{Dirichlet, Distribution};
 
 use crate::factored::LegalAction;
 use crate::game::BaseGame;
@@ -222,32 +222,64 @@ fn sample_price_for_pw(
     if p_min == p_max {
         return p_min;
     }
-    let clipped = price_log_std.clamp(-1.0_f32, 8.5_f32);
-    let sigma = clipped.exp().max(1e-3);
-    let mu = price_mean;
-    let mut rng = rand::rngs::StdRng::from_entropy();
-    let dist = match Normal::new(mu as f64, sigma as f64) {
-        Ok(d) => d,
-        Err(_) => {
-            // Fallback: uniform sample on the snap grid.
-            let step = price_grid_step(action_type);
-            let n_choices = (((p_max - p_min) / step) + 1).max(1);
-            use rand::Rng;
-            let k = rng.gen_range(0..n_choices);
-            return p_min + k * step;
-        }
-    };
-    for _ in 0..8 {
-        let sample = dist.sample(&mut rng) as f32;
-        if (p_min as f32 - sigma) <= sample && sample <= (p_max as f32 + sigma) {
-            return snap_price(sample, action_type, p_min, p_max);
+    let sigma = (price_log_std.clamp(-1.0_f32, 8.5_f32).exp() as f64).max(1e-3);
+    let mu = price_mean as f64;
+    let mut rng = rand::thread_rng();
+    let z = sample_truncated_std_normal((p_min as f64 - mu) / sigma, (p_max as f64 - mu) / sigma, &mut rng);
+    snap_price((mu + sigma * z) as f32, action_type, p_min, p_max)
+}
+
+/// One draw of a standard Normal truncated to ``[a, b]`` (Robert, 1995) —
+/// mirrors Python ``_sample_truncated_std_normal``. The price head is fit
+/// with the truncated-Normal NLL, so when observed prices pile up at the
+/// legal minimum its ``mu`` sits below ``price_min``; plain rejection from
+/// N(0, 1) then almost never accepts (the old sampler fell back to a
+/// uniform draw over the whole range). Tails use an exponential proposal,
+/// short intervals a uniform one.
+fn sample_truncated_std_normal<R: rand::Rng>(a: f64, b: f64, rng: &mut R) -> f64 {
+    if a >= 0.0 {
+        return sample_std_normal_tail(a, b, rng);
+    }
+    if b <= 0.0 {
+        return -sample_std_normal_tail(-b, -a, rng);
+    }
+    if b - a >= 1.0 {
+        // Straddles 0 with at least ~38% of the mass.
+        loop {
+            let z: f64 = rng.sample(rand_distr::StandardNormal);
+            if a <= z && z <= b {
+                return z;
+            }
         }
     }
-    let step = price_grid_step(action_type);
-    let n_choices = (((p_max - p_min) / step) + 1).max(1);
-    use rand::Rng;
-    let k = rng.gen_range(0..n_choices);
-    p_min + k * step
+    loop {
+        // Short interval around 0: |z| < 1, acceptance > e^-1/2.
+        let z = rng.gen_range(a..b);
+        if rng.gen::<f64>() <= (-0.5 * z * z).exp() {
+            return z;
+        }
+    }
+}
+
+/// Standard Normal truncated to ``[a, b]`` with ``0 <= a < b``.
+fn sample_std_normal_tail<R: rand::Rng>(a: f64, b: f64, rng: &mut R) -> f64 {
+    if (b - a) * (b + a) < 2.0 {
+        // Short interval: uniform proposal, acceptance >= e^-1.
+        loop {
+            let z = rng.gen_range(a..b);
+            if rng.gen::<f64>() <= (0.5 * (a * a - z * z)).exp() {
+                return z;
+            }
+        }
+    }
+    // Exponential proposal with the optimal rate for the tail beyond ``a``.
+    let alpha = 0.5 * (a + (a * a + 4.0).sqrt());
+    loop {
+        let z = a - (1.0 - rng.gen::<f64>()).ln() / alpha;
+        if z <= b && rng.gen::<f64>() <= (-0.5 * (z - alpha) * (z - alpha)).exp() {
+            return z;
+        }
+    }
 }
 
 fn pw_target_children(visits: f32, pw_c: f32, pw_alpha: f32, min_children: usize) -> usize {
@@ -1633,4 +1665,38 @@ fn decode_price_components(py: Python<'_>, dict: &Bound<'_, PyAny>) -> PyResult<
         slot_index,
         num_slots,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pretrained head's opening B&O bid: mu $202, sigma ~$8.8, legal
+    /// $225..$600. The truncated Normal keeps nearly all mass at the
+    /// minimum; the old rejection sampler drew uniformly up to $600 ~2/3
+    /// of the time.
+    #[test]
+    fn price_sampling_with_mean_below_range_stays_near_the_minimum() {
+        let samples: Vec<i64> = (0..2000)
+            .map(|_| sample_price_for_pw(202.0, 2.178, "Bid", (225, 600)))
+            .collect();
+        assert!(samples.iter().all(|&p| (225..=600).contains(&p) && p % 5 == 0));
+        let near_min = samples.iter().filter(|&&p| p <= 240).count();
+        assert!(near_min as f64 / samples.len() as f64 > 0.95, "only {near_min}/2000 near the minimum");
+    }
+
+    #[test]
+    fn truncated_std_normal_stays_in_bounds_and_matches_the_tail_mean() {
+        let mut rng = rand::thread_rng();
+        for &(a, b) in &[(-0.3, 0.2), (-3.0, 3.0), (0.5, 0.6), (4.0, 1e9), (-1e9, -6.0), (40.0, 40.5)] {
+            for _ in 0..500 {
+                let z = sample_truncated_std_normal(a, b, &mut rng);
+                assert!(a <= z && z <= b, "{z} outside [{a}, {b}]");
+            }
+        }
+        // E[Z | Z > 3] = phi(3) / (1 - Phi(3)) ~= 3.283.
+        let n = 20000;
+        let mean: f64 = (0..n).map(|_| sample_truncated_std_normal(3.0, 1e9, &mut rng)).sum::<f64>() / n as f64;
+        assert!((mean - 3.283).abs() < 0.02, "tail mean {mean}");
+    }
 }

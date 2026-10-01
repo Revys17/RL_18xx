@@ -14,6 +14,7 @@ import pytest
 from rl18xx.agent.alphazero.mcts import (
     MCTSNode,
     PRICE_GRID,
+    _sample_truncated_std_normal,
     _snap_price,
     sample_price_for_pw,
 )
@@ -99,6 +100,33 @@ def test_sample_price_always_in_range_under_extreme_inputs():
     for _ in range(50):
         sample = sample_price_for_pw(-1e6, float(np.log(1e6)), "BuyTrain", price_range, rng)
         assert price_range[0] <= sample <= price_range[1]
+
+
+def test_sample_price_with_mean_below_range_stays_near_the_minimum():
+    """The price loss fits a Normal truncated to the legal range, so when
+    observed prices pile up at the minimum (opening bids) the head's μ sits
+    below ``price_min``. Sampling must follow that truncated Normal — the
+    old rejection sampler fell back to a uniform draw over the whole range,
+    bidding up to the bidder's entire cash. (μ, log σ) here are the
+    pretrained head's opening B&O bid; legal range $225..$600."""
+    rng = _seeded_rng(7)
+    samples = np.array([sample_price_for_pw(202.0, 2.178, "Bid", (225, 600), rng) for _ in range(2000)])
+    assert np.all((samples >= 225) & (samples <= 600)) and np.all(samples % 5 == 0)
+    assert np.mean(samples <= 240) > 0.95
+
+
+@pytest.mark.parametrize("a, b", [(-0.3, 0.2), (-3.0, 3.0), (0.5, 0.6), (4.0, 1e9), (-1e9, -6.0), (40.0, 40.5)])
+def test_truncated_std_normal_stays_in_bounds(a, b):
+    rng = _seeded_rng(3)
+    z = np.array([_sample_truncated_std_normal(a, b, rng) for _ in range(500)])
+    assert np.all((z >= a) & (z <= b))
+
+
+def test_truncated_std_normal_matches_the_tail_mean():
+    # E[Z | Z > 3] = φ(3) / (1 - Φ(3)) ≈ 3.283
+    rng = _seeded_rng(11)
+    z = np.array([_sample_truncated_std_normal(3.0, 1e9, rng) for _ in range(20000)])
+    assert abs(z.mean() - 3.283) < 0.02
 
 
 def test_snap_price_rounds_up_when_below_min():
