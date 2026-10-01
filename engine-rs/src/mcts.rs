@@ -1223,6 +1223,7 @@ impl RustMCTSPlayer {
         // Also clear the price-grandchild flag — it should not mirror into
         // a (now-gone) parent slot during subsequent backups.
         self.arena[self.root_idx].is_price_grandchild = false;
+        self.compact_to_root();
         Ok(())
     }
 
@@ -1345,6 +1346,50 @@ impl RustMCTSPlayer {
 }
 
 impl RustMCTSPlayer {
+    /// Drop every arena node outside the current root's subtree and renumber
+    /// the survivors, root first (root_idx becomes 0). Without this the arena
+    /// keeps every node created during the game — each holding a full game
+    /// clone — and a self-play game grew to ~18 GB before the OOM killer
+    /// stepped in. Only called between searches (no leaf indices in flight).
+    fn compact_to_root(&mut self) {
+        let old_len = self.arena.len();
+        let mut new_index = vec![usize::MAX; old_len];
+        let mut order: Vec<usize> = Vec::new();
+        let mut stack = vec![self.root_idx];
+        while let Some(i) = stack.pop() {
+            if new_index[i] != usize::MAX {
+                continue;
+            }
+            new_index[i] = order.len();
+            order.push(i);
+            let node = &self.arena[i];
+            stack.extend(node.children.values().copied());
+            for by_price in node.price_children.values() {
+                stack.extend(by_price.values().copied());
+            }
+        }
+        if self.root_idx == 0 && order.len() == old_len {
+            return;
+        }
+        let mut old: Vec<Option<RustMCTSNode>> = std::mem::take(&mut self.arena).into_iter().map(Some).collect();
+        let mut arena = Vec::with_capacity(order.len());
+        for &i in &order {
+            let mut node = old[i].take().expect("arena node visited twice");
+            node.parent = node.parent.and_then(|p| (new_index[p] != usize::MAX).then(|| new_index[p]));
+            for child in node.children.values_mut() {
+                *child = new_index[*child];
+            }
+            for by_price in node.price_children.values_mut() {
+                for child in by_price.values_mut() {
+                    *child = new_index[*child];
+                }
+            }
+            arena.push(node);
+        }
+        self.arena = arena;
+        self.root_idx = 0;
+    }
+
     /// Internal: sample a price for a PW slot given the explicit action
     /// index, so we can resolve the price-head slot via the entity-key
     /// resolver. Falls back to a midpoint-Normal when no components or no

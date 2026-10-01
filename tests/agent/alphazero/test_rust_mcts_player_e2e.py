@@ -215,7 +215,6 @@ def test_game_result_reads_the_current_root_not_the_starting_position():
     else:
         pytest.fail("net-worth split never moved off the starting position in 200 moves")
 
-    assert root_idx != 0
     assert np.allclose(player.root.game_result()[:4], current)
     assert player._is_root_terminal() == player._rust_player.is_terminal(root_idx)
 
@@ -242,3 +241,22 @@ def test_stalled_private_auction_is_abandoned_without_training_data(tmp_path, mo
     assert status["termination"] == "auction_stall"
     assert status["status"] == "Abandoned"
     assert not list((tmp_path / "training_examples").rglob("data.mdb"))
+
+
+def test_arena_keeps_only_the_current_subtree():
+    """advance_root compacts the arena to the new root's subtree. Every node
+    holds a full game clone, so an arena that kept the whole game's history
+    grew to ~18 GB per self-play worker."""
+    from rl18xx.agent.alphazero.loop import _create_fresh_game
+
+    player = RustMCTSPlayer(_make_config(num_readouts=8))
+    player.initialize_game(_create_fresh_game(4))
+    sizes = []
+    for _ in range(100):
+        if player.is_done():
+            break
+        player.play_move(player.suggest_move())
+        sizes.append(player._rust_player.arena_size())
+        assert player._rust_player.root_idx == 0
+    # Without compaction this grows by >= num_readouts nodes per move.
+    assert max(sizes) <= 64, f"arena kept growing: {sizes[-5:]}"
