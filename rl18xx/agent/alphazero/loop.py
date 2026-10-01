@@ -19,6 +19,7 @@ from rl18xx.agent.alphazero.config import SelfPlayConfig, TrainingConfig
 from rl18xx.agent.alphazero.metrics import Metrics
 from rl18xx.agent.alphazero.self_play import MCTSPlayer, SelfPlay, SELF_PLAY_GAMES_STATUS_PATH
 from rl18xx.agent.alphazero.train import train
+from rl18xx.agent.multi_agent import play_multi_agent_game
 from rl18xx.shared.atomic_io import atomic_write_json
 from multiprocessing import resource_tracker
 from pathlib import Path
@@ -459,14 +460,6 @@ def _sample_player_count(distribution: dict[int, float] | None) -> int:
     return random.choices(counts, weights=weights, k=1)[0]
 
 
-# Small Dirichlet noise weight injected during gating so each game produces a
-# distinct trajectory. With deterministic priors and argmax move selection, gate
-# games would otherwise be identical given the same seat assignment, collapsing
-# `gate_games=N` to at most `num_seats` distinct outcomes. See
-# docs/step1_review.md "Improved gating mechanics".
-GATING_DIRICHLET_NOISE_WEIGHT = 0.1
-
-
 def _gate_seat_assignment(game_index: int, num_seats: int = 4) -> list[bool]:
     """Return ``is_candidate[seat]`` for each seat in the given gate game.
 
@@ -494,22 +487,15 @@ def _play_gate_game(
     seats. With ``gate_games`` a multiple of ``num_players``, every seat is
     sampled equally.
 
-    A small Dirichlet noise weight (``GATING_DIRICHLET_NOISE_WEIGHT``) is
-    injected on the root prior so each game produces a distinct trajectory.
-    ``softpick_move_cutoff=0`` (argmax move selection) is kept — trajectory
-    diversity comes from the noised root prior, not random move selection.
-
     Returns a dict with 'candidate_seats', 'winner_seat', and 'scores'.
     """
     eval_config_candidate = SelfPlayConfig(
         softpick_move_cutoff=0,
-        dirichlet_noise_weight=GATING_DIRICHLET_NOISE_WEIGHT,
         num_readouts=num_readouts,
         network=candidate_model,
     )
     eval_config_best = SelfPlayConfig(
         softpick_move_cutoff=0,
-        dirichlet_noise_weight=GATING_DIRICHLET_NOISE_WEIGHT,
         num_readouts=num_readouts,
         network=current_best_model,
     )
@@ -522,21 +508,10 @@ def _play_gate_game(
     candidate_seats = {seat for seat, is_cand in enumerate(is_candidate_by_seat) if is_cand}
 
     game_state = _create_fresh_game(num_players=num_players)
-    for agent in agents:
-        agent.initialize_game(game_state)
-
     agent_by_player_id = {player.id: agent for player, agent in zip(game_state.players, agents)}
     seat_by_player_id = {player.id: seat for seat, player in enumerate(game_state.players)}
 
-    while not game_state.finished:
-        if game_state.move_number >= 1000:
-            game_state.end_game()
-            break
-
-        current_player = game_state.active_players()[0]
-        move = agent_by_player_id[current_player.id].suggest_move()
-        for agent in agents:
-            agent.play_move(move)
+    game_state = play_multi_agent_game(game_state, agent_by_player_id, max_moves=eval_config_best.max_game_length)
 
     result = game_state.result()
     best_score = max(result.values())
@@ -561,10 +536,6 @@ def evaluate_candidate(
     Each game has 4 players: 1 with the candidate model, 3 with the current
     best. The candidate's seat rotates through all four seats across games
     (see ``_gate_seat_assignment``), controlling for priority-deal advantages.
-    A small Dirichlet noise weight is injected on the root prior to ensure
-    each game produces a distinct trajectory (without it, deterministic priors
-    + argmax move selection collapse all gate games at a given seat assignment
-    onto an identical trajectory).
 
     To disable gating entirely once training is stable, pass ``--no-gate``
     to the loop; that's the AlphaZero / AlphaGo Zero approach (always promote
@@ -600,7 +571,10 @@ def evaluate_candidate(
         return 0.0
 
     win_rate = candidate_wins / games_completed
-    LOGGER.info(f"Gating evaluation complete: {candidate_wins}/{games_completed} wins ({win_rate:.1%})")
+    LOGGER.info(
+        f"Gating evaluation complete: {candidate_wins}/{games_completed} wins ({win_rate:.1%}), "
+        f"{num_games - games_completed} crashed game(s) excluded"
+    )
     return win_rate
 
 

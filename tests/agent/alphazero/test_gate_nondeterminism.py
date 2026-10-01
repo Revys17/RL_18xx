@@ -1,16 +1,14 @@
-"""Lightweight non-determinism test for gating-arena MCTS root noise.
+"""Lightweight non-determinism test for MCTS root noise.
 
-``loop._play_gate_game`` injects Dirichlet noise on each gating MCTS root
-(see ``GATING_DIRICHLET_NOISE_WEIGHT``) so repeated games against the same
-opponent don't collapse to a single trajectory. The actual gating loop runs
-full games, which is far too expensive for a unit test; instead we directly
-exercise ``MCTSNode.inject_noise`` and assert that two consecutive calls on
-the same node produce *different* ``child_prior_compressed`` arrays because
-``np.random.dirichlet`` is non-deterministic between calls.
+``SelfPlay.play`` injects Dirichlet noise on the MCTS root before each search
+so self-play explores beyond the network's prior. Gating does not inject noise.
+We directly exercise ``MCTSNode.inject_noise`` and assert that two consecutive
+calls on the same node produce *different* ``child_prior_compressed`` arrays
+because ``np.random.dirichlet`` is non-deterministic between calls.
 
 This is the smallest assertion that would catch the regression "someone
-hard-coded a seed inside inject_noise" — which would silently make every
-gating game identical and tank gating signal-to-noise.
+hard-coded a seed inside inject_noise" — which would silently make the
+self-play exploration noise identical on every move.
 """
 from __future__ import annotations
 

@@ -41,8 +41,20 @@ class RandomPlayer(Agent):
     def play_move(self, action_index):
         if self.legal_action_indices is None:
             raise ValueError("Legal action indices not set. Call initialize_game first.")
-        new_position = self.game_state.deep_copy_clone()
-        action_to_take = self.action_mapper.map_index_to_action(action_index, new_position)
-        new_position.process_action(action_to_take)
+        new_position = self.game_state.pickle_clone()
+        # Serialize before processing: a Rust-adapter LayTile resolves its tile
+        # instance lazily, so after the lay it would name the next free copy.
+        self._last_action_dict = self.action_mapper.map_index_to_action(action_index, new_position).to_dict()
+        new_position.process_action(self._last_action_dict)
+        self.game_state = new_position
+        self.legal_action_indices = self.action_mapper.get_legal_action_indices(self.game_state)
+
+    def committed_action_dicts(self) -> list[dict]:
+        return [self._last_action_dict]
+
+    def play_action_dicts(self, action_index: int, action_dicts: list[dict]):
+        new_position = self.game_state.pickle_clone()
+        for action_dict in action_dicts:
+            new_position.process_action(action_dict)
         self.game_state = new_position
         self.legal_action_indices = self.action_mapper.get_legal_action_indices(self.game_state)

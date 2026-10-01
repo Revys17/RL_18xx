@@ -13,6 +13,7 @@ from rl18xx.agent.alphazero.checkpointer import get_latest_model
 from rl18xx.agent.alphazero.dataset import TrainingExampleProcessor
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.agent import Agent
+from rl18xx.agent.multi_agent import action_log_key
 from rl18xx.shared.atomic_io import atomic_write_json
 import numpy as np
 from typing import Optional, List, Tuple, Generator, Union
@@ -379,6 +380,58 @@ class MCTSPlayer(Agent):
         self.log_memory_usage(stage_name="MCTSPlayer.play_move")
 
         self.game_state = self.root.game_object.to_dict()  # for showboard
+        return True
+
+    def committed_action_dicts(self) -> list[dict]:
+        return [self.played_actions[-1], *self.forced_action_dicts[-1]]
+
+    def play_action_dicts(self, action_index: int, action_dicts: list[dict]) -> bool:
+        """Advance the root through a move another agent committed.
+
+        Multi-agent harnesses give each seat its own ``MCTSPlayer``. Replaying
+        the bare ``action_index`` with ``play_move`` would pick *this* tree's
+        most-visited price (or sample one) for a price-bearing slot, forking
+        this agent's game from the acting agent's. Instead ``action_dicts``
+        (the acting agent's ``committed_action_dicts()``) are applied verbatim,
+        including forced-chain actions whose prices the acting agent sampled.
+
+        Re-roots onto the existing child / price grandchild whose engine log
+        matches the committed actions, keeping its subtree; otherwise the tree
+        restarts from the committed position.
+        """
+        temperature = 1.0 if self.root.game_object.move_number < self.config.softpick_move_cutoff else 0.0
+        self.searches_pi.append(self.root.children_as_pi(temperature=temperature))
+
+        raw_before = len(self.root.game_object.raw_actions)
+        committed_game = self.root.game_object.pickle_clone()
+        for action_dict in action_dicts:
+            committed_game.process_action(action_dict)
+        committed_log = [action_log_key(a) for a in committed_game.raw_actions[raw_before:]]
+
+        candidates = list(self.root.price_children.get(action_index, {}).values())
+        if action_index in self.root.children:
+            candidates.append(self.root.children[action_index])
+        new_root = next(
+            (
+                child
+                for child in candidates
+                if [action_log_key(a) for a in child.game_object.raw_actions[raw_before:]] == committed_log
+            ),
+            None,
+        )
+        if new_root is not None:
+            self.root = new_root
+            self.prune_mcts_tree_retain_parent(self.root)
+        else:
+            self._recursive_clear_references(self.root)
+            self.root = mcts.MCTSNode(committed_game, config=self.config)
+
+        self.played_actions.append(action_dicts[0])
+        self.forced_action_dicts.append(list(action_dicts[1:]))
+        # No search-derived price targets for a move this agent didn't choose.
+        self.price_targets.append([])
+        self._traces_collected_this_move = 0
+        LOGGER.debug(f"Played committed move {action_index}. Reused subtree: {new_root is not None}")
         return True
 
     def _extract_price_targets(
