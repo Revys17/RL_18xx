@@ -504,3 +504,42 @@ def test_packed_states_round_trip_real_encodings():
         assert restored[2] is None and restored[3] is None
         assert tuple(restored[4:]) == tuple(original[4:])
     assert PackedStates.pack([1, 2]) is None
+
+
+class _PositionalMockModel:
+    """Distinct, deterministic priors per encoded state (keyed on its state vector)."""
+
+    last_price_components = None
+
+    @staticmethod
+    def priors_for(encoded_state) -> torch.Tensor:
+        p = torch.arange(POLICY_SIZE, dtype=torch.float32) % 113 + 1 + float(encoded_state[0].sum()) % 7
+        return p / p.sum()
+
+    def run_many_encoded(self, encoded_states):
+        probs = [self.priors_for(st) for st in encoded_states]
+        return probs, None, [torch.zeros(VALUE_SIZE) for _ in encoded_states]
+
+
+def test_client_sparse_legal_priors_scatter_back_to_dense():
+    """With ``legal_indices`` the server ships only those priors (float32) and
+    the client rebuilds dense policy rows: exact at the legal indices, zero
+    elsewhere — MCTS only reads the legal entries."""
+    from rl18xx.agent.alphazero.loop import _create_fresh_game
+    from rl18xx.agent.alphazero.mcts import _rust_encode
+
+    server, request_q, reply_qs, control_q = _make_server(
+        model_factory=lambda _ckpt: _PositionalMockModel(), num_workers=1
+    )
+    thread = _start_server_thread(server)
+    try:
+        client = InferenceClient(request_q, reply_qs[0], worker_id=0)
+        states = [_rust_encode(_create_fresh_game(n)) for n in (3, 3, 3)]
+        legal = [np.array([0, 5, POLICY_SIZE - 1]), np.array([7]), np.array([], dtype=np.int64)]
+        probs, _, _ = client.run_many_encoded(states, legal_indices=legal)
+        for st, ix, row in zip(states, legal, probs):
+            expected = torch.zeros(POLICY_SIZE)
+            expected[ix] = _PositionalMockModel.priors_for(st)[ix]
+            assert torch.equal(row, expected)
+    finally:
+        _shutdown(server, control_q, thread)

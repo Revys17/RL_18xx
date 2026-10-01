@@ -74,6 +74,11 @@ class PackedStates:
     game_states: np.ndarray     # (n, D) flat state vectors (one player count per pack)
     node_features: np.ndarray   # (n, num_hexes, features)
     extras: list                # per state: encoded tuple from index 4 on (round type, active, rotation[, num_players])
+    # Optional per-state legal action indices. When set, the reply carries only
+    # those priors (MCTS renormalizes over the legal set anyway): a few dozen
+    # floats per leaf instead of a 26,537-wide vector, which made reply
+    # serialization the server's bottleneck (~0.5 GB/s at 9k leaves/s).
+    legal_indices: Optional[list] = None
 
     def __len__(self) -> int:
         return len(self.extras)
@@ -126,6 +131,10 @@ class InferenceReply:
     log_probs: np.ndarray          # (POLICY_SIZE,) log-softmax
     value: np.ndarray              # (VALUE_SIZE,) per-player softmaxed win/loss
     price_components: Optional[dict]  # per-leaf sliced (1D tensors or None)
+    # Sparse replies (requests with ``legal_indices``): ``probs`` is the flat
+    # float32 concatenation of each leaf's legal priors, split by
+    # ``legal_lengths``.
+    legal_lengths: Optional[np.ndarray] = None
     # Batched replies (to ``encoded_states`` requests) stack the leaves:
     # probs (n, POLICY_SIZE) float16, value (n, VALUE_SIZE), log_probs None
     # (MCTS uses only probs; dropping log_probs and halving the dtype cuts
@@ -196,6 +205,18 @@ def _rows_to_numpy(batch: Any, start: int, n: int, dtype: torch.dtype) -> np.nda
     if not isinstance(rows, torch.Tensor):
         rows = torch.stack([torch.as_tensor(r) for r in rows])
     return rows.detach().to(dtype).cpu().numpy()
+
+
+def _gather_legal_priors(probs: Any, start: int, legal: list) -> np.ndarray:
+    """Flat float32 priors of each leaf's legal actions, gathered on the
+    model's device and transferred once."""
+    rows = probs[start:start + len(legal)]
+    if not isinstance(rows, torch.Tensor):
+        rows = torch.stack([torch.as_tensor(r) for r in rows])
+    lengths = torch.tensor([len(ix) for ix in legal], device=rows.device)
+    row_ids = torch.repeat_interleave(torch.arange(len(legal), device=rows.device), lengths)
+    col_ids = torch.from_numpy(np.concatenate([np.asarray(ix, dtype=np.int64) for ix in legal])).to(rows.device)
+    return rows[row_ids, col_ids].float().cpu().numpy()
 
 
 def _slice_price_rows_for_reply(batched: Optional[dict], start: int, n: int) -> Optional[dict]:
@@ -430,14 +451,22 @@ class InferenceServer:
                     )
                 )
                 continue
+            legal = getattr(req.encoded_states, "legal_indices", None)
+            if legal is not None:
+                probs_np, legal_lengths = _gather_legal_priors(probs, start, legal), np.array(
+                    [len(ix) for ix in legal], dtype=np.int64
+                )
+            else:
+                probs_np, legal_lengths = _rows_to_numpy(probs, start, n, torch.float16), None
             replies.append(
                 InferenceReply(
                     request_id=req.request_id,
-                    probs=_rows_to_numpy(probs, start, n, torch.float16),
+                    probs=probs_np,
                     log_probs=None,
                     value=_rows_to_numpy(values, start, n, torch.float32),
                     price_components=_slice_price_rows_for_reply(batched_price_components, start, n),
                     batched=True,
+                    legal_lengths=legal_lengths,
                 )
             )
         return replies
@@ -591,7 +620,7 @@ class InferenceClient:
         probs, _log_probs, values = self.run_many_encoded([encoded_game_state])
         return probs[0], None, values[0]
 
-    def run_many_encoded(self, encoded_game_states: list):
+    def run_many_encoded(self, encoded_game_states: list, legal_indices: Optional[list] = None):
         """Submit all leaves as one request and unpack the batched reply.
 
         Returns ``(probs, None, values)`` like the model's API minus
@@ -602,6 +631,8 @@ class InferenceClient:
         rid = self._next_request_id
         self._next_request_id += 1
         packed = PackedStates.pack(encoded_game_states)
+        if packed is not None and legal_indices is not None:
+            packed.legal_indices = [np.asarray(ix, dtype=np.int32) for ix in legal_indices]
         self.request_q.put(
             InferenceRequest(
                 request_id=rid,
@@ -630,7 +661,18 @@ class InferenceClient:
                 f"InferenceClient(worker={self.worker_id}): discarding stale reply for request {reply.request_id}"
             )
 
-        probs = torch.from_numpy(reply.probs.astype(np.float32))
+        if reply.legal_lengths is not None:
+            # Scatter the legal priors back into dense policy vectors.
+            from rl18xx.agent.alphazero.mcts import POLICY_SIZE
+
+            dense = np.zeros((len(reply.legal_lengths), POLICY_SIZE), dtype=np.float32)
+            offset = 0
+            for row, (ix, length) in enumerate(zip(packed.legal_indices, reply.legal_lengths)):
+                dense[row, ix] = reply.probs[offset:offset + length]
+                offset += length
+            probs = torch.from_numpy(dense)
+        else:
+            probs = torch.from_numpy(reply.probs.astype(np.float32))
         values = torch.from_numpy(np.asarray(reply.value, dtype=np.float32))
         pc = reply.price_components
         self.last_price_components = (

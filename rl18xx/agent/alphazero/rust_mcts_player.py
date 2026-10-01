@@ -383,7 +383,9 @@ class RustMCTSPlayer:
         backend = self._backend
         backend_is_client = backend is not self.network
         if backend_is_client:
-            move_probs, _, values = backend.run_many_encoded(encoded_states)
+            # The server then ships only each leaf's legal priors.
+            legal = [self._rust_player.legal_action_indices_for_idx(idx) for idx in leaves]
+            move_probs, _, values = backend.run_many_encoded(encoded_states, legal_indices=legal)
         else:
             with torch.no_grad():
                 move_probs, _, values = backend.run_many_encoded(encoded_states)
