@@ -56,6 +56,9 @@ ROUND_TYPE_MAP = {
 MAX_ROUND_TYPE_IDX = max(ROUND_TYPE_MAP.values())
 
 
+_SECTION_LAYOUT_CACHE: Dict[Tuple[type, int], Tuple[Dict[str, Tuple[int, int]], int]] = {}
+
+
 class Encoder_1830:
     @classmethod
     def get_encoder_for_model(cls, model: Any) -> "Encoder_1830":
@@ -199,20 +202,26 @@ class Encoder_1830Graph(Encoder_1830, metaclass=Singleton):
         Downstream consumers (models, debug tooling) should read offsets from here
         rather than hard-coding them.
         """
-        eval_globals = {
-            "num_players": num_players,
-            "NUM_CORPORATIONS": cls.NUM_CORPORATIONS,
-            "NUM_PRIVATES": cls.NUM_PRIVATES,
-            "NUM_TRAIN_TYPES": cls.NUM_TRAIN_TYPES,
-            "NUM_TILE_IDS": cls.NUM_TILE_IDS,
-        }
-        layout: Dict[str, Tuple[int, int]] = {}
-        offset = 0
-        for key, (size_expr, _) in cls.GAME_STATE_ENCODING_STRUCTURE.items():
-            size = eval(str(size_expr), eval_globals)
-            layout[key] = (offset, size)
-            offset += size
-        return layout, offset
+        # Cached: the model calls this per batch row (state padding, player-
+        # count inference), and each computation runs ~30 eval()s.
+        cached = _SECTION_LAYOUT_CACHE.get((cls, num_players))
+        if cached is None:
+            eval_globals = {
+                "num_players": num_players,
+                "NUM_CORPORATIONS": cls.NUM_CORPORATIONS,
+                "NUM_PRIVATES": cls.NUM_PRIVATES,
+                "NUM_TRAIN_TYPES": cls.NUM_TRAIN_TYPES,
+                "NUM_TILE_IDS": cls.NUM_TILE_IDS,
+            }
+            layout: Dict[str, Tuple[int, int]] = {}
+            offset = 0
+            for key, (size_expr, _) in cls.GAME_STATE_ENCODING_STRUCTURE.items():
+                size = eval(str(size_expr), eval_globals)
+                layout[key] = (offset, size)
+                offset += size
+            cached = _SECTION_LAYOUT_CACHE[(cls, num_players)] = (layout, offset)
+        layout, total = cached
+        return dict(layout), total
 
     def _calculate_encoding_size(self, num_players: int) -> int:
         """Calculates the total encoding size for the flat game state vector."""

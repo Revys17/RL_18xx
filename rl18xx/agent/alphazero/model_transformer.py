@@ -12,6 +12,7 @@ An alternative to the GNN-based variant, built around:
 See docs/network_architecture_v2.md for full design rationale.
 """
 
+import functools
 import math
 import logging
 from typing import Optional, List, Tuple
@@ -72,8 +73,12 @@ NUM_TRAIN_TYPES = Encoder_1830Graph.NUM_TRAIN_TYPES
 NUM_TILE_IDS = Encoder_1830Graph.NUM_TILE_IDS
 
 
+@functools.lru_cache(maxsize=None)
 def _layout_for(num_players: int) -> tuple[dict, dict, int]:
-    """Return ``(off, size, total_size)`` for the encoder's flat game-state layout."""
+    """Return ``(off, size, total_size)`` for the encoder's flat game-state layout.
+
+    Cached and shared — callers must not mutate the returned dicts.
+    """
     layout, total = Encoder_1830Graph.compute_section_layout(num_players)
     off = {name: offset for name, (offset, _size) in layout.items()}
     size = {name: sz for name, (_offset, sz) in layout.items()}
@@ -1741,15 +1746,15 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         batched tensor shares one fixed length.
         """
         max_players = self._max_players
-        game_state_tensors = []
+        game_state_rows = []
         node_features_list = []
         round_type_indices = []
         active_player_indices = []
         num_players_list = []
+        rows_by_player_count: dict[int, list[int]] = {}
 
-        for gs in encoded_game_states:
-            game_state_tensor = gs[0].to(self.device)
-            node_data = gs[1].to(self.device)
+        for i, gs in enumerate(encoded_game_states):
+            game_state_tensor = gs[0].reshape(1, -1)
             round_type_idx = gs[4] if len(gs) > 4 else 0
             active_player_idx = gs[5] if len(gs) > 5 else 0
             if len(gs) > 7:
@@ -1760,17 +1765,24 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
                 # keep working without touching that file.
                 num_players = self._infer_num_players_from_state_size(game_state_tensor.shape[-1])
 
-            if num_players != max_players:
-                game_state_tensor = _pad_state_to_max_players(game_state_tensor, num_players, max_players)
-
-            game_state_tensors.append(game_state_tensor)
-            node_features_list.append(node_data)
+            game_state_rows.append(game_state_tensor)
+            node_features_list.append(gs[1])
             round_type_indices.append(round_type_idx)
             active_player_indices.append(active_player_idx)
             num_players_list.append(num_players)
+            rows_by_player_count.setdefault(num_players, []).append(i)
 
-        batched_gs = torch.cat(game_state_tensors, dim=0)  # (B, max-N layout size)
-        batched_nodes = torch.stack(node_features_list, dim=0)  # (B, N, F)
+        # Pad each player-count group to the max-N layout in one call, on the
+        # tensors' own device, then move the batch to the model in one copy.
+        padded_rows: list = [None] * len(game_state_rows)
+        for num_players, rows in rows_by_player_count.items():
+            block = torch.cat([game_state_rows[i] for i in rows], dim=0)
+            if num_players != max_players:
+                block = _pad_state_to_max_players(block, num_players, max_players)
+            for j, i in enumerate(rows):
+                padded_rows[i] = block[j]
+        batched_gs = torch.stack(padded_rows, dim=0).to(self.device, non_blocking=True)  # (B, max-N layout size)
+        batched_nodes = torch.stack(node_features_list, dim=0).to(self.device, non_blocking=True)  # (B, N, F)
         round_type_tensor = torch.tensor(round_type_indices, dtype=torch.long, device=self.device)
         active_player_tensor = torch.tensor(active_player_indices, dtype=torch.long, device=self.device)
         num_players_tensor = torch.tensor(num_players_list, dtype=torch.long, device=self.device)
@@ -1786,8 +1798,7 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         element.
         """
         for n in range(2, MAX_PLAYERS + 1):
-            _, total = Encoder_1830Graph.compute_section_layout(n)
-            if total == size:
+            if _layout_for(n)[2] == size:
                 return n
         raise ValueError(
             f"Game state of length {size} does not match any layout for 2..{MAX_PLAYERS} players."
