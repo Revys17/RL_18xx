@@ -466,7 +466,10 @@ class SelfPlayHyperparams:
     # through ``SelfPlayConfig.inference_client`` instead of the local
     # model. See docs/mcts_improvements_plan.md "Phase 3".
     use_inference_server: bool = False
-    inference_batch_size: int = 64
+    # Cap in leaves, not requests: a worker's request carries up to
+    # parallel_readouts leaves, so 64 meant GPU batches of about two
+    # requests. 512 measured best at 56 workers.
+    inference_batch_size: int = 512
     inference_batch_timeout_ms: float = 2.0
     # Rust-native MCTS (``engine_rs.RustMCTSPlayer`` via rust_mcts_player.py):
     # the search tree, expansion, and backup run in Rust on the Rust engine,

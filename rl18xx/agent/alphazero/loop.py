@@ -122,7 +122,10 @@ class LoopConfig:
     # server process (cross-game batching). Verify on a short training
     # run before promoting.
     use_inference_server: bool = False
-    inference_batch_size: int = 64
+    # Cap in leaves, not requests: a worker's request carries up to
+    # parallel_readouts leaves, so 64 meant GPU batches of about two
+    # requests. 512 measured best at 56 workers.
+    inference_batch_size: int = 512
     inference_batch_timeout_ms: float = 2.0
     # Per-game self-play TensorBoard logging (per-move scalars + MCTS
     # histograms under runs/.../game_L<loop>_G<idx>). Off by default because
