@@ -77,6 +77,7 @@ from rl18xx.agent.alphazero.pretraining import (  # noqa: E402
     should_add_pass,
     should_skip_action,
     check_action_in_action_helper,
+    engine_optional_rules,
     RouteStep,
     BuySellParShares,
     _process_pass_leniently,
@@ -220,7 +221,7 @@ def diagnose_game(game: dict, strict: bool = False):
     the same b/c/d rigor as random mode but on the human-import trajectory. The
     first enumeration divergence is reported as ``status="enum_divergence"``.
     """
-    optional_rules = bool(game["settings"].get("optional_rules"))
+    rules = engine_optional_rules(game)
     num_players = len(game["players"])
     # Malformed / never-started exports (0–1 players, e.g. abandoned games) can't
     # form a legal 1830 game — the Python oracle itself raises in
@@ -234,8 +235,8 @@ def diagnose_game(game: dict, strict: bool = False):
     # Python oracle (drives decisions) + Rust mirror (compared only).
     game_map = GameMap()
     game_class = game_map.game_by_title("1830")
-    py_state = game_class(players)
-    ru_state = RustGameAdapter(RustGame(players))
+    py_state = game_class(players, optional_rules=rules)
+    ru_state = RustGameAdapter(RustGame(players, optional_rules=rules))
 
     player_mapping = {p["id"]: i + 1 for i, p in enumerate(game["players"])}
     filtered_actions = filter_actions(game["actions"])
@@ -345,6 +346,8 @@ def diagnose_game(game: dict, strict: bool = False):
                             "scanned": i}
 
             if action["type"] == "buy_train":
+                if gs.train_by_id(action["train"]) is None:
+                    return {"status": "dropped", "reason": "unknown_train", "scanned": i}
                 train_purchaser = gs.get(action["entity_type"], action["entity"])
                 train_owner = gs.train_by_id(action["train"]).owner
                 if train_owner.is_corporation():
@@ -452,10 +455,11 @@ def trace_clean(game: dict, use_rust: bool):
     """
     num_players = len(game["players"])
     players = {i + 1: f"Player {i + 1}" for i in range(num_players)}
+    rules = engine_optional_rules(game)
     if use_rust:
-        gs = RustGameAdapter(RustGame(players))
+        gs = RustGameAdapter(RustGame(players, optional_rules=rules))
     else:
-        gs = GameMap().game_by_title("1830")(players)
+        gs = GameMap().game_by_title("1830")(players, optional_rules=rules)
 
     player_mapping = {p["id"]: i + 1 for i, p in enumerate(game["players"])}
     filtered_actions = filter_actions(game["actions"])
@@ -498,6 +502,9 @@ def trace_clean(game: dict, use_rust: bool):
                     return {"applied": applied,
                             "outcome": {"status": "dropped", "reason": "cross_player_company_purchase", "scanned": i}}
             if action["type"] == "buy_train":
+                if gs.train_by_id(action["train"]) is None:
+                    return {"applied": applied,
+                            "outcome": {"status": "dropped", "reason": "unknown_train", "scanned": i}}
                 tp = gs.get(action["entity_type"], action["entity"])
                 to = gs.train_by_id(action["train"]).owner
                 if to.is_corporation() and tp.player() != to.player():

@@ -579,6 +579,8 @@ class Game(BaseGame):
             "num": 3,
             "events": [{"type": "close_companies"}],
         },
+        # Base count (the encoder normalizes by it); optional_6_train adds a
+        # 3rd via num_trains.
         {"name": "6", "distance": 6, "price": 630, "num": 2},
         {
             "name": "D",

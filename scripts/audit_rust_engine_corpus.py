@@ -46,6 +46,7 @@ from tests.validate_rust_engine import compare_state
 from engine_rs import BaseGame as RustGame
 from rl18xx.game.gamemap import GameMap
 from rl18xx.agent.alphazero.pretraining import (
+    engine_optional_rules,
     filter_actions,
     should_add_pass,
     should_skip_action,
@@ -76,9 +77,11 @@ def _categorize_drop_reason(raw_game: dict) -> str:
     game_class = game_map.game_by_title("1830")
     num_players = len(raw_game["players"])
     players = {i + 1: f"Player {i + 1}" for i in range(num_players)}
-    game_state = game_class(players)
+    rules = engine_optional_rules(raw_game)
+    game_state = game_class(players, optional_rules=rules)
     player_mapping = {p["id"]: i + 1 for i, p in enumerate(raw_game["players"])}
-    optional_rules = bool(raw_game.get("settings", {}).get("optional_rules"))
+    # Only rules the engines don't model excuse an engine error.
+    optional_rules = any(r not in rules for r in raw_game.get("settings", {}).get("optional_rules") or [])
 
     try:
         filtered_actions = filter_actions(raw_game["actions"])
@@ -330,8 +333,9 @@ def audit_one_game(clean_path: Path, raw_dir: Path) -> GameAuditResult:
     names = {p["id"]: p["name"] for p in clean["players"]}
     try:
         game_cls = GameMap().game_by_title("1830")
-        py_game = game_cls(names)
-        rust_game = RustGame(names)
+        rules = engine_optional_rules(clean)
+        py_game = game_cls(names, optional_rules=rules)
+        rust_game = RustGame(names, optional_rules=rules)
     except Exception as e:
         return GameAuditResult(
             game_id=game_id,

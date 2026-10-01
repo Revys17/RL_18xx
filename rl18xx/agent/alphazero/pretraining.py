@@ -1104,6 +1104,19 @@ def _hex_from_city_id(city_str: Optional[str]) -> Optional[str]:
     return None
 
 
+# Optional rules both engines implement (at parity). A recorded game's other
+# optional rules are not modeled: it replays under the base rules and is
+# dropped ("optional_rules_engine_error") if the engine rejects an action.
+ENGINE_OPTIONAL_RULES = ("optional_6_train",)
+
+
+def engine_optional_rules(game: dict) -> list:
+    """The optional rules of a recorded game (an 18xx.games export or a
+    cleaned ``to_dict``) that the engines implement — what to build it with."""
+    rules = (game.get("settings") or {}).get("optional_rules") or []
+    return [rule for rule in rules if rule in ENGINE_OPTIONAL_RULES]
+
+
 def _load_cleaned_game_via_rust(game: dict):
     """Replay a *cleaned* game dict through the Rust engine and return the
     resulting ``RustGameAdapter`` (or ``None`` if replay fails).
@@ -1137,7 +1150,7 @@ def _load_cleaned_game_via_rust(game: dict):
                 pid = i + 1
                 name = str(p)
             players[pid] = name
-        rust_game = RustGame(players)
+        rust_game = RustGame(players, optional_rules=engine_optional_rules(game))
         adapter = RustGameAdapter(rust_game)
         for action in game.get("actions", []):
             adapter.process_action(action)
@@ -1205,14 +1218,16 @@ def _get_game_object_for_game_with_reason(game: dict, use_rust: bool = True):
     (e.g. ``"cross_player_company_purchase"``,
     ``"cross_player_train_purchase"``, ``"ruby_depot_phase_skip"``,
     ``"mh_out_of_turn"``, ``"company_tile_lay_outside_or"``,
-    ``"illegal_share_buy"``, ``"entity_mismatch"``, ``"engine_error"``,
-    ``"optional_rules_engine_error"``).
+    ``"illegal_share_buy"``, ``"entity_mismatch"``, ``"unknown_train"``,
+    ``"engine_error"``, ``"optional_rules_engine_error"``).
     """
     LOGGER.debug(f"Processing game {game['id']}")
+    rules = engine_optional_rules(game)
+    unmodeled_rules = [rule for rule in game["settings"]["optional_rules"] or [] if rule not in rules]
     optional_rules = False
-    if game["settings"]["optional_rules"]:
+    if unmodeled_rules:
         LOGGER.debug(
-            f"Warning: Game {game['id']} has optional rules {game['settings']['optional_rules']}. If we hit an error, we will skip this game."
+            f"Warning: Game {game['id']} has optional rules {unmodeled_rules} the engines don't implement. If we hit an error, we will skip this game."
         )
         optional_rules = True
     num_players = len(game["players"])
@@ -1222,12 +1237,12 @@ def _get_game_object_for_game_with_reason(game: dict, use_rust: bool = True):
     if use_rust:
         from engine_rs import BaseGame as RustGame
         from rl18xx.rust_adapter import RustGameAdapter
-        rust_game = RustGame(players)
+        rust_game = RustGame(players, optional_rules=rules)
         game_state = RustGameAdapter(rust_game)
     else:
         game_map = GameMap()
         game_class = game_map.game_by_title("1830")
-        game_state = game_class(players)
+        game_state = game_class(players, optional_rules=rules)
 
     player_mapping = {p["id"]: i + 1 for i, p in enumerate(game["players"])}
 
@@ -1261,8 +1276,14 @@ def _get_game_object_for_game_with_reason(game: dict, use_rust: bool = True):
 
         # If a player buys a train from a different player, we don't want to use this game.
         if action["type"] == "buy_train":
+            # A train id the engine never created means the recording ran
+            # under train rules we don't model; there is nothing to replay.
+            train = game_state.train_by_id(action["train"])
+            if train is None:
+                LOGGER.debug(f"Skipping game because it buys unknown train {action['train']}")
+                return None, "unknown_train"
             train_purchaser = game_state.get(action["entity_type"], action["entity"])
-            train_owner = game_state.train_by_id(action["train"]).owner
+            train_owner = train.owner
             if train_owner.is_corporation():
                 if train_purchaser.player() != train_owner.player():
                     LOGGER.debug(f"Skipping game because there's a cross-player train purchase")
@@ -1510,7 +1531,7 @@ def convert_game_to_training_data(
     from rl18xx.rust_adapter import RustGameAdapter as _RustGameAdapter
     num_players = len(game.players)
     players = {i + 1: f"Player {i + 1}" for i in range(num_players)}
-    fresh_game_state = _RustGameAdapter(_RustGame(players))
+    fresh_game_state = _RustGameAdapter(_RustGame(players, optional_rules=list(game.optional_rules)))
 
     # KataGo-style dual value head training target.
     #

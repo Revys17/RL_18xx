@@ -428,6 +428,23 @@ pub fn trains() -> Vec<TrainDef> {
     ]
 }
 
+/// The optional rules the engine implements: Ruby G1830::Meta OPTIONAL_RULES
+/// minus `multiple_brown_from_ipo` (the stock round hardcodes the base
+/// multiple-buy-only-from-market rule).
+pub const OPTIONAL_RULES: &[&str] = &["optional_6_train"];
+
+/// Ruby G1830 `num_trains` (game.rb): `optional_6_train` adds a 3rd 6-train.
+pub fn num_trains(td: &TrainDef, optional_rules: &[String]) -> u32 {
+    if td.name != "6" {
+        return td.count;
+    }
+    if optional_rules.iter().any(|r| r == "optional_6_train") {
+        3
+    } else {
+        2
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Phase data (6 phases)
 // ---------------------------------------------------------------------------

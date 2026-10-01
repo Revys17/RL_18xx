@@ -67,8 +67,9 @@ player valuation + end-game loan settlement.
 5. Small classes: merge-candidate validation (5), misc singletons.
 6. **Not yet implemented** (fail loudly if reached): phase-8 train
    trade-in enforcement (`train_trade_allowed` discounts are data-wired
-   but unenforced), the `grid_market` optional rule (data unplumbed; the
-   only optional rule appearing in the 1867 corpus), the 2-player
+   but unenforced), the `grid_market` optional rule (the only optional
+   rule in the 1867 corpus; its market data is unplumbed, and 1867 declares
+   no `GameTitle::optional_rules`, so the constructor rejects it), the 2-player
    variant (70% cap / train+company removal, `TODO(1867-2p)`).
 7. **The RL bridge — the actual goal.** Everything above is the rules
    engine; 1867 is still `alphazero_bridge_ready() == false`. Needed:

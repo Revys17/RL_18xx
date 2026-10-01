@@ -774,6 +774,8 @@ class BaseGame:
             "finished": self.finished,
             "move_number": self.move_number,
             "result": self.result(),
+            # Same shape as an 18xx.games export, so ``load`` reapplies them.
+            "settings": {"optional_rules": list(self.optional_rules)},
         }
 
     @classmethod
@@ -2683,8 +2685,9 @@ class BaseGame:
     def init_train_handler(self):
         trains = []
         for train in self.game_trains:
-            num = train.get("num", self.num_trains(train))
-            for index in range(num):
+            # Ruby asks ``num_trains`` for every train type so titles can
+            # override the data count per game (1830's optional_6_train).
+            for index in range(self.num_trains(train)):
                 trains.append(self.TRAIN_CLASS(**train, index=index))
         return self.DEPOT_CLASS(trains, self)
 
@@ -2693,7 +2696,7 @@ class BaseGame:
         return self.TRAINS
 
     def num_trains(self, train):
-        raise NotImplementedError
+        return train["num"]
 
     def init_minors(self):
         return [Minor(**minor) for minor in self.game_minors]

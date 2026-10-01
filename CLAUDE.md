@@ -106,6 +106,7 @@ Runs matches between agents (MCTS or random). Can optionally sync to 18xx.games 
 - Game state is always accessed through `BaseGame` (Python) or `RustGameAdapter` (Rust) — never construct engine objects directly.
 - Legal moves come from `ActionHelper.get_all_choices(game)`, applied via `game.process_action(action)`.
 - The encoder/action_mapper bridge between the engine's object model and the neural network's tensor representation. The action layout is duplicated in Python (`action_mapper.py`) and Rust (`action_index.rs`) and must stay in sync.
+- **Optional rules**: engines are built with a recorded game's `settings.optional_rules` filtered to the ones BOTH implement (`pretraining.ENGINE_OPTIONAL_RULES`; today 1830's `optional_6_train`). The Rust constructor raises ValueError for any rule its title doesn't declare (`GameTitle::optional_rules`). Games with other optional rules replay under the base rules and are dropped if the engine rejects an action.
 - **Parity is load-bearing**: the Rust engine and the `RustGameAdapter` must reproduce Python's behavior exactly (down to which games the cleaning pipeline drops). Parity audits and bug logs live in `docs/` (`rust_engine_*_audit.*`, `cleaning_engine_parity.*`, `rust_engine_bugs.md`).
 - `pickle_clone()` (Python) is used for fast state cloning in MCTS; it strips log/action history, graph caches, hex neighbor links, and the tile catalog before pickling, then restores shared/rebuilt data on the clone.
 - Training data is stored in LMDB databases compressed with LZ4.

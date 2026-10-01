@@ -263,6 +263,9 @@ pub struct BaseGame {
     /// real rules only the SV is discounted, so such an auction can only loop;
     /// in 2,428 human 1830 games no all-pass ever met the condition.
     pub(crate) auction_unlock: bool,
+    /// Ruby `@optional_rules`, validated against the title's
+    /// `GameTitle::optional_rules` at construction.
+    pub(crate) optional_rules: Vec<String>,
 }
 
 // crate-visible wrappers that forward to the (private) PyO3-exposed methods
@@ -506,6 +509,7 @@ impl BaseGame {
             trainless_major: self.trainless_major.clone(),
             national_reservations: self.national_reservations.clone(),
             auction_unlock: self.auction_unlock,
+            optional_rules: self.optional_rules.clone(),
         }
     }
 
@@ -2399,6 +2403,39 @@ impl BaseGame {
         player_ids: Vec<u32>,
         player_names: HashMap<u32, String>,
     ) -> Self {
+        Self::build_with_rules(title_name, player_ids, player_names, Vec::new())
+    }
+
+    /// Check a game's optional rules (Python constructor input) against the
+    /// ones the title implements. An unimplemented rule is a ValueError, not
+    /// a silent no-op: the game would replay under the wrong rules.
+    fn validate_optional_rules(
+        title_name: &str,
+        rules: Option<Vec<String>>,
+    ) -> PyResult<Vec<String>> {
+        let rules = rules.unwrap_or_default();
+        let supported = crate::title::resolve(title_name).optional_rules();
+        let unsupported: Vec<&str> = rules
+            .iter()
+            .map(String::as_str)
+            .filter(|r| !supported.contains(r))
+            .collect();
+        if !unsupported.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "optional rules not implemented for {title_name}: {unsupported:?} (supported: {supported:?})"
+            )));
+        }
+        Ok(rules)
+    }
+
+    /// Construct a game of any registered title under the given optional
+    /// rules, which the caller has validated (`validate_optional_rules`).
+    pub(crate) fn build_with_rules(
+        title_name: &str,
+        player_ids: Vec<u32>,
+        player_names: HashMap<u32, String>,
+        optional_rules: Vec<String>,
+    ) -> Self {
         let title = crate::title::resolve(title_name);
         let num_players = player_names.len() as u8;
         let cash = title.starting_cash(num_players);
@@ -2459,7 +2496,9 @@ impl BaseGame {
         // billion structs. Finite counts (all of 1830's) are unaffected.
         const UNLIMITED_TRAIN_POOL: u32 = 40;
         for td in &train_defs {
-            let materialized = td.count.min(UNLIMITED_TRAIN_POOL);
+            let materialized = title
+                .num_trains(td, &optional_rules)
+                .min(UNLIMITED_TRAIN_POOL);
             for _ in 0..materialized {
                 let instance = train_instance_counters
                     .entry(td.name.to_string())
@@ -2597,6 +2636,7 @@ impl BaseGame {
                 .map(|ns| ns.reservations.iter().map(|s| s.to_string()).collect())
                 .unwrap_or_default(),
             auction_unlock: false,
+            optional_rules,
         };
         game.setup_national();
         if single_item_opener {
@@ -2615,8 +2655,17 @@ impl BaseGame {
     /// seats in input/JSON order and a Python dict iterates insertion order, so
     /// building from the raw dict (instead of a HashMap, which loses order)
     /// makes Rust's seating and priority/turn order match the Python engine.
+    ///
+    /// `optional_rules` are Ruby optional-rule syms (an 18xx.games export's
+    /// `settings.optional_rules`); ValueError for any the title does not
+    /// implement.
     #[new]
-    fn new(player_names: &Bound<'_, PyDict>) -> PyResult<Self> {
+    #[pyo3(signature = (player_names, optional_rules=None))]
+    fn new(
+        player_names: &Bound<'_, PyDict>,
+        optional_rules: Option<Vec<String>>,
+    ) -> PyResult<Self> {
+        let optional_rules = Self::validate_optional_rules("1830", optional_rules)?;
         let mut player_ids: Vec<u32> = Vec::new();
         let mut names: HashMap<u32, String> = HashMap::new();
         for (k, v) in player_names.iter() {
@@ -2625,19 +2674,25 @@ impl BaseGame {
             player_ids.push(id);
             names.insert(id, name);
         }
-        Ok(Self::build(player_ids, names))
+        Ok(Self::build_with_rules("1830", player_ids, names, optional_rules))
     }
 
     /// Construct a game of any registered title (the title-aware sibling of
     /// `new`). Raises ValueError for an unknown title — callers (e.g. the
     /// per-title replay harnesses) probe `supported_titles_py()` first.
     #[staticmethod]
-    fn new_titled(title: &str, player_names: &Bound<'_, PyDict>) -> PyResult<Self> {
+    #[pyo3(signature = (title, player_names, optional_rules=None))]
+    fn new_titled(
+        title: &str,
+        player_names: &Bound<'_, PyDict>,
+        optional_rules: Option<Vec<String>>,
+    ) -> PyResult<Self> {
         if !crate::title::all_titles().iter().any(|t| t.name() == title) {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "unknown game title: {title}"
             )));
         }
+        let optional_rules = Self::validate_optional_rules(title, optional_rules)?;
         let mut player_ids: Vec<u32> = Vec::new();
         let mut names: HashMap<u32, String> = HashMap::new();
         for (k, v) in player_names.iter() {
@@ -2646,7 +2701,7 @@ impl BaseGame {
             player_ids.push(id);
             names.insert(id, name);
         }
-        Ok(Self::build_titled(title, player_ids, names))
+        Ok(Self::build_with_rules(title, player_ids, names, optional_rules))
     }
 
     // -- Getters --
@@ -2694,6 +2749,11 @@ impl BaseGame {
     #[getter]
     fn title(&self) -> String {
         self.title.clone()
+    }
+
+    #[getter]
+    fn optional_rules(&self) -> Vec<String> {
+        self.optional_rules.clone()
     }
 
     #[getter]
@@ -4211,6 +4271,46 @@ mod tests {
         for player in &game.players {
             assert_eq!(player.cash, 600);
         }
+    }
+
+    fn six_train_ids(game: &BaseGame) -> Vec<String> {
+        game.depot
+            .trains
+            .iter()
+            .filter(|t| t.name == "6")
+            .map(|t| t.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn optional_6_train_adds_a_third_six() {
+        let players: HashMap<u32, String> =
+            [(1, "A".to_string()), (2, "B".to_string())].into_iter().collect();
+        let base = BaseGame::build(vec![1, 2], players.clone());
+        assert_eq!(six_train_ids(&base), vec!["6-0", "6-1"]);
+        assert_eq!(base.depot.trains.len(), 40);
+
+        let rules = vec!["optional_6_train".to_string()];
+        let game = BaseGame::build_with_rules("1830", vec![1, 2], players, rules.clone());
+        assert_eq!(six_train_ids(&game), vec!["6-0", "6-1", "6-2"]);
+        assert_eq!(game.depot.trains.len(), 41);
+        // The extra 6 sits between the base 6s and the D-trains, as in Ruby.
+        let ids: Vec<&str> = game.depot.trains.iter().map(|t| t.id.as_str()).collect();
+        let six2 = ids.iter().position(|&id| id == "6-2").unwrap();
+        assert_eq!(ids[six2 + 1], "D-0");
+        assert_eq!(game.clone_for_search().optional_rules, rules);
+    }
+
+    #[test]
+    fn unimplemented_optional_rules_are_rejected() {
+        let validate = |title: &str, rules: &[&str]| {
+            let rules = rules.iter().map(|r| r.to_string()).collect();
+            BaseGame::validate_optional_rules(title, Some(rules))
+        };
+        assert!(BaseGame::validate_optional_rules("1830", None).unwrap().is_empty());
+        assert_eq!(validate("1830", &["optional_6_train"]).unwrap(), vec!["optional_6_train"]);
+        assert!(validate("1830", &["multiple_brown_from_ipo"]).is_err());
+        assert!(validate("1867", &["optional_6_train"]).is_err());
     }
 
     #[test]

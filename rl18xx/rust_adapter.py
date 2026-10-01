@@ -2411,7 +2411,8 @@ class RustGameAdapter:
 
         Emits the schema downstream tooling (``fix_online_games``,
         ``convert_games_to_training_dataset``) expects: title, sorted players,
-        the action log, id/finished/move_number, and final result.
+        the action log, id/finished/move_number, final result, and the
+        optional rules under ``settings`` (as in an 18xx.games export).
         """
         players = sorted(self._game.players, key=lambda p: p.id)
         try:
@@ -2426,6 +2427,7 @@ class RustGameAdapter:
             "finished": self._game.finished,
             "move_number": self._game.move_number,
             "result": result,
+            "settings": {"optional_rules": list(self._game.optional_rules)},
         }
 
     def end_game(self):

@@ -83,8 +83,25 @@ pub trait GameTitle: Sync {
     fn bank_cash(&self) -> i32;
     fn companies(&self) -> Vec<CompanyDef>;
     fn corporations(&self) -> Vec<CorporationDef>;
+    /// The title's train types. `TrainDef.count` is the BASE-rules count —
+    /// the encoder normalizes by it, so it never varies per game; the depot
+    /// a game actually starts with comes from `num_trains`.
     fn trains(&self) -> Vec<TrainDef>;
     fn phases(&self) -> Vec<PhaseDef>;
+
+    // -- optional rules (Ruby Meta::OPTIONAL_RULES) --
+
+    /// The optional-rule syms this title implements. The constructors reject
+    /// any other rule: replaying a game under a rule the engine ignores would
+    /// silently diverge from Ruby (and from the Python engine).
+    fn optional_rules(&self) -> &'static [&'static str] {
+        &[]
+    }
+    /// Ruby `num_trains`: how many of a train type the depot starts with,
+    /// given the game's (validated) optional rules. Default: the title data.
+    fn num_trains(&self, td: &TrainDef, _optional_rules: &[String]) -> u32 {
+        td.count
+    }
     fn hex_definitions(&self) -> Vec<HexDef>;
     /// The preprinted tile DSL + color for a map hex, if any.
     fn preprinted_hex_dsl(&self, coord: &str) -> Option<(&'static str, &'static str)>;
@@ -356,6 +373,12 @@ impl GameTitle for G1830 {
     }
     fn trains(&self) -> Vec<TrainDef> {
         g1830::trains()
+    }
+    fn optional_rules(&self) -> &'static [&'static str] {
+        g1830::OPTIONAL_RULES
+    }
+    fn num_trains(&self, td: &TrainDef, optional_rules: &[String]) -> u32 {
+        g1830::num_trains(td, optional_rules)
     }
     fn phases(&self) -> Vec<PhaseDef> {
         g1830::phases()
