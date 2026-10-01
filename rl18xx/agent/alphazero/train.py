@@ -624,10 +624,18 @@ def train_model(
         LOGGER.warning("Dataset is empty. Skipping training.")
         return metrics
 
+    # Self-play mixes player counts and the flat state width depends on the
+    # count, so a batch must hold one count (the model pads a batch to the
+    # max-N layout from its width). Same sampler as pretraining; no bucket
+    # cache — the sliding training window can keep the example count while
+    # shifting its contents.
+    from rl18xx.agent.alphazero.pretraining import PlayerCountBatchSampler, _make_num_players_fn  # pretraining imports this module
+
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.batch_size,
-        shuffle=config.shuffle_examples,
+        batch_sampler=PlayerCountBatchSampler(
+            train_dataset, batch_size=config.batch_size, num_players_fn=_make_num_players_fn(train_dataset)
+        ),
         num_workers=0,
         pin_memory=False,
         collate_fn=collate_examples,
