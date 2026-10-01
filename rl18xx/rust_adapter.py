@@ -472,9 +472,13 @@ class _HexProxy:
 class _RoundProxy:
     """Proxy for game.round that provides active_entities and __class__.__name__."""
 
-    def __init__(self, game):
+    def __init__(self, game, adapter=None):
         self._game = game
         self._round = game.round
+        self._adapter = adapter
+
+    def _acting_company(self):
+        return self._adapter._acting_company() if self._adapter is not None else None
 
     @property
     def operating(self):
@@ -497,7 +501,10 @@ class _RoundProxy:
 
     @property
     def active_entities(self):
-        """Returns a list of the currently active entity (Player or Corporation)."""
+        """Returns a list of the currently active entity (Player, Corporation, or acting Company)."""
+        company = self._acting_company()
+        if company is not None:
+            return [company]
         player = self._game.current_player
         if player is not None:
             return [_PlayerProxy(player)]
@@ -599,6 +606,11 @@ class _RoundProxy:
         base_class = step_class_map.get(step_type)
         if base_class:
             return _AuctionStepProxy(self._game, base_class)
+        # A pending DH teleport token blocks ahead of the regular Token step
+        # (Python's active step is then SpecialToken, acting for the company).
+        company = self._acting_company()
+        if company is not None and self._game.teleport_pending():
+            return _SpecialTokenStepProxy(self._game, teleported=company)
         return _StepProxy(self._game, step_type)
 
 
@@ -749,7 +761,16 @@ class _StepProxy:
         return list(groups.values())
 
     def sellable_shares(self, entity):
-        """Returns list of share bundles from Rust sellable_bundles()."""
+        """Returns list of share bundles from Rust sellable_bundles().
+
+        In an operating round the entity is the operating corporation and the
+        seller is its president (Python ``BuyTrain.sellable_shares`` sells
+        ``entity.owner``'s bundles to raise emergency money).
+        """
+        if isinstance(entity, _CorpProxy):
+            entity = entity.owner
+            if entity is None:
+                return []
         player_id = entity.id if hasattr(entity, 'id') else entity
         if isinstance(player_id, str):
             player_id = int(player_id) if player_id.isdigit() else 0
@@ -1053,10 +1074,16 @@ class _SpecialTrackStepProxy:
 
 
 class _SpecialTokenStepProxy:
-    """Proxy that passes isinstance(x, SpecialTokenStep)."""
+    """Proxy that passes isinstance(x, SpecialTokenStep).
 
-    def __init__(self, game):
+    With ``teleported`` set it is the BLOCKING step of a pending DH teleport
+    token (Python ``round.teleported``): the company may place the token or
+    Pass to decline it.
+    """
+
+    def __init__(self, game, teleported=None):
         self._game = game
+        self._teleported = teleported
 
     @property
     def __class__(self):
@@ -1068,9 +1095,23 @@ class _SpecialTokenStepProxy:
 
     @property
     def blocking(self):
-        return False
+        return self._teleported is not None
+
+    @property
+    def description(self):
+        return "Place teleport token"
+
+    @property
+    def active_entities(self):
+        return [self._teleported] if self._teleported is not None else []
+
+    @property
+    def current_entity(self):
+        return self._teleported
 
     def actions(self, entity):
+        if self._teleported is not None and entity == self._teleported:
+            return [PlaceToken, Pass]
         return []
 
 
@@ -1105,10 +1146,15 @@ class _ExchangeStepProxy:
         sources = _exchange_sources(ability)
         for corp_sym in ability.get("corporations", ()):
             corp = self._game.corporation_by_id(corp_sym)
-            if not corp or corp.ipo_price is None:
+            if not corp:
                 continue
             if "ipo" in sources:
-                ipo_shares = [s for s in corp.shares if s.owner == f"ipo:{corp_sym}" and not s.president]
+                # Before the corp pars the engine leaves its certs unowned
+                # (owner ""), but the IPO conceptually holds all of them and
+                # the exchange is legal at any time (Python/Ruby
+                # `exchangeable_shares`; the Rust enumerator offers it too).
+                ipo_owners = {f"ipo:{corp_sym}"} if corp.ipo_price is not None else {f"ipo:{corp_sym}", ""}
+                ipo_shares = [s for s in corp.shares if s.owner in ipo_owners and not s.president]
                 if ipo_shares:
                     result.append(_BuyableShare(corp, "ipo", ipo_shares[0].index, 0, self._game))
             if "market" in sources:
@@ -2395,11 +2441,27 @@ class RustGameAdapter:
     @property
     def round(self):
         """Returns a proxy that provides active_entities and __class__.__name__."""
-        return _RoundProxy(self._game)
+        return _RoundProxy(self._game, self)
+
+    def _acting_company(self):
+        """The company the blocking step acts for, or None.
+
+        Python's ``game.current_entity`` is the blocking step's current entity,
+        which is usually the round's player/corporation — but while a DH
+        teleport token is pending the blocking step is ``SpecialToken`` and the
+        actor is the teleported COMPANY (whose Pass declines the token).
+        """
+        acting = self._game.acting_entity_id()
+        if acting and acting.startswith("company:"):
+            return self.company_by_id(acting.split(":", 1)[1])
+        return None
 
     @property
     def current_entity(self):
-        """Returns the active entity (Player or Corporation) with isinstance compat."""
+        """Returns the active entity (Player, Corporation, or acting Company) with isinstance compat."""
+        company = self._acting_company()
+        if company is not None:
+            return company
         player = self._game.current_player
         if player is not None:
             return _PlayerProxy(player)
@@ -2705,26 +2767,32 @@ class RustGameAdapter:
         return active_corp.sym == corp_sym
 
     def discountable_trains_for(self, entity):
-        """Returns discountable trains (4→D exchange)."""
+        """Trade-in options ``[(owned_train, depot_train, name, discounted_price)]``.
+
+        Mirrors Python ``BaseGame.discountable_trains_for``: each owned train
+        paired with each depot train whose exchange-discount map discounts it
+        (1830: a 4, 5 or 6 takes $300 off a D). Copies of the same depot train
+        are interchangeable, so only the first of each name is listed.
+        """
         corp_sym = entity.sym if hasattr(entity, 'sym') else str(entity)
-        ci = None
-        for i, c in enumerate(self._game.corporations):
-            if c.sym == corp_sym:
-                ci = i
-                break
-        if ci is None:
+        corp = self._game.corporation_by_id(corp_sym)
+        if corp is None:
             return []
-        corp = self._game.corporations[ci]
-        has_4 = any(t.name == "4" for t in corp.trains)
-        if not has_4:
-            return []
-        d_train = next((t for t in self.depot.trains if t.name == "D"), None)
-        if d_train is None:
-            return []
-        old_train = next(t for t in corp.trains if t.name == "4")
-        # Wrap the D-train as a BuyableTrain so action.train.owner works
-        wrapped_d = _BuyableTrain(d_train.id, d_train.name, 800, "depot", self.depot, self._game)
-        return [(old_train, wrapped_d, "D", 800)]
+        discountable = {}
+        for t in self.depot.trains:
+            if t.discount and t.name not in discountable:
+                discountable[t.name] = t
+        result = []
+        for owned in corp.trains:
+            for name, dt in discountable.items():
+                amount = dict(dt.discount).get(owned.name)
+                if not amount:
+                    continue
+                price = dt.price - amount
+                # Wrap the depot train as a BuyableTrain so action.train.owner works
+                wrapped = _BuyableTrain(dt.id, dt.name, price, "depot", self.depot, self._game)
+                result.append((owned, wrapped, name, price))
+        return result
 
     @property
     def stock_market(self):

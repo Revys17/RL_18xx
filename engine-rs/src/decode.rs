@@ -52,6 +52,31 @@ impl BaseGame {
         )))
     }
 
+    /// The tile instance id the dict path lays for catalog tile `name`:
+    /// `name-N` for the lowest copy index N not on the board (the adapter's
+    /// `_TileProxy.id`, mirroring Python's `get_available_tile_with_name`). The
+    /// lay handler stores the id verbatim as the tile's name, so laying the bare
+    /// name would leave two hexes with the same tile indistinguishable to a
+    /// `city: "57-0"` PlaceToken ref. A bare `name` already on the board counts
+    /// as copy 0.
+    fn available_tile_instance_id(&self, name: &str) -> String {
+        let prefix = format!("{}-", name);
+        let laid: std::collections::HashSet<u32> = self
+            .hexes
+            .iter()
+            .filter_map(|h| {
+                let laid_name = h.tile.name.as_str();
+                if laid_name == name {
+                    Some(0)
+                } else {
+                    laid_name.strip_prefix(prefix.as_str()).and_then(|n| n.parse().ok())
+                }
+            })
+            .collect();
+        let copy = (0..).find(|n| !laid.contains(n)).unwrap_or(0);
+        format!("{}{}", prefix, copy)
+    }
+
     /// Find the deduplicated factored [`LegalAction`] whose flat policy index
     /// matches `idx` at the current state, re-running the factored enumeration.
     /// Shared by `decode_index`, `price_range_for_index`, and
@@ -423,8 +448,9 @@ impl BaseGame {
                 };
                 let hex_id = s(&la.params, "hex")
                     .ok_or_else(|| GameError::new("LayTile LegalAction missing 'hex'"))?;
-                let tile_id = s(&la.params, "tile")
+                let tile_name = s(&la.params, "tile")
                     .ok_or_else(|| GameError::new("LayTile LegalAction missing 'tile'"))?;
+                let tile_id = self.available_tile_instance_id(&tile_name);
                 let rotation = i(&la.params, "rotation").unwrap_or(0) as u8;
                 Ok(Action::LayTile {
                     entity_id,

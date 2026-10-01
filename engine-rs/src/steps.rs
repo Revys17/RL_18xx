@@ -337,6 +337,32 @@ impl BaseGame {
         self.title_def().next_round(finished, &self.phase.name, ors)
     }
 
+    /// Python `round.active_step()` + `game.current_entity`: the index of the
+    /// BLOCKING step — the first active step that `blocks` with non-empty
+    /// `current_actions` for its own current entity, or whose per-kind
+    /// blocking override fires — and that step's current entity. `None` when
+    /// no step blocks.
+    fn blocking_step_entity(&mut self, snap: &Round) -> Option<(usize, StepEntity)> {
+        let steps = self.round_step_descs(snap);
+        for (i, desc) in steps.iter().enumerate() {
+            if !self.step_active(desc, snap) {
+                continue;
+            }
+            if self.step_blocking_override(desc, snap) {
+                return self.step_current_entity(desc, snap).map(|e| (i, e));
+            }
+            if !desc.blocks {
+                continue;
+            }
+            if let Some(e) = self.step_current_entity(desc, snap) {
+                if !self.step_actions(desc, &e, snap).is_empty() {
+                    return Some((i, e));
+                }
+            }
+        }
+        None
+    }
+
     /// THE shared `actions_for` accumulation loop (Python
     /// `BaseRound.actions_for` + `active_step` + the ActionHelper's parallel
     /// company-actions union), written once for all rounds and titles:
@@ -363,28 +389,7 @@ impl BaseGame {
         let steps = self.round_step_descs(&snap);
 
         // 1+2: blocking step + acting entity.
-        let mut blocking: Option<(usize, StepEntity)> = None;
-        for (i, desc) in steps.iter().enumerate() {
-            if !self.step_active(desc, &snap) {
-                continue;
-            }
-            if self.step_blocking_override(desc, &snap) {
-                if let Some(e) = self.step_current_entity(desc, &snap) {
-                    blocking = Some((i, e));
-                }
-                break;
-            }
-            if !desc.blocks {
-                continue;
-            }
-            if let Some(e) = self.step_current_entity(desc, &snap) {
-                if !self.step_actions(desc, &e, &snap).is_empty() {
-                    blocking = Some((i, e));
-                    break;
-                }
-            }
-        }
-        let Some((bidx, entity)) = blocking else {
+        let Some((bidx, entity)) = self.blocking_step_entity(&snap) else {
             return Vec::new();
         };
 
@@ -1539,6 +1544,24 @@ impl BaseGame {
     /// hand-derived `legal_action_types` at every state.
     fn step_action_types(&mut self) -> Vec<String> {
         self.step_action_types_impl()
+    }
+
+    /// Python `game.current_entity` — the blocking step's current entity —
+    /// as `player:<id>`, `corp:<sym>` or `company:<sym>`; `None` when the
+    /// game is over or no step blocks. Usually the round's active entity, but
+    /// a step can act for another: while a DH teleport token is pending the
+    /// actor is the teleported COMPANY (Python `SpecialToken.active_entities
+    /// == [round.teleported]`), whose Pass declines the token.
+    fn acting_entity_id(&mut self) -> Option<String> {
+        if self.finished {
+            return None;
+        }
+        let snap = self.round.clone();
+        self.blocking_step_entity(&snap).map(|(_, e)| match e {
+            StepEntity::Player(pid) => format!("player:{}", pid),
+            StepEntity::Corp(sym) => format!("corp:{}", sym),
+            StepEntity::Company(sym) => format!("company:{}", sym),
+        })
     }
 }
 

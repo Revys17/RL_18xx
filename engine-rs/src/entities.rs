@@ -108,6 +108,13 @@ impl Train {
         self.owner.0.clone()
     }
 
+    /// Exchange discount map as `[(traded_train_name, amount), ...]`
+    /// (Python `Train.discount`).
+    #[getter]
+    fn discount(&self) -> Vec<(String, i32)> {
+        self.discount.clone()
+    }
+
     fn __repr__(&self) -> String {
         format!("Train(name='{}', price={})", self.name, self.price)
     }

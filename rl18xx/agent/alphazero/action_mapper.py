@@ -1114,6 +1114,29 @@ class ActionMapper(metaclass=Singleton):
         LOGGER.debug(f"Indices: {indices}")
         return indices
 
+    def _legal_action_for_index(self, index: int, state: BaseGame) -> Optional[LegalAction]:
+        """The first factored LegalAction (in enumeration order) mapping to ``index``.
+
+        Mirrors the native decode's ``legal_action_for_index``: when several
+        LegalActions share a slot, the first one decides what the slot means.
+        """
+        for la in self._get_factored_choices(state):
+            try:
+                if self.index_for_factored(la, state) == index:
+                    return la
+            except (KeyError, ValueError):
+                continue
+        return None
+
+    @staticmethod
+    def _trade_in_donor(entity):
+        """The owned train a D trade-in gives up: the lowest tier (4, then 5, then 6)."""
+        for donor_name in ("4", "5", "6"):
+            matches = [t for t in entity.trains if t.name == donor_name]
+            if matches:
+                return matches[0]
+        return None
+
     def map_index_to_action(self, index: int, state: BaseGame) -> BaseAction:
         if not (0 <= index < self.action_encoding_size):
             raise IndexError(f"Action index {index} out of bounds (0-{self.action_encoding_size-1})")
@@ -1258,13 +1281,7 @@ class ActionMapper(metaclass=Singleton):
                 if args[2] == "full":
                     return BuyTrain(entity, d_train, d_train.price)
                 if args[2] == "trade-in":
-                    # Auto-pick lowest-tier donor (4 first, then 5, then 6).
-                    donor = None
-                    for donor_name in ("4", "5", "6"):
-                        matches = [t for t in entity.trains if t.name == donor_name]
-                        if matches:
-                            donor = matches[0]
-                            break
+                    donor = self._trade_in_donor(entity)
                     if donor is None:
                         raise ValueError(
                             "No 4/5/6 owned by entity for D-trade-in BuyTrain action"
@@ -1297,6 +1314,18 @@ class ActionMapper(metaclass=Singleton):
                 if len(trains) == 0:
                     raise ValueError("No discarded trains available in depot for BuyTrain action")
                 train = trains[0]
+                # The discard slot is shared: ``_index_for_factored_buy_train``
+                # checks the discard pool before the D/exchange split, so a
+                # trade-in for a train whose name is also in the pool lands
+                # here too. Decode the LegalAction that produced the slot (as
+                # the native decode does) — otherwise a trade-in becomes a
+                # face-value buy the corporation may not be able to afford.
+                la = self._legal_action_for_index(index, state)
+                if la is not None and la.entity.get("exchange") is not None:
+                    donor = self._trade_in_donor(entity)
+                    if donor is None:
+                        raise ValueError(f"No trade-in train owned by entity for BuyTrain action: {la}")
+                    return BuyTrain(entity, train, int(la.price_range[0]), exchange=donor)
                 return BuyTrain(entity, train, train.price)
 
             # Buy train from other corporation

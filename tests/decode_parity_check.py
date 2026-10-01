@@ -13,7 +13,8 @@ State equality is checked via the deterministic full-state encoding
 
 The trajectory is advanced through the OLD (known-good) path so divergences are
 attributable to the NEW decode. Action choice is deterministic (seeded by step),
-no RNG.
+no RNG. A legal index the OLD path cannot apply also fails the check — the
+pure-Python MCTS used by gating and the arena would crash on it.
 """
 
 import logging
@@ -77,13 +78,19 @@ def run_game(seed_players, max_steps, am):
                 old_clone = game.pickle_clone()
                 new_clone = game.pickle_clone()
 
-                # OLD path (oracle). If Python decode itself raises (e.g.
-                # enumerated but no concrete share), that is not a NEW bug — skip.
+                # OLD path (oracle). An enumerated index the Python decode can't
+                # apply is a bug too: the pure-Python MCTS (gating, arena)
+                # crashes on it. Report it rather than skipping.
                 try:
                     old_dict = _decode_old(am, old_clone, idx, price)
                     old_clone.process_action(old_dict)
-                except Exception:
+                except Exception as exc:
                     stats["skipped_old_raise"] += 1
+                    if len(mismatches) < 25:
+                        mismatches.append(
+                            f"step{step} idx{idx} type={atype} price={price}: OLD raised "
+                            f"{type(exc).__name__}: {exc}"
+                        )
                     continue
 
                 # NEW path.
