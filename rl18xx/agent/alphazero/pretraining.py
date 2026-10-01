@@ -322,7 +322,8 @@ def filter_actions(actions: list[dict]) -> list[dict]:
     actions = copy.deepcopy(actions)
     filtered_actions_history = []
     filtered_actions = []
-    # First, remove the actions that should be removed by undo/redo along with all messages
+    # First, remove the actions that should be removed by undo/redo along with all messages.
+    # (``log`` actions stay in this pass — they are undo targets in Ruby — and are stripped below.)
     for action in actions:
         if action["type"] == "message":
             continue
@@ -364,6 +365,18 @@ def filter_actions(actions: list[dict]) -> list[dict]:
     # right before is enough to wrap the game; if not, both engines simply
     # stop where the human action stream ends, which is what we want).
     filtered_actions = [x for x in filtered_actions if x["type"] != "end_game"]
+
+    # ``log`` is the audit line 18xx.games records when a player confirms
+    # another player's consent (``check_consent`` in the Ruby client). Ruby's
+    # ``Action::Log < Message`` and ``Step::Message#process_log`` only appends
+    # to the game log, so it is state-neutral — but both our engines reject it
+    # (the Message step is disabled for agents). Strip it HERE, after the
+    # undo/redo pass, not alongside ``message`` above: Ruby's
+    # ``Game::Base.filtered_actions`` special-cases only ``message``, so a bare
+    # ``undo`` right after a ``log`` undoes the log itself, not the preceding
+    # game action — the consent flow produces exactly that (log, rejected
+    # click, undo).
+    filtered_actions = [x for x in filtered_actions if x["type"] != "log"]
 
     # Next, reset the id on all actions
     for i, action in enumerate(filtered_actions):

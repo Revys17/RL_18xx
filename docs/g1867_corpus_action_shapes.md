@@ -39,4 +39,6 @@ analysis in `g1867_port_notes.md`.
 - `auto_actions` appear on `buy_shares`/`dividend`/`remove_token` — the
   shared `filter_actions` already flattens them.
 - Client-side types to filter (already handled by `filter_actions`):
-  `message`, `undo`, `redo`, `program_*`; plus `end_game` (145×).
+  `message`, `undo`, `redo`, `program_*`; plus `end_game` (145×) and `log`
+  (the consent audit line; 13 scrape_2026_10 games), which is stripped only
+  after the undo/redo pass because Ruby lets a bare `undo` target it.
