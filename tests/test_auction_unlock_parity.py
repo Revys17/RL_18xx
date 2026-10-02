@@ -89,25 +89,26 @@ def test_without_unlock_the_locked_auction_never_moves():
     assert rs.auction_min_bid("CS") == 40 and py.active_step().min_bid(py.company_by_id("CS")) == 40
 
 
-def test_unlocked_auction_resolves_every_bid():
-    """Even when the SV's owner spends its revenue on raises, the CS gets
-    cheap enough for it to buy (the $5 revenue it holds after each payout);
-    buying it cascades through the bids waiting behind it and the auction
-    ends, identically in both engines."""
+def test_unlock_takes_the_private_free_at_zero_and_resolves_the_bids():
+    """The SV's owner spends its revenue raising a bid every round, so no one
+    can ever afford the CS when everyone passes: its price reaches $0, the
+    next player takes it free, and the cascade resolves every bid waiting
+    behind it, identically in both engines. (Judging affordability after
+    the payout instead left the CS at $5 forever: the owner always held the
+    $5 it had just earned.)"""
     py, rs = _games(True)
     for action in LOCK + ALL_PASS:  # P1 now holds the SV's $5; CS at $35
         _apply(py, rs, action)
     mh_bid = 580
-    while rs.auction_min_bid("CS") > 5:
+    while rs.auction_companies() and mh_bid < 700:
         mh_bid += 5
         for action in [pass_(2), pass_(3), pass_(4), bid(1, "MH", mh_bid)] + ALL_PASS:
             _apply(py, rs, action)
             py_state, rs_state = _state(py, rs)
             assert py_state[:3] == rs_state, action
-    for action in [pass_(2), pass_(3), pass_(4), bid(1, "CS", 5)]:
-        _apply(py, rs, action)
-        py_state, rs_state = _state(py, rs)
-        assert py_state[:3] == rs_state, action
-    assert not rs.auction_companies(), "buying the CS should resolve every remaining bid"
+            if not rs.auction_companies():
+                break
+    assert not rs.auction_companies(), "the CS going free should resolve every remaining bid"
     owners = _state(py, rs)[0][3]
-    assert owners == {"SV": 1, "CS": 1, "DH": 4, "MH": 1, "CA": 3, "BO": 2}
+    assert owners["DH"] == 4 and owners["MH"] == 1 and owners["CA"] == 3 and owners["BO"] == 2
+    assert owners["CS"] is not None

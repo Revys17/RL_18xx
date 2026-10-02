@@ -329,10 +329,14 @@ impl BaseGame {
                     // (Python: self.game.payout_companies(), self.game.or_set_finished())
                     // Don't update current_auction_company — it stays as the original
                     // target (already sold), so subsequent all-pass cycles also trigger payouts.
+                    // Self-play variant (BaseGame::auction_unlock): judged before
+                    // the payout — no one could buy the next private in the round
+                    // they all passed (after it, the SV's owner always holds the
+                    // $5 it just earned and can re-spend it on a raise forever).
+                    let locked = self.auction_unlock && self.auction_next_unaffordable(&new_state);
                     self.payout_companies();
-                    if self.auction_unlock && self.auction_next_unaffordable(&new_state) {
-                        // Self-play variant (BaseGame::auction_unlock): discount
-                        // the next private as the SV branch above does.
+                    if locked {
+                        // Discount the next private as the SV branch above does.
                         if let Some(next_idx) = new_state.cheapest_company() {
                             new_state.discount += 5;
                             let new_min = (self.companies[next_idx].value - new_state.discount).max(0);

@@ -257,11 +257,11 @@ pub struct BaseGame {
     /// reserve (Montreal L12) — consumed by `place_639_token` or by
     /// nationalization on that hex.
     pub(crate) national_reservations: Vec<String>,
-    /// Self-play rule variant, off unless set: when an all-pass round leaves
-    /// the next private in the waterfall auction unbid and no player able to
-    /// afford it, its price drops $5 like the SV's (taken free at $0). Under
-    /// the real rules only the SV is discounted, so such an auction can only
-    /// loop; in 2,428 human 1830 games no all-pass ever met the condition.
+    /// Self-play rule variant, off unless set: when every player passes in a
+    /// waterfall round in which none of them could afford the next private
+    /// (unbid), its price drops $5 like the SV's (taken free at $0). Under the
+    /// real rules only the SV is discounted, so such an auction can only loop;
+    /// in 2,428 human 1830 games no all-pass ever met the condition.
     pub(crate) auction_unlock: bool,
 }
 
