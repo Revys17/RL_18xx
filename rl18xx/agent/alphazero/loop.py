@@ -790,6 +790,16 @@ def _run_selfplay_iteration(
     executor_kwargs: dict = {"max_workers": loop_config.num_threads}
     if server_handle is not None:
         from rl18xx.agent.alphazero.inference_server import worker_init_inference
+
+        # The server has a fixed number of worker slots; a pool worker without
+        # one would block at boot.
+        if loop_config.num_threads > server_handle.num_workers:
+            LOGGER.warning(
+                f"Loop {loop+1}: num_threads={loop_config.num_threads} exceeds the inference server's "
+                f"{server_handle.num_workers} worker slots; using {server_handle.num_workers} processes."
+            )
+            executor_kwargs["max_workers"] = server_handle.num_workers
+        server_handle.reset_worker_slots()
         executor_kwargs["initializer"] = worker_init_inference
         executor_kwargs["initargs"] = (
             server_handle.request_q,

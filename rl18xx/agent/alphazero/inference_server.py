@@ -756,6 +756,24 @@ class ServerHandle:
             if reply_seq == seq:
                 return reply
 
+    def reset_worker_slots(self) -> None:
+        """Make every worker slot available to a new process pool.
+
+        A pool worker takes a slot ticket at boot and never hands it back, so
+        the next iteration's pool would block forever in
+        ``worker_init_inference`` once the first pool had taken them all. Call
+        between pools, with no workers alive. Also drops any reply left in a
+        slot's queue so a new worker can't read its predecessor's.
+        """
+        for q in (self.ticket_q, *self.reply_qs):
+            while True:
+                try:
+                    q.get(timeout=0.05)
+                except queue.Empty:
+                    break
+        for i in range(self.num_workers):
+            self.ticket_q.put(i)
+
     def pause(self, timeout_s: float = 30.0):
         return self._send("pause", timeout_s=timeout_s)
 

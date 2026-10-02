@@ -543,3 +543,42 @@ def test_client_sparse_legal_priors_scatter_back_to_dense():
             assert torch.equal(row, expected)
     finally:
         _shutdown(server, control_q, thread)
+
+
+def _pool_worker_round_trip(signature):
+    from rl18xx.agent.alphazero.inference_server import get_worker_client
+
+    _, _, values = get_worker_client().run_many_encoded([signature])
+    return float(values[0][0])
+
+
+def test_each_process_pool_gets_worker_slots():
+    """Every training-loop iteration opens a new self-play pool against the
+    same server. Pool workers take a slot ticket at boot and never return it,
+    so without resetting the slots the second pool's workers blocked forever
+    in ``worker_init_inference``."""
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+
+    from rl18xx.agent.alphazero.inference_server import start_inference_server, worker_init_inference
+
+    handle = start_inference_server(
+        num_workers=2, model_factory=_mock_factory, checkpoint_path=None, batch_size=4, batch_timeout_ms=2.0
+    )
+    try:
+        for _ in range(2):
+            handle.reset_worker_slots()
+            pool = ProcessPoolExecutor(
+                2,
+                mp_context=mp.get_context("spawn"),
+                initializer=worker_init_inference,
+                initargs=(handle.request_q, handle.reply_qs, handle.ticket_q),
+            )
+            try:
+                assert list(pool.map(_pool_worker_round_trip, [3, 5], timeout=120)) == [3.0, 5.0]
+            finally:
+                for proc in list(pool._processes.values()):
+                    proc.kill()
+                pool.shutdown(wait=False, cancel_futures=True)
+    finally:
+        handle.shutdown(timeout_s=30)
