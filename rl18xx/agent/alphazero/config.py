@@ -397,8 +397,11 @@ class SelfPlayHyperparams:
     # End a game still in the initial private auction after this many engine
     # moves, scored on net worth; 0 disables. A backstop for players passing
     # forever while the next private is affordable. Human 1830 auctions run a
-    # median of 18 actions (p99 43, max 59).
-    auction_stall_moves: int = 150
+    # median of 18 actions (p99 43, max 59), but a self-play lock takes
+    # ~100-150 to unwind under auction_unlock: at 150, 12 of 28 games were
+    # cut off mid-resolution; at 400, 27 of 28 finished on their own (median
+    # 592 moves; humans 587).
+    auction_stall_moves: int = 400
     c_puct_base: float = 19652
     c_puct_init: float = 1.25
     c_puct_by_round: dict = field(default_factory=_default_c_puct_by_round)
