@@ -15,8 +15,9 @@
         "score_loss_weight": 0.1,
         "entropy_weight": 0.01,
         "gradient_accumulation_steps": 1,
-        "max_training_window": 100000,
-        "value_lr_multiplier": 3.0,
+        "max_training_window": 1000000,
+        "train_samples_per_iteration": 40000,
+        "value_lr_multiplier": 1.0,
         "use_fp16_training": true,
         "pretrain_label_smoothing": 0.03,
         "pretrain_validation_percentage": 0.05

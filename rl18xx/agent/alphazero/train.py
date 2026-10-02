@@ -1,4 +1,5 @@
 import math
+import random
 import numpy as np
 from rl18xx.agent.alphazero.model import AlphaZeroModel
 from rl18xx.agent.alphazero import price_pmf
@@ -9,7 +10,7 @@ from rl18xx.agent.alphazero.checkpointer import get_latest_model, save_model, sa
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Subset
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 import logging
@@ -572,9 +573,36 @@ def train(
             )
 
     train_dataset = SelfPlayDataset(config.train_dir, start_index=start_index)
+    samples = config.train_samples_per_iteration
+    if samples and len(train_dataset) > samples:
+        LOGGER.info(f"Training on {samples} examples sampled from the {len(train_dataset)}-example window")
+        train_dataset = Subset(train_dataset, sorted(random.sample(range(len(train_dataset)), samples)))
 
     metrics = train_model(model, train_dataset, config, graph, model_checkpoint_dir)
     return model, metrics
+
+
+def value_cross_entropy(model: AlphaZeroModel, dataset: Dataset, indices: list, batch_size: int = 256) -> float:
+    """Mean win-loss-head cross-entropy against share-of-winners targets on
+    ``dataset[indices]`` (the value loss the training loop minimizes)."""
+    if not indices:
+        return float("nan")
+    was_training = model.training
+    model.eval()
+    device = model.device
+    total, count = 0.0, 0
+    loader = DataLoader(Subset(dataset, indices), batch_size=batch_size, collate_fn=collate_examples)
+    with torch.no_grad():
+        for batch in loader:
+            game_state_data, batch_data, _, _, value = batch[:5]
+            _, win_loss_logits, _, _ = model(game_state_data.squeeze(1).float().to(device), batch_data.to(device))
+            target, _ = _derive_dual_value_targets(value.float().to(device))
+            if target.shape[1] < win_loss_logits.shape[1]:
+                target = F.pad(target, (0, win_loss_logits.shape[1] - target.shape[1]))
+            total += float(-(target * F.log_softmax(win_loss_logits.float(), dim=1)).sum())
+            count += len(value)
+    model.train(was_training)
+    return total / count
 
 
 def train_model(

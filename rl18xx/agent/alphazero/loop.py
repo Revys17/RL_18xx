@@ -3,12 +3,14 @@ import os
 import json
 import logging
 import gc
+import math
 import shutil
 import time
 from datetime import datetime
 from dataclasses import dataclass, asdict
 from rl18xx.agent.alphazero.checkpointer import (
     _find_latest_session,
+    get_current_best,
     get_latest_model,
     save_model,
     save_optimizer_state,
@@ -18,7 +20,8 @@ from rl18xx.agent.alphazero.checkpointer import (
 from rl18xx.agent.alphazero.config import SelfPlayConfig, TrainingConfig
 from rl18xx.agent.alphazero.metrics import Metrics
 from rl18xx.agent.alphazero.self_play import MCTSPlayer, SelfPlay, SELF_PLAY_GAMES_STATUS_PATH
-from rl18xx.agent.alphazero.train import train
+from rl18xx.agent.alphazero.dataset import SelfPlayDataset
+from rl18xx.agent.alphazero.train import train, value_cross_entropy
 from rl18xx.agent.multi_agent import play_multi_agent_game
 from rl18xx.shared.atomic_io import atomic_write_json
 from multiprocessing import resource_tracker
@@ -1085,10 +1088,57 @@ def _aggregate_selfplay_stats(
     )
 
 
+def _selfplay_dir(model_checkpoint_dir: str = MODEL_CHECKPOINT_DIR) -> Optional[Path]:
+    """Self-play LMDB of the current-best model's session (where its games are written)."""
+    pointer = get_current_best(model_checkpoint_dir)
+    if pointer is None:
+        return None
+    return Path(f"training_examples/selfplay/{pointer['arch']}_{pointer['session']}")
+
+
+def _selfplay_example_count() -> int:
+    path = _selfplay_dir()
+    if path is None or not (path / "data.mdb").exists():
+        return 0
+    dataset = SelfPlayDataset(path)
+    count = len(dataset)
+    dataset.env.close()
+    return count
+
+
+def log_value_generalization(
+    loop: int, model, train_dir: Path, examples_before_selfplay: int, window: int, metrics: Metrics, sample: int = 5000
+) -> dict:
+    """Value-head CE of the model about to train on (a) this iteration's new
+    games, which it generated but never trained on, and (b) the rest of its
+    training window. A wide gap means it is memorizing games rather than
+    learning to evaluate positions (uniform guessing scores ln(players))."""
+    if not (train_dir / "data.mdb").exists():
+        return {}
+    dataset = SelfPlayDataset(train_dir)
+    total = len(dataset)
+    new = list(range(examples_before_selfplay, total))
+    old = list(range(max(0, total - window) if window else 0, examples_before_selfplay))
+    rng = random.Random(loop)
+    result = {
+        "new_games": value_cross_entropy(model, dataset, sorted(rng.sample(new, min(sample, len(new))))),
+        "trained_window": value_cross_entropy(model, dataset, sorted(rng.sample(old, min(sample, len(old))))),
+    }
+    dataset.env.close()
+    LOGGER.info(
+        f"Loop {loop+1}: value CE on new games {result['new_games']:.3f} vs trained window "
+        f"{result['trained_window']:.3f} (uniform 4p: {math.log(4):.3f})"
+    )
+    metrics.add_scalar("Value/CE_New_Games", result["new_games"], loop)
+    metrics.add_scalar("Value/CE_Trained_Window", result["trained_window"], loop)
+    return result
+
+
 def _run_training_iteration(
     loop: int,
     loop_config: "LoopConfig",
     metrics: Metrics,
+    examples_before_selfplay: int = 0,
 ) -> TrainingIterationResult:
     """Train the current-best model on the current self-play data.
 
@@ -1107,6 +1157,13 @@ def _run_training_iteration(
 
     model = get_latest_model(MODEL_CHECKPOINT_DIR)
     training_config.train_dir = Path(f"training_examples/selfplay/{model.get_name()}")
+    try:
+        log_value_generalization(
+            loop, model, training_config.train_dir, examples_before_selfplay,
+            training_config.max_training_window, metrics,
+        )
+    except Exception as e:
+        LOGGER.warning(f"Loop {loop+1}: value generalization check failed (continuing): {e}")
 
     training_start_time = time.time()
     _, train_metrics = train(training_config, model, model_checkpoint_dir=MODEL_CHECKPOINT_DIR)
@@ -1609,6 +1666,7 @@ def main(
             }
             update_loop_status(status)
 
+            examples_before_selfplay = _selfplay_example_count()
             sp = _run_selfplay_iteration(
                 loop, loop_config, scheduled_game_length, tb_log_dir, timestamp, loop_metrics,
                 server_handle=inference_server_handle,
@@ -1634,7 +1692,7 @@ def main(
                 except Exception as e:
                     LOGGER.warning(f"Inference server pause failed (continuing): {e}")
 
-            train_result = _run_training_iteration(loop, loop_config, metrics)
+            train_result = _run_training_iteration(loop, loop_config, metrics, examples_before_selfplay)
             model = train_result.model
             train_metrics = train_result.train_metrics
             training_wall_time = train_result.wall_time

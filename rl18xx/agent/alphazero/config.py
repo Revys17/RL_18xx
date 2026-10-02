@@ -268,6 +268,15 @@ class TrainingConfig:
     gradient_accumulation_steps: int = 1  # gradient accumulation steps (1 = no accumulation)
     # 0 = no windowing; default is approximately 5 iterations worth of examples.
     max_training_window: int = 250_000
+    # Train each iteration on this many examples drawn at random from the
+    # window instead of the whole window (None = whole window). Positions of
+    # one game share one outcome, so retraining on a window of a few hundred
+    # games every iteration let the value head memorize them: after 15
+    # iterations on a 100k window its CE was 0.17 on positions it had trained
+    # on but 1.57 on new games — worse than uniform (1.39). A large window
+    # sampled at roughly the rate new examples arrive keeps many games in
+    # play and each position seen about once.
+    train_samples_per_iteration: Optional[int] = None
     value_lr_multiplier: float = 3.0  # multiplier for value head learning rate relative to config.lr
     use_fp16_training: bool = True  # mixed-precision (bf16) training on CUDA
     pretrain_label_smoothing: float = 0.03  # epsilon for smoothing policy targets during pretraining
@@ -311,6 +320,7 @@ class TrainingConfig:
             "entropy_weight": self.entropy_weight,
             "gradient_accumulation_steps": self.gradient_accumulation_steps,
             "max_training_window": self.max_training_window,
+            "train_samples_per_iteration": self.train_samples_per_iteration,
             "value_lr_multiplier": self.value_lr_multiplier,
             "use_fp16_training": self.use_fp16_training,
             "pretrain_label_smoothing": self.pretrain_label_smoothing,
