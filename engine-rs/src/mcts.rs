@@ -225,7 +225,15 @@ fn sample_price_for_pw(
     let sigma = (price_log_std.clamp(-1.0_f32, 8.5_f32).exp() as f64).max(1e-3);
     let mu = price_mean as f64;
     let mut rng = rand::thread_rng();
-    let z = sample_truncated_std_normal((p_min as f64 - mu) / sigma, (p_max as f64 - mu) / sigma, &mut rng);
+    let (a, b) = ((p_min as f64 - mu) / sigma, (p_max as f64 - mu) / sigma);
+    if !(a.is_finite() && b.is_finite() && a < b) {
+        // A non-finite head output: any legal price, uniformly on the grid.
+        use rand::Rng;
+        let step = price_grid_step(action_type);
+        let n_choices = (((p_max - p_min) / step) + 1).max(1);
+        return snap_price((p_min + rng.gen_range(0..n_choices) * step) as f32, action_type, p_min, p_max);
+    }
+    let z = sample_truncated_std_normal(a, b, &mut rng);
     snap_price((mu + sigma * z) as f32, action_type, p_min, p_max)
 }
 
@@ -1683,6 +1691,14 @@ mod tests {
         assert!(samples.iter().all(|&p| (225..=600).contains(&p) && p % 5 == 0));
         let near_min = samples.iter().filter(|&&p| p <= 240).count();
         assert!(near_min as f64 / samples.len() as f64 > 0.95, "only {near_min}/2000 near the minimum");
+    }
+
+    #[test]
+    fn price_sampling_survives_a_non_finite_head() {
+        for (mu, log_std) in [(f32::NAN, 2.0), (200.0, f32::NAN), (f32::INFINITY, 2.0), (f32::NEG_INFINITY, 2.0)] {
+            let p = sample_price_for_pw(mu, log_std, "Bid", (225, 600));
+            assert!((225..=600).contains(&p) && p % 5 == 0, "{p} for mu={mu} log_std={log_std}");
+        }
     }
 
     #[test]

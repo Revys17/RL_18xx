@@ -115,6 +115,14 @@ def test_sample_price_with_mean_below_range_stays_near_the_minimum():
     assert np.mean(samples <= 240) > 0.95
 
 
+@pytest.mark.parametrize("mu, log_std", [(float("nan"), 2.0), (200.0, float("nan")), (float("inf"), 2.0), (-float("inf"), 2.0)])
+def test_sample_price_survives_a_non_finite_head(mu, log_std):
+    """A NaN/inf head output (an fp16 overflow did this) must still yield a
+    legal price, not hang the rejection loop."""
+    sample = sample_price_for_pw(mu, log_std, "Bid", (225, 600), _seeded_rng())
+    assert 225 <= sample <= 600 and sample % 5 == 0
+
+
 @pytest.mark.parametrize("a, b", [(-0.3, 0.2), (-3.0, 3.0), (0.5, 0.6), (4.0, 1e9), (-1e9, -6.0), (40.0, 40.5)])
 def test_truncated_std_normal_stays_in_bounds(a, b):
     rng = _seeded_rng(3)

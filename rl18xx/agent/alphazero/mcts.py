@@ -212,7 +212,14 @@ def sample_price_for_pw(
 
     sigma = float(np.exp(np.clip(price_log_std, -1.0, 8.5)))
     mu = float(price_mean)
-    z = _sample_truncated_std_normal((p_min - mu) / sigma, (p_max - mu) / sigma, rng)
+    a, b = (p_min - mu) / sigma, (p_max - mu) / sigma
+    if not (math.isfinite(a) and math.isfinite(b) and a < b):
+        # A non-finite head output: any legal price, uniformly on the grid
+        # (the rejection loops below would never accept NaN bounds).
+        step = PRICE_GRID.get(action_type, 1)
+        n_choices = max(1, (int(p_max) - int(p_min)) // step + 1)
+        return _snap_price(int(p_min) + int(rng.integers(0, n_choices)) * step, action_type, int(p_min), int(p_max))
+    z = _sample_truncated_std_normal(a, b, rng)
     return _snap_price(mu + sigma * z, action_type, int(p_min), int(p_max))
 
 
