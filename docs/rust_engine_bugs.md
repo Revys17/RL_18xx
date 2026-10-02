@@ -1,5 +1,30 @@
 # Rust engine divergences from Python reference
 
+## OPEN — the native router runs routes 1830 forbids (found 2026-10-02)
+
+The native RunRoutes decode (`decode.rs` → `BaseGame::optimal_routes` →
+`router::calculate_corp_routes`) sometimes picks a route the rules forbid,
+and pays its revenue. Replays don't notice — both engines trust a recorded
+route's revenue — but Python's route validation (a port of Ruby's) rejects
+these routes when it rebuilds them from the logged `connections`. Over 300
+random native games (seeds 100–399, 2–6 players, both auction rules), 1,576 of
+40,225 routes (3.9%):
+
+| Violation | Routes | Python error | Example (`nodes`) |
+|---|---|---|---|
+| Revisits a stop (loops back to a city) | 1,274 | `Cannot use I15 twice` | `I15-0, H10-0, H12-0, I15-0` |
+| Crosses a hexside twice (runs back over its own track) | 278 | `Route cannot reuse track on D22` | chains `…C19, D20, D22, E23` then `E23, D24, D22, D20, …` |
+| Stops at two nodes of one group | 24 | `Cannot use group Canada more than once` | both Canada offboards |
+
+A loop counts the revisited stop twice (`I15 → H10 → H12 → I15` logs
+60+40+10+60 = 170), so the native engine overpays. The fix belongs in the
+router walk (`router.rs`): no revisiting a visited stop (including the start),
+no reusing a hexside within a route, at most one stop per group. It changes
+self-play revenues, so validate it against Python's AutoRouter optimum.
+`tests/test_rust_raw_actions_python_replay.py` rebuilds every logged route in
+Python and screens exactly these three cases (`_illegal_route_reason`); once
+the router is fixed, that screen should find nothing.
+
 ## Full raw-corpus audit — all player counts (docs/rust_engine_full_corpus_audit.md)
 
 After running `audit_full_raw_corpus.py` on the full 1991 completed games
