@@ -40,7 +40,7 @@ CASES = [
     (1, 3, True),
     (3, 2, True),
     (5, 4, True),
-    (7, 5, True),
+    (6, 5, True),
     (10, 4, False),
     (14, 6, False),
 ]
