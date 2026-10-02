@@ -329,13 +329,12 @@ impl BaseGame {
                     // (Python: self.game.payout_companies(), self.game.or_set_finished())
                     // Don't update current_auction_company — it stays as the original
                     // target (already sold), so subsequent all-pass cycles also trigger payouts.
-                    // Self-play variant (BaseGame::auction_unlock): judged before
-                    // the payout — no one could buy the next private in the round
-                    // they all passed (after it, the SV's owner always holds the
-                    // $5 it just earned and can re-spend it on a raise forever).
-                    let locked = self.auction_unlock && self.auction_next_unaffordable(&new_state);
+                    // Self-play variant (BaseGame::auction_unlock): an all-pass
+                    // round also discounts the next private when nobody has bid
+                    // on it, as the SV branch above does.
+                    let discount_next = self.auction_unlock && self.auction_next_unbid(&new_state);
                     self.payout_companies();
-                    if locked {
+                    if discount_next {
                         // Discount the next private as the SV branch above does.
                         if let Some(next_idx) = new_state.cheapest_company() {
                             new_state.discount += 5;
@@ -365,27 +364,12 @@ impl BaseGame {
         Ok(())
     }
 
-    /// Waterfall: the next private is unbid and no player's uncommitted cash
-    /// covers its price, so no one can ever buy it (the auction-unlock
-    /// variant's trigger).
-    fn auction_next_unaffordable(&self, state: &AuctionState) -> bool {
-        let Some(next) = state.cheapest_company() else {
-            return false;
-        };
-        if state.bids.get(&next).map_or(false, |bids| !bids.is_empty()) {
-            return false;
-        }
-        let price = state.min_bid_for(next, self.companies[next].value);
-        self.players.iter().all(|p| {
-            let committed: i32 = state
-                .bids
-                .values()
-                .flatten()
-                .filter(|b| b.player_id == p.id)
-                .map(|b| b.price)
-                .sum();
-            p.cash - committed < price
-        })
+    /// Waterfall: nobody has bid on the next private (the auction-unlock
+    /// variant discounts it on an all-pass round).
+    fn auction_next_unbid(&self, state: &AuctionState) -> bool {
+        state
+            .cheapest_company()
+            .map_or(false, |next| state.bids.get(&next).map_or(true, |bids| bids.is_empty()))
     }
 
     /// Buy a company at auction: transfer money and ownership, process abilities.

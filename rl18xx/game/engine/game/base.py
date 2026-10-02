@@ -204,8 +204,8 @@ from ...gamemap import GameMap
 
 class BaseGame:
     # Self-play rule variant, off unless set (engine-rs BaseGame::auction_unlock):
-    # when every player passes in a waterfall round in which none of them could
-    # afford the next private (unbid), its price drops $5 like the SV's.
+    # an all-pass waterfall round discounts the next private by $5 like the SV
+    # when nobody has bid on it.
     auction_unlock = False
     # Times the variant has discounted a private this game (diagnostic).
     auction_unlock_discounts = 0

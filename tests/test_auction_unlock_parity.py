@@ -1,10 +1,10 @@
-"""Self-play auction-unlock variant (``auction_unlock``): both engines agree,
-and it only acts when no player can afford the next private.
+"""Self-play auction-unlock variant (``auction_unlock``): both engines agree.
 
 Real 1830 discounts only the SV on an all-pass, so a waterfall auction where
-every player's cash is committed to bids and the next private is unaffordable
-loops forever. With the variant on, that private's price drops $5 per all-pass
-round until someone can afford it (or it is taken free at $0)."""
+everyone keeps passing — every player's cash committed to bids, or the next
+private just never bought — never ends. With the variant on, an all-pass round
+also discounts the next private by $5 when nobody has bid on it, until someone
+buys it or it is taken free at $0."""
 import engine_rs
 import pytest
 
@@ -68,7 +68,7 @@ def test_engines_agree_through_a_locked_auction(unlock):
         assert py_state[:3] == rs_state, action
 
 
-def test_unlock_discounts_the_next_private_only_while_nobody_can_afford_it():
+def test_unlock_discounts_the_next_private_on_every_all_pass():
     py, rs = _games(True)
     for action in LOCK:
         _apply(py, rs, action)
@@ -77,11 +77,11 @@ def test_unlock_discounts_the_next_private_only_while_nobody_can_afford_it():
         for action in ALL_PASS:
             _apply(py, rs, action)
         prices.append(rs.auction_min_bid("CS"))
-    # P1's SV revenue adds $5 of free cash per round: $35, $30, $25, $20, then
-    # P1 can afford it and the real rules apply again.
-    assert prices == [35, 30, 25, 20, 20, 20]
+    # Every round everyone passes the CS by costs it $5, whether or not someone
+    # could afford it (P1's SV revenue pays for it from the fourth round on).
+    assert prices == [35, 30, 25, 20, 15, 10]
     # Both engines count the discounts (the loop reports how often it fires).
-    assert rs.auction_unlock_discounts == py.auction_unlock_discounts == 4
+    assert rs.auction_unlock_discounts == py.auction_unlock_discounts == 6
 
 
 def test_without_unlock_the_locked_auction_never_moves():

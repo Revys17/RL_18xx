@@ -5194,14 +5194,12 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         if self.companies.count(self.cheapest):
             self.increase_discount(self.cheapest, 5)
         else:
-            # Self-play variant (BaseGame.auction_unlock), judged before the
-            # payout: no one could buy the next private in the round they all
-            # passed (after it, the SV's owner always holds the $5 it just
-            # earned and can re-spend it on a raise forever).
-            locked = self.game.auction_unlock and self._next_unaffordable()
+            # Self-play variant (BaseGame.auction_unlock): an all-pass round
+            # also discounts the next private when nobody has bid on it.
+            discount_next = self.game.auction_unlock and self._next_unbid()
             self.game.payout_companies()
             self.game.or_set_finished()
-            if locked:
+            if discount_next:
                 # Discount the next private as the SV is discounted above.
                 self.game.auction_unlock_discounts += 1
                 self.increase_discount(self.companies[0], 5)
@@ -5209,13 +5207,9 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
         for entity in self.entities:
             entity.unpass()
 
-    def _next_unaffordable(self):
-        """The next private is unbid and no player's uncommitted cash covers it."""
-        company = self.companies[0] if self.companies else None
-        if company is None or self.bids[company]:
-            return False
-        price = self.min_bid(company)
-        return all(p.cash - self.committed_cash(p) < price for p in self.entities)
+    def _next_unbid(self):
+        """Nobody has bid on the next private."""
+        return bool(self.companies) and not self.bids[self.companies[0]]
 
     def increase_discount(self, company, discount):
         value = company.min_bid
