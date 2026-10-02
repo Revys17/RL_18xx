@@ -67,6 +67,11 @@ def _get_autocast_device() -> str | None:
     return None
 
 
+def _auction_unlock_discounts(game) -> int:
+    """How often the engine's ``auction_unlock`` variant fired in ``game``."""
+    return int(getattr(getattr(game, "_game", game), "auction_unlock_discounts", 0) or 0)
+
+
 def score_fractions(net_worth: dict) -> np.ndarray:
     """``VALUE_SIZE`` vector of each player's share of total net worth, in
     sorted player-id order — the stored training value for a finished game."""
@@ -1080,6 +1085,7 @@ class SelfPlay:
         noresign_holdout: Optional[bool] = None,
         would_have_resigned: Optional[dict] = None,
         result_per_player: Optional[list[float]] = None,
+        auction_unlock_discounts: Optional[int] = None,
     ):
         file = SELF_PLAY_GAMES_STATUS_PATH / f"{game_id}.json"
         status_data = {
@@ -1107,6 +1113,8 @@ class SelfPlay:
             status_data["would_have_resigned"] = would_have_resigned
         if result_per_player is not None:
             status_data["result_per_player"] = list(result_per_player)
+        if auction_unlock_discounts is not None:
+            status_data["auction_unlock_discounts"] = int(auction_unlock_discounts)
         try:
             atomic_write_json(file, status_data, indent=4)
         except IOError as e:
@@ -1307,6 +1315,7 @@ class SelfPlay:
                         phase_move_counts=phase_move_counts,
                         termination=player.termination,
                         result_per_player=[float(v) for v in player.result],
+                        auction_unlock_discounts=_auction_unlock_discounts(game_now),
                     )
                     break
 
@@ -1378,6 +1387,7 @@ class SelfPlay:
                         noresign_holdout=player._noresign_holdout,
                         would_have_resigned=player._would_have_resigned_info,
                         result_per_player=[float(v) for v in player.result],
+                        auction_unlock_discounts=_auction_unlock_discounts(player.root.game_object),
                     )
                     break
 

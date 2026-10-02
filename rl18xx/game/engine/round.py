@@ -5203,6 +5203,7 @@ class WaterfallAuction(BaseStep, Auctioner, ProgrammerAuctionBid):
             self.game.or_set_finished()
             if locked:
                 # Discount the next private as the SV is discounted above.
+                self.game.auction_unlock_discounts += 1
                 self.increase_discount(self.companies[0], 5)
 
         for entity in self.entities:

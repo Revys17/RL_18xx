@@ -272,6 +272,7 @@ def test_stalled_private_auction_ends_scored_with_training_data(tmp_path, monkey
     assert status["termination"] == "auction_stall"
     assert status["status"] == "Completed"
     assert sum(status["result_per_player"]) == pytest.approx(1.0)
+    assert status["auction_unlock_discounts"] == 0  # recorded for the loop's unlock rate
     assert list((tmp_path / "training_examples").rglob("data.mdb"))
 
 

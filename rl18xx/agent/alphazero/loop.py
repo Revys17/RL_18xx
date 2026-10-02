@@ -1014,6 +1014,20 @@ def _aggregate_selfplay_stats(
         metrics.add_scalar(f"SelfPlay/Phase_Moves/{phase}", count, loop)
     LOGGER.info(f"Loop {loop+1}: Phase move counts: {phase_counts}")
 
+    # How often the self-play ``auction_unlock`` rule variant had to break a
+    # locked auction. It is training wheels: once this stays near zero the
+    # policy has learned not to lock the auction and the variant should be
+    # turned off (SelfPlayHyperparams.auction_unlock).
+    unlock_games = completed_games = 0
+    for status_file in SELF_PLAY_GAMES_STATUS_PATH.glob(f"L{loop}_G*.json"):
+        status_json = _safe_read_json(status_file)
+        if status_json and status_json.get("status") == "Completed":
+            completed_games += 1
+            unlock_games += status_json.get("auction_unlock_discounts", 0) > 0
+    if completed_games:
+        metrics.add_scalar("SelfPlay/Auction_Unlock_Game_Rate", unlock_games / completed_games, loop)
+        LOGGER.info(f"Loop {loop+1}: auction_unlock fired in {unlock_games}/{completed_games} games")
+
     timing_sums = {k: 0.0 for k in _SELFPLAY_TIMING_KEYS}
     timing_count = 0
     total_sims = 0

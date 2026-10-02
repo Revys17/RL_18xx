@@ -80,6 +80,8 @@ def test_unlock_discounts_the_next_private_only_while_nobody_can_afford_it():
     # P1's SV revenue adds $5 of free cash per round: $35, $30, $25, $20, then
     # P1 can afford it and the real rules apply again.
     assert prices == [35, 30, 25, 20, 20, 20]
+    # Both engines count the discounts (the loop reports how often it fires).
+    assert rs.auction_unlock_discounts == py.auction_unlock_discounts == 4
 
 
 def test_without_unlock_the_locked_auction_never_moves():
@@ -87,6 +89,7 @@ def test_without_unlock_the_locked_auction_never_moves():
     for action in LOCK + ALL_PASS * 6:
         _apply(py, rs, action)
     assert rs.auction_min_bid("CS") == 40 and py.active_step().min_bid(py.company_by_id("CS")) == 40
+    assert rs.auction_unlock_discounts == py.auction_unlock_discounts == 0
 
 
 def test_unlock_takes_the_private_free_at_zero_and_resolves_the_bids():

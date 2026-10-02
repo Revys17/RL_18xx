@@ -263,6 +263,10 @@ pub struct BaseGame {
     /// real rules only the SV is discounted, so such an auction can only loop;
     /// in 2,428 human 1830 games no all-pass ever met the condition.
     pub(crate) auction_unlock: bool,
+    /// How many times `auction_unlock` has discounted a private in this game
+    /// (diagnostic: the variant should stop firing as self-play learns not to
+    /// lock the auction, and is meant to be turned off then).
+    pub(crate) auction_unlock_discounts: u32,
     /// Ruby `@optional_rules`, validated against the title's
     /// `GameTitle::optional_rules` at construction.
     pub(crate) optional_rules: Vec<String>,
@@ -509,6 +513,7 @@ impl BaseGame {
             trainless_major: self.trainless_major.clone(),
             national_reservations: self.national_reservations.clone(),
             auction_unlock: self.auction_unlock,
+            auction_unlock_discounts: self.auction_unlock_discounts,
             optional_rules: self.optional_rules.clone(),
         }
     }
@@ -2636,6 +2641,7 @@ impl BaseGame {
                 .map(|ns| ns.reservations.iter().map(|s| s.to_string()).collect())
                 .unwrap_or_default(),
             auction_unlock: false,
+            auction_unlock_discounts: 0,
             optional_rules,
         };
         game.setup_national();
@@ -3954,6 +3960,12 @@ impl BaseGame {
     #[getter(auction_unlock)]
     fn get_auction_unlock(&self) -> bool {
         self.auction_unlock
+    }
+
+    /// Times the `auction_unlock` variant has discounted a private this game.
+    #[getter(auction_unlock_discounts)]
+    fn get_auction_unlock_discounts(&self) -> u32 {
+        self.auction_unlock_discounts
     }
 
     /// Get all valid par prices for the stock market.

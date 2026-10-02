@@ -339,6 +339,7 @@ impl BaseGame {
                         // Discount the next private as the SV branch above does.
                         if let Some(next_idx) = new_state.cheapest_company() {
                             new_state.discount += 5;
+                            self.auction_unlock_discounts += 1;
                             let new_min = (self.companies[next_idx].value - new_state.discount).max(0);
                             if new_min <= 0 {
                                 new_state.advance_entity();
