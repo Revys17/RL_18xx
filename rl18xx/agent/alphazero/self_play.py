@@ -67,47 +67,6 @@ def _get_autocast_device() -> str | None:
     return None
 
 
-def auction_lock_settlement(game) -> Optional[dict]:
-    """Settled net worth ``{player_id: net_worth}`` if the private auction is
-    locked, else ``None``.
-
-    Locked: no private is up for auction, the next one in line has no bids,
-    and no player's uncommitted cash covers its price. The rules then only
-    loop — all-pass rounds pay private revenue, which owners spend raising
-    their own bids (1830 discounts only the cheapest private at setup, the
-    SV, on an all-pass; not whichever is next). Settle as the bids would
-    resolve: each bid-on private goes to its high bidder at that bid (with
-    nothing uncommitted they couldn't raise in the bidders' auction), so a
-    player who overbid ends with the net worth that cost them. Rust engine
-    (``RustGameAdapter``) only; ``None`` for anything else.
-    """
-    rust_game = getattr(game, "_game", None)
-    if rust_game is None or not hasattr(rust_game, "auction_companies"):
-        return None
-    remaining = rust_game.auction_companies()
-    if not remaining or rust_game.auctioning_company() is not None:
-        return None
-    next_up = remaining[0]
-    if rust_game.auction_bids(next_up):
-        return None
-    if next_up == min(game.companies, key=lambda c: c.value).sym:
-        return None  # its price drops on every all-pass until someone must take it
-    bids = {sym: rust_game.auction_bids(sym) for sym in remaining}
-    committed = collections.Counter()
-    for company_bids in bids.values():
-        for player_id, price in company_bids:
-            committed[player_id] += price
-    price = rust_game.auction_min_bid(next_up)
-    if any(p.cash - committed[p.id] >= price for p in game.players):
-        return None
-    net_worth = _compute_net_worth(game)
-    for sym, company_bids in bids.items():
-        if company_bids:
-            winner, high_bid = max(company_bids, key=lambda b: b[1])
-            net_worth[winner] += game.company_by_id(sym).value - high_bid
-    return net_worth
-
-
 def score_fractions(net_worth: dict) -> np.ndarray:
     """``VALUE_SIZE`` vector of each player's share of total net worth, in
     sorted player-id order — the stored training value for a finished game."""
@@ -294,7 +253,9 @@ class MCTSPlayer(Agent):
         # Cache so extract_data's replay game uses the same player count.
         self._num_players = num_players
         players = {i + 1: f"Player {i + 1}" for i in range(num_players)}
-        return RustGameAdapter(RustGame(players))
+        game = RustGame(players)
+        game.set_auction_unlock(bool(getattr(self.config, "auction_unlock", True)))
+        return RustGameAdapter(game)
 
     def _sample_num_players(self) -> int:
         """Sample a player count from the config's distribution.
@@ -1316,40 +1277,38 @@ class SelfPlay:
                 move_time_this_move = time.time() - start_time_for_move_processing
                 total_move_time_for_game += move_time_this_move
 
-                # A locked private auction (every player's cash committed to
-                # bids, the next private unbid and unaffordable) is legal but
-                # only loops, so end the game there and score the bids as they
-                # would resolve: whoever overbid carries the loss into the
-                # value targets. ``auction_stall_moves`` is a backstop for any
-                # other auction that never ends.
-                if "Auction" in round_class_name:
+                # Backstop for a private auction that never ends (players can
+                # pass forever while the next private is affordable): end the
+                # game there, scored on net worth. Locks, where nobody can
+                # afford the next private, resolve under ``auction_unlock``.
+                stall_moves = int(getattr(self.config, "auction_stall_moves", 0) or 0)
+                if (
+                    stall_moves
+                    and "Auction" in round_class_name
+                    and player.root.game_object.move_number >= stall_moves
+                ):
                     game_now = player.root.game_object
-                    stall_moves = int(getattr(self.config, "auction_stall_moves", 0) or 0)
-                    settled = auction_lock_settlement(game_now)
-                    if settled is None and stall_moves and game_now.move_number >= stall_moves:
-                        settled = _compute_net_worth(game_now)
-                    if settled is not None:
-                        LOGGER.info(
-                            f"Private auction locked after {game_now.move_number} engine moves "
-                            f"({move_counter} decisions); settled net worth {settled}."
-                        )
-                        player.termination = "auction_lock"
-                        player.set_result(score_fractions(settled))
-                        self.update_self_play_game_progress(
-                            game_id=self.config.game_id,
-                            loop_number=self.config.global_step,
-                            game_number=self.config.game_idx_in_iteration,
-                            moves_played=move_counter,
-                            max_moves=self.config.max_game_length,
-                            current_round="Finished",
-                            last_action=game_now.actions[-1].description(),
-                            game_start_time_unix=game_start_time,
-                            status="Completed",
-                            phase_move_counts=phase_move_counts,
-                            termination=player.termination,
-                            result_per_player=[float(v) for v in player.result],
-                        )
-                        break
+                    LOGGER.info(
+                        f"Ending game still in the private auction after {game_now.move_number} engine moves "
+                        f"({move_counter} decisions)."
+                    )
+                    player.termination = "auction_stall"
+                    player.set_result(score_fractions(_compute_net_worth(game_now)))
+                    self.update_self_play_game_progress(
+                        game_id=self.config.game_id,
+                        loop_number=self.config.global_step,
+                        game_number=self.config.game_idx_in_iteration,
+                        moves_played=move_counter,
+                        max_moves=self.config.max_game_length,
+                        current_round="Finished",
+                        last_action=game_now.actions[-1].description(),
+                        game_start_time_unix=game_start_time,
+                        status="Completed",
+                        phase_move_counts=phase_move_counts,
+                        termination=player.termination,
+                        result_per_player=[float(v) for v in player.result],
+                    )
+                    break
 
                 self.add_metric("SelfPlay/Tree_Search_Time_ms", tree_search_duration_this_move * 1000)
                 self.add_metric("SelfPlay/Pick_Move_Time_ms", pick_move_duration_this_move * 1000)
@@ -1449,7 +1408,7 @@ class SelfPlay:
         # Phase 2: resign indicator. Averaging across games yields the resign rate.
         self.add_metric("SelfPlay/Game_Ended_By_Resign", float(game_ended_by_resign))
         self.add_metric("self_play/resigned", float(game_ended_by_resign))
-        self.add_metric("SelfPlay/Game_Ended_By_Auction_Lock", float(player.termination == "auction_lock"))
+        self.add_metric("SelfPlay/Game_Ended_By_Auction_Stall", float(player.termination == "auction_stall"))
 
         if player.result is not None and len(player.result) > 0:
             for i, score in enumerate(player.result):

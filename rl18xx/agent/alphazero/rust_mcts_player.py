@@ -185,7 +185,9 @@ class RustMCTSPlayer:
         num_players = self._sample_num_players()
         self._num_players = num_players
         players = {i + 1: f"Player {i + 1}" for i in range(num_players)}
-        return RustGameAdapter(RustBaseGame(players))
+        game = RustBaseGame(players)
+        game.set_auction_unlock(bool(getattr(self.config, "auction_unlock", True)))
+        return RustGameAdapter(game)
 
     # ------------------------------------------------------- initialization
     def initialize_game(self, game_state: Optional[RustGameAdapter] = None):

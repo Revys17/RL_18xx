@@ -431,7 +431,7 @@ def cleanup_and_exit(signum=None, frame=None):
         LOOP_LOCK_FILE.unlink()
 
 
-def _create_fresh_game(num_players: int = 4):
+def _create_fresh_game(num_players: int = 4, auction_unlock: bool = False):
     """Create a new ``num_players``-player 1830 game instance.
 
     Players are always named ``"Player 1"``..``"Player N"`` so the encoder's
@@ -446,7 +446,9 @@ def _create_fresh_game(num_players: int = 4):
     from engine_rs import BaseGame as RustGame
     from rl18xx.rust_adapter import RustGameAdapter
     players = {i + 1: f"Player {i + 1}" for i in range(num_players)}
-    return RustGameAdapter(RustGame(players))
+    game = RustGame(players)
+    game.set_auction_unlock(auction_unlock)
+    return RustGameAdapter(game)
 
 
 def _sample_player_count(distribution: dict[int, float] | None) -> int:
@@ -513,7 +515,8 @@ def _play_gate_game(
     ]
     candidate_seats = {seat for seat, is_cand in enumerate(is_candidate_by_seat) if is_cand}
 
-    game_state = _create_fresh_game(num_players=num_players)
+    # Gate games are model-vs-model, so they run the self-play rule variant too.
+    game_state = _create_fresh_game(num_players=num_players, auction_unlock=True)
     agent_by_player_id = {player.id: agent for player, agent in zip(game_state.players, agents)}
     seat_by_player_id = {player.id: seat for seat, player in enumerate(game_state.players)}
 

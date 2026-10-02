@@ -235,31 +235,11 @@ def test_game_result_reads_the_current_root_not_the_starting_position():
     assert player._is_root_terminal() == player._rust_player.is_terminal(root_idx)
 
 
-def test_locked_private_auction_settles_bids_at_their_prices():
-    """Every player's cash committed to bids with the next private (CS)
-    unbid: nobody can ever buy it, so the auction is settled — each bid-on
-    private to its high bidder at that bid."""
-    import engine_rs
-
-    from rl18xx.agent.alphazero.self_play import auction_lock_settlement
-    from rl18xx.rust_adapter import RustGameAdapter
-
-    rust_game = engine_rs.BaseGame({i: f"Player {i}" for i in range(1, 5)})
-    game = RustGameAdapter(rust_game)
-
-    def bid(player, company, price):
-        rust_game.process_action(
-            {"type": "bid", "entity": player, "entity_type": "player", "company": company, "price": price}
-        )
-
-    bid(1, "SV", 20)  # buys it: next in line
-    bid(2, "BO", 600)
-    bid(3, "CA", 600)
-    bid(4, "DH", 600)
-    assert auction_lock_settlement(game) is None  # P1 still has $580 free for the $40 CS
-    bid(1, "MH", 580)
-    # Net worth: cash + private face values, less each winning bid's premium over face.
-    assert auction_lock_settlement(game) == {1: 600 - 580 + 110, 2: 600 - 600 + 220, 3: 600 - 600 + 160, 4: 600 - 600 + 70}
+def test_self_play_games_run_the_auction_unlock_variant():
+    """Self-play games (and extract_data's replay game, built the same way)
+    run the engines' ``auction_unlock`` variant; it can be turned off."""
+    assert RustMCTSPlayer(_make_config()).get_new_game_state()._game.auction_unlock is True
+    assert RustMCTSPlayer(_make_config(auction_unlock=False)).get_new_game_state()._game.auction_unlock is False
 
 
 def test_stalled_private_auction_ends_scored_with_training_data(tmp_path, monkeypatch):
@@ -289,7 +269,7 @@ def test_stalled_private_auction_ends_scored_with_training_data(tmp_path, monkey
     self_play.SelfPlay(config).run_game()
 
     status = json.loads((tmp_path / "status" / "stall.json").read_text())
-    assert status["termination"] == "auction_lock"
+    assert status["termination"] == "auction_stall"
     assert status["status"] == "Completed"
     assert sum(status["result_per_player"]) == pytest.approx(1.0)
     assert list((tmp_path / "training_examples").rglob("data.mdb"))

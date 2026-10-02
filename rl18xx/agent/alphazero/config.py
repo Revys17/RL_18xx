@@ -387,12 +387,17 @@ class SelfPlayHyperparams:
     """
 
     max_game_length: int = 1000
+    # Self-play games run the engines' ``auction_unlock`` rule variant: when an
+    # all-pass round leaves the next private unbid and no player able to
+    # afford it, its price drops $5 like the SV's. Under the real rules such
+    # an auction (every player's cash committed to bids) loops forever, and
+    # self-play reached it in about half of all games; no all-pass in 2,428
+    # human games met the condition.
+    auction_unlock: bool = True
     # End a game still in the initial private auction after this many engine
-    # moves, scored on net worth with outstanding bids settled; 0 disables.
-    # A backstop: the usual never-ending auction — every player's cash
-    # committed to bids, nobody able to buy the next private — is detected
-    # and settled the moment it locks (``self_play.auction_lock_settlement``).
-    # Human 1830 auctions run a median of 18 actions (p99 43, max 59).
+    # moves, scored on net worth; 0 disables. A backstop for players passing
+    # forever while the next private is affordable. Human 1830 auctions run a
+    # median of 18 actions (p99 43, max 59).
     auction_stall_moves: int = 150
     c_puct_base: float = 19652
     c_puct_init: float = 1.25
