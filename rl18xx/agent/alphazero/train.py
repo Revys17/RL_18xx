@@ -661,13 +661,17 @@ def train_model(
     metrics.training_examples = len(train_dataset)
     device = model.device
 
-    # FP16 mixed-precision training (Item 7)
+    # Mixed precision in bfloat16, as pretraining uses. fp16 overflowed: with
+    # trunk activations in the 1e3 range the fusion cross-attention's scores
+    # went inf, every later batch's loss was NaN and skipped, and the frozen
+    # weights were saved and served. bf16 has fp32's exponent range, so no
+    # overflow and no GradScaler.
     use_amp = config.use_fp16_training and device.type == "cuda"
-    scaler = torch.amp.GradScaler("cuda") if use_amp else None
+    scaler = None
     if use_amp:
-        LOGGER.info("FP16 mixed-precision training enabled (CUDA).")
+        LOGGER.info("bf16 mixed-precision training enabled (CUDA).")
     else:
-        LOGGER.info(f"FP16 training disabled (device={device.type}, config={config.use_fp16_training}).")
+        LOGGER.info(f"Mixed-precision training disabled (device={device.type}, config={config.use_fp16_training}).")
 
     if graph:
         plt.ion()
@@ -682,6 +686,7 @@ def train_model(
     global_batch_number = 0
     for epoch in range(config.num_epochs):
         model.train()
+        non_finite_batches = 0
         train_losses = []
         train_policy_losses = []
         train_value_losses = []
@@ -721,7 +726,7 @@ def train_model(
             pi = pi.float().to(device, non_blocking=True)
             value = value.float().to(device, non_blocking=True)
 
-            with torch.amp.autocast("cuda", enabled=use_amp):
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
                 policy_logits, win_loss_logits, score_pred, aux_action_count_pred = model(
                     game_state_data, batch_data
                 )
@@ -798,6 +803,7 @@ def train_model(
                     f"aux={aux_loss.item():.4f}, entropy={entropy.item():.4f}. Skipping batch."
                 )
                 optimizer.zero_grad()
+                non_finite_batches += 1
                 continue
 
             # --- Gradient step ---
@@ -898,6 +904,14 @@ def train_model(
 
             if graph and global_batch_number % 100 == 0:
                 update_live_plot(metrics, axes, epoch + 1, config.num_epochs, global_batch_number, fig, plot_output)
+
+        # A model whose forward goes non-finite skips every batch from then on
+        # and would otherwise be saved (and promoted) as if it had trained.
+        if non_finite_batches > len(train_loader) // 2:
+            raise RuntimeError(
+                f"Training diverged: {non_finite_batches}/{len(train_loader)} batches in epoch {epoch + 1} "
+                f"had a non-finite loss. Not saving a checkpoint."
+            )
 
         # --- Compute epoch-level metrics ---
         avg_epoch_loss = np.mean(train_losses)

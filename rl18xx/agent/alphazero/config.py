@@ -269,7 +269,7 @@ class TrainingConfig:
     # 0 = no windowing; default is approximately 5 iterations worth of examples.
     max_training_window: int = 250_000
     value_lr_multiplier: float = 3.0  # multiplier for value head learning rate relative to config.lr
-    use_fp16_training: bool = True  # use mixed-precision (FP16) training on CUDA
+    use_fp16_training: bool = True  # mixed-precision (bf16) training on CUDA
     pretrain_label_smoothing: float = 0.03  # epsilon for smoothing policy targets during pretraining
     pretrain_validation_percentage: float = 0.05  # per-game probability of routing a game to validation
     # Stop pretraining after this many consecutive epochs without a val-loss
@@ -430,7 +430,10 @@ class SelfPlayHyperparams:
     # such node has at least one sampled price even at very low visit counts.
     min_price_children: int = 1
     use_score_values: bool = True
-    use_fp16_inference: bool = True
+    # fp16 autocast for in-process inference. Off: trained checkpoints reach
+    # activations that overflow fp16 (NaN priors on ~15% of positions), and
+    # fp32 costs only ~7% per batch here.
+    use_fp16_inference: bool = False
     adaptive_readout_threshold: int = 5
     # Variable player count support: each self-play game samples a player count
     # from this distribution. Use ``{4: 1.0}`` to lock self-play to 4-player

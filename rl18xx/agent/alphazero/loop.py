@@ -1504,7 +1504,9 @@ def main(
             checkpoint_path=None,
             batch_size=initial_loop_config.inference_batch_size,
             batch_timeout_ms=initial_loop_config.inference_batch_timeout_ms,
-            autocast_device="cuda" if torch.cuda.is_available() else None,
+            # fp32: trained checkpoints reach activations that overflow fp16
+            # (NaN priors panicked the Rust MCTS), and fp32 costs ~7% here.
+            autocast_device=None,
         )
 
     loop = 0
