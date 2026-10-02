@@ -135,6 +135,10 @@ pub struct OffboardDef {
     pub green_revenue: Option<i32>,
     #[serde(default)]
     pub gray_revenue: Option<i32>,
+    /// Ruby `groups:` — a route may stop at only one revenue center of a
+    /// group (1830's two Canada offboards, 1867's Detroit pair).
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -488,9 +492,12 @@ pub fn parse_tile(name: &str, code: &str, color: TileColor) -> TileDef {
             let mut brown_revenue = 0i32;
             let mut green_revenue = None;
             let mut gray_revenue = None;
+            let mut groups = Vec::new();
             for segment in attrs.split(',') {
                 let (k, v) = parse_kv(segment);
-                if k == "revenue" {
+                if k == "groups" {
+                    groups = v.split('|').filter(|g| !g.is_empty()).map(str::to_string).collect();
+                } else if k == "revenue" {
                     // Format: "yellow_V|green_V|brown_V|gray_V" (any subset;
                     // 1830 uses yellow|brown, 1867 all four), or a bare flat
                     // value "V" (1867's blue lake ports pay the same at every
@@ -516,6 +523,7 @@ pub fn parse_tile(name: &str, code: &str, color: TileColor) -> TileDef {
                 brown_revenue,
                 green_revenue,
                 gray_revenue,
+                groups,
             });
         } else if let Some(attrs) = trimmed.strip_prefix("path=") {
             let mut a_ref = "";

@@ -1547,14 +1547,21 @@ pub fn preprinted_hex_dsl(coord: &str) -> Option<(&'static str, &'static str)> {
             "offboard=revenue:yellow_40|brown_70;path=a:3,b:_0;path=a:4,b:_0;path=a:5,b:_0",
             "red",
         )),
-        "I1" => Some(("offboard=revenue:yellow_30|brown_60;path=a:4,b:_0", "red")),
+        "I1" => Some((
+            "offboard=revenue:yellow_30|brown_60,groups:Gulf;path=a:4,b:_0",
+            "red",
+        )),
         "J2" => Some((
             "offboard=revenue:yellow_30|brown_60;path=a:3,b:_0;path=a:4,b:_0",
             "red",
         )),
-        "A9" => Some(("offboard=revenue:yellow_30|brown_50;path=a:5,b:_0", "red")),
+        // A9 + A11 are both Canada: a route stops at one of them at most.
+        "A9" => Some((
+            "offboard=revenue:yellow_30|brown_50,groups:Canada;path=a:5,b:_0",
+            "red",
+        )),
         "A11" => Some((
-            "offboard=revenue:yellow_30|brown_50;path=a:5,b:_0;path=a:0,b:_0",
+            "offboard=revenue:yellow_30|brown_50,groups:Canada;path=a:5,b:_0;path=a:0,b:_0",
             "red",
         )),
         "K13" => Some((

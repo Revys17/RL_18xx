@@ -1284,8 +1284,7 @@ pub fn tile_counts() -> Vec<(&'static str, u32)> {
 // K13 edge 4; StubsAreRestricted), labels Y/M/T/O + future_label (J12 gray
 // O → tile X8) gating upgrades, the L12 TRIPLE city (three separate 1-slot
 // cities — DoubleCity is the closest current fit; the third city holds a
-// neutral CN token + the national reservation), grouped Detroit
-// (A17+A19 count once), 4-tier offboard revenue (green/gray tiers),
+// neutral CN token + the national reservation), 4-tier offboard revenue (green/gray tiers),
 // border-cost/impassable enforcement in the lay/graph code (the DATA is
 // in `borders` below).
 // ---------------------------------------------------------------------------
@@ -1423,7 +1422,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
         HexDef { coord: "O13", hex_type: Offboard { yellow_revenue: 20, brown_revenue: 40 }, terrain_cost: 0, borders: NO_BORDERS },
         HexDef { coord: "P8", hex_type: Offboard { yellow_revenue: 30, brown_revenue: 40 }, terrain_cost: 0, borders: NO_BORDERS },
         // A17+A19 are ONE grouped offboard (groups:Detroit, A17 hide:1) —
-        // TODO(1867-router) counts it once.
+        // the native router stops at one of them at most.
         HexDef { coord: "A17", hex_type: Offboard { yellow_revenue: 30, brown_revenue: 50 }, terrain_cost: 0, borders: WALL_0 },
         HexDef { coord: "A19", hex_type: Offboard { yellow_revenue: 30, brown_revenue: 50 }, terrain_cost: 0, borders: WALL_3 },
         // --- Blue hexes (lake ports, flat revenue 10 at all phases) ---

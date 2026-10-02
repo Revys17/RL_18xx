@@ -2049,6 +2049,7 @@ impl BaseGame {
             ob.brown_revenue = Some(od.brown_revenue);
             ob.green_revenue = od.green_revenue;
             ob.gray_revenue = od.gray_revenue;
+            ob.groups = od.groups.clone();
             tile.offboards.push(ob);
         }
         for ud in &rotated.upgrades {
@@ -4093,15 +4094,17 @@ impl BaseGame {
     }
 
     /// Calculate optimal routes and revenue for a corporation.
-    /// Returns (routes_as_dicts, total_revenue).
+    /// Returns (routes_as_dicts, total_revenue); each dict names the `train`
+    /// (id) that runs the route.
     pub(crate) fn calculate_routes(&mut self, corp_sym: String) -> (Vec<HashMap<String, String>>, i32) {
-        let (routes, _train_ids, revenue) = self.optimal_routes(&corp_sym);
+        let (routes, train_ids, revenue) = self.optimal_routes(&corp_sym);
 
         // Convert to Python-friendly format
         let route_dicts: Vec<HashMap<String, String>> = routes
             .iter()
             .map(|r| {
                 let mut d = HashMap::new();
+                d.insert("train".to_string(), train_ids[r.train_index].clone());
                 d.insert("revenue".to_string(), r.revenue.to_string());
                 let nodes_str: Vec<String> = r
                     .nodes

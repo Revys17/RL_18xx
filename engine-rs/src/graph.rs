@@ -63,6 +63,11 @@ pub struct Offboard {
     #[pyo3(get)]
     #[serde(default)]
     pub gray_revenue: Option<i32>,
+    /// Ruby `groups:` — a route may stop at only one revenue center of a
+    /// group (1830's two Canada offboards).
+    #[pyo3(get)]
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 #[pymethods]
@@ -74,6 +79,7 @@ impl Offboard {
             brown_revenue: None,
             green_revenue: None,
             gray_revenue: None,
+            groups: Vec::new(),
         }
     }
 

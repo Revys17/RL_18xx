@@ -1,1132 +1,753 @@
-use std::collections::{HashMap, HashSet};
+//! Native route search: the revenue-maximising set of legal routes for a
+//! corporation's trains — the Rust counterpart of Python's `AutoRouter` (a
+//! port of Ruby's auto_router.rb), used when self-play's native decode builds
+//! a RunRoutes action.
+//!
+//! Two stages:
+//! 1. **Enumerate** every legal route with a depth-first walk over tile paths
+//!    from each revenue node the corporation reaches (Python `Node.walk` /
+//!    `Path.walk`). Each route is walked from both of its ends; only the walk
+//!    from the lower-keyed end is kept.
+//! 2. **Combine**: branch-and-bound over one route (or none) per train,
+//!    maximising total revenue with no track shared between routes — the
+//!    maximum Python's `js_evaluate_combos` finds by brute force.
+//!
+//! Legal means passing the checks of Python's `Route.revenue()` (Ruby
+//! route.rb), which the walk enforces as it goes:
+//! - at least two stops, one a city the corporation has tokened
+//!   (`check_route_token`);
+//! - no stop visited twice (`check_cycles`) — every node a route passes is a
+//!   stop, including the one it started from;
+//! - no track used twice, within a route or across one run's routes
+//!   (`check_overlap`, keyed per `(hex, edge)` path end; a route only ever
+//!   uses a path end by crossing that hexside, so the walk tracks hexsides,
+//!   plus node-to-node paths inside a tile);
+//! - at most one stop per group (`groups:Canada`: 1830's two Canada
+//!   offboards);
+//! - offboards and cities blocked by other corporations' tokens can only end
+//!   a route (`check_connected` → `Node.blocks`), and terminal paths can only
+//!   be a route's first or last path (`check_terminals`);
+//! - no more stops than the train's distance (`check_distance`).
 
-use crate::graph::Hex;
+use std::collections::HashMap;
+
+use crate::graph::{Hex, Tile};
 use crate::map::{NodeId, NodeType};
 use crate::tiles::PathEndpoint;
 
 // ---------------------------------------------------------------------------
-// Route candidate
+// Public result
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 pub struct RouteCandidate {
+    /// Stops in route order.
     pub nodes: Vec<NodeId>,
     pub revenue: i32,
-    /// Bitfield of hexsides used by this route (for conflict detection).
-    pub hexside_bits: u128,
-    /// Hex chains between consecutive stops (for Python Route construction).
+    /// Hex chains between consecutive stops, one hex per tile path (Python
+    /// `Route.chain_id`), in route order — what a logged run_routes records.
     pub connections: Vec<Vec<String>>,
     /// Index into the `trains` slice passed to [`calculate_corp_routes`] of
-    /// the train this route was enumerated for (its distance bounds the
-    /// route), so a chosen combination names which train runs which route.
+    /// the train that runs this route.
     pub train_index: usize,
 }
 
 // ---------------------------------------------------------------------------
-// Route finder (hexside bit assignment)
+// Node keys
 // ---------------------------------------------------------------------------
 
-pub struct RouteFinder {
-    hexside_bits: HashMap<(String, u8), u128>,
-    next_bit: u32,
+/// A revenue node packed as `hex << 8 | kind << 6 | index`, so keys order by
+/// hex, then kind, then index.
+type NodeKey = u32;
+
+const KIND_CITY: u32 = 0;
+const KIND_TOWN: u32 = 1;
+const KIND_OFFBOARD: u32 = 2;
+
+fn endpoint_key(hex: usize, ep: &PathEndpoint) -> Option<NodeKey> {
+    let (kind, index) = match ep {
+        PathEndpoint::City(i) => (KIND_CITY, *i),
+        PathEndpoint::Town(i) => (KIND_TOWN, *i),
+        PathEndpoint::Offboard(i) => (KIND_OFFBOARD, *i),
+        PathEndpoint::Edge(_) | PathEndpoint::Junction => return None,
+    };
+    if index >= 64 {
+        return None;
+    }
+    Some((hex as u32) << 8 | kind << 6 | index as u32)
 }
 
-impl Default for RouteFinder {
-    fn default() -> Self {
-        Self::new()
+fn key_hex(key: NodeKey) -> usize {
+    (key >> 8) as usize
+}
+
+fn key_endpoint(key: NodeKey) -> PathEndpoint {
+    let index = (key & 63) as usize;
+    match (key >> 6) & 3 {
+        KIND_CITY => PathEndpoint::City(index),
+        KIND_TOWN => PathEndpoint::Town(index),
+        _ => PathEndpoint::Offboard(index),
     }
 }
 
-impl RouteFinder {
-    pub fn new() -> Self {
-        RouteFinder {
-            hexside_bits: HashMap::new(),
-            next_bit: 0,
-        }
-    }
+fn node_id_key(node: &NodeId, hex_idx: &HashMap<String, usize>) -> Option<NodeKey> {
+    let hex = *hex_idx.get(&node.hex_id)?;
+    let ep = match node.node_type {
+        NodeType::City => PathEndpoint::City(node.index),
+        NodeType::Town => PathEndpoint::Town(node.index),
+        NodeType::Offboard => PathEndpoint::Offboard(node.index),
+    };
+    endpoint_key(hex, &ep)
+}
 
-    fn assign_bit(&mut self, hex_id: &str, edge: u8) -> u128 {
-        let key = (hex_id.to_string(), edge);
-        *self.hexside_bits.entry(key).or_insert_with(|| {
-            let bit = 1u128 << self.next_bit;
-            self.next_bit = (self.next_bit + 1).min(127);
-            bit
-        })
-    }
-
-    /// Assign bit for both sides of a hexside (hex_id/edge and neighbor_id/opposite_edge).
-    fn assign_hexside_pair(
-        &mut self,
-        hex_id: &str,
-        edge: u8,
-        hex_adjacency: &HashMap<String, HashMap<u8, String>>,
-    ) -> u128 {
-        let key1 = (hex_id.to_string(), edge);
-        if let Some(&bit) = self.hexside_bits.get(&key1) {
-            return bit;
-        }
-
-        if let Some(neighbor_id) = hex_adjacency.get(hex_id).and_then(|n| n.get(&edge)) {
-            let opposite = (edge + 3) % 6;
-            let key2 = (neighbor_id.clone(), opposite);
-            if let Some(&bit) = self.hexside_bits.get(&key2) {
-                self.hexside_bits.insert(key1, bit);
-                return bit;
-            }
-        }
-
-        let bit = self.assign_bit(hex_id, edge);
-
-        if let Some(neighbor_id) = hex_adjacency.get(hex_id).and_then(|n| n.get(&edge)) {
-            let opposite = (edge + 3) % 6;
-            let key2 = (neighbor_id.clone(), opposite);
-            self.hexside_bits.entry(key2).or_insert(bit);
-        }
-
-        bit
+fn key_node_id(key: NodeKey, hexes: &[Hex]) -> NodeId {
+    let (node_type, index) = match key_endpoint(key) {
+        PathEndpoint::City(i) => (NodeType::City, i),
+        PathEndpoint::Town(i) => (NodeType::Town, i),
+        PathEndpoint::Offboard(i) => (NodeType::Offboard, i),
+        _ => unreachable!("node keys only encode revenue nodes"),
+    };
+    NodeId {
+        hex_id: hexes[key_hex(key)].id.clone(),
+        node_type,
+        index,
     }
 }
 
 // ---------------------------------------------------------------------------
-// Path-level walk state
+// Revenue nodes
 // ---------------------------------------------------------------------------
 
-/// A single tile path segment — the atomic unit of route traversal.
-#[derive(Clone, Hash, Eq, PartialEq, Debug)]
-struct PathSegment {
-    hex_id: String,
-    path_index: usize,
+fn node_exists(tile: &Tile, ep: &PathEndpoint) -> bool {
+    match ep {
+        PathEndpoint::City(i) => *i < tile.cities.len(),
+        PathEndpoint::Town(i) => *i < tile.towns.len(),
+        PathEndpoint::Offboard(i) => *i < tile.offboards.len(),
+        _ => false,
+    }
 }
 
-/// Accumulated state during a path-level walk.
-struct WalkState<'a> {
+fn node_revenue(tile: &Tile, ep: &PathEndpoint, phase_tiles: &[String]) -> i32 {
+    match ep {
+        PathEndpoint::City(i) => tile.cities.get(*i).map_or(0, |c| c.revenue),
+        PathEndpoint::Town(i) => tile.towns.get(*i).map_or(0, |t| t.revenue),
+        PathEndpoint::Offboard(i) => tile
+            .offboards
+            .get(*i)
+            .map_or(0, |o| o.phase_revenue(phase_tiles)),
+        _ => 0,
+    }
+}
+
+fn node_groups<'t>(tile: &'t Tile, ep: &PathEndpoint) -> &'t [String] {
+    match ep {
+        PathEndpoint::Offboard(i) => tile.offboards.get(*i).map_or(&[], |o| &o.groups),
+        _ => &[],
+    }
+}
+
+/// Ruby `Node#blocks?`: an offboard always ends a route; a city does when
+/// every slot holds another corporation's (non-neutral) token.
+fn node_blocks(tile: &Tile, ep: &PathEndpoint, corp_sym: &str) -> bool {
+    match ep {
+        PathEndpoint::Offboard(_) => true,
+        PathEndpoint::City(i) => tile.cities.get(*i).is_some_and(|city| {
+            city.tokens.iter().all(|t| {
+                t.as_ref().is_some_and(|tok| {
+                    tok.token_type != "neutral" && tok.corporation_id != corp_sym
+                })
+            })
+        }),
+        _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 1: route enumeration
+// ---------------------------------------------------------------------------
+
+const NBR_UNKNOWN: u16 = u16::MAX;
+const NBR_NONE: u16 = u16::MAX - 1;
+const NO_TRACK: u16 = u16::MAX;
+
+/// A legal route, stored as ranges into the walk's arenas.
+struct Found {
+    revenue: i32,
+    /// Stops counted toward distance: all of them / towns free (D trains).
+    cost: u32,
+    cost_d: u32,
+    /// Into `Walk::found_stops` and `Walk::found_stop_pos`.
+    stops: std::ops::Range<usize>,
+    /// Into `Walk::found_trail`; `found_stop_pos` indexes this slice.
+    trail: std::ops::Range<usize>,
+    /// Into `Walk::found_track`.
+    track: std::ops::Range<usize>,
+}
+
+struct Walk<'a> {
     hexes: &'a [Hex],
     hex_idx: &'a HashMap<String, usize>,
     hex_adjacency: &'a HashMap<String, HashMap<u8, String>>,
     phase_tiles: &'a [String],
     corp_sym: &'a str,
-    finder: &'a mut RouteFinder,
+    /// Most stops any train can count, every stop counted (`None`: no
+    /// such train) / towns free (D trains).
+    max_cost: Option<u32>,
+    max_cost_d: Option<u32>,
+    tokens: Vec<NodeKey>,
+    /// Sorted: every node a walk starts from.
+    starts: Vec<NodeKey>,
 
-    // Walk tracking
-    visited_paths: HashSet<PathSegment>,
-    visited_nodes: HashSet<NodeId>,
-    edge_counter: HashMap<(String, u8), u32>,
-    hexside_bits: u128,
+    /// Neighbor hex by (hex, edge), resolved on first use.
+    neighbors: Vec<[u16; 6]>,
+    /// Track id of each `(hex, edge)` path end — both sides of a hexside
+    /// share one — assigned on first use.
+    hexside_track: Vec<u16>,
+    /// Track ids of node-to-node paths inside a tile, by (hex, path index).
+    node_path_track: HashMap<(usize, usize), u16>,
+    /// Whether the route being walked uses each track id.
+    in_use: Vec<bool>,
 
-    // Route collection
-    /// Current ordered list of stops (revenue nodes) in the walk.
-    stops: Vec<NodeId>,
-    /// Current ordered list of hex IDs traversed between stops.
-    /// Each entry corresponds to a connection between stops[i] and stops[i+1].
-    current_chain: Vec<String>,
-    /// Completed chains between consecutive stops.
-    chains: Vec<Vec<String>>,
-    /// Accumulated revenue.
+    // The route being walked.
+    stops: Vec<NodeKey>,
+    /// Index into `trail` of each stop's hex.
+    stop_pos: Vec<u16>,
+    /// The route's hexes, one per tile path (consecutive paths in one hex
+    /// share an entry).
+    trail: Vec<u16>,
+    track: Vec<u16>,
+    junction_hexes: Vec<usize>,
+    groups: Vec<&'a str>,
     revenue: i32,
+    cost: u32,
+    cost_d: u32,
+    n_paths: u32,
 
-    // Train constraints
-    train_distance: u32,
-    is_d_train: bool,
-    /// Number of stops that count toward train distance.
-    stop_count: u32,
-
-    // Results
-    candidates: Vec<RouteCandidate>,
-    token_set: HashSet<NodeId>,
+    found: Vec<Found>,
+    found_stops: Vec<NodeKey>,
+    found_stop_pos: Vec<u16>,
+    found_trail: Vec<u16>,
+    found_track: Vec<u16>,
 }
 
-impl<'a> WalkState<'a> {
-    /// Emit the current walk state as a route candidate if valid.
-    fn emit_candidate(&mut self) {
-        if self.stops.len() < 2 {
+impl<'a> Walk<'a> {
+    fn neighbor(&mut self, hex: usize, edge: u8) -> Option<usize> {
+        let slot = self.neighbors[hex][edge as usize];
+        if slot == NBR_UNKNOWN {
+            let nb = self
+                .hex_adjacency
+                .get(&self.hexes[hex].id)
+                .and_then(|m| m.get(&edge))
+                .and_then(|id| self.hex_idx.get(id))
+                .copied();
+            self.neighbors[hex][edge as usize] = nb.map_or(NBR_NONE, |n| n as u16);
+            return nb;
+        }
+        (slot != NBR_NONE).then_some(slot as usize)
+    }
+
+    fn new_track(&mut self) -> u16 {
+        let id = self.in_use.len() as u16;
+        self.in_use.push(false);
+        id
+    }
+
+    fn hexside_track(&mut self, hex: usize, edge: u8, nb: usize) -> usize {
+        let k = hex * 6 + edge as usize;
+        if self.hexside_track[k] == NO_TRACK {
+            let id = self.new_track();
+            self.hexside_track[k] = id;
+            self.hexside_track[nb * 6 + ((edge + 3) % 6) as usize] = id;
+        }
+        self.hexside_track[k] as usize
+    }
+
+    fn node_path_track(&mut self, hex: usize, path: usize) -> usize {
+        if let Some(&id) = self.node_path_track.get(&(hex, path)) {
+            return id as usize;
+        }
+        let id = self.new_track();
+        self.node_path_track.insert((hex, path), id);
+        id as usize
+    }
+
+    fn fits(&self, cost: u32, cost_d: u32) -> bool {
+        self.max_cost.is_some_and(|m| cost <= m) || self.max_cost_d.is_some_and(|m| cost_d <= m)
+    }
+
+    /// Walk every route that starts at `start`.
+    fn walk_routes_from(&mut self, start: NodeKey) {
+        let hexes = self.hexes;
+        let hex = key_hex(start);
+        let ep = key_endpoint(start);
+        let tile = &hexes[hex].tile;
+        let cost_d = if matches!(ep, PathEndpoint::Town(_)) {
+            0
+        } else {
+            1
+        };
+        if !node_exists(tile, &ep) || !self.fits(1, cost_d) {
             return;
         }
-        // Must include at least one tokened city
-        if !self.stops.iter().any(|n| self.token_set.contains(n)) {
-            return;
-        }
+        self.stops.push(start);
+        self.stop_pos.push(0);
+        self.trail.push(hex as u16);
+        self.groups
+            .extend(node_groups(tile, &ep).iter().map(String::as_str));
+        self.revenue = node_revenue(tile, &ep, self.phase_tiles);
+        self.cost = 1;
+        self.cost_d = cost_d;
+        // A route may start at a blocked city or an offboard; it just
+        // can't pass through one.
+        self.walk_from(hex, &ep);
+        self.stops.clear();
+        self.stop_pos.clear();
+        self.trail.clear();
+        self.groups.clear();
+    }
 
-        // Build connections: chains[0..n-1] are complete, current_chain is the
-        // in-progress chain for the last stop pair (if stops > chains + 1).
-        let mut connections = self.chains.clone();
-        if !self.current_chain.is_empty() {
-            connections.push(self.current_chain.clone());
-        }
-
-        // Fix up chains: ensure each chain starts with its source stop's hex
-        // and ends with its destination stop's hex. The walk's backtracking
-        // can sometimes lose the first/last hex due to push/pop ordering.
-        for (ci, chain) in connections.iter_mut().enumerate() {
-            if chain.is_empty() {
+    /// Extend the route from the stop at `node` along each of its paths.
+    fn walk_from(&mut self, hex: usize, node: &PathEndpoint) {
+        let hexes = self.hexes;
+        for (pi, p) in hexes[hex].tile.paths.iter().enumerate() {
+            let other = if p.a == *node {
+                &p.b
+            } else if p.b == *node {
+                &p.a
+            } else {
                 continue;
-            }
-            // Source stop hex (stops[ci] is the stop BEFORE this chain)
-            let src_hex = &self.stops[ci].hex_id;
-            if chain.first().map(|s| s.as_str()) != Some(src_hex) {
-                chain.insert(0, src_hex.clone());
-            }
-            // Destination stop hex (stops[ci+1] is the stop AFTER this chain)
-            if ci + 1 < self.stops.len() {
-                let dst_hex = &self.stops[ci + 1].hex_id;
-                if chain.last().map(|s| s.as_str()) != Some(dst_hex) {
-                    chain.push(dst_hex.clone());
+            };
+            // A terminal path can be a route's first path, or its last.
+            let last = p.terminal && self.n_paths > 0;
+            self.n_paths += 1;
+            self.follow(hex, pi, other, last);
+            self.n_paths -= 1;
+        }
+    }
+
+    /// Continue along path `path` of `hex` to its endpoint `other`. `last`:
+    /// the path is terminal, so the route must end at its node.
+    fn follow(&mut self, hex: usize, path: usize, other: &PathEndpoint, last: bool) {
+        match other {
+            PathEndpoint::Edge(e) => {
+                if !last {
+                    self.cross(hex, *e);
                 }
             }
+            PathEndpoint::Junction => {
+                if !last {
+                    self.through_junction(hex, path);
+                }
+            }
+            node => {
+                // A node-to-node path inside the tile: no hexside, so it is
+                // its own piece of track.
+                let id = self.node_path_track(hex, path);
+                if self.in_use[id] {
+                    return;
+                }
+                self.in_use[id] = true;
+                self.track.push(id as u16);
+                self.arrive(hex, node, last);
+                self.track.pop();
+                self.in_use[id] = false;
+            }
+        }
+    }
+
+    /// Cross from `hex` over its `edge` and follow each path of the
+    /// neighbor that meets that hexside.
+    fn cross(&mut self, hex: usize, edge: u8) {
+        let Some(nb) = self.neighbor(hex, edge) else {
+            return;
+        };
+        let id = self.hexside_track(hex, edge, nb);
+        if self.in_use[id] {
+            return;
+        }
+        self.in_use[id] = true;
+        self.track.push(id as u16);
+        self.trail.push(nb as u16);
+        let enter = PathEndpoint::Edge((edge + 3) % 6);
+        let hexes = self.hexes;
+        for (qi, q) in hexes[nb].tile.paths.iter().enumerate() {
+            let other = if q.a == enter {
+                &q.b
+            } else if q.b == enter {
+                &q.a
+            } else {
+                continue;
+            };
+            self.n_paths += 1;
+            self.follow(nb, qi, other, q.terminal);
+            self.n_paths -= 1;
+        }
+        self.trail.pop();
+        self.track.pop();
+        self.in_use[id] = false;
+    }
+
+    /// Pass through `hex`'s junction (entered on `path`) onto each of its
+    /// other paths — at most once per route (Python `Path.walk`).
+    fn through_junction(&mut self, hex: usize, path: usize) {
+        if self.junction_hexes.contains(&hex) {
+            return;
+        }
+        self.junction_hexes.push(hex);
+        let hexes = self.hexes;
+        for (ji, j) in hexes[hex].tile.paths.iter().enumerate() {
+            if ji == path {
+                continue;
+            }
+            let other = if j.a == PathEndpoint::Junction {
+                &j.b
+            } else if j.b == PathEndpoint::Junction {
+                &j.a
+            } else {
+                continue;
+            };
+            if *other == PathEndpoint::Junction {
+                continue;
+            }
+            self.n_paths += 1;
+            self.follow(hex, ji, other, j.terminal);
+            self.n_paths -= 1;
+        }
+        self.junction_hexes.pop();
+    }
+
+    /// Stop at `node` on `hex`: record the route so far, then keep going
+    /// unless the node (or a terminal path, `last`) ends the route.
+    fn arrive(&mut self, hex: usize, node: &PathEndpoint, last: bool) {
+        let Some(key) = endpoint_key(hex, node) else {
+            return;
+        };
+        if self.stops.contains(&key) {
+            return;
+        }
+        let hexes = self.hexes;
+        let tile = &hexes[hex].tile;
+        if !node_exists(tile, node) {
+            return;
+        }
+        let cost = self.cost + 1;
+        let cost_d = self.cost_d + u32::from(!matches!(node, PathEndpoint::Town(_)));
+        if !self.fits(cost, cost_d) {
+            return;
+        }
+        let groups = node_groups(tile, node);
+        if groups.iter().any(|g| self.groups.contains(&g.as_str())) {
+            return;
+        }
+        let (saved_cost, saved_cost_d) = (self.cost, self.cost_d);
+        let revenue = node_revenue(tile, node, self.phase_tiles);
+        self.stops.push(key);
+        self.stop_pos.push((self.trail.len() - 1) as u16);
+        self.groups.extend(groups.iter().map(String::as_str));
+        self.revenue += revenue;
+        self.cost = cost;
+        self.cost_d = cost_d;
+
+        self.record();
+        if !last && !node_blocks(tile, node, self.corp_sym) {
+            self.walk_from(hex, node);
         }
 
-        self.candidates.push(RouteCandidate {
-            nodes: self.stops.clone(),
+        self.cost = saved_cost;
+        self.cost_d = saved_cost_d;
+        self.revenue -= revenue;
+        self.groups.truncate(self.groups.len() - groups.len());
+        self.stop_pos.pop();
+        self.stops.pop();
+    }
+
+    /// Keep the route walked so far if it is a route: two or more stops,
+    /// one of them tokened.
+    fn record(&mut self) {
+        if self.stops.len() < 2 || !self.stops.iter().any(|s| self.tokens.contains(s)) {
+            return;
+        }
+        // The walk from the route's other end finds it too; keep one.
+        let (first, last) = (self.stops[0], self.stops[self.stops.len() - 1]);
+        if last < first && self.starts.binary_search(&last).is_ok() {
+            return;
+        }
+        let stops = self.found_stops.len()..self.found_stops.len() + self.stops.len();
+        self.found_stops.extend_from_slice(&self.stops);
+        self.found_stop_pos.extend_from_slice(&self.stop_pos);
+        let trail = self.found_trail.len()..self.found_trail.len() + self.trail.len();
+        self.found_trail.extend_from_slice(&self.trail);
+        let track = self.found_track.len()..self.found_track.len() + self.track.len();
+        self.found_track.extend_from_slice(&self.track);
+        self.found.push(Found {
             revenue: self.revenue,
-            hexside_bits: self.hexside_bits,
-            connections,
-            // Set by `calculate_corp_routes` once the walk for a train is done.
-            train_index: 0,
+            cost: self.cost,
+            cost_d: self.cost_d,
+            stops,
+            trail,
+            track,
         });
     }
-}
 
-// ---------------------------------------------------------------------------
-// Revenue helpers
-// ---------------------------------------------------------------------------
-
-fn node_revenue(
-    hexes: &[Hex],
-    hex_idx: &HashMap<String, usize>,
-    node: &NodeId,
-    phase_tiles: &[String],
-) -> i32 {
-    let hi = match hex_idx.get(&node.hex_id) {
-        Some(&i) => i,
-        None => return 0,
-    };
-    let tile = &hexes[hi].tile;
-    match node.node_type {
-        NodeType::City => tile.cities.get(node.index).map_or(0, |c| c.revenue),
-        NodeType::Town => tile.towns.get(node.index).map_or(0, |t| t.revenue),
-        NodeType::Offboard => tile
-            .offboards
-            .get(node.index)
-            .map_or(0, |o| o.phase_revenue(phase_tiles)),
+    fn route(&self, found: &Found, train_index: usize) -> RouteCandidate {
+        let stops = &self.found_stops[found.stops.clone()];
+        let pos = &self.found_stop_pos[found.stops.clone()];
+        let trail = &self.found_trail[found.trail.clone()];
+        RouteCandidate {
+            nodes: stops.iter().map(|&k| key_node_id(k, self.hexes)).collect(),
+            revenue: found.revenue,
+            connections: pos
+                .windows(2)
+                .map(|w| {
+                    trail[w[0] as usize..=w[1] as usize]
+                        .iter()
+                        .map(|&h| self.hexes[h as usize].id.clone())
+                        .collect()
+                })
+                .collect(),
+            train_index,
+        }
     }
 }
 
-/// Check if a city blocks route traversal: all token slots filled by other corps.
-fn is_city_blocked_for_route(
-    hexes: &[Hex],
-    hex_idx: &HashMap<String, usize>,
-    node: &NodeId,
-    corp_sym: &str,
-) -> bool {
-    if node.node_type != NodeType::City {
-        return false;
-    }
-    let hi = match hex_idx.get(&node.hex_id) {
-        Some(&i) => i,
-        None => return false,
-    };
-    let city = match hexes[hi].tile.cities.get(node.index) {
-        Some(c) => c,
-        None => return false,
-    };
-    if city.tokens.iter().any(|t| t.is_none()) {
-        return false;
-    }
-    // A neutral token (1867's CN green placeholders) keeps the city open
-    // for everyone (Ruby City#blocks?).
-    if city
-        .tokens
-        .iter()
-        .any(|t| t.as_ref().is_some_and(|tok| tok.token_type == "neutral"))
-    {
-        return false;
-    }
-    !city
-        .tokens
-        .iter()
-        .any(|t| t.as_ref().is_some_and(|tok| tok.corporation_id == corp_sym))
-}
-
-/// Check if a hex has any edge↔edge bypass path.
-fn has_bypass_path(hexes: &[Hex], hex_idx: &HashMap<String, usize>, node: &NodeId) -> bool {
-    let hi = match hex_idx.get(&node.hex_id) {
-        Some(&i) => i,
-        None => return false,
-    };
-    let tile = &hexes[hi].tile;
-    tile.paths
-        .iter()
-        .any(|p| matches!((&p.a, &p.b), (PathEndpoint::Edge(_), PathEndpoint::Edge(_))))
-}
-
 // ---------------------------------------------------------------------------
-// Path-level walk algorithm
+// Stage 2: best combination
 // ---------------------------------------------------------------------------
 
-/// Walk outward from a revenue node (city/town/offboard), exploring all paths
-/// that connect to this node. Each path step is a concrete tile PathDef.
-fn walk_from_node(state: &mut WalkState<'_>, hex_id: &str, node: &NodeId) {
-    if state.visited_nodes.contains(node) {
-        return;
-    }
-    state.visited_nodes.insert(node.clone());
+/// Branch-and-bound over one route (or none) per train, trains ordered so
+/// identical ones are adjacent.
+struct Combo<'a> {
+    revenue: &'a [i32],
+    /// Track bitset of each found route, `words` u64s apiece.
+    bits: &'a [u64],
+    words: usize,
+    /// Per ordered train: eligible routes, best revenue first.
+    lists: Vec<&'a [u32]>,
+    /// Per ordered train: for each track id, the bitset of the list
+    /// positions whose route uses it (`list.len().div_ceil(64)` u64s each).
+    uses: Vec<&'a [u64]>,
+    /// Whether ordered train `t` is identical to train `t - 1`.
+    same_as_prev: Vec<bool>,
+    /// First ordered train after `t`'s run of identical trains.
+    group_end: Vec<usize>,
+    /// Track bitset of the routes chosen so far.
+    used: Vec<u64>,
+    /// Per ordered train: scratch bitset of its list positions that share
+    /// track with the routes chosen so far.
+    blocked: Vec<Vec<u64>>,
+    chosen: Vec<Option<u32>>,
+    best: i32,
+    best_chosen: Vec<Option<u32>>,
+}
 
-    let hi = match state.hex_idx.get(hex_id) {
-        Some(&i) => i,
-        None => {
-            state.visited_nodes.remove(node);
+impl Combo<'_> {
+    fn toggle(&mut self, route: usize) {
+        let b = &self.bits[route * self.words..(route + 1) * self.words];
+        for (u, x) in self.used.iter_mut().zip(b) {
+            *u ^= x;
+        }
+    }
+
+    /// The most trains `t..` could add, ignoring overlap, when train `t`
+    /// takes routes from list position `from` on: it and the identical
+    /// trains after it take distinct routes, the rest their best.
+    fn upper_bound(&self, t: usize, from: usize) -> i32 {
+        let n = self.lists.len();
+        let mut bound = 0;
+        let (mut t, mut from) = (t, from);
+        while t < n {
+            let end = self.group_end[t];
+            let list = self.lists[t];
+            bound += list[from.min(list.len())..]
+                .iter()
+                .take(end - t)
+                .map(|&r| self.revenue[r as usize])
+                .sum::<i32>();
+            (t, from) = (end, 0);
+        }
+        bound
+    }
+
+    /// Choose routes for trains `t..`, having earned `revenue` so far.
+    /// `from`: identical trains take routes in list order, so this train
+    /// starts at the list position after the previous train's.
+    fn search(&mut self, t: usize, revenue: i32, from: usize) {
+        if revenue > self.best {
+            self.best = revenue;
+            self.best_chosen.clone_from(&self.chosen);
+        }
+        let n = self.lists.len();
+        if t == n || revenue + self.upper_bound(t, from) <= self.best {
             return;
         }
-    };
-    let tile = &state.hexes[hi].tile;
-
-    let node_ep = match node.node_type {
-        NodeType::City => PathEndpoint::City(node.index),
-        NodeType::Town => PathEndpoint::Town(node.index),
-        NodeType::Offboard => PathEndpoint::Offboard(node.index),
-    };
-
-    // Collect path indices to avoid borrow issues
-    let path_indices: Vec<(usize, PathEndpoint)> = tile
-        .paths
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| !p.terminal)
-        .filter_map(|(idx, p)| {
-            if p.a == node_ep {
-                Some((idx, p.b.clone()))
-            } else if p.b == node_ep {
-                Some((idx, p.a.clone()))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    for (path_idx, exit) in path_indices {
-        let seg = PathSegment {
-            hex_id: hex_id.to_string(),
-            path_index: path_idx,
+        let next_same = t + 1 < n && self.same_as_prev[t + 1];
+        let list = self.lists[t];
+        let rest_bound = if next_same {
+            0
+        } else {
+            self.upper_bound(t + 1, 0)
         };
-        if state.visited_paths.contains(&seg) {
-            continue;
-        }
 
-        // Check edge counter for edges in this path
-        if let Some(e) = exit.edge_num() {
-            let cnt = *state
-                .edge_counter
-                .get(&(hex_id.to_string(), e))
-                .unwrap_or(&0);
-            if cnt > 0 {
-                continue;
-            }
-        }
-
-        state.visited_paths.insert(seg.clone());
-
-        match &exit {
-            PathEndpoint::Edge(exit_edge) => {
-                let bit = state.finder.assign_hexside_pair(
-                    hex_id,
-                    *exit_edge,
-                    state.hex_adjacency,
-                );
-                state.hexside_bits |= bit;
-
-                // Add hex to current chain (save length for reliable restore)
-                let chain_len = state.current_chain.len();
-                if state.current_chain.is_empty()
-                    || state.current_chain.last().map(|s| s.as_str()) != Some(hex_id)
+        // Rule out, 64 positions at a time, every route sharing track with
+        // the ones chosen so far.
+        let pw = list.len().div_ceil(64);
+        let mut blocked = std::mem::take(&mut self.blocked[t]);
+        blocked.clear();
+        blocked.resize(pw, 0);
+        for (w, &word) in self.used.iter().enumerate() {
+            let mut word = word;
+            while word != 0 {
+                let id = w * 64 + word.trailing_zeros() as usize;
+                word &= word - 1;
+                for (b, u) in blocked
+                    .iter_mut()
+                    .zip(&self.uses[t][id * pw..(id + 1) * pw])
                 {
-                    state.current_chain.push(hex_id.to_string());
+                    *b |= u;
                 }
-
-                // Follow to neighbor
-                let neighbor_id = state
-                    .hex_adjacency
-                    .get(hex_id)
-                    .and_then(|n| n.get(exit_edge))
-                    .cloned();
-
-                if let Some(neighbor_id) = neighbor_id {
-                    let enter_edge = (*exit_edge + 3) % 6;
-                    let edge_key = (hex_id.to_string(), *exit_edge);
-                    *state.edge_counter.entry(edge_key.clone()).or_insert(0) += 1;
-
-                    walk_into_path(state, &neighbor_id, enter_edge);
-
-                    *state.edge_counter.entry(edge_key).or_insert(0) -= 1;
-                }
-
-                state.hexside_bits &= !bit;
-                state.current_chain.truncate(chain_len);
             }
-            PathEndpoint::City(idx) => {
-                let dest = NodeId {
-                    hex_id: hex_id.to_string(),
-                    node_type: NodeType::City,
-                    index: *idx,
-                };
-                let blocked = is_city_blocked_for_route(
-                    state.hexes,
-                    state.hex_idx,
-                    &dest,
-                    state.corp_sym,
-                );
-                if blocked {
-                    let has_bypass =
-                        has_bypass_path(state.hexes, state.hex_idx, &dest);
-                    if !has_bypass {
-                        // Terminal stop at blocked city (no bypass)
-                        let rev =
-                            node_revenue(state.hexes, state.hex_idx, &dest, state.phase_tiles);
-                        let cost = 1u32;
-                        if state.stop_count + cost <= state.train_distance {
-                            let chain_len = state.current_chain.len();
-                            if state.current_chain.is_empty()
-                                || state.current_chain.last().map(|s| s.as_str())
-                                    != Some(hex_id)
-                            {
-                                state.current_chain.push(hex_id.to_string());
-                            }
-                            let chain = state.current_chain.clone();
+        }
 
-                            state.stops.push(dest.clone());
-                            state.chains.push(chain.clone());
-                            let saved_chain =
-                                std::mem::replace(&mut state.current_chain, Vec::new());
-                            state.revenue += rev;
-                            state.stop_count += cost;
-
-                            state.emit_candidate();
-
-                            state.stop_count -= cost;
-                            state.revenue -= rev;
-                            state.current_chain = saved_chain;
-                            state.chains.pop();
-                            state.stops.pop();
-
-                            state.current_chain.truncate(chain_len);
-                        }
-                    }
-                    // If bypass exists, skip — bypass paths are separate path segments
+        'scan: for w in from / 64..pw {
+            let mut free = !blocked[w];
+            if w == from / 64 {
+                free &= !0u64 << (from % 64);
+            }
+            while free != 0 {
+                let pos = w * 64 + free.trailing_zeros() as usize;
+                free &= free - 1;
+                if pos >= list.len() {
+                    break 'scan;
+                }
+                let route = list[pos] as usize;
+                let r = self.revenue[route];
+                // Both terms shrink as `pos` grows, so nothing later can win.
+                let rest = if next_same {
+                    self.upper_bound(t + 1, pos + 1)
                 } else {
-                    // Unblocked intra-tile city: add as stop and continue walk
-                    arrive_at_node(state, hex_id, &dest);
-                }
-            }
-            PathEndpoint::Town(idx) => {
-                let dest = NodeId {
-                    hex_id: hex_id.to_string(),
-                    node_type: NodeType::Town,
-                    index: *idx,
+                    rest_bound
                 };
-                arrive_at_node(state, hex_id, &dest);
-            }
-            PathEndpoint::Offboard(idx) => {
-                let dest = NodeId {
-                    hex_id: hex_id.to_string(),
-                    node_type: NodeType::Offboard,
-                    index: *idx,
-                };
-                arrive_at_node(state, hex_id, &dest);
-            }
-            PathEndpoint::Junction => {
-                // Follow through junction to all other junction paths on this tile
-                let tile = &state.hexes[hi].tile;
-                let junction_paths: Vec<(usize, PathEndpoint)> = tile
-                    .paths
-                    .iter()
-                    .enumerate()
-                    .filter(|(idx, p)| {
-                        *idx != path_idx
-                            && !p.terminal
-                            && (p.a == PathEndpoint::Junction || p.b == PathEndpoint::Junction)
-                    })
-                    .map(|(idx, p)| {
-                        let exit = if p.a == PathEndpoint::Junction {
-                            p.b.clone()
-                        } else {
-                            p.a.clone()
-                        };
-                        (idx, exit)
-                    })
-                    .collect();
-
-                for (other_idx, other_exit) in junction_paths {
-                    let other_seg = PathSegment {
-                        hex_id: hex_id.to_string(),
-                        path_index: other_idx,
-                    };
-                    if state.visited_paths.contains(&other_seg) {
-                        continue;
-                    }
-
-                    match &other_exit {
-                        PathEndpoint::Edge(e) => {
-                            let edge_cnt = *state
-                                .edge_counter
-                                .get(&(hex_id.to_string(), *e))
-                                .unwrap_or(&0);
-                            if edge_cnt > 0 {
-                                continue;
-                            }
-
-                            state.visited_paths.insert(other_seg.clone());
-                            let bit = state.finder.assign_hexside_pair(
-                                hex_id,
-                                *e,
-                                state.hex_adjacency,
-                            );
-                            state.hexside_bits |= bit;
-
-                            let chain_len = state.current_chain.len();
-                            if state.current_chain.is_empty()
-                                || state.current_chain.last().map(|s| s.as_str()) != Some(hex_id)
-                            {
-                                state.current_chain.push(hex_id.to_string());
-                            }
-
-                            let neighbor_id = state
-                                .hex_adjacency
-                                .get(hex_id)
-                                .and_then(|n| n.get(e))
-                                .cloned();
-
-                            if let Some(neighbor_id) = neighbor_id {
-                                let enter_edge = (*e + 3) % 6;
-                                let edge_key = (hex_id.to_string(), *e);
-                                *state.edge_counter.entry(edge_key.clone()).or_insert(0) += 1;
-
-                                walk_into_path(state, &neighbor_id, enter_edge);
-
-                                *state.edge_counter.entry(edge_key).or_insert(0) -= 1;
-                            }
-
-                            state.hexside_bits &= !bit;
-                            state.current_chain.truncate(chain_len);
-                            state.visited_paths.remove(&other_seg);
-                        }
-                        PathEndpoint::City(idx) => {
-                            state.visited_paths.insert(other_seg.clone());
-                            let dest = NodeId {
-                                hex_id: hex_id.to_string(),
-                                node_type: NodeType::City,
-                                index: *idx,
-                            };
-                            let blocked = is_city_blocked_for_route(
-                                state.hexes, state.hex_idx, &dest, state.corp_sym,
-                            );
-                            if !blocked {
-                                arrive_at_node(state, hex_id, &dest);
-                            }
-                            state.visited_paths.remove(&other_seg);
-                        }
-                        PathEndpoint::Town(idx) => {
-                            state.visited_paths.insert(other_seg.clone());
-                            let dest = NodeId {
-                                hex_id: hex_id.to_string(),
-                                node_type: NodeType::Town,
-                                index: *idx,
-                            };
-                            arrive_at_node(state, hex_id, &dest);
-                            state.visited_paths.remove(&other_seg);
-                        }
-                        PathEndpoint::Offboard(idx) => {
-                            state.visited_paths.insert(other_seg.clone());
-                            let dest = NodeId {
-                                hex_id: hex_id.to_string(),
-                                node_type: NodeType::Offboard,
-                                index: *idx,
-                            };
-                            arrive_at_node(state, hex_id, &dest);
-                            state.visited_paths.remove(&other_seg);
-                        }
-                        PathEndpoint::Junction => {
-                            // Nested junctions — skip to avoid infinite recursion
-                        }
-                    }
+                if revenue + r + rest <= self.best {
+                    break 'scan;
                 }
+                self.toggle(route);
+                self.chosen[t] = Some(route as u32);
+                self.search(t + 1, revenue + r, if next_same { pos + 1 } else { 0 });
+                self.chosen[t] = None;
+                self.toggle(route);
             }
         }
+        self.blocked[t] = blocked;
 
-        state.visited_paths.remove(&seg);
-    }
-
-    state.visited_nodes.remove(node);
-}
-
-/// Walk into a hex from an entry edge, following the matching path.
-/// This handles pass-through hexes (edge→edge) and arrival at revenue nodes.
-fn walk_into_path(state: &mut WalkState<'_>, hex_id: &str, enter_edge: u8) {
-    let hi = match state.hex_idx.get(hex_id) {
-        Some(&i) => i,
-        None => return,
-    };
-    let tile = &state.hexes[hi].tile;
-    let enter_ep = PathEndpoint::Edge(enter_edge);
-
-    // Collect matching paths
-    let matching: Vec<(usize, PathEndpoint)> = tile
-        .paths
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| !p.terminal)
-        .filter_map(|(idx, p)| {
-            if p.a == enter_ep {
-                Some((idx, p.b.clone()))
-            } else if p.b == enter_ep {
-                Some((idx, p.a.clone()))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    for (path_idx, dest) in matching {
-        let seg = PathSegment {
-            hex_id: hex_id.to_string(),
-            path_index: path_idx,
-        };
-        if state.visited_paths.contains(&seg) {
-            continue;
-        }
-
-        // Check edge counter for the exit edge of this path
-        if let Some(e) = dest.edge_num() {
-            let cnt = *state
-                .edge_counter
-                .get(&(hex_id.to_string(), e))
-                .unwrap_or(&0);
-            if cnt > 0 {
-                continue;
-            }
-        }
-
-        state.visited_paths.insert(seg.clone());
-
-        // Add hex to current chain. Save length for reliable restore —
-        // nested arrive_at_node backtracking can corrupt the chain if we
-        // rely on positional pop().
-        let chain_len = state.current_chain.len();
-        state.current_chain.push(hex_id.to_string());
-
-        match &dest {
-            PathEndpoint::Edge(exit_edge) => {
-                // Pass-through hex: enter one edge, exit another
-                let bit = state.finder.assign_hexside_pair(
-                    hex_id,
-                    *exit_edge,
-                    state.hex_adjacency,
-                );
-                state.hexside_bits |= bit;
-
-                let neighbor_id = state
-                    .hex_adjacency
-                    .get(hex_id)
-                    .and_then(|n| n.get(exit_edge))
-                    .cloned();
-
-                if let Some(neighbor_id) = neighbor_id {
-                    let next_enter = (*exit_edge + 3) % 6;
-                    let edge_key = (hex_id.to_string(), *exit_edge);
-                    *state.edge_counter.entry(edge_key.clone()).or_insert(0) += 1;
-
-                    walk_into_path(state, &neighbor_id, next_enter);
-
-                    *state.edge_counter.entry(edge_key).or_insert(0) -= 1;
-                }
-
-                state.hexside_bits &= !bit;
-            }
-            PathEndpoint::City(idx) => {
-                let dest_node = NodeId {
-                    hex_id: hex_id.to_string(),
-                    node_type: NodeType::City,
-                    index: *idx,
-                };
-                let blocked = is_city_blocked_for_route(
-                    state.hexes,
-                    state.hex_idx,
-                    &dest_node,
-                    state.corp_sym,
-                );
-                if blocked {
-                    let has_bypass =
-                        has_bypass_path(state.hexes, state.hex_idx, &dest_node);
-                    if !has_bypass {
-                        // Terminal stop at blocked city with no bypass
-                        let rev = node_revenue(
-                            state.hexes,
-                            state.hex_idx,
-                            &dest_node,
-                            state.phase_tiles,
-                        );
-                        let cost = 1u32;
-                        if state.stop_count + cost <= state.train_distance {
-                            let chain = state.current_chain.clone();
-                            state.stops.push(dest_node.clone());
-                            state.chains.push(chain);
-                            let saved_chain =
-                                std::mem::replace(&mut state.current_chain, Vec::new());
-                            state.revenue += rev;
-                            state.stop_count += cost;
-
-                            state.emit_candidate();
-
-                            state.stop_count -= cost;
-                            state.revenue -= rev;
-                            state.current_chain = saved_chain;
-                            state.chains.pop();
-                            state.stops.pop();
-                        }
-                    }
-                    // With bypass: the bypass edge→edge paths will be separate entries
-                } else {
-                    arrive_at_node(state, hex_id, &dest_node);
-                }
-            }
-            PathEndpoint::Town(idx) => {
-                let dest_node = NodeId {
-                    hex_id: hex_id.to_string(),
-                    node_type: NodeType::Town,
-                    index: *idx,
-                };
-                arrive_at_node(state, hex_id, &dest_node);
-            }
-            PathEndpoint::Offboard(idx) => {
-                let dest_node = NodeId {
-                    hex_id: hex_id.to_string(),
-                    node_type: NodeType::Offboard,
-                    index: *idx,
-                };
-                arrive_at_node(state, hex_id, &dest_node);
-            }
-            PathEndpoint::Junction => {
-                // Follow through junction
-                let tile = &state.hexes[hi].tile;
-                let junction_paths: Vec<(usize, PathEndpoint)> = tile
-                    .paths
-                    .iter()
-                    .enumerate()
-                    .filter(|(idx, p)| {
-                        *idx != path_idx
-                            && !p.terminal
-                            && (p.a == PathEndpoint::Junction || p.b == PathEndpoint::Junction)
-                    })
-                    .map(|(idx, p)| {
-                        let exit = if p.a == PathEndpoint::Junction {
-                            p.b.clone()
-                        } else {
-                            p.a.clone()
-                        };
-                        (idx, exit)
-                    })
-                    .collect();
-
-                for (other_idx, other_exit) in junction_paths {
-                    let other_seg = PathSegment {
-                        hex_id: hex_id.to_string(),
-                        path_index: other_idx,
-                    };
-                    if state.visited_paths.contains(&other_seg) {
-                        continue;
-                    }
-
-                    match &other_exit {
-                        PathEndpoint::Edge(e) => {
-                            let edge_cnt = *state
-                                .edge_counter
-                                .get(&(hex_id.to_string(), *e))
-                                .unwrap_or(&0);
-                            if edge_cnt > 0 {
-                                continue;
-                            }
-
-                            state.visited_paths.insert(other_seg.clone());
-                            let bit = state.finder.assign_hexside_pair(
-                                hex_id,
-                                *e,
-                                state.hex_adjacency,
-                            );
-                            state.hexside_bits |= bit;
-
-                            let neighbor_id = state
-                                .hex_adjacency
-                                .get(hex_id)
-                                .and_then(|n| n.get(e))
-                                .cloned();
-
-                            if let Some(neighbor_id) = neighbor_id {
-                                let next_enter = (*e + 3) % 6;
-                                let edge_key = (hex_id.to_string(), *e);
-                                *state.edge_counter.entry(edge_key.clone()).or_insert(0) += 1;
-
-                                walk_into_path(state, &neighbor_id, next_enter);
-
-                                *state.edge_counter.entry(edge_key).or_insert(0) -= 1;
-                            }
-
-                            state.hexside_bits &= !bit;
-                            state.visited_paths.remove(&other_seg);
-                        }
-                        PathEndpoint::City(idx) => {
-                            state.visited_paths.insert(other_seg.clone());
-                            let dest = NodeId {
-                                hex_id: hex_id.to_string(),
-                                node_type: NodeType::City,
-                                index: *idx,
-                            };
-                            let blocked = is_city_blocked_for_route(
-                                state.hexes, state.hex_idx, &dest, state.corp_sym,
-                            );
-                            if !blocked {
-                                arrive_at_node(state, hex_id, &dest);
-                            }
-                            state.visited_paths.remove(&other_seg);
-                        }
-                        PathEndpoint::Town(idx) => {
-                            state.visited_paths.insert(other_seg.clone());
-                            let dest = NodeId {
-                                hex_id: hex_id.to_string(),
-                                node_type: NodeType::Town,
-                                index: *idx,
-                            };
-                            arrive_at_node(state, hex_id, &dest);
-                            state.visited_paths.remove(&other_seg);
-                        }
-                        PathEndpoint::Offboard(idx) => {
-                            state.visited_paths.insert(other_seg.clone());
-                            let dest = NodeId {
-                                hex_id: hex_id.to_string(),
-                                node_type: NodeType::Offboard,
-                                index: *idx,
-                            };
-                            arrive_at_node(state, hex_id, &dest);
-                            state.visited_paths.remove(&other_seg);
-                        }
-                        PathEndpoint::Junction => {
-                            // Nested junctions — skip
-                        }
-                    }
-                }
-            }
-        }
-
-        // Restore chain to pre-push state (reliable even after nested backtracking)
-        state.current_chain.truncate(chain_len);
-        state.visited_paths.remove(&seg);
+        // This train runs nothing — and then neither do identical ones
+        // after it (any other arrangement is a permutation of one tried).
+        self.search(self.group_end[t], revenue, 0);
     }
 }
 
-/// Arrive at a revenue node: add as stop, emit candidate, continue walking.
-fn arrive_at_node(state: &mut WalkState<'_>, hex_id: &str, node: &NodeId) {
-    if state.visited_nodes.contains(node) {
-        return;
-    }
-
-    let is_town = node.node_type == NodeType::Town;
-    let stop_cost = if state.is_d_train && is_town {
-        0u32
-    } else {
-        1u32
-    };
-
-    if state.stop_count + stop_cost > state.train_distance {
-        return;
-    }
-
-    let rev = node_revenue(state.hexes, state.hex_idx, node, state.phase_tiles);
-
-    // Save chain length for reliable restore after backtracking
-    let chain_len = state.current_chain.len();
-
-    // Finalize the current chain (add this hex as endpoint)
-    if state.current_chain.is_empty()
-        || state.current_chain.last().map(|s| s.as_str()) != Some(hex_id)
-    {
-        state.current_chain.push(hex_id.to_string());
-    }
-    let chain = state.current_chain.clone();
-
-    // Push stop
-    state.stops.push(node.clone());
-    state.chains.push(chain);
-    let saved_chain = std::mem::replace(&mut state.current_chain, Vec::new());
-    state.revenue += rev;
-    state.stop_count += stop_cost;
-
-    // Emit candidate
-    state.emit_candidate();
-
-    // Continue walking from this node if we haven't reached distance limit.
-    // Offboards are always terminal — Python's Offboard.blocks() returns True,
-    // preventing traversal past offboard nodes.
-    let is_offboard = node.node_type == NodeType::Offboard;
-    if !is_offboard && state.stop_count < state.train_distance {
-        walk_from_node(state, hex_id, node);
-    }
-
-    // Backtrack
-    state.stop_count -= stop_cost;
-    state.revenue -= rev;
-    state.current_chain = saved_chain;
-    state.chains.pop();
-    state.stops.pop();
-
-    // Restore chain to pre-push state
-    state.current_chain.truncate(chain_len);
-}
-
-// ---------------------------------------------------------------------------
-// Route enumeration
-// ---------------------------------------------------------------------------
-
-/// Enumerate all valid routes for a train using path-level walk.
-pub fn enumerate_routes(
-    hexes: &[Hex],
-    hex_idx: &HashMap<String, usize>,
-    hex_adjacency: &HashMap<String, HashMap<u8, String>>,
-    token_nodes: &[NodeId],
-    connected_nodes: &[NodeId],
-    train_distance: u32,
-    is_d_train: bool,
-    phase_tiles: &[String],
-    corp_sym: &str,
-    finder: &mut RouteFinder,
-) -> Vec<RouteCandidate> {
-    let token_set: HashSet<NodeId> = token_nodes.iter().cloned().collect();
-
-    let mut state = WalkState {
-        hexes,
-        hex_idx,
-        hex_adjacency,
-        phase_tiles,
-        corp_sym,
-        finder,
-        visited_paths: HashSet::new(),
-        visited_nodes: HashSet::new(),
-        edge_counter: HashMap::new(),
-        hexside_bits: 0,
-        stops: Vec::new(),
-        current_chain: Vec::new(),
-        chains: Vec::new(),
-        revenue: 0,
-        train_distance,
-        is_d_train,
-        stop_count: 0,
-        candidates: Vec::new(),
-        token_set,
-    };
-
-    for start in connected_nodes {
-        // Don't skip blocked cities as starting points — they can be valid
-        // terminal stops at the start of a route. Python walks from ALL
-        // connected nodes; blocking only prevents traversal THROUGH a city,
-        // not starting at one.
-
-        let rev = node_revenue(hexes, hex_idx, start, phase_tiles);
-        let is_town = start.node_type == NodeType::Town;
-        let stop_cost = if is_d_train && is_town { 0u32 } else { 1u32 };
-
-        state.stops.push(start.clone());
-        state.revenue = rev;
-        state.stop_count = stop_cost;
-
-        // Start chain with this hex
-        state.current_chain.clear();
-
-        walk_from_node(&mut state, &start.hex_id, start);
-
-        state.stops.pop();
-        state.revenue = 0;
-        state.stop_count = 0;
-        state.current_chain.clear();
-        state.chains.clear();
-    }
-
-    state.candidates
-}
-
-// ---------------------------------------------------------------------------
-// Optimal route combination
-// ---------------------------------------------------------------------------
-
-/// Collect hex-pair edges (normalized) from a route's connection chains.
-/// Each hex pair represents a hexside the route physically traverses.
-fn route_hex_edges(route: &RouteCandidate) -> HashSet<(String, String)> {
-    let mut edges = HashSet::new();
-    for chain in &route.connections {
-        for pair in chain.windows(2) {
-            let (a, b) = (&pair[0], &pair[1]);
-            if a < b {
-                edges.insert((a.clone(), b.clone()));
-            } else {
-                edges.insert((b.clone(), a.clone()));
-            }
-        }
-    }
-    edges
-}
-
-/// Check if a combo of routes has any actual hexside overlaps.
-fn combo_has_hex_overlap(combo: &[RouteCandidate]) -> bool {
-    let edge_sets: Vec<HashSet<(String, String)>> =
-        combo.iter().map(route_hex_edges).collect();
-    for i in 0..edge_sets.len() {
-        for j in (i + 1)..edge_sets.len() {
-            if !edge_sets[i].is_disjoint(&edge_sets[j]) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Find the revenue-maximizing combination of routes (one per train) with no
-/// hexside conflicts.
-pub fn find_best_routes(candidates_per_train: &[Vec<RouteCandidate>]) -> (Vec<RouteCandidate>, i32) {
-    if candidates_per_train.is_empty() {
+/// The best set of `(train index, found route)` pairs and its revenue.
+fn best_combination(walk: &Walk<'_>, trains: &[(u32, bool)]) -> (Vec<(usize, usize)>, i32) {
+    let found = &walk.found;
+    if found.is_empty() {
         return (Vec::new(), 0);
     }
+    let n_track = walk.in_use.len();
+    let words = n_track.div_ceil(64).max(1);
+    let mut bits = vec![0u64; found.len() * words];
+    for (i, f) in found.iter().enumerate() {
+        for &id in &walk.found_track[f.track.clone()] {
+            bits[i * words + id as usize / 64] |= 1u64 << (id % 64);
+        }
+    }
+    let revenue: Vec<i32> = found.iter().map(|f| f.revenue).collect();
+    let mut by_revenue: Vec<u32> = (0..found.len() as u32).collect();
+    by_revenue.sort_by_key(|&i| std::cmp::Reverse(revenue[i as usize]));
 
-    if candidates_per_train.len() == 1 {
-        let best = candidates_per_train[0].iter().max_by_key(|r| r.revenue);
-        return match best {
-            Some(route) => (vec![route.clone()], route.revenue),
-            None => (Vec::new(), 0),
+    // Larger trains first; identical trains adjacent and sharing a list.
+    let mut order: Vec<usize> = (0..trains.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse((trains[i].1, trains[i].0)));
+    let mut kinds: Vec<(u32, bool)> = Vec::new();
+    let mut kind_lists: Vec<Vec<u32>> = Vec::new();
+    let mut kind_uses: Vec<Vec<u64>> = Vec::new();
+    for &i in &order {
+        let (distance, is_d) = trains[i];
+        if kinds.contains(&(distance, is_d)) {
+            continue;
+        }
+        let list: Vec<u32> = by_revenue
+            .iter()
+            .copied()
+            .filter(|&r| {
+                let f = &found[r as usize];
+                if is_d {
+                    f.cost_d <= distance
+                } else {
+                    f.cost <= distance
+                }
+            })
+            .collect();
+        let pw = list.len().div_ceil(64);
+        let mut uses = vec![0u64; n_track * pw];
+        for (pos, &r) in list.iter().enumerate() {
+            for &id in &walk.found_track[found[r as usize].track.clone()] {
+                uses[id as usize * pw + pos / 64] |= 1u64 << (pos % 64);
+            }
+        }
+        kinds.push((distance, is_d));
+        kind_lists.push(list);
+        kind_uses.push(uses);
+    }
+    let kind_of: Vec<usize> = order
+        .iter()
+        .map(|&i| kinds.iter().position(|&k| k == trains[i]).unwrap())
+        .collect();
+    let same_as_prev: Vec<bool> = (0..order.len())
+        .map(|t| t > 0 && trains[order[t]] == trains[order[t - 1]])
+        .collect();
+    let mut group_end = vec![order.len(); order.len()];
+    for t in (0..order.len().saturating_sub(1)).rev() {
+        group_end[t] = if same_as_prev[t + 1] {
+            group_end[t + 1]
+        } else {
+            t + 1
         };
     }
 
-    let mut best_revenue = 0i32;
-    let mut best_combo: Vec<RouteCandidate> = Vec::new();
+    let mut combo = Combo {
+        revenue: &revenue,
+        bits: &bits,
+        words,
+        lists: kind_of.iter().map(|&k| kind_lists[k].as_slice()).collect(),
+        uses: kind_of.iter().map(|&k| kind_uses[k].as_slice()).collect(),
+        same_as_prev,
+        group_end,
+        used: vec![0u64; words],
+        blocked: vec![Vec::new(); order.len()],
+        chosen: vec![None; order.len()],
+        best: 0,
+        best_chosen: vec![None; order.len()],
+    };
+    combo.search(0, 0, 0);
 
-    find_best_recursive(
-        candidates_per_train,
-        0,
-        &mut Vec::new(),
-        0,
-        0,
-        &mut best_revenue,
-        &mut best_combo,
-    );
-
-    // Secondary validation: verify the best combo has no actual hexside overlaps.
-    // The bitfield check is a fast heuristic; this catches edge cases where bits
-    // were assigned inconsistently due to walk order.
-    if best_combo.len() > 1 && combo_has_hex_overlap(&best_combo) {
-        // Fall back to exhaustive search with hex-edge overlap check
-        best_revenue = 0;
-        best_combo.clear();
-        find_best_recursive_validated(
-            candidates_per_train,
-            0,
-            &mut Vec::new(),
-            0,
-            0,
-            &mut best_revenue,
-            &mut best_combo,
-        );
-    }
-
-    (best_combo, best_revenue)
+    let mut chosen: Vec<(usize, usize)> = combo
+        .best_chosen
+        .iter()
+        .enumerate()
+        .filter_map(|(t, r)| r.map(|r| (order[t], r as usize)))
+        .collect();
+    chosen.sort_unstable();
+    (chosen, combo.best)
 }
 
-fn find_best_recursive_validated(
-    candidates_per_train: &[Vec<RouteCandidate>],
-    train_index: usize,
-    current_combo: &mut Vec<RouteCandidate>,
-    current_revenue: i32,
-    used_bits: u128,
-    best_revenue: &mut i32,
-    best_combo: &mut Vec<RouteCandidate>,
-) {
-    if train_index >= candidates_per_train.len() {
-        if current_revenue > *best_revenue && !combo_has_hex_overlap(current_combo) {
-            *best_revenue = current_revenue;
-            *best_combo = current_combo.clone();
-        }
-        return;
-    }
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
-    // Option: skip this train
-    find_best_recursive_validated(
-        candidates_per_train,
-        train_index + 1,
-        current_combo,
-        current_revenue,
-        used_bits,
-        best_revenue,
-        best_combo,
-    );
-
-    for route in &candidates_per_train[train_index] {
-        if route.hexside_bits & used_bits != 0 {
-            continue;
-        }
-
-        current_combo.push(route.clone());
-        find_best_recursive_validated(
-            candidates_per_train,
-            train_index + 1,
-            current_combo,
-            current_revenue + route.revenue,
-            used_bits | route.hexside_bits,
-            best_revenue,
-            best_combo,
-        );
-        current_combo.pop();
-    }
-}
-
-fn find_best_recursive(
-    candidates_per_train: &[Vec<RouteCandidate>],
-    train_index: usize,
-    current_combo: &mut Vec<RouteCandidate>,
-    current_revenue: i32,
-    used_bits: u128,
-    best_revenue: &mut i32,
-    best_combo: &mut Vec<RouteCandidate>,
-) {
-    if train_index >= candidates_per_train.len() {
-        if current_revenue > *best_revenue {
-            *best_revenue = current_revenue;
-            *best_combo = current_combo.clone();
-        }
-        return;
-    }
-
-    // Option: skip this train
-    find_best_recursive(
-        candidates_per_train,
-        train_index + 1,
-        current_combo,
-        current_revenue,
-        used_bits,
-        best_revenue,
-        best_combo,
-    );
-
-    for route in &candidates_per_train[train_index] {
-        if route.hexside_bits & used_bits != 0 {
-            continue;
-        }
-
-        current_combo.push(route.clone());
-        find_best_recursive(
-            candidates_per_train,
-            train_index + 1,
-            current_combo,
-            current_revenue + route.revenue,
-            used_bits | route.hexside_bits,
-            best_revenue,
-            best_combo,
-        );
-        current_combo.pop();
-    }
-}
-
-/// Calculate optimal routes and total revenue for a corporation.
+/// The revenue-maximising legal routes for a corporation's `trains` (each
+/// `(distance, is_d)`; a D train counts towns free), and their total
+/// revenue. `token_nodes` are the corporation's token cities;
+/// `connected_nodes` the revenue nodes its track reaches.
+#[allow(clippy::too_many_arguments)]
 pub fn calculate_corp_routes(
     hexes: &[Hex],
     hex_idx: &HashMap<String, usize>,
@@ -1140,32 +761,58 @@ pub fn calculate_corp_routes(
     if trains.is_empty() || token_nodes.is_empty() {
         return (Vec::new(), 0);
     }
+    let tokens: Vec<NodeKey> = token_nodes
+        .iter()
+        .filter_map(|n| node_id_key(n, hex_idx))
+        .collect();
+    let mut starts: Vec<NodeKey> = connected_nodes
+        .iter()
+        .filter_map(|n| node_id_key(n, hex_idx))
+        .chain(tokens.iter().copied())
+        .collect();
+    starts.sort_unstable();
+    starts.dedup();
 
-    // Single RouteFinder shared across all trains so hexside bit assignments
-    // are consistent — required for cross-train conflict detection.
-    let mut finder = RouteFinder::new();
-
-    let mut candidates_per_train = Vec::new();
-    for (train_index, &(distance, is_d)) in trains.iter().enumerate() {
-        let mut candidates = enumerate_routes(
-            hexes,
-            hex_idx,
-            hex_adjacency,
-            token_nodes,
-            connected_nodes,
-            distance,
-            is_d,
-            phase_tiles,
-            corp_sym,
-            &mut finder,
-        );
-        for c in &mut candidates {
-            c.train_index = train_index;
-        }
-        candidates_per_train.push(candidates);
+    let mut walk = Walk {
+        hexes,
+        hex_idx,
+        hex_adjacency,
+        phase_tiles,
+        corp_sym,
+        max_cost: trains.iter().filter(|t| !t.1).map(|t| t.0).max(),
+        max_cost_d: trains.iter().filter(|t| t.1).map(|t| t.0).max(),
+        tokens,
+        starts: starts.clone(),
+        neighbors: vec![[NBR_UNKNOWN; 6]; hexes.len()],
+        hexside_track: vec![NO_TRACK; hexes.len() * 6],
+        node_path_track: HashMap::new(),
+        in_use: Vec::new(),
+        stops: Vec::new(),
+        stop_pos: Vec::new(),
+        trail: Vec::new(),
+        track: Vec::new(),
+        junction_hexes: Vec::new(),
+        groups: Vec::new(),
+        revenue: 0,
+        cost: 0,
+        cost_d: 0,
+        n_paths: 0,
+        found: Vec::new(),
+        found_stops: Vec::new(),
+        found_stop_pos: Vec::new(),
+        found_trail: Vec::new(),
+        found_track: Vec::new(),
+    };
+    for start in starts {
+        walk.walk_routes_from(start);
     }
 
-    find_best_routes(&candidates_per_train)
+    let (chosen, revenue) = best_combination(&walk, trains);
+    let routes = chosen
+        .into_iter()
+        .map(|(train, f)| walk.route(&walk.found[f], train))
+        .collect();
+    (routes, revenue)
 }
 
 // ---------------------------------------------------------------------------
@@ -1175,7 +822,7 @@ pub fn calculate_corp_routes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{City, Hex, Tile, Town};
+    use crate::graph::{City, Hex, Offboard, Tile, Town};
     use crate::tiles::{parse_tile, TileColor};
 
     fn tile_from_dsl(name: &str, dsl: &str, color: TileColor) -> Tile {
@@ -1189,6 +836,12 @@ mod tests {
         for td in &tile_def.towns {
             tile.towns.push(Town::new(td.revenue));
         }
+        for od in &tile_def.offboards {
+            let mut ob = Offboard::new(od.yellow_revenue);
+            ob.brown_revenue = Some(od.brown_revenue);
+            ob.groups = od.groups.clone();
+            tile.offboards.push(ob);
+        }
         tile
     }
 
@@ -1200,511 +853,489 @@ mod tests {
         city.tokens[slot] = Some(tok);
     }
 
-    /// Simple linear: A(city:20, token) -- B(track) -- C(city:30)
-    fn build_linear_for_routing() -> (
-        Vec<Hex>,
-        HashMap<String, usize>,
-        HashMap<String, HashMap<u8, String>>,
-        Vec<NodeId>,
-    ) {
-        let mut tile_a = tile_from_dsl("a", "city=revenue:20;path=a:1,b:_0", TileColor::Yellow);
-        place_token(&mut tile_a, 0, "PRR");
-
-        let tile_b = tile_from_dsl("b", "path=a:4,b:1", TileColor::Yellow);
-
-        let tile_c = tile_from_dsl("c", "city=revenue:30;path=a:4,b:_0", TileColor::Yellow);
-
-        let hexes = vec![
-            Hex::new("A".to_string(), tile_a),
-            Hex::new("B".to_string(), tile_b),
-            Hex::new("C".to_string(), tile_c),
-        ];
-        let hex_idx: HashMap<String, usize> = [
-            ("A".to_string(), 0),
-            ("B".to_string(), 1),
-            ("C".to_string(), 2),
-        ]
-        .into();
-        let adjacency: HashMap<String, HashMap<u8, String>> = [
-            ("A".to_string(), [(1u8, "B".to_string())].into()),
-            (
-                "B".to_string(),
-                [(4u8, "A".to_string()), (1u8, "C".to_string())].into(),
-            ),
-            ("C".to_string(), [(4u8, "B".to_string())].into()),
-        ]
-        .into();
-        let token_nodes = vec![NodeId {
-            hex_id: "A".to_string(),
+    fn city(hex: &str) -> NodeId {
+        NodeId {
+            hex_id: hex.to_string(),
             node_type: NodeType::City,
             index: 0,
-        }];
+        }
+    }
 
-        (hexes, hex_idx, adjacency, token_nodes)
+    /// A test map: hexes with tiles, adjacency from `(hex, edge, neighbor)`
+    /// triples (the reverse direction is added).
+    struct TestMap {
+        hexes: Vec<Hex>,
+        hex_idx: HashMap<String, usize>,
+        adjacency: HashMap<String, HashMap<u8, String>>,
+    }
+
+    impl TestMap {
+        fn new(tiles: Vec<(&str, Tile)>, links: &[(&str, u8, &str)]) -> Self {
+            let hexes: Vec<Hex> = tiles
+                .into_iter()
+                .map(|(id, tile)| Hex::new(id.to_string(), tile))
+                .collect();
+            let hex_idx = hexes
+                .iter()
+                .enumerate()
+                .map(|(i, h)| (h.id.clone(), i))
+                .collect();
+            let mut adjacency: HashMap<String, HashMap<u8, String>> = HashMap::new();
+            for &(a, edge, b) in links {
+                adjacency
+                    .entry(a.to_string())
+                    .or_default()
+                    .insert(edge, b.to_string());
+                adjacency
+                    .entry(b.to_string())
+                    .or_default()
+                    .insert((edge + 3) % 6, a.to_string());
+            }
+            TestMap {
+                hexes,
+                hex_idx,
+                adjacency,
+            }
+        }
+
+        /// Every revenue node on the map counts as connected.
+        fn routes(&self, tokens: &[NodeId], trains: &[(u32, bool)]) -> (Vec<RouteCandidate>, i32) {
+            let mut connected = Vec::new();
+            for h in &self.hexes {
+                for i in 0..h.tile.cities.len() {
+                    connected.push(NodeId {
+                        hex_id: h.id.clone(),
+                        node_type: NodeType::City,
+                        index: i,
+                    });
+                }
+                for i in 0..h.tile.towns.len() {
+                    connected.push(NodeId {
+                        hex_id: h.id.clone(),
+                        node_type: NodeType::Town,
+                        index: i,
+                    });
+                }
+                for i in 0..h.tile.offboards.len() {
+                    connected.push(NodeId {
+                        hex_id: h.id.clone(),
+                        node_type: NodeType::Offboard,
+                        index: i,
+                    });
+                }
+            }
+            calculate_corp_routes(
+                &self.hexes,
+                &self.hex_idx,
+                &self.adjacency,
+                tokens,
+                &connected,
+                trains,
+                &["yellow".to_string()],
+                "PRR",
+            )
+        }
+    }
+
+    fn y(name: &str, dsl: &str) -> Tile {
+        tile_from_dsl(name, dsl, TileColor::Yellow)
+    }
+
+    fn tokened(mut tile: Tile) -> Tile {
+        place_token(&mut tile, 0, "PRR");
+        tile
+    }
+
+    fn stops(route: &RouteCandidate) -> Vec<String> {
+        route.nodes.iter().map(|n| n.hex_id.clone()).collect()
+    }
+
+    /// A(city 20, token) -- B(track) -- C(city 30)
+    fn linear() -> TestMap {
+        TestMap::new(
+            vec![
+                ("A", tokened(y("a", "city=revenue:20;path=a:1,b:_0"))),
+                ("B", y("b", "path=a:4,b:1")),
+                ("C", y("c", "city=revenue:30;path=a:4,b:_0")),
+            ],
+            &[("A", 1, "B"), ("B", 1, "C")],
+        )
     }
 
     #[test]
     fn single_train_finds_best_route() {
-        let (hexes, hex_idx, adjacency, token_nodes) = build_linear_for_routing();
-
-        let (routes, revenue) = calculate_corp_routes(
-            &hexes,
-            &hex_idx,
-            &adjacency,
-            &token_nodes,
-            &token_nodes,
-            &[(2, false)],
-            &vec!["yellow".to_string()],
-            "PRR",
-        );
-
-        assert_eq!(revenue, 50, "Best route should be A+C = 50");
+        let (routes, revenue) = linear().routes(&[city("A")], &[(2, false)]);
+        assert_eq!(revenue, 50, "A+C");
         assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].connections, vec![vec!["A", "B", "C"]]);
     }
 
     #[test]
-    fn no_trains_no_revenue() {
-        let (hexes, hex_idx, adjacency, token_nodes) = build_linear_for_routing();
+    fn no_trains_or_tokens_no_revenue() {
+        let map = linear();
+        assert_eq!(map.routes(&[city("A")], &[]).1, 0);
+        assert_eq!(map.routes(&[], &[(2, false)]).1, 0);
+    }
 
-        let (routes, revenue) = calculate_corp_routes(
-            &hexes,
-            &hex_idx,
-            &adjacency,
-            &token_nodes,
-            &token_nodes,
-            &[],
-            &vec!["yellow".to_string()],
-            "PRR",
-        );
-
+    #[test]
+    fn route_needs_two_stops() {
+        let (routes, revenue) = linear().routes(&[city("A")], &[(1, false)]);
         assert_eq!(revenue, 0);
         assert!(routes.is_empty());
     }
 
     #[test]
-    fn no_tokens_no_revenue() {
-        let (hexes, hex_idx, adjacency, _) = build_linear_for_routing();
-
-        let (routes, revenue) = calculate_corp_routes(
-            &hexes,
-            &hex_idx,
-            &adjacency,
-            &[],
-            &[],
-            &[(2, false)],
-            &vec!["yellow".to_string()],
-            "PRR",
+    fn route_needs_a_token() {
+        // C--D runs on track the corp reaches, but neither stop is tokened.
+        let map = TestMap::new(
+            vec![
+                ("A", tokened(y("a", "city=revenue:20;path=a:1,b:_0"))),
+                ("C", y("c", "city=revenue:30;path=a:4,b:_0;path=a:1,b:_0")),
+                ("D", y("d", "city=revenue:90;path=a:4,b:_0")),
+            ],
+            &[("A", 1, "C"), ("C", 1, "D")],
         );
+        let (routes, revenue) = map.routes(&[city("A")], &[(2, false)]);
+        assert_eq!(revenue, 50, "A-C, not the untokened C-D (120)");
+        assert_eq!(stops(&routes[0]), vec!["A", "C"]);
+    }
 
-        assert_eq!(revenue, 0);
-        assert!(routes.is_empty());
+    /// Triangle A(token) -- B -- C -- A.
+    fn triangle() -> TestMap {
+        TestMap::new(
+            vec![
+                (
+                    "A",
+                    tokened(tile_from_dsl(
+                        "a",
+                        "city=revenue:20;path=a:1,b:_0;path=a:2,b:_0",
+                        TileColor::Green,
+                    )),
+                ),
+                (
+                    "B",
+                    tile_from_dsl(
+                        "b",
+                        "city=revenue:30;path=a:4,b:_0;path=a:3,b:_0",
+                        TileColor::Green,
+                    ),
+                ),
+                (
+                    "C",
+                    tile_from_dsl(
+                        "c",
+                        "city=revenue:40;path=a:5,b:_0;path=a:0,b:_0",
+                        TileColor::Green,
+                    ),
+                ),
+            ],
+            &[("A", 1, "B"), ("A", 2, "C"), ("B", 3, "C")],
+        )
     }
 
     #[test]
-    fn distance_1_train_stays_home() {
-        let (hexes, hex_idx, adjacency, token_nodes) = build_linear_for_routing();
-
-        let mut finder = RouteFinder::new();
-        let candidates = enumerate_routes(
-            &hexes,
-            &hex_idx,
-            &adjacency,
-            &token_nodes,
-            &token_nodes,
-            1,
-            false,
-            &vec!["yellow".to_string()],
-            "PRR",
-            &mut finder,
-        );
-
-        assert!(
-            candidates.is_empty(),
-            "Distance-1 train shouldn't find valid routes (needs 2 stops)"
-        );
-    }
-
-    /// Build a diamond: A -- B, A -- C, B -- C
-    fn build_diamond_for_routing() -> (
-        Vec<Hex>,
-        HashMap<String, usize>,
-        HashMap<String, HashMap<u8, String>>,
-        Vec<NodeId>,
-    ) {
-        let mut tile_a = tile_from_dsl(
-            "a",
-            "city=revenue:20;path=a:1,b:_0;path=a:2,b:_0",
-            TileColor::Green,
-        );
-        place_token(&mut tile_a, 0, "PRR");
-
-        let tile_b = tile_from_dsl(
-            "b",
-            "city=revenue:30;path=a:4,b:_0;path=a:3,b:_0",
-            TileColor::Green,
-        );
-
-        let tile_c = tile_from_dsl(
-            "c",
-            "city=revenue:40;path=a:5,b:_0;path=a:0,b:_0",
-            TileColor::Green,
-        );
-
-        let hexes = vec![
-            Hex::new("A".to_string(), tile_a),
-            Hex::new("B".to_string(), tile_b),
-            Hex::new("C".to_string(), tile_c),
-        ];
-        let hex_idx: HashMap<String, usize> = [
-            ("A".to_string(), 0),
-            ("B".to_string(), 1),
-            ("C".to_string(), 2),
-        ]
-        .into();
-        let adjacency: HashMap<String, HashMap<u8, String>> = [
-            (
-                "A".to_string(),
-                [(1u8, "B".to_string()), (2u8, "C".to_string())].into(),
-            ),
-            (
-                "B".to_string(),
-                [(4u8, "A".to_string()), (3u8, "C".to_string())].into(),
-            ),
-            (
-                "C".to_string(),
-                [(5u8, "A".to_string()), (0u8, "B".to_string())].into(),
-            ),
-        ]
-        .into();
-        let token_nodes = vec![NodeId {
-            hex_id: "A".to_string(),
-            node_type: NodeType::City,
-            index: 0,
-        }];
-
-        (hexes, hex_idx, adjacency, token_nodes)
-    }
-
-    #[test]
-    fn diamond_distance3_visits_all() {
-        let (hexes, hex_idx, adjacency, token_nodes) = build_diamond_for_routing();
-
-        let (routes, revenue) = calculate_corp_routes(
-            &hexes,
-            &hex_idx,
-            &adjacency,
-            &token_nodes,
-            &token_nodes,
-            &[(3, false)],
-            &vec!["yellow".to_string()],
-            "PRR",
-        );
-
-        assert_eq!(revenue, 90, "Should visit all 3 cities for 90 revenue");
-        assert_eq!(routes.len(), 1);
+    fn triangle_visits_each_city_once() {
+        let (routes, revenue) = triangle().routes(&[city("A")], &[(3, false)]);
+        assert_eq!(revenue, 90);
         assert_eq!(routes[0].nodes.len(), 3);
+        // A 4-train must not loop back to its start (A-B-C-A = 110).
+        let (routes, revenue) = triangle().routes(&[city("A")], &[(4, false)]);
+        assert_eq!(revenue, 90, "no stop counted twice: {:?}", routes);
     }
 
     #[test]
-    fn diamond_distance2_picks_best_pair() {
-        let (hexes, hex_idx, adjacency, token_nodes) = build_diamond_for_routing();
+    fn triangle_two_stop_best_pair() {
+        let (routes, revenue) = triangle().routes(&[city("A")], &[(2, false)]);
+        assert_eq!(revenue, 60, "A-C; B-C (70) has no token");
+        assert_eq!(stops(&routes[0]), vec!["A", "C"]);
+    }
 
-        let (routes, revenue) = calculate_corp_routes(
-            &hexes,
-            &hex_idx,
-            &adjacency,
-            &token_nodes,
-            &token_nodes,
-            &[(2, false)],
-            &vec!["yellow".to_string()],
-            "PRR",
+    #[test]
+    fn route_never_revisits_a_blocked_start() {
+        // B is full of another corp's tokens: a route may start or end there
+        // but never visit it twice (B-A-C-B would count B twice).
+        let mut b = tile_from_dsl(
+            "b",
+            "city=revenue:50;path=a:4,b:_0;path=a:3,b:_0",
+            TileColor::Green,
         );
+        place_token(&mut b, 0, "NYC");
+        let map = TestMap::new(
+            vec![
+                (
+                    "A",
+                    tokened(tile_from_dsl(
+                        "a",
+                        "city=revenue:20;path=a:1,b:_0;path=a:2,b:_0",
+                        TileColor::Green,
+                    )),
+                ),
+                ("B", b),
+                (
+                    "C",
+                    tile_from_dsl(
+                        "c",
+                        "city=revenue:40;path=a:5,b:_0;path=a:0,b:_0",
+                        TileColor::Green,
+                    ),
+                ),
+            ],
+            &[("A", 1, "B"), ("A", 2, "C"), ("B", 3, "C")],
+        );
+        let (routes, revenue) = map.routes(&[city("A")], &[(4, false)]);
+        assert_eq!(revenue, 110, "B-A-C or A-C-B, once each: {:?}", routes);
+        for r in &routes {
+            let mut s = stops(r);
+            s.sort();
+            s.dedup();
+            assert_eq!(s.len(), r.nodes.len(), "repeated stop in {:?}", r);
+        }
+    }
 
-        assert_eq!(revenue, 60, "Best 2-stop route: A+C=60");
+    #[test]
+    fn route_never_crosses_a_hexside_twice() {
+        // X and Y each have two paths onto the X|Y hexside (like D20/D22
+        // in 1830): S-X-Y-M, round the K loop back into Y, and over X|Y
+        // again to E would pay S+M+E = 90.
+        let map = TestMap::new(
+            vec![
+                ("S", tokened(y("s", "city=revenue:20;path=a:1,b:_0"))),
+                ("X", y("x", "path=a:4,b:1;path=a:2,b:1")),
+                ("Y", y("y", "path=a:4,b:0;path=a:4,b:2")),
+                ("M", y("m", "city=revenue:30;path=a:3,b:_0;path=a:1,b:_0")),
+                ("K", y("k", "path=a:5,b:4")),
+                ("E", y("e", "city=revenue:40;path=a:5,b:_0")),
+            ],
+            &[
+                ("S", 1, "X"),
+                ("X", 1, "Y"),
+                ("X", 2, "E"),
+                ("Y", 0, "M"),
+                ("Y", 2, "K"),
+                ("M", 1, "K"),
+            ],
+        );
+        let (routes, revenue) = map.routes(&[city("S")], &[(3, false)]);
+        assert_eq!(revenue, 50, "S-M, not S-M-E over X|Y twice: {:?}", routes);
+    }
+
+    #[test]
+    fn trains_never_share_a_hexside() {
+        // X forks the track out of A (edge 4) to B and to C: two trains
+        // can't both leave A through X, and one can't run B-X-A-X-C.
+        let map = TestMap::new(
+            vec![
+                ("A", tokened(y("a", "city=revenue:20;path=a:1,b:_0"))),
+                ("X", y("x", "path=a:4,b:1;path=a:4,b:2")),
+                ("B", y("b", "city=revenue:30;path=a:4,b:_0")),
+                ("C", y("c", "city=revenue:40;path=a:5,b:_0")),
+            ],
+            &[("A", 1, "X"), ("X", 1, "B"), ("X", 2, "C")],
+        );
+        let (routes, revenue) = map.routes(&[city("A")], &[(3, false)]);
+        assert_eq!(revenue, 60, "A-X-C: {:?}", routes);
+        let (routes, revenue) = map.routes(&[city("A")], &[(2, false), (2, false)]);
+        assert_eq!(revenue, 60, "{:?}", routes);
         assert_eq!(routes.len(), 1);
     }
 
     #[test]
-    fn two_trains_no_hexside_conflict() {
-        let mut tile_a = tile_from_dsl(
-            "a",
-            "city=revenue:10;path=a:1,b:_0;path=a:3,b:_0",
-            TileColor::Green,
+    fn group_counts_once() {
+        // Two Canada offboards either side of the token city.
+        let map = TestMap::new(
+            vec![
+                (
+                    "W",
+                    tile_from_dsl(
+                        "w",
+                        "offboard=revenue:yellow_30|brown_50,groups:Canada;path=a:1,b:_0",
+                        TileColor::Red,
+                    ),
+                ),
+                (
+                    "A",
+                    tokened(y("a", "city=revenue:20;path=a:4,b:_0;path=a:1,b:_0")),
+                ),
+                (
+                    "E",
+                    tile_from_dsl(
+                        "e",
+                        "offboard=revenue:yellow_30|brown_50,groups:Canada;path=a:4,b:_0",
+                        TileColor::Red,
+                    ),
+                ),
+            ],
+            &[("W", 1, "A"), ("A", 1, "E")],
         );
-        place_token(&mut tile_a, 0, "PRR");
+        let (routes, revenue) = map.routes(&[city("A")], &[(3, false)]);
+        assert_eq!(revenue, 50, "one Canada offboard: {:?}", routes);
+        assert_eq!(routes[0].nodes.len(), 2);
+    }
 
-        let tile_b = tile_from_dsl("b", "path=a:4,b:1", TileColor::Yellow);
-        let tile_c = tile_from_dsl("c", "city=revenue:30;path=a:4,b:_0", TileColor::Yellow);
-        let tile_d = tile_from_dsl("d", "city=revenue:20;path=a:0,b:_0", TileColor::Yellow);
-
-        let hexes = vec![
-            Hex::new("A".to_string(), tile_a),
-            Hex::new("B".to_string(), tile_b),
-            Hex::new("C".to_string(), tile_c),
-            Hex::new("D".to_string(), tile_d),
-        ];
-        let hex_idx: HashMap<String, usize> = [
-            ("A".to_string(), 0),
-            ("B".to_string(), 1),
-            ("C".to_string(), 2),
-            ("D".to_string(), 3),
-        ]
-        .into();
-        let adjacency: HashMap<String, HashMap<u8, String>> = [
-            (
-                "A".to_string(),
-                [(1u8, "B".to_string()), (3u8, "D".to_string())].into(),
-            ),
-            (
-                "B".to_string(),
-                [(4u8, "A".to_string()), (1u8, "C".to_string())].into(),
-            ),
-            ("C".to_string(), [(4u8, "B".to_string())].into()),
-            ("D".to_string(), [(0u8, "A".to_string())].into()),
-        ]
-        .into();
-
-        let token_nodes = vec![NodeId {
-            hex_id: "A".to_string(),
-            node_type: NodeType::City,
-            index: 0,
-        }];
-
-        let (routes, revenue) = calculate_corp_routes(
-            &hexes,
-            &hex_idx,
-            &adjacency,
-            &token_nodes,
-            &token_nodes,
-            &[(2, false), (2, false)],
-            &vec!["yellow".to_string()],
-            "PRR",
+    #[test]
+    fn offboard_ends_a_route() {
+        // A(token) -- O(offboard, two paths) -- C: no running through O.
+        let map = TestMap::new(
+            vec![
+                ("A", tokened(y("a", "city=revenue:20;path=a:1,b:_0"))),
+                (
+                    "O",
+                    tile_from_dsl(
+                        "o",
+                        "offboard=revenue:yellow_30|brown_50;path=a:4,b:_0;path=a:1,b:_0",
+                        TileColor::Red,
+                    ),
+                ),
+                ("C", y("c", "city=revenue:40;path=a:4,b:_0")),
+            ],
+            &[("A", 1, "O"), ("O", 1, "C")],
         );
+        let (_, revenue) = map.routes(&[city("A")], &[(3, false)]);
+        assert_eq!(revenue, 50);
+    }
 
-        assert_eq!(revenue, 70, "Two non-conflicting routes: A-C=40 + A-D=30");
+    #[test]
+    fn two_trains_no_shared_track() {
+        let map = TestMap::new(
+            vec![
+                (
+                    "A",
+                    tokened(tile_from_dsl(
+                        "a",
+                        "city=revenue:10;path=a:1,b:_0;path=a:3,b:_0",
+                        TileColor::Green,
+                    )),
+                ),
+                ("B", y("b", "path=a:4,b:1")),
+                ("C", y("c", "city=revenue:30;path=a:4,b:_0")),
+                ("D", y("d", "city=revenue:20;path=a:0,b:_0")),
+            ],
+            &[("A", 1, "B"), ("B", 1, "C"), ("A", 3, "D")],
+        );
+        let (routes, revenue) = map.routes(&[city("A")], &[(2, false), (2, false)]);
+        assert_eq!(revenue, 70, "A-C=40 + A-D=30");
+        assert_eq!(routes.len(), 2);
+        assert_ne!(routes[0].train_index, routes[1].train_index);
+        // D-A-C (60) for the 3-train alone pays less than splitting.
+        let (routes, revenue) = map.routes(&[city("A")], &[(2, false), (3, false)]);
+        assert_eq!(revenue, 70, "{:?}", routes);
         assert_eq!(routes.len(), 2);
     }
 
     #[test]
     fn town_adds_revenue_on_route() {
-        let mut tile_a = tile_from_dsl("a", "city=revenue:20;path=a:1,b:_0", TileColor::Yellow);
-        place_token(&mut tile_a, 0, "PRR");
-
-        let tile_b = tile_from_dsl(
-            "b",
-            "town=revenue:10;path=a:4,b:_0;path=a:_0,b:1",
-            TileColor::Yellow,
+        let map = TestMap::new(
+            vec![
+                ("A", tokened(y("a", "city=revenue:20;path=a:1,b:_0"))),
+                ("B", y("b", "town=revenue:10;path=a:4,b:_0;path=a:_0,b:1")),
+                ("C", y("c", "city=revenue:30;path=a:4,b:_0")),
+            ],
+            &[("A", 1, "B"), ("B", 1, "C")],
         );
-
-        let tile_c = tile_from_dsl("c", "city=revenue:30;path=a:4,b:_0", TileColor::Yellow);
-
-        let hexes = vec![
-            Hex::new("A".to_string(), tile_a),
-            Hex::new("B".to_string(), tile_b),
-            Hex::new("C".to_string(), tile_c),
-        ];
-        let hex_idx: HashMap<String, usize> = [
-            ("A".to_string(), 0),
-            ("B".to_string(), 1),
-            ("C".to_string(), 2),
-        ]
-        .into();
-        let adjacency: HashMap<String, HashMap<u8, String>> = [
-            ("A".to_string(), [(1u8, "B".to_string())].into()),
-            (
-                "B".to_string(),
-                [(4u8, "A".to_string()), (1u8, "C".to_string())].into(),
-            ),
-            ("C".to_string(), [(4u8, "B".to_string())].into()),
-        ]
-        .into();
-        let token_nodes = vec![NodeId {
-            hex_id: "A".to_string(),
-            node_type: NodeType::City,
-            index: 0,
-        }];
-
-        let (routes, revenue) = calculate_corp_routes(
-            &hexes,
-            &hex_idx,
-            &adjacency,
-            &token_nodes,
-            &token_nodes,
-            &[(3, false)],
-            &vec!["yellow".to_string()],
-            "PRR",
-        );
-
-        assert_eq!(revenue, 60, "Route through town: 20+10+30=60");
-        assert_eq!(routes.len(), 1);
+        let (_, revenue) = map.routes(&[city("A")], &[(3, false)]);
+        assert_eq!(revenue, 60, "20+10+30");
+        // A 2-train can't skip the town.
+        let (_, revenue) = map.routes(&[city("A")], &[(2, false)]);
+        assert_eq!(revenue, 30, "A+town");
+        // A D train counts the town free.
+        let (_, revenue) = map.routes(&[city("A")], &[(2, true)]);
+        assert_eq!(revenue, 60);
     }
 
-    #[test]
-    fn find_best_routes_with_conflict() {
-        let r1 = RouteCandidate {
-            nodes: vec![],
-            revenue: 50,
-            hexside_bits: 0b0001,
-            connections: vec![],
-            train_index: 0,
-        };
-        let r2 = RouteCandidate {
-            nodes: vec![],
-            revenue: 40,
-            hexside_bits: 0b0001,
-            connections: vec![],
-            train_index: 0,
-        };
-        let r3 = RouteCandidate {
-            nodes: vec![],
-            revenue: 30,
-            hexside_bits: 0b0010,
-            connections: vec![],
-            train_index: 0,
-        };
-
-        let (routes, revenue) = find_best_routes(&[vec![r1, r3.clone()], vec![r2, r3]]);
-
-        assert_eq!(revenue, 80);
-        assert_eq!(routes.len(), 2);
-    }
-
-    #[test]
-    fn single_candidate_list() {
-        let r1 = RouteCandidate {
-            nodes: vec![],
-            revenue: 42,
-            hexside_bits: 0,
-            connections: vec![],
-            train_index: 0,
-        };
-
-        let (routes, revenue) = find_best_routes(&[vec![r1]]);
-        assert_eq!(revenue, 42);
-        assert_eq!(routes.len(), 1);
-    }
-
-    #[test]
-    fn empty_candidates() {
-        let (routes, revenue) = find_best_routes(&[]);
-        assert_eq!(revenue, 0);
-        assert!(routes.is_empty());
-    }
-
-    #[test]
-    fn bypass_blocked_city_not_stopped() {
-        // H12 tile: city(rev:10), paths: city↔edge1, city↔edge4, edge1↔edge4 (bypass)
-        // When city is blocked, train should use bypass, not stop
-        let mut tile_h12 = tile_from_dsl(
+    /// H12-like: a city with a bypass (edge 1 <-> edge 4) between SRC and DST.
+    fn bypass(blocked: bool) -> TestMap {
+        let mut h12 = tile_from_dsl(
             "h12",
             "city=revenue:10;path=a:1,b:_0;path=a:4,b:_0;path=a:1,b:4",
             TileColor::Gray,
         );
-        // Block the city: fill slot with another corp's token
-        place_token(&mut tile_h12, 0, "NYC");
-
-        let mut tile_src = tile_from_dsl("src", "city=revenue:20;path=a:1,b:_0", TileColor::Yellow);
-        place_token(&mut tile_src, 0, "PRR");
-
-        let tile_dest = tile_from_dsl("dest", "city=revenue:30;path=a:4,b:_0", TileColor::Yellow);
-
-        let hexes = vec![
-            Hex::new("SRC".to_string(), tile_src),
-            Hex::new("H12".to_string(), tile_h12),
-            Hex::new("DST".to_string(), tile_dest),
-        ];
-        let hex_idx: HashMap<String, usize> = [
-            ("SRC".to_string(), 0),
-            ("H12".to_string(), 1),
-            ("DST".to_string(), 2),
-        ]
-        .into();
-        let adjacency: HashMap<String, HashMap<u8, String>> = [
-            ("SRC".to_string(), [(1u8, "H12".to_string())].into()),
-            (
-                "H12".to_string(),
-                [(4u8, "SRC".to_string()), (1u8, "DST".to_string())].into(),
-            ),
-            ("DST".to_string(), [(4u8, "H12".to_string())].into()),
-        ]
-        .into();
-
-        let token_nodes = vec![NodeId {
-            hex_id: "SRC".to_string(),
-            node_type: NodeType::City,
-            index: 0,
-        }];
-        let connected = vec![
-            NodeId {
-                hex_id: "SRC".to_string(),
-                node_type: NodeType::City,
-                index: 0,
-            },
-            NodeId {
-                hex_id: "H12".to_string(),
-                node_type: NodeType::City,
-                index: 0,
-            },
-            NodeId {
-                hex_id: "DST".to_string(),
-                node_type: NodeType::City,
-                index: 0,
-            },
-        ];
-
-        let (routes, revenue) = calculate_corp_routes(
-            &hexes,
-            &hex_idx,
-            &adjacency,
-            &token_nodes,
-            &connected,
-            &[(3, false)],
-            &vec!["yellow".to_string()],
-            "PRR",
-        );
-
-        // Should bypass H12 (blocked) and reach DST: SRC(20) + DST(30) = 50
-        // Should NOT stop at H12 since it has a bypass
-        assert_eq!(revenue, 50, "Should bypass blocked city and reach DST");
-        assert!(routes.len() >= 1);
-        // Verify no route includes H12 as a stop
-        for r in &routes {
-            assert!(
-                !r.nodes.iter().any(|n| n.hex_id == "H12"),
-                "Route should not stop at blocked city with bypass"
-            );
+        if blocked {
+            place_token(&mut h12, 0, "NYC");
         }
+        TestMap::new(
+            vec![
+                ("SRC", tokened(y("src", "city=revenue:20;path=a:1,b:_0"))),
+                ("H12", h12),
+                ("DST", y("dst", "city=revenue:30;path=a:4,b:_0")),
+            ],
+            &[("SRC", 1, "H12"), ("H12", 1, "DST")],
+        )
     }
 
     #[test]
-    fn connections_have_hex_chains() {
-        let (hexes, hex_idx, adjacency, token_nodes) = build_linear_for_routing();
-
-        let mut finder = RouteFinder::new();
-        let candidates = enumerate_routes(
-            &hexes,
-            &hex_idx,
-            &adjacency,
-            &token_nodes,
-            &token_nodes,
-            2,
-            false,
-            &vec!["yellow".to_string()],
-            "PRR",
-            &mut finder,
+    fn blocked_city_with_bypass() {
+        // Through the blocked city only on the bypass.
+        let (routes, revenue) = bypass(true).routes(&[city("SRC")], &[(3, false)]);
+        assert_eq!(revenue, 50);
+        assert_eq!(stops(&routes[0]), vec!["SRC", "DST"]);
+        assert_eq!(routes[0].connections, vec![vec!["SRC", "H12", "DST"]]);
+        // A blocked city still ends a route (Python stops there).
+        let (routes, revenue) = bypass(true).routes(&[city("SRC")], &[(2, false), (2, false)]);
+        assert_eq!(
+            revenue, 50,
+            "SRC-DST on the bypass; SRC-H12 would share track: {:?}",
+            routes
         );
+        let (_, revenue) = bypass(false).routes(&[city("SRC")], &[(3, false)]);
+        assert_eq!(revenue, 60, "unblocked: SRC-H12-DST");
+    }
 
-        // Find the A→C route
-        let route = candidates
+    #[test]
+    fn identical_trains_share_out_routes() {
+        // Token city A with four spokes to cities worth 10/20/30/40.
+        let map = TestMap::new(
+            vec![
+                ("A", tokened(tile_from_dsl("a", "city=revenue:0,slots:2;path=a:0,b:_0;path=a:1,b:_0;path=a:2,b:_0;path=a:3,b:_0", TileColor::Green))),
+                ("B0", y("b0", "city=revenue:10;path=a:3,b:_0")),
+                ("B1", y("b1", "city=revenue:20;path=a:4,b:_0")),
+                ("B2", y("b2", "city=revenue:30;path=a:5,b:_0")),
+                ("B3", y("b3", "city=revenue:40;path=a:0,b:_0")),
+            ],
+            &[("A", 0, "B0"), ("A", 1, "B1"), ("A", 2, "B2"), ("A", 3, "B3")],
+        );
+        let (routes, revenue) = map.routes(&[city("A")], &[(2, false), (2, false), (2, false)]);
+        assert_eq!(revenue, 90, "40+30+20: {:?}", routes);
+        let mut trains: Vec<usize> = routes.iter().map(|r| r.train_index).collect();
+        trains.sort();
+        assert_eq!(trains, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn many_hexsides() {
+        // A 301-hex line with cities at H0, H150 (token) and H300: the two
+        // routes out of H150 use 300 hexsides between them, and must not
+        // be mistaken for overlapping.
+        let mut tiles = Vec::new();
+        let mut links = Vec::new();
+        for i in 0..=300 {
+            let dsl = match i {
+                0 => "city=revenue:10;path=a:1,b:_0",
+                150 => "city=revenue:10;path=a:4,b:_0;path=a:1,b:_0",
+                300 => "city=revenue:10;path=a:4,b:_0",
+                _ => "path=a:4,b:1",
+            };
+            let tile = if i == 150 {
+                tokened(y("t", dsl))
+            } else {
+                y("t", dsl)
+            };
+            tiles.push((format!("H{}", i), tile));
+            if i > 0 {
+                links.push((format!("H{}", i - 1), 1u8, format!("H{}", i)));
+            }
+        }
+        let tiles: Vec<(&str, Tile)> = tiles.iter().map(|(h, t)| (h.as_str(), t.clone())).collect();
+        let links: Vec<(&str, u8, &str)> = links
             .iter()
-            .find(|r| r.nodes.len() == 2 && r.revenue == 50)
-            .expect("Should find A+C route");
-
-        // Should have 1 connection (A to C through B)
-        assert_eq!(route.connections.len(), 1, "Should have 1 connection chain");
-        let chain = &route.connections[0];
-        assert!(chain.contains(&"A".to_string()), "Chain should include A");
-        assert!(chain.contains(&"B".to_string()), "Chain should include B");
-        assert!(chain.contains(&"C".to_string()), "Chain should include C");
+            .map(|(a, e, b)| (a.as_str(), *e, b.as_str()))
+            .collect();
+        let map = TestMap::new(tiles, &links);
+        let (routes, revenue) = map.routes(&[city("H150")], &[(2, false), (2, false)]);
+        assert_eq!(
+            revenue,
+            40,
+            "{:?}",
+            routes.iter().map(stops).collect::<Vec<_>>()
+        );
     }
 }

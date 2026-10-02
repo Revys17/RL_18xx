@@ -2255,24 +2255,11 @@ class RustGameAdapter:
     def auto_routes_for(self, entity):
         """Compute optimal routes using Rust router. Returns (routes_dicts, revenue).
 
-        Augments each route dict with a ``train`` field (the corp's first
-        unoperated train) so ``auto_route_action`` can build a RunRoutes action
-        with a non-empty train id. Rust's calculate_routes returns the optimal
-        revenue but doesn't assign trains; we pick by route order.
+        Each route dict names the ``train`` (id) that runs it, so
+        ``auto_route_action`` can build a RunRoutes action.
         """
         corp_sym = entity.sym if hasattr(entity, 'sym') else str(entity)
-        route_dicts, revenue = self._game.calculate_routes(corp_sym)
-        ci = None
-        for i, c in enumerate(self._game.corporations):
-            if c.sym == corp_sym:
-                ci = i
-                break
-        if ci is not None:
-            unoperated = [t for t in self._game.corporations[ci].trains if not t.operated]
-            for rd, train in zip(route_dicts, unoperated):
-                if not rd.get("train"):
-                    rd["train"] = train.id
-        return route_dicts, revenue
+        return self._game.calculate_routes(corp_sym)
 
     def token_graph_for_entity(self, entity):
         """Returns the graph proxy (same for all entities in 1830)."""
