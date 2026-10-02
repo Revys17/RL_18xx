@@ -40,7 +40,7 @@ def _select_best_device() -> torch.device:
 @dataclass
 class ModelGNNConfig:
     device: Optional[torch.device] = None
-    game_state_size: int = 390
+    game_state_size: int = 394
     map_node_features: int = 50
     policy_size: int = field(default_factory=_engine_policy_size)
     # Number of player slots the value head emits. The legacy GNN architecture

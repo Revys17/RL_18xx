@@ -131,6 +131,11 @@ class Encoder_1830Graph(Encoder_1830, metaclass=Singleton):
         "train_limit": (1, 0),
         "private_closed": (NUM_PRIVATES, 0),
         "player_turn_order": ("num_players", 0),
+        # Each player's cash committed to standing private-auction bids (zero
+        # outside the auction). The bids themselves sit in the private
+        # companies' features; this puts each player's total on their own
+        # token, where the per-seat value head reads it.
+        "player_committed_cash": ("num_players", 0),
     }
     GAME_STATE_ENCODING_SIZE: int = 0
 
@@ -321,7 +326,7 @@ class Encoder_1830Graph(Encoder_1830, metaclass=Singleton):
             if section_name == 'active_entity':
                 plan.append(('simple', offset, n))
             elif section_name in ('active_president', 'priority_deal_player', 'player_certs_remaining',
-                                  'player_cash', 'player_turn_order'):
+                                  'player_cash', 'player_turn_order', 'player_committed_cash'):
                 plan.append(('simple', offset, n))
             elif section_name == 'player_shares':
                 plan.append(('block', offset, nc, n))
@@ -855,6 +860,12 @@ class Encoder_1830Graph(Encoder_1830, metaclass=Singleton):
         offset += self._get_section_size(section_name)
         section_start_offset = self.check_offset(section_name, offset, section_start_offset)
 
+        # --- Section: Player Cash Committed to Auction Bids ---
+        section_name = "player_committed_cash"
+        self._encode_player_committed_cash(game, state_encoding, offset)
+        offset += self._get_section_size(section_name)
+        section_start_offset = self.check_offset(section_name, offset, section_start_offset)
+
         # --- Final Offset Check ---
         # LOGGER.debug(f"Final offset after encoding: {offset}")
         if offset != self.ENCODING_SIZE:
@@ -893,6 +904,16 @@ class Encoder_1830Graph(Encoder_1830, metaclass=Singleton):
             company = game.company_by_id(priv_id)
             if company and hasattr(company, "closed") and company.closed:
                 state_encoding[offset + priv_idx] = 1.0
+
+    def _encode_player_committed_cash(self, game: BaseGame, state_encoding: np.ndarray, offset: int) -> None:
+        """Encode each player's total standing private-auction bids."""
+        auction_step = game.round.active_step()
+        if not isinstance(auction_step, WaterfallAuction):
+            return
+        for company_bids in auction_step.bids.values():
+            for bid in company_bids:
+                player_idx = self.player_id_to_idx[bid.entity.id]
+                state_encoding[offset + player_idx] += float(bid.price) / self.starting_cash
 
     def _encode_player_turn_order(self, game: BaseGame, state_encoding: np.ndarray, offset: int) -> None:
         """Encode player turn order in stock round."""

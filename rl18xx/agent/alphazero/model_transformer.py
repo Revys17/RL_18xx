@@ -94,7 +94,7 @@ _SIZE = {name: size for name, (_offset, size) in _LAYOUT.items()}
 
 
 def _build_player_indices(num_players: int = MAX_PLAYERS, off: Optional[dict] = None) -> list[list[int]]:
-    """Build gather indices for each player entity group (14 features each).
+    """Build gather indices for each player entity group (15 features each).
 
     ``num_players`` is the **layout** player count (i.e. the model's
     ``max_players`` slot allocation). Use the same value for both the layout
@@ -114,6 +114,7 @@ def _build_player_indices(num_players: int = MAX_PLAYERS, off: Optional[dict] = 
         ]
         idx.extend(range(off["player_shares"] + i * NUM_CORPORATIONS, off["player_shares"] + (i + 1) * NUM_CORPORATIONS))
         idx.append(off["player_turn_order"] + i)
+        idx.append(off["player_committed_cash"] + i)
         groups.append(idx)
     return groups
 
@@ -177,7 +178,7 @@ def _build_global_indices(off: Optional[dict] = None) -> list[int]:
 
 
 # Feature sizes per entity type
-PLAYER_FEAT_SIZE = 14
+PLAYER_FEAT_SIZE = 15
 CORP_FEAT_SIZE = 18
 # Private feature size depends on the layout player count (owner one-hot +
 # auction-bids). The model is built for ``MAX_PLAYERS``, so private features
@@ -205,6 +206,7 @@ _VARIABLE_PLAYER_SECTIONS = (
     "private_ownership",      # size = NUM_PRIVATES * (num_players + NUM_CORPORATIONS)
     "auction_bids",           # size = NUM_PRIVATES * num_players
     "player_turn_order",      # size = num_players
+    "player_committed_cash",  # size = num_players
 )
 
 
@@ -262,7 +264,7 @@ def _pad_state_to_max_players(state: Tensor, num_players: int, max_players: int 
             )
         elif name in (
             "active_president", "priority_deal_player", "player_certs_remaining",
-            "player_cash", "player_turn_order",
+            "player_cash", "player_turn_order", "player_committed_cash",
         ):
             # Flat per-player vector: copy first ``num_players`` slots.
             out[:, dst_s:dst_s + num_players] = state[:, src_s:src_s + num_players]
@@ -801,7 +803,7 @@ class EconomicStateTransformer(nn.Module):
             num_players = torch.full((B,), self.max_players, dtype=torch.long, device=game_state.device)
 
         # Gather entity features
-        player_feats = game_state[:, self.player_gather]  # (B, max_players, 14)
+        player_feats = game_state[:, self.player_gather]  # (B, max_players, PLAYER_FEAT_SIZE)
         corp_feats = game_state[:, self.corp_gather]  # (B, 8, 18)
         private_feats = game_state[:, self.private_gather]  # (B, 6, 2*max_players + 8 + 5)
         global_feats = game_state[:, self.global_gather]  # (B, 64)

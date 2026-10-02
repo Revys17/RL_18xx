@@ -475,6 +475,7 @@ def test_test_game_1830_4p_encoding(encoder_1830: Encoder_1830Graph, test_game_1
 
     # --- Section: Player Turn Order ---
     s_slice, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    _, offset = get_section_slice(encoder_1830, "player_committed_cash", offset)
     # Auction round, so turn order should be zeros
     np.testing.assert_allclose(encoding[s_slice], np.zeros(num_players), atol=1e-6, err_msg="Player Turn Order")
 
@@ -584,6 +585,10 @@ def test_encoding_after_bid(encoder_1830: Encoder_1830Graph, test_game_1830_4p):
     _, offset = get_section_slice(encoder_1830, "train_limit", offset)
     _, offset = get_section_slice(encoder_1830, "private_closed", offset)
     _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    s_slice, offset = get_section_slice(encoder_1830, "player_committed_cash", offset)
+    # P1's standing B&O bid is on P1's committed cash; nobody else has bid.
+    assert_float(encoding[s_slice][p1_idx], expected_bid_norm, "Committed cash: P1")
+    assert np.sum(encoding[s_slice]) == expected_bid_norm, "Committed cash: only P1 has bid"
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after bid test"
 
@@ -718,6 +723,7 @@ def test_encoding_after_purchase(encoder_1830: Encoder_1830Graph, test_game_1830
     _, offset = get_section_slice(encoder_1830, "train_limit", offset)
     _, offset = get_section_slice(encoder_1830, "private_closed", offset)
     _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    _, offset = get_section_slice(encoder_1830, "player_committed_cash", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after purchase test"
 
@@ -1209,6 +1215,7 @@ def test_encoding_after_par(encoder_1830: Encoder_1830Graph, test_game_1830_4p):
     _, offset = get_section_slice(encoder_1830, "train_limit", offset)
     _, offset = get_section_slice(encoder_1830, "private_closed", offset)
     _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    _, offset = get_section_slice(encoder_1830, "player_committed_cash", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after par test"
 
@@ -1422,6 +1429,7 @@ def test_encoding_after_par(encoder_1830: Encoder_1830Graph, test_game_1830_4p):
     _, offset = get_section_slice(encoder_1830, "train_limit", offset)
     _, offset = get_section_slice(encoder_1830, "private_closed", offset)
     _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    _, offset = get_section_slice(encoder_1830, "player_committed_cash", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after par test"
 
@@ -1629,6 +1637,7 @@ def test_encoding_after_par(encoder_1830: Encoder_1830Graph, test_game_1830_4p):
     _, offset = get_section_slice(encoder_1830, "train_limit", offset)
     _, offset = get_section_slice(encoder_1830, "private_closed", offset)
     _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    _, offset = get_section_slice(encoder_1830, "player_committed_cash", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after par test"
 
@@ -1989,6 +1998,7 @@ def test_operating_round_2_encoding(
     _, offset = get_section_slice(encoder_1830, "train_limit", offset)
     _, offset = get_section_slice(encoder_1830, "private_closed", offset)
     _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    _, offset = get_section_slice(encoder_1830, "player_committed_cash", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after par test"
 
@@ -2535,6 +2545,7 @@ def test_operating_round_2_encoding(
     _, offset = get_section_slice(encoder_1830, "train_limit", offset)
     _, offset = get_section_slice(encoder_1830, "private_closed", offset)
     _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    _, offset = get_section_slice(encoder_1830, "player_committed_cash", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset} after test"
 
@@ -2920,6 +2931,7 @@ def test_operating_round_2_encoding(
     _, offset = get_section_slice(encoder_1830, "train_limit", offset)
     _, offset = get_section_slice(encoder_1830, "private_closed", offset)
     _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    _, offset = get_section_slice(encoder_1830, "player_committed_cash", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset}"
 
@@ -3295,6 +3307,7 @@ def test_operating_round_2_encoding(
     _, offset = get_section_slice(encoder_1830, "train_limit", offset)
     _, offset = get_section_slice(encoder_1830, "private_closed", offset)
     _, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    _, offset = get_section_slice(encoder_1830, "player_committed_cash", offset)
     # --- Final Offset Check ---
     assert offset == encoder_1830.ENCODING_SIZE, f"Final offset {offset}"
 
@@ -3696,6 +3709,7 @@ def test_operating_round_2_encoding(
 
     # --- Section: Player Turn Order ---
     s_slice, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    _, offset = get_section_slice(encoder_1830, "player_committed_cash", offset)
     np.testing.assert_allclose(
         np.zeros(encoder_1830.num_players), encoding[s_slice], atol=1e-6, err_msg="Turn order in OR"
     )
@@ -3737,6 +3751,7 @@ def test_new_features(encoder_1830: Encoder_1830Graph, test_game_1830_4p):
 
     # --- Player Turn Order: should be zeros during auction round ---
     s_slice, offset = get_section_slice(encoder_1830, "player_turn_order", offset)
+    _, offset = get_section_slice(encoder_1830, "player_committed_cash", offset)
     np.testing.assert_allclose(
         np.zeros(encoder_1830.num_players),
         encoding[s_slice],

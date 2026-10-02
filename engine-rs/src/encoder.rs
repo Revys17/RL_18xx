@@ -136,7 +136,7 @@ impl EncoderSpec {
 
         (np + nc) + np + 1 + 1 + np + 1 + np + np + np * nc + npv * (np + nc) + npv
             + nc + nc + nc * nt + nc + nc * 2 + 2 * nc + 4 * nc + nt + nt + ntile
-            + npv * np + npv + npv + npv + 2 + 1 + npv + np
+            + npv * np + npv + npv + npv + 2 + 1 + npv + np + np
     }
 }
 
@@ -490,6 +490,18 @@ impl BaseGame {
         }
         off += np;
 
+        // S30: Player cash committed to standing auction bids
+        if let crate::rounds::Round::Auction(ref a) = &self.round {
+            for bids in a.bids.values() {
+                for bid in bids {
+                    if let Some(i) = pidx(bid.player_id) {
+                        enc[off + i] += bid.price as f32 / sc;
+                    }
+                }
+            }
+        }
+        off += np;
+
         debug_assert_eq!(off, size);
         for v in &mut enc { if v.is_nan() || v.is_infinite() { *v = 0.0; } }
         enc
@@ -688,7 +700,7 @@ mod tests {
             let (np, nc, npv, nt, ntile) = (4usize, 8usize, 6usize, 6usize, 46usize);
             (np + nc) + np + 1 + 1 + np + 1 + np + np + np * nc + npv * (np + nc) + npv
                 + nc + nc + nc * nt + nc + nc * 2 + 2 * nc + 4 * nc + nt + nt + ntile
-                + npv * np + npv + npv + npv + 2 + 1 + npv + np
+                + npv * np + npv + npv + npv + 2 + 1 + npv + np + np
         });
     }
 }

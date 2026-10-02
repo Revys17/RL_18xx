@@ -28,7 +28,7 @@ MAP_NODE_FEATURES = 50
 # Flat game-state vector size for the model's max-N layout (max_players=6).
 # Encoder emits shorter games padded to this layout via the model's
 # ``_pad_state_to_max_players`` helper.
-GAME_STATE_SIZE = 442
+GAME_STATE_SIZE = 448
 
 
 def get_fresh_game_state():
@@ -335,7 +335,7 @@ def _get_game_state_for_players(n: int):
 
 def test_encoder_pad_to_max_players_3_player_to_6_layout():
     """Encoder emits a shorter state vector for a 3-player game; the model's
-    ``_pad_state_to_max_players`` helper must remap it into the 442-dim
+    ``_pad_state_to_max_players`` helper must remap it into the 448-dim
     max-N (max_players=6) layout."""
     from rl18xx.agent.alphazero.encoder import Encoder_1830Graph
     from rl18xx.agent.alphazero.model_transformer import _pad_state_to_max_players
