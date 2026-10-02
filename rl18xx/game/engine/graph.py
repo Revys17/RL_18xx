@@ -1788,7 +1788,7 @@ class Route:
                     if chain:
                         self._connection_data.append(self.segment(chain, left=self.tail["right"]))
 
-            if self._train.local and len(self._connection_data) == self.local_length:
+            if self._train.is_local() and len(self._connection_data) == self.local_length:
                 self._connection_data.pop()
         elif self.last_node == node:
             self.last_node = None
@@ -1803,7 +1803,7 @@ class Route:
                 self._connection_data.append({"left": a, "right": b, "chain": chain})
         else:
             self.last_node = node
-            if self._train.local and not self.connection_data:
+            if self._train.is_local() and not self.connection_data:
                 self.add_single_node_connection(node)
 
         self.halts = None
@@ -1873,7 +1873,7 @@ class Route:
         return set(path.hex for path in self.paths)
 
     def check_cycles(self):
-        if self._train.local:
+        if self._train.is_local():
             return
 
         cycles = {}
@@ -1988,7 +1988,11 @@ class Route:
     @property
     def connection_hexes(self):
         if not self._connection_hexes:
-            if self._train.local and len(self.connection_data) == 1 and not self.connection_data[0]["chain"]["paths"]:
+            if (
+                self._train.is_local()
+                and len(self.connection_data) == 1
+                and not self.connection_data[0]["chain"]["paths"]
+            ):
                 self._connection_hexes = [["local", self.connection_data[0]["left"].hex.id]]
             else:
                 self._connection_hexes = [self.chain_id(chain["paths"]) for chain in self.chains if chain]
@@ -2004,7 +2008,7 @@ class Route:
             return self._connection_data
 
         if len(self.connection_hexes) == 1 and "local" in self.connection_hexes[0]:
-            if self._train.local:
+            if self._train.is_local():
                 city_node = next(
                     (
                         n
@@ -2044,13 +2048,15 @@ class Route:
                 a, b = pair
                 a, b, left, right, middle = self.find_pairwise_chain(a, b, other_paths)
                 if not left or not left.hex or not right or not right.hex or not middle or not middle.hex:
-                    return self._connection_data.clear()
+                    # Ruby returns the emptied array (list.clear() returns None).
+                    self._connection_data.clear()
+                    return self._connection_data
 
-                self._connection_data.append(
-                    {"left": left, "right": middle, "chain": a}
-                    if index == 0
-                    else {"left": middle, "right": right, "chain": b}
-                )
+                # Ruby: the first pair also contributes its left connection;
+                # every pair contributes middle -> right.
+                if index == 0:
+                    self._connection_data.append({"left": left, "right": middle, "chain": a})
+                self._connection_data.append({"left": middle, "right": right, "chain": b})
                 other_paths.extend(a["paths"])
 
         return self._connection_data
@@ -2132,7 +2138,7 @@ class Route:
 
     def local_connection(self):
         return (
-            self._train.local
+            self._train.is_local()
             and self.connection_data
             and self.connection_data[0]["left"] == self.connection_data[0]["right"]
         )
