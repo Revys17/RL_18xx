@@ -1,10 +1,10 @@
 # Rust engine divergences from Python reference
 
-## OPEN — the native router runs routes 1830 forbids (found 2026-10-02)
+## FIXED — the native router ran routes 1830 forbids (found and fixed 2026-10-02)
 
 The native RunRoutes decode (`decode.rs` → `BaseGame::optimal_routes` →
-`router::calculate_corp_routes`) sometimes picks a route the rules forbid,
-and pays its revenue. Replays don't notice — both engines trust a recorded
+`router::calculate_corp_routes`) sometimes picked a route the rules forbid,
+and paid its revenue. Replays don't notice — both engines trust a recorded
 route's revenue — but Python's route validation (a port of Ruby's) rejects
 these routes when it rebuilds them from the logged `connections`. Over 300
 random native games (seeds 100–399, 2–6 players, both auction rules), 1,576 of
@@ -17,13 +17,76 @@ random native games (seeds 100–399, 2–6 players, both auction rules), 1,576 
 | Stops at two nodes of one group | 24 | `Cannot use group Canada more than once` | both Canada offboards |
 
 A loop counts the revisited stop twice (`I15 → H10 → H12 → I15` logs
-60+40+10+60 = 170), so the native engine overpays. The fix belongs in the
-router walk (`router.rs`): no revisiting a visited stop (including the start),
-no reusing a hexside within a route, at most one stop per group. It changes
-self-play revenues, so validate it against Python's AutoRouter optimum.
-`tests/test_rust_raw_actions_python_replay.py` rebuilds every logged route in
-Python and screens exactly these three cases (`_illegal_route_reason`); once
-the router is fixed, that screen should find nothing.
+60+40+10+60 = 170), so the native engine overpaid, and self-play trained on
+the inflated revenue.
+
+**Causes** (the old `router.rs` walk):
+
+- *Revisited stops.* The walk kept a visited-node set, but the branch that
+  stops at a city full of other corporations' tokens emitted the stop without
+  consulting it. Walks also *start* at such blocked cities, so a route could
+  start at one, loop round and stop there again.
+- *Reused track.* The edge counter keyed each crossing by the hex and edge the
+  walk *left* through and never marked the edge a path entered by — the two
+  sides of a hexside were separate keys. A route could later re-cross that
+  hexside the other way on a different path sharing the edge (D20 and D22 each
+  have two paths onto the D20|D22 hexside). Only reusing the very same tile
+  path was caught.
+- *Groups ignored.* The tile DSL parser dropped `groups:`, and the 1830
+  preprinted DSL for A9/A11 had lost `groups:Canada`.
+
+Also wrong, though not seen to change an optimum in the sweeps below: a
+blocked city with a bypass (a full H12) could never end a route (Python
+stops there); cross-route conflicts used a `u128` whose hexside bits were
+handed out up to 127 and then saturated, so in big networks distinct
+hexsides collided into false conflicts; ties between equal-revenue route sets
+resolved in `HashSet` order (non-deterministic); `calculate_routes` didn't
+name trains, so `RustGameAdapter.auto_routes_for` paired routes with trains
+by position. And it was slow — an unbounded brute-force combination search
+over per-train re-walks, up to 212 s for one late-game human state.
+
+**Fix** (`router.rs` rewritten). A path-level walk enforces the checks of
+Python's `Route.revenue()` as it goes — no stop revisited (start included),
+each hexside (and node-to-node tile path) used at most once, at most one stop
+per group, blocked cities and offboards only end a route, terminal paths only
+at the ends, distance — and keeps each route once (it is walked from both
+ends). Routes are enumerated once for all trains. An exact branch-and-bound
+then picks one route per train with no shared track, on track bitsets of any
+width, each train's candidate list indexed by track so conflicting routes are
+skipped 64 at a time, identical trains taking distinct routes in list order.
+Offboards now carry `groups` (A9/A11 Canada, I1 Gulf as in Ruby; 1867's
+Detroit pair was already in its DSL).
+
+**Validation** — Rust's best total vs Python's AutoRouter at every run_routes
+(`tests/router_parity_sweep.py`):
+
+| States | Before | After |
+|---|---|---|
+| 300 random native games (seeds 100–399) | 27,372 / 28,500 equal (96.0%); 1,128 Rust higher; 0 lower | 28,573 / 28,573 equal |
+| 1,708 cleaned human games (`human_games/1830_clean_2026_10`), 131,201 states | 127,229 equal (97.0%); 3,972 Rust higher; 0 lower | 131,188 equal; 13 Rust higher (see below); 0 lower |
+
+The random games' states differ before/after (revenue steers the game); the
+human games replay recorded actions, so their states are identical. The 13
+"Rust higher" human states are all two-D-train late game (five games), where
+the AutoRouter keeps only each train's top `route_limit` = 10,000 routes (and,
+on the largest networks, times out its 30 s path walk): lifting both
+(`compute(corp, route_limit=10**9, path_timeout=3600)`), its own candidates
+reach exactly the Rust total in all 13 (15,498–29,455 routes per train; in the
+two states counted, the same number the Rust walk finds), and Rust's routes
+recompute to their logged revenue in Python.
+The native router never pays less than the human's own routes (0 of 131,201).
+`tests/test_rust_router_parity.py` pins seven random games and one anonymized
+human game (`tests/fixtures/1830/router_d_trains.json`);
+`tests/test_rust_raw_actions_python_replay.py` now rebuilds every logged route
+in Python with no screen.
+
+**Speed** — the Rust search per run_routes state (`calculate_routes` from
+Python on a clone with a warm graph cache, 16-way parallel sweep):
+
+| States | Before | After |
+|---|---|---|
+| random games | mean 2.7 ms, p50 128 µs, p90 2.2 ms, p99 47 ms, max 1.37 s | mean 20 µs, p50 11 µs, p90 44 µs, p99 140 µs, max 0.7 ms |
+| human games (same 131,201 states) | mean 59 ms, p50 204 µs, p90 2.9 ms, p99 276 ms, max 212 s | mean 59 µs, p50 22 µs, p90 102 µs, p99 0.54 ms, max 40 ms |
 
 ## Full raw-corpus audit — all player counts (docs/rust_engine_full_corpus_audit.md)
 
