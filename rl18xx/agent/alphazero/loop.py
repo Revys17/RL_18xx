@@ -432,6 +432,10 @@ def cleanup_and_exit(signum=None, frame=None):
             pass
     if LOOP_LOCK_FILE.exists():
         LOOP_LOCK_FILE.unlink()
+    if signum is not None:
+        # Called as the SIGINT/SIGTERM handler: stop. Returning used to resume
+        # the loop with its children (inference server, self-play pool) dead.
+        sys.exit(128 + signum)
 
 
 def _create_fresh_game(num_players: int = 4, auction_unlock: bool = False):
