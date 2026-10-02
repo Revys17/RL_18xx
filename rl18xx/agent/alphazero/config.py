@@ -457,6 +457,11 @@ class SelfPlayHyperparams:
     # ``K`` in the spec — number of recent moves the leader/gap conditions
     # must hold over.
     resign_window: int = 8
+    # No resign checks before this many engine moves. Early in training the
+    # value head turns confident long before a game is decided: after one
+    # iteration (3 epochs on 98 games) 256 of 263 self-play games resigned
+    # around move 80, mid-auction. Human 4p games run a median of 587 moves.
+    resign_min_move: int = 200
     # Minimum ``min_over_window(Q_leader)`` required to resign. Holdout
     # calibration adjusts this between iterations.
     resign_high_threshold: float = 0.65

@@ -1234,7 +1234,8 @@ class SelfPlay:
                 # consensus, not stale carry-over Q.
                 should_resign = False
                 resign_info: Optional[dict] = None
-                if mcts_ran_this_move:
+                resign_min_move = int(getattr(self.config, "resign_min_move", 0) or 0)
+                if mcts_ran_this_move and player.root.game_object.move_number >= resign_min_move:
                     should_resign, resign_info = player.check_resign()
                 if should_resign:
                     LOGGER.info(

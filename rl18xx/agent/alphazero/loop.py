@@ -113,6 +113,7 @@ class LoopConfig:
     # auto-calibrated between iterations; the rest are stable hyperparams.
     enable_resign: bool = True
     resign_window: int = 8
+    resign_min_move: int = 200
     resign_high_threshold: float = 0.65
     resign_gap_threshold: float = 0.30
     noresign_holdout_rate: float = 0.10
@@ -195,6 +196,7 @@ def load_loop_config(
             for key in (
                 "enable_resign",
                 "resign_window",
+                "resign_min_move",
                 "resign_high_threshold",
                 "resign_gap_threshold",
                 "noresign_holdout_rate",
@@ -341,6 +343,7 @@ def run_self_play(
         for key in (
             "enable_resign",
             "resign_window",
+            "resign_min_move",
             "resign_high_threshold",
             "resign_gap_threshold",
             "noresign_holdout_rate",
@@ -1443,7 +1446,7 @@ def main(
     num_threads: int,
     cleanup: bool,
     num_readouts: int,
-    num_epochs: int = 3,
+    num_epochs: int = 1,
     max_training_window: int = 100000,
     gate_games: int = 10,
     gate_threshold: float = 0.55,
@@ -1724,7 +1727,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--num_readouts", type=int, default=200, help="Number of readouts to use for self-play")
     parser.add_argument("--batch_size", type=int, default=256, help="Training batch size (default: 256)")
-    parser.add_argument("--num-epochs", type=int, default=3, help="Training epochs per iteration")
+    parser.add_argument("--num-epochs", type=int, default=1, help="Training epochs per iteration (default: 1)")
     parser.add_argument(
         "--max_training_window", type=int, default=100000, help="Max training examples to use (0 = all data, default: 100000)"
     )

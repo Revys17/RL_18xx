@@ -304,6 +304,28 @@ def test_resignation_ends_the_game(tmp_path, monkeypatch):
     assert np.any(player.result != 0)  # scored at the resigned position
 
 
+def test_no_resign_check_before_resign_min_move(tmp_path, monkeypatch):
+    """An overconfident early value head must not end games before
+    ``resign_min_move`` engine moves: check_resign isn't even consulted."""
+    from rl18xx.agent.alphazero import self_play
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(self_play, "SELF_PLAY_GAMES_STATUS_PATH", tmp_path / "status")
+    (tmp_path / "status").mkdir()
+
+    def always_resign(self):
+        raise AssertionError("check_resign called before resign_min_move")
+
+    class EvalDummyNet(DummyNet):
+        def eval(self):
+            return self
+
+    monkeypatch.setattr(RustMCTSPlayer, "check_resign", always_resign)
+    config = _make_config(network=EvalDummyNet(), game_id="floor", max_game_length=30, resign_min_move=1000)
+    player = self_play.SelfPlay(config).play()
+    assert player.termination != "resigned"
+
+
 def test_arena_keeps_only_the_current_subtree():
     """advance_root compacts the arena to the new root's subtree. Every node
     holds a full game clone, so an arena that kept the whole game's history
