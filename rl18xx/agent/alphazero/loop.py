@@ -484,12 +484,28 @@ def _gate_seat_assignment(game_index: int, num_seats: int = 4) -> list[bool]:
     return [seat == candidate_seat for seat in range(num_seats)]
 
 
+# Gate games seat the candidate in one of this many seats, current_best in the rest.
+GATE_NUM_PLAYERS = 4
+
+
+def gate_win_rate_needed(gate_threshold: float, num_players: int = GATE_NUM_PLAYERS) -> float:
+    """Win rate a candidate needs to be promoted.
+
+    ``gate_threshold`` keeps its two-player meaning (0.55 = win 10% more than
+    the fair 50%). A gate game seats the candidate against ``num_players - 1``
+    copies of current_best, so an equally strong candidate wins 1/num_players
+    of them; scale the threshold the same way (4 players: 0.55 -> 0.275).
+    Compared raw against a 25% fair share, 0.55 almost never promoted.
+    """
+    return gate_threshold * 2.0 / num_players
+
+
 def _play_gate_game(
     candidate_model,
     current_best_model,
     game_index: int,
     num_readouts: int,
-    num_players: int = 4,
+    num_players: int = GATE_NUM_PLAYERS,
 ) -> dict:
     """Play a single gating arena game and return result info.
 
@@ -1164,11 +1180,12 @@ def _run_gating_iteration(
             num_games=gate_games,
             num_readouts=min(num_readouts, 50),
         )
+        needed = gate_win_rate_needed(gate_threshold)
         metrics.add_scalar("Gating/Win_Rate", gate_win_rate, loop)
-        metrics.add_scalar("Gating/Promoted", 1.0 if gate_win_rate >= gate_threshold else 0.0, loop)
+        metrics.add_scalar("Gating/Promoted", 1.0 if gate_win_rate >= needed else 0.0, loop)
 
-        if gate_win_rate >= gate_threshold:
-            LOGGER.info(f"Model promoted! Win rate: {gate_win_rate:.1%} >= {gate_threshold:.1%}")
+        if gate_win_rate >= needed:
+            LOGGER.info(f"Model promoted! Win rate: {gate_win_rate:.1%} >= {needed:.1%}")
             if candidate_checkpoint_num is not None:
                 set_current_best(MODEL_CHECKPOINT_DIR, arch, session, candidate_checkpoint_num)
             else:
@@ -1176,7 +1193,7 @@ def _run_gating_iteration(
             promoted = True
         else:
             LOGGER.info(
-                f"Model rejected. Win rate: {gate_win_rate:.1%} < {gate_threshold:.1%}. "
+                f"Model rejected. Win rate: {gate_win_rate:.1%} < {needed:.1%}. "
                 f"Candidate checkpoint {candidate_checkpoint_num} remains on disk; "
                 f"current_best pointer unchanged."
             )
@@ -1735,7 +1752,9 @@ if __name__ == "__main__":
         "--gate-games", type=int, default=10, help="Number of arena games for model gating (default: 10)"
     )
     parser.add_argument(
-        "--gate-threshold", type=float, default=0.55, help="Minimum win rate to promote model (default: 0.55)"
+        "--gate-threshold", type=float, default=0.55,
+        help="Min win rate to promote, on the 2-player scale; scaled to the 4-player gate's 25%% fair share "
+        "(default: 0.55 -> 27.5%%)"
     )
     parser.add_argument("--no-gate", action="store_true", help="Disable model gating (always promote)")
     parser.add_argument(

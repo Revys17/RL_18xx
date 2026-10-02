@@ -205,7 +205,11 @@ def build_parser():
         help="Max training examples to use (0 = all data, default: 100000)"
     )
     p.add_argument("--gate-games", type=int, default=10, help="Arena games for model gating (default: 10)")
-    p.add_argument("--gate-threshold", type=float, default=0.55, help="Min win rate to promote (default: 0.55)")
+    p.add_argument(
+        "--gate-threshold", type=float, default=0.55,
+        help="Min win rate to promote, on the 2-player scale; scaled to the 4-player gate's 25%% fair share "
+        "(default: 0.55 -> 27.5%%)",
+    )
     p.add_argument("--no-gate", action="store_true", help="Disable model gating (always promote)")
     p.add_argument(
         "--model-type", type=str, default="transformer", choices=["gnn", "transformer"],
