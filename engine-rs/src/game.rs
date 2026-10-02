@@ -257,6 +257,12 @@ pub struct BaseGame {
     /// reserve (Montreal L12) — consumed by `place_639_token` or by
     /// nationalization on that hex.
     pub(crate) national_reservations: Vec<String>,
+    /// Self-play rule variant, off unless set: when an all-pass round leaves
+    /// the next private in the waterfall auction unbid and no player able to
+    /// afford it, its price drops $5 like the SV's (taken free at $0). Under
+    /// the real rules only the SV is discounted, so such an auction can only
+    /// loop; in 2,428 human 1830 games no all-pass ever met the condition.
+    pub(crate) auction_unlock: bool,
 }
 
 // crate-visible wrappers that forward to the (private) PyO3-exposed methods
@@ -499,6 +505,7 @@ impl BaseGame {
             trainless_nationalization_pending: self.trainless_nationalization_pending,
             trainless_major: self.trainless_major.clone(),
             national_reservations: self.national_reservations.clone(),
+            auction_unlock: self.auction_unlock,
         }
     }
 
@@ -2589,6 +2596,7 @@ impl BaseGame {
                 .national_setup()
                 .map(|ns| ns.reservations.iter().map(|s| s.to_string()).collect())
                 .unwrap_or_default(),
+            auction_unlock: false,
         };
         game.setup_national();
         if single_item_opener {
@@ -3875,6 +3883,17 @@ impl BaseGame {
     /// Get the game result: player_id -> total value (cash + share values).
     fn result(&self) -> HashMap<u32, i32> {
         self.calculate_results()
+    }
+
+    /// Turn the self-play auction-unlock rule variant on or off (see the
+    /// `auction_unlock` field). Clones keep the setting.
+    fn set_auction_unlock(&mut self, on: bool) {
+        self.auction_unlock = on;
+    }
+
+    #[getter(auction_unlock)]
+    fn get_auction_unlock(&self) -> bool {
+        self.auction_unlock
     }
 
     /// Get all valid par prices for the stock market.

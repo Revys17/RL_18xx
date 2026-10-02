@@ -330,6 +330,20 @@ impl BaseGame {
                     // Don't update current_auction_company — it stays as the original
                     // target (already sold), so subsequent all-pass cycles also trigger payouts.
                     self.payout_companies();
+                    if self.auction_unlock && self.auction_next_unaffordable(&new_state) {
+                        // Self-play variant (BaseGame::auction_unlock): discount
+                        // the next private as the SV branch above does.
+                        if let Some(next_idx) = new_state.cheapest_company() {
+                            new_state.discount += 5;
+                            let new_min = (self.companies[next_idx].value - new_state.discount).max(0);
+                            if new_min <= 0 {
+                                new_state.advance_entity();
+                                let buyer_id = new_state.current_player_id();
+                                self.auction_buy_company(&mut new_state, next_idx, buyer_id, 0)?;
+                                self.auction_resolve_bids(&mut new_state)?;
+                            }
+                        }
+                    }
                     new_state.unpass_all();
                     new_state.advance_entity();
                 } else {
@@ -344,6 +358,29 @@ impl BaseGame {
 
         self.set_auction_state(new_state);
         Ok(())
+    }
+
+    /// Waterfall: the next private is unbid and no player's uncommitted cash
+    /// covers its price, so no one can ever buy it (the auction-unlock
+    /// variant's trigger).
+    fn auction_next_unaffordable(&self, state: &AuctionState) -> bool {
+        let Some(next) = state.cheapest_company() else {
+            return false;
+        };
+        if state.bids.get(&next).map_or(false, |bids| !bids.is_empty()) {
+            return false;
+        }
+        let price = state.min_bid_for(next, self.companies[next].value);
+        self.players.iter().all(|p| {
+            let committed: i32 = state
+                .bids
+                .values()
+                .flatten()
+                .filter(|b| b.player_id == p.id)
+                .map(|b| b.price)
+                .sum();
+            p.cash - committed < price
+        })
     }
 
     /// Buy a company at auction: transfer money and ownership, process abilities.

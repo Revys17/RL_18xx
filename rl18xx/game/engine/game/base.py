@@ -203,6 +203,11 @@ from ...gamemap import GameMap
 
 
 class BaseGame:
+    # Self-play rule variant, off unless set (engine-rs BaseGame::auction_unlock):
+    # when an all-pass round leaves the next private in the waterfall auction
+    # unbid and no player able to afford it, its price drops $5 like the SV's.
+    auction_unlock = False
+
     @classmethod
     def load(
         cls,
