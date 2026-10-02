@@ -1718,6 +1718,54 @@ impl BaseGame {
         Ok(())
     }
 
+    /// The certificates a sale of `percent`% of corporation `corp_idx` by
+    /// `player_eid` moves when the action names none (the native decode never
+    /// does): the seller's non-president certs by ascending index until the
+    /// non-president portion is covered — `percent` minus the president
+    /// cert's face value when the presidency is dumped — and whether the
+    /// president cert goes too (the seller would drop below the president's
+    /// percent). Python's `all_bundles_for_corporation` builds the same
+    /// [normals..., president] bundle. Shared by the sell validation, both
+    /// sale paths, and the native action log, so the logged share ids are
+    /// exactly the certs the sale moves.
+    pub(crate) fn implied_sell_bundle(
+        &self,
+        corp_idx: usize,
+        player_eid: &crate::entities::EntityId,
+        percent: u8,
+    ) -> (Vec<usize>, bool) {
+        let corp = &self.corporations[corp_idx];
+        let pres_pct: u8 = corp
+            .shares
+            .iter()
+            .find(|s| s.president)
+            .map(|s| s.percent)
+            .unwrap_or(20);
+        let remaining_after = corp.percent_owned_by(player_eid).saturating_sub(percent);
+        let includes_president = corp
+            .shares
+            .iter()
+            .any(|s| s.president && s.owner == *player_eid)
+            && remaining_after < corp.president_percent();
+        let non_pres_to_sell = if includes_president {
+            percent.saturating_sub(pres_pct)
+        } else {
+            percent
+        };
+        let mut normals: Vec<usize> = Vec::new();
+        let mut taken = 0u8;
+        for (i, share) in corp.shares.iter().enumerate() {
+            if taken >= non_pres_to_sell {
+                break;
+            }
+            if share.owner == *player_eid && !share.president {
+                normals.push(i);
+                taken += share.percent;
+            }
+        }
+        (normals, includes_president)
+    }
+
     /// Which Python step's `can_sell` governs a SellShares action.
     pub(crate) fn validate_sell_bundle(
         &self,
@@ -1812,35 +1860,18 @@ impl BaseGame {
             if percent > player_total {
                 return Err(reject());
             }
-            let has_pres = corp
-                .shares
-                .iter()
-                .any(|s| s.president && s.owner == player_eid);
-            includes_president = has_pres && player_total - percent < pres_pct;
+            let (normals, dumps_president) = self.implied_sell_bundle(ci, &player_eid, percent);
+            includes_president = dumps_president;
             let non_pres_needed = if includes_president {
                 percent.saturating_sub(pres_pct)
             } else {
                 percent
             };
-            let non_pres_held: u8 = corp
-                .shares
-                .iter()
-                .filter(|s| s.owner == player_eid && !s.president)
-                .map(|s| s.percent)
-                .sum();
-            if non_pres_held < non_pres_needed {
+            let mut pcts: Vec<u8> = normals.iter().map(|&i| corp.shares[i].percent).collect();
+            // The selection stops once the non-president portion is covered,
+            // so falling short means the seller doesn't hold enough of it.
+            if pcts.iter().sum::<u8>() < non_pres_needed {
                 return Err(reject());
-            }
-            let mut pcts: Vec<u8> = Vec::new();
-            let mut taken = 0u8;
-            for s in corp.shares.iter() {
-                if taken >= non_pres_needed {
-                    break;
-                }
-                if s.owner == player_eid && !s.president {
-                    pcts.push(s.percent);
-                    taken += s.percent;
-                }
             }
             if includes_president {
                 pcts.push(pres_pct);
@@ -2008,21 +2039,10 @@ impl BaseGame {
         // per-cert → owner mapping in lockstep with Python's recorded share ids
         // so a later sell that names a specific id resolves to the same owner in
         // both engines. We fall back to owner-based ascending-index selection
-        // when no indices are supplied — which is NOT rare: the native decode
-        // emits empty ``share_indices`` for EVERY SellShares (decode.rs), and
-        // the bankruptcy liquidation constructs its own bundles. Either way
-        // the correct PERCENT reaches the market.
-        let pres_pct: u8 = self.corporations[corp_idx]
-            .shares
-            .iter()
-            .find(|s| s.president)
-            .map(|s| s.percent)
-            .unwrap_or(20);
-        let non_pres_to_sell = if includes_president {
-            percent.saturating_sub(pres_pct)
-        } else {
-            percent
-        };
+        // (`implied_sell_bundle`) when no indices are supplied — which is NOT
+        // rare: the native decode emits empty ``share_indices`` for EVERY
+        // SellShares (decode.rs), and the bankruptcy liquidation constructs
+        // its own bundles. Either way the correct PERCENT reaches the market.
 
         // Honor the EXACT certs named by the action (Python's transfer_shares
         // moves precisely the bundle's non-president certs; any over-move for a
@@ -2041,16 +2061,7 @@ impl BaseGame {
                 }
             }
         } else {
-            let mut transferred_pct = 0u8;
-            for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
-                if transferred_pct >= non_pres_to_sell {
-                    break;
-                }
-                if share.owner == player_eid && !share.president {
-                    to_market.push(i);
-                    transferred_pct += share.percent;
-                }
-            }
+            to_market = self.implied_sell_bundle(corp_idx, &player_eid, percent).0;
         }
         for i in to_market {
             self.corporations[corp_idx]

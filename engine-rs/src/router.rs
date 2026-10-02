@@ -16,6 +16,10 @@ pub struct RouteCandidate {
     pub hexside_bits: u128,
     /// Hex chains between consecutive stops (for Python Route construction).
     pub connections: Vec<Vec<String>>,
+    /// Index into the `trains` slice passed to [`calculate_corp_routes`] of
+    /// the train this route was enumerated for (its distance bounds the
+    /// route), so a chosen combination names which train runs which route.
+    pub train_index: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +179,8 @@ impl<'a> WalkState<'a> {
             revenue: self.revenue,
             hexside_bits: self.hexside_bits,
             connections,
+            // Set by `calculate_corp_routes` once the walk for a train is done.
+            train_index: 0,
         });
     }
 }
@@ -1140,8 +1146,8 @@ pub fn calculate_corp_routes(
     let mut finder = RouteFinder::new();
 
     let mut candidates_per_train = Vec::new();
-    for &(distance, is_d) in trains {
-        let candidates = enumerate_routes(
+    for (train_index, &(distance, is_d)) in trains.iter().enumerate() {
+        let mut candidates = enumerate_routes(
             hexes,
             hex_idx,
             hex_adjacency,
@@ -1153,6 +1159,9 @@ pub fn calculate_corp_routes(
             corp_sym,
             &mut finder,
         );
+        for c in &mut candidates {
+            c.train_index = train_index;
+        }
         candidates_per_train.push(candidates);
     }
 
@@ -1537,18 +1546,21 @@ mod tests {
             revenue: 50,
             hexside_bits: 0b0001,
             connections: vec![],
+            train_index: 0,
         };
         let r2 = RouteCandidate {
             nodes: vec![],
             revenue: 40,
             hexside_bits: 0b0001,
             connections: vec![],
+            train_index: 0,
         };
         let r3 = RouteCandidate {
             nodes: vec![],
             revenue: 30,
             hexside_bits: 0b0010,
             connections: vec![],
+            train_index: 0,
         };
 
         let (routes, revenue) = find_best_routes(&[vec![r1, r3.clone()], vec![r2, r3]]);
@@ -1564,6 +1576,7 @@ mod tests {
             revenue: 42,
             hexside_bits: 0,
             connections: vec![],
+            train_index: 0,
         };
 
         let (routes, revenue) = find_best_routes(&[vec![r1]]);

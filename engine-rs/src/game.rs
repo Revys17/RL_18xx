@@ -1341,6 +1341,37 @@ impl BaseGame {
         }
     }
 
+    /// Whether `entity_id` names a company rather than a seated player — the
+    /// test `try_process_company_exchange` uses to route a `buy_shares` to
+    /// the exchange. A numeric id matching a SEATED player is the player, even
+    /// when a company sym collides (1867's hidden company '3' vs player 3 —
+    /// same rule as action_step_entity).
+    pub(crate) fn is_company_actor(&self, entity_id: &str) -> bool {
+        if let Ok(pid) = entity_id.parse::<u32>() {
+            if self.players.iter().any(|p| p.id == pid) {
+                return false;
+            }
+        }
+        self.company_idx.contains_key(entity_id)
+    }
+
+    /// The certificate a company exchange (e.g. MH → NYC) that names no share
+    /// receives: the lowest-index non-president `percent`% cert in the IPO,
+    /// else the market, else still unissued (the corporation not yet parred).
+    /// Shared by the exchange handler and the native action log, so the logged
+    /// share id is exactly the cert the exchange moves.
+    pub(crate) fn implied_exchange_cert(&self, corp_idx: usize, percent: u8) -> Option<usize> {
+        let corp = &self.corporations[corp_idx];
+        let first_owned_by = |owner: EntityId| {
+            corp.shares
+                .iter()
+                .position(|s| !s.president && s.percent == percent && s.owner == owner)
+        };
+        first_owned_by(EntityId::ipo(&corp.sym))
+            .or_else(|| first_owned_by(EntityId::market()))
+            .or_else(|| first_owned_by(EntityId::none()))
+    }
+
     /// Handle company exchange abilities (e.g., MH → NYC share).
     /// Returns Ok(true) if the action was a company exchange and was processed,
     /// Ok(false) if it's not a company exchange (caller should dispatch normally).
@@ -1356,19 +1387,11 @@ impl BaseGame {
             _ => return Ok(false),
         };
 
-        // Check if entity is a company (not a player or corp). A numeric id
-        // matching a SEATED player is the player, even when a company sym
-        // collides (1867's hidden company '3' vs player 3 — same rule as
-        // action_step_entity).
-        if let Ok(pid) = entity_id.parse::<u32>() {
-            if self.players.iter().any(|p| p.id == pid) {
-                return Ok(false);
-            }
+        // Check if entity is a company (not a player or corp).
+        if !self.is_company_actor(entity_id) {
+            return Ok(false); // Not a company entity — normal action
         }
-        let company_idx = match self.company_idx.get(entity_id) {
-            Some(&idx) => idx,
-            None => return Ok(false), // Not a company entity — normal action
-        };
+        let company_idx = self.company_idx[entity_id];
 
         // The company's owner (a player) receives the share
         let owner_player_id = self.companies[company_idx]
@@ -1400,71 +1423,20 @@ impl BaseGame {
         // Find a share to transfer.
         // If specific share indices are provided, use the exact share.
         // Otherwise: prefer IPO, then market, then uninitialized.
-        let mut transferred = false;
-        let ipo_eid = EntityId::ipo(corp_sym);
-        let market_eid = EntityId::market();
-
-        if !share_indices.is_empty() {
-            let idx = share_indices[0];
-            if idx < self.corporations[corp_idx].shares.len() {
-                self.corporations[corp_idx]
-                    .set_share_owner(idx, player_eid.clone());
-                transferred = true;
-            }
-        }
-
-        // Fallback: try IPO first
-        if !transferred {
-            let mut found_idx: Option<usize> = None;
-            for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
-                if !share.president && share.percent == percent && share.owner == ipo_eid {
-                    found_idx = Some(i);
-                    break;
-                }
-            }
-            if let Some(i) = found_idx {
-                self.corporations[corp_idx]
-                    .set_share_owner(i, player_eid.clone());
-                transferred = true;
-            }
-        }
-        // Then market
-        if !transferred {
-            let mut found_idx: Option<usize> = None;
-            for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
-                if !share.president && share.percent == percent && share.owner == market_eid {
-                    found_idx = Some(i);
-                    break;
-                }
-            }
-            if let Some(i) = found_idx {
-                self.corporations[corp_idx]
-                    .set_share_owner(i, player_eid.clone());
-                transferred = true;
-            }
-        }
-        // Then uninitialized (before corp is parred)
-        if !transferred {
-            let mut found_idx: Option<usize> = None;
-            for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
-                if !share.president && share.percent == percent && share.owner.is_none() {
-                    found_idx = Some(i);
-                    break;
-                }
-            }
-            if let Some(i) = found_idx {
-                self.corporations[corp_idx]
-                    .set_share_owner(i, player_eid.clone());
-                transferred = true;
-            }
-        }
-
-        if !transferred {
-            return Err(GameError::new(format!(
-                "No {}% share of {} available for exchange",
-                percent, corp_sym
-            )));
-        }
+        let named = share_indices
+            .first()
+            .copied()
+            .filter(|&idx| idx < self.corporations[corp_idx].shares.len());
+        let share_idx = named
+            .or_else(|| self.implied_exchange_cert(corp_idx, percent))
+            .ok_or_else(|| {
+                GameError::new(format!(
+                    "No {}% share of {} available for exchange",
+                    percent, corp_sym
+                ))
+            })?;
+        self.corporations[corp_idx]
+            .set_share_owner(share_idx, player_eid.clone());
 
         // Close the company
         self.companies[company_idx].closed = true;
@@ -2858,6 +2830,7 @@ impl BaseGame {
             hexes: Vec::new(),
             revenue: None,
             connections,
+            nodes: Vec::new(),
         };
         match self
             .title_def()
@@ -3942,6 +3915,76 @@ impl BaseGame {
 
         result
     }
+
+    /// The revenue-maximising route combination for `corp_sym`'s unoperated
+    /// trains: `(routes, train_ids, total_revenue)`. Each route's
+    /// `train_index` indexes `train_ids` (the corp's unoperated trains in
+    /// holding order), naming the train that runs it.
+    pub(crate) fn optimal_routes(
+        &mut self,
+        corp_sym: &str,
+    ) -> (Vec<crate::router::RouteCandidate>, Vec<String>, i32) {
+        let ci = match self.corp_idx.get(corp_sym) {
+            Some(&i) => i,
+            None => return (Vec::new(), Vec::new(), 0),
+        };
+
+        // Get token nodes
+        let token_positions = self.corp_token_positions(corp_sym);
+        let token_nodes: Vec<NodeId> = token_positions
+            .iter()
+            .map(|(hex_id, city_idx)| NodeId {
+                hex_id: hex_id.clone(),
+                node_type: NodeType::City,
+                index: *city_idx,
+            })
+            .collect();
+
+        // Get all connected revenue nodes (cities/towns/offboards) from graph
+        let reservations = self.home_reservations();
+        let graph = self.graph_cache.get_or_compute(
+            corp_sym,
+            &self.hexes,
+            &self.hex_idx,
+            &self.hex_adjacency,
+            &token_positions,
+            &reservations,
+        );
+        let connected_nodes: Vec<NodeId> = graph
+            .connected_nodes
+            .iter()
+            .filter(|n| {
+                n.node_type == NodeType::City
+                    || n.node_type == NodeType::Town
+                    || n.node_type == NodeType::Offboard
+            })
+            .cloned()
+            .collect();
+
+        // Get trains (only non-operated)
+        let unoperated: Vec<&Train> = self.corporations[ci]
+            .trains
+            .iter()
+            .filter(|t| !t.operated)
+            .collect();
+        let trains: Vec<(u32, bool)> = unoperated
+            .iter()
+            .map(|t| (t.distance, t.name == "D"))
+            .collect();
+        let train_ids: Vec<String> = unoperated.iter().map(|t| t.id.clone()).collect();
+
+        let (routes, revenue) = crate::router::calculate_corp_routes(
+            &self.hexes,
+            &self.hex_idx,
+            &self.hex_adjacency,
+            &token_nodes,
+            &connected_nodes,
+            &trains,
+            &self.phase.tiles,
+            corp_sym,
+        );
+        (routes, train_ids, revenue)
+    }
 }
 
 #[pymethods]
@@ -4050,61 +4093,7 @@ impl BaseGame {
     /// Calculate optimal routes and revenue for a corporation.
     /// Returns (routes_as_dicts, total_revenue).
     pub(crate) fn calculate_routes(&mut self, corp_sym: String) -> (Vec<HashMap<String, String>>, i32) {
-        let ci = match self.corp_idx.get(corp_sym.as_str()) {
-            Some(&i) => i,
-            None => return (Vec::new(), 0),
-        };
-
-        // Get token nodes
-        let token_positions = self.corp_token_positions(&corp_sym);
-        let token_nodes: Vec<NodeId> = token_positions
-            .iter()
-            .map(|(hex_id, city_idx)| NodeId {
-                hex_id: hex_id.clone(),
-                node_type: NodeType::City,
-                index: *city_idx,
-            })
-            .collect();
-
-        // Get all connected revenue nodes (cities/towns/offboards) from graph
-        let reservations = self.home_reservations();
-        let graph = self.graph_cache.get_or_compute(
-            &corp_sym,
-            &self.hexes,
-            &self.hex_idx,
-            &self.hex_adjacency,
-            &token_positions,
-            &reservations,
-        );
-        let connected_nodes: Vec<NodeId> = graph
-            .connected_nodes
-            .iter()
-            .filter(|n| {
-                n.node_type == NodeType::City
-                    || n.node_type == NodeType::Town
-                    || n.node_type == NodeType::Offboard
-            })
-            .cloned()
-            .collect();
-
-        // Get trains (only non-operated)
-        let trains: Vec<(u32, bool)> = self.corporations[ci]
-            .trains
-            .iter()
-            .filter(|t| !t.operated)
-            .map(|t| (t.distance, t.name == "D"))
-            .collect();
-
-        let (routes, revenue) = crate::router::calculate_corp_routes(
-            &self.hexes,
-            &self.hex_idx,
-            &self.hex_adjacency,
-            &token_nodes,
-            &connected_nodes,
-            &trains,
-            &self.phase.tiles,
-            &corp_sym,
-        );
+        let (routes, _train_ids, revenue) = self.optimal_routes(&corp_sym);
 
         // Convert to Python-friendly format
         let route_dicts: Vec<HashMap<String, String>> = routes

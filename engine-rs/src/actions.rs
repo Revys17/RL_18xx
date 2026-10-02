@@ -56,6 +56,11 @@ pub struct RouteData {
     /// center to the next; interior hexes are plain track).
     #[serde(default)]
     pub connections: Vec<Vec<String>>,
+    /// Signatures (`"<hex>-<node index>"`) of the route's stops, as the
+    /// 18xx.games `nodes` field records them (disambiguates chains that join
+    /// the same hexes through different cities). Informational for the engine.
+    #[serde(default)]
+    pub nodes: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -720,11 +725,17 @@ fn extract_routes(dict: &Bound<'_, PyDict>) -> Result<Vec<RouteData>, GameError>
             _ => Vec::new(),
         };
 
+        let nodes: Vec<String> = match route_dict.get_item("nodes") {
+            Ok(Some(item)) => item.extract().unwrap_or_default(),
+            _ => Vec::new(),
+        };
+
         result.push(RouteData {
             train_name,
             hexes,
             revenue,
             connections,
+            nodes,
         });
     }
 

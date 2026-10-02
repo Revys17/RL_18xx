@@ -252,6 +252,39 @@ impl BaseGame {
         Ok(())
     }
 
+    /// The certificate a stock-round buy that names no share takes from
+    /// `source` ("ipo", "market", or "auto" = market first, then IPO): the
+    /// lowest-index non-president cert there (Python's `pool[0]`), with the
+    /// source it came from. Shared by the buy handler and the native action
+    /// log, so the logged share id is exactly the cert the buy moves.
+    pub(crate) fn implied_buy_cert(
+        &self,
+        corp_idx: usize,
+        source: &str,
+    ) -> Result<(usize, &'static str), GameError> {
+        let corp = &self.corporations[corp_idx];
+        let ipo_eid = EntityId::ipo(&corp.sym);
+        let market_eid = EntityId::market();
+        let first_from = |owner: &EntityId| {
+            corp.shares
+                .iter()
+                .position(|s| s.owner == *owner && !s.president)
+        };
+        match source {
+            "ipo" => first_from(&ipo_eid)
+                .map(|i| (i, "ipo"))
+                .ok_or_else(|| GameError::new("No IPO shares available")),
+            "market" => first_from(&market_eid)
+                .map(|i| (i, "market"))
+                .ok_or_else(|| GameError::new("No market shares available")),
+            // "auto": try market first (uses market price), then IPO (uses par price)
+            _ => first_from(&market_eid)
+                .map(|i| (i, "market"))
+                .or_else(|| first_from(&ipo_eid).map(|i| (i, "ipo")))
+                .ok_or_else(|| GameError::new("No shares available")),
+        }
+    }
+
     fn stock_process_buy_shares(
         &mut self,
         state: &StockState,
@@ -335,45 +368,16 @@ impl BaseGame {
             None
         };
 
-        let effective_source = inferred_source.unwrap_or(source);
-
         // If the action specifies a share index whose Rust-side owner matches
         // the effective source, use that EXACT index. This keeps Rust's share
         // assignments aligned with Python's (Python honors the share_id in
-        // the action when moving shares). Fall back to `position(...)` when
-        // the index is unusable.
+        // the action when moving shares). Fall back to the source's first
+        // cert when the index is unusable.
         let (share_idx, actual_source) = if let (Some(src), false) = (inferred_source, share_indices.is_empty()) {
             let idx = share_indices[0];
             (idx, src)
-        } else if effective_source == "ipo" {
-            self.corporations[corp_idx]
-                .shares
-                .iter()
-                .position(|s| s.owner == ipo_eid && !s.president)
-                .map(|i| (i, "ipo"))
-                .ok_or_else(|| GameError::new("No IPO shares available"))?
-        } else if source == "market" {
-            self.corporations[corp_idx]
-                .shares
-                .iter()
-                .position(|s| s.owner == market_eid && !s.president)
-                .map(|i| (i, "market"))
-                .ok_or_else(|| GameError::new("No market shares available"))?
         } else {
-            // "auto": try market first (uses market price), then IPO (uses par price)
-            self.corporations[corp_idx]
-                .shares
-                .iter()
-                .position(|s| s.owner == market_eid && !s.president)
-                .map(|i| (i, "market"))
-                .or_else(|| {
-                    self.corporations[corp_idx]
-                        .shares
-                        .iter()
-                        .position(|s| s.owner == ipo_eid && !s.president)
-                        .map(|i| (i, "ipo"))
-                })
-                .ok_or_else(|| GameError::new("No shares available"))?
+            self.implied_buy_cert(corp_idx, source)?
         };
 
         // Enforce multiple_buy_only_from_market: if this is a second buy (multiple),
@@ -555,24 +559,14 @@ impl BaseGame {
         // fallback is NOT a rare path: the native decode emits empty
         // ``share_indices`` for EVERY SellShares (decode.rs), and the
         // bankruptcy liquidation constructs its own bundles — so this
-        // selection must match Python's bundle composition exactly. A dumped
-        // bundle's non-president portion is ``percent`` minus the PRESIDENT
-        // CERT'S FACE VALUE (20% in 1830) — Python's
+        // selection (`implied_sell_bundle`, which also names the certs in the
+        // native action log) must match Python's bundle composition exactly.
+        // A dumped bundle's non-president portion is ``percent`` minus the
+        // PRESIDENT CERT'S FACE VALUE (20% in 1830) — Python's
         // ``all_bundles_for_corporation`` builds [normals..., president], so
         // the certs moved alongside the president are the remaining
         // ``percent - 20`` of normals (the partial-dump leftover is returned
         // from the pool afterwards, mirroring ``handle_partial``).
-        let pres_pct: u8 = self.corporations[corp_idx]
-            .shares
-            .iter()
-            .find(|s| s.president)
-            .map(|s| s.percent)
-            .unwrap_or(20);
-        let non_pres_to_sell = if includes_president {
-            percent.saturating_sub(pres_pct)
-        } else {
-            percent
-        };
         {
             let mut to_market: Vec<usize> = Vec::new();
             if !share_indices.is_empty() {
@@ -599,16 +593,7 @@ impl BaseGame {
                 // SellShares — and the bankruptcy liquidation): take the
                 // seller's non-president certs by ascending index until the
                 // percent is covered.
-                let mut transferred_pct = 0u8;
-                for (i, share) in self.corporations[corp_idx].shares.iter().enumerate() {
-                    if transferred_pct >= non_pres_to_sell {
-                        break;
-                    }
-                    if share.owner == player_eid && !share.president {
-                        to_market.push(i);
-                        transferred_pct += share.percent;
-                    }
-                }
+                to_market = self.implied_sell_bundle(corp_idx, &player_eid, percent).0;
             }
             for i in to_market {
                 self.corporations[corp_idx]

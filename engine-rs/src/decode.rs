@@ -35,6 +35,12 @@ fn i(map: &std::collections::HashMap<String, serde_json::Value>, key: &str) -> O
     map.get(key).and_then(|v| v.as_i64())
 }
 
+/// Share ids (`"PRR_3"`) for certificate indices of `corp` — a cert's id is
+/// its index in the corporation's share list, president cert 0.
+fn share_ids(corp: &str, idxs: &[usize]) -> Vec<String> {
+    idxs.iter().map(|i| format!("{}_{}", corp, i)).collect()
+}
+
 impl BaseGame {
     /// The actor id string for a non-company action: the current entity as
     /// `Action.entity_id()` expects it (player → numeric id string; corp → sym).
@@ -124,11 +130,92 @@ impl BaseGame {
     /// `ActionMapper` round-trip. The apply itself uses the
     /// decode-parity-verified `process_action_internal` path directly; the JSON
     /// is for logging only (never re-parsed for this apply).
+    ///
+    /// The dict is the 18xx.games wire format (what the Python engine's
+    /// `to_dict` emits), so the log replays in the Python engine and the
+    /// browser as well as here. Facts the decoded action leaves implicit come
+    /// from the engine itself: the certificates a buy/sell moves are resolved
+    /// before the apply by the same selection the handler's no-named-shares
+    /// fallback runs, and the par cell and token slot are read back after it.
     pub(crate) fn process_action_native(&mut self, action: &Action) -> Result<(), GameError> {
-        let logged = self.action_to_json(action);
+        let certs = self.implied_share_certs(action);
         self.process_action_internal(action)?;
+        let logged = self.action_to_json(action, certs.as_deref());
         self.action_log.push(logged);
         Ok(())
+    }
+
+    /// The certificate indices a BuyShares / SellShares moves, resolved
+    /// BEFORE it is processed: the action's named shares, or — for the native
+    /// decode, which names none — the certs the handler's fallback will pick
+    /// (`implied_buy_cert` / `implied_exchange_cert` / `implied_sell_bundle`,
+    /// the very functions the handlers call). A sale lists the president cert
+    /// last when it is dumped, as Python's bundles do. `None` for other
+    /// actions and for paths with no 18xx.games share list to name (1867
+    /// redemptions / mergers).
+    fn implied_share_certs(&self, action: &Action) -> Option<Vec<usize>> {
+        use crate::rounds::Round;
+        match action {
+            Action::BuyShares {
+                entity_id,
+                corporation_sym,
+                percent,
+                source,
+                share_indices,
+                ..
+            } => {
+                if !share_indices.is_empty() {
+                    return Some(share_indices.clone());
+                }
+                let ci = *self.corp_idx.get(corporation_sym.as_str())?;
+                if self.is_company_actor(entity_id) {
+                    self.implied_exchange_cert(ci, *percent).map(|i| vec![i])
+                } else if matches!(self.round, Round::Stock(_)) {
+                    self.implied_buy_cert(ci, source).ok().map(|(i, _)| vec![i])
+                } else {
+                    None
+                }
+            }
+            Action::SellShares {
+                entity_id,
+                corporation_sym,
+                percent,
+                share_indices,
+                ..
+            } => {
+                if !share_indices.is_empty() {
+                    return Some(share_indices.clone());
+                }
+                if !matches!(self.round, Round::Stock(_) | Round::Operating(_)) {
+                    return None;
+                }
+                let ci = *self.corp_idx.get(corporation_sym.as_str())?;
+                let seller = crate::entities::EntityId::player(entity_id.parse().ok()?);
+                let (mut certs, dumps_president) = self.implied_sell_bundle(ci, &seller, *percent);
+                if dumps_president {
+                    let pres = self.corporations[ci]
+                        .shares
+                        .iter()
+                        .position(|sh| sh.president && sh.owner == seller)?;
+                    certs.push(pres);
+                }
+                Some(certs)
+            }
+            _ => None,
+        }
+    }
+
+    /// The Python / 18xx.games id of the tile on `hex_id`: a laid tile's
+    /// instance id (`57-0`, which the lay handler stores as the tile's name),
+    /// or `<hex>-0` for the hex's preprinted tile (Python names preprinted
+    /// tiles after their hex, copy 0).
+    fn wire_tile_id(&self, hex_id: &str) -> Option<String> {
+        let tile = &self.hexes[*self.hex_idx.get(hex_id)?].tile;
+        Some(if tile.id.starts_with("preprinted_") {
+            format!("{}-0", tile.name)
+        } else {
+            tile.name.clone()
+        })
     }
 
     /// (entity JSON value, entity_type) for an action's entity id — player ids
@@ -150,10 +237,13 @@ impl BaseGame {
         }
     }
 
-    /// Build a faithful, replayable action dict (as JSON) from a decoded action.
-    /// Field shapes match what `Action::from_py_dict` parses, so re-processing
-    /// the logged dict reproduces the same action/state.
-    fn action_to_json(&self, action: &Action) -> serde_json::Value {
+    /// Build a faithful, replayable action dict (as JSON) for a decoded action
+    /// that was just processed, in the 18xx.games format the Python engine's
+    /// `BaseAction.action_from_dict` reads (and `Action::from_py_dict` parses,
+    /// so re-processing the logged dict reproduces the same action/state).
+    /// `certs` are the BuyShares / SellShares certificates from
+    /// [`Self::implied_share_certs`], resolved before the apply.
+    fn action_to_json(&self, action: &Action, certs: Option<&[usize]>) -> serde_json::Value {
         let (entity, entity_type) = self.entity_json(action.entity_id());
         let mut m = serde_json::Map::new();
         m.insert("type".to_string(), json!(action.action_type()));
@@ -171,44 +261,95 @@ impl BaseGame {
             }
             Action::Par { corporation_sym, share_price, .. } => {
                 m.insert("corporation".to_string(), json!(corporation_sym));
-                m.insert("share_price".to_string(), json!(share_price));
+                // The market cell id "price,row,col" (`SharePrice.id`) of the
+                // par the handler just set — a bare price can't name the cell.
+                let cell = self
+                    .corp_idx
+                    .get(corporation_sym.as_str())
+                    .and_then(|&ci| self.corporations[ci].ipo_price.as_ref())
+                    .map(|sp| format!("{},{},{}", sp.price, sp.row, sp.column));
+                match cell {
+                    Some(id) => m.insert("share_price".to_string(), json!(id)),
+                    None => m.insert("share_price".to_string(), json!(share_price)),
+                };
             }
-            Action::BuyShares { corporation_sym, percent, source, share_indices, .. } => {
-                m.insert("corporation".to_string(), json!(corporation_sym));
-                m.insert("percent".to_string(), json!(percent));
-                m.insert("source".to_string(), json!(source));
-                if !share_indices.is_empty() {
-                    let shares: Vec<String> = share_indices
-                        .iter()
-                        .map(|i| format!("{}_{}", corporation_sym, i))
-                        .collect();
-                    m.insert("shares".to_string(), json!(shares));
+            Action::BuyShares { corporation_sym, percent, source, .. } => match certs {
+                Some(idxs) if !idxs.is_empty() => {
+                    m.insert("shares".to_string(), json!(share_ids(corporation_sym, idxs)));
+                    m.insert("percent".to_string(), json!(percent));
                 }
-            }
-            Action::SellShares { corporation_sym, percent, share_indices, .. } => {
-                m.insert("corporation".to_string(), json!(corporation_sym));
-                m.insert("percent".to_string(), json!(percent));
-                if !share_indices.is_empty() {
-                    let shares: Vec<String> = share_indices
-                        .iter()
-                        .map(|i| format!("{}_{}", corporation_sym, i))
-                        .collect();
-                    m.insert("shares".to_string(), json!(shares));
+                _ => {
+                    m.insert("corporation".to_string(), json!(corporation_sym));
+                    m.insert("percent".to_string(), json!(percent));
+                    m.insert("source".to_string(), json!(source));
                 }
-            }
+            },
+            Action::SellShares { corporation_sym, percent, .. } => match certs {
+                Some(idxs) if !idxs.is_empty() => {
+                    m.insert("shares".to_string(), json!(share_ids(corporation_sym, idxs)));
+                    m.insert("percent".to_string(), json!(percent));
+                }
+                _ => {
+                    m.insert("corporation".to_string(), json!(corporation_sym));
+                    m.insert("percent".to_string(), json!(percent));
+                }
+            },
             Action::LayTile { hex_id, tile_id, rotation, .. } => {
                 m.insert("hex".to_string(), json!(hex_id));
                 m.insert("tile".to_string(), json!(tile_id));
                 m.insert("rotation".to_string(), json!(rotation));
             }
-            Action::PlaceToken { hex_id, city_index, .. } => {
-                m.insert("hex".to_string(), json!(hex_id));
-                m.insert("city_index".to_string(), json!(city_index));
+            Action::PlaceToken { entity_id, hex_id, city_index } => {
+                // City id "<tile id>-<city index>", plus the slot the token
+                // landed in and the corporation whose token it is (the owning
+                // corporation for a private's teleport).
+                let tokener = if self.corp_idx.contains_key(entity_id.as_str()) {
+                    Some(entity_id.clone())
+                } else {
+                    self.company_idx
+                        .get(entity_id.as_str())
+                        .and_then(|&i| self.companies[i].owner.corp_sym())
+                        .map(str::to_string)
+                };
+                match self.wire_tile_id(hex_id) {
+                    Some(tile_id) => {
+                        m.insert("city".to_string(), json!(format!("{}-{}", tile_id, city_index)));
+                        let slot = tokener.as_deref().and_then(|corp| {
+                            let hi = *self.hex_idx.get(hex_id.as_str())?;
+                            self.hexes[hi]
+                                .tile
+                                .cities
+                                .get(*city_index as usize)?
+                                .tokens
+                                .iter()
+                                .position(|t| t.as_ref().is_some_and(|t| t.corporation_id == corp))
+                        });
+                        if let Some(slot) = slot {
+                            m.insert("slot".to_string(), json!(slot));
+                        }
+                    }
+                    None => {
+                        m.insert("hex".to_string(), json!(hex_id));
+                        m.insert("city_index".to_string(), json!(city_index));
+                    }
+                }
+                if let Some(corp) = tokener {
+                    m.insert("tokener".to_string(), json!(corp));
+                }
             }
             Action::RunRoutes { routes, extra_revenue, .. } => {
                 let rlist: Vec<serde_json::Value> = routes
                     .iter()
-                    .map(|r| json!({"train": r.train_name, "revenue": r.revenue.unwrap_or(0), "hexes": r.hexes}))
+                    .map(|r| {
+                        json!({
+                            "train": r.train_name,
+                            "connections": r.connections,
+                            "hexes": r.hexes,
+                            "revenue": r.revenue.unwrap_or(0),
+                            "revenue_str": r.hexes.join("-"),
+                            "nodes": r.nodes,
+                        })
+                    })
                     .collect();
                 m.insert("routes".to_string(), json!(rlist));
                 m.insert("extra_revenue".to_string(), json!(extra_revenue));
@@ -216,10 +357,10 @@ impl BaseGame {
             Action::Dividend { kind, .. } => {
                 m.insert("kind".to_string(), json!(kind.as_str()));
             }
-            Action::BuyTrain { train_name, price, from, variant, exchange, .. } => {
+            // No "from": both engines find the seller from the train id.
+            Action::BuyTrain { train_name, price, variant, exchange, .. } => {
                 m.insert("train".to_string(), json!(train_name));
                 m.insert("price".to_string(), json!(price));
-                m.insert("from".to_string(), json!(from));
                 if let Some(v) = variant {
                     m.insert("variant".to_string(), json!(v));
                 }
@@ -569,14 +710,20 @@ impl BaseGame {
                     train_name: train_id,
                     price: price as i32,
                     from,
-                    variant: None,
+                    // The train type, as 18xx.games records a purchase (1830
+                    // trains have one variant each, named for the type).
+                    variant: Some(name),
                     exchange: exchange_id,
                 })
             }
 
             "DiscardTrain" => {
                 let entity_id = self.current_actor_id()?;
-                let train_name = s(&la.entity, "train")
+                // The exact instance (the corp's first train of the slot's
+                // type — the one the handler's by-name fallback would take),
+                // so the logged id names a real train.
+                let train_name = s(&la.params, "train_id")
+                    .or_else(|| s(&la.entity, "train"))
                     .or_else(|| s(&la.params, "train"))
                     .ok_or_else(|| GameError::new("DiscardTrain LegalAction missing 'train'"))?;
                 Ok(Action::DiscardTrain {
@@ -624,15 +771,32 @@ impl BaseGame {
                     .to_string();
                 // Native optimal routing — replaces Python's
                 // ActionHelper.auto_route_action. `or_process_run_routes` only
-                // consumes the summed revenue, so a single RouteData carrying the
-                // total revenue is behaviorally equivalent.
-                let (_route_dicts, total_revenue) = self.calculate_routes(corp_sym.clone());
-                let routes = vec![RouteData {
-                    train_name: String::new(),
-                    hexes: Vec::new(),
-                    revenue: Some(total_revenue),
-                    connections: Vec::new(),
-                }];
+                // consumes the summed revenue; the per-route train, stops and
+                // hex chains are what the logged 18xx.games dict records (and
+                // what the Python engine needs to rebuild each route).
+                let (candidates, train_ids, _total_revenue) = self.optimal_routes(&corp_sym);
+                let routes = candidates
+                    .into_iter()
+                    .map(|r| {
+                        let mut hexes: Vec<String> = Vec::new();
+                        for n in &r.nodes {
+                            if !hexes.contains(&n.hex_id) {
+                                hexes.push(n.hex_id.clone());
+                            }
+                        }
+                        RouteData {
+                            train_name: train_ids[r.train_index].clone(),
+                            hexes,
+                            revenue: Some(r.revenue),
+                            nodes: r
+                                .nodes
+                                .iter()
+                                .map(|n| format!("{}-{}", n.hex_id, n.index))
+                                .collect(),
+                            connections: r.connections,
+                        }
+                    })
+                    .collect();
                 Ok(Action::RunRoutes {
                     entity_id: corp_sym,
                     routes,
