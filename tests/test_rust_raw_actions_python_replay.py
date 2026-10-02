@@ -15,12 +15,9 @@ the final result. The Rust replay must also match the full GNN encoding.
 Run routes are additionally rebuilt in the Python engine from their logged
 ``connections`` / ``nodes`` with the revenue stripped, so Python recomputes
 each route itself — the logged chains must name real routes, not just carry a
-total. Routes the Rust router produces that 1830's rules forbid (a stop
-visited twice, a hexside crossed twice, two stops of one group — Python
-rejects them with "Cannot use X twice" / "Route cannot reuse track" / "Cannot
-use group X more than once") are skipped there: that is a router legality bug
-(docs/rust_engine_bugs.md), not a log-format one, and the recorded revenue
-still replays.
+total. Python's route validation (a port of Ruby's route.rb) must accept every
+route the Rust router picks: no stop visited twice, no track reused within or
+across the run's routes, at most one stop per group (both Canada offboards).
 """
 
 import copy
@@ -32,6 +29,7 @@ import pytest
 
 import engine_rs
 from rl18xx.game.engine.actions import BaseAction
+from rl18xx.game.engine.core import GameError
 from rl18xx.game.engine.entities import Player, SharePool
 from rl18xx.game.gamemap import GameMap
 
@@ -145,43 +143,15 @@ def _play_native(seed, players, auction_unlock):
     return game, checkpoints
 
 
-def _illegal_route_reason(route, pg):
-    """Why a logged route breaks 1830's route rules, judged from the dict and
-    the map: it visits a stop twice, crosses a hexside twice, or stops at two
-    nodes of one group (e.g. both Canada offboards, ``Route.revenue``)."""
-    nodes = route["nodes"]
-    if len(set(nodes)) != len(nodes):
-        return "revisits a stop"
-    crossed = set()
-    for chain in route["connections"]:
-        for a, b in zip(chain, chain[1:]):
-            side = frozenset((a, b))
-            if side in crossed:
-                return "crosses a hexside twice"
-            crossed.add(side)
-    groups = [
-        group
-        for signature in nodes
-        for node in pg.hex_by_id(signature.rsplit("-", 1)[0]).tile.nodes
-        if node.signature == signature
-        for group in node.groups
-        if group
-    ]
-    if len(set(groups)) != len(groups):
-        return "uses a group twice"
-    return None
-
-
 def _rebuild_routes(action_dict, pg):
-    """Rebuild the legal routes of a logged run_routes in the Python engine
-    with their revenue stripped; return (logged, recomputed) revenue pairs."""
-    legal = [r for r in action_dict["routes"] if _illegal_route_reason(r, pg) is None]
-    if not legal:
-        return []
+    """Rebuild a logged run_routes in the Python engine with each route's
+    revenue stripped; return (logged, recomputed) revenue pairs. Validating a
+    route 1830's rules forbid raises a GameError ("Cannot use X twice",
+    "Route cannot reuse track on X", "Cannot use group X more than once")."""
     stripped = copy.deepcopy(action_dict)
-    stripped["routes"] = [{k: v for k, v in r.items() if k != "revenue"} for r in legal]
+    stripped["routes"] = [{k: v for k, v in r.items() if k != "revenue"} for r in action_dict["routes"]]
     rebuilt = BaseAction.action_from_dict(stripped, pg)
-    return [(r["revenue"], route.revenue()) for r, route in zip(legal, rebuilt.routes)]
+    return [(r["revenue"], route.revenue()) for r, route in zip(action_dict["routes"], rebuilt.routes)]
 
 
 @pytest.mark.parametrize("seed,num_players,auction_unlock", CASES)
@@ -199,7 +169,11 @@ def test_native_log_replays_in_python_and_rust(seed, num_players, auction_unlock
     routes_checked = 0
     for move, action in enumerate(actions, start=1):
         if action["type"] == "run_routes":
-            for logged, recomputed in _rebuild_routes(action, py_game):
+            try:
+                rebuilt = _rebuild_routes(action, py_game)
+            except GameError as exc:
+                pytest.fail(f"move {move}: Python rejects a logged route ({exc}): {action}")
+            for logged, recomputed in rebuilt:
                 assert recomputed == logged, f"move {move}: route recomputes to {recomputed}: {action}"
                 routes_checked += 1
         try:
