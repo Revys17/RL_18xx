@@ -27,6 +27,7 @@ from rl18xx.agent.alphazero.inference_server import (
     _stack_price_components,
 )
 from rl18xx.agent.alphazero.mcts import POLICY_SIZE, VALUE_SIZE
+from rl18xx.agent.alphazero.price_pmf import NUM_CELLS
 
 
 # ----- model stub ---------------------------------------------------------
@@ -65,14 +66,12 @@ class MockModel:
             values.append(v)
         if self.with_price_head:
             num_slots = 3
-            mean = torch.zeros(n, num_slots)
-            log_std = torch.zeros(n, num_slots)
+            logits = torch.zeros(n, num_slots, NUM_CELLS)
             for i, st in enumerate(encoded_states):
-                mean[i, 0] = float(st)
-                log_std[i, 0] = float(st) * 0.1
+                logits[i, 0, 0] = float(st)
+                logits[i, 0, 1] = float(st) * 0.1
             self.last_price_components = {
-                "price_mean": mean,
-                "price_log_std": log_std,
+                "price_logits": logits,
                 "slot_index": {("Bid", "SV"): 0, ("Bid", "CS"): 1, ("Bid", "DH"): 2},
                 "num_slots": num_slots,
             }
@@ -149,8 +148,8 @@ def test_server_starts_and_serves_a_single_request():
         assert reply.value[0] == pytest.approx(7.0)
         assert reply.probs.shape == (POLICY_SIZE,)
         assert reply.price_components is not None
-        assert reply.price_components["price_mean"].shape == (3,)
-        assert reply.price_components["price_mean"][0] == pytest.approx(7.0)
+        assert reply.price_components["price_logits"].shape == (3, NUM_CELLS)
+        assert reply.price_components["price_logits"][0, 0] == pytest.approx(7.0)
     finally:
         _shutdown(server, control_q, thread)
 
@@ -300,11 +299,11 @@ def test_client_round_trip_in_order():
         # Order preserved (the client must return results in submission order).
         for i, v in enumerate(values):
             assert v[0].item() == pytest.approx(float(states[i]))
-        # Price components batched back to (B, num_slots).
+        # Price components batched back to (B, num_slots, NUM_CELLS).
         assert client.last_price_components is not None
-        assert client.last_price_components["price_mean"].shape == (4, 3)
+        assert client.last_price_components["price_logits"].shape == (4, 3, NUM_CELLS)
         for i, st in enumerate(states):
-            assert client.last_price_components["price_mean"][i, 0].item() == pytest.approx(float(st))
+            assert client.last_price_components["price_logits"][i, 0, 0].item() == pytest.approx(float(st))
     finally:
         _shutdown(server, control_q, thread)
 
@@ -352,18 +351,16 @@ def test_client_timeout_raises():
 def test_slice_then_stack_round_trip():
     """``_slice_price_components_for_reply`` per-leaf then ``_stack_price_components``
     must return the same shapes the in-process slicer expects."""
-    means = torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
-    log_stds = torch.tensor([[-1.0, -2.0], [-3.0, -4.0], [-5.0, -6.0]])
+    logits = torch.arange(3 * 2 * NUM_CELLS, dtype=torch.float32).reshape(3, 2, NUM_CELLS)
     batched = {
-        "price_mean": means, "price_log_std": log_stds,
+        "price_logits": logits,
         "slot_index": {("Bid", "X"): 0, ("Bid", "Y"): 1},
         "num_slots": 2,
     }
     sliced = [_slice_price_components_for_reply(batched, i) for i in range(3)]
     restacked = _stack_price_components(sliced)
     assert restacked is not None
-    assert torch.allclose(restacked["price_mean"], means)
-    assert torch.allclose(restacked["price_log_std"], log_stds)
+    assert torch.allclose(restacked["price_logits"], logits)
     assert restacked["slot_index"] == {("Bid", "X"): 0, ("Bid", "Y"): 1}
 
 
@@ -373,10 +370,7 @@ def test_stack_returns_none_for_empty_list():
 
 def test_stack_returns_none_on_mixed_some_none():
     """A mixed list shouldn't happen in practice — be defensive."""
-    means = torch.tensor([1.0, 2.0])
-    log_stds = torch.tensor([-1.0, -2.0])
-    real = {"price_mean": means.numpy(), "price_log_std": log_stds.numpy(),
-            "slot_index": {}, "num_slots": 2}
+    real = {"price_logits": np.zeros((2, NUM_CELLS), dtype=np.float32), "slot_index": {}, "num_slots": 2}
     assert _stack_price_components([real, None]) is None
 
 
@@ -403,8 +397,7 @@ class _MCTSEncoderShapedMockModel:
         # Provide a price head so MCTS PW exercises the sliced path too.
         num_slots = 8
         self.last_price_components = {
-            "price_mean": torch.zeros(n, num_slots),
-            "price_log_std": torch.zeros(n, num_slots),
+            "price_logits": torch.zeros(n, num_slots, NUM_CELLS),
             "slot_index": {("Bid", c): i for i, c in enumerate("SCDMCB")},
             "num_slots": num_slots,
         }

@@ -34,23 +34,20 @@ SELF_PLAY_GAMES_STATUS_PATH.mkdir(parents=True, exist_ok=True)
 def _slice_price_components(batched: Optional[dict], leaf_index: int) -> Optional[dict]:
     """Slice the model's batched ``last_price_components`` dict for a single leaf.
 
-    The transformer model emits ``price_mean`` / ``price_log_std`` as ``(B,
-    num_slots)`` tensors during ``forward()``. MCTS needs them per-leaf (1D,
-    ``num_slots``) so it can read a slot's ``(μ, log σ)`` for PW price
-    sampling. Returns ``None`` if the model doesn't emit price components
-    (e.g., the GNN model).
+    The transformer model emits ``price_logits`` as a ``(B, num_slots,
+    NUM_CELLS)`` tensor during ``forward()``. MCTS needs them per-leaf
+    (``num_slots, NUM_CELLS``) to propose prices for price-bearing slots.
+    Returns ``None`` if the model doesn't emit price components (e.g., the GNN
+    model).
     """
     if batched is None:
         return None
-    means = batched.get("price_mean")
-    log_stds = batched.get("price_log_std")
-    if means is None or log_stds is None:
+    logits = batched.get("price_logits")
+    if logits is None:
         return None
-    # Detach + move to CPU once at the slice boundary; downstream MCTS reads
-    # scalar values via ``float(tensor[slot])`` which is safe on CPU only.
+    # Detach + move to CPU once at the slice boundary.
     return {
-        "price_mean": means[leaf_index].detach().cpu(),
-        "price_log_std": log_stds[leaf_index].detach().cpu(),
+        "price_logits": logits[leaf_index].detach().float().cpu(),
         "slot_index": batched.get("slot_index"),
         "num_slots": batched.get("num_slots"),
     }
@@ -308,7 +305,7 @@ class MCTSPlayer(Agent):
         self.result = np.zeros(len(game_state.players))
         self.result_string = None
         self.searches_pi = []
-        # Per-move ContinuousPriceHead targets aggregated from MCTS visits.
+        # Per-move price-head targets aggregated from MCTS visits.
         # Each entry is a list of ``(slot_idx, price, weight, price_min,
         # price_max)`` tuples (empty for categorical-only moves). Captured in
         # ``play_move`` before pruning discards the price grandchildren.
@@ -368,7 +365,7 @@ class MCTSPlayer(Agent):
         forced_dicts = full_raw_after[raw_actions_before + 1:] if len(full_raw_after) > raw_actions_before + 1 else []
         self.forced_action_dicts.append(forced_dicts)
 
-        # Capture ContinuousPriceHead targets from MCTS price grandchildren
+        # Capture price-head targets from MCTS price grandchildren
         # BEFORE pruning destroys them. For price-bearing slots, every
         # explored grandchild contributes one (slot_idx, price, weight,
         # price_min, price_max) tuple weighted by its share of visits within
@@ -460,9 +457,9 @@ class MCTSPlayer(Agent):
         action_index: int,
         price_range: Optional[tuple],
     ) -> list[tuple]:
-        """Aggregate ContinuousPriceHead targets across visited price grandchildren.
+        """Aggregate price-head targets across visited price grandchildren.
 
-        For a price-bearing categorical slot, MCTS may have sampled several
+        For a price-bearing categorical slot, MCTS may have expanded several
         prices via progressive widening; each grandchild has its own visit
         count. We turn those into a list of
         ``(slot_idx, price, weight, price_min, price_max)`` tuples — the
@@ -470,7 +467,7 @@ class MCTSPlayer(Agent):
         visit-weighted mixture of observed-good prices for this state.
 
         Returns an empty list for categorical-only moves, for fixed-price
-        slots, and when the action doesn't map to a ContinuousPriceHead slot
+        slots, and when the action doesn't map to a price-head slot
         (e.g. depot trains, exchange trains).
         """
         if price_range is None or price_range[0] == price_range[1]:

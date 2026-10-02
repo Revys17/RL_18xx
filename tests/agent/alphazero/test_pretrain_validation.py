@@ -169,3 +169,59 @@ def test_pretrain_value_refit_promotes_a_new_checkpoint(tmp_path):
     assert model.value_stop_grad is False
     # The trunk the refit kept is the trained checkpoint's, not the init.
     assert not torch.equal(model.econ_transformer.player_proj.weight.detach(), trunk_before)
+
+
+def _build_price_dataset(n_priced: int, n_plain: int):
+    """Fresh-game rows; ``n_priced`` of them carry a min-bid price target for
+    the first price-bearing Bid slot (a human opening bid)."""
+    from rl18xx.agent.alphazero import price_pmf
+
+    game_class = GameMap().game_by_title("1830")
+    encoder, action_mapper = Encoder_Transformer(), ActionMapper()
+    examples = []
+    for i in range(n_priced + n_plain):
+        g = game_class({1: "P1", 2: "P2", 3: "P3", 4: "P4"})
+        encoded, legal, pi, value, _ = _encode_one_example(encoder, g, action_mapper)
+        targets = []
+        if i < n_priced:
+            indices, ranges, types = action_mapper.get_legal_actions_factored(g)
+            idx = next(j for j in indices if types[j] == "Bid" and ranges[j][0] != ranges[j][1])
+            lo, hi = ranges[idx]
+            company = action_mapper.actions[idx][1][0]
+            targets = [(price_pmf.SLOT_INDEX[("Bid", (company,))], lo, 1.0, lo, hi)]
+        examples.append((encoded, legal, pi, value, targets))
+    return HumanPlayDataset(examples)
+
+
+def test_refit_price_head_trains_only_the_price_head(tmp_path):
+    """``refit_price_head`` fits a fresh price head on the frozen trunk from the
+    rows with price targets, saves it as a new checkpoint without touching
+    current_best, and leaves the model fully trainable again."""
+    from rl18xx.agent.alphazero.checkpointer import get_current_best
+    from rl18xx.agent.alphazero.pretraining import refit_price_head
+
+    torch.manual_seed(0)
+    model = AlphaZeroTransformerModel(ModelTransformerConfig(device=torch.device("cpu")))
+    trunk_before = model.econ_transformer.player_proj.weight.detach().clone()
+    model_dir = tmp_path / "ckpts"
+    model_dir.mkdir()
+    config = TrainingConfig(batch_size=2, lr=1e-2, weight_decay=0.0, use_fp16_training=False)
+
+    result = refit_price_head(
+        model,
+        _build_price_dataset(n_priced=4, n_plain=2),
+        _build_price_dataset(n_priced=2, n_plain=1),
+        config,
+        str(model_dir),
+        max_steps=4,
+        eval_every=2,
+        patience=3,
+    )
+
+    assert result["checkpoint_num"] >= 1
+    assert get_current_best(str(model_dir)) is None
+    assert torch.equal(model.econ_transformer.player_proj.weight.detach(), trunk_before)
+    assert all(p.requires_grad for p in model.parameters())
+    # A single repeated opening bid is easy: the refit head beats uniform cells.
+    assert result["val_bits_per_price"] < result["fresh_val_bits_per_price"] - 1.0
+    assert result["val_cell_top1"] == 1.0

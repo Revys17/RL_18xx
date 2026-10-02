@@ -1,6 +1,7 @@
 import math
 import numpy as np
 from rl18xx.agent.alphazero.model import AlphaZeroModel
+from rl18xx.agent.alphazero import price_pmf
 from rl18xx.agent.alphazero.config import TrainingConfig
 from rl18xx.agent.alphazero.dataset import SelfPlayDataset, collate_examples
 from rl18xx.agent.alphazero.checkpointer import get_latest_model, save_model, save_optimizer_state, load_optimizer_state
@@ -268,103 +269,69 @@ def _compute_price_nll_loss(
     price_components: dict,
     price_targets: list,
 ) -> Tuple[torch.Tensor, dict]:
-    """Continuous-price NLL on the network's ``Normal(mean, exp(log_std))`` head.
+    """Exact NLL of observed prices under the price head's distribution.
 
     ``price_targets`` is a per-example list of ``[(slot_idx, price, weight,
-    price_min, price_max), ...]`` tuples. Each tuple says "this example had a
-    target observation of ``price`` for the (action_type, entity) corresponding
-    to ``slot_idx``, contributing ``weight`` mass to the loss; the legal price
-    range is ``[price_min, price_max]``." Weight is typically 1.0 for
-    pretraining (one observed action per state) and visit-fraction for
-    self-play (multiple sampled prices per categorical child node).
+    price_min, price_max), ...]`` tuples: "this example observed ``price`` for
+    the (action_type, entity) of ``slot_idx`` with legal range ``[price_min,
+    price_max]``, contributing ``weight`` mass". Weight is 1.0 for pretraining
+    (the human's price) and the visit fraction for self-play (every searched
+    price grandchild).
 
-    The truncated-Normal correction (subtracting ``log(Φ((max-μ)/σ) -
-    Φ((min-μ)/σ))``) is implemented so the head's reported NLL reflects the
-    actual truncated distribution MCTS samples from. Skipping it would
-    over-penalize ``μ`` predictions outside the legal range — the gradient
-    direction is the same but the magnitudes drift.
+    The head emits cell logits per slot; the cells partition the legal range
+    (``price_pmf.PriceCells``), so ``log P(price) = log_softmax(logits over
+    non-empty cells)[cell(price)] - log |cell(price)|``. Every legal price has
+    probability, so targets are used verbatim — nothing is snapped.
 
-    Returns ``(price_loss, diagnostics)``. ``price_loss`` is the weighted
-    average NLL across all (example, target) pairs; if there are no price
-    targets in the batch it is a zero tensor on the same device as the head.
-    ``diagnostics`` carries the per-action-type breakdown for TensorBoard.
+    Returns ``(price_loss, diagnostics)``: the weighted mean NLL (a zero tensor
+    when the batch has no price targets) and per-batch stats for TensorBoard.
     """
-    mean = price_components["price_mean"]  # (B, num_slots)
-    log_std = price_components["price_log_std"]  # (B, num_slots)
-    device = mean.device
-    dtype = mean.dtype
+    logits = price_components["price_logits"]  # (B, num_slots, NUM_CELLS)
+    device = logits.device
+    num_slots = logits.shape[1]
 
-    # Flatten the per-example target lists into batched index tensors so the
-    # NLL computation is a single vectorized operation.
     batch_idx: list = []
     slot_idx: list = []
-    prices: list = []
+    cells: list = []
+    log_counts: list = []
+    masks: list = []
     weights: list = []
-    p_min: list = []
-    p_max: list = []
     for b, targets in enumerate(price_targets or []):
-        if not targets:
-            continue
-        for entry in targets:
-            slot, price, w, pmn, pmx = entry
+        for slot, price, w, pmn, pmx in targets or []:
+            slot, price, lo, hi = int(slot), int(round(price)), int(round(pmn)), int(round(pmx))
+            if not 0 <= slot < num_slots or hi <= lo or not lo <= price <= hi:
+                continue
+            pc = price_pmf.price_cells(price_pmf.SLOT_TYPES[slot], lo, hi)
+            cell = pc.cell_of(price)
             batch_idx.append(b)
             slot_idx.append(slot)
-            prices.append(float(price))
+            cells.append(cell)
+            log_counts.append(math.log(int(pc.counts[cell])))
+            masks.append(pc.nonempty)
             weights.append(float(w))
-            p_min.append(float(pmn))
-            p_max.append(float(pmx))
 
     if not slot_idx:
-        zero = torch.tensor(0.0, device=device, dtype=dtype)
-        return zero, {"price_count": 0}
+        return torch.tensor(0.0, device=device, dtype=logits.dtype), {"price_count": 0}
 
     bi = torch.tensor(batch_idx, device=device, dtype=torch.long)
     si = torch.tensor(slot_idx, device=device, dtype=torch.long)
-    px = torch.tensor(prices, device=device, dtype=dtype)
-    wt = torch.tensor(weights, device=device, dtype=dtype)
-    lo = torch.tensor(p_min, device=device, dtype=dtype)
-    hi = torch.tensor(p_max, device=device, dtype=dtype)
+    ci = torch.tensor(cells, device=device, dtype=torch.long)
+    lc = torch.tensor(log_counts, device=device, dtype=torch.float32)
+    wt = torch.tensor(weights, device=device, dtype=torch.float32)
+    mask = torch.from_numpy(np.stack(masks)).to(device)
 
-    mu = mean[bi, si]
-    log_sigma = log_std[bi, si]
-    # Numerical-safety clamp on log_std so the gradient stays finite even if
-    # the head emits an extreme prediction; matches the clamp MCTS uses when
-    # sampling. The bounds are roughly ``[$0.5, $5000]`` in raw price space.
-    log_sigma = log_sigma.clamp(min=-1.0, max=8.5)
-    sigma = log_sigma.exp()
+    selected = logits[bi, si].float().masked_fill(~mask, float("-inf"))
+    log_p_cell = torch.log_softmax(selected, dim=-1)
+    nll = -(log_p_cell.gather(1, ci.unsqueeze(1)).squeeze(1) - lc)
 
-    # Untruncated Normal log-pdf:  -0.5*((x-μ)/σ)² - log(σ) - 0.5*log(2π)
-    log2pi = math.log(2.0 * math.pi)
-    z = (px - mu) / sigma
-    untruncated_log_prob = -0.5 * z * z - log_sigma - 0.5 * log2pi
-
-    # Truncation correction: subtract log(Φ((hi-μ)/σ) - Φ((lo-μ)/σ)).
-    # When ``hi == lo`` (fixed-price actions like depot trains shouldn't reach
-    # this head, but we defend against it) treat the correction as 0 so the
-    # NLL collapses to the untruncated log-pdf.
-    inv_sqrt2 = 1.0 / math.sqrt(2.0)
-    norm_cdf_hi = 0.5 * (1.0 + torch.erf((hi - mu) * inv_sqrt2 / sigma))
-    norm_cdf_lo = 0.5 * (1.0 + torch.erf((lo - mu) * inv_sqrt2 / sigma))
-    truncation_mass = (norm_cdf_hi - norm_cdf_lo).clamp(min=1e-8)
-    fixed_price = (hi - lo).abs() < 1e-6
-    log_trunc_correction = torch.where(
-        fixed_price,
-        torch.zeros_like(truncation_mass),
-        torch.log(truncation_mass),
-    )
-
-    log_prob = untruncated_log_prob - log_trunc_correction
-    nll = -log_prob  # (num_targets,)
-
-    weighted = nll * wt
     total_weight = wt.sum().clamp(min=1e-8)
-    price_loss = weighted.sum() / total_weight
+    price_loss = (nll * wt).sum() / total_weight
 
     diagnostics = {
         "price_count": int(si.numel()),
         "price_nll_mean": price_loss.detach(),
-        "price_mu_mean": mu.detach().mean(),
-        "price_log_std_mean": log_sigma.detach().mean(),
+        "price_bits_mean": price_loss.detach() / math.log(2.0),
+        "price_cell_top1": ((selected.argmax(dim=-1) == ci).float() * wt).sum().detach() / total_weight,
     }
     return price_loss, diagnostics
 
@@ -502,7 +469,7 @@ def compute_losses(
     aux_pred = aux_action_count_pred.squeeze(1)
     aux_loss = F.mse_loss(aux_pred, aux_target)
 
-    # --- Continuous price NLL ---
+    # --- Price NLL ---
     # The price head is consumed only when the model exposes
     # ``last_price_components`` (current Transformer architecture) AND the
     # caller has supplied per-example price targets. Both conditions are
@@ -766,7 +733,7 @@ def train_model(
                 aux_pred = aux_action_count_pred.squeeze(1)
                 aux_loss = F.mse_loss(aux_pred, aux_target)
 
-                # --- Continuous price NLL ---
+                # --- Price NLL ---
                 # The price head only contributes when the model exposes
                 # ``last_price_components`` (Transformer architecture) AND the
                 # current batch has price targets. Self-play batches today

@@ -184,13 +184,11 @@ def _slice_price_components_for_reply(batched: Optional[dict], leaf_index: int) 
     """
     if batched is None:
         return None
-    means = batched.get("price_mean")
-    log_stds = batched.get("price_log_std")
-    if means is None or log_stds is None:
+    logits = batched.get("price_logits")
+    if logits is None:
         return None
     return {
-        "price_mean": means[leaf_index].detach().cpu().numpy(),
-        "price_log_std": log_stds[leaf_index].detach().cpu().numpy(),
+        "price_logits": logits[leaf_index].detach().float().cpu().numpy(),
         "slot_index": batched.get("slot_index"),
         "num_slots": batched.get("num_slots"),
     }
@@ -224,13 +222,11 @@ def _slice_price_rows_for_reply(batched: Optional[dict], start: int, n: int) -> 
     numpy, for a batched reply (``slot_index`` / ``num_slots`` sent once)."""
     if batched is None:
         return None
-    means = batched.get("price_mean")
-    log_stds = batched.get("price_log_std")
-    if means is None or log_stds is None:
+    logits = batched.get("price_logits")
+    if logits is None:
         return None
     return {
-        "price_mean": means[start:start + n].detach().float().cpu().numpy(),
-        "price_log_std": log_stds[start:start + n].detach().float().cpu().numpy(),
+        "price_logits": logits[start:start + n].detach().float().cpu().numpy(),
         "slot_index": batched.get("slot_index"),
         "num_slots": batched.get("num_slots"),
     }
@@ -679,8 +675,7 @@ class InferenceClient:
             None
             if pc is None
             else {
-                "price_mean": torch.from_numpy(pc["price_mean"]),
-                "price_log_std": torch.from_numpy(pc["price_log_std"]),
+                "price_logits": torch.from_numpy(pc["price_logits"]),
                 "slot_index": pc.get("slot_index"),
                 "num_slots": pc.get("num_slots"),
             }
@@ -702,13 +697,10 @@ def _stack_price_components(per_leaf: list[Optional[dict]]) -> Optional[dict]:
         return None
     if len(non_none) != len(per_leaf):
         # Mixed Some/None — the model can't have produced this; mark None
-        # so the slicer falls back to the wide-Normal prior.
+        # so MCTS falls back to uniform price cells.
         return None
-    means = torch.stack([torch.from_numpy(d["price_mean"]) for d in per_leaf])
-    log_stds = torch.stack([torch.from_numpy(d["price_log_std"]) for d in per_leaf])
     return {
-        "price_mean": means,
-        "price_log_std": log_stds,
+        "price_logits": torch.stack([torch.from_numpy(d["price_logits"]) for d in per_leaf]),
         "slot_index": per_leaf[0].get("slot_index"),
         "num_slots": per_leaf[0].get("num_slots"),
     }

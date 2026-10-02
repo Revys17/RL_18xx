@@ -8,6 +8,7 @@ import scipy
 import torch
 import logging
 from rl18xx.game.engine.game.base import BaseGame
+from rl18xx.agent.alphazero import price_pmf
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.alphazero.config import SelfPlayConfig
 from rl18xx.rust_adapter import RustGameAdapter
@@ -59,16 +60,9 @@ class PlayoutTrace:
 POLICY_SIZE = ActionMapper().action_encoding_size
 VALUE_SIZE = 6  # Max-N: model emits 6 per-player values; entries [num_players:] are zero-padded.
 
-# Continuous-price progressive-widening constants.
-# Price grid snapping rules: Bid uses $5 ticks (matches the human ladder for
-# auctions), every other price-bearing type uses $1 ticks. ``PRICE_GRID`` maps
-# action-type names to snap step in raw dollars; missing types are treated as
-# fixed-price (depot trains, market trains) and never reach the PW sampler.
-PRICE_GRID = {
-    "Bid": 5,
-    "BuyTrain": 1,
-    "BuyCompany": 1,
-}
+# Bid ladder step for the price cells ($5 in 1830; the Rust engine reads it
+# from the title).
+BID_STEP = price_pmf.BID_STEP_1830
 
 LOGGER = logging.getLogger(__name__)
 
@@ -155,117 +149,6 @@ def terminal_backup_value(result: np.ndarray, num_players: int) -> np.ndarray:
     return out
 
 
-def _snap_price(price: float, action_type: str, price_min: int, price_max: int) -> int:
-    """Snap a continuous price sample to the legal grid for ``action_type``.
-
-    Returns the snapped integer price clamped to ``[price_min, price_max]``.
-    Bids snap to $5 multiples (matching the auction ladder humans bid on);
-    other price-bearing actions snap to $1 (the engine's smallest legal
-    increment). Unknown types snap to $1 by default.
-    """
-    step = PRICE_GRID.get(action_type, 1)
-    snapped = int(round(price / step) * step)
-    if snapped < price_min:
-        # Round up to first legal multiple >= price_min.
-        rem = price_min % step
-        snapped = price_min if rem == 0 else price_min + (step - rem)
-    if snapped > price_max:
-        # Round down to last legal multiple <= price_max.
-        snapped = price_max - (price_max % step) if step > 1 else price_max
-    # Final defensive clamp (handles edge cases where snapping ran past bounds).
-    return int(max(min(snapped, price_max), price_min))
-
-
-def sample_price_for_pw(
-    price_mean: float,
-    price_log_std: float,
-    action_type: str,
-    price_range: tuple,
-    rng: Optional[np.random.Generator] = None,
-) -> int:
-    """Sample a snapped legal price from the head's truncated Normal.
-
-    Progressive widening calls this for each price-bearing slot whose
-    ``price_range`` has min != max; the draw comes from N(μ, σ) truncated to
-    the legal range (the distribution the price loss fits) and is snapped to
-    the legal grid via ``_snap_price``. Mirrored by ``sample_price_for_pw``
-    in ``engine-rs/src/mcts.rs``.
-
-    Args:
-        price_mean:    Network's predicted ``μ`` for this (type, entity) slot.
-        price_log_std: Network's predicted ``log σ`` for the same slot.
-        action_type:   ``"Bid"`` / ``"BuyTrain"`` / ``"BuyCompany"``.
-        price_range:   ``(min, max)`` inclusive legal range from
-                       FactoredActionHelper.
-        rng:           Optional numpy Generator; defaults to ``np.random``.
-
-    Returns:
-        Snapped integer price guaranteed to lie in ``[price_range[0],
-        price_range[1]]`` on the appropriate grid step.
-    """
-    if rng is None:
-        rng = np.random.default_rng()
-
-    p_min, p_max = price_range
-    if p_min == p_max:
-        return int(p_min)
-
-    sigma = float(np.exp(np.clip(price_log_std, -1.0, 8.5)))
-    mu = float(price_mean)
-    a, b = (p_min - mu) / sigma, (p_max - mu) / sigma
-    if not (math.isfinite(a) and math.isfinite(b) and a < b):
-        # A non-finite head output: any legal price, uniformly on the grid
-        # (the rejection loops below would never accept NaN bounds).
-        step = PRICE_GRID.get(action_type, 1)
-        n_choices = max(1, (int(p_max) - int(p_min)) // step + 1)
-        return _snap_price(int(p_min) + int(rng.integers(0, n_choices)) * step, action_type, int(p_min), int(p_max))
-    z = _sample_truncated_std_normal(a, b, rng)
-    return _snap_price(mu + sigma * z, action_type, int(p_min), int(p_max))
-
-
-def _sample_truncated_std_normal(a: float, b: float, rng: np.random.Generator) -> float:
-    """One draw of a standard Normal truncated to ``[a, b]`` (Robert, 1995).
-
-    The price head is fit with the truncated-Normal NLL, so when observed
-    prices pile up at the legal minimum (opening bids) its ``μ`` sits below
-    ``price_min`` and almost all of the untruncated mass is out of range.
-    Plain rejection from N(0, 1) then rarely accepts — the old sampler gave
-    up after 8 tries and drew uniformly over the whole range, so ~2/3 of
-    B&O opening bids came out anywhere up to the bidder's entire cash.
-    Tails use an exponential proposal and short intervals a uniform one;
-    each accepts with probability bounded away from zero for any ``a < b``.
-    """
-    if a >= 0.0:
-        return _sample_std_normal_tail(a, b, rng)
-    if b <= 0.0:
-        return -_sample_std_normal_tail(-b, -a, rng)
-    if b - a >= 1.0:  # straddles 0 with at least ~38% of the mass
-        while True:
-            z = rng.standard_normal()
-            if a <= z <= b:
-                return float(z)
-    while True:  # short interval around 0: |z| < 1, acceptance > e^-1/2
-        z = rng.uniform(a, b)
-        if rng.random() <= math.exp(-0.5 * z * z):
-            return float(z)
-
-
-def _sample_std_normal_tail(a: float, b: float, rng: np.random.Generator) -> float:
-    """Standard Normal truncated to ``[a, b]`` with ``0 <= a < b``."""
-    if (b - a) * (b + a) < 2.0:
-        # Short interval: uniform proposal, acceptance >= e^-1.
-        while True:
-            z = rng.uniform(a, b)
-            if rng.random() <= math.exp(0.5 * (a * a - z * z)):
-                return float(z)
-    # Exponential proposal with the optimal rate for the tail beyond ``a``.
-    alpha = 0.5 * (a + math.sqrt(a * a + 4.0))
-    while True:
-        z = a + rng.exponential(1.0 / alpha)
-        if z <= b and rng.random() <= math.exp(-0.5 * (z - alpha) ** 2):
-            return float(z)
-
-
 def pw_target_children(visits: int, pw_c: float, pw_alpha: float, min_children: int = 1) -> int:
     """Number of price children a categorical PW node should have at ``visits`` visits.
 
@@ -349,8 +232,8 @@ class MCTSNode:
         t0 = time.perf_counter()
         # Factored enumeration: legal categorical slots + per-slot price ranges.
         # Price-bearing slots (Bid/BuyTrain/BuyCompany) carry ``(min, max)``
-        # metadata that MCTS uses to sample a concrete price via the
-        # network's continuous-price head + ``sample_price_for_pw``. Slots
+        # metadata that MCTS uses to propose concrete prices from the
+        # network's price head (see ``price_pmf``). Slots
         # with ``price_range[0] == price_range[1]`` are fixed-price (depot
         # trains, exchange trains) and skip the sampler entirely.
         (
@@ -397,6 +280,10 @@ class MCTSNode:
         # negligibly faster than ``np.random.default_rng()`` per call and
         # keeps any future deterministic-seed test wiring simple.
         self._pw_rng = np.random.default_rng()
+        # Per price-bearing slot: the cells progressive widening will still
+        # materialize, in order (``price_pmf.proposal_order``). Built on the
+        # slot's first widening, after the network's price logits arrived.
+        self._price_proposals: dict[int, list[int]] = {}
         self.add_metric("MCTS/Depth", self.depth)
 
         if self.is_done():
@@ -603,13 +490,15 @@ class MCTSNode:
     def _select_or_expand_price_child(self, action_index: int, price_range: tuple) -> "MCTSNode":
         """PW descent for a price-bearing categorical slot.
 
-        Implements the two-level (categorical → continuous-price) MCTS tree:
-        once the outer PUCT selects ``action_index``, this either grows a new
-        grandchild via ``sample_price_for_pw`` (when the slot's grandchild
-        count is below the PW target ``k = ceil(pw_c * N^pw_alpha)``) or
-        PUCT-selects among existing grandchildren using their independent
-        per-price stats. The chosen grandchild is the returned node — the
-        outer ``select_leaf`` loop continues its descent from there.
+        Implements the two-level (categorical → price) MCTS tree: once the
+        outer PUCT selects ``action_index``, this either grows a new
+        grandchild (while the slot's grandchild count is below the PW target
+        ``k = ceil(pw_c * N^pw_alpha)``) or PUCT-selects among the existing
+        grandchildren. A new grandchild takes a uniform price inside the next
+        not-yet-expanded cell of the slot's proposal order — the price head's
+        most likely cell first, then Gumbel-top-k with an exploration floor —
+        so no two grandchildren share a cell. The chosen grandchild is
+        returned and the outer ``select_leaf`` loop continues from it.
 
         ``action_index``: the categorical flat-policy index.
         ``price_range``:  ``(min, max)`` from ``price_ranges_by_idx`` (already
@@ -626,36 +515,30 @@ class MCTSNode:
         )
 
         if len(existing) < target:
-            # Sample a fresh price and either expand a new grandchild or — if
-            # the snapped price collides with an existing grandchild — return
-            # that one (it will receive a fresh visit on the next backup).
-            sampled_price = self._sample_price_for_slot(action_index, action_type, price_range)
-            if sampled_price in existing:
-                return existing[sampled_price]
-            return self.maybe_add_child(action_index, price=sampled_price)
+            price = self._next_proposed_price(action_index, action_type, price_range)
+            if price is not None:
+                return self.maybe_add_child(action_index, price=price)
+            # Every non-empty cell already has a grandchild: fall through.
 
         # PW cap reached: PUCT among existing grandchildren using per-price
-        # stats. The scoring formula mirrors ``child_U`` but with grandchild N
-        # values, sharing the categorical prior P (the head doesn't yet
-        # produce per-price priors).
+        # stats, with each grandchild's prior the price head's probability of
+        # its cell, renormalized over the expanded grandchildren.
         round_name = self.game_object.round.__class__.__name__
         c_puct_init = self.config.c_puct_by_round.get(round_name, self.config.c_puct_init)
         c_puct = 2.0 * (
             math.log((1.0 + slot_visits + self.config.c_puct_base) / self.config.c_puct_base) + c_puct_init
         )
         n_s = max(1, slot_visits - 1)
-        # Categorical-slot prior, divided among grandchildren so PUCT's
-        # exploration mass scales with prior, not just grandchild count.
-        idx = self._index_for(action_index)
-        slot_prior = float(self.child_prior_compressed[idx])
-        per_grandchild_prior = slot_prior / max(1, len(existing))
+        cells, probs = self._slot_cell_probs(action_index, action_type, price_range)
+        cell_mass = {price: float(probs[cells.cell_of(price)]) for price in existing}
+        total_mass = sum(cell_mass.values()) or 1.0
 
         best_score = -np.inf
         best_grandchild = None
-        for grandchild in existing.values():
+        for price, grandchild in existing.items():
             n_sa = grandchild.N
             q_sa = (grandchild.W[self.active_player_index] / (1 + n_sa)) if n_sa > 0 else 0.0
-            u_sa = c_puct * per_grandchild_prior * math.sqrt(n_s) / (1 + n_sa)
+            u_sa = c_puct * (cell_mass[price] / total_mass) * math.sqrt(n_s) / (1 + n_sa)
             score = q_sa + u_sa
             if score > best_score:
                 best_score = score
@@ -679,12 +562,13 @@ class MCTSNode:
 
         For price-bearing slots with a non-degenerate ``price_range``, the child
         is materialized as a *price grandchild* under
-        ``self.price_children[action_index][snapped_price]``. When ``price`` is
-        ``None``, a price is sampled via ``_sample_price_for_slot`` (the
-        network's ``ContinuousPriceHead`` posterior); when ``price`` is given
-        (e.g., by ``select_leaf`` after PW deciding to expand), it's used
-        directly. If a grandchild already exists at the snapped price, it is
-        returned without creating a duplicate.
+        ``self.price_children[action_index][price]``. When ``price`` is
+        ``None``, the slot's next proposed price is used (``_next_proposed_price``;
+        a draw from the price head once every cell is expanded); a given
+        ``price`` (e.g., from ``select_leaf`` after PW decided to expand) is
+        clamped to the legal range — any legal price is playable. If a
+        grandchild already exists at that price, it is returned without
+        creating a duplicate.
 
         Forced-move chaining: after applying ``action_index``, if the resulting state has
         exactly one legal action, that action is automatically applied; this repeats until
@@ -705,9 +589,10 @@ class MCTSNode:
         if is_pw_slot:
             action_type = self.action_types_by_idx.get(action_index, "")
             if price is None:
+                price = self._next_proposed_price(action_index, action_type, price_range)
+            if price is None:
                 price = self._sample_price_for_slot(action_index, action_type, price_range)
-            else:
-                price = _snap_price(int(price), action_type, int(price_range[0]), int(price_range[1]))
+            price = int(min(max(int(price), int(price_range[0])), int(price_range[1])))
             slot_grandchildren = self.price_children.get(action_index)
             if slot_grandchildren is not None and price in slot_grandchildren:
                 self.add_metric("MCTS/Maybe_Add_Child_Overall_Duration", time.time() - start_time)
@@ -823,58 +708,69 @@ class MCTSNode:
         self.add_metric("MCTS/Maybe_Add_Child_Overall_Duration", overall_call_duration)
         return child
 
-    def _sample_price_for_slot(
-        self,
-        action_index: int,
-        action_type: str,
-        price_range: tuple,
-    ) -> int:
-        """Sample a snapped legal price for a price-bearing categorical slot.
-
-        Pulls ``(μ, log σ)`` from the network's ``ContinuousPriceHead`` if
-        the parent leaf has them attached (set by ``incorporate_results``),
-        falling back to a wide-Normal prior centered at the midpoint of the
-        legal range so MCTS still produces usable children before the
-        network is fully wired (or for the GNN model which has no price
-        head). The sampled price is snapped to the action type's price grid
-        (``PRICE_GRID``) and guaranteed to lie in ``[price_range[0],
-        price_range[1]]``.
-        """
-        p_min, p_max = price_range
-        if p_min == p_max:
-            return int(p_min)
-
-        # Default prior: uniform-ish Normal centered at the midpoint, scaled
-        # to cover the legal range comfortably. Used when no price head
-        # output is available (e.g., GNN model or initial expansion before
-        # incorporate_results runs).
-        midpoint = (p_min + p_max) / 2.0
-        spread = max((p_max - p_min) / 4.0, 1.0)
-        price_mean = float(midpoint)
-        price_log_std = float(np.log(spread))
-
+    def _price_logits_for_slot(self, action_index: int, action_type: str) -> Optional[np.ndarray]:
+        """This node's price-head logits (``NUM_CELLS``) for ``action_index``'s
+        slot, or ``None`` before ``incorporate_results`` attached them (or for
+        a model without a price head)."""
         price_components = getattr(self, "price_components", None)
-        if price_components is not None:
-            slot_index_map = price_components.get("slot_index")
-            entity_key = self._price_head_entity_key(action_index)
-            if slot_index_map is not None and entity_key is not None:
-                slot = slot_index_map.get((action_type, entity_key))
-                if slot is not None:
-                    means = price_components.get("price_mean")
-                    log_stds = price_components.get("price_log_std")
-                    if means is not None and log_stds is not None:
-                        # means/log_stds are torch tensors (1D, num_slots) sliced
-                        # to this leaf during incorporate_results.
-                        price_mean = float(means[slot])
-                        price_log_std = float(log_stds[slot])
+        if price_components is None:
+            return None
+        slot_index_map = price_components.get("slot_index")
+        logits = price_components.get("price_logits")
+        entity_key = self._price_head_entity_key(action_index)
+        if slot_index_map is None or logits is None or entity_key is None:
+            return None
+        slot = slot_index_map.get((action_type, entity_key))
+        if slot is None:
+            return None
+        row = logits[slot]
+        if isinstance(row, torch.Tensor):
+            row = row.detach().float().cpu().numpy()
+        return np.asarray(row, dtype=np.float64)
 
-        return sample_price_for_pw(price_mean, price_log_std, action_type, price_range)
+    def _slot_cell_probs(self, action_index: int, action_type: str, price_range: tuple):
+        """``(PriceCells, cell probabilities)`` of a price-bearing slot."""
+        cells = price_pmf.price_cells(action_type, int(price_range[0]), int(price_range[1]), BID_STEP)
+        return cells, cells.cell_probs(self._price_logits_for_slot(action_index, action_type))
+
+    def _next_proposed_price(self, action_index: int, action_type: str, price_range: tuple) -> Optional[int]:
+        """The slot's next progressive-widening price: a uniform price inside
+        the next cell of its proposal order that has no grandchild yet, or
+        ``None`` once every non-empty cell has one."""
+        cells, probs = self._slot_cell_probs(action_index, action_type, price_range)
+        order = self._price_proposals.get(action_index)
+        if order is None:
+            order = price_pmf.proposal_order(probs, self.config.price_explore_eps, self._pw_rng)
+            self._price_proposals[action_index] = order
+        taken = {cells.cell_of(p) for p in self.price_children.get(action_index, {})}
+        while order:
+            cell = order.pop(0)
+            if cell not in taken:
+                return cells.sample_price(cell, self._pw_rng)
+        return None
+
+    def _sample_price_for_slot(self, action_index: int, action_type: str, price_range: tuple) -> int:
+        """One draw from the price head's distribution for a slot (with the
+        exploration floor mixed in): a cell, then a uniform price inside it.
+
+        Used where a price is needed outside the slot's proposal order —
+        forced-chain price actions and slots whose cells are all expanded.
+        Without price logits (no head yet, or non-finite output) the cells
+        are uniform, so any legal price can still come out."""
+        p_min, p_max = int(price_range[0]), int(price_range[1])
+        if p_min == p_max:
+            return p_min
+        cells, probs = self._slot_cell_probs(action_index, action_type, price_range)
+        eps = self.config.price_explore_eps
+        mixed = (1.0 - eps) * probs + eps * cells.nonempty / cells.nonempty.sum()
+        cell = int(self._pw_rng.choice(len(mixed), p=mixed / mixed.sum()))
+        return cells.sample_price(cell, self._pw_rng)
 
     def _price_head_entity_key(self, action_index: int):
-        """Resolve the (action_type, entity_key) the ContinuousPriceHead uses
+        """Resolve the (action_type, entity_key) the price head uses
         as its slot key for ``action_index``.
 
-        The price head slot layout (see ``model_transformer.ContinuousPriceHead``):
+        The price head slot layout (see ``price_pmf.SLOTS``):
           - ``Bid``        → ``(company_sym,)``
           - ``BuyTrain``   → ``(corp_sym, train_type)`` (corp-to-corp only)
           - ``BuyCompany`` → ``(company_sym,)``
@@ -980,18 +876,16 @@ class MCTSNode:
         """Incorporate the network's prediction at this leaf.
 
         ``price_components`` (optional) carries the per-leaf slice of the
-        ``ContinuousPriceHead`` outputs:
+        price head's output:
 
             {
-                "price_mean":    1D tensor (num_slots,)
-                "price_log_std": 1D tensor (num_slots,)
-                "slot_index":    {(action_type, entity_key) -> int}
+                "price_logits": (num_slots, NUM_CELLS) cell logits
+                "slot_index":   {(action_type, entity_key) -> int}
             }
 
-        When present, ``maybe_add_child`` reads from it to draw legal prices
-        for price-bearing categorical slots via ``sample_price_for_pw``.
-        ``None`` (e.g., the GNN model with no price head) falls back to a
-        uniform-Normal default prior on the legal range.
+        When present, progressive widening proposes prices for price-bearing
+        slots from it (``price_pmf``). ``None`` (e.g., the GNN model with no
+        price head) falls back to uniform cells over the legal range.
         """
         if price_components is not None:
             self.price_components = price_components

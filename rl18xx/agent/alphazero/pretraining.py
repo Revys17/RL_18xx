@@ -1030,7 +1030,7 @@ def _factored_price_target(
     action_mapper,
     chosen_index: int,
 ) -> list:
-    """Build the ContinuousPriceHead training target for a price-bearing
+    """Build the price-head training target for a price-bearing
     human action via the factored-helper path.
 
     Returns a list of ``(slot_idx, price, weight, price_min, price_max)``
@@ -1063,7 +1063,7 @@ def _factored_price_target(
     if price_min == price_max:
         return []  # fixed-price slot (depot trains, exchange trains)
 
-    # Resolve the ContinuousPriceHead slot index from (action_type, entity_key).
+    # Resolve the price-head slot index from (action_type, entity_key).
     entity = target_la.entity or {}
     action_type = target_la.type
     slot = None
@@ -1622,7 +1622,7 @@ def convert_game_to_training_data(
             pi[legal_action_indices] += epsilon / len(legal_action_indices)
         pi[action_index] = 1.0 - epsilon
 
-        # Price target for the ContinuousPriceHead's NLL loss. The factored
+        # Price target for the price head's NLL loss. The factored
         # ``LegalAction`` for a price-bearing slot carries ``price_range``;
         # we derive the head slot directly from ``(action_type, entity)``
         # instead of round-tripping through a Python ``BaseAction``.
@@ -1823,6 +1823,193 @@ def _refit_value_heads(
         "checkpoint_num": new_checkpoint_num,
         "val_value_loss": best_loss,
         "val_winner_accuracy": best_acc,
+        "steps": step,
+        "curve": curve,
+    }
+
+
+class _PriceRowProbe(Dataset):
+    """Decodes a dataset row to ``(index, num_players, has_price_target)``."""
+
+    def __init__(self, dataset: Dataset):
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        row = self.dataset[idx]
+        return idx, _infer_num_players_from_state_size(int(row[0].shape[-1])), bool(row[5])
+
+
+def _collate_rows(rows):
+    return rows
+
+
+def _price_row_buckets(dataset: Dataset, workers: int) -> dict:
+    """``{num_players: [row index, ...]}`` for the rows of ``dataset`` that
+    carry price targets (a few percent of human-game rows).
+
+    One decode pass over the dataset, cached as ``price_rows.json`` next to an
+    LMDB-backed dataset (keyed by its length, like the player-count buckets).
+    """
+    lmdb_path = getattr(dataset, "lmdb_path", None)
+    cache = Path(lmdb_path) / "price_rows.json" if lmdb_path else None
+    if cache is not None and cache.exists():
+        try:
+            data = json.loads(cache.read_text())
+            if data.get("length") == len(dataset):
+                return {int(n): rows for n, rows in data["buckets"].items()}
+        except (OSError, ValueError, KeyError):
+            pass
+    buckets: dict = {}
+    loader = DataLoader(_PriceRowProbe(dataset), batch_size=256, num_workers=workers, collate_fn=_collate_rows)
+    for rows in tqdm(loader, desc="Finding rows with price targets", unit="batch"):
+        for idx, num_players, has_price in rows:
+            if has_price:
+                buckets.setdefault(int(num_players), []).append(int(idx))
+    if cache is not None:
+        atomic_write_json(cache, {"length": len(dataset), "buckets": {str(n): r for n, r in buckets.items()}})
+    return buckets
+
+
+def _price_batches(buckets: dict, batch_size: int, rng: Optional[random.Random]) -> list:
+    """Same-player-count batches of row indices; shuffled when ``rng`` is given."""
+    batches = []
+    for n in sorted(buckets):
+        rows = list(buckets[n])
+        if rng is not None:
+            rng.shuffle(rows)
+        batches.extend(rows[i : i + batch_size] for i in range(0, len(rows), batch_size))
+    if rng is not None:
+        rng.shuffle(batches)
+    return batches
+
+
+def refit_price_head(
+    model: AlphaZeroModel,
+    train_dataset: Dataset,
+    val_dataset: Dataset,
+    config: TrainingConfig,
+    model_dir: str,
+    max_steps: int = 4000,
+    eval_every: int = 200,
+    patience: int = 5,
+) -> dict:
+    """Fit a fresh price head on the frozen trunk of ``model`` from human prices.
+
+    Converts a checkpoint whose price head is untrained — e.g. one saved with
+    the legacy Gaussian head, which doesn't carry over to ``PricePmfHead`` —
+    without retraining the network: everything but the price head is frozen,
+    the head is re-initialized and trained on the exact price NLL of the rows
+    that carry price targets, validating every ``eval_every`` steps and
+    keeping the best head (early stop after ``patience`` evaluations without
+    improvement). The result is saved as the session's next checkpoint;
+    ``current_best`` is left alone so the caller can validate it first.
+    """
+    device = model.device
+    use_amp = config.use_fp16_training and device.type == "cuda"
+    workers = min(8, os.cpu_count() or 1)
+    train_buckets = _price_row_buckets(train_dataset, workers)
+    val_buckets = _price_row_buckets(val_dataset, workers)
+    n_train = sum(len(r) for r in train_buckets.values())
+    n_val = sum(len(r) for r in val_buckets.values())
+    LOGGER.info(f"Price refit: {n_train} training / {n_val} validation rows with price targets")
+    if n_train == 0 or n_val == 0:
+        raise ValueError("Price refit needs rows with price targets in both the training and validation data")
+
+    loader_kwargs: dict = {
+        "num_workers": workers,
+        "pin_memory": torch.cuda.is_available(),
+        "collate_fn": collate_examples,
+    }
+    val_loader = DataLoader(
+        val_dataset, batch_sampler=_price_batches(val_buckets, config.batch_size, None), **loader_kwargs
+    )
+
+    model.reset_price_head()
+    head_params = list(model.price_head.parameters())
+    head_ids = {id(p) for p in head_params}
+    trainable_before = {id(p): p.requires_grad for p in model.parameters()}
+    for p in model.parameters():
+        p.requires_grad = id(p) in head_ids
+    optimizer = optim.AdamW(head_params, lr=config.lr, weight_decay=config.weight_decay)
+    # The trunk is frozen: keep it in eval mode so the head trains on the same
+    # features it will see at inference.
+    model.eval()
+
+    def run(batch):
+        game_state_data, batch_data, legal_action_mask, pi, value, price_targets = move_batch_to_device(batch, device)
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+            return compute_losses(
+                model, game_state_data, batch_data, legal_action_mask, pi, value, config, price_targets=price_targets
+            )
+
+    def evaluate() -> Tuple[float, float]:
+        nll_sum = top1_sum = count = 0.0
+        with torch.no_grad():
+            for batch in val_loader:
+                diag = run(batch)["price_diagnostics"]
+                n = diag["price_count"]
+                if n:
+                    nll_sum += float(diag["price_bits_mean"]) * n
+                    top1_sum += float(diag["price_cell_top1"]) * n
+                    count += n
+        return nll_sum / max(count, 1), top1_sum / max(count, 1)
+
+    best_bits, best_top1 = evaluate()
+    fresh_bits = best_bits
+    best_state = copy.deepcopy(model.price_head.state_dict())
+    LOGGER.info(f"Price refit: fresh head val {best_bits:.3f} bits/price, cell top-1 {best_top1:.3f}")
+    curve = []
+    step = evals_since_improve = 0
+    window: list = []
+    rng = random.Random(0)
+    while step < max_steps and evals_since_improve < patience:
+        train_loader = DataLoader(
+            train_dataset, batch_sampler=_price_batches(train_buckets, config.batch_size, rng), **loader_kwargs
+        )
+        for batch in train_loader:
+            outputs = run(batch)
+            if not outputs["price_diagnostics"]["price_count"]:
+                continue
+            optimizer.zero_grad()
+            outputs["price_loss"].backward()
+            optimizer.step()
+            window.append(float(outputs["price_diagnostics"]["price_bits_mean"]))
+            step += 1
+            if step % eval_every == 0 or step >= max_steps:
+                val_bits, val_top1 = evaluate()
+                train_bits = float(np.mean(window))
+                window = []
+                curve.append({"step": step, "train_bits": train_bits, "val_bits": val_bits, "val_cell_top1": val_top1})
+                improved = val_bits < best_bits
+                if improved:
+                    best_bits, best_top1, evals_since_improve = val_bits, val_top1, 0
+                    best_state = copy.deepcopy(model.price_head.state_dict())
+                else:
+                    evals_since_improve += 1
+                LOGGER.info(
+                    f"Price refit step {step}: train {train_bits:.3f} bits, val {val_bits:.3f} bits, "
+                    f"cell top-1 {val_top1:.3f}{' (best)' if improved else ''}"
+                )
+                if evals_since_improve >= patience or step >= max_steps:
+                    break
+
+    model.price_head.load_state_dict(best_state)
+    for p in model.parameters():
+        p.requires_grad = trainable_before[id(p)]
+    new_checkpoint_num = save_model(model, model_dir)
+    LOGGER.info(
+        f"Price refit saved as checkpoint {new_checkpoint_num} of session {session_name_for(model)}: "
+        f"val {best_bits:.3f} bits/price, cell top-1 {best_top1:.3f}"
+    )
+    return {
+        "checkpoint_num": new_checkpoint_num,
+        "session": session_name_for(model),
+        "val_bits_per_price": best_bits,
+        "fresh_val_bits_per_price": fresh_bits,
+        "val_cell_top1": best_top1,
         "steps": step,
         "curve": curve,
     }

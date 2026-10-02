@@ -22,6 +22,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from rl18xx.agent.alphazero import price_pmf
 from rl18xx.agent.alphazero.config import ModelTransformerConfig
 from rl18xx.agent.alphazero.encoder import Encoder_1830Graph
 from rl18xx.agent.alphazero.model import AlphaZeroModel
@@ -954,102 +955,42 @@ class FiLMResBlock(nn.Module):
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-class ContinuousPriceHead(nn.Module):
-    """Continuous-price head for Bid / BuyTrain / BuyCompany.
+class PricePmfHead(nn.Module):
+    """Exact price distribution for Bid / cross-corp BuyTrain / BuyCompany.
 
-    Emits ``(mean, log_std)`` per legal ``(action_type, entity)`` slot. Slots are
-    arranged in a fixed canonical order so MCTS / training can index into the
-    output by (type, entity) key without re-querying the action mapper.
+    Emits ``NUM_CELLS`` logits per ``(action_type, entity)`` slot. A slot's
+    legal range ``[lo, hi]`` is partitioned into cells by
+    :class:`~rl18xx.agent.alphazero.price_pmf.PriceCells` — atoms where humans
+    pile up (min-bid ladder, $1 / max / max-1, min / max) plus range-relative
+    bins — and ``P(price) = softmax(logits over non-empty cells)[cell] /
+    |cell|``. Every legal integer price has probability, so human and searched
+    prices train the head verbatim, and MCTS can propose any legal price.
 
-    Slot layout (matches ``ActionMapper`` entity ordering):
+    Slot layout (``price_pmf.SLOTS``, matching ``ActionMapper`` entity order):
+    6 Bid slots (one per company), 48 BuyTrain slots (8 corporations x 6 train
+    types; only cross-corp purchases are price-bearing) and 6 BuyCompany slots.
 
-      - ``Bid``        : 6 slots, one per company (SV, CS, DH, MH, CA, BO).
-      - ``BuyTrain``   : 48 slots — 8 corporations × 6 train types
-                        (only the corp-to-corp variant is price-bearing; depot
-                        and market trains have fixed prices and are not
-                        produced by this head).
-      - ``BuyCompany`` : 6 slots, one per company.
-
-    Total: 60 slots × 2 (mean, log_std) = 120 outputs per example.
-
-    The MCTS consumer reads ``(mean, exp(log_std))`` for a (type, entity) pair
-    and uses it to parameterize a Normal distribution truncated to that
-    action's legal ``[price_min, price_max]`` range. The pretraining /
-    self-play loss uses the head's NLL against the observed price.
-
-    ``log_std`` is centered near 0 (i.e. σ≈1 in raw-dollar units, which is too
-    tight). To make the head start with a useful prior, we apply a small
-    constant bias to log_std at init so the initial spread is ~$25 (log_std
-    ≈ 3.2). This is a hyperparameter; tune with empirical data.
+    One shared MLP reads the trunk plus a learned per-slot embedding, so
+    companies / corporations / train types share what they learn about
+    pricing instead of training 60 independent output blocks.
     """
-
-    # Canonical slot ordering, matching ActionMapper's company / corporation
-    # tables. Kept in sync with action_mapper.py — if those tables change, so
-    # does ``_BUILD_SLOTS`` below.
-    _COMPANIES = ("SV", "CS", "DH", "MH", "CA", "BO")
-    _CORPORATIONS = ("PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M")
-    _TRAIN_TYPES = ("2", "3", "4", "5", "6", "D")
-
-    LOG_STD_INIT = 3.0  # exp(3) ≈ 20 — reasonable starting spread for $-prices
-    PRICE_CENTER = 150.0  # $ — mean at a zero MLP output
-    PRICE_SCALE = 100.0  # $ per unit of MLP output
 
     def __init__(self, d_trunk: int):
         super().__init__()
+        self.slots: List[Tuple[str, tuple]] = list(price_pmf.SLOTS)
+        self.num_slots = len(self.slots)
+        self.num_cells = price_pmf.NUM_CELLS
+        self.slot_index = dict(price_pmf.SLOT_INDEX)
 
-        # Build the slot list and a lookup dict so callers can map a
-        # (type, entity) tuple to a slot index without iterating.
-        slots: List[Tuple[str, tuple]] = []
-        # Bids: per-company.
-        for c in self._COMPANIES:
-            slots.append(("Bid", (c,)))
-        # BuyTrain: per (corp, train_type).
-        for corp in self._CORPORATIONS:
-            for ttype in self._TRAIN_TYPES:
-                slots.append(("BuyTrain", (corp, ttype)))
-        # BuyCompany: per-company.
-        for c in self._COMPANIES:
-            slots.append(("BuyCompany", (c,)))
-
-        self.slots: List[Tuple[str, tuple]] = slots
-        self.num_slots = len(slots)
-        self.slot_index = {key: i for i, key in enumerate(slots)}
-
-        # Bookkeeping for sub-block ranges (handy for diagnostics).
-        self.bid_offset = 0
-        self.bid_count = len(self._COMPANIES)
-        self.buy_train_offset = self.bid_count
-        self.buy_train_count = len(self._CORPORATIONS) * len(self._TRAIN_TYPES)
-        self.buy_company_offset = self.buy_train_offset + self.buy_train_count
-        self.buy_company_count = len(self._COMPANIES)
-
-        # MLP: trunk → 2 outputs per slot. Use a single linear from a hidden
-        # state, kept small relative to the trunk to avoid parameter bloat.
         hidden = max(d_trunk // 4, 128)
-        self.mlp = nn.Sequential(
-            nn.Linear(d_trunk, hidden),
-            nn.GELU(),
-            nn.Linear(hidden, self.num_slots * 2),
-        )
+        self.trunk_proj = nn.Linear(d_trunk, hidden)
+        self.slot_embed = nn.Parameter(torch.randn(self.num_slots, hidden) * 0.02)
+        self.out = nn.Sequential(nn.GELU(), nn.LayerNorm(hidden), nn.Linear(hidden, self.num_cells))
 
-    def forward(self, trunk: Tensor) -> Tuple[Tensor, Tensor]:
-        """
-        Args:
-            trunk: (B, d_trunk) trunk features.
-
-        Returns:
-            mean:     (B, num_slots) per-slot price means (raw $-units).
-            log_std:  (B, num_slots) per-slot log-σ. Add ``LOG_STD_INIT`` bias.
-        """
-        B = trunk.shape[0]
-        raw = self.mlp(trunk).view(B, self.num_slots, 2)
-        # The MLP output is O(1); observed prices are $1-$1000. Emitting the
-        # mean in raw dollars put the initial mean ~$150+ from every target
-        # and the price NLL in the tens of thousands, so map it through a
-        # dollar-scale affine instead (consumers still read dollars).
-        mean = self.PRICE_CENTER + self.PRICE_SCALE * raw[..., 0]
-        log_std = raw[..., 1] + self.LOG_STD_INIT
-        return mean, log_std
+    def forward(self, trunk: Tensor) -> Tensor:
+        """``(B, d_trunk)`` → ``(B, num_slots, NUM_CELLS)`` cell logits."""
+        h = self.trunk_proj(trunk).unsqueeze(1) + self.slot_embed.unsqueeze(0)
+        return self.out(h)
 
 
 class HierarchicalPolicyHead(nn.Module):
@@ -1625,12 +1566,11 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         lay_tile_info = action_mapper.get_lay_tile_index_info()
         self.policy_head = HierarchicalPolicyHead(c.d_trunk, c.d_map, c.policy_size, lay_tile_info)
 
-        # Continuous-price head: emits (mean, log_std) per legal (action_type,
-        # entity) slot for Bid / BuyTrain / BuyCompany. MCTS samples a price
-        # via progressive widening against this Normal; training applies NLL
-        # against the observed price. See ContinuousPriceHead docstring for
-        # the slot layout.
-        self.price_head = ContinuousPriceHead(c.d_trunk)
+        # Price head: an exact distribution over every legal price of each
+        # (action_type, entity) slot for Bid / BuyTrain / BuyCompany. MCTS
+        # widens price-bearing slots with cells drawn from it; training fits
+        # its NLL to the observed price. See PricePmfHead / price_pmf.
+        self.price_head = PricePmfHead(c.d_trunk)
 
         # 6. Dual Value Head (KataGo-style), evaluated per seat: seat i's
         # output reads player i's economic token alongside the shared trunk,
@@ -1692,11 +1632,10 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
         # Zero the output layers of the value, score and price heads so they
-        # start at their priors (equal odds, equal shares, $PRICE_CENTER with
-        # sigma ~exp(LOG_STD_INIT)). The trunk isn't normalized, so Kaiming
-        # output layers start with logits of std ~4 (a confident random
-        # winner) and price NLLs in the hundreds of thousands.
-        for final in (self.win_loss_head[-1], self.score_head[-1], self.price_head.mlp[-1]):
+        # start at their priors (equal odds, equal shares, uniform over price
+        # cells). The trunk isn't normalized, so Kaiming output layers start
+        # with logits of std ~4 (a confident random winner).
+        for final in (self.win_loss_head[-1], self.score_head[-1], self.price_head.out[-1]):
             nn.init.zeros_(final.weight)
             nn.init.zeros_(final.bias)
 
@@ -1711,6 +1650,13 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
                     nn.init.constant_(m.weight, 1)
                     nn.init.constant_(m.bias, 0)
             nn.init.zeros_(head[-1].weight)
+
+    def reset_price_head(self):
+        """Re-initialize the price head as at construction (uniform over cells)."""
+        device = next(self.price_head.parameters()).device
+        self.price_head = PricePmfHead(self.config.d_trunk).to(device)
+        nn.init.zeros_(self.price_head.out[-1].weight)
+        nn.init.zeros_(self.price_head.out[-1].bias)
 
     def architecture_name(self) -> str:
         return "AlphaZeroTransformer"
@@ -1919,15 +1865,12 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         policy_logits, policy_components = self.policy_head(x, node_embeds)
         self.last_policy_components = policy_components
 
-        # 5b. Continuous price head — emits (mean, log_std) per legal
-        # (action_type, entity) slot. Stashed on the model alongside
-        # ``last_policy_components`` so the training loss + MCTS PW can
-        # consume it without changing the long-standing 4-tuple forward
-        # contract.
-        price_mean, price_log_std = self.price_head(x)
+        # 5b. Price head — cell logits per (action_type, entity) slot.
+        # Stashed on the model alongside ``last_policy_components`` so the
+        # training loss + MCTS PW can consume it without changing the
+        # long-standing 4-tuple forward contract.
         self.last_price_components = {
-            "price_mean": price_mean,
-            "price_log_std": price_log_std,
+            "price_logits": self.price_head(x),
             "slot_index": self.price_head.slot_index,
             "num_slots": self.price_head.num_slots,
         }

@@ -5,7 +5,9 @@ Drives the Rust MCTS through readouts that traverse price-bearing slots
 
   1. Categorical-level child_N totals roughly match the Python MCTS path.
   2. After enough readouts a PW slot has grown >1 grandchildren with prices
-     in the legal range, snapped to the right grid (Bid → $5 ticks).
+     in the legal range, one per price cell, the price head's most likely
+     cell among them.
+  3. Both engines' first price proposal is the head's most likely cell.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import pytest
 
 from rl18xx.agent.alphazero.action_mapper import ActionMapper
 from rl18xx.agent.alphazero.config import SelfPlayConfig
+from rl18xx.agent.alphazero import price_pmf
 from rl18xx.agent.alphazero.mcts import MCTSNode, POLICY_SIZE, VALUE_SIZE
 from rl18xx.rust_adapter import RustGameAdapter
 
@@ -48,37 +51,33 @@ def _mcts_config(**overrides) -> SelfPlayConfig:
     return SelfPlayConfig(**defaults)
 
 
-def _zero_price_components(num_slots: int) -> dict:
-    """Build a price_components dict with zero μ / log σ for every slot.
-
-    This is what ``DummyNet`` would produce — a head with degenerate
-    (deterministic) output. The slot_index map mirrors
-    ``ContinuousPriceHead.slot_index``: ``(type, entity_key_tuple) -> int``.
-    """
-    # Mirror the head's slot layout from
-    # ``model_transformer.ContinuousPriceHead.__init__``.
-    companies = ("SV", "CS", "DH", "MH", "CA", "BO")
-    corporations = ("PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M")
-    train_types = ("2", "3", "4", "5", "6", "D")
-    slot_index: dict = {}
-    i = 0
-    for c in companies:
-        slot_index[("Bid", (c,))] = i
-        i += 1
-    for corp in corporations:
-        for t in train_types:
-            slot_index[("BuyTrain", (corp, t))] = i
-            i += 1
-    for c in companies:
-        slot_index[("BuyCompany", (c,))] = i
-        i += 1
-    n = i
+def _zero_price_components(num_slots: int = 0) -> dict:
+    """``price_components`` with all-zero cell logits (uniform price cells)
+    for every slot, in the price head's slot layout (``price_pmf.SLOTS``)."""
     return {
-        "price_mean": np.zeros(n, dtype=np.float32),
-        "price_log_std": np.zeros(n, dtype=np.float32),
-        "slot_index": slot_index,
-        "num_slots": n,
+        "price_logits": np.zeros((price_pmf.NUM_SLOTS, price_pmf.NUM_CELLS), dtype=np.float32),
+        "slot_index": dict(price_pmf.SLOT_INDEX),
+        "num_slots": price_pmf.NUM_SLOTS,
     }
+
+
+def _target_bid_slot():
+    """The first price-bearing Bid slot at the initial state, with its range."""
+    am = ActionMapper()
+    indices, price_ranges, action_types = am.get_legal_actions_factored(_fresh_game())
+    target = next(
+        i for i in indices
+        if action_types.get(i) == "Bid" and price_ranges.get(i) is not None and price_ranges[i][0] != price_ranges[i][1]
+    )
+    return target, price_ranges[target]
+
+
+def _bid_components_with_mode(target_slot: int, mode_cell: int) -> dict:
+    """Zero logits except a confident ``mode_cell`` for ``target_slot``'s company."""
+    pc = _zero_price_components()
+    company = ActionMapper().actions[target_slot][1][0]
+    pc["price_logits"][price_pmf.SLOT_INDEX[("Bid", (company,))], mode_cell] = 5.0
+    return pc
 
 
 @pytest.mark.skipif(RustMCTSPlayer is None, reason="engine_rs not built")
@@ -112,16 +111,8 @@ def test_pw_visit_count_totals_match_python_within_tolerance():
     # Uniform prior + zero value + zero price components on both sides.
     uniform = np.full(POLICY_SIZE, 1.0 / POLICY_SIZE, dtype=np.float32)
     zero_value = np.zeros(VALUE_SIZE, dtype=np.float32)
-    price_components_py = _zero_price_components(0)
-    # For Python, MCTSNode.incorporate_results expects torch tensors for the
-    # head outputs; np float32 is sufficient (it reads via float(...)).
-    price_components_py = {
-        "price_mean": price_components_py["price_mean"],
-        "price_log_std": price_components_py["price_log_std"],
-        "slot_index": price_components_py["slot_index"],
-        "num_slots": price_components_py["num_slots"],
-    }
-    price_components_rs = _zero_price_components(0)  # numpy dict for Rust
+    price_components_py = _zero_price_components()
+    price_components_rs = _zero_price_components()  # numpy dict for Rust
 
     for _ in range(readouts):
         # Python MCTS readout
@@ -169,33 +160,20 @@ def test_pw_visit_count_totals_match_python_within_tolerance():
 
 
 @pytest.mark.skipif(RustMCTSPlayer is None, reason="engine_rs not built")
-def test_pw_grows_multiple_grandchildren_with_legal_snapped_prices():
+def test_pw_grows_one_grandchild_per_price_cell():
     """After enough readouts on a price-bearing slot, the Rust side has more
-    than one grandchild under that slot — sampled prices are in the legal
-    range and snapped to the right grid (Bid → $5 ticks).
+    than one grandchild under that slot: legal prices, each in its own price
+    cell, the head's most likely cell (min bid + $15 here) among them.
 
-    We strongly bias the prior so the search visits a single Bid slot (CS,
-    index 2) many times — that's the slot we'll inspect for grandchildren.
+    We strongly bias the prior so the search visits a single Bid slot many
+    times — that's the slot we'll inspect for grandchildren.
     """
     game_rs = _fresh_game()
     cfg = _mcts_config(pw_c=2.0, pw_alpha=0.7, min_price_children=1)
     rs_player = RustMCTSPlayer(
         game_rs, cfg.pw_c, cfg.pw_alpha, cfg.min_price_children
     )
-    legal = rs_player.legal_action_indices_at_root()
-    # Confirm slot 2 is a PW Bid slot.
-    am = ActionMapper()
-    indices, price_ranges, action_types = am.get_legal_actions_factored(
-        RustGameAdapter(RustBaseGame({i + 1: f"P{i + 1}" for i in range(PLAYER_COUNT)}))
-    )
-    target_slot = next(
-        i for i in indices
-        if action_types.get(i) == "Bid"
-        and price_ranges.get(i) is not None
-        and price_ranges[i][0] != price_ranges[i][1]
-    )
-    p_min, p_max = price_ranges[target_slot]
-    assert p_min != p_max  # sanity
+    target_slot, (p_min, p_max) = _target_bid_slot()
 
     # Spike-prior on ``target_slot`` and almost zero elsewhere so PUCT
     # routes almost every readout there.
@@ -203,12 +181,7 @@ def test_pw_grows_multiple_grandchildren_with_legal_snapped_prices():
     probs[target_slot] = 1.0
     probs /= probs.sum()
     zero_value = np.zeros(VALUE_SIZE, dtype=np.float32)
-    # A head with real spread over the slot's range: PW samples from N(μ, σ)
-    # truncated to it, so the zero head (σ = $1 centred at $0) would put
-    # every sample on the minimum and grow a single grandchild.
-    price_components = _zero_price_components(0)
-    price_components["price_mean"][:] = (p_min + p_max) / 2
-    price_components["price_log_std"][:] = np.log((p_max - p_min) / 4)
+    price_components = _bid_components_with_mode(target_slot, mode_cell=3)
 
     # Drive ~50 readouts and let PW grow grandchildren.
     READOUTS = 50
@@ -227,17 +200,39 @@ def test_pw_grows_multiple_grandchildren_with_legal_snapped_prices():
     assert len(prices_visited) > 1, (
         f"PW slot {target_slot}: expected >1 grandchildren, got {prices_visited}"
     )
-    # All prices in legal range + snapped to $5 (Bid grid).
+    cells = price_pmf.price_cells("Bid", p_min, p_max)
     for p in prices_visited:
         assert p_min <= p <= p_max, (
             f"PW price {p} outside legal range [{p_min}, {p_max}] for slot {target_slot}"
         )
-        assert p % 5 == 0, (
-            f"PW price {p} not snapped to $5 grid for Bid slot {target_slot}"
-        )
+    assert len({cells.cell_of(p) for p in prices_visited}) == len(prices_visited), "two grandchildren share a cell"
+    assert p_min + 15 in prices_visited, "the head's most likely cell was never proposed"
 
     # ``most_visited_price_for_slot`` should return one of the visited prices.
     best_price = rs_player.most_visited_price_for_slot(target_slot)
     assert best_price in prices_visited, (
         f"most_visited_price_for_slot returned {best_price}, not in {prices_visited}"
     )
+
+
+@pytest.mark.skipif(RustMCTSPlayer is None, reason="engine_rs not built")
+def test_first_price_proposal_is_the_heads_mode_in_both_engines():
+    """Readout 1 expands the root; readout 2 descends into the spiked Bid
+    slot and widens it once — with the price head's most likely cell, a
+    ladder atom, so both engines pick the identical price."""
+    target_slot, (p_min, _) = _target_bid_slot()
+    cfg = _mcts_config()
+    probs = np.full(POLICY_SIZE, 1e-9, dtype=np.float32)
+    probs[target_slot] = 1.0
+    probs /= probs.sum()
+    zero_value = np.zeros(VALUE_SIZE, dtype=np.float32)
+    pc = _bid_components_with_mode(target_slot, mode_cell=3)
+
+    py_root = MCTSNode(_fresh_game(), config=cfg)
+    rs_player = RustMCTSPlayer(_fresh_game(), cfg.pw_c, cfg.pw_alpha, cfg.min_price_children)
+    for _ in range(2):
+        py_root.select_leaf().incorporate_results(probs, zero_value, up_to=py_root, price_components=pc)
+        rs_player.incorporate_results(rs_player.select_leaf(), probs, zero_value, pc)
+
+    assert list(py_root.price_children[target_slot]) == [p_min + 15]
+    assert list(rs_player.price_grandchildren_at_root()[target_slot]) == [p_min + 15]

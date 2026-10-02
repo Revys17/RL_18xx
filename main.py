@@ -102,6 +102,44 @@ def cmd_convert(args):
     )
 
 
+def cmd_refit_price_head(args):
+    """Fit a fresh price head on a checkpoint's frozen trunk from human prices.
+
+    For checkpoints saved with the legacy Gaussian price head (which doesn't
+    carry over to the cell-logit head) or any checkpoint whose price head
+    should be re-fit. Saves the result as the session's next checkpoint and
+    only moves ``current_best`` with ``--promote``.
+    """
+    import logging
+    from pathlib import Path
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from rl18xx.agent.alphazero.checkpointer import get_latest_model, set_current_best
+    from rl18xx.agent.alphazero.config import TrainingConfig
+    from rl18xx.agent.alphazero.dataset import SelfPlayDataset
+    from rl18xx.agent.alphazero.pretraining import refit_price_head
+
+    model = get_latest_model(args.model_dir)
+    data = Path(args.data_dir)
+    config = TrainingConfig(batch_size=args.batch_size, lr=args.lr)
+    result = refit_price_head(
+        model,
+        SelfPlayDataset(data / "training"),
+        SelfPlayDataset(data / "validation"),
+        config,
+        args.model_dir,
+        max_steps=args.max_steps,
+        eval_every=args.eval_every,
+        patience=args.patience,
+    )
+    print(
+        f"Refit price head saved as {result['session']} checkpoint {result['checkpoint_num']}: "
+        f"{result['val_bits_per_price']:.3f} bits/price, cell top-1 {result['val_cell_top1']:.3f}"
+    )
+    if args.promote:
+        set_current_best(args.model_dir, model.architecture_name(), result["session"], result["checkpoint_num"])
+
+
 def cmd_arena(args):
     from rl18xx.agent.arena import Arena
     from rl18xx.agent.alphazero.self_play import MCTSPlayer
@@ -245,6 +283,20 @@ def build_parser():
     p.add_argument("--output", type=str, default="human_games/lmdb_v2", help="Output directory for LMDB data")
     p.add_argument("--model-dir", type=str, default="model_checkpoints", help="Model checkpoint (determines encoder)")
 
+    # refit-price-head (fit the price head on a frozen checkpoint)
+    p = sub.add_parser("refit-price-head", help="Fit a fresh price head on the current-best checkpoint's frozen trunk")
+    p.add_argument("--model-dir", type=str, default="model_checkpoints", help="Model checkpoint directory")
+    p.add_argument(
+        "--data-dir", type=str, default="human_games/lmdb_v3",
+        help="Converted human-game LMDB root with training/ and validation/ (default: human_games/lmdb_v3)",
+    )
+    p.add_argument("--batch-size", type=int, default=256, help="Batch size (default: 256)")
+    p.add_argument("--lr", type=float, default=0.001, help="Learning rate (default: 0.001)")
+    p.add_argument("--max-steps", type=int, default=4000, help="Maximum optimizer steps (default: 4000)")
+    p.add_argument("--eval-every", type=int, default=200, help="Validate every N steps (default: 200)")
+    p.add_argument("--patience", type=int, default=5, help="Stop after N validations without improvement (default: 5)")
+    p.add_argument("--promote", action="store_true", help="Point current_best at the refit checkpoint")
+
     # arena
     p = sub.add_parser("arena", help="Run a match between agents")
     p.add_argument(
@@ -283,6 +335,7 @@ if __name__ == "__main__":
         "pretrain": cmd_pretrain,
         "clean": cmd_clean,
         "convert": cmd_convert,
+        "refit-price-head": cmd_refit_price_head,
         "arena": cmd_arena,
         "dashboard": cmd_dashboard,
         "replay": cmd_replay,

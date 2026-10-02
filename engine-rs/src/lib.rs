@@ -18,6 +18,7 @@ pub mod game;
 pub mod graph;
 pub mod map;
 pub mod mcts;
+pub mod price_pmf;
 pub mod revenue;
 pub mod rounds;
 pub mod router;
@@ -62,6 +63,9 @@ fn engine_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(action_index::policy_size_for_py, m)?)?;
     m.add_function(wrap_pyfunction!(supported_titles_py, m)?)?;
     m.add_function(wrap_pyfunction!(action_index::legal_action_to_index_py, m)?)?;
+    m.add_function(wrap_pyfunction!(price_pmf::price_pmf_counts, m)?)?;
+    m.add_function(wrap_pyfunction!(price_pmf::price_pmf_cell_of, m)?)?;
+    m.add_function(wrap_pyfunction!(price_pmf::price_pmf_member, m)?)?;
 
     Ok(())
 }

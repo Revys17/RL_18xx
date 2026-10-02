@@ -437,6 +437,11 @@ class SelfPlayHyperparams:
     # categorical node before progressive widening kicks in. Ensures every
     # such node has at least one sampled price even at very low visit counts.
     min_price_children: int = 1
+    # Exploration floor for price proposals: widening draws cells from
+    # ``(1 - eps) * head + eps * uniform`` (after the head's most likely
+    # cell), so every legal price cell is eventually tried even where the
+    # price head is confidently wrong. See ``price_pmf.proposal_order``.
+    price_explore_eps: float = 0.05
     use_score_values: bool = True
     # fp16 autocast for in-process inference. Off: trained checkpoints reach
     # activations that overflow fp16 (NaN priors on ~15% of positions), and

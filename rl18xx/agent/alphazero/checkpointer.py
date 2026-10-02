@@ -245,6 +245,17 @@ def _instantiate_model(checkpoint_dict: dict, checkpoint_path: str) -> AlphaZero
             f"re-initializing {len(stale_value_keys)} value-head tensors."
         )
         state_dict = {k: v for k, v in state_dict.items() if k not in stale_value_keys}
+    # The Gaussian ``ContinuousPriceHead`` (``price_head.mlp.*``) was replaced by
+    # the cell-logit ``PricePmfHead``: none of its tensors carry over, so the
+    # new head starts untrained (uniform over price cells) — refit it with
+    # ``main.py refit-price-head`` before self-play.
+    legacy_price_keys = [k for k in state_dict if k.startswith("price_head.") and k not in current]
+    if legacy_price_keys and any(k.startswith("price_head.") for k in current):
+        LOGGER.warning(
+            f"Checkpoint {checkpoint_path} has the legacy Gaussian price head; its price head starts "
+            f"untrained. Refit it with `main.py refit-price-head` before self-play."
+        )
+        state_dict = {k: v for k, v in state_dict.items() if k not in legacy_price_keys}
     # ``strict=False`` lets dropped legacy buffers (e.g. ``other_indices``) be
     # served by the freshly-initialized model copy.
     model.load_state_dict(state_dict, strict=False)

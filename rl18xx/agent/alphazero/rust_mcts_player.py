@@ -42,36 +42,31 @@ def _coerce_price_components_for_rust(leaf_pc: Optional[dict]) -> Optional[dict]
     """Coerce a per-leaf ``price_components`` dict into a Rust-friendly shape.
 
     The Rust ``RustMCTSPlayer.incorporate_results`` decoder expects:
-      - ``price_mean`` / ``price_log_std``: numpy float32 1D arrays.
+      - ``price_logits``: numpy float32, ``num_slots * NUM_CELLS`` row-major.
       - ``slot_index``: dict of ``(action_type, (entity_key_parts,))`` -> int.
       - ``num_slots``: int.
 
-    The transformer model emits torch tensors for the means/log-stds; this
-    helper detaches them to numpy float32 once at the FFI boundary. ``None``
-    propagates through (the GNN model has no price head, so PW falls back to
-    a wide-Normal default on the Rust side).
+    The transformer model emits a torch tensor; this helper flattens it to
+    numpy float32 once at the FFI boundary. ``None`` propagates through (the
+    GNN model has no price head, so PW proposes uniform cells on the Rust
+    side).
     """
     if leaf_pc is None:
         return None
-    means = leaf_pc.get("price_mean")
-    log_stds = leaf_pc.get("price_log_std")
+    logits = leaf_pc.get("price_logits")
     slot_index = leaf_pc.get("slot_index")
     num_slots = leaf_pc.get("num_slots")
-    if means is None or log_stds is None or slot_index is None:
+    if logits is None or slot_index is None:
         return None
-    if isinstance(means, torch.Tensor):
-        means_np = means.detach().cpu().numpy().astype(np.float32)
+    if isinstance(logits, torch.Tensor):
+        logits_np = logits.detach().float().cpu().numpy()
     else:
-        means_np = np.asarray(means, dtype=np.float32)
-    if isinstance(log_stds, torch.Tensor):
-        log_stds_np = log_stds.detach().cpu().numpy().astype(np.float32)
-    else:
-        log_stds_np = np.asarray(log_stds, dtype=np.float32)
+        logits_np = np.asarray(logits, dtype=np.float32)
+    logits_np = np.ascontiguousarray(logits_np, dtype=np.float32)
     return {
-        "price_mean": means_np,
-        "price_log_std": log_stds_np,
+        "price_logits": logits_np.reshape(-1),
         "slot_index": slot_index,
-        "num_slots": int(num_slots) if num_slots is not None else int(means_np.shape[0]),
+        "num_slots": int(num_slots) if num_slots is not None else int(logits_np.shape[0]),
     }
 
 
@@ -204,6 +199,7 @@ class RustMCTSPlayer:
             float(getattr(self.config, "pw_c", 1.0)),
             float(getattr(self.config, "pw_alpha", 0.5)),
             int(getattr(self.config, "min_price_children", 1)),
+            float(getattr(self.config, "price_explore_eps", 0.05)),
         )
         # PUCT / forced-chain knobs (parity with the Python MCTSPlayer):
         # per-round c_puct_init overrides and the forced-chain

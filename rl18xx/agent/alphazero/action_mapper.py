@@ -664,8 +664,7 @@ class ActionMapper(metaclass=Singleton):
         indices = self.get_legal_action_indices(state)
         return self.convert_indices_to_mask(indices)
 
-    # Slot layout for the ContinuousPriceHead (kept in sync with
-    # ``model_transformer.ContinuousPriceHead``). Exposed here so the
+    # Slot layout for the price head (kept in sync with ``price_pmf.SLOTS``). Exposed here so the
     # pretraining pipeline can resolve (action_type, entity) → slot index
     # without importing model code.
     _PRICE_HEAD_COMPANIES = ("SV", "CS", "DH", "MH", "CA", "BO")
@@ -675,7 +674,7 @@ class ActionMapper(metaclass=Singleton):
     def price_head_slot_for_action(
         self, action: BaseAction, state: BaseGame
     ) -> Optional[Tuple[str, int, int, int, int]]:
-        """Resolve the ``ContinuousPriceHead`` slot for a price-bearing action.
+        """Resolve the price-head slot for a price-bearing action.
 
         Returns ``(action_type, slot_index, observed_price, price_min,
         price_max)`` for ``Bid`` / cross-corp ``BuyTrain`` / ``BuyCompany``;
@@ -788,7 +787,7 @@ class ActionMapper(metaclass=Singleton):
 
         Used by pretraining to produce a one-hot categorical pi target
         on the (type, entity) slot while emitting the raw observed price
-        as a separate ``price_target`` for the ``ContinuousPriceHead``.
+        as a separate ``price_target`` for the price head.
         """
         action_type = action.__class__.__name__
         if action.entity.__class__.__name__ == "Company":
@@ -840,9 +839,9 @@ class ActionMapper(metaclass=Singleton):
         every legal (type, entity) pair maps to a single canonical index in
         the existing flat layout. MCTS's continuous-price progressive widening
         recovers the price as a per-node grandchild keyed off the
-        :attr:`LegalAction.price_range` metadata; the network's
-        ``ContinuousPriceHead`` emits ``(μ, log σ)`` for each (type, entity)
-        slot.
+        :attr:`LegalAction.price_range` metadata; the network's price head
+        (``model_transformer.PricePmfHead``) gives a distribution over every
+        legal price of each (type, entity) slot.
 
         The flat layout itself is unchanged from the legacy enumerated
         ``(action, price)`` layout — we just no longer consume the price-bearing
@@ -1034,9 +1033,8 @@ class ActionMapper(metaclass=Singleton):
                 slots; ``min == max`` for fixed-price entries (depot trains).
                 Categorical-only slots are absent.
             action_types_by_idx: ``{flat_index: action_type_name}`` for every
-                legal index. MCTS PW consults this to look up the price-grid
-                step (``mcts.PRICE_GRID``) and the ``ContinuousPriceHead`` slot
-                key.
+                legal index. MCTS PW consults this to build the slot's price
+                cells (``price_pmf``) and look up its price-head slot key.
         """
         if state is None:
             raise ValueError("State is None")
@@ -1387,10 +1385,9 @@ class ActionMapper(metaclass=Singleton):
         """Materialize a price-bearing action with an explicit sampled price.
 
         Counterpart to :meth:`map_index_to_action` for the continuous-price
-        progressive widening flow: MCTS samples a price from the
-        ``ContinuousPriceHead`` truncated to a slot's legal range, snaps to
-        the legal grid, and calls this method to construct the concrete game
-        action. Pretraining uses the same primitive to materialize human
+        progressive widening flow: MCTS proposes a legal price from the price
+        head (``price_pmf``) and calls this method to construct the concrete
+        game action. Pretraining uses the same primitive to materialize human
         actions with their raw observed prices.
 
         For non-price-bearing slots this delegates to

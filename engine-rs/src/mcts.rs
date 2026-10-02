@@ -4,9 +4,10 @@
 //! Python `MCTSNode` / `MCTSPlayer` (rl18xx/agent/alphazero/mcts.py +
 //! self_play.py).
 //!
-//! Phase 4c (this revision) adds progressive widening (PW) with continuous
-//! price grandchildren for the price-bearing categorical slots
-//! (Bid / BuyTrain / BuyCompany). A "price grandchild" is a child of a
+//! Phase 4c adds progressive widening (PW) with price grandchildren for the
+//! price-bearing categorical slots (Bid / BuyTrain / BuyCompany); prices are
+//! proposed from the price head's distribution over every legal price
+//! (`price_pmf`). A "price grandchild" is a child of a
 //! price-bearing categorical slot whose own statistics (N, W) live in the
 //! parent's ``price_child_n`` / ``price_child_w`` dicts rather than the
 //! parent's compressed categorical arrays. Backups still mirror up into the
@@ -19,11 +20,12 @@ use numpy::PyReadonlyArray1;
 use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use rand::SeedableRng;
+use rand::{Rng, SeedableRng};
 use rand_distr::{Dirichlet, Distribution};
 
 use crate::factored::LegalAction;
 use crate::game::BaseGame;
+use crate::price_pmf::{proposal_order, PriceCells, NUM_CELLS};
 
 /// Value-head width — single-sourced from the encoder's player-slot cap.
 const VALUE_SIZE: usize = crate::encoder::MAX_PLAYERS;
@@ -34,13 +36,12 @@ const C_PUCT_INIT: f32 = 1.25;
 // Price components (per-leaf NN price-head output)
 // ----------------------------------------------------------------------------
 
-/// Per-leaf ContinuousPriceHead output sliced from the model's batched
-/// ``last_price_components`` dict. Indices into ``price_mean`` /
-/// ``price_log_std`` come from ``slot_index``.
+/// Per-leaf price-head output sliced from the model's batched
+/// ``last_price_components`` dict: ``NUM_CELLS`` cell logits per slot,
+/// row-major, with slot rows located via ``slot_index``.
 #[derive(Debug, Clone, Default)]
 pub struct PriceComponents {
-    pub price_mean: Vec<f32>,
-    pub price_log_std: Vec<f32>,
+    pub price_logits: Vec<f32>,
     /// Map (action_type, entity_key_parts) → slot index.
     pub slot_index: HashMap<(String, Vec<String>), usize>,
     pub num_slots: usize,
@@ -90,9 +91,12 @@ pub struct RustMCTSNode {
     pub sampled_price: Option<i64>,
     pub is_price_grandchild: bool,
 
-    /// Continuous-price head output stashed at incorporate-results time.
-    /// Consulted by ``_sample_price_for_slot`` for future PW expansions.
+    /// Price-head output stashed at incorporate-results time. Consulted when
+    /// widening this node's price-bearing slots.
     pub price_components: Option<PriceComponents>,
+    /// Per price-bearing slot: the cells PW will still materialize, in order
+    /// (``price_pmf::proposal_order``), built on the slot's first widening.
+    pub price_proposals: HashMap<u32, Vec<usize>>,
 }
 
 impl RustMCTSNode {
@@ -179,115 +183,14 @@ fn price_head_entity_key(action_index: u32, action_type: &str) -> Option<(String
 }
 
 // ----------------------------------------------------------------------------
-// Price snapping + sampling helpers (mirror Python ``_snap_price`` /
-// ``sample_price_for_pw``).
+// Price helpers
 // ----------------------------------------------------------------------------
 
-fn price_grid_step(action_type: &str) -> i64 {
-    match action_type {
-        // The auction bid increment comes from the title data (1830: $5).
-        // The MCTS runs against the global 1830 layout today; a per-title
-        // MCTS threads its own layout here.
-        "Bid" => {
-            crate::title::resolve(crate::action_index::layout().title_name).bid_price_step()
-        }
-        _ => 1,
-    }
-}
-
-fn snap_price(price: f32, action_type: &str, price_min: i64, price_max: i64) -> i64 {
-    let step = price_grid_step(action_type);
-    let mut snapped = ((price / step as f32).round() as i64) * step;
-    if snapped < price_min {
-        let rem = price_min.rem_euclid(step);
-        snapped = if rem == 0 { price_min } else { price_min + (step - rem) };
-    }
-    if snapped > price_max {
-        if step > 1 {
-            snapped = price_max - price_max.rem_euclid(step);
-        } else {
-            snapped = price_max;
-        }
-    }
-    snapped.max(price_min).min(price_max)
-}
-
-fn sample_price_for_pw(
-    price_mean: f32,
-    price_log_std: f32,
-    action_type: &str,
-    price_range: (i64, i64),
-) -> i64 {
-    let (p_min, p_max) = price_range;
-    if p_min == p_max {
-        return p_min;
-    }
-    let sigma = (price_log_std.clamp(-1.0_f32, 8.5_f32).exp() as f64).max(1e-3);
-    let mu = price_mean as f64;
-    let mut rng = rand::thread_rng();
-    let (a, b) = ((p_min as f64 - mu) / sigma, (p_max as f64 - mu) / sigma);
-    if !(a.is_finite() && b.is_finite() && a < b) {
-        // A non-finite head output: any legal price, uniformly on the grid.
-        use rand::Rng;
-        let step = price_grid_step(action_type);
-        let n_choices = (((p_max - p_min) / step) + 1).max(1);
-        return snap_price((p_min + rng.gen_range(0..n_choices) * step) as f32, action_type, p_min, p_max);
-    }
-    let z = sample_truncated_std_normal(a, b, &mut rng);
-    snap_price((mu + sigma * z) as f32, action_type, p_min, p_max)
-}
-
-/// One draw of a standard Normal truncated to ``[a, b]`` (Robert, 1995) —
-/// mirrors Python ``_sample_truncated_std_normal``. The price head is fit
-/// with the truncated-Normal NLL, so when observed prices pile up at the
-/// legal minimum its ``mu`` sits below ``price_min``; plain rejection from
-/// N(0, 1) then almost never accepts (the old sampler fell back to a
-/// uniform draw over the whole range). Tails use an exponential proposal,
-/// short intervals a uniform one.
-fn sample_truncated_std_normal<R: rand::Rng>(a: f64, b: f64, rng: &mut R) -> f64 {
-    if a >= 0.0 {
-        return sample_std_normal_tail(a, b, rng);
-    }
-    if b <= 0.0 {
-        return -sample_std_normal_tail(-b, -a, rng);
-    }
-    if b - a >= 1.0 {
-        // Straddles 0 with at least ~38% of the mass.
-        loop {
-            let z: f64 = rng.sample(rand_distr::StandardNormal);
-            if a <= z && z <= b {
-                return z;
-            }
-        }
-    }
-    loop {
-        // Short interval around 0: |z| < 1, acceptance > e^-1/2.
-        let z = rng.gen_range(a..b);
-        if rng.gen::<f64>() <= (-0.5 * z * z).exp() {
-            return z;
-        }
-    }
-}
-
-/// Standard Normal truncated to ``[a, b]`` with ``0 <= a < b``.
-fn sample_std_normal_tail<R: rand::Rng>(a: f64, b: f64, rng: &mut R) -> f64 {
-    if (b - a) * (b + a) < 2.0 {
-        // Short interval: uniform proposal, acceptance >= e^-1.
-        loop {
-            let z = rng.gen_range(a..b);
-            if rng.gen::<f64>() <= (0.5 * (a * a - z * z)).exp() {
-                return z;
-            }
-        }
-    }
-    // Exponential proposal with the optimal rate for the tail beyond ``a``.
-    let alpha = 0.5 * (a + (a * a + 4.0).sqrt());
-    loop {
-        let z = a - (1.0 - rng.gen::<f64>()).ln() / alpha;
-        if z <= b && rng.gen::<f64>() <= (-0.5 * (z - alpha) * (z - alpha)).exp() {
-            return z;
-        }
-    }
+/// The auction bid ladder step for the price cells, from the title data
+/// (1830: $5). The MCTS runs against the global 1830 layout today; a
+/// per-title MCTS threads its own layout here.
+fn bid_step() -> i64 {
+    crate::title::resolve(crate::action_index::layout().title_name).bid_price_step()
 }
 
 fn pw_target_children(visits: f32, pw_c: f32, pw_alpha: f32, min_children: usize) -> usize {
@@ -316,6 +219,8 @@ pub struct RustMCTSPlayer {
     pub pw_c: f32,
     pub pw_alpha: f32,
     pub min_price_children: usize,
+    /// Exploration floor mixed into price proposals (``price_explore_eps``).
+    pub price_explore_eps: f32,
 
     /// Per-round-type c_puct_init override (Python ``config.c_puct_by_round``,
     /// keyed by the round class name "Auction"/"Stock"/"Operating"). Falls
@@ -405,6 +310,7 @@ impl RustMCTSPlayer {
             sampled_price: None,
             is_price_grandchild: false,
             price_components: None,
+            price_proposals: HashMap::new(),
         })
     }
 
@@ -425,13 +331,14 @@ impl RustMCTSPlayer {
     /// Accepts either an `engine_rs.BaseGame` directly or a `RustGameAdapter`
     /// (we unwrap via its `_game` attribute).
     #[new]
-    #[pyo3(signature = (game_obj, pw_c=None, pw_alpha=None, min_price_children=None))]
+    #[pyo3(signature = (game_obj, pw_c=None, pw_alpha=None, min_price_children=None, price_explore_eps=None))]
     pub fn new(
         py: Python<'_>,
         game_obj: PyObject,
         pw_c: Option<f32>,
         pw_alpha: Option<f32>,
         min_price_children: Option<usize>,
+        price_explore_eps: Option<f32>,
     ) -> PyResult<Self> {
         // Resolve the inner Rust BaseGame. If we got a RustGameAdapter, pull
         // out `._game`; otherwise treat the arg as the BaseGame itself.
@@ -461,6 +368,7 @@ impl RustMCTSPlayer {
             pw_c: pw_c.unwrap_or(1.0),
             pw_alpha: pw_alpha.unwrap_or(0.5),
             min_price_children: min_price_children.unwrap_or(1),
+            price_explore_eps: price_explore_eps.unwrap_or(0.05),
             c_puct_by_round: HashMap::new(),
             max_game_length: 1000,
         };
@@ -472,10 +380,14 @@ impl RustMCTSPlayer {
     }
 
     /// Set PW knobs after construction (mirrors a config update in Python).
-    pub fn set_pw_config(&mut self, pw_c: f32, pw_alpha: f32, min_price_children: usize) {
+    #[pyo3(signature = (pw_c, pw_alpha, min_price_children, price_explore_eps=None))]
+    pub fn set_pw_config(&mut self, pw_c: f32, pw_alpha: f32, min_price_children: usize, price_explore_eps: Option<f32>) {
         self.pw_c = pw_c;
         self.pw_alpha = pw_alpha;
         self.min_price_children = min_price_children;
+        if let Some(eps) = price_explore_eps {
+            self.price_explore_eps = eps;
+        }
     }
 
     /// Set the PUCT / forced-chain knobs from the Python ``SelfPlayConfig``
@@ -650,9 +562,11 @@ impl RustMCTSPlayer {
     /// PW descent for a price-bearing categorical slot.
     ///
     /// If the grandchild count is below the target ``k = max(min, ceil(pw_c *
-    /// N^pw_alpha))``, sample a fresh price and either return an existing
-    /// grandchild (collision) or expand a new one. Otherwise PUCT-select
-    /// among existing grandchildren.
+    /// N^pw_alpha))``, expand a grandchild at a uniform price inside the next
+    /// not-yet-expanded cell of the slot's proposal order (mirrors Python
+    /// ``_select_or_expand_price_child``). Otherwise — or once every cell has
+    /// a grandchild — PUCT-select among the existing grandchildren with the
+    /// price head's cell probabilities as priors.
     pub fn _select_or_expand_price_child(
         &mut self,
         arena_idx: usize,
@@ -682,44 +596,35 @@ impl RustMCTSPlayer {
             .map(|m| m.len())
             .unwrap_or(0);
 
+        let action_type = self.arena[arena_idx]
+            .action_types
+            .get(&action_index)
+            .cloned()
+            .unwrap_or_default();
+        let price_range = *self.arena[arena_idx]
+            .price_ranges
+            .get(&action_index)
+            .ok_or_else(|| PyRuntimeError::new_err("price_range missing on PW slot"))?;
         if existing_count < target {
-            // Sample a fresh price; if it collides with an existing
-            // grandchild, return that one (it will accrue a fresh visit on
-            // backup). Otherwise materialize a new grandchild.
-            let price_range = *self.arena[arena_idx]
-                .price_ranges
-                .get(&action_index)
-                .ok_or_else(|| PyRuntimeError::new_err("price_range missing on PW slot"))?;
-            let action_type = self.arena[arena_idx]
-                .action_types
-                .get(&action_index)
-                .cloned()
-                .unwrap_or_default();
-            let sampled =
-                self._sample_price_with_index(arena_idx, action_index, &action_type, price_range);
-            if let Some(slot_grandchildren) = self.arena[arena_idx].price_children.get(&action_index) {
-                if let Some(&existing_idx) = slot_grandchildren.get(&sampled) {
-                    return Ok(existing_idx);
-                }
+            if let Some(price) = self.next_proposed_price(arena_idx, action_index, &action_type, price_range) {
+                return self.maybe_add_child(arena_idx, action_index, Some(price));
             }
-            return self.maybe_add_child(arena_idx, action_index, Some(sampled));
         }
 
-        // PW cap reached — PUCT among existing grandchildren using the
-        // categorical slot's prior split among them.
-        let (slot_prior, ap, idx_compressed) = {
-            let node = &self.arena[arena_idx];
-            let i = node.legal_index_in_compressed(action_index).unwrap();
-            (node.child_prior[i], node.active_player_index, i)
+        // PW cap reached: PUCT among existing grandchildren, each with the
+        // price head's probability of its cell (renormalized over the
+        // expanded grandchildren) as its prior.
+        let ap = self.arena[arena_idx].active_player_index;
+        let cell_mass: HashMap<i64, f32> = match self.slot_cells(arena_idx, action_index, &action_type, price_range) {
+            Some((cells, probs)) => self.arena[arena_idx]
+                .price_children
+                .get(&action_index)
+                .map(|m| m.keys().map(|&p| (p, cells.cell_of(p).map_or(0.0, |c| probs[c] as f32))).collect())
+                .unwrap_or_default(),
+            None => HashMap::new(),
         };
-        let n_existing = self.arena[arena_idx]
-            .price_children
-            .get(&action_index)
-            .map(|m| m.len())
-            .unwrap_or(1)
-            .max(1);
-        let per_grandchild_prior = slot_prior / (n_existing as f32);
-        let _ = idx_compressed;
+        let total_mass: f32 = cell_mass.values().sum::<f32>();
+        let total_mass = if total_mass > 0.0 { total_mass } else { 1.0 };
 
         let c_puct = 2.0
             * ((1.0 + slot_visits + self.c_puct_base) / self.c_puct_base).ln()
@@ -750,7 +655,8 @@ impl RustMCTSPlayer {
             let n_sa = *nw_clone.get(&price).unwrap_or(&0.0);
             let w_vec = *ww_clone.get(&price).unwrap_or(&[0.0; VALUE_SIZE]);
             let q_sa = if n_sa > 0.0 { w_vec[ap] / (1.0 + n_sa) } else { 0.0 };
-            let u_sa = c_puct * per_grandchild_prior * sqrt_n_s / (1.0 + n_sa);
+            let prior = cell_mass.get(&price).copied().unwrap_or(0.0) / total_mass;
+            let u_sa = c_puct * prior * sqrt_n_s / (1.0 + n_sa);
             let score = q_sa + u_sa;
             if score > best_score {
                 best_score = score;
@@ -766,8 +672,10 @@ impl RustMCTSPlayer {
     /// ``price`` semantics:
     ///   - ``None`` for non-PW slots; falls back to fixed-price (the engine
     ///     picks via ``map_index_to_action`` / ``..._with_price`` at min).
-    ///   - ``None`` for a PW slot: sample via the price head's posterior.
-    ///   - ``Some(p)`` for any slot: snap and use (PW grandchild path).
+    ///   - ``None`` for a PW slot: the slot's next proposed price (a draw
+    ///     from the price head once every cell is expanded).
+    ///   - ``Some(p)`` for a PW slot: clamped to the legal range and used —
+    ///     any legal price is playable.
     #[pyo3(signature = (arena_idx, action_index, price=None))]
     pub fn maybe_add_child(
         &mut self,
@@ -792,8 +700,8 @@ impl RustMCTSPlayer {
                 ))
             })?;
 
-        // Resolve / snap the price for PW slots; existing-grandchild fast
-        // path lives below the action_type lookup.
+        // Resolve the price for PW slots; existing-grandchild fast path lives
+        // below the action_type lookup.
         let (sampled_price, expansion_price_for_apply): (Option<i64>, Option<i64>) = if is_pw {
             let price_range = *self.arena[arena_idx]
                 .price_ranges
@@ -805,14 +713,13 @@ impl RustMCTSPlayer {
                 .cloned()
                 .unwrap_or_default();
             let p = match price {
-                Some(p) => snap_price(p as f32, &action_type, price_range.0, price_range.1),
-                None => self._sample_price_with_index(
-                    arena_idx,
-                    action_index,
-                    &action_type,
-                    price_range,
-                ),
-            };
+                Some(p) => p,
+                None => match self.next_proposed_price(arena_idx, action_index, &action_type, price_range) {
+                    Some(p) => p,
+                    None => self.sample_price_from_head(arena_idx, action_index, &action_type, price_range),
+                },
+            }
+            .clamp(price_range.0, price_range.1);
             // Existing-grandchild fast path.
             if let Some(slot_grandchildren) = self.arena[arena_idx].price_children.get(&action_index) {
                 if let Some(&existing_idx) = slot_grandchildren.get(&p) {
@@ -863,17 +770,16 @@ impl RustMCTSPlayer {
                 break;
             }
             let forced_idx = flat_indices[0];
-            // Python's forced loop samples a price from the price-head
-            // posterior for non-degenerate ranges (the same sampler PW
-            // expansion uses, reading this node's stashed price_components);
-            // degenerate ranges apply the engine minimum.
+            // Python's forced loop draws a price from the price head for
+            // non-degenerate ranges (reading this node's stashed
+            // price_components); degenerate ranges apply the engine minimum.
             let forced_price = match forced_price_ranges.get(&forced_idx) {
                 Some(&(lo, hi)) if lo != hi => {
                     let at = forced_action_types
                         .get(&forced_idx)
                         .cloned()
                         .unwrap_or_default();
-                    Some(self._sample_price_with_index(arena_idx, forced_idx, &at, (lo, hi)))
+                    Some(self.sample_price_from_head(arena_idx, forced_idx, &at, (lo, hi)))
                 }
                 Some(&(lo, _)) => Some(lo),
                 None => None,
@@ -1058,8 +964,7 @@ impl RustMCTSPlayer {
     /// `probs`: numpy float32 vector of length POLICY_SIZE (full policy).
     /// `value`: numpy float32 vector of length VALUE_SIZE.
     /// `price_components` (optional): dict with keys
-    ///   - ``price_mean`` (np.float32 array, length num_slots)
-    ///   - ``price_log_std`` (np.float32 array, length num_slots)
+    ///   - ``price_logits`` (np.float32, num_slots x NUM_CELLS, flat or 2-D)
     ///   - ``slot_index`` ({(action_type_str, (entity_key_parts,)): int})
     ///   - ``num_slots`` (int)
     #[pyo3(signature = (arena_idx, probs, value, price_components=None))]
@@ -1206,21 +1111,13 @@ impl RustMCTSPlayer {
                 }
             } else {
                 // No price-grandchild was ever expanded for this PW slot at
-                // commit time. Commit the deterministic engine minimum
-                // (price_range low) rather than letting maybe_add_child sample
-                // a random price — passing `None` here would route through
-                // `_sample_price_with_index` and produce a nondeterministic
-                // committed price. This mirrors the removed Python fixed-min
-                // fallback (``committed_price = int(price_range[0])``). For PW
-                // slots the range entry is guaranteed present (is_pw_slot just
-                // returned true on it); snapping the min is identity for every
-                // action type (Bid mins are multiples of the step-5 grid; all
-                // others use step 1).
-                let price_min = self.arena[self.root_idx]
-                    .price_ranges
-                    .get(&action_index)
-                    .map(|&(lo, _)| lo);
-                self.maybe_add_child(self.root_idx, action_index, price_min)?
+                // commit time: commit the slot's first proposal — a price in
+                // the price head's most likely cell (Python's
+                // ``_select_most_visited_price_grandchild`` →
+                // ``maybe_add_child(action_index)``). The range minimum would
+                // be the wrong default for e.g. BuyCompany, which humans
+                // play at the maximum 94% of the time.
+                self.maybe_add_child(self.root_idx, action_index, None)?
             }
         } else {
             self.maybe_add_child(self.root_idx, action_index, None)?
@@ -1430,11 +1327,66 @@ impl RustMCTSPlayer {
         self.root_idx = 0;
     }
 
-    /// Internal: sample a price for a PW slot given the explicit action
-    /// index, so we can resolve the price-head slot via the entity-key
-    /// resolver. Falls back to a midpoint-Normal when no components or no
-    /// slot mapping is available.
-    fn _sample_price_with_index(
+    /// The price head's ``NUM_CELLS`` logits for ``action_index``'s slot at
+    /// ``arena_idx``, if the node has price components and the slot maps.
+    fn slot_logits(&self, arena_idx: usize, action_index: u32, action_type: &str) -> Option<&[f32]> {
+        let pc = self.arena[arena_idx].price_components.as_ref()?;
+        let key = price_head_entity_key(action_index, action_type)?;
+        let &slot = pc.slot_index.get(&key)?;
+        pc.price_logits.get(slot * NUM_CELLS..(slot + 1) * NUM_CELLS)
+    }
+
+    /// ``(PriceCells, cell probabilities)`` of a price-bearing slot — mirrors
+    /// Python ``_slot_cell_probs``. Without logits (or with non-finite ones)
+    /// the cells are uniform.
+    fn slot_cells(
+        &self,
+        arena_idx: usize,
+        action_index: u32,
+        action_type: &str,
+        price_range: (i64, i64),
+    ) -> Option<(PriceCells, [f64; NUM_CELLS])> {
+        let cells = PriceCells::new(action_type, price_range.0, price_range.1, bid_step())?;
+        let probs = cells.cell_probs(self.slot_logits(arena_idx, action_index, action_type));
+        Some((cells, probs))
+    }
+
+    /// The slot's next PW price: a uniform price inside the next cell of its
+    /// proposal order without a grandchild yet, or ``None`` once every
+    /// non-empty cell has one — mirrors Python ``_next_proposed_price``.
+    fn next_proposed_price(
+        &mut self,
+        arena_idx: usize,
+        action_index: u32,
+        action_type: &str,
+        price_range: (i64, i64),
+    ) -> Option<i64> {
+        let (cells, probs) = self.slot_cells(arena_idx, action_index, action_type, price_range)?;
+        let mut rng = rand::thread_rng();
+        let eps = self.price_explore_eps as f64;
+        let taken: std::collections::HashSet<usize> = self.arena[arena_idx]
+            .price_children
+            .get(&action_index)
+            .map(|m| m.keys().filter_map(|&p| cells.cell_of(p)).collect())
+            .unwrap_or_default();
+        let order = self.arena[arena_idx]
+            .price_proposals
+            .entry(action_index)
+            .or_insert_with(|| proposal_order(&probs, eps, &mut rng));
+        while !order.is_empty() {
+            let cell = order.remove(0);
+            if !taken.contains(&cell) {
+                return Some(cells.sample_price(cell, &mut rng));
+            }
+        }
+        None
+    }
+
+    /// One draw from the price head's distribution for a slot, with the
+    /// exploration floor mixed in: a cell, then a uniform price inside it.
+    /// Used for forced-chain prices and fully-expanded slots — mirrors
+    /// Python ``_sample_price_for_slot``.
+    fn sample_price_from_head(
         &self,
         arena_idx: usize,
         action_index: u32,
@@ -1445,22 +1397,24 @@ impl RustMCTSPlayer {
         if p_min == p_max {
             return p_min;
         }
-        let midpoint = (p_min + p_max) as f32 / 2.0;
-        let spread = (((p_max - p_min) as f32) / 4.0).max(1.0);
-        let mut price_mean = midpoint;
-        let mut price_log_std = spread.ln();
-
-        if let Some(pc) = self.arena[arena_idx].price_components.as_ref() {
-            if let Some(key) = price_head_entity_key(action_index, action_type) {
-                if let Some(&slot) = pc.slot_index.get(&key) {
-                    if slot < pc.price_mean.len() && slot < pc.price_log_std.len() {
-                        price_mean = pc.price_mean[slot];
-                        price_log_std = pc.price_log_std[slot];
-                    }
-                }
+        let (cells, probs) = match self.slot_cells(arena_idx, action_index, action_type, price_range) {
+            Some(x) => x,
+            None => return p_min,
+        };
+        let eps = self.price_explore_eps as f64;
+        let live = (0..NUM_CELLS).filter(|&c| cells.nonempty(c)).count() as f64;
+        let mut rng = rand::thread_rng();
+        let mut u = rng.gen::<f64>();
+        let mut chosen = None;
+        for c in (0..NUM_CELLS).filter(|&c| cells.nonempty(c)) {
+            chosen = Some(c);
+            let mass = (1.0 - eps) * probs[c] + eps / live;
+            if u < mass {
+                break;
             }
+            u -= mass;
         }
-        sample_price_for_pw(price_mean, price_log_std, action_type, price_range)
+        chosen.map_or(p_min, |c| cells.sample_price(c, &mut rng))
     }
 
     /// A node's own visit count — Python ``MCTSNode.N``. The root reads its
@@ -1593,45 +1547,43 @@ fn apply_action(
 // Price-components decoder
 // ----------------------------------------------------------------------------
 
-/// Decode a Python dict {price_mean, price_log_std, slot_index, num_slots}
-/// into the Rust ``PriceComponents`` struct. ``price_mean`` and
-/// ``price_log_std`` should be numpy float32 arrays of length ``num_slots``.
+/// Decode a Python dict {price_logits, slot_index, num_slots} into the Rust
+/// ``PriceComponents`` struct. ``price_logits`` is a numpy float32 array (or
+/// torch tensor) of ``num_slots x NUM_CELLS`` cell logits, flat or 2-D.
 /// ``slot_index`` keys are tuples of (action_type_str, (entity_key_parts...)).
 fn decode_price_components(py: Python<'_>, dict: &Bound<'_, PyAny>) -> PyResult<PriceComponents> {
     let d: &Bound<'_, PyDict> = dict.downcast::<PyDict>().map_err(|_| {
         PyValueError::new_err("price_components must be a dict")
     })?;
 
-    let means_obj = d.get_item("price_mean")?;
-    let log_stds_obj = d.get_item("price_log_std")?;
+    let logits_obj = d.get_item("price_logits")?;
     let slot_index_obj = d.get_item("slot_index")?;
     let num_slots_obj = d.get_item("num_slots")?;
 
-    let means_obj = means_obj
-        .ok_or_else(|| PyValueError::new_err("price_components missing price_mean"))?;
-    let log_stds_obj = log_stds_obj
-        .ok_or_else(|| PyValueError::new_err("price_components missing price_log_std"))?;
+    let logits_obj = logits_obj
+        .ok_or_else(|| PyValueError::new_err("price_components missing price_logits"))?;
     let slot_index_obj = slot_index_obj
         .ok_or_else(|| PyValueError::new_err("price_components missing slot_index"))?;
 
-    // ``price_mean`` / ``price_log_std`` may be numpy arrays or torch tensors.
-    // Use numpy.asarray to normalize, then read as float32 vectors.
+    // ``price_logits`` may be a numpy array or torch tensor, (num_slots,
+    // NUM_CELLS) or already flat: normalize to a flat float32 vector.
     let np = py.import("numpy")?;
-    let asarray = np.getattr("asarray")?;
-    let means_np = asarray.call1((means_obj, "float32"))?;
-    let log_stds_np = asarray.call1((log_stds_obj, "float32"))?;
+    let flat = np.getattr("ravel")?.call1((np.getattr("asarray")?.call1((logits_obj, "float32"))?,))?;
+    let logits_arr: PyReadonlyArray1<'_, f32> = flat.extract()?;
+    let price_logits: Vec<f32> = logits_arr.as_slice()?.to_vec();
 
-    // Use the numpy crate's PyReadonlyArray1 to extract slices.
-    let means_arr: PyReadonlyArray1<'_, f32> = means_np.extract()?;
-    let log_stds_arr: PyReadonlyArray1<'_, f32> = log_stds_np.extract()?;
-    let price_mean: Vec<f32> = means_arr.as_slice()?.to_vec();
-    let price_log_std: Vec<f32> = log_stds_arr.as_slice()?.to_vec();
-
-    let num_slots = if let Some(n) = num_slots_obj {
-        n.extract::<usize>().unwrap_or(price_mean.len())
-    } else {
-        price_mean.len()
+    let num_slots = match num_slots_obj {
+        Some(n) => n.extract::<usize>().unwrap_or(price_logits.len() / NUM_CELLS),
+        None => price_logits.len() / NUM_CELLS,
     };
+    if price_logits.len() < num_slots * NUM_CELLS {
+        return Err(PyValueError::new_err(format!(
+            "price_logits has {} values, expected {} slots x {} cells",
+            price_logits.len(),
+            num_slots,
+            NUM_CELLS
+        )));
+    }
 
     // Decode slot_index: dict of (action_type_str, tuple_of_strs) -> int.
     // The Python side passes tuples-of-strings (e.g. ("SV",) or
@@ -1668,51 +1620,8 @@ fn decode_price_components(py: Python<'_>, dict: &Bound<'_, PyAny>) -> PyResult<
     }
 
     Ok(PriceComponents {
-        price_mean,
-        price_log_std,
+        price_logits,
         slot_index,
         num_slots,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The pretrained head's opening B&O bid: mu $202, sigma ~$8.8, legal
-    /// $225..$600. The truncated Normal keeps nearly all mass at the
-    /// minimum; the old rejection sampler drew uniformly up to $600 ~2/3
-    /// of the time.
-    #[test]
-    fn price_sampling_with_mean_below_range_stays_near_the_minimum() {
-        let samples: Vec<i64> = (0..2000)
-            .map(|_| sample_price_for_pw(202.0, 2.178, "Bid", (225, 600)))
-            .collect();
-        assert!(samples.iter().all(|&p| (225..=600).contains(&p) && p % 5 == 0));
-        let near_min = samples.iter().filter(|&&p| p <= 240).count();
-        assert!(near_min as f64 / samples.len() as f64 > 0.95, "only {near_min}/2000 near the minimum");
-    }
-
-    #[test]
-    fn price_sampling_survives_a_non_finite_head() {
-        for (mu, log_std) in [(f32::NAN, 2.0), (200.0, f32::NAN), (f32::INFINITY, 2.0), (f32::NEG_INFINITY, 2.0)] {
-            let p = sample_price_for_pw(mu, log_std, "Bid", (225, 600));
-            assert!((225..=600).contains(&p) && p % 5 == 0, "{p} for mu={mu} log_std={log_std}");
-        }
-    }
-
-    #[test]
-    fn truncated_std_normal_stays_in_bounds_and_matches_the_tail_mean() {
-        let mut rng = rand::thread_rng();
-        for &(a, b) in &[(-0.3, 0.2), (-3.0, 3.0), (0.5, 0.6), (4.0, 1e9), (-1e9, -6.0), (40.0, 40.5)] {
-            for _ in 0..500 {
-                let z = sample_truncated_std_normal(a, b, &mut rng);
-                assert!(a <= z && z <= b, "{z} outside [{a}, {b}]");
-            }
-        }
-        // E[Z | Z > 3] = phi(3) / (1 - Phi(3)) ~= 3.283.
-        let n = 20000;
-        let mean: f64 = (0..n).map(|_| sample_truncated_std_normal(3.0, 1e9, &mut rng)).sum::<f64>() / n as f64;
-        assert!((mean - 3.283).abs() < 0.02, "tail mean {mean}");
-    }
 }

@@ -1,6 +1,6 @@
 """Exhaustive slot-coverage tests for ``ActionMapper.price_head_slot_for_action``.
 
-For every (action_type, entity) combination that the ``ContinuousPriceHead``
+For every (action_type, entity) combination that the price head (``PricePmfHead``)
 models, we assert that ``price_head_slot_for_action`` returns the right slot
 index, observed price, and price-range. Mocks stand in for the heavy game
 objects — the function only touches a handful of fields on

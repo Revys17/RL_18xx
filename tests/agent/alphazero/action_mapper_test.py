@@ -1585,8 +1585,8 @@ def test_operating_round_2_game_state(operating_round_2_game_state):
     assert mask.dtype == np.float32
     # Legal actions (price-collapsed):
     #   Pass, Buy SV (single slot), Buy NYC 2 (single slot), Buy NYC 3 (single slot).
-    # MCTS PW samples the price for the price-bearing slots from the
-    # ContinuousPriceHead's truncated Normal.
+    # MCTS PW proposes the price for the price-bearing slots from the
+    # price head's distribution over every legal price (price_pmf).
     assert mask[0] == 1.0
     buy_company_idx = action_mapper.action_offsets["BuyCompany"]
     assert (

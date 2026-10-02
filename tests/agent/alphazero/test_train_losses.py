@@ -1,8 +1,8 @@
 """Unit tests for ``train.py`` loss helpers.
 
 Covers:
-- ``_compute_price_nll_loss`` (truncated-Normal correction, fixed-price branch,
-  empty-target branch).
+- ``_compute_price_nll_loss`` (exact price-pmf NLL, visit weights, skipped and
+  empty targets).
 - ``_compute_decomposed_policy_loss`` (the three LayTile autoregressive levels).
 - ``_derive_dual_value_targets`` (score-encoded, win/loss-encoded, ties).
 
@@ -17,6 +17,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from rl18xx.agent.alphazero import price_pmf
+from rl18xx.agent.alphazero.price_pmf import NUM_CELLS
 from rl18xx.agent.alphazero.train import (
     _compute_decomposed_policy_loss,
     _compute_price_nll_loss,
@@ -29,81 +31,55 @@ from rl18xx.agent.alphazero.train import (
 # ---------------------------------------------------------------------------
 
 
-def _analytic_trunc_normal_nll(p, mu, sigma, lo, hi):
-    """Hand-computed truncated-Normal NLL: ``-log φ((p-μ)/σ) + log(Φ_hi - Φ_lo)``.
-
-    Matches the formula the helper claims to implement; keeps the analytic
-    expression independent of the production code so the test catches drift.
-    """
-    z = (p - mu) / sigma
-    # Standard-normal log-pdf at z, plus the ``- log(σ)`` Jacobian.
-    log_phi = -0.5 * z * z - math.log(sigma) - 0.5 * math.log(2.0 * math.pi)
-    inv_sqrt2 = 1.0 / math.sqrt(2.0)
-    cdf_hi = 0.5 * (1.0 + math.erf((hi - mu) * inv_sqrt2 / sigma))
-    cdf_lo = 0.5 * (1.0 + math.erf((lo - mu) * inv_sqrt2 / sigma))
-    log_trunc = math.log(cdf_hi - cdf_lo)
-    log_prob = log_phi - log_trunc
-    return -log_prob
+def _components(slot_logits: dict, num_slots: int = 60):
+    """``price_components`` for a one-example batch: zero logits except the
+    given ``{slot: NUM_CELLS logits}`` rows."""
+    logits = torch.zeros(1, num_slots, NUM_CELLS)
+    for slot, row in slot_logits.items():
+        logits[0, slot] = torch.as_tensor(row, dtype=torch.float32)
+    return {"price_logits": logits}
 
 
-def _make_price_components(num_slots, mu_values, log_sigma_values):
-    """Build a minimal ``price_components`` dict with the only two keys the
-    helper reads from ('price_mean', 'price_log_std')."""
-    mean = torch.tensor([mu_values], dtype=torch.float32)
-    log_std = torch.tensor([log_sigma_values], dtype=torch.float32)
-    assert mean.shape[1] == num_slots
-    return {"price_mean": mean, "price_log_std": log_std}
+def test_price_nll_is_the_exact_log_probability_of_the_price():
+    """NLL = -(log_softmax over non-empty cells)[cell(price)] + log |cell|,
+    for an atom (the min bid) and for a price inside a bin."""
+    row = torch.linspace(-1.0, 1.0, NUM_CELLS)
+    bid_slot = price_pmf.SLOT_INDEX[("Bid", ("BO",))]
+    train_slot = price_pmf.SLOT_INDEX[("BuyTrain", ("PRR", "4"))]
+    for slot, action_type, price, lo, hi in (
+        (bid_slot, "Bid", 225, 225, 600),
+        (bid_slot, "Bid", 437, 225, 600),  # off the $5 ladder: residual cell
+        (train_slot, "BuyTrain", 237, 1, 441),
+    ):
+        loss, diags = _compute_price_nll_loss(_components({slot: row}), [[(slot, price, 1.0, lo, hi)]])
+        cells = price_pmf.PriceCells(action_type, lo, hi)
+        expected = -cells.log_prob(row.numpy(), price)
+        assert math.isclose(loss.item(), expected, rel_tol=1e-5, abs_tol=1e-5), (action_type, price)
+        assert diags["price_count"] == 1
 
 
-def test_price_nll_truncated_normal_matches_analytic():
-    """The helper's NLL equals ``-log φ(z) + log(Φ(hi) - Φ(lo))`` to high precision."""
-    mu = 100.0
-    sigma = 20.0
-    log_sigma = math.log(sigma)
-    components = _make_price_components(1, [mu], [log_sigma])
-
-    price = 110.0
-    lo, hi = 80.0, 150.0
-    weight = 1.0
-    # Batch has one example with one target at slot 0.
-    price_targets = [[(0, price, weight, lo, hi)]]
-
-    loss, diags = _compute_price_nll_loss(components, price_targets)
-
-    expected = _analytic_trunc_normal_nll(price, mu, sigma, lo, hi)
-    assert math.isclose(loss.item(), expected, rel_tol=1e-5, abs_tol=1e-5), (
-        f"loss {loss.item():.6f} != analytic {expected:.6f}"
-    )
-    assert diags["price_count"] == 1
+def test_price_nll_weights_visit_fractions():
+    slot = price_pmf.SLOT_INDEX[("BuyTrain", ("NYC", "3"))]
+    row = torch.randn(NUM_CELLS)
+    targets = [[(slot, 1, 0.75, 1, 300), (slot, 300, 0.25, 1, 300)]]
+    loss, _ = _compute_price_nll_loss(_components({slot: row}), targets)
+    cells = price_pmf.PriceCells("BuyTrain", 1, 300)
+    expected = -(0.75 * cells.log_prob(row.numpy(), 1) + 0.25 * cells.log_prob(row.numpy(), 300))
+    assert math.isclose(loss.item(), expected, rel_tol=1e-5)
 
 
-def test_price_nll_fixed_price_branch_drops_truncation_correction():
-    """When ``lo == hi`` the helper collapses to the untruncated log-pdf
-    (truncation correction is zeroed out per the doc-comment contract)."""
-    mu = 50.0
-    sigma = 10.0
-    log_sigma = math.log(sigma)
-    components = _make_price_components(1, [mu], [log_sigma])
-
-    price = 50.0
-    lo = hi = 50.0  # fixed-price branch
-    price_targets = [[(0, price, 1.0, lo, hi)]]
-
-    loss, _ = _compute_price_nll_loss(components, price_targets)
-
-    # ``log_trunc_correction`` is zero, so loss == untruncated NLL.
-    z = (price - mu) / sigma
-    expected = -(-0.5 * z * z - log_sigma - 0.5 * math.log(2.0 * math.pi))
-    assert math.isclose(loss.item(), expected, rel_tol=1e-5, abs_tol=1e-5)
+def test_price_nll_skips_fixed_and_out_of_range_targets():
+    """Fixed-price (lo == hi) and illegal prices carry no distribution: no loss."""
+    for targets in ([[(0, 50, 1.0, 50, 50)]], [[(0, 700, 1.0, 225, 600)]], [[(99, 300, 1.0, 225, 600)]]):
+        loss, diags = _compute_price_nll_loss(_components({}), targets)
+        assert loss.item() == 0.0
+        assert diags["price_count"] == 0
 
 
 def test_price_nll_empty_targets_returns_zero_loss():
     """No targets in any batch row → loss is a literal zero tensor."""
-    components = _make_price_components(2, [0.0, 0.0], [0.0, 0.0])
-
-    # Both "no entries at all" and "rows of empty lists" should yield zero.
     for price_targets in ([], [[], []], None):
-        loss, diags = _compute_price_nll_loss(components, price_targets)
+        loss, diags = _compute_price_nll_loss(_components({}), price_targets)
         assert loss.item() == 0.0
         assert diags["price_count"] == 0
 
