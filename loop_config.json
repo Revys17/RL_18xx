@@ -32,7 +32,7 @@
     "noresign_holdout_rate": 0.1,
     "resign_high_threshold_min": 0.45,
     "use_inference_server": false,
-    "inference_batch_size": 64,
+    "inference_batch_size": 512,
     "inference_batch_timeout_ms": 2.0,
     "selfplay_tensorboard": true
 }
