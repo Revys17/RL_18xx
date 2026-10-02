@@ -138,6 +138,22 @@ Implemented on `claude/arbitrary-bid-amounts-638fdc`:
 - **Old checkpoints:** load with a warning; the Gaussian head's tensors are dropped.
 - **Refit:** `main.py refit-price-head` fits a fresh head on a checkpoint's frozen trunk from `human_games/lmdb_v3` and saves a new checkpoint without moving `current_best` (`--promote` moves it).
 
+### Results on the training branch's current_best (2026-10-01)
+
+**Refit:** fitted a fresh head on the frozen trunk of `20260930_173105` checkpoint 9 with `main.py refit-price-head`. It used 53,413 training and 3,249 validation rows with price targets from `lmdb_v3`, and converged in about 1,000 of 3,000 steps (about 3 minutes on the GPU). Held-out loss went from 4.72 bits/price (fresh, uniform head) to **1.67**, with the head's top cell matching the human's in 80% of cases.
+
+On held-out human decisions:
+
+| Type | Bits/price | Head's top cell = human's | Human's cell in first 4 PW proposals |
+|---|---|---|---|
+| Bid | 0.61 | 0.93 | 0.95 |
+| BuyCompany | 0.55 | 0.95 | 0.98 |
+| Cross-corp BuyTrain | 5.36 | 0.34 | 0.51 |
+
+The cross-corp train interior is the genuinely uncertain part. A joint pretraining run, where the trunk also gets price gradients from this head, should help it.
+
+**Opening self-play:** Rust MCTS at 64 readouts with the refit head, three 4-player games, 40 moves each. Each chosen bid slot searched 2–6 price grandchildren, and all 98 committed bids were the minimum bid, the human $5 ladder. Before the fix, self-play opened with bids up to the bidder's entire cash.
+
 ### Work plan (as planned)
 
 1. `cell()` in Python (`action_mapper.py`) and Rust (new `price_cells.rs`, step from `title::bid_price_step`). Add a parity test sweeping every `(type, price, lo, hi)` in the census.
