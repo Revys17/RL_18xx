@@ -102,18 +102,20 @@ Replays a game log in the browser via 18xx.games.
 
 ## Dashboard
 
-Shows current loop/phase, system metrics, loss curves (Chart.js), model lineage, and active self-play games. Training parameters (batch size, LR, epochs, weight decay, loss weights, gradient accumulation, training window) are editable inline and hot-reloaded.
+Shows current loop/phase (and whether the loop process is still alive), system and GPU metrics, per-run loss and diagnostic curves (Chart.js), the value-generalization and auction-unlock/resign scalars the loop logs only to TensorBoard, model lineage, and the current iteration's self-play games. Training parameters (batch size, LR, epochs, weight decay, loss weights, gradient accumulation, training window) are editable inline and hot-reloaded; loop-level settings (iterations, target experiences, processes, readouts) come from the `main.py train` command line and are shown read-only.
 
 API endpoints:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/loop_config` | GET/POST | Read or update loop configuration |
-| `/api/current_status` | GET | Current training loop status |
-| `/api/games_status` | GET | Active self-play games |
-| `/api/metrics_history` | GET | Training metrics (JSONL). `?last=N` for recent entries |
-| `/api/model_history` | GET | Model gating decisions |
-| `/api/system_metrics` | GET | CPU and memory usage |
+| `/api/current_status` | GET | `loop_status.json` plus `loop_process` (null when no loop is running), `status_updated_unix`, `current_best` |
+| `/api/games_status` | GET | Self-play game statuses. `?loop=N` (0-based, as in the file names) or `?limit=N` most recently updated |
+| `/api/metrics_runs` | GET | One summary per training run in the metrics history |
+| `/api/metrics_history` | GET | Training metrics (JSONL) with TensorBoard-only scalars merged in. `?run=latest\|<index>`, `?last=N` |
+| `/api/model_history` | GET | Model gating decisions. `?run=latest\|<index>` for one run's lineage |
+| `/api/pretrain_runs` | GET | Pretraining summaries. `?brief=true`, `?run=<run_name>`, `?latest=true` |
+| `/api/system_metrics` | GET | CPU, memory, and GPU (nvidia-smi) usage |
 
 ## Services
 
