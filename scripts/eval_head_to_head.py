@@ -20,9 +20,11 @@ moves, or still running at ``--max-length``, is scored on net worth.
 
 A player is a checkpoint -- ``<num>`` (in the current_best session),
 ``<session>/<num>``, or a path to a ``.pth`` -- optionally with its own search
-size, ``<checkpoint>@<readouts>`` (default ``--readouts``):
+size, ``<checkpoint>@<readouts>`` (default ``--readouts``), and its own PUCT
+constant, ``<checkpoint>@<readouts>/<c_puct_init>`` (default SelfPlayConfig's):
 
     uv run python scripts/eval_head_to_head.py --match 7@200 7@64 --games 120
+    uv run python scripts/eval_head_to_head.py --match 7@64/0.6 7@64 --games 120
 """
 
 import argparse
@@ -73,9 +75,15 @@ def resolve_checkpoint(spec: str) -> Path:
 
 
 def parse_player(spec: str, default_readouts: int) -> tuple:
-    """``(checkpoint path, readouts)`` of a ``<checkpoint>[@<readouts>]`` player spec."""
-    checkpoint, _, readouts = spec.partition("@")
-    return resolve_checkpoint(checkpoint), int(readouts) if readouts else default_readouts
+    """``(checkpoint path, readouts, c_puct_init or None)`` of a
+    ``<checkpoint>[@<readouts>[/<c_puct_init>]]`` player spec."""
+    checkpoint, _, search = spec.partition("@")
+    readouts, _, c_puct = search.partition("/")
+    return (
+        resolve_checkpoint(checkpoint),
+        int(readouts) if readouts else default_readouts,
+        float(c_puct) if c_puct else None,
+    )
 
 
 def model_factory(checkpoint_path):
@@ -140,6 +148,7 @@ def play_game(game_idx: int, seat_names: tuple, settings: dict) -> dict:
             use_inference_server=True,
             inference_client=_CLIENTS[spec["server"]],
             num_readouts=spec["readouts"],
+            **({"c_puct_init": spec["c_puct"]} if spec["c_puct"] is not None else {}),
             softpick_move_cutoff=settings["softpick"],
             dirichlet_noise_weight=0.0,
             enable_resign=False,
@@ -255,8 +264,8 @@ def main():
     players = {}
     for a, b in args.match:
         for spec in (a, b):
-            path, readouts = parse_player(spec, args.readouts)
-            players[spec] = {"server": str(path), "readouts": readouts}
+            path, readouts, c_puct = parse_player(spec, args.readouts)
+            players[spec] = {"server": str(path), "readouts": readouts, "c_puct": c_puct}
     paths = sorted({p["server"] for p in players.values()})
     games_per_match = math.ceil(args.games / len(ARRANGEMENTS)) * len(ARRANGEMENTS)
     settings = {
