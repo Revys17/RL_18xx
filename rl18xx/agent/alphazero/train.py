@@ -677,6 +677,9 @@ def train_model(
     else:
         fig, axes = None, None
 
+    if hasattr(model, "value_stop_grad"):
+        model.value_stop_grad = config.value_stop_grad
+
     accum_steps = config.gradient_accumulation_steps
     global_batch_number = 0
     for epoch in range(config.num_epochs):

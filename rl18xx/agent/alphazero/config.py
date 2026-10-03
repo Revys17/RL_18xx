@@ -278,6 +278,15 @@ class TrainingConfig:
     # play and each position seen about once.
     train_samples_per_iteration: Optional[int] = None
     value_lr_multiplier: float = 3.0  # multiplier for value head learning rate relative to config.lr
+    # Self-play training: the value/score heads train on detached features, so
+    # the trunk learns only from the policy (and auxiliary) targets. Every
+    # position of a game shares its outcome, and value gradients into the trunk
+    # taught it to recognize games. Replaying iterations 51-66 of a 100-iteration
+    # run (scripts/value_overfit_replay.py), detaching with value_lr_multiplier
+    # 0.3 cut the value CE on unseen games 0.81 -> 0.70 and the gap to the
+    # training window 0.33 -> 0.07. Pretraining has its own schedule
+    # (pretrain_value_joint_epochs).
+    value_stop_grad: bool = False
     use_fp16_training: bool = True  # mixed-precision (bf16) training on CUDA
     pretrain_label_smoothing: float = 0.03  # epsilon for smoothing policy targets during pretraining
     pretrain_validation_percentage: float = 0.05  # per-game probability of routing a game to validation
@@ -322,6 +331,7 @@ class TrainingConfig:
             "max_training_window": self.max_training_window,
             "train_samples_per_iteration": self.train_samples_per_iteration,
             "value_lr_multiplier": self.value_lr_multiplier,
+            "value_stop_grad": self.value_stop_grad,
             "use_fp16_training": self.use_fp16_training,
             "pretrain_label_smoothing": self.pretrain_label_smoothing,
             "pretrain_validation_percentage": self.pretrain_validation_percentage,

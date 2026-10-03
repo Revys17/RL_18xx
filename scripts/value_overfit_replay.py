@@ -14,7 +14,7 @@ Checkpoints and optimizer state go to ``--out`` (never model_checkpoints/).
 
     uv run python scripts/value_overfit_replay.py --log logs/run100b_2026-10-02.log \\
         --start-ckpt model_checkpoints/AlphaZeroTransformer/<session>/57.pth --first-iter 51 \\
-        --iters 25 --name w025 --set value_loss_weight=0.25 --set score_loss_weight=0.025
+        --iters 25 --name stopgrad_vlr03 --set value_stop_grad=true --set value_lr_multiplier=0.3
 """
 
 import argparse
@@ -71,7 +71,6 @@ def main():
     parser.add_argument("--iters", type=int, default=25)
     parser.add_argument("--name", required=True)
     parser.add_argument("--set", action="append", default=[], help="TrainingConfig override key=value")
-    parser.add_argument("--value-stop-grad", action="store_true", help="Value heads train on detached trunk features")
     parser.add_argument("--eval-sample", type=int, default=5000)
     parser.add_argument("--out", type=Path, default=REPO_ROOT / "logs" / "value_replay")
     parser.add_argument("--seed", type=int, default=0)
@@ -97,7 +96,6 @@ def main():
 
     totals = iteration_totals(args.log)
     model = _load_model_from_session_checkpoint(args.start_ckpt.parent, args.start_ckpt)
-    model.value_stop_grad = bool(args.value_stop_grad)
     data_dir = args.data or REPO_ROOT / "training_examples" / "selfplay" / model.get_name()
     dataset = SelfPlayDataset(data_dir)
 
@@ -107,7 +105,7 @@ def main():
     config = TrainingConfig.from_json(base)
     config.metrics = None
     window = config.max_training_window
-    LOGGER.info(f"Replay {args.name}: {config.to_json()} value_stop_grad={model.value_stop_grad}")
+    LOGGER.info(f"Replay {args.name}: {config.to_json()}")
 
     results_path = out_dir / "results.jsonl"
     results_path.unlink(missing_ok=True)
