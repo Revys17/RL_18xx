@@ -100,11 +100,7 @@
         .form-group input:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px rgba(108,140,255,0.2); }
         .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 0.85rem; font-weight: 500; cursor: pointer; transition: background 0.15s; }
         .btn-primary { background: var(--accent); color: #fff; } .btn-primary:hover { background: #5a7ae6; }
-        .btn-danger { background: var(--red); color: #fff; } .btn-danger:hover { background: #e05555; }
-        .btn-secondary { background: transparent; color: var(--text-muted); border: 1px solid var(--border); } .btn-secondary:hover { background: var(--bg-card-hover); }
         .config-actions { display: flex; gap: 10px; margin-top: 12px; }
-        .training-params-section { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
-        .training-params-section.collapsed { display: none; }
 
         @media (max-width: 1200px) { .main-grid, .charts-row { grid-template-columns: 1fr; } .health-cards { grid-template-columns: repeat(4, 1fr); } }
         @media (max-width: 768px) { .health-cards { grid-template-columns: repeat(2, 1fr); } .form-row { grid-template-columns: 1fr; } }
@@ -122,6 +118,20 @@
         .metric-section-header h2 { font-size: 0.95rem; font-weight: 600; }
         .metric-section-header .section-hint { font-size: 0.75rem; color: var(--text-dim); margin-left: 10px; font-weight: 400; }
         .metric-section-body.collapsed { display: none; }
+
+        .badge-dot.grey { background: var(--text-dim); }
+        .run-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; font-size: 0.8rem; color: var(--text-muted); flex-wrap: wrap; }
+        .run-bar select, .pretrain-select { background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 0.8rem; max-width: 100%; }
+        .run-info { color: var(--text-dim); }
+        .run-info.warn { color: var(--yellow); }
+        .chart-nodata { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 0 20px; color: var(--text-dim); font-size: 0.8rem; pointer-events: none; }
+        .game-badge.resigned { background: rgba(167,139,250,0.15); color: var(--purple); }
+        .game-badge.max-length { background: var(--yellow-bg); color: var(--yellow); }
+        .loop-settings { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px; }
+        .loop-settings b { color: var(--text); font-variant-numeric: tabular-nums; }
+        .config-note { font-size: 0.78rem; color: var(--text-dim); margin-bottom: 12px; }
+        .config-note code { color: var(--text-muted); }
+        .form-group select { width: 100%; padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.85rem; }
     </style>
 </head>
 <body>
@@ -130,19 +140,22 @@
             <div class="header-left">
                 <h1>AlphaZero Training</h1>
                 <div class="header-badges">
-                    <div class="badge"><span class="badge-dot blue" id="phase-dot"></span><span class="badge-value" id="phase-text">Loading...</span></div>
+                    <div class="badge" id="phase-badge"><span class="badge-dot blue" id="phase-dot"></span><span class="badge-value" id="phase-text">Loading...</span></div>
                     <div class="badge"><span class="badge-label">Loop</span><span class="badge-value" id="loop-counter">--/--</span></div>
-                    <div class="badge"><span class="badge-label">Model</span><span class="badge-value" id="model-version">--</span></div>
+                    <div class="badge" title="Self-play games completed by the running loop"><span class="badge-label">Games</span><span class="badge-value" id="games-total">--</span></div>
+                    <div class="badge" title="Checkpoint self-play is using (current_best.json)"><span class="badge-label">Model</span><span class="badge-value" id="model-version">--</span></div>
                 </div>
             </div>
             <div class="header-right">
                 <span class="sys-metric">CPU <span id="cpu-metric">--</span>%</span>
                 <span class="sys-metric">Mem <span id="memory-metric">--</span>%</span>
-                <a href="{{ tensorboard_url }}" target="_blank" class="header-link">TensorBoard</a>
+                <span class="sys-metric" id="gpu-metric-wrap" style="display:none;">GPU <span id="gpu-metric">--</span></span>
+                <a href="http://localhost:{{ tensorboard_port }}" id="tensorboard-link" target="_blank" class="header-link">TensorBoard</a>
             </div>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endif %}{% endwith %}
+        <div class="flash error" id="fetch-errors" style="display:none;"></div>
 
         <div class="tab-bar">
             <button class="tab-btn active" data-tab="selfplay" onclick="showTab('selfplay')">Self-Play Loop</button>
@@ -150,6 +163,11 @@
         </div>
 
         <div id="tab-selfplay">
+        <div class="run-bar">
+            <label for="run-select">Run</label>
+            <select id="run-select" onchange="onRunChange()"><option value="latest">Latest run</option></select>
+            <span class="run-info" id="run-info"></span>
+        </div>
         <div class="health-cards" id="health-cards">
             <div class="health-card neutral" id="card-learning"><div class="health-card-label">Learning</div><div class="health-card-value">--</div><div class="health-card-delta delta-neutral">waiting for data</div></div>
             <div class="health-card neutral" id="card-total-loss"><div class="health-card-label">Total Loss</div><div class="health-card-value">--</div><div class="health-card-delta delta-neutral"></div></div>
@@ -174,6 +192,10 @@
                 <div class="charts-row">
                     <div class="panel"><h2>Policy Accuracy</h2><div class="chart-container"><canvas id="c-policy-acc"></canvas></div></div>
                     <div class="panel"><h2>Value Quality</h2><div class="chart-container"><canvas id="c-value-quality"></canvas></div></div>
+                </div>
+                <div class="charts-row">
+                    <div class="panel"><h2>Value Generalization (CE before training)</h2><div class="chart-container"><canvas id="c-value-ce"></canvas></div></div>
+                    <div class="panel"><h2>Auction Unlock &amp; Resignation</h2><div class="chart-container"><canvas id="c-wheels"></canvas></div></div>
                 </div>
             </div>
         </div>
@@ -200,7 +222,7 @@
                 </div>
                 <div class="charts-row">
                     <div class="panel"><h2>Mean Legal Actions</h2><div class="chart-container"><canvas id="c-legal-actions"></canvas></div></div>
-                    <div class="panel"></div>
+                    <div class="panel"><h2>Oldest Training Example</h2><div class="chart-container"><canvas id="c-data-age"></canvas></div></div>
                 </div>
             </div>
         </div>
@@ -218,7 +240,7 @@
                     <div class="panel"><h2>Experiences per Iteration</h2><div class="chart-container"><canvas id="c-experiences"></canvas></div></div>
                 </div>
                 <div class="charts-row">
-                    <div class="panel"><h2>Cumulative Training Data</h2><div class="chart-container"><canvas id="c-cumulative"></canvas></div></div>
+                    <div class="panel"><h2>Cumulative Data</h2><div class="chart-container"><canvas id="c-cumulative"></canvas></div></div>
                     <div class="panel"><h2>Curriculum Schedule</h2><div class="chart-container"><canvas id="c-schedule"></canvas></div></div>
                 </div>
             </div>
@@ -250,12 +272,13 @@
                     <div class="selfplay-stat"><span class="selfplay-stat-label">Completed</span><span class="selfplay-stat-value" id="stat-completed" style="color:var(--green)">0</span></div>
                     <div class="selfplay-stat"><span class="selfplay-stat-label">In Progress</span><span class="selfplay-stat-value" id="stat-in-progress" style="color:var(--blue)">0</span></div>
                     <div class="selfplay-stat"><span class="selfplay-stat-label">Error</span><span class="selfplay-stat-value" id="stat-error" style="color:var(--red)">0</span></div>
-                    <div class="selfplay-stat"><span class="selfplay-stat-label">Pending</span><span class="selfplay-stat-value" id="stat-pending" style="color:var(--text-dim)">0</span></div>
-                    <div class="selfplay-stat"><span class="selfplay-stat-label">Throughput</span><span class="selfplay-stat-value" id="stat-throughput" style="color:var(--text)">--</span><span class="selfplay-stat-label">games/hr</span></div>
+                    <div class="selfplay-stat" title="Moves of this iteration's completed games vs the loop's target_experiences; in-flight games still finish once it is reached"><span class="selfplay-stat-label">Experiences</span><span class="selfplay-stat-value" id="stat-experiences" style="color:var(--text)">--</span></div>
+                    <div class="selfplay-stat"><span class="selfplay-stat-label">Throughput</span><span class="selfplay-stat-value" id="stat-throughput" style="color:var(--text)">--</span><span class="selfplay-stat-label">games/hr (last iteration)</span></div>
                 </div>
                 <div class="games-filter">
                     <label><input type="checkbox" id="show-current-loop-only" checked onchange="filterGames()"> Current loop only</label>
                     <span id="current-loop-info" style="color:var(--text-dim);">(Loop {{ status.current_loop|default('--') }})</span>
+                    <span id="games-scope-info" style="color:var(--text-dim);"></span>
                 </div>
                 <div class="games-list" id="self-play-games-dynamic-area"><div class="no-data-msg">No games in progress</div></div>
             </div>
@@ -266,29 +289,29 @@
                 <h2>Configuration</h2><span class="config-toggle" id="config-toggle-icon">&#x25BC;</span>
             </div>
             <div class="config-body collapsed" id="config-body">
+                {% macro loop_setting(value) %}{{ '{:,}'.format(value) if value is number else '--' }}{% endmacro %}
+                <div class="loop-settings">
+                    <span>Iterations <b>{{ loop_setting(config_form.num_loop_iterations) }}</b></span>
+                    <span>Target experiences / iteration <b>{{ loop_setting(config_form.target_experiences) }}</b></span>
+                    <span>Self-play processes <b>{{ loop_setting(config_form.num_threads) }}</b></span>
+                    <span>Readouts <b>{{ loop_setting(config_form.num_readouts) }}</b></span>
+                </div>
+                <p class="config-note">These come from the <code>main.py train</code> command line: the loop rewrites them into loop_config.json every iteration, so they can't be changed (and a run can't be told to stop early) from here. The training parameters below are hot-reloaded at the start of each iteration.</p>
                 <form method="POST" class="compact-form">
                     <div class="form-row">
-                        <div class="form-group"><label for="num_loop_iterations">Loop Iterations</label><input type="number" id="num_loop_iterations" name="num_loop_iterations" value="{{ config_form.num_loop_iterations if config_form.num_loop_iterations is not none else '' }}" required></div>
-                        <div class="form-group"><label for="num_games_per_iteration">Games per Iteration</label><input type="number" id="num_games_per_iteration" name="num_games_per_iteration" value="{{ config_form.num_games_per_iteration if config_form.num_games_per_iteration is not none else '' }}" required></div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group"><label for="num_threads">Threads</label><input type="number" id="num_threads" name="num_threads" value="{{ config_form.num_threads if config_form.num_threads is not none else '' }}" required></div>
-                        <div class="form-group"><label for="num_readouts">Readouts</label><input type="number" id="num_readouts" name="num_readouts" value="{{ config_form.num_readouts if config_form.num_readouts is not none else '' }}" required></div>
-                    </div>
-                    <div class="training-params-section collapsed" id="training-params">
-                        <div class="form-row">
-                            {% for i in range(0, editable_training_params|length, 2) %}
-                                <div class="form-group"><label for="{{ editable_training_params[i] }}">{{ editable_training_params[i].replace('_', ' ')|title }}</label><input type="number" step="any" id="{{ editable_training_params[i] }}" name="{{ editable_training_params[i] }}" value="{{ config_form.training_params[editable_training_params[i]] if config_form.training_params[editable_training_params[i]] is not none else '' }}"></div>
-                                {% if i+1 < editable_training_params|length %}
-                                <div class="form-group"><label for="{{ editable_training_params[i+1] }}">{{ editable_training_params[i+1].replace('_', ' ')|title }}</label><input type="number" step="any" id="{{ editable_training_params[i+1] }}" name="{{ editable_training_params[i+1] }}" value="{{ config_form.training_params[editable_training_params[i+1]] if config_form.training_params[editable_training_params[i+1]] is not none else '' }}"></div>
-                                {% endif %}
-                            {% endfor %}
+                        {% for param in editable_training_params %}
+                        {% set value = config_form.training_params.get(param) %}
+                        <div class="form-group"><label for="{{ param }}">{{ param.replace('_', ' ')|title }}</label>
+                            {% if param in bool_training_params %}
+                            <select id="{{ param }}" name="{{ param }}"><option value="true" {{ 'selected' if value }}>True</option><option value="false" {{ 'selected' if not value }}>False</option></select>
+                            {% else %}
+                            <input type="number" step="any" id="{{ param }}" name="{{ param }}" value="{{ value if value is not none else '' }}" placeholder="{{ 'unset' if value is none else '' }}">
+                            {% endif %}
                         </div>
+                        {% endfor %}
                     </div>
                     <div class="config-actions">
-                        <button type="submit" class="btn btn-primary">Update Configuration</button>
-                        <button type="button" class="btn btn-secondary" onclick="toggleTrainingParams()">Training Params</button>
-                        <button type="button" class="btn btn-danger" onclick="endAfterCurrentLoop()">End After Current Loop</button>
+                        <button type="submit" class="btn btn-primary">Update Training Parameters</button>
                     </div>
                 </form>
             </div>
@@ -296,6 +319,11 @@
         </div><!-- /tab-selfplay -->
 
         <div id="tab-pretrain" style="display:none;">
+            <div class="run-bar">
+                <label for="pretrain-select">Run</label>
+                <select id="pretrain-select" class="pretrain-select" onchange="onPretrainChange()"></select>
+                <span class="run-info" id="pretrain-run-info"></span>
+            </div>
             <div id="pretrain-nodata" class="no-data-msg">No pretraining runs found.</div>
             <div id="pretrain-section" style="display:none;">
                 <div class="charts-row" style="margin-bottom:6px;">
@@ -332,23 +360,54 @@
     </div>
 
     <script>
-    const MAX_GAME_STEPS = 1000;
-    let currentLoop = {{ status.current_loop|default('null') }};
+    const ALL_GAMES_LIMIT = 200;
+    const UNIFORM_4P_CE = Math.log(4);
+    const STALE_PRETRAIN_SECONDS = 3 * 3600;
+    let loopStatus = {};
+    let currentLoop = {{ status.get('current_loop')|tojson }};
+    let targetExperiences = {{ config_form.target_experiences|tojson }};
     let allGamesData = [];
-    let totalGamesThisIteration = {{ status.total_games_this_iteration|default(0) }};
+    let selectedRun = 'latest';
+    let runSummaries = [];
+    let lineageKey = '';
+    let pretrainRuns = [], pretrainSelected = null;
     let C = {}; // chart instances
 
-    function formatTimeAgo(ts) {
-        if (!ts || ts <= 0) return '--';
-        const s = Math.round((Date.now()/1000)-ts);
-        if (s<5)return'now';if(s<60)return s+'s';if(s<3600)return Math.round(s/60)+'m';if(s<86400)return Math.round(s/3600)+'h';return Math.round(s/86400)+'d';
+    function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+    function formatAge(seconds){
+        if(seconds==null||!isFinite(seconds))return'--';const s=Math.max(0,Math.round(seconds));
+        if(s<5)return'now';if(s<60)return s+'s';if(s<3600)return Math.round(s/60)+'m';if(s<86400)return Math.round(s/3600)+'h';return Math.round(s/86400)+'d';
     }
+    function formatTimeAgo(ts){return(!ts||ts<=0)?'--':formatAge(Date.now()/1000-ts);}
+    function fmtDate(iso){if(!iso)return'--';const d=new Date(iso);return isNaN(d)?iso:d.toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}
     function fmt(v,d){return(v==null)?'--':Number(v).toFixed(d!=null?d:3);}
     function pct(v){return(v==null)?'--':(Number(v)*100).toFixed(1)+'%';}
+    function num(v){return(v==null)?'--':Number(v).toLocaleString();}
     function deltaStr(curr,prev,d,inv){
         if(prev==null||curr==null)return'';const delta=curr-prev,sign=delta>0?'+':'';
         const cls=inv?(delta<0?'delta-positive':delta>0?'delta-negative':'delta-neutral'):(delta>0?'delta-positive':delta<0?'delta-negative':'delta-neutral');
         return`<span class="${cls}">${sign}${delta.toFixed(d!=null?d:3)}</span>`;
+    }
+
+    // Every fetch goes through here so a failing endpoint shows up in a banner
+    // instead of silently leaving the charts empty.
+    const fetchErrors = {};
+    function renderFetchErrors(){
+        const el=document.getElementById('fetch-errors'),msgs=Object.entries(fetchErrors).map(([k,v])=>k+': '+v);
+        el.style.display=msgs.length?'block':'none';
+        el.textContent=msgs.length?'Could not load dashboard data. '+msgs.join(' | '):'';
+    }
+    async function getJSON(url,key,quiet){
+        try{
+            const r=await fetch(url,{cache:'no-store'});const text=await r.text();
+            let data;try{data=JSON.parse(text);}catch(e){throw new Error('invalid JSON ('+e.message+')');}
+            if(!r.ok)throw new Error((data&&data.error)||('HTTP '+r.status));
+            if(fetchErrors[key]){delete fetchErrors[key];renderFetchErrors();}
+            return data;
+        }catch(e){
+            if(!quiet){fetchErrors[key]=(e&&e.message)||String(e);renderFetchErrors();}
+            return quiet?{__error:(e&&e.message)||String(e)}:null;
+        }
     }
 
     Chart.defaults.color='#8b8fa3';Chart.defaults.borderColor='rgba(42,46,58,0.6)';Chart.defaults.font.size=11;
@@ -360,12 +419,15 @@
     function ds(label,color,extra){return{label,data:[],borderColor:color,borderWidth:2,pointRadius:3,tension:0.2,...(extra||{})};}
     function dsDash(label,color,extra){return ds(label,color,{borderWidth:1.5,pointRadius:2,borderDash:[4,2],...(extra||{})});}
     function dsRange(label,color){return ds(label,color,{borderWidth:1,pointRadius:0,borderDash:[3,3]});}
+    function dsRef(label,color){return ds(label,color,{borderWidth:1.5,pointRadius:0,borderDash:[6,4],_ref:true});}
 
     function initCharts(){
         C.losses=new Chart(document.getElementById('c-losses'),{type:'line',data:{labels:[],datasets:[ds('Total','#6c8cff'),ds('Policy','#4ade80'),ds('Value (KL)','#fb923c')]},options:opts('Loss',{min:0})});
         C.entropy=new Chart(document.getElementById('c-entropy'),{type:'line',data:{labels:[],datasets:[ds('Entropy Bonus','#a78bfa'),ds('Net Entropy','#6c8cff'),ds('MCTS Target','#4ade80'),ds('KL Divergence','#f87171')]},options:opts('Entropy / KL')});
         C.policyAcc=new Chart(document.getElementById('c-policy-acc'),{type:'line',data:{labels:[],datasets:[ds('Top-1','#4ade80'),ds('Top-5','#22d3ee'),dsDash('Max Prob','#fb923c')]},options:opts('Probability',{min:0,max:1})});
         C.valueQuality=new Chart(document.getElementById('c-value-quality'),{type:'line',data:{labels:[],datasets:[ds('Correlation','#a78bfa'),ds('Explained Variance','#4ade80')]},options:opts('Quality',{min:-1,max:1})});
+        C.valueCE=new Chart(document.getElementById('c-value-ce'),{type:'line',data:{labels:[],datasets:[ds('New games (not yet trained on)','#f87171'),ds('Trained window','#6c8cff'),dsRef('Uniform guess (4p)','#8b8fa3')]},options:opts('Value CE (nats)',{min:0})});
+        C.wheels=new Chart(document.getElementById('c-wheels'),{type:'line',data:{labels:[],datasets:[ds('Auction-unlock games','#fb923c'),ds('Resigned games','#a78bfa'),dsDash('Resign threshold','#8b8fa3')]},options:opts('Fraction',{min:0,max:1})});
         C.valueError=new Chart(document.getElementById('c-value-error'),{type:'line',data:{labels:[],datasets:[ds('MAE','#fb923c'),ds('MSE','#f87171')]},options:opts('Error',{min:0})});
         C.valueDist=new Chart(document.getElementById('c-value-dist'),{type:'line',data:{labels:[],datasets:[ds('Target Mean','#4ade80'),dsRange('Target Min','#4ade80'),dsRange('Target Max','#4ade80'),ds('Pred Mean','#6c8cff'),dsRange('Pred Min','#6c8cff'),dsRange('Pred Max','#6c8cff'),dsDash('Target Std','#fb923c'),dsDash('Pred Std','#a78bfa')]},options:opts('Value (softmax prob)',{min:0,max:1})});
         C.gradNorms=new Chart(document.getElementById('c-grad-norms'),{type:'line',data:{labels:[],datasets:[ds('Total','#6c8cff'),ds('Policy Head','#4ade80'),ds('Value Head','#fb923c'),ds('Trunk','#a78bfa')]},options:opts('L2 Norm')});
@@ -388,13 +450,14 @@
         C.movesPerSec=new Chart(document.getElementById('c-moves-per-sec'),{type:'line',data:{labels:[],datasets:[ds('Moves/Second','#6c8cff')]},options:opts('Moves/s')});
         C.gameLength=new Chart(document.getElementById('c-game-length'),{type:'line',data:{labels:[],datasets:[ds('Average','#6c8cff'),dsRange('Min','#4ade80'),dsRange('Max','#f87171')]},options:opts('Moves')});
         C.gamesCount=new Chart(document.getElementById('c-games-count'),{type:'line',data:{labels:[],datasets:[ds('Games Played','#4ade80')]},options:opts('Games')});
-        C.experiences=new Chart(document.getElementById('c-experiences'),{type:'line',data:{labels:[],datasets:[ds('Experiences','#6c8cff')]},options:opts('Examples')});
-        C.cumulative=new Chart(document.getElementById('c-cumulative'),{type:'line',data:{labels:[],datasets:[ds('Training Set Size','#6c8cff'),dsDash('Cumulative Experiences','#a78bfa')]},options:opts('Examples')});
+        C.experiences=new Chart(document.getElementById('c-experiences'),{type:'line',data:{labels:[],datasets:[ds('Self-play experiences','#6c8cff'),dsDash('Samples trained on','#a78bfa')]},options:opts('Examples',{min:0})});
+        C.cumulative=new Chart(document.getElementById('c-cumulative'),{type:'line',data:{labels:[],datasets:[ds('Self-play experiences','#6c8cff'),dsDash('Samples trained on','#a78bfa')]},options:opts('Examples (cumulative, this run)',{min:0})});
         C.auxPT=new Chart(document.getElementById('c-aux-pt'),{type:'line',data:{labels:[],datasets:[ds('Pred Mean','#6c8cff'),ds('Target Mean','#4ade80')]},options:opts('log(action count)')});
         C.auxCorr=new Chart(document.getElementById('c-aux-corr'),{type:'line',data:{labels:[],datasets:[ds('Correlation','#a78bfa')]},options:opts('Correlation',{min:-1,max:1})});
         C.lr=new Chart(document.getElementById('c-lr'),{type:'line',data:{labels:[],datasets:[ds('Learning Rate','#6c8cff')]},options:opts('LR')});
         C.legalActions=new Chart(document.getElementById('c-legal-actions'),{type:'line',data:{labels:[],datasets:[ds('Mean Legal Actions','#4ade80')]},options:opts('Actions')});
-        C.gating=new Chart(document.getElementById('c-gating'),{type:'line',data:{labels:[],datasets:[ds('Gate Win Rate','#4ade80'),dsDash('Promote Threshold','#f87171',{pointRadius:0})]},options:opts('Win Rate',{min:0,max:1})});
+        C.dataAge=new Chart(document.getElementById('c-data-age'),{type:'line',data:{labels:[],datasets:[ds('Oldest example in the training window','#22d3ee')]},options:opts('Minutes',{min:0})});
+        C.gating=new Chart(document.getElementById('c-gating'),{type:'line',data:{labels:[],datasets:[ds('Gate Win Rate','#4ade80'),dsRef('Promote Threshold','#f87171')]},options:opts('Win Rate',{min:0,max:1})});
         const PHASE_KEYS=['Auction','WaterfallAuction','Stock','Operating','Other'];
         C.phaseMix=new Chart(document.getElementById('c-phase-mix'),{type:'bar',data:{labels:[],datasets:[
             {label:'Auction',data:[],backgroundColor:'rgba(167,139,250,0.7)',stack:'ph'},
@@ -411,6 +474,16 @@
         C.pretrainWinner=new Chart(document.getElementById('c-pretrain-winner'),{type:'line',data:{labels:[],datasets:[ds('Train','#4ade80'),dsDash('Validation','#fb923c')]},options:opts('Accuracy',{min:0,max:1})});
         C.pretrainValComponents=new Chart(document.getElementById('c-pretrain-val-components'),{type:'line',data:{labels:[],datasets:[ds('Val Total','#6c8cff'),ds('Val Policy','#4ade80'),ds('Val Value','#fb923c')]},options:opts('Loss',{min:0})});
         C.pretrainLR=new Chart(document.getElementById('c-pretrain-lr'),{type:'line',data:{labels:[],datasets:[ds('Learning Rate','#6c8cff')]},options:opts('LR')});
+        // Pretraining x-axes count epochs, not loops.
+        ['pretrainLoss','pretrainAcc','pretrainValue','pretrainWinner','pretrainValComponents','pretrainLR'].forEach(k=>{C[k].options.scales.x={grid:GRID,title:{display:true,text:'Epoch',color:'#5c6078'}};});
+    }
+
+    // Overlay a message on a chart that has nothing to draw (reference lines don't count).
+    function setNoData(chart,msg){
+        const box=chart.canvas.parentNode;let el=box.querySelector('.chart-nodata');
+        const empty=!chart.data.datasets.some(d=>!d._ref&&(d.data||[]).some(v=>v!=null));
+        if(empty){if(!el){el=document.createElement('div');el.className='chart-nodata';box.appendChild(el);}el.textContent=msg||'No data for this run';}
+        else if(el)el.remove();
     }
 
     function showTab(name){
@@ -419,6 +492,7 @@
         document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
         try{localStorage.setItem('dashTab',name);}catch(e){}
         requestAnimationFrame(()=>Object.values(C).forEach(ch=>{try{ch.resize();}catch(e){}}));
+        if(name==='pretrain')fetchPretrainRun();
     }
     function toggleSection(hdr){
         hdr.nextElementSibling.classList.toggle('collapsed');
@@ -426,18 +500,53 @@
         requestAnimationFrame(()=>Object.values(C).forEach(ch=>{try{ch.resize();}catch(e){}}));
     }
 
+    // ---------------- Pretraining tab ----------------
+    function pretrainIsStale(r){return!!(r&&r.in_progress&&r.updated_unix&&Date.now()/1000-r.updated_unix>STALE_PRETRAIN_SECONDS);}
+    function pretrainLabel(r){
+        const parts=[r.run_name,(r.training_examples||0).toLocaleString()+' ex',(r.epochs_trained||0)+' ep'];
+        if(currentBestSession()&&r.model_session===currentBestSession())parts.push('current model lineage');
+        if(r.in_progress)parts.push(pretrainIsStale(r)?'stopped?':'running');
+        return parts.join(' · ');
+    }
+    function currentBestSession(){return loopStatus.current_best?loopStatus.current_best.session:null;}
+    async function fetchPretrainRuns(){
+        const runs=await getJSON('/api/pretrain_runs?brief=true','pretraining runs');
+        if(!Array.isArray(runs))return;
+        pretrainRuns=runs;
+        if(pretrainSelected==null||!runs.some(r=>r.run_name===pretrainSelected)){
+            // Default to the pretraining run behind the model self-play is using.
+            const lineage=runs.find(r=>r.model_session===currentBestSession());
+            pretrainSelected=(lineage||runs[0]||{}).run_name||null;
+        }
+        const sel=document.getElementById('pretrain-select');
+        const big=runs.filter(r=>(r.training_examples||0)>=1000),small=runs.filter(r=>(r.training_examples||0)<1000);
+        const opt=r=>`<option value="${esc(r.run_name)}">${esc(pretrainLabel(r))}</option>`;
+        let html=big.map(opt).join('');
+        if(small.length)html+=`<optgroup label="Under 1,000 examples (test / smoke runs)">${small.map(opt).join('')}</optgroup>`;
+        if(sel._html!==html){sel.innerHTML=html;sel._html=html;}
+        if(pretrainSelected)sel.value=pretrainSelected;
+        const live=runs.some(r=>r.in_progress&&!pretrainIsStale(r));
+        document.getElementById('pretrain-tab-hint').textContent=live?'● running':'';
+        if(document.getElementById('tab-pretrain').style.display!=='none')fetchPretrainRun();
+    }
+    function onPretrainChange(){pretrainSelected=document.getElementById('pretrain-select').value;fetchPretrainRun();}
+    async function fetchPretrainRun(){
+        if(!pretrainSelected){updatePretrainPanel(null);return;}
+        const s=await getJSON('/api/pretrain_runs?run='+encodeURIComponent(pretrainSelected),'pretraining run');
+        if(s)updatePretrainPanel(s);
+    }
+
     function updatePretrainPanel(summary){
         const section=document.getElementById('pretrain-section');
         const nodata=document.getElementById('pretrain-nodata');
-        const hint=document.getElementById('pretrain-tab-hint');
-        if(!summary||!summary.run_name){section.style.display='none';nodata.style.display='block';hint.textContent='';return;}
+        if(!summary||!summary.run_name){section.style.display='none';nodata.style.display='block';return;}
         section.style.display='block';nodata.style.display='none';
         document.getElementById('pretrain-run').textContent=summary.run_name;
         document.getElementById('pretrain-session').textContent=summary.model_session||'--';
-        const inProg=!!summary.in_progress;
-        hint.textContent=inProg?'● running':'';
-        document.getElementById('pretrain-status').textContent=inProg?'(in progress)':'(completed)';
-        document.getElementById('pretrain-status').style.color=inProg?'#fb923c':'#4ade80';
+        const inProg=!!summary.in_progress,stale=pretrainIsStale(summary),st=document.getElementById('pretrain-status');
+        st.textContent=!inProg?'(completed)':stale?'(stopped: no update for '+formatTimeAgo(summary.updated_unix)+')':'(in progress)';
+        st.style.color=!inProg?'#4ade80':stale?'#8b8fa3':'#fb923c';
+        document.getElementById('pretrain-run-info').textContent=summary.updated_unix?'updated '+formatTimeAgo(summary.updated_unix)+' ago':'';
         const planned=summary.epochs_planned||summary.epochs_trained||0;
         document.getElementById('pretrain-epochs').textContent=(summary.epochs_trained||0)+'/'+planned;
         document.getElementById('pretrain-examples').textContent=(summary.training_examples||0).toLocaleString();
@@ -477,16 +586,20 @@
         C.pretrainLR.data.labels=epochs;
         C.pretrainLR.data.datasets[0].data=summary.epoch_lr||[];
         C.pretrainLR.update('none');
+        ['pretrainLoss','pretrainAcc','pretrainValue','pretrainWinner','pretrainValComponents','pretrainLR'].forEach(k=>setNoData(C[k],'Not recorded for this run'));
     }
 
-    function fetchPretrainSummary(){fetch('/api/pretrain_runs?latest=true').then(r=>r.json()).then(updatePretrainPanel).catch(()=>{});}
-
+    // ---------------- Self-play tab ----------------
     function updateHealthCards(history){
-        if(!history.length)return;
+        if(!history.length){
+            ['card-learning','card-total-loss','card-policy-acc','card-policy-kl','card-value-ev','card-value-corr','card-grad-norm','card-gate-wr','card-moves-sec','card-iter-time'].forEach(id=>updateCard(id,'--',id==='card-learning'?'waiting for data':'','neutral'));
+            return;
+        }
         const curr=history[history.length-1],prev=history.length>=2?history[history.length-2]:null;
         const recent=history.slice(-5).map(r=>r.total_loss).filter(v=>v!=null);
         let ls='--',lc='neutral',ld='';
         if(recent.length>=3){const slope=(recent[recent.length-1]-recent[0])/(recent.length-1);if(slope<-0.01){ls='Active';lc='green';ld='loss decreasing';}else if(slope>0.01){ls='Diverging';lc='red';ld='loss increasing';}else{ls='Plateau';lc='yellow';ld='loss flat';}}else if(recent.length>0){ls='Early';ld=recent.length+' loop(s)';}
+        if(curr.total_loss==null&&curr.epoch_losses&&curr.epoch_losses.some(v=>v==null)){ls='NaN';lc='red';ld='last iteration diverged';}
         updateCard('card-learning',ls,ld,lc);
         updateCard('card-total-loss',fmt(curr.total_loss,3),deltaStr(curr.total_loss,prev?.total_loss,3,true),curr.total_loss==null?'neutral':curr.total_loss<2?'green':curr.total_loss<4?'yellow':'red');
         updateCard('card-policy-acc',pct(curr.top1_accuracy),deltaStr(curr.top1_accuracy,prev?.top1_accuracy,3,false),curr.top1_accuracy>0.2?'green':curr.top1_accuracy>0.1?'yellow':'red');
@@ -494,22 +607,26 @@
         updateCard('card-value-ev',fmt(curr.value_explained_variance,3),deltaStr(curr.value_explained_variance,prev?.value_explained_variance,3,false),curr.value_explained_variance>0.5?'green':curr.value_explained_variance>0.2?'yellow':'red');
         const vc=curr.value_correlation||0;updateCard('card-value-corr',fmt(vc,3),deltaStr(vc,prev?.value_correlation,3,false),vc>0.7?'green':vc>0.3?'yellow':'red');
         const gn=curr.grad_norm_total;updateCard('card-grad-norm',fmt(gn,2),curr.grad_norm_cv!=null?'CV '+fmt(curr.grad_norm_cv,2):'',gn>=0.1&&gn<=5?'green':(gn>5&&gn<=10)||gn<0.1?'yellow':'red');
-        const gwr=curr.gate_win_rate;updateCard('card-gate-wr',gwr!=null?pct(gwr):'N/A',gwr!=null&&prev?.gate_win_rate!=null?deltaStr(gwr,prev.gate_win_rate,3,false):'',gwr==null?'neutral':gwr>=0.55?'green':gwr>=0.45?'yellow':'red');
+        const gwr=curr.gate_win_rate;
+        if(history.every(r=>r.gate_win_rate==null))updateCard('card-gate-wr','Off','no gating this run','neutral');
+        else updateCard('card-gate-wr',gwr!=null?pct(gwr):'N/A',gwr!=null&&prev?.gate_win_rate!=null?deltaStr(gwr,prev.gate_win_rate,3,false):'',gwr==null?'neutral':gwr>=0.55?'green':gwr>=0.45?'yellow':'red');
         const mps=curr.selfplay_moves_per_second;updateCard('card-moves-sec',mps!=null?fmt(mps,1):'--',mps!=null&&prev?.selfplay_moves_per_second!=null?deltaStr(mps,prev.selfplay_moves_per_second,1,false):'','neutral');
-        const itm=curr.total_iteration_time_seconds;if(itm!=null){const m=Math.floor(itm/60),s=Math.round(itm%60);updateCard('card-iter-time',m+'m '+s+'s',itm!=null&&prev?.total_iteration_time_seconds!=null?deltaStr(itm,prev.total_iteration_time_seconds,0,true):'','neutral');}
+        const itm=curr.total_iteration_time_seconds;if(itm!=null){const m=Math.floor(itm/60),s=Math.round(itm%60);updateCard('card-iter-time',m+'m '+s+'s',prev?.total_iteration_time_seconds!=null?deltaStr(itm,prev.total_iteration_time_seconds,0,true):'','neutral');}
+        else updateCard('card-iter-time','--','','neutral');
     }
     function updateCard(id,value,delta,color){const el=document.getElementById(id);el.className='health-card '+color;el.querySelector('.health-card-value').textContent=value;el.querySelector('.health-card-delta').innerHTML=delta;}
 
     function updateCharts(history){
-        if(!history.length)return;
         const L=history.map(r=>r.loop);
-        function s(chart,idx,field){chart.data.datasets[idx].data=history.map(r=>r[field]);}
-        function apply(chart,fields){chart.data.labels=L;fields.forEach((f,i)=>s(chart,i,f));chart.update('none');}
+        function apply(chart,fields){chart.data.labels=L;fields.forEach((f,i)=>{chart.data.datasets[i].data=typeof f==='function'?history.map(f):history.map(r=>r[f]);});chart.update('none');}
+        function running(field){let t=0;return r=>(t+=(r[field]||0));}
 
         apply(C.losses,['total_loss','policy_loss','value_loss']);
         apply(C.entropy,['entropy','policy_entropy','mcts_target_entropy','policy_kl']);
         apply(C.policyAcc,['top1_accuracy','top5_accuracy','max_prob_concentration']);
         apply(C.valueQuality,['value_correlation','value_explained_variance']);
+        apply(C.valueCE,['value_ce_new_games','value_ce_trained_window',()=>UNIFORM_4P_CE]);
+        apply(C.wheels,['auction_unlock_game_rate',r=>(r.resigned_games!=null&&r.games_played)?r.resigned_games/r.games_played:null,'resign_high_threshold']);
         apply(C.valueError,['value_mae','value_mse']);
         apply(C.valueDist,['value_target_mean','value_target_min','value_target_max','value_pred_mean','value_pred_min','value_pred_max','value_target_std','value_pred_std']);
         apply(C.gradNorms,['grad_norm_total','grad_norm_policy','grad_norm_value','grad_norm_trunk']);
@@ -521,101 +638,179 @@
         apply(C.movesPerSec,['selfplay_moves_per_second']);
         apply(C.gameLength,['avg_game_length','min_game_length','max_game_length']);
         apply(C.gamesCount,['games_played']);
-        apply(C.experiences,['experiences']);
-        apply(C.cumulative,['training_examples','total_experiences_cumulative']);
+        // ``training_examples`` is the sample count trained on that iteration
+        // (train_samples_per_iteration out of the window), and
+        // ``total_experiences_cumulative`` is its running sum.
+        apply(C.experiences,['experiences','training_examples']);
+        apply(C.cumulative,[running('experiences'),'total_experiences_cumulative']);
         apply(C.auxPT,['aux_pred_mean','aux_target_mean']);
         apply(C.auxCorr,['aux_correlation']);
         apply(C.lr,['learning_rate']);
         apply(C.legalActions,['mean_legal_actions']);
-        apply(C.gating,['gate_win_rate']);
-        C.gating.data.datasets[1].data=history.map(()=>0.55);
-        C.gating.update('none');
+        apply(C.dataAge,['oldest_example_age_minutes']);
+        apply(C.gating,['gate_win_rate',()=>0.55]);
         C.phaseMix.data.labels=L;
         C.phaseMix._phaseKeys.forEach((p,i)=>{C.phaseMix.data.datasets[i].data=history.map(r=>(r.phase_move_counts||{})[p]||0);});
         C.phaseMix.update('none');
         apply(C.schedule,['scheduled_max_game_length','num_readouts']);
+        Object.values(C).forEach(ch=>{if(!ch.canvas.id.startsWith('c-pretrain'))setNoData(ch);});
+        setNoData(C.gating,history.length&&history.every(r=>r.gate_win_rate==null)?'Gating disabled for this run (--no-gate)':null);
+        setNoData(C.valueCE,history.length?'Not logged by this run (TensorBoard Value/CE_* scalars)':null);
     }
 
     function updateLineage(history){
         const el=document.getElementById('lineage-timeline');
-        if(!history.length){el.innerHTML='<div class="no-data-msg">No model history yet</div>';return;}
+        const key=JSON.stringify(history.map(e=>[e.checkpoint_num,e.timestamp]));
+        if(key===lineageKey)return;
+        lineageKey=key;
+        if(!history.length){el.innerHTML='<div class="no-data-msg">No model history for this run</div>';return;}
         let html='';
         history.forEach((e,i)=>{
-            const dc=e.reason==='first_iteration'?'seed':e.promoted?'promoted':e.reason==='gating_disabled'?'skipped':'rejected';
+            const pre=e.loop==null;
+            const dc=pre||e.reason==='first_iteration'?'seed':e.promoted?'promoted':e.reason==='gating_disabled'?'skipped':'rejected';
             const wr=e.win_rate!=null?'WR '+(e.win_rate*100).toFixed(0)+'%':'';
-            const lbl=e.reason==='pretrain_best_val'?'Pretrain':(e.loop!=null?'L'+e.loop:'--');
+            const lbl=pre?(e.reason==='pretrain_value_refit'?'Value refit':'Pretrain'):'L'+e.loop;
             if(i>0)html+='<div class="lineage-arrow"></div>';
-            html+=`<div class="lineage-node"><div class="lineage-dot ${dc}">#${e.checkpoint_num||'?'}</div><div class="lineage-label">${lbl}</div><div class="lineage-wr">${wr}</div></div>`;
+            html+=`<div class="lineage-node" title="${esc(e.reason)} · ${esc(e.timestamp)}"><div class="lineage-dot ${dc}">#${esc(e.checkpoint_num??'?')}</div><div class="lineage-label">${esc(lbl)}</div><div class="lineage-wr">${esc(wr)}</div></div>`;
         });
         el.innerHTML=html;
+        el.scrollLeft=el.scrollWidth;  // newest checkpoint in view
     }
-    function updateHeaderStatus(status){
-        if(status.current_loop!=null){
-            const total=document.getElementById('num_loop_iterations')?.value||status.target_loop_count||'--';
-            document.getElementById('loop-counter').textContent=status.current_loop+'/'+total;
-            if(status.current_loop!==currentLoop){currentLoop=status.current_loop;document.getElementById('current-loop-info').textContent='(Loop '+currentLoop+')';filterGames();}
+
+    function phaseOf(st){
+        const msg=st.status_message||'';
+        if(st.error)return['Status error','red',st.error];
+        if(/^error/i.test(msg))return['Error','red',msg];
+        if(st.loop_process===null)return['Stopped','grey','No training loop process is running. Last status ('+formatTimeAgo(st.status_updated_unix)+' ago): '+(msg||'--')];
+        if(/starting training/i.test(msg))return['Training','blue',msg];
+        if(/training complete|preparing/i.test(msg))return['Between loops','blue',msg];
+        if(/gating/i.test(msg))return['Gating','yellow',msg];
+        if(/self-play/i.test(msg))return['Self-Play','green',msg];
+        return[msg.length>30?msg.slice(0,30)+'...':(msg||'Waiting'),'blue',msg];
+    }
+    function updateHeaderStatus(st){
+        loopStatus=st;
+        if(st.current_loop!=null){
+            document.getElementById('loop-counter').textContent=st.current_loop+'/'+(st.target_loop_count||'--');
+            if(st.current_loop!==currentLoop){currentLoop=st.current_loop;document.getElementById('current-loop-info').textContent='(Loop '+currentLoop+')';fetchGamesStatus();}
         }
-        if(status.total_games_this_iteration!==undefined)totalGamesThisIteration=status.total_games_this_iteration;
-        const pt=document.getElementById('phase-text'),pd=document.getElementById('phase-dot'),msg=status.status_message||'';
-        if(msg.includes('Error')){pt.textContent='Error';pd.className='badge-dot red';}
-        else if(msg.includes('self-play')||msg.includes('Self-play')){pt.textContent='Self-Play';pd.className='badge-dot green';}
-        else if(msg.includes('training')||msg.includes('Training')){pt.textContent='Training';pd.className='badge-dot blue';}
-        else if(msg.includes('gating')||msg.includes('Gating')){pt.textContent='Gating';pd.className='badge-dot yellow';}
-        else if(msg.includes('Preparing')||msg.includes('complete')){pt.textContent='Idle';pd.className='badge-dot blue';}
-        else{pt.textContent=msg.length>30?msg.slice(0,30)+'...':(msg||'Waiting');pd.className='badge-dot blue';}
+        const tg=st.loop_metrics&&st.loop_metrics.total_games_played;
+        document.getElementById('games-total').textContent=tg!=null?num(tg):'--';
+        if(st.current_best)document.getElementById('model-version').textContent='#'+st.current_best.checkpoint_num;
+        const [text,color,title]=phaseOf(st);
+        document.getElementById('phase-text').textContent=text;
+        document.getElementById('phase-dot').className='badge-dot '+color;
+        document.getElementById('phase-badge').title=title||'';
+        updateRunInfo();
     }
-    function updateModelBadge(h){if(!h.length)return;const p=h.filter(e=>e.promoted);if(p.length)document.getElementById('model-version').textContent='#'+(p[p.length-1].checkpoint_num||'?');}
     function updateThroughput(h){if(!h.length)return;const v=h[h.length-1].selfplay_games_per_hour;if(v)document.getElementById('stat-throughput').textContent=v.toFixed(1);}
 
-    function updateGameStats(games){
-        const st={completed:0,inProgress:0,error:0,pending:0};
-        games.forEach(g=>{if(g.status==='Completed')st.completed++;else if(g.status==='Error')st.error++;else st.inProgress++;});
-        if(document.getElementById('show-current-loop-only').checked&&currentLoop!=null)st.pending=Math.max(0,(totalGamesThisIteration||0)-games.length);
-        document.getElementById('stat-completed').textContent=st.completed;document.getElementById('stat-in-progress').textContent=st.inProgress;
-        document.getElementById('stat-error').textContent=st.error;document.getElementById('stat-pending').textContent=st.pending;
+    function gameBadge(g){
+        const st=g.status||'In Progress';
+        if(st==='Error')return['error','Error'];
+        if(st!=='Completed')return['in-progress',st];
+        if(g.termination==='resigned')return['resigned','Resigned'];
+        if(g.termination==='max_length')return['max-length','Max length'];
+        return['completed',g.termination==='finished'?'Finished':'Completed'];
     }
-    function filterGames(){
-        const sc=document.getElementById('show-current-loop-only').checked;
-        let f=allGamesData;if(sc&&currentLoop!=null)f=allGamesData.filter(g=>g.loop_number+1===currentLoop||g.loop_number===String(currentLoop));
-        renderGames(f);updateGameStats(f);
+    function updateGameStats(games,currentOnly){
+        const st={completed:0,inProgress:0,error:0};let moves=0;
+        games.forEach(g=>{if(g.status==='Completed'){st.completed++;moves+=parseInt(g.moves_played||0,10);}else if(g.status==='Error')st.error++;else st.inProgress++;});
+        document.getElementById('stat-completed').textContent=st.completed;document.getElementById('stat-in-progress').textContent=st.inProgress;
+        document.getElementById('stat-error').textContent=st.error;
+        let exp=currentOnly?num(moves)+(targetExperiences?' / '+num(targetExperiences):''):'--';
+        if(currentOnly&&targetExperiences&&moves>=targetExperiences&&st.inProgress)exp+=' (target met; finishing in-flight games)';
+        document.getElementById('stat-experiences').textContent=exp;
     }
     function renderGames(games){
         const el=document.getElementById('self-play-games-dynamic-area');
         if(!games.length){el.innerHTML='<div class="no-data-msg">No games to display</div>';return;}
-        let h='';games.forEach(g=>{
-            const st=g.status||'In Progress',mv=parseInt(g.moves_played||0,10),p=(mv/MAX_GAME_STEPS*100).toFixed(0);
-            const bc=st==='Completed'?'green':st==='Error'?'red':'',bgc=st==='Completed'?'completed':st==='Error'?'error':'in-progress';
-            h+=`<div class="game-item"><span class="game-id">${g.game_id}</span><span class="game-time">${formatTimeAgo(g.start_time_unix)}</span><div class="game-progress"><div class="game-progress-bar ${bc}" style="width:${p}%">${mv}/${MAX_GAME_STEPS}</div></div><span class="game-time">${formatTimeAgo(g.last_update_unix)}</span><span class="game-badge ${bgc}">${st}</span></div>`;
+        // In-progress games first, then the most recently finished.
+        const live=games.filter(g=>g.status!=='Completed'&&g.status!=='Error').sort((a,b)=>(a.start_time_unix||0)-(b.start_time_unix||0));
+        const done=games.filter(g=>g.status==='Completed'||g.status==='Error').sort((a,b)=>(b.last_update_unix||0)-(a.last_update_unix||0));
+        let h='';live.concat(done).forEach(g=>{
+            const mv=parseInt(g.moves_played||0,10),max=parseInt(g.max_moves||0,10)||1000,p=Math.min(100,mv/max*100).toFixed(0);
+            const [bgc,label]=gameBadge(g),bc=g.status==='Completed'?'green':g.status==='Error'?'red':'';
+            h+=`<div class="game-item"><span class="game-id">${esc(g.game_id)}</span><span class="game-time" title="started">${formatTimeAgo(g.start_time_unix)}</span><div class="game-progress"><div class="game-progress-bar ${bc}" style="width:${p}%">${mv}/${max}</div></div><span class="game-time" title="last update">${formatTimeAgo(g.last_update_unix)}</span><span class="game-badge ${bgc}">${esc(label)}</span></div>`;
         });el.innerHTML=h;
+    }
+    function filterGames(){fetchGamesStatus();}
+    async function fetchGamesStatus(){
+        const currentOnly=document.getElementById('show-current-loop-only').checked&&currentLoop!=null;
+        // Status files are named with the 0-based loop index; current_loop is 1-based.
+        const url=currentOnly?'/api/games_status?loop='+(currentLoop-1):'/api/games_status?limit='+ALL_GAMES_LIMIT;
+        const d=await getJSON(url,'games',true);
+        const el=document.getElementById('self-play-games-dynamic-area');
+        if(!Array.isArray(d)){el.innerHTML=`<div class="no-data-msg">${esc((d&&(d.__error||d.error))||'Could not load self-play games')}</div>`;return;}
+        allGamesData=d;
+        document.getElementById('games-scope-info').textContent=currentOnly?'':'(most recently updated '+ALL_GAMES_LIMIT+' across loops)';
+        renderGames(d);updateGameStats(d,currentOnly);
     }
 
     function toggleConfig(){document.getElementById('config-body').classList.toggle('collapsed');document.getElementById('config-toggle-icon').classList.toggle('open');}
-    function toggleTrainingParams(){document.getElementById('training-params').classList.toggle('collapsed');}
-    function endAfterCurrentLoop(){
-        if(currentLoop==null){alert('Unable to determine current loop');return;}
-        if(!confirm('End training after loop '+currentLoop+'?'))return;
-        fetch('/api/loop_config').then(r=>r.json()).then(cfg=>{
-            cfg.num_loop_iterations=currentLoop;
-            return fetch('/api/loop_config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
-        }).then(r=>r.json()).then(r=>{
-            if(r.error)alert('Failed: '+r.error);
-            else{const i=document.getElementById('num_loop_iterations');if(i)i.value=currentLoop;alert('Training will end after loop '+currentLoop);}
-        }).catch(e=>alert('Error: '+e));
+
+    async function updateSystemMetrics(){
+        const m=await getJSON('/api/system_metrics','system metrics');
+        if(!m)return;
+        document.getElementById('cpu-metric').textContent=m.cpu_percent;document.getElementById('memory-metric').textContent=m.memory_percent;
+        if(m.gpu_util_percent!=null){
+            document.getElementById('gpu-metric-wrap').style.display='';
+            document.getElementById('gpu-metric').textContent=m.gpu_util_percent+'% · '+(m.gpu_memory_used_mb/1024).toFixed(1)+'/'+(m.gpu_memory_total_mb/1024).toFixed(0)+' GB';
+        }
     }
 
-    function updateSystemMetrics(){fetch('/api/system_metrics').then(r=>r.json()).then(m=>{if(!m.error){document.getElementById('cpu-metric').textContent=m.cpu_percent;document.getElementById('memory-metric').textContent=m.memory_percent;}}).catch(()=>{});}
+    function selectedRunSummary(){
+        if(!runSummaries.length)return null;
+        return selectedRun==='latest'?runSummaries[runSummaries.length-1]:runSummaries.find(r=>String(r.run)===String(selectedRun))||null;
+    }
+    function updateRunInfo(){
+        const el=document.getElementById('run-info'),r=selectedRunSummary();
+        if(!r){el.textContent='No completed iterations yet';el.className='run-info';return;}
+        let txt=`Run ${r.run+1} of ${runSummaries.length} · loops ${r.first_loop}–${r.last_loop} · ${fmtDate(r.start)} → ${fmtDate(r.end)} · ${num(r.games)} games · ${num(r.experiences)} experiences`;
+        let warn=false;
+        // A freshly started loop has no records yet, so "latest" is still the previous run.
+        if(selectedRun==='latest'&&loopStatus.loop_process&&loopStatus.tensorboard_log_dir&&r.tensorboard_dir&&loopStatus.tensorboard_log_dir!==r.tensorboard_dir){
+            txt+=' · the running loop has not finished its first iteration yet';warn=true;
+        }
+        el.textContent=txt;el.className='run-info'+(warn?' warn':'');
+    }
+    async function fetchRuns(){
+        const runs=await getJSON('/api/metrics_runs','runs');
+        if(!Array.isArray(runs))return;
+        runSummaries=runs;
+        const sel=document.getElementById('run-select');
+        const html='<option value="latest">Latest run</option>'+runs.slice().reverse().map(r=>`<option value="${r.run}">Run ${r.run+1}: loops ${r.first_loop}–${r.last_loop} · ${esc(fmtDate(r.start))}</option>`).join('');
+        if(sel._html!==html){sel.innerHTML=html;sel._html=html;sel.value=String(selectedRun);}
+        updateRunInfo();
+    }
+    function onRunChange(){selectedRun=document.getElementById('run-select').value;lineageKey='';updateRunInfo();fetchMetricsHistory();fetchModelHistory();}
 
-    function fetchMetricsHistory(){fetch('/api/metrics_history').then(r=>r.json()).then(d=>{if(Array.isArray(d)&&d.length>0){updateHealthCards(d);updateCharts(d);updateThroughput(d);}}).catch(()=>{});}
-    function fetchModelHistory(){fetch('/api/model_history').then(r=>r.json()).then(d=>{if(Array.isArray(d)){updateLineage(d);updateModelBadge(d);}}).catch(()=>{});}
-    function fetchGamesStatus(){fetch('/api/games_status').then(r=>r.json()).then(d=>{if(Array.isArray(d)){allGamesData=d;filterGames();}}).catch(()=>{});}
-    function fetchStatus(){fetch('/api/current_status').then(r=>r.json()).then(s=>{updateHeaderStatus(s);}).catch(()=>{});}
+    async function fetchMetricsHistory(){
+        const run=selectedRun;
+        const d=await getJSON('/api/metrics_history?run='+encodeURIComponent(run),'metrics history');
+        if(!Array.isArray(d)||run!==selectedRun)return;
+        updateHealthCards(d);updateCharts(d);
+        if(selectedRun==='latest')updateThroughput(d);
+    }
+    async function fetchModelHistory(){
+        const run=selectedRun;
+        const d=await getJSON('/api/model_history?run='+encodeURIComponent(run),'model history');
+        if(Array.isArray(d)&&run===selectedRun)updateLineage(d);
+    }
+    async function fetchStatus(){const s=await getJSON('/api/current_status','status');if(s)updateHeaderStatus(s);}
 
-    document.addEventListener('DOMContentLoaded',function(){
+    document.addEventListener('DOMContentLoaded',async function(){
+        // TensorBoard runs on this host; "localhost" would be the viewer's own machine.
+        const tb=document.getElementById('tensorboard-link');try{const u=new URL(tb.href);u.hostname=location.hostname;tb.href=u.toString();}catch(e){}
         initCharts();
         let savedTab='selfplay';try{savedTab=localStorage.getItem('dashTab')||'selfplay';}catch(e){}
+        await fetchStatus();
         showTab(savedTab);
-        fetchStatus();fetchGamesStatus();fetchMetricsHistory();fetchModelHistory();fetchPretrainSummary();updateSystemMetrics();
-        setInterval(fetchGamesStatus,1000);setInterval(fetchStatus,2000);setInterval(updateSystemMetrics,3000);setInterval(fetchMetricsHistory,5000);setInterval(fetchModelHistory,10000);setInterval(fetchPretrainSummary,5000);
+        fetchRuns();fetchGamesStatus();fetchMetricsHistory();fetchModelHistory();fetchPretrainRuns();updateSystemMetrics();
+        setInterval(fetchGamesStatus,3000);setInterval(fetchStatus,3000);setInterval(updateSystemMetrics,5000);
+        setInterval(()=>{fetchRuns();fetchMetricsHistory();},10000);setInterval(fetchModelHistory,15000);
+        setInterval(fetchPretrainRuns,30000);
+        setInterval(()=>{if(document.getElementById('tab-pretrain').style.display!=='none')fetchPretrainRun();},10000);
     });
     </script>
 </body>
