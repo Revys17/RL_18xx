@@ -94,3 +94,20 @@ def test_stop_signal_exits_after_cleaning_up(monkeypatch):
         loop.cleanup_and_exit(signum=15)
     assert exc.value.code == 143
     loop.cleanup_and_exit()  # the atexit path just cleans up
+
+
+def test_an_earlier_runs_status_files_are_not_this_iterations(tmp_path, monkeypatch):
+    """Iteration indices restart at 0 every run; files an earlier run left for
+    this index were read back as this iteration's games (resign calibration,
+    phase counts, unlock rate)."""
+    import os
+
+    from rl18xx.agent.alphazero import loop
+
+    monkeypatch.setattr(loop, "SELF_PLAY_GAMES_STATUS_PATH", tmp_path)
+    for name in ("L3_G0.json", "L3_G150.json", "L4_G0.json", "L31_G0.json"):
+        (tmp_path / name).write_text("{}")
+    os.utime(tmp_path / "L3_G150.json", (1000.0, 1000.0))  # an earlier run's game
+    started = (tmp_path / "L3_G0.json").stat().st_mtime
+    assert [p.name for p in loop._iteration_status_files(3, since=started)] == ["L3_G0.json"]
+    assert len(list(tmp_path.iterdir())) == 4  # nothing deleted

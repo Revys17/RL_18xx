@@ -692,6 +692,7 @@ class SelfPlayIterationResult:
     game_lengths: list
     experiences: int
     wall_time: float
+    started_unix: float = 0.0
 
 
 @dataclass
@@ -782,6 +783,25 @@ def _ingest_completed_selfplay_game(
     except Exception as e:
         LOGGER.error(f"Error in self-play game {game_idx}: {e}", exc_info=True)
     return games_completed_count, experiences_this_iteration
+
+
+def _iteration_status_files(loop: int, since: float = 0.0) -> list:
+    """The iteration's game status files: ``L{loop}_G*.json`` written at or
+    after ``since`` (its self-play start).
+
+    Status files are named by iteration index, which restarts at 0 with every
+    run, so with --keep-old-files an earlier run's games share these names;
+    resign calibration, phase counts and the auction-unlock rate used to count
+    them as this iteration's.
+    """
+    files = []
+    for path in SELF_PLAY_GAMES_STATUS_PATH.glob(f"L{loop}_G*.json"):
+        try:
+            if path.stat().st_mtime >= since:
+                files.append(path)
+        except OSError:
+            continue  # removed between the glob and the stat
+    return files
 
 
 def _run_selfplay_iteration(
@@ -885,6 +905,7 @@ def _run_selfplay_iteration(
         game_lengths=game_lengths_this_iteration,
         experiences=experiences_this_iteration,
         wall_time=time.time() - selfplay_start_time,
+        started_unix=selfplay_start_time,
     )
 
 
@@ -893,13 +914,15 @@ def calibrate_resign_threshold(
     loop_config: "LoopConfig",
     loop_metrics: "LoopMetrics",
     metrics: Optional[Metrics] = None,
+    since: float = 0.0,
 ) -> dict:
     """Auto-calibrate ``resign_high_threshold`` from the iteration's holdout games.
 
     Implements the AlphaGo-Zero schedule from
     docs/mcts_improvements_plan.md Phase 2:
 
-    - Scan ``L{loop}_G*.json`` for **completed holdout** games (those with
+    - Scan ``L{loop}_G*.json`` written since ``since`` (the iteration's
+      self-play start; see ``_iteration_status_files``) for **completed holdout** games (those with
       ``noresign_holdout=True``). These are games that ignored the resign
       signal and played to completion, so we have ground truth for whether
       the resign signal would have been correct.
@@ -927,7 +950,7 @@ def calibrate_resign_threshold(
     holdouts_with_signal = 0
     correct = 0
     resigned_total = 0
-    for game_file in SELF_PLAY_GAMES_STATUS_PATH.glob(f"L{loop}_G*.json"):
+    for game_file in _iteration_status_files(loop, since):
         gdata = _safe_read_json(game_file)
         if not gdata or gdata.get("status") != "Completed":
             continue
@@ -1031,7 +1054,7 @@ def _aggregate_selfplay_stats(
     LOGGER.info(f"Loop {loop+1}: Total experiences this iteration: {sp.experiences}")
 
     phase_counts = {"Auction": 0, "WaterfallAuction": 0, "Stock": 0, "Operating": 0, "Other": 0}
-    for status_file in SELF_PLAY_GAMES_STATUS_PATH.glob(f"L{loop}_G*.json"):
+    for status_file in _iteration_status_files(loop, sp.started_unix):
         status_json = _safe_read_json(status_file)
         if status_json:
             for phase, count in status_json.get("phase_move_counts", {}).items():
@@ -1045,7 +1068,7 @@ def _aggregate_selfplay_stats(
     # policy has learned not to lock the auction and the variant should be
     # turned off (SelfPlayHyperparams.auction_unlock).
     unlock_games = completed_games = 0
-    for status_file in SELF_PLAY_GAMES_STATUS_PATH.glob(f"L{loop}_G*.json"):
+    for status_file in _iteration_status_files(loop, sp.started_unix):
         status_json = _safe_read_json(status_file)
         if status_json and status_json.get("status") == "Completed":
             completed_games += 1
@@ -1057,7 +1080,7 @@ def _aggregate_selfplay_stats(
     timing_sums = {k: 0.0 for k in _SELFPLAY_TIMING_KEYS}
     timing_count = 0
     total_sims = 0
-    for game_file in SELF_PLAY_GAMES_STATUS_PATH.glob("*.json"):
+    for game_file in _iteration_status_files(loop, sp.started_unix):
         gdata = _safe_read_json(game_file)
         if not gdata:
             continue
@@ -1677,7 +1700,7 @@ def main(
             # accumulated). Mutates loop_config + persists to disk so the
             # next iteration's workers pick up the new threshold.
             if loop_config.enable_resign:
-                calibrate_resign_threshold(loop, loop_config, loop_metrics, metrics)
+                calibrate_resign_threshold(loop, loop_config, loop_metrics, metrics, since=sp.started_unix)
 
             status["status_message"] = "Self-play phase completed. Starting training."
             update_loop_status(status)
