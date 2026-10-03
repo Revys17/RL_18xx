@@ -291,7 +291,7 @@ def test_resignation_ends_the_game(tmp_path, monkeypatch):
     def resign_on_third_search(self):
         calls.append(1)
         assert len(calls) <= 3, "kept searching after resigning"
-        return len(calls) == 3, {"leader": 0, "q_leader_min": 0.9, "gap_min": 0.5}
+        return len(calls) == 3, {"leader": 2, "q_leader_min": 0.9, "gap_min": 0.5}
 
     class EvalDummyNet(DummyNet):
         def eval(self):
@@ -302,6 +302,25 @@ def test_resignation_ends_the_game(tmp_path, monkeypatch):
     assert player.termination == "resigned"
     assert len(calls) == 3
     assert np.any(player.result != 0)  # scored at the resigned position
+    # Three moves in, everyone still holds the same net worth; the player the
+    # search was confident in is the sole winner of the stored target.
+    winners = np.flatnonzero(player.result >= player.result.max() - 1e-6)
+    assert winners.tolist() == [2]
+
+
+def test_resigned_result_makes_the_resign_leader_the_winner():
+    from rl18xx.agent.alphazero.self_play import resigned_result
+
+    shares = np.array([0.30, 0.20, 0.26, 0.24, 0.0, 0.0], dtype=np.float32)
+    swapped = resigned_result(shares, leader=2)
+    assert int(np.argmax(swapped)) == 2
+    assert sorted(swapped.tolist()) == sorted(shares.tolist())  # same shares, reassigned
+    assert swapped[0] == np.float32(0.26) and swapped[2] == np.float32(0.30)
+    assert np.array_equal(resigned_result(shares, leader=0), shares)  # already the leader
+
+    tied = resigned_result(np.array([0.25, 0.25, 0.25, 0.25], dtype=np.float32), leader=1)
+    assert np.flatnonzero(tied >= tied.max() - 1e-6).tolist() == [1]
+    assert abs(float(tied.sum()) - 1.0) < 1e-6
 
 
 def test_no_resign_check_before_resign_min_move(tmp_path, monkeypatch):

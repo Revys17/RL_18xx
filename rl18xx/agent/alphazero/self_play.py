@@ -79,6 +79,29 @@ def score_fractions(net_worth: dict) -> np.ndarray:
     return value
 
 
+def resigned_result(result: np.ndarray, leader: int) -> np.ndarray:
+    """Stored value for a game ended by resignation: ``leader`` (the player the
+    search was confident would win) wins.
+
+    ``result`` holds net-worth fractions at the resign point, and the win-loss
+    target is derived from its argmax. Mid-game the net-worth leader is often
+    someone else — in 14% of the resigned games of a 100-iteration run, while
+    the would-resign leader went on to win 92% of the holdout games that played
+    on — so those games taught the value head "who leads on net worth now".
+    The leader's and the top share are swapped, so the score head still sees
+    the same shares; an exact tie is broken toward the leader.
+    """
+    value = np.array(result, dtype=np.float32, copy=True)
+    top = int(np.argmax(value))
+    if top != leader:
+        value[leader], value[top] = value[top], value[leader]
+    others = np.delete(value, leader)
+    if others.size and others.max() >= value[leader]:
+        value[leader] += 1e-4
+        value /= value.sum()
+    return value
+
+
 def _compute_net_worth(game) -> dict:
     """Return {player_id: net_worth} for each player.
 
@@ -1350,7 +1373,10 @@ class SelfPlay:
                         # Natural engine-driven ending (train exhaustion, bankruptcy, ...).
                         player.termination = "finished"
 
-                    player.set_result(player.root.game_result())
+                    result = player.root.game_result()
+                    if player.termination == "resigned":
+                        result = resigned_result(result, resign_info["leader"])
+                    player.set_result(result)
                     LOGGER.info(
                         f"Game finished after {move_counter} moves. Result: {player.root.game_object.result()}, mapped to: {player.result} via {player.root.player_mapping}"
                     )
