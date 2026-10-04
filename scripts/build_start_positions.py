@@ -130,6 +130,7 @@ def main():
     with os.fdopen(fd, "w") as f:
         for record in records:
             f.write(json.dumps(record, separators=(",", ":")) + "\n")
+    os.chmod(tmp, 0o644)  # mkstemp creates it 0600
     os.replace(tmp, out)
 
     print(f"{len(games)} cleaned games in {args.clean_dir}")
