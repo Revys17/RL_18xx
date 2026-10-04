@@ -1,4 +1,4 @@
-"""train_model must not save a model whose training went non-finite."""
+"""train_model stops on the first non-finite loss or gradient and saves nothing."""
 import pytest
 import torch
 
@@ -63,3 +63,49 @@ def test_training_that_goes_non_finite_raises_instead_of_saving(tmp_path, monkey
     with pytest.raises(RuntimeError, match="Training diverged"):
         train_model(model, dataset, TrainingConfig(num_epochs=1, batch_size=4), model_checkpoint_dir=str(checkpoints))
     assert not list(checkpoints.rglob("*.pth"))
+
+
+def _selfplay_dataset(tmp_path, monkeypatch):
+    from rl18xx.agent.alphazero import self_play
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(self_play, "SELF_PLAY_GAMES_STATUS_PATH", tmp_path / "status")
+    (tmp_path / "status").mkdir()
+    config = SelfPlayConfig(
+        network=_UniformNet(), num_readouts=4, parallel_readouts=2, min_readouts=2, use_score_values=False,
+        player_count_distribution={4: 1.0}, enable_resign=False, auction_stall_moves=12, game_id="nan",
+    )
+    self_play.SelfPlay(config).run_game()
+    return SelfPlayDataset(tmp_path / "training_examples" / "selfplay" / "dummy")
+
+
+def test_one_non_finite_batch_stops_training(tmp_path, monkeypatch):
+    """Skipping the odd non-finite batch hid the fp16 overflow until most of an
+    epoch was gone; now the first one is fatal."""
+    dataset = _selfplay_dataset(tmp_path, monkeypatch)
+    model = AlphaZeroTransformerModel(ModelTransformerConfig(device=torch.device("cpu")))
+    forward = model.forward
+    calls = []
+
+    def nan_on_second_batch(*args, **kwargs):
+        calls.append(1)
+        policy_logits, *rest = forward(*args, **kwargs)
+        return (policy_logits * float("nan") if len(calls) == 2 else policy_logits, *rest)
+
+    monkeypatch.setattr(model, "forward", nan_on_second_batch)
+    checkpoints = tmp_path / "checkpoints"
+    with pytest.raises(RuntimeError, match="non-finite loss in epoch 1, batch 1"):
+        train_model(model, dataset, TrainingConfig(num_epochs=1, batch_size=2), model_checkpoint_dir=str(checkpoints))
+    assert len(calls) == 2
+    assert not list(checkpoints.rglob("*.pth"))
+
+
+def test_training_reports_block_output_peaks_and_weight_stats(tmp_path, monkeypatch):
+    dataset = _selfplay_dataset(tmp_path, monkeypatch)
+    model = AlphaZeroTransformerModel(ModelTransformerConfig(device=torch.device("cpu")))
+    metrics = train_model(
+        model, dataset, TrainingConfig(num_epochs=1, batch_size=4), model_checkpoint_dir=str(tmp_path / "ckpt")
+    )
+    assert set(metrics.activation_abs_max) == {"econ_transformer", "hex_transformer", "fusion", "res_blocks"}
+    assert all(0 < peak < float("inf") for peak in metrics.activation_abs_max.values())
+    assert 0 < metrics.weight_abs_max < metrics.weight_l2_norm

@@ -1433,6 +1433,10 @@ def _emit_tensorboard_metrics(
     metrics.add_scalar("Gradients/Value_Head_Norm", _last_or(train_metrics.epoch_grad_norm_value_head), loop)
     metrics.add_scalar("Gradients/Trunk_Norm", _last_or(train_metrics.epoch_grad_norm_trunk), loop)
     metrics.add_scalar("Gradients/CV", _last_or(train_metrics.epoch_grad_norm_cv), loop)
+    for block, peak in (train_metrics.activation_abs_max or {}).items():
+        metrics.add_scalar(f"Numerics/Activation_Max/{block}", peak, loop)
+    metrics.add_scalar("Numerics/Weight_Abs_Max", train_metrics.weight_abs_max, loop)
+    metrics.add_scalar("Numerics/Weight_L2_Norm", train_metrics.weight_l2_norm, loop)
 
     metrics.add_scalar("Training/Learning_Rate", _last_or(train_metrics.epoch_lr), loop)
     metrics.add_scalar("Aux/Pred_Mean", _last_or(train_metrics.epoch_aux_pred_mean), loop)
@@ -1507,6 +1511,10 @@ def _build_history_record(
         "grad_norm_value": _last_or(train_metrics.epoch_grad_norm_value_head) if train_metrics else 0.0,
         "grad_norm_trunk": _last_or(train_metrics.epoch_grad_norm_trunk) if train_metrics else 0.0,
         "grad_norm_cv": _last_or(train_metrics.epoch_grad_norm_cv) if train_metrics else 0.0,
+        # Numerical headroom
+        "activation_abs_max": dict(train_metrics.activation_abs_max) if train_metrics else {},
+        "weight_abs_max": train_metrics.weight_abs_max if train_metrics else 0.0,
+        "weight_l2_norm": train_metrics.weight_l2_norm if train_metrics else 0.0,
         # Self-play
         "games_played": sp.games_completed,
         "experiences": sp.experiences,

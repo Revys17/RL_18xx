@@ -89,6 +89,14 @@ class TrainingMetrics:
     epoch_aux_target_mean: list = field(default_factory=list)
     epoch_aux_correlation: list = field(default_factory=list)
 
+    # Numerical headroom: the largest |output| each major block produced in
+    # the last epoch, and the largest |weight| after training. Self-play once
+    # grew trunk activations to ~1e3 within an iteration and overflowed fp16;
+    # these show that kind of drift long before anything goes non-finite.
+    activation_abs_max: dict = field(default_factory=dict)
+    weight_abs_max: float = 0.0
+    weight_l2_norm: float = 0.0
+
 
 def _compute_grad_norms(model: AlphaZeroModel) -> dict:
     """Compute gradient norms for different model components.
@@ -110,6 +118,61 @@ def _compute_grad_norms(model: AlphaZeroModel) -> dict:
                 norms["trunk"] += grad_norm
     norms = {k: v**0.5 for k, v in norms.items()}
     return norms
+
+
+# Blocks whose outputs ``_ActivationMonitor`` tracks (the trunk's stages).
+_MONITORED_BLOCKS = ("econ_transformer", "hex_transformer", "fusion", "res_blocks")
+
+
+class _ActivationMonitor:
+    """Forward hooks recording the largest |output| of each monitored block.
+
+    Maxima stay on the device and are read once (``read``), so monitoring
+    adds no host sync per batch. ``res_blocks`` is a ModuleList; its last
+    block's output is the trunk's output.
+    """
+
+    def __init__(self, model):
+        self.maxima: dict = {}
+        self.handles = []
+        for name in _MONITORED_BLOCKS:
+            module = getattr(model, name, None)
+            if isinstance(module, torch.nn.ModuleList):
+                module = module[-1] if len(module) else None
+            if module is not None:
+                self.handles.append(module.register_forward_hook(self._hook(name)))
+
+    def _hook(self, name):
+        def record(_module, _inputs, output):
+            tensors = output if isinstance(output, (tuple, list)) else (output,)
+            for t in tensors:
+                if isinstance(t, torch.Tensor) and t.is_floating_point() and t.numel():
+                    peak = t.detach().abs().amax().float()
+                    prev = self.maxima.get(name)
+                    self.maxima[name] = peak if prev is None else torch.maximum(prev, peak)
+
+        return record
+
+    def read(self) -> dict:
+        return {name: float(peak) for name, peak in self.maxima.items()}
+
+    def reset(self):
+        self.maxima = {}
+
+    def remove(self):
+        for handle in self.handles:
+            handle.remove()
+
+
+def _weight_stats(model) -> tuple:
+    """(largest |weight|, global L2 norm) over the model's parameters."""
+    with torch.no_grad():
+        params = [p.detach().float() for p in model.parameters()]
+        if not params:
+            return 0.0, 0.0
+        abs_max = max(float(p.abs().max()) for p in params)
+        l2 = float(torch.sqrt(sum((p * p).sum() for p in params)))
+    return abs_max, l2
 
 
 def _derive_dual_value_targets(value: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -680,11 +743,12 @@ def train_model(
     if hasattr(model, "value_stop_grad"):
         model.value_stop_grad = config.value_stop_grad
 
+    activation_monitor = _ActivationMonitor(model)
     accum_steps = config.gradient_accumulation_steps
     global_batch_number = 0
     for epoch in range(config.num_epochs):
         model.train()
-        non_finite_batches = 0
+        activation_monitor.reset()
         train_losses = []
         train_policy_losses = []
         train_value_losses = []
@@ -794,15 +858,19 @@ def train_model(
             # …) doesn't need rewriting — it always meant "the head MCTS reads".
             value_pred = win_loss_logits
 
+            # Any non-finite loss is a bug to find, not a batch to skip: the
+            # bf16 switch removed the fp16 overflow that used to cause them, and
+            # a model that trains through them was saved and served as if it
+            # were fine. No checkpoint is written.
             if not torch.isfinite(total_loss):
-                LOGGER.warning(
-                    f"Non-finite loss at batch {batch_idx}: total={total_loss.item():.4f}, "
-                    f"policy={policy_loss.item():.4f}, value={value_loss.item():.4f}, "
-                    f"aux={aux_loss.item():.4f}, entropy={entropy.item():.4f}. Skipping batch."
+                activation_monitor.remove()
+                raise RuntimeError(
+                    f"Training diverged: non-finite loss in epoch {epoch + 1}, batch {batch_idx} "
+                    f"(total={total_loss.item()}, policy={policy_loss.item()}, value={value_loss.item()}, "
+                    f"score={score_loss.item()}, price={float(price_loss_value)}, aux={aux_loss.item()}, "
+                    f"entropy={entropy.item()}); block output peaks so far: {activation_monitor.read()}. "
+                    f"Not saving a checkpoint."
                 )
-                optimizer.zero_grad()
-                non_finite_batches += 1
-                continue
 
             # --- Gradient step ---
             if scaler is not None:
@@ -825,7 +893,14 @@ def train_model(
             else:
                 (total_loss / accum_steps).backward()
                 if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(train_loader):
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    if not torch.isfinite(total_norm):
+                        activation_monitor.remove()
+                        raise RuntimeError(
+                            f"Training diverged: non-finite gradient norm in epoch {epoch + 1}, batch {batch_idx} "
+                            f"(loss {total_loss.item()}); block output peaks so far: {activation_monitor.read()}. "
+                            f"Not saving a checkpoint."
+                        )
                     grad_norms = _compute_grad_norms(model)
                     epoch_grad_norms.append(grad_norms)
                     optimizer.step()
@@ -902,14 +977,6 @@ def train_model(
 
             if graph and global_batch_number % 100 == 0:
                 update_live_plot(metrics, axes, epoch + 1, config.num_epochs, global_batch_number, fig, plot_output)
-
-        # A model whose forward goes non-finite skips every batch from then on
-        # and would otherwise be saved (and promoted) as if it had trained.
-        if non_finite_batches > len(train_loader) // 2:
-            raise RuntimeError(
-                f"Training diverged: {non_finite_batches}/{len(train_loader)} batches in epoch {epoch + 1} "
-                f"had a non-finite loss. Not saving a checkpoint."
-            )
 
         # --- Compute epoch-level metrics ---
         avg_epoch_loss = np.mean(train_losses)
@@ -1026,6 +1093,14 @@ def train_model(
 
         if graph:
             update_live_plot(metrics, axes, epoch + 1, config.num_epochs, global_batch_number, fig, plot_output)
+
+    activation_monitor.remove()
+    metrics.activation_abs_max = activation_monitor.read()
+    metrics.weight_abs_max, metrics.weight_l2_norm = _weight_stats(model)
+    LOGGER.info(
+        f"Block output peaks (last epoch): {', '.join(f'{k}={v:.1f}' for k, v in metrics.activation_abs_max.items())}; "
+        f"weights: max |w| {metrics.weight_abs_max:.3f}, L2 {metrics.weight_l2_norm:.1f}"
+    )
 
     # Save optimizer state for next iteration
     save_optimizer_state(optimizer, scheduler, model_checkpoint_dir, model)

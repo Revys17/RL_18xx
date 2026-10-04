@@ -2207,15 +2207,22 @@ def pretrain_model(
                     price_targets=price_targets,
                 )
             total_loss = outputs["total_loss"]
+            # A non-finite loss or gradient is a bug to find, not a batch to
+            # skip (as in train.train_model): stop before anything is saved.
             if not torch.isfinite(total_loss):
-                LOGGER.warning(
-                    f"Non-finite loss at batch {batch_idx}: total={total_loss.item():.4f}; skipping."
+                raise RuntimeError(
+                    f"Pretraining diverged: non-finite loss in epoch {epoch + 1}, batch {batch_idx} "
+                    f"(total={total_loss.item()}, policy={outputs['policy_loss'].item()}, "
+                    f"value={outputs['value_loss'].item()}, score={outputs['score_loss'].item()}, "
+                    f"price={float(outputs['price_loss'])}, aux={outputs['aux_loss'].item()})"
                 )
-                optimizer.zero_grad()
-                continue
 
             total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            if not torch.isfinite(total_norm):
+                raise RuntimeError(
+                    f"Pretraining diverged: non-finite gradient norm in epoch {epoch + 1}, batch {batch_idx}"
+                )
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
