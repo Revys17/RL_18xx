@@ -1,5 +1,6 @@
 from pathlib import Path
 import copy
+import hashlib
 import json
 import os
 import random
@@ -831,15 +832,19 @@ def _share_source(state, share_id: str) -> Optional[str]:
     adapter's share lookup) and maps it to the source bucket the factored
     helper uses. Returns ``None`` for player-owned shares (which never
     appear in a legal BuyShares action — that'd be a player-to-player swap).
+    An unparred corporation's shares have no owner yet; they're in its IPO
+    (the MH exchange can take an NYC share before NYC is parred).
     """
     try:
         share = state.share_by_id(share_id)
     except Exception:
         return None
+    if share is None:
+        return None
     raw = getattr(getattr(share, "_share", None), "owner", "") or ""
     if raw == "market":
         return "market"
-    if raw.startswith("ipo:") or raw.startswith("corp:"):
+    if raw == "" or raw.startswith("ipo:") or raw.startswith("corp:"):
         return "ipo"
     return None
 
@@ -862,6 +867,10 @@ def _normalize_train_name(raw: Optional[str]) -> Optional[str]:
     return raw.split("-", 1)[0]
 
 
+class AmbiguousActionMatch(ValueError):
+    """A human action matched factored choices with different policy indices."""
+
+
 def _action_dict_to_factored_index(
     action_dict: dict,
     state,
@@ -872,53 +881,99 @@ def _action_dict_to_factored_index(
     via the factored helper output, bypassing BaseAction reconstruction.
 
     Returns the int index, or ``None`` when no matching ``LegalAction``
-    is found (the caller logs + skips). Encoding goes through
-    ``ActionMapper.index_for_factored`` so the path stays consistent with
-    the production self-play encoding.
+    is found (the caller logs + skips). Raises ``AmbiguousActionMatch`` when
+    the matching choices map to more than one index — the label would be a
+    guess, so the caller skips the example rather than take the first.
+    Encoding goes through ``ActionMapper.index_for_factored`` so the path
+    stays consistent with the production self-play encoding.
 
     ``factored_choices`` is the list of dicts returned by
     ``state.get_factored_choices()``; passing it in lets the caller
     enumerate once per step and share between encode + legal-index
     extraction.
     """
+    indices = set()
+    for la in _matching_choices(action_dict, state, factored_choices):
+        try:
+            indices.add(int(action_mapper.index_for_factored(la, state)))
+        except (KeyError, ValueError):
+            continue
+    if len(indices) > 1:
+        raise AmbiguousActionMatch(f"{action_dict.get('type')} matches policy indices {sorted(indices)}: {action_dict}")
+    return indices.pop() if indices else None
+
+
+def _matching_choices(action_dict: dict, state, factored_choices: list) -> list:
+    """The factored choices that correspond to a human action dict."""
     raw_type = action_dict.get("type")
     if raw_type is None:
-        return None
+        return []
     target_type = "".join(p.title() for p in raw_type.split("_"))
 
     # CompanyBuyShares appears in the human dict as ``type="buy_shares"``
     # with ``entity_type="company"`` (the acting entity is a private, e.g.
     # MH exchanging for NYC); the factored helper emits ``type="CompanyBuyShares"``.
-    # Same idea for Company-level LayTile / PlaceToken.
-    if action_dict.get("entity_type") == "company":
-        type_overrides = {
-            "BuyShares": "CompanyBuyShares",
-            "LayTile": "CompanyLayTile",
-            "PlaceToken": "CompanyPlaceToken",
-        }
-        target_type = type_overrides.get(target_type, target_type)
+    # Company tile lays and tokens (CS, DH) keep their type: the factored
+    # helper emits them as LayTile / PlaceToken with ``entity={"private": ...}``.
+    if action_dict.get("entity_type") == "company" and target_type == "BuyShares":
+        target_type = "CompanyBuyShares"
 
     candidates = [la for la in factored_choices if la.type == target_type]
-
     if not candidates:
-        return None
-
-    for la in candidates:
-        if not _factored_choice_matches(la, action_dict, state):
-            continue
-        try:
-            return action_mapper.index_for_factored(la, state)
-        except (KeyError, ValueError):
-            continue
-    return None
+        return []
+    resolved = _resolve_human_action(action_dict, state)
+    return [la for la in candidates if _factored_choice_matches(la, action_dict, state, resolved)]
 
 
-def _factored_choice_matches(la, action_dict: dict, state) -> bool:
+def _resolve_human_action(action_dict: dict, state) -> dict:
+    """State-dependent facts about a human action that its dict only names by id.
+
+    - place_token: ``city`` -> ``(hex id, city index)`` (``None`` if unresolved).
+    - buy_train: ``train_source`` (``"depot"`` for the depot and its discard
+      pool, else the selling corporation; ``None`` if the train is unknown),
+      ``train_name`` and ``exchange_name`` (the traded-in train for a D-train
+      exchange, else ``None``).
+    """
+    raw_type = action_dict.get("type")
+    if raw_type == "place_token":
+        return {"city": _city_location(state, action_dict.get("city"))}
+    if raw_type == "buy_train":
+        train_id = action_dict.get("train")
+        train = state.train_by_id(train_id) if train_id else None
+        if train is None:
+            source = None
+        elif train.from_depot():
+            source = "depot"
+        else:
+            source = getattr(train.owner, "id", None)
+        exchange = action_dict.get("exchange")
+        return {
+            "train_source": source,
+            "train_name": _normalize_train_name(train_id),
+            "exchange_name": _normalize_train_name(exchange) if exchange else None,
+        }
+    return {}
+
+
+def _acting_entity_matches(entity: dict, action_dict: dict) -> bool:
+    """Company abilities (CS / DH tile lays, the DH token) come as
+    ``entity_type="company"``; the factored helper tags those choices
+    ``{"private": sym}``, and a corporation's own lays and tokens ``{"corp": sym}``."""
+    if action_dict.get("entity_type") == "company":
+        return entity.get("private") == action_dict.get("entity")
+    return "private" not in entity
+
+
+def _factored_choice_matches(la, action_dict: dict, state, resolved: Optional[dict] = None) -> bool:
     """Type-by-type matcher between a ``LegalAction`` and a human action dict.
 
     Returns True iff the ``LegalAction`` corresponds to the action the
-    human played. Used by :func:`_action_dict_to_factored_index`.
+    human played, given that their types agree. Used by
+    :func:`_matching_choices`, which computes ``resolved``
+    (:func:`_resolve_human_action`) once per action.
     """
+    if resolved is None:
+        resolved = _resolve_human_action(action_dict, state)
     t = la.type
     entity = la.entity or {}
     params = la.params or {}
@@ -971,27 +1026,19 @@ def _factored_choice_matches(la, action_dict: dict, state) -> bool:
         return int(params.get("count", 0)) == len(shares)
 
     if t == "PlaceToken":
-        # The factored helper's PlaceToken slot identifies the placement
-        # site via ``params.hex`` + ``params.city`` (city_idx). The human
-        # dict gives us ``city`` (e.g. ``"F20-0"`` or ``"57-1-0"``) plus
-        # the operating ``entity`` (the placing corp). PlaceToken legal
-        # sets are usually small (a corp places on its operating hex); if
-        # the candidate set is unique, accept; otherwise compare by hex
-        # id parsed from the city string.
-        target_hex = _hex_from_city_id(action_dict.get("city"))
-        if target_hex is None:
-            # Fall back to "any" when the human dict's city doesn't pin a
-            # hex unambiguously — in practice PlaceToken legal sets are
-            # length-1 in 1830 OR cases.
-            return True
-        return params.get("hex") == target_hex
+        # The factored choice names the site by ``params.hex`` + ``params.city``
+        # (the city's index on the tile); the human dict by city id, resolved
+        # against the board in ``_resolve_human_action``.
+        if not _acting_entity_matches(entity, action_dict):
+            return False
+        location = resolved.get("city")
+        if location is None:
+            return False
+        return params.get("hex") == location[0] and int(params.get("city", -1)) == location[1]
 
     if t == "LayTile":
-        if entity.get("private"):
-            # Company tile-lays (DH/CS) — the entity in the human dict
-            # is the *corporation* but the cleaning pipeline tags these
-            # as company lays; rely on the hex+tile+rotation triple alone.
-            pass
+        if not _acting_entity_matches(entity, action_dict):
+            return False
         return (
             params.get("hex") == action_dict.get("hex")
             and params.get("tile") == _normalize_tile_name(action_dict.get("tile"))
@@ -999,17 +1046,16 @@ def _factored_choice_matches(la, action_dict: dict, state) -> bool:
         )
 
     if t == "BuyTrain":
-        # Match on the train's source (depot / discard / cross-corp) and
-        # the train type. The human dict tags the train as ``"2-0"``,
-        # ``"3-1"``, etc. — strip the suffix.
-        target_train = _normalize_train_name(action_dict.get("train"))
-        if entity.get("train") != target_train:
+        # Factored choices are one per (source, train name), where the source
+        # is "depot" (upcoming trains and the discard pool alike) or the
+        # selling corporation, plus one per D-train exchange with
+        # ``entity["exchange"]`` naming the traded-in train.
+        if entity.get("train") != resolved.get("train_name"):
             return False
-        # Discriminate depot / discard / cross-corp:
-        # - factored ``entity={"source": "depot", "train": "X"}`` → depot
-        # - factored ``entity={"source": "discard", "train": "X"}`` → discard
-        # - factored ``entity={"corp": "OWNER", "train": "X"}`` → cross-corp
-        return True  # train-type + corp-owner check via entity above is sufficient
+        if entity.get("exchange") != resolved.get("exchange_name"):
+            return False
+        source = resolved.get("train_source")
+        return source is None or entity.get("source") == source
 
     if t == "DiscardTrain":
         return params.get("train") == _normalize_train_name(action_dict.get("train"))
@@ -1095,25 +1141,29 @@ def _factored_price_target(
     return [(int(slot), float(observed_price), 1.0, float(price_min), float(price_max))]
 
 
-def _hex_from_city_id(city_str: Optional[str]) -> Optional[str]:
-    """Extract the hex id from a city descriptor like ``"F20-0"``.
+def _city_location(state, city_str: Optional[str]) -> Optional[Tuple[str, int]]:
+    """``(hex id, city index)`` of an 18xx.games city id at the current state.
 
-    18xx.games's serialized city ids fall into two shapes:
-      - ``"<hex_id>-<city_idx>"`` (preprinted): e.g. ``"F20-0"``.
-      - ``"<tile_name>-<tile_instance>-<city_idx>"`` (laid tile):
-        e.g. ``"57-1-0"`` — does NOT pin the hex.
-
-    We can only recover the hex id directly from the first form. Returning
-    ``None`` lets the caller fall back to accepting any candidate at this
-    state (PlaceToken legal sets are typically singleton in 1830 OR
-    operating phases).
+    City ids are ``"<tile id>-<city index>"`` with tile ids ``"<name>-<instance>"``:
+    ``"57-1-0"`` is city 0 of tile 57-1 and ``"D2-0-0"`` city 0 of the
+    preprinted tile on D2 (which the Rust engine calls ``"preprinted_D2"``), so
+    the hex is wherever that tile lies now. A two-part ``"<hex>-<city index>"``
+    names the hex directly. ``None`` if the id doesn't resolve.
     """
     if not city_str or "-" not in city_str:
         return None
-    parts = city_str.split("-")
-    if len(parts) == 2:
-        return parts[0]
-    # 3+ parts: tile-form, hex isn't directly extractable.
+    tile_id, _, city_idx = city_str.rpartition("-")
+    try:
+        city_idx = int(city_idx)
+    except ValueError:
+        return None
+    if "-" not in tile_id:
+        return tile_id, city_idx
+    raw = getattr(state, "_game", state)  # the adapter's tile ids are synthesized; read the engine's
+    for hex_ in raw.hexes:
+        laid = hex_.tile.id
+        if laid == tile_id or (laid == f"preprinted_{hex_.id}" and tile_id == f"{hex_.id}-0"):
+            return hex_.id, city_idx
     return None
 
 
@@ -1513,12 +1563,21 @@ def fix_online_games(game_data_dir: str, output_dir: str, overwrite: bool = Fals
 # observed price), neither transformation is needed.
 
 
+def in_validation_split(game_id, validation_percentage: float) -> bool:
+    """Deterministic per-game train/validation split: a game id always lands on
+    the same side, so every conversion of the same games holds out the same
+    ones (and raising the percentage only moves games into validation)."""
+    digest = hashlib.sha256(str(game_id).encode()).digest()
+    return int.from_bytes(digest[:8], "big") / 2**64 < validation_percentage
+
+
 def convert_game_to_training_data(
     game: BaseGame,
     encoder: Encoder_1830,
     config: Optional[TrainingConfig] = None,
     skip_forced: bool = True,
     stats: Optional[dict] = None,
+    game_id: Optional[Union[str, int]] = None,
 ) -> Tuple[list[Any], list[Any]]:
     """Turn every decision of a cleaned human game into a training example.
 
@@ -1527,7 +1586,10 @@ def convert_game_to_training_data(
     trivial, and their value targets are extra correlated copies of the game's
     single outcome. Self-play never records them either (the MCTS applies
     forced actions without searching). ``stats``, if given, accumulates
-    ``positions`` (examples written) and ``forced_skipped`` counts.
+    ``positions`` (examples written), ``forced_skipped``, and per action type
+    ``unmatched`` / ``ambiguous`` labels (skipped). The whole game goes to
+    validation by :func:`in_validation_split` on ``game_id``, or at random
+    when no id is given.
     """
     if config is None:
         config = TrainingConfig()
@@ -1535,7 +1597,11 @@ def convert_game_to_training_data(
     validation_data = []
     action_mapper = ActionMapper()
     validation_percentage = config.pretrain_validation_percentage
-    if random.random() < validation_percentage:
+    if game_id is None:
+        to_validation = random.random() < validation_percentage
+    else:
+        to_validation = in_validation_split(game_id, validation_percentage)
+    if to_validation:
         save_array = validation_data
         LOGGER.debug(f"Adding to validation data")
     else:
@@ -1591,6 +1657,7 @@ def convert_game_to_training_data(
     skipped_actions = 0
     forced_skipped = 0
     _skipped_examples_by_type: dict = {}
+    ambiguous_by_type: dict = {}
     for action in game.raw_actions:
         LOGGER.debug(f"Processing action: {action}")
         # Enumerate legal actions via the Rust factored helper (native, fast)
@@ -1601,7 +1668,14 @@ def convert_game_to_training_data(
         # state-dependent ``canonical_index_for_action`` path that bottlenecked
         # pretraining on the Python ``FactoredActionHelper`` fallback.
         factored = fresh_game_state.get_factored_choices()
-        action_index = _action_dict_to_factored_index(action, fresh_game_state, factored, action_mapper)
+        try:
+            action_index = _action_dict_to_factored_index(action, fresh_game_state, factored, action_mapper)
+        except AmbiguousActionMatch as e:
+            _t = action.get("type", "?")
+            ambiguous_by_type[_t] = ambiguous_by_type.get(_t, 0) + 1
+            LOGGER.warning("convert_game_to_training_data: skipping an ambiguous label: %s", e)
+            fresh_game_state.process_action(action)
+            continue
         if action_index is None:
             skipped_actions += 1
             _t = action.get("type", "?")
@@ -1666,6 +1740,10 @@ def convert_game_to_training_data(
     if stats is not None:
         stats["positions"] = stats.get("positions", 0) + len(training_data) + len(validation_data)
         stats["forced_skipped"] = stats.get("forced_skipped", 0) + forced_skipped
+        for key, counts in (("unmatched", _skipped_examples_by_type), ("ambiguous", ambiguous_by_type)):
+            totals = stats.setdefault(key, {})
+            for action_type, n in counts.items():
+                totals[action_type] = totals.get(action_type, 0) + n
 
     return training_data, validation_data
 
@@ -1708,7 +1786,7 @@ def convert_games_to_training_dataset(
     converted = 0
     skipped = 0
     errors = 0
-    stats = {"positions": 0, "forced_skipped": 0}
+    stats = {"positions": 0, "forced_skipped": 0, "unmatched": {}, "ambiguous": {}}
     for game in tqdm(games, desc="Converting games to training data"):
         if game["id"] in progress:
             skipped += 1
@@ -1722,7 +1800,7 @@ def convert_games_to_training_dataset(
                 atomic_write_json(progress_file, progress)
                 continue
             train, val = convert_game_to_training_data(
-                game_obj, encoder, config=config, skip_forced=skip_forced, stats=stats
+                game_obj, encoder, config=config, skip_forced=skip_forced, stats=stats, game_id=game["id"]
             )
             if train:
                 dest = save_path / "training"
@@ -1747,6 +1825,10 @@ def convert_games_to_training_dataset(
         )
     else:
         LOGGER.info(f"Wrote {stats['positions']} examples (forced single-legal-action positions kept)")
+    LOGGER.info(
+        f"Skipped labels: unmatched {sum(stats['unmatched'].values())} {stats['unmatched']}; "
+        f"ambiguous {sum(stats['ambiguous'].values())} {stats['ambiguous']}"
+    )
 
 
 def _refit_value_heads(
@@ -2768,13 +2850,13 @@ def do_pretraining(model_dir: str, game_data_dir: str, config: TrainingConfig) -
     games = load_games_from_json(str(json_dir))
     games = [g for g in games if g.get("status") != "error" and "title" in g]
     LOGGER.info(f"Filtered to {len(games)} valid games")
-    games = [_load_cleaned_game_via_rust(game) for game in games]
-    games = [g for g in games if g is not None]
+    games = [(game["id"], _load_cleaned_game_via_rust(game)) for game in games]
+    games = [(game_id, g) for game_id, g in games if g is not None]
     LOGGER.info(f"Loaded {len(games)} games via the Rust engine")
     encoder = Encoder_1830.get_encoder_for_model(model)
     training_data, validation_data = [], []
-    for game in tqdm(games, desc="Converting games to training data"):
-        train, val = convert_game_to_training_data(game, encoder, config=config)
+    for game_id, game in tqdm(games, desc="Converting games to training data"):
+        train, val = convert_game_to_training_data(game, encoder, config=config, game_id=game_id)
         training_data.extend(train)
         validation_data.extend(val)
 
