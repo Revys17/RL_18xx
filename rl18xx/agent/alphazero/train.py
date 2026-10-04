@@ -867,7 +867,7 @@ def train_model(
                 raise RuntimeError(
                     f"Training diverged: non-finite loss in epoch {epoch + 1}, batch {batch_idx} "
                     f"(total={total_loss.item()}, policy={policy_loss.item()}, value={value_loss.item()}, "
-                    f"score={score_loss.item()}, price={float(price_loss_value)}, aux={aux_loss.item()}, "
+                    f"score={score_loss.item()}, price={price_loss_value.item()}, aux={aux_loss.item()}, "
                     f"entropy={entropy.item()}); block output peaks so far: {activation_monitor.read()}. "
                     f"Not saving a checkpoint."
                 )
