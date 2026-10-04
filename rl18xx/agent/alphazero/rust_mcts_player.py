@@ -208,7 +208,7 @@ class RustMCTSPlayer:
             float(getattr(self.config, "c_puct_init", 1.25)),
             float(getattr(self.config, "c_puct_base", 19652.0)),
             {str(k): float(v) for k, v in getattr(self.config, "c_puct_by_round", {}).items()},
-            int(getattr(self.config, "max_game_length", 1000)),
+            int(getattr(self.config, "max_engine_actions", 5000)),
         )
         if bool(getattr(self.config, "mcts_mean_q", False)):
             self._rust_player.set_q_config(True, float(getattr(self.config, "fpu_reduction", 0.0)))
@@ -223,6 +223,9 @@ class RustMCTSPlayer:
         )
         self.forced_action_dicts: list[list[dict]] = []
         self._initial_action_count = len(self.played_actions)
+        # Decisions played (moves with more than one legal action); the game
+        # limits count these, not engine actions (see SelfPlayConfig).
+        self.decisions = 0
         LOGGER.info(
             "Initialized RustMCTSPlayer. Root legal action count: %d",
             len(self._rust_player.legal_action_indices_at_root()),
@@ -467,7 +470,7 @@ class RustMCTSPlayer:
         engine moves, visit-count-proportional sampling (temperature=1)
         before it."""
         legal = self._rust_player.legal_action_indices_at_root()
-        if self._rust_player.root_move_number() >= self.config.softpick_move_cutoff:
+        if self.decisions >= self.config.softpick_move_cutoff:
             return int(self._rust_player.pick_best_action())
         if len(legal) == 1:
             return int(legal[0])
@@ -485,6 +488,8 @@ class RustMCTSPlayer:
 
     def play_move(self, action_index: int) -> bool:
         rust_root_game = self._rust_player.root_game_object()
+        if len(self._rust_player.legal_action_indices_at_root()) > 1:
+            self.decisions += 1
 
         # Snapshot the search-policy vector before advancing the root. The
         # training target is the full visit distribution at every move;
@@ -609,9 +614,8 @@ class RustMCTSPlayer:
             return True
         if self._is_root_terminal():
             return True
-        # Truncation: the Rust BaseGame's move counter relative to max_game_length.
-        rust_root_game = self._rust_player.root_game_object()
-        return int(rust_root_game.move_number) >= int(self.config.max_game_length)
+        # Truncation: decisions played against max_game_length.
+        return self.decisions >= int(self.config.max_game_length)
 
     def set_result(self, result):
         self.result = np.array(result)
@@ -827,9 +831,7 @@ class _RootShim:
     def is_done(self) -> bool:
         if self._player._is_root_terminal():
             return True
-        return (
-            int(self.game_object.move_number) >= int(self._player.config.max_game_length)
-        )
+        return self._player.decisions >= int(self._player.config.max_game_length)
 
     def inject_noise(self):
         self._player.inject_noise()

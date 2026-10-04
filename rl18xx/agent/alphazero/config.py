@@ -406,7 +406,16 @@ class SelfPlayHyperparams:
     SelfPlayRuntime instead.
     """
 
+    # Game-length limits count DECISIONS: moves where the player to act had
+    # more than one legal action. Forced actions are applied automatically
+    # (the search collapses them into the preceding move) and never count:
+    # max_game_length, auction_stall_moves, softpick_move_cutoff and
+    # resign_min_move are all in decisions.
     max_game_length: int = 1000
+    # Safety bound on engine actions for the searches' forced-action collapse
+    # and terminal check (both engines); far above any real game, so the
+    # decision limits above are what end self-play games.
+    max_engine_actions: int = 5000
     # Self-play games run the engines' ``auction_unlock`` rule variant: an
     # all-pass round discounts the next private by $5 like the SV when nobody
     # has bid on it. Under the real rules an auction where everyone keeps
@@ -491,7 +500,7 @@ class SelfPlayHyperparams:
     # ``K`` in the spec — number of recent moves the leader/gap conditions
     # must hold over.
     resign_window: int = 8
-    # No resign checks before this many engine moves. Early in training the
+    # No resign checks before this many decisions. Early in training the
     # value head turns confident long before a game is decided: after one
     # iteration (3 epochs on 98 games) 256 of 263 self-play games resigned
     # around move 80, mid-auction. Human 4p games run a median of 587 moves.

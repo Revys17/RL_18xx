@@ -12,8 +12,10 @@ net worth), so a side's expected score is 0.5 when the checkpoints are equally
 strong. Games use the self-play ``auction_unlock`` variant both checkpoints
 were trained under; moves are sampled from visit counts before
 ``--softpick`` engine moves and argmax after, with no Dirichlet noise and no
-resignation. A game still in the private auction after ``--stall`` engine
-moves, or still running at ``--max-length``, is scored on net worth.
+resignation. A game still in the private auction after ``--stall``
+decisions, or still running after ``--max-length``, is scored on net worth.
+Limits count decisions (moves with more than one legal action), as self-play
+does.
 
     uv run python scripts/eval_head_to_head.py --match 107 7 --games 240
     uv run python scripts/eval_head_to_head.py --match 107 7 --match 57 7 --games 120
@@ -178,17 +180,18 @@ def play_game(game_idx: int, seat_names: tuple, settings: dict) -> dict:
     seat_by_player_id = {player.id: seat for seat, player in enumerate(game.players)}
     last_mover = None
     decisions = Counter()
+    decision_count = 0
     termination = None
     while True:
         if game.finished:
             termination = "finished"
             break
-        if game.move_number >= settings["max_length"]:
+        if decision_count >= settings["max_length"]:
             game.end_game()
             termination = "max_length"
             break
         round_name = game.round.__class__.__name__
-        if settings["stall"] and "Auction" in round_name and game.move_number >= settings["stall"]:
+        if settings["stall"] and "Auction" in round_name and decision_count >= settings["stall"]:
             termination = "auction_stall"
             break
 
@@ -197,12 +200,15 @@ def play_game(game_idx: int, seat_names: tuple, settings: dict) -> dict:
         player = players[name]
         if last_mover != name:
             player.initialize_game(game.pickle_clone())
+            player.decisions = decision_count  # the softpick cutoff counts the game's decisions
             _expand_root(player)
+        if len(player._rust_player.legal_action_indices_at_root()) > 1:
+            decision_count += 1
+            decisions["auction" if "Auction" in round_name else round_name.lower()] += 1
         move = player.suggest_move()
         player.play_move(move)
         game = player.get_game_state()
         last_mover = name
-        decisions["auction" if "Auction" in round_name else round_name.lower()] += 1
 
     net_worth = {seat_by_player_id[pid]: float(v) for pid, v in game.result().items()}
     best = max(net_worth.values())
@@ -213,6 +219,7 @@ def play_game(game_idx: int, seat_names: tuple, settings: dict) -> dict:
         "seats": list(seat_names),
         "termination": termination,
         "engine_moves": int(game.move_number),
+        "decision_count": decision_count,
         "decisions": dict(decisions),
         "net_worth": [net_worth[s] for s in range(NUM_PLAYERS)],
         "worth_share": [max(net_worth[s], 0.0) / total for s in range(NUM_PLAYERS)],
@@ -262,9 +269,9 @@ def main():
     parser.add_argument("--match", nargs=2, action="append", metavar=("A", "B"), required=True)
     parser.add_argument("--games", type=int, default=240, help="Games per match (rounded up to a multiple of 6)")
     parser.add_argument("--readouts", type=int, default=64)
-    parser.add_argument("--softpick", type=int, default=30, help="Sample from visit counts before this engine move")
+    parser.add_argument("--softpick", type=int, default=30, help="Sample from visit counts for this many decisions")
     parser.add_argument("--max-length", type=int, default=1000)
-    parser.add_argument("--stall", type=int, default=400, help="End a game still in the private auction here")
+    parser.add_argument("--stall", type=int, default=400, help="End a game still in the auction after this many decisions")
     parser.add_argument("--workers", type=int, default=48)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--seed", type=int, default=0)

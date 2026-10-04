@@ -328,6 +328,9 @@ class MCTSPlayer(Agent):
         self.result = np.zeros(len(game_state.players))
         self.result_string = None
         self.searches_pi = []
+        # Decisions played (moves with more than one legal action); the game
+        # limits count these, not engine actions (see SelfPlayConfig).
+        self.decisions = 0
         # Per-move price-head targets aggregated from MCTS visits.
         # Each entry is a list of ``(slot_idx, price, weight, price_min,
         # price_max)`` tuples (empty for categorical-only moves). Captured in
@@ -358,6 +361,8 @@ class MCTSPlayer(Agent):
           `inject_noise` calls.
         """
         self.log_memory_usage(stage_name="MCTSPlayer.play_move")
+        if self.root.num_legal_actions > 1:
+            self.decisions += 1
         # Train on the full visit distribution at every move; the softpick
         # cutoff only governs how ``pick_move`` chooses.
         self.searches_pi.append(self.root.children_as_pi(temperature=1.0))
@@ -438,6 +443,9 @@ class MCTSPlayer(Agent):
         matches the committed actions, keeping its subtree; otherwise the tree
         restarts from the committed position.
         """
+        # Decisions count every seat's moves, as the game limits do.
+        if self.root.num_legal_actions > 1:
+            self.decisions += 1
         # Train on the full visit distribution at every move; the softpick
         # cutoff only governs how ``pick_move`` chooses.
         self.searches_pi.append(self.root.children_as_pi(temperature=1.0))
@@ -556,7 +564,7 @@ class MCTSPlayer(Agent):
         Works on compressed arrays (only legal actions) to avoid allocating
         full 26,535-element arrays on every move.
         """
-        if self.root.game_object.move_number >= self.config.softpick_move_cutoff:
+        if self.decisions >= self.config.softpick_move_cutoff:
             return self.root.best_child()
 
         if self.root.num_legal_actions == 1:
@@ -881,7 +889,11 @@ class MCTSPlayer(Agent):
         return self.pick_move()
 
     def is_done(self):
-        return (not np.array_equal(self.result, np.zeros_like(self.result))) or self.root.is_done()
+        return (
+            (not np.array_equal(self.result, np.zeros_like(self.result)))
+            or self.root.is_done()
+            or self.decisions >= self.config.max_game_length
+        )
 
     def set_result(self, result):
         self.result = np.array(result)
@@ -1255,7 +1267,7 @@ class SelfPlay:
                 should_resign = False
                 resign_info: Optional[dict] = None
                 resign_min_move = int(getattr(self.config, "resign_min_move", 0) or 0)
-                if mcts_ran_this_move and player.root.game_object.move_number >= resign_min_move:
+                if mcts_ran_this_move and player.decisions >= resign_min_move:
                     should_resign, resign_info = player.check_resign()
                 if should_resign:
                     LOGGER.info(
@@ -1314,12 +1326,12 @@ class SelfPlay:
                 if (
                     stall_moves
                     and "Auction" in round_class_name
-                    and player.root.game_object.move_number >= stall_moves
+                    and player.decisions >= stall_moves
                 ):
                     game_now = player.root.game_object
                     LOGGER.info(
-                        f"Ending game still in the private auction after {game_now.move_number} engine moves "
-                        f"({move_counter} decisions)."
+                        f"Ending game still in the private auction after {player.decisions} decisions "
+                        f"({game_now.move_number} engine actions)."
                     )
                     player.termination = "auction_stall"
                     player.set_result(score_fractions(_compute_net_worth(game_now)))
@@ -1347,7 +1359,11 @@ class SelfPlay:
                 self.add_metric("SelfPlay/Num_MCTS_Moves", sim_count_this_move)
                 self.add_metric("SelfPlay/Total_Sims_For_MCTS_Moves", total_sims_for_mcts_moves)
 
-                if player.termination == "resigned" or player.root.is_done():
+                if (
+                    player.termination == "resigned"
+                    or player.root.is_done()
+                    or player.decisions >= self.config.max_game_length
+                ):
                     if player.termination == "resigned":
                         # Already end_game'd above; do not double-flag as truncation.
                         net_worth = _compute_net_worth(player.root.game_object)
@@ -1355,7 +1371,7 @@ class SelfPlay:
                             f"Game ended by resign ({move_counter} moves). "
                             f"Net worth at resign: {net_worth}"
                         )
-                    elif player.root.game_object.move_number >= self.config.max_game_length:
+                    elif player.decisions >= self.config.max_game_length:
                         # Truncated game: derive win/loss + score targets from net worth
                         # at the truncation step. end_game() flips the engine's `finished`
                         # flag but does not mutate player cash / share holdings; the

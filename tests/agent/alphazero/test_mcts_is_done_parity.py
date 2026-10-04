@@ -1,12 +1,13 @@
-"""Parity test: ``MCTSPlayer.is_done`` and ``MCTSNode.is_done`` agree on the
-``>= max_game_length`` boundary.
+"""Game-length limits count decisions; the search trees' terminal check counts
+engine actions only as a safety bound.
 
-Both methods consult ``game_object.move_number >= config.max_game_length``
-(MCTSPlayer ORs in a check on whether ``self.result`` has been set, but at
-the moment of interest ``result`` is still zero). This test pins that they
-agree on both sides of the boundary so that a regression where one uses
-``>`` and the other uses ``>=`` (or one reads a different config field)
-would be caught.
+``SelfPlayConfig.max_game_length`` (and the resign floor, exploration cutoff
+and auction-stall limits) count decisions -- moves where the player to act
+had more than one legal action -- so actions the engine applies on its own
+never use up a game. ``MCTSNode.is_done`` (the Python tree) and the Rust
+tree's forced-action collapse stop at ``max_engine_actions`` instead, far
+above any real game. Both players (Python ``MCTSPlayer`` and
+``RustMCTSPlayer``) report done at the same decision count.
 """
 
 import numpy as np
@@ -14,7 +15,8 @@ import pytest
 import torch
 
 from rl18xx.agent.alphazero.config import SelfPlayConfig
-from rl18xx.agent.alphazero.mcts import VALUE_SIZE
+from rl18xx.agent.alphazero.mcts import POLICY_SIZE, VALUE_SIZE
+from rl18xx.agent.alphazero.rust_mcts_player import RustMCTSPlayer
 from rl18xx.agent.alphazero.self_play import MCTSPlayer
 from rl18xx.game.gamemap import GameMap
 
@@ -27,60 +29,38 @@ class DummyNet:
 
     def run_many_encoded(self, encoded_game_states):
         n = len(encoded_game_states)
-        priors = torch.ones(26537, dtype=torch.float32) / 26537
+        priors = torch.ones(POLICY_SIZE, dtype=torch.float32) / POLICY_SIZE
         value = torch.zeros(VALUE_SIZE, dtype=torch.float32)
         return [priors] * n, [torch.log(priors)] * n, [value] * n
 
 
 def _build_python_game():
-    """Fresh 4-player 1830 game on the Python engine.
-
-    Python engine usage matches the existing mcts_test.py style so the
-    DummyNet is sufficient; we never advance through MCTS readouts here."""
-    game_map = GameMap()
-    game_class = game_map.game_by_title("1830")
-    players = {1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"}
-    return game_class(players)
+    game_class = GameMap().game_by_title("1830")
+    return game_class({1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"})
 
 
-@pytest.mark.parametrize(
-    "max_game_length,expected_done",
-    [
-        # move_number == 0 at game start, so >= 0 is True, > 0 is False.
-        (0, True),   # 0 >= 0 → root.is_done() True
-        (1, False),  # 0 >= 1 → root.is_done() False (and game not finished)
-    ],
-)
-def test_player_and_root_is_done_agree_on_max_game_length_boundary(
-    max_game_length, expected_done
-):
-    """At the ``move_number >= max_game_length`` boundary, both methods
-    should agree (since ``MCTSPlayer.result`` is still all-zero at this
-    point, the player's extra ``result != 0`` term is False and both
-    reduce to ``root.is_done()``)."""
-    config = SelfPlayConfig(
-        network=DummyNet(),
-        max_game_length=max_game_length,
-        use_score_values=False,
-    )
+@pytest.mark.parametrize("max_engine_actions,expected_done", [(0, True), (1, False)])
+def test_python_tree_is_done_at_the_engine_action_bound(max_engine_actions, expected_done):
+    config = SelfPlayConfig(network=DummyNet(), max_engine_actions=max_engine_actions, use_score_values=False)
     player = MCTSPlayer(config)
-    # Override the default Rust-backed game with a Python BaseGame so we
-    # don't need engine_rs available; move_number == 0 on a fresh game.
     player.initialize_game(_build_python_game())
+    assert player.root.game_object.move_number == 0
+    assert player.root.is_done() == expected_done
 
-    # Sanity: the player's result is still zero at this point.
+
+@pytest.mark.parametrize("player_class", [MCTSPlayer, RustMCTSPlayer])
+def test_players_are_done_after_max_game_length_decisions(player_class):
+    """Opening-auction moves are decisions (several bids or a pass), so after
+    max_game_length of them the player is done -- whatever the engine-action
+    count."""
+    config = SelfPlayConfig(
+        network=DummyNet(), max_game_length=3, num_readouts=2, parallel_readouts=1, min_readouts=1,
+        dirichlet_noise_weight=0.0, use_score_values=False, player_count_distribution={4: 1.0},
+    )
+    player = player_class(config)  # both start a fresh Rust-engine game
+    for played in range(3):
+        assert not player.is_done()
+        player.play_move(player.suggest_move())
+        assert player.decisions == played + 1
+    assert player.is_done()
     assert np.array_equal(player.result, np.zeros_like(player.result))
-
-    root_done = player.root.is_done()
-    player_done = player.is_done()
-
-    assert root_done == expected_done, (
-        f"root.is_done() returned {root_done}, expected {expected_done} "
-        f"for max_game_length={max_game_length}, move_number={player.root.game_object.move_number}"
-    )
-    assert player_done == root_done, (
-        f"MCTSPlayer.is_done() and MCTSNode.is_done() disagree at "
-        f"move_number={player.root.game_object.move_number}, "
-        f"max_game_length={max_game_length}: "
-        f"player_done={player_done}, root_done={root_done}"
-    )

@@ -644,7 +644,7 @@ class MCTSNode:
         # exactly one legal action, so MCTS doesn't waste tree depth / visits on them.
         forced_chain: list[int] = []
         forced_chain_start = time.time()
-        while not (new_position.finished or new_position.move_number >= self.config.max_game_length):
+        while not (new_position.finished or new_position.move_number >= self.config.max_engine_actions):
             legal_indices, forced_price_ranges, forced_action_types = (
                 self.action_mapper.get_legal_actions_factored(new_position)
             )
@@ -962,7 +962,7 @@ class MCTSNode:
         self.parent.backup_value(value * self.config.backup_discount, up_to)
 
     def is_done(self):
-        return self.game_object.finished or self.game_object.move_number >= self.config.max_game_length
+        return self.game_object.finished or self.game_object.move_number >= self.config.max_engine_actions
 
     def game_result(self) -> Optional[np.ndarray]:
         """Per-player value vector emitted at game end.
