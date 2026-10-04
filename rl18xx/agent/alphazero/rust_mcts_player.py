@@ -316,6 +316,7 @@ class RustMCTSPlayer:
                 traces_budget = max(0, int(trace_cfg.traces_per_move))
 
         leaves: list[int] = []  # arena indices
+        leaf_adapters: list = []  # parallel to leaves
         encoded_states: list = []
         leaf_active_player_idx: list[int] = []  # mirrors leaves; for trace q_perspective
         leaf_traces: list = []  # parallel to leaves; None if untraced
@@ -370,6 +371,7 @@ class RustMCTSPlayer:
             # Encode each leaf via the Rust-side BaseGame -> adapter shim.
             rust_game = self._rust_player.get_game_for_idx(idx)
             adapter = RustGameAdapter(rust_game)
+            leaf_adapters.append(adapter)
             encoded_states.append(_rust_encode(adapter))
             leaf_active_player_idx.append(_active_player_index(adapter))
             leaf_traces.append(trace)
@@ -417,6 +419,8 @@ class RustMCTSPlayer:
             # values are in absolute seat order.
             leaf_state = encoded_states[i]
             value_np = unrotate_value(value_np, leaf_state[6], leaf_state[7])
+            if self.config.leaf_value_heuristic is not None:
+                value_np = self._heuristic_leaf_value(leaf_adapters[i])
             leaf_pc = _slice_price_components(batched_price_components, i)
             pc_arg = _coerce_price_components_for_rust(leaf_pc)
             self._rust_player.incorporate_results(
@@ -445,6 +449,20 @@ class RustMCTSPlayer:
                         trace.leaf_prior_entropy = float(calculate_entropy(legal_probs))
                 self.traces.append(trace)
         self.cumulative_backup_time += time.time() - backup_start
+
+    def _heuristic_leaf_value(self, adapter) -> np.ndarray:
+        """``leaf_value_heuristic`` value of a leaf, in absolute seat order
+        (``SelfPlayConfig.leaf_value_heuristic``; diagnostics only)."""
+        kind = self.config.leaf_value_heuristic
+        if kind != "net_worth":
+            raise ValueError(f"Unknown leaf_value_heuristic {kind!r}")
+        net_worth = _compute_net_worth(adapter)
+        scores = np.array([float(net_worth[pid]) for pid in sorted(net_worth)], dtype=np.float64)
+        logits = (scores - scores.max()) / float(self.config.leaf_value_heuristic_scale)
+        shares = np.exp(logits) / np.exp(logits).sum()
+        value = np.zeros(VALUE_SIZE, dtype=np.float32)
+        value[: len(shares)] = shares
+        return value
 
     def adaptive_readouts(self) -> int:
         num_legal = len(self._rust_player.legal_action_indices_at_root())

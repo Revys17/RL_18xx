@@ -21,16 +21,21 @@ does.
     uv run python scripts/eval_head_to_head.py --match 107 7 --match 57 7 --games 120
 
 A player is a checkpoint -- ``<num>`` (in the current_best session),
-``<session>/<num>``, or a path to a ``.pth`` -- optionally with its own search
-size, ``<checkpoint>@<readouts>`` (default ``--readouts``), its own PUCT
-constant for every round, ``<checkpoint>@<readouts>/<c_puct_init>`` (default
-SelfPlayConfig's c_puct_init and per-round c_puct_by_round),
-and mean-Q selection with first-play urgency, a ``:mean`` or
-``:mean=<fpu_reduction>`` suffix (SelfPlayConfig.mcts_mean_q):
+``<session>/<num>``, or a path to a ``.pth`` -- optionally followed by
+``@<readouts>`` (default ``--readouts``), ``/<c_puct_init>`` (applied in every
+round: it replaces SelfPlayConfig's per-round c_puct_by_round table) and
+``:<option>,<option>...``:
+
+- ``mean`` / ``mean=<fpu_reduction>``: mean-Q selection with first-play
+  urgency (SelfPlayConfig.mcts_mean_q / fpu_reduction)
+- ``par=<n>``: leaves selected per batch (SelfPlayConfig.parallel_readouts)
+- ``value=networth``: leaf values from a net-worth heuristic instead of the
+  network (SelfPlayConfig.leaf_value_heuristic), to test the search alone
 
     uv run python scripts/eval_head_to_head.py --match 7@200 7@64 --games 120
     uv run python scripts/eval_head_to_head.py --match 7@64/0.6 7@64 --games 120
     uv run python scripts/eval_head_to_head.py --match 7@64/0.2:mean 7@64 --games 120
+    uv run python scripts/eval_head_to_head.py --match 7@200:value=networth 7@8:value=networth
 """
 
 import argparse
@@ -81,24 +86,24 @@ def resolve_checkpoint(spec: str) -> Path:
 
 
 def parse_player(spec: str, default_readouts: int) -> tuple:
-    """``(checkpoint path, readouts, c_puct_init or None, fpu_reduction or None)``
-    of a ``<checkpoint>[@<readouts>[/<c_puct_init>]][:mean[=<fpu_reduction>]]``
-    player spec; ``fpu_reduction`` is None for minigo-style selection."""
-    spec, _, q_mode = spec.partition(":")
+    """``(checkpoint path, SelfPlayConfig overrides)`` of a player spec (see the module docstring)."""
+    spec, _, options = spec.partition(":")
     checkpoint, _, search = spec.partition("@")
     readouts, _, c_puct = search.partition("/")
-    fpu = None
-    if q_mode:
-        mode, _, fpu_text = q_mode.partition("=")
-        if mode != "mean":
-            raise SystemExit(f"Unknown selection mode {q_mode!r} in player {spec!r}")
-        fpu = float(fpu_text) if fpu_text else 0.0
-    return (
-        resolve_checkpoint(checkpoint),
-        int(readouts) if readouts else default_readouts,
-        float(c_puct) if c_puct else None,
-        fpu,
-    )
+    overrides = {"num_readouts": int(readouts) if readouts else default_readouts}
+    if c_puct:
+        overrides.update(c_puct_init=float(c_puct), c_puct_by_round={})
+    for option in filter(None, options.split(",")):
+        key, _, value = option.partition("=")
+        if key == "mean":
+            overrides.update(mcts_mean_q=True, fpu_reduction=float(value) if value else 0.0)
+        elif key == "par":
+            overrides["parallel_readouts"] = int(value)
+        elif key == "value" and value == "networth":
+            overrides["leaf_value_heuristic"] = "net_worth"
+        else:
+            raise SystemExit(f"Unknown player option {option!r} in {spec!r}")
+    return resolve_checkpoint(checkpoint), overrides
 
 
 def model_factory(checkpoint_path):
@@ -162,11 +167,7 @@ def play_game(game_idx: int, seat_names: tuple, settings: dict) -> dict:
             network=None,
             use_inference_server=True,
             inference_client=_CLIENTS[spec["server"]],
-            num_readouts=spec["readouts"],
-            # An explicit constant replaces the per-round table too, which
-            # otherwise overrides c_puct_init in every 1830 round.
-            **({"c_puct_init": spec["c_puct"], "c_puct_by_round": {}} if spec["c_puct"] is not None else {}),
-            **({"mcts_mean_q": True, "fpu_reduction": spec["fpu"]} if spec["fpu"] is not None else {}),
+            **spec["overrides"],
             softpick_move_cutoff=settings["softpick"],
             dirichlet_noise_weight=0.0,
             enable_resign=False,
@@ -271,7 +272,9 @@ def main():
     parser.add_argument("--readouts", type=int, default=64)
     parser.add_argument("--softpick", type=int, default=30, help="Sample from visit counts for this many decisions")
     parser.add_argument("--max-length", type=int, default=1000)
-    parser.add_argument("--stall", type=int, default=400, help="End a game still in the auction after this many decisions")
+    parser.add_argument(
+        "--stall", type=int, default=400, help="End a game still in the auction after this many decisions"
+    )
     parser.add_argument("--workers", type=int, default=48)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--seed", type=int, default=0)
@@ -287,8 +290,8 @@ def main():
     players = {}
     for a, b in args.match:
         for spec in (a, b):
-            path, readouts, c_puct, fpu = parse_player(spec, args.readouts)
-            players[spec] = {"server": str(path), "readouts": readouts, "c_puct": c_puct, "fpu": fpu}
+            path, overrides = parse_player(spec, args.readouts)
+            players[spec] = {"server": str(path), "overrides": overrides}
     paths = sorted({p["server"] for p in players.values()})
     games_per_match = math.ceil(args.games / len(ARRANGEMENTS)) * len(ARRANGEMENTS)
     settings = {

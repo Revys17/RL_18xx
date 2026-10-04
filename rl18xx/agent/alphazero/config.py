@@ -442,6 +442,11 @@ class SelfPlayHyperparams:
     # "certain loss".
     mcts_mean_q: bool = False
     fpu_reduction: float = 0.0
+    # Diagnostics only (Rust MCTS): replace the network's leaf value with a
+    # heuristic, to test the search apart from the value head. "net_worth":
+    # softmax over players of net worth / leaf_value_heuristic_scale dollars.
+    leaf_value_heuristic: Optional[str] = None
+    leaf_value_heuristic_scale: float = 100.0
     c_puct_by_round: dict = field(default_factory=_default_c_puct_by_round)
     dirichlet_noise_alpha: float = 0.03
     dirichlet_noise_weight: float = 0.25
