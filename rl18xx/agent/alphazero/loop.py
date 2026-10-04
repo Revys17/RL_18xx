@@ -240,11 +240,21 @@ def load_loop_config(
     )
 
     # Write current config to file for visibility / hot-reload editing
-    serializable = asdict(loop_config)
-    serializable["training_config"] = training_config.to_json()
-    atomic_write_json(LOOP_CONFIG_PATH, serializable, indent=4)
+    _write_loop_config(loop_config)
 
     return loop_config
+
+
+def _write_loop_config(loop_config: "LoopConfig"):
+    """Persist ``loop_config`` to loop_config.json, keeping the file's other
+    keys. Keys LoopConfig doesn't model (selfplay_overrides, eval_every, ...)
+    are read straight from the file by the code that uses them; rewriting the
+    file from the dataclass alone dropped them after the first iteration."""
+    existing = _safe_read_json(LOOP_CONFIG_PATH) if LOOP_CONFIG_PATH.exists() else None
+    serializable = dict(existing) if isinstance(existing, dict) else {}
+    serializable.update(asdict(loop_config))
+    serializable["training_config"] = loop_config.training_config.to_json()
+    atomic_write_json(LOOP_CONFIG_PATH, serializable, indent=4)
 
 
 def update_loop_status(status_data: dict):
@@ -1044,9 +1054,7 @@ def calibrate_resign_threshold(
         # Persist back so subsequent workers + next iteration's
         # load_loop_config pick up the updated threshold.
         try:
-            serializable = asdict(loop_config)
-            serializable["training_config"] = loop_config.training_config.to_json()
-            atomic_write_json(LOOP_CONFIG_PATH, serializable, indent=4)
+            _write_loop_config(loop_config)
         except Exception as e:
             LOGGER.warning(f"Failed to persist resign threshold update: {e}")
 

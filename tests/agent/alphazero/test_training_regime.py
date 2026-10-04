@@ -169,3 +169,22 @@ def test_periodic_evaluator_runs_every_n_iterations_and_logs_the_score(tmp_path,
     assert record["loop"] == 2 and record["score"] == 0.6
     argv = json.loads((tmp_path / "logs/eval/loop_T/iter_2/summary.json").read_text())[0]["argv"]
     assert argv[argv.index("--match") + 1 : argv.index("--match") + 3] == ["S/9@64", "S/7@64"]
+
+
+def test_loading_the_loop_config_keeps_keys_loop_config_does_not_model(tmp_path, monkeypatch):
+    """load_loop_config rewrites loop_config.json each iteration; rewriting it
+    from the LoopConfig dataclass alone dropped selfplay_overrides / eval_every
+    after the first iteration."""
+    import json
+
+    from rl18xx.agent.alphazero import loop
+
+    path = tmp_path / "loop_config.json"
+    path.write_text(json.dumps({"eval_every": 10, "selfplay_overrides": {"mcts_mean_q": True}, "resign_window": 4}))
+    monkeypatch.setattr(loop, "LOOP_CONFIG_PATH", path)
+    config = loop.load_loop_config(3, 5, 2, TrainingConfig(), 16, 100)
+    assert config.resign_window == 4
+    written = json.loads(path.read_text())
+    assert written["eval_every"] == 10
+    assert written["selfplay_overrides"] == {"mcts_mean_q": True}
+    assert written["num_loop_iterations"] == 3 and written["resign_window"] == 4
