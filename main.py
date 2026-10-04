@@ -104,7 +104,7 @@ def cmd_convert(args):
         game_data_dir=args.data_dir,
         encoder=encoder,
         save_path=args.output,
-        skip_forced=not args.keep_forced,
+        skip_forced=args.skip_forced,
     )
 
 
@@ -293,8 +293,9 @@ def build_parser():
     p.add_argument("--output", type=str, default="human_games/lmdb_v2", help="Output directory for LMDB data")
     p.add_argument("--model-dir", type=str, default="model_checkpoints", help="Model checkpoint (determines encoder)")
     p.add_argument(
-        "--keep-forced", action="store_true",
-        help="Also record positions with a single legal action (skipped by default; self-play never records them)",
+        "--skip-forced", action="store_true",
+        help="Don't record positions with a single legal action (as self-play doesn't); off by default because "
+        "it made pretraining worse (see pretraining.convert_game_to_training_data)",
     )
 
     # refit-price-head (fit the price head on a frozen checkpoint)

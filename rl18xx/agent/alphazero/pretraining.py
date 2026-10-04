@@ -1575,17 +1575,19 @@ def convert_game_to_training_data(
     game: BaseGame,
     encoder: Encoder_1830,
     config: Optional[TrainingConfig] = None,
-    skip_forced: bool = True,
+    skip_forced: bool = False,
     stats: Optional[dict] = None,
     game_id: Optional[Union[str, int]] = None,
 ) -> Tuple[list[Any], list[Any]]:
     """Turn every decision of a cleaned human game into a training example.
 
-    With ``skip_forced`` (the default), positions whose legal set has exactly
-    one action index are replayed but not recorded: their policy target is
-    trivial, and their value targets are extra correlated copies of the game's
-    single outcome. Self-play never records them either (the MCTS applies
-    forced actions without searching). ``stats``, if given, accumulates
+    With ``skip_forced``, positions whose legal set has exactly one action
+    index (92% of them auto-routed RunRoutes) are replayed but not recorded,
+    as self-play does. It is off by default because it made pretraining
+    worse: from the same initial weights, 2 epochs on lmdb_v6 (skipped) vs
+    lmdb_v6k (kept) scored 0.326 vs 0.448 top-1 on human BuyShares and 0.631
+    vs 0.652 overall on the same held-out decisions, and the full 10-epoch
+    run without them lost 0.117-0.883 to its predecessor in self-play games. ``stats``, if given, accumulates
     ``positions`` (examples written), ``forced_skipped``, and per action type
     ``unmatched`` / ``ambiguous`` labels (skipped). The whole game goes to
     validation by :func:`in_validation_split` on ``game_id``, or at random
@@ -1753,7 +1755,7 @@ def convert_games_to_training_dataset(
     encoder: Encoder_1830,
     save_path: Union[str, Path],
     config: Optional[TrainingConfig] = None,
-    skip_forced: bool = True,
+    skip_forced: bool = False,
 ):
     if config is None:
         config = TrainingConfig()
