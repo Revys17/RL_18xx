@@ -7,6 +7,8 @@ import math
 import shutil
 import time
 from datetime import datetime
+import dataclasses
+import subprocess
 from dataclasses import dataclass, asdict
 from rl18xx.agent.alphazero.checkpointer import (
     _find_latest_session,
@@ -17,7 +19,7 @@ from rl18xx.agent.alphazero.checkpointer import (
     session_name_for,
     set_current_best,
 )
-from rl18xx.agent.alphazero.config import SelfPlayConfig, TrainingConfig
+from rl18xx.agent.alphazero.config import SelfPlayConfig, SelfPlayHyperparams, TrainingConfig
 from rl18xx.agent.alphazero.metrics import Metrics
 from rl18xx.agent.alphazero.self_play import MCTSPlayer, SelfPlay, SELF_PLAY_GAMES_STATUS_PATH
 from rl18xx.agent.alphazero.dataset import SelfPlayDataset
@@ -303,6 +305,16 @@ def cleanup_files():
                 item.unlink()
 
 
+def _selfplay_overrides(file_cfg: Optional[dict]) -> dict:
+    """``selfplay_overrides`` from loop_config.json, keeping only self-play hyperparameters."""
+    raw = (file_cfg or {}).get("selfplay_overrides") or {}
+    known = {f.name for f in dataclasses.fields(SelfPlayHyperparams)}
+    unknown = sorted(set(raw) - known)
+    if unknown:
+        LOGGER.warning(f"Ignoring unknown selfplay_overrides keys: {unknown}")
+    return {k: v for k, v in raw.items() if k in known}
+
+
 def run_self_play(
     game_idx_in_iteration: int,
     tb_log_dir: str,
@@ -364,6 +376,11 @@ def run_self_play(
                 if key in file_cfg and file_cfg[key] is not None:
                     server_kwargs[key] = file_cfg[key]
 
+    # ``selfplay_overrides`` in loop_config.json: any SelfPlayConfig fields
+    # (search settings such as mcts_mean_q, c_puct_init, parallel_readouts),
+    # applied over everything else here. Read per game, so hot-reloadable.
+    selfplay_overrides = _selfplay_overrides(file_cfg)
+
     # Per-game TensorBoard logging is opt-in via ``selfplay_tensorboard`` in
     # loop_config.json — event files get large over long runs.
     selfplay_metrics = None
@@ -371,7 +388,7 @@ def run_self_play(
         selfplay_metrics = Metrics(os.path.join(tb_log_dir, f"game_L{loop}_G{game_idx_in_iteration}"))
 
     try:
-        self_play_config = SelfPlayConfig(
+        config_kwargs = dict(
             network=model,
             metrics=selfplay_metrics,
             global_step=loop,
@@ -387,6 +404,8 @@ def run_self_play(
             **resign_kwargs,
             **server_kwargs,
         )
+        config_kwargs.update(selfplay_overrides)
+        self_play_config = SelfPlayConfig(**config_kwargs)
         selfplay = SelfPlay(self_play_config)
         selfplay.run_game()
         logging.info(f"Self-play game L{loop}/G{game_idx_in_iteration} completed successfully.")
@@ -1129,6 +1148,108 @@ def _selfplay_example_count() -> int:
     return count
 
 
+EVAL_HISTORY_PATH = Path("logs/loop/eval_history.jsonl")
+EVAL_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "eval_head_to_head.py"
+
+
+def _eval_player_spec(pointer: dict, overrides: dict, readouts: int) -> str:
+    """eval_head_to_head player spec for a checkpoint pointer, searching like self-play."""
+    spec = f"{pointer['session']}/{int(pointer['checkpoint_num'])}@{readouts}"
+    if overrides.get("c_puct_init") is not None:
+        spec += f"/{overrides['c_puct_init']}"
+    options = []
+    if overrides.get("mcts_mean_q"):
+        options.append(f"mean={overrides.get('fpu_reduction', 0.0)}")
+    if overrides.get("parallel_readouts"):
+        options.append(f"par={int(overrides['parallel_readouts'])}")
+    return spec + (":" + ",".join(options) if options else "")
+
+
+class PeriodicEvaluator:
+    """Plays the current-best checkpoint against the run's starting one every
+    ``eval_every`` iterations (loop_config.json; 0 or absent = off), in a
+    background ``scripts/eval_head_to_head.py`` process so self-play keeps
+    going. Both sides search as self-play does (``selfplay_overrides``).
+
+    The score is the newer checkpoint's share of wins with two seats each
+    (0.5 = no stronger than where the run started). It is logged as
+    ``Eval/Score_vs_Start`` at the evaluated iteration and appended to
+    logs/loop/eval_history.jsonl. Other keys: ``eval_games`` (120),
+    ``eval_workers`` (16), ``eval_readouts`` (the loop's readouts).
+    """
+
+    def __init__(self, reference: Optional[dict], timestamp: str, metrics: Metrics):
+        self.reference = reference
+        self.out_root = Path("logs") / "eval" / f"loop_{timestamp}"
+        self.metrics = metrics
+        self.proc = None
+        self.pending: Optional[dict] = None
+
+    def maybe_start(self, loop: int, num_readouts: int):
+        file_cfg = _safe_read_json(LOOP_CONFIG_PATH) if LOOP_CONFIG_PATH.exists() else None
+        every = int((file_cfg or {}).get("eval_every") or 0)
+        if every <= 0 or (loop + 1) % every or self.reference is None:
+            return
+        if self.proc is not None:
+            LOGGER.info(f"Loop {loop+1}: previous strength eval still running; skipping this one")
+            return
+        current = get_current_best(MODEL_CHECKPOINT_DIR)
+        if current is None:
+            return
+        overrides = _selfplay_overrides(file_cfg)
+        readouts = int(file_cfg.get("eval_readouts") or num_readouts)
+        out_dir = self.out_root / f"iter_{loop + 1}"
+        cmd = [
+            sys.executable, str(EVAL_SCRIPT),
+            "--match", _eval_player_spec(current, overrides, readouts),
+            _eval_player_spec(self.reference, overrides, readouts),
+            "--games", str(int(file_cfg.get("eval_games") or 120)),
+            "--workers", str(int(file_cfg.get("eval_workers") or 16)),
+            "--readouts", str(readouts),
+            "--batch-size", "256",
+            "--out", str(out_dir),
+        ]
+        env = dict(os.environ, OMP_NUM_THREADS="2", PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with open(out_dir / "eval.log", "w") as log:
+            self.proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)
+        self.pending = {"loop": loop, "checkpoint": current, "out_dir": out_dir}
+        LOGGER.info(f"Loop {loop+1}: strength eval started: {' '.join(cmd[2:6])} (pid {self.proc.pid})")
+
+    def poll(self, wait: bool = False):
+        if self.proc is None:
+            return
+        if wait:
+            self.proc.wait()
+        elif self.proc.poll() is None:
+            return
+        pending, code = self.pending, self.proc.returncode
+        self.proc = self.pending = None
+        summary = _safe_read_json(pending["out_dir"] / "summary.json")
+        if code != 0 or not summary:
+            LOGGER.warning(f"Strength eval for loop {pending['loop']+1} failed (exit {code}); see {pending['out_dir']}")
+            return
+        result = summary[0]
+        record = {
+            "loop": pending["loop"] + 1,
+            "checkpoint": pending["checkpoint"],
+            "reference": self.reference,
+            "score": result["A_score"],
+            "score_se": result["A_score_se"],
+            "games": result["games"],
+            "timestamp": datetime.now().isoformat(),
+        }
+        self.metrics.add_scalar("Eval/Score_vs_Start", result["A_score"], pending["loop"])
+        self.metrics.add_scalar("Eval/Score_vs_Start_SE", result["A_score_se"], pending["loop"])
+        EVAL_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(EVAL_HISTORY_PATH, "a") as f:
+            f.write(json.dumps(record, default=str) + "\n")
+        LOGGER.info(
+            f"Strength eval, loop {record['loop']}: score vs start {record['score']:.3f} "
+            f"+- {record['score_se']:.3f} over {record['games']} games (0.5 = no stronger)"
+        )
+
+
 def log_value_generalization(
     loop: int, model, train_dir: Path, examples_before_selfplay: int, window: int, metrics: Metrics, sample: int = 5000
 ) -> dict:
@@ -1638,9 +1759,13 @@ def main(
             autocast_device=None,
         )
 
+    # Strength checks against the checkpoint this run starts from.
+    evaluator = PeriodicEvaluator(get_current_best(MODEL_CHECKPOINT_DIR), timestamp, metrics)
+
     loop = 0
     try:
         while True:
+            evaluator.poll()
             # Compute scheduled values based on persistent checkpoint count
             checkpoint_count = _get_checkpoint_count()
             scheduled_game_length = get_scheduled_value(checkpoint_count, game_length_schedule)
@@ -1745,6 +1870,7 @@ def main(
                     LOGGER.info("Inference server reloaded with latest checkpoint")
                 except Exception as e:
                     LOGGER.warning(f"Inference server reload failed (continuing): {e}")
+            evaluator.maybe_start(loop, scheduled_readouts)
 
             _emit_tensorboard_metrics(
                 loop, sp_stats, sp, training_wall_time, gating.wall_time,
@@ -1795,6 +1921,7 @@ def main(
             LOOP_LOCK_FILE.unlink()
 
     LOGGER.info("--- Finished all loops ---")
+    evaluator.poll(wait=True)
 
     # Final save of loop metrics
     save_loop_metrics(loop_metrics, loop_metrics_path)

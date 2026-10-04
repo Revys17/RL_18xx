@@ -111,3 +111,61 @@ def test_an_earlier_runs_status_files_are_not_this_iterations(tmp_path, monkeypa
     started = (tmp_path / "L3_G0.json").stat().st_mtime
     assert [p.name for p in loop._iteration_status_files(3, since=started)] == ["L3_G0.json"]
     assert len(list(tmp_path.iterdir())) == 4  # nothing deleted
+
+
+def test_selfplay_overrides_keep_only_selfplay_config_fields():
+    from rl18xx.agent.alphazero import loop
+
+    cfg = {"selfplay_overrides": {"mcts_mean_q": True, "parallel_readouts": 8, "not_a_field": 1}}
+    assert loop._selfplay_overrides(cfg) == {"mcts_mean_q": True, "parallel_readouts": 8}
+    assert loop._selfplay_overrides(None) == {}
+
+
+def test_eval_player_spec_searches_like_self_play():
+    from rl18xx.agent.alphazero import loop
+
+    pointer = {"session": "S", "checkpoint_num": 12}
+    assert loop._eval_player_spec(pointer, {}, 64) == "S/12@64"
+    overrides = {"c_puct_init": 0.5, "mcts_mean_q": True, "fpu_reduction": 0.1, "parallel_readouts": 8}
+    assert loop._eval_player_spec(pointer, overrides, 64) == "S/12@64/0.5:mean=0.1,par=8"
+
+
+def test_periodic_evaluator_runs_every_n_iterations_and_logs_the_score(tmp_path, monkeypatch):
+    """The eval runs in a background process (stubbed here) every eval_every
+    iterations; its score lands in TensorBoard and eval_history.jsonl."""
+    import json
+    import textwrap
+
+    from rl18xx.agent.alphazero import loop
+
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "loop_config.json"
+    config_path.write_text(json.dumps({"eval_every": 2, "eval_games": 6}))
+    monkeypatch.setattr(loop, "LOOP_CONFIG_PATH", config_path)
+    monkeypatch.setattr(loop, "EVAL_HISTORY_PATH", tmp_path / "eval_history.jsonl")
+    fake_eval = tmp_path / "fake_eval.py"
+    fake_eval.write_text(textwrap.dedent('''
+        import json, sys
+        args = sys.argv[1:]
+        out = args[args.index("--out") + 1]
+        json.dump([{"A_score": 0.6, "A_score_se": 0.05, "games": 6, "argv": args}], open(out + "/summary.json", "w"))
+    '''))
+    monkeypatch.setattr(loop, "EVAL_SCRIPT", fake_eval)
+    monkeypatch.setattr(loop, "get_current_best", lambda _dir: {"session": "S", "checkpoint_num": 9})
+    logged = []
+
+    class Metrics:
+        def add_scalar(self, name, value, step):
+            logged.append((name, value, step))
+
+    evaluator = loop.PeriodicEvaluator({"session": "S", "checkpoint_num": 7}, "T", Metrics())
+    evaluator.maybe_start(0, 64)  # iteration 1: not due
+    assert evaluator.proc is None
+    evaluator.maybe_start(1, 64)  # iteration 2: due
+    assert evaluator.proc is not None
+    evaluator.poll(wait=True)
+    assert ("Eval/Score_vs_Start", 0.6, 1) in logged
+    record = json.loads((tmp_path / "eval_history.jsonl").read_text())
+    assert record["loop"] == 2 and record["score"] == 0.6
+    argv = json.loads((tmp_path / "logs/eval/loop_T/iter_2/summary.json").read_text())[0]["argv"]
+    assert argv[argv.index("--match") + 1 : argv.index("--match") + 3] == ["S/9@64", "S/7@64"]
