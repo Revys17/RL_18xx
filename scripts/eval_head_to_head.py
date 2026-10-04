@@ -30,7 +30,8 @@ round: it replaces SelfPlayConfig's per-round c_puct_by_round table) and
   urgency (SelfPlayConfig.mcts_mean_q / fpu_reduction)
 - ``par=<n>``: leaves selected per batch (SelfPlayConfig.parallel_readouts)
 - ``value=networth``: leaf values from a net-worth heuristic instead of the
-  network (SelfPlayConfig.leaf_value_heuristic), to test the search alone
+  network (SelfPlayConfig.leaf_value_heuristic), to test the search alone;
+  with ``mix=<w>`` the heuristic gets weight w and the network 1 - w
 
     uv run python scripts/eval_head_to_head.py --match 7@200 7@64 --games 120
     uv run python scripts/eval_head_to_head.py --match 7@64/0.6 7@64 --games 120
@@ -101,6 +102,8 @@ def parse_player(spec: str, default_readouts: int) -> tuple:
             overrides["parallel_readouts"] = int(value)
         elif key == "value" and value == "networth":
             overrides["leaf_value_heuristic"] = "net_worth"
+        elif key == "mix":
+            overrides["leaf_value_heuristic_weight"] = float(value)
         else:
             raise SystemExit(f"Unknown player option {option!r} in {spec!r}")
     return resolve_checkpoint(checkpoint), overrides

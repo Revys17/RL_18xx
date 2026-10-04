@@ -403,3 +403,21 @@ def test_network_values_are_backed_up_in_absolute_seat_order():
         player.tree_search()
     q = np.asarray(player._rust_player.root_q_vector())
     assert q.argmax() == 1, f"root value by seat: {q}"
+
+
+def test_net_worth_leaf_heuristic_is_a_softmax_over_net_worth():
+    player = RustMCTSPlayer(_make_config(leaf_value_heuristic="net_worth", leaf_value_heuristic_scale=100.0))
+    game = player.get_game_state()
+    value = player._heuristic_leaf_value(game)  # everyone starts with the same net worth
+    np.testing.assert_allclose(value[:4], 0.25, atol=1e-6)
+    assert np.all(value[4:] == 0)
+
+    class Ahead:
+        """Player 2 is $100 ahead of the rest."""
+
+        def result(self):
+            return {1: 600, 2: 700, 3: 600, 4: 600}
+
+    value = player._heuristic_leaf_value(Ahead())
+    np.testing.assert_allclose(value[1] / value[0], np.e, rtol=1e-5)
+    assert abs(float(value.sum()) - 1.0) < 1e-6

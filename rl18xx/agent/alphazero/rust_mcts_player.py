@@ -448,7 +448,8 @@ class RustMCTSPlayer:
             leaf_state = encoded_states[i]
             value_np = unrotate_value(value_np, leaf_state[6], leaf_state[7])
             if self.config.leaf_value_heuristic is not None:
-                value_np = self._heuristic_leaf_value(leaf_adapters[i])
+                w = float(self.config.leaf_value_heuristic_weight)
+                value_np = (1.0 - w) * value_np + w * self._heuristic_leaf_value(leaf_adapters[i])
             leaf_pc = _slice_price_components(batched_price_components, i)
             pc_arg = _coerce_price_components_for_rust(leaf_pc)
             self._rust_player.incorporate_results(
