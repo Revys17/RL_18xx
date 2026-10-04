@@ -79,6 +79,8 @@ TENSORBOARD_EXTRA_SCALARS = {
     "Resign/High_Threshold": "resign_high_threshold",
     "Resign/Holdout_FP_Rate": "resign_holdout_fp_rate",
     "training/oldest_example_age_minutes": "oldest_example_age_minutes",
+    "Eval/Score_vs_Start": "eval_score_vs_start",
+    "Eval/Score_vs_Start_SE": "eval_score_vs_start_se",
 }
 
 _TTL_CACHE: dict = {}

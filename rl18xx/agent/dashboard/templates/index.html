@@ -197,6 +197,10 @@
                     <div class="panel"><h2>Value Generalization (CE before training)</h2><div class="chart-container"><canvas id="c-value-ce"></canvas></div></div>
                     <div class="panel"><h2>Auction Unlock &amp; Resignation</h2><div class="chart-container"><canvas id="c-wheels"></canvas></div></div>
                 </div>
+                <div class="charts-row">
+                    <div class="panel"><h2>Strength vs Starting Checkpoint (0.5 = no stronger)</h2><div class="chart-container"><canvas id="c-strength"></canvas></div></div>
+                    <div class="panel"><h2>Numerical Headroom (peak |output| per block, max |weight|)</h2><div class="chart-container"><canvas id="c-numerics"></canvas></div></div>
+                </div>
             </div>
         </div>
 
@@ -427,6 +431,8 @@
         C.policyAcc=new Chart(document.getElementById('c-policy-acc'),{type:'line',data:{labels:[],datasets:[ds('Top-1','#4ade80'),ds('Top-5','#22d3ee'),dsDash('Max Prob','#fb923c')]},options:opts('Probability',{min:0,max:1})});
         C.valueQuality=new Chart(document.getElementById('c-value-quality'),{type:'line',data:{labels:[],datasets:[ds('Correlation','#a78bfa'),ds('Explained Variance','#4ade80')]},options:opts('Quality',{min:-1,max:1})});
         C.valueCE=new Chart(document.getElementById('c-value-ce'),{type:'line',data:{labels:[],datasets:[ds('New games (not yet trained on)','#f87171'),ds('Trained window','#6c8cff'),dsRef('Uniform guess (4p)','#8b8fa3')]},options:opts('Value CE (nats)',{min:0})});
+        C.strength=new Chart(document.getElementById('c-strength'),{type:'line',data:{labels:[],datasets:[ds('Score vs start','#4ade80',{spanGaps:true}),dsDash('+1 SE','#4ade80',{spanGaps:true,pointRadius:0}),dsDash('-1 SE','#4ade80',{spanGaps:true,pointRadius:0}),dsRef('Even (0.5)','#8b8fa3')]},options:opts('Share of wins',{min:0,max:1})});
+        C.numerics=new Chart(document.getElementById('c-numerics'),{type:'line',data:{labels:[],datasets:[ds('Econ transformer','#6c8cff'),ds('Hex transformer','#f87171'),ds('Fusion','#fb923c'),ds('Trunk out','#a78bfa'),dsDash('Max |weight|','#8b8fa3')]},options:opts('Magnitude',{type:'logarithmic'})});
         C.wheels=new Chart(document.getElementById('c-wheels'),{type:'line',data:{labels:[],datasets:[ds('Auction-unlock games','#fb923c'),ds('Resigned games','#a78bfa'),dsDash('Resign threshold','#8b8fa3')]},options:opts('Fraction',{min:0,max:1})});
         C.valueError=new Chart(document.getElementById('c-value-error'),{type:'line',data:{labels:[],datasets:[ds('MAE','#fb923c'),ds('MSE','#f87171')]},options:opts('Error',{min:0})});
         C.valueDist=new Chart(document.getElementById('c-value-dist'),{type:'line',data:{labels:[],datasets:[ds('Target Mean','#4ade80'),dsRange('Target Min','#4ade80'),dsRange('Target Max','#4ade80'),ds('Pred Mean','#6c8cff'),dsRange('Pred Min','#6c8cff'),dsRange('Pred Max','#6c8cff'),dsDash('Target Std','#fb923c'),dsDash('Pred Std','#a78bfa')]},options:opts('Value (softmax prob)',{min:0,max:1})});
@@ -626,6 +632,10 @@
         apply(C.policyAcc,['top1_accuracy','top5_accuracy','max_prob_concentration']);
         apply(C.valueQuality,['value_correlation','value_explained_variance']);
         apply(C.valueCE,['value_ce_new_games','value_ce_trained_window',()=>UNIFORM_4P_CE]);
+        const se=(sign)=>r=>(r.eval_score_vs_start!=null&&r.eval_score_vs_start_se!=null)?r.eval_score_vs_start+sign*r.eval_score_vs_start_se:null;
+        apply(C.strength,['eval_score_vs_start',se(1),se(-1),()=>0.5]);
+        const peak=(block)=>r=>(r.activation_abs_max&&r.activation_abs_max[block]!=null)?r.activation_abs_max[block]:null;
+        apply(C.numerics,[peak('econ_transformer'),peak('hex_transformer'),peak('fusion'),peak('res_blocks'),r=>r.weight_abs_max||null]);
         apply(C.wheels,['auction_unlock_game_rate',r=>(r.resigned_games!=null&&r.games_played)?r.resigned_games/r.games_played:null,'resign_high_threshold']);
         apply(C.valueError,['value_mae','value_mse']);
         apply(C.valueDist,['value_target_mean','value_target_min','value_target_max','value_pred_mean','value_pred_min','value_pred_max','value_target_std','value_pred_std']);
