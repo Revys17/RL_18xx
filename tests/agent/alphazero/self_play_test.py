@@ -476,18 +476,17 @@ def test_pick_moves():
     root.child_N_compressed[1] = 5
     root.child_N_compressed[2] = 1
 
-    root.game_object.raw_actions =["a"] * 600
-
-    print(root.legal_action_indices)
+    # The softpick cutoff counts decisions (moves with more than one legal
+    # action), not engine actions.
+    player.decisions = player.config.softpick_move_cutoff + 1
 
     # Assert we're picking deterministically
-    assert root.game_object.move_number > player.config.softpick_move_cutoff
     move = player.pick_move()
     assert move == 0
 
-    root.game_object.raw_actions =["a"] * 10
     # But if we're in the early part of the game, pick randomly
-    assert root.game_object.move_number < player.config.softpick_move_cutoff
+    player.decisions = 10
+    assert player.decisions < player.config.softpick_move_cutoff
 
     with mock.patch("random.random", lambda: 0.5):
         move = player.pick_move()
