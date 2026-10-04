@@ -337,8 +337,11 @@ def run_self_play(
     num_players: int = 4,
 ):
     process_root_logger = logging.getLogger()
-    random.seed(os.getpid())
-    np.random.seed(os.getpid() ^ int(time.time()))
+    # Fresh OS entropy per game: pool workers are reused, and seeding from the
+    # pid gave every game a worker played the same Python random stream (the
+    # same no-resign holdout coin, the same temperature-1 draws).
+    random.seed()
+    np.random.seed()
     for handler in process_root_logger.handlers[:]:
         process_root_logger.removeHandler(handler)
         handler.close()
