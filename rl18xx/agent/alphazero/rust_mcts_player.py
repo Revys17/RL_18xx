@@ -210,6 +210,8 @@ class RustMCTSPlayer:
             {str(k): float(v) for k, v in getattr(self.config, "c_puct_by_round", {}).items()},
             int(getattr(self.config, "max_game_length", 1000)),
         )
+        if bool(getattr(self.config, "mcts_mean_q", False)):
+            self._rust_player.set_q_config(True, float(getattr(self.config, "fpu_reduction", 0.0)))
         self.result = np.zeros(len(game_state.players))
         self.result_string: Optional[str] = None
         self.searches_pi: list = []

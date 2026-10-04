@@ -66,6 +66,9 @@ pub struct RustMCTSNode {
     pub action_types: HashMap<u32, String>,
     pub child_n: Vec<f32>,           // [num_legal]
     pub child_w: Vec<[f32; VALUE_SIZE]>,
+    /// Virtual losses in flight through each child (``mean_q`` uses them to
+    /// count an in-flight descent as a zero-value visit).
+    pub child_vl: Vec<f32>,
     pub child_prior: Vec<f32>,
     pub original_prior: Vec<f32>,
 
@@ -231,6 +234,13 @@ pub struct RustMCTSPlayer {
     /// this, exactly like Python's ``while not (finished or move_number >=
     /// max_game_length)``.
     pub max_game_length: usize,
+    /// Selection Q. false (default): minigo's ``W / (1 + N)`` with unvisited
+    /// children at 0 and a virtual loss of -1 to W. true: the mean value
+    /// ``W / N``, an in-flight descent counted as a zero-value visit, and
+    /// unvisited children at the node's own mean value minus
+    /// ``fpu_reduction * sqrt(visited prior mass)`` (first-play urgency).
+    pub mean_q: bool,
+    pub fpu_reduction: f32,
 }
 
 impl RustMCTSPlayer {
@@ -295,6 +305,7 @@ impl RustMCTSPlayer {
             price_ranges,
             action_types,
             child_n: vec![0.0; num_legal],
+            child_vl: vec![0.0; num_legal],
             child_w: vec![[0.0; VALUE_SIZE]; num_legal],
             child_prior: vec![0.0; num_legal],
             original_prior: vec![0.0; num_legal],
@@ -371,6 +382,8 @@ impl RustMCTSPlayer {
             price_explore_eps: price_explore_eps.unwrap_or(0.05),
             c_puct_by_round: HashMap::new(),
             max_game_length: 1000,
+            mean_q: false,
+            fpu_reduction: 0.0,
         };
         let root = player.build_node(cloned_inner, None, None)?;
         player.num_players = root.num_players;
@@ -404,6 +417,12 @@ impl RustMCTSPlayer {
         self.c_puct_base = c_puct_base;
         self.c_puct_by_round = c_puct_by_round;
         self.max_game_length = max_game_length;
+    }
+
+    /// Selection-Q mode (see the ``mean_q`` field).
+    pub fn set_q_config(&mut self, mean_q: bool, fpu_reduction: f32) {
+        self.mean_q = mean_q;
+        self.fpu_reduction = fpu_reduction;
     }
 
     /// Engine move number at the root (length of the full action log) —
@@ -854,6 +873,7 @@ impl RustMCTSPlayer {
             } else {
                 self.arena[parent].child_w[pidx][prev_player] -= 1.0;
             }
+            self.arena[parent].child_vl[pidx] += 1.0;
             self.arena[current].losses_applied += 1;
             current = parent;
         }
@@ -884,6 +904,7 @@ impl RustMCTSPlayer {
             } else {
                 self.arena[parent].child_w[pidx][prev_player] += 1.0;
             }
+            self.arena[parent].child_vl[pidx] -= 1.0;
             self.arena[current].losses_applied -= 1;
             current = parent;
         }
@@ -1442,6 +1463,27 @@ impl RustMCTSPlayer {
         }
     }
 
+    /// Mean backed-up value of ``arena_idx`` for ``player`` (in-flight
+    /// virtual losses excluded); ``1 / num_players`` before any backup.
+    fn node_mean_value(&self, arena_idx: usize, player: usize) -> f32 {
+        let fallback = 1.0 / self.num_players.max(1) as f32;
+        if arena_idx == self.root_idx {
+            return if self.root_n > 0.0 { self.root_w[player] / self.root_n } else { fallback };
+        }
+        let node = &self.arena[arena_idx];
+        let parent = &self.arena[node.parent.unwrap()];
+        let pidx = node.parent_compressed_idx;
+        let (n, mut w) = (parent.child_n[pidx], parent.child_w[pidx][player]);
+        if player == parent.active_player_index {
+            w += parent.child_vl[pidx];
+        }
+        if n > 0.0 {
+            w / n
+        } else {
+            fallback
+        }
+    }
+
     /// c_puct_init for the node's round type — Python's
     /// ``config.c_puct_by_round.get(round_name, config.c_puct_init)`` keyed
     /// by the round class name.
@@ -1499,6 +1541,19 @@ impl RustMCTSPlayer {
 
         let mut best_i: Option<usize> = None;
         let mut best_score = f32::NEG_INFINITY;
+        // First-play urgency (Leela/KataGo): an unvisited child starts at the
+        // node's own mean value, lowered by fpu_reduction * sqrt(prior mass
+        // of the children already visited) -- the more of the policy the
+        // search has explored, the less it expects from what is left.
+        let fpu = if self.mean_q {
+            let visited_mass: f32 = (0..num_legal)
+                .filter(|&i| node.child_n[i] + node.child_vl[i] > 0.0)
+                .map(|i| node.child_prior[i])
+                .sum();
+            self.node_mean_value(arena_idx, ap) - self.fpu_reduction * visited_mass.sqrt()
+        } else {
+            0.0
+        };
         for i in 0..num_legal {
             if let Some(ref mask) = allowed {
                 if !mask[i] {
@@ -1506,7 +1561,17 @@ impl RustMCTSPlayer {
                 }
             }
             let n_sa = node.child_n[i];
-            let q_sa = node.child_w[i][ap] / (1.0 + n_sa);
+            let q_sa = if self.mean_q {
+                // Undo the -1 virtual losses and count each as a 0-value visit.
+                let vl = node.child_vl[i];
+                if n_sa + vl > 0.0 {
+                    (node.child_w[i][ap] + vl) / (n_sa + vl)
+                } else {
+                    fpu
+                }
+            } else {
+                node.child_w[i][ap] / (1.0 + n_sa)
+            };
             let u_sa = c_puct * node.child_prior[i] * sqrt_n_s / (1.0 + n_sa);
             let score = q_sa + u_sa;
             if best_i.is_none() || score > best_score {

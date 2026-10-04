@@ -425,6 +425,14 @@ class SelfPlayHyperparams:
     auction_stall_moves: int = 400
     c_puct_base: float = 19652
     c_puct_init: float = 1.25
+    # Rust MCTS selection Q (``RustMCTSPlayer.set_q_config``). False keeps
+    # minigo's W / (1 + N) with unvisited children at 0; True uses the mean
+    # value W / N and starts unvisited children at the node's mean value minus
+    # ``fpu_reduction * sqrt(prior mass of the visited children)``. Values
+    # here are 0-1 win shares, where minigo's shrinkage toward 0 reads as
+    # "certain loss".
+    mcts_mean_q: bool = False
+    fpu_reduction: float = 0.0
     c_puct_by_round: dict = field(default_factory=_default_c_puct_by_round)
     dirichlet_noise_alpha: float = 0.03
     dirichlet_noise_weight: float = 0.25

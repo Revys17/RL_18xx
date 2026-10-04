@@ -20,11 +20,15 @@ moves, or still running at ``--max-length``, is scored on net worth.
 
 A player is a checkpoint -- ``<num>`` (in the current_best session),
 ``<session>/<num>``, or a path to a ``.pth`` -- optionally with its own search
-size, ``<checkpoint>@<readouts>`` (default ``--readouts``), and its own PUCT
-constant, ``<checkpoint>@<readouts>/<c_puct_init>`` (default SelfPlayConfig's):
+size, ``<checkpoint>@<readouts>`` (default ``--readouts``), its own PUCT
+constant for every round, ``<checkpoint>@<readouts>/<c_puct_init>`` (default
+SelfPlayConfig's c_puct_init and per-round c_puct_by_round),
+and mean-Q selection with first-play urgency, a ``:mean`` or
+``:mean=<fpu_reduction>`` suffix (SelfPlayConfig.mcts_mean_q):
 
     uv run python scripts/eval_head_to_head.py --match 7@200 7@64 --games 120
     uv run python scripts/eval_head_to_head.py --match 7@64/0.6 7@64 --games 120
+    uv run python scripts/eval_head_to_head.py --match 7@64/0.2:mean 7@64 --games 120
 """
 
 import argparse
@@ -75,14 +79,23 @@ def resolve_checkpoint(spec: str) -> Path:
 
 
 def parse_player(spec: str, default_readouts: int) -> tuple:
-    """``(checkpoint path, readouts, c_puct_init or None)`` of a
-    ``<checkpoint>[@<readouts>[/<c_puct_init>]]`` player spec."""
+    """``(checkpoint path, readouts, c_puct_init or None, fpu_reduction or None)``
+    of a ``<checkpoint>[@<readouts>[/<c_puct_init>]][:mean[=<fpu_reduction>]]``
+    player spec; ``fpu_reduction`` is None for minigo-style selection."""
+    spec, _, q_mode = spec.partition(":")
     checkpoint, _, search = spec.partition("@")
     readouts, _, c_puct = search.partition("/")
+    fpu = None
+    if q_mode:
+        mode, _, fpu_text = q_mode.partition("=")
+        if mode != "mean":
+            raise SystemExit(f"Unknown selection mode {q_mode!r} in player {spec!r}")
+        fpu = float(fpu_text) if fpu_text else 0.0
     return (
         resolve_checkpoint(checkpoint),
         int(readouts) if readouts else default_readouts,
         float(c_puct) if c_puct else None,
+        fpu,
     )
 
 
@@ -148,7 +161,10 @@ def play_game(game_idx: int, seat_names: tuple, settings: dict) -> dict:
             use_inference_server=True,
             inference_client=_CLIENTS[spec["server"]],
             num_readouts=spec["readouts"],
-            **({"c_puct_init": spec["c_puct"]} if spec["c_puct"] is not None else {}),
+            # An explicit constant replaces the per-round table too, which
+            # otherwise overrides c_puct_init in every 1830 round.
+            **({"c_puct_init": spec["c_puct"], "c_puct_by_round": {}} if spec["c_puct"] is not None else {}),
+            **({"mcts_mean_q": True, "fpu_reduction": spec["fpu"]} if spec["fpu"] is not None else {}),
             softpick_move_cutoff=settings["softpick"],
             dirichlet_noise_weight=0.0,
             enable_resign=False,
@@ -264,8 +280,8 @@ def main():
     players = {}
     for a, b in args.match:
         for spec in (a, b):
-            path, readouts, c_puct = parse_player(spec, args.readouts)
-            players[spec] = {"server": str(path), "readouts": readouts, "c_puct": c_puct}
+            path, readouts, c_puct, fpu = parse_player(spec, args.readouts)
+            players[spec] = {"server": str(path), "readouts": readouts, "c_puct": c_puct, "fpu": fpu}
     paths = sorted({p["server"] for p in players.values()})
     games_per_match = math.ceil(args.games / len(ARRANGEMENTS)) * len(ARRANGEMENTS)
     settings = {
