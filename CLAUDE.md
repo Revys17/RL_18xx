@@ -83,7 +83,7 @@ A PyO3 crate that re-implements the engine for speed (it recently reached full 1
 - **Loop** (`loop.py`): Orchestrates self-play → train → gate iterations. Configured via `loop_config.json` (hot-reloaded), status in `loop_status.json`.
 - **Config** (`config.py`): `ModelConfig`, `TrainingConfig`, `SelfPlayConfig` dataclasses.
 - **Checkpointer** (`checkpointer.py`): Model save/load with versioned directories under `model_checkpoints/`.
-- **Pretraining** (`pretraining.py`): Supervised pre-training from human game data (JSON exports from 18xx.games; cleaning uses the Rust engine). Two-stage by default: a joint run with a small value-loss weight, early-stopped on validation loss, then the value heads are re-fit on the frozen best checkpoint (`_refit_value_heads`) because on ~2,900 games the value head memorizes after under an epoch while the policy keeps improving. Logs value winner accuracy vs. the equal-odds baseline each epoch.
+- **Pretraining** (`pretraining.py`): Supervised pre-training from human game data (JSON exports from 18xx.games; cleaning uses the Rust engine). Two-stage by default: a joint run with a small value-loss weight, early-stopped on validation loss, then the value heads are re-fit on the frozen best checkpoint (`_refit_value_heads`) because on ~2,900 games the value head memorizes after under an epoch while the policy keeps improving. Logs value winner accuracy vs. the equal-odds baseline each epoch. `main.py convert` skips forced positions (exactly one legal action index), as self-play does; `--keep-forced` restores them (lmdb_v4 and earlier include them, lmdb_v5 doesn't).
 - **Inference server** (`inference_server.py`), **Metrics** (`metrics.py`).
 
 ### Client (`rl18xx/client/`)

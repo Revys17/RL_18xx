@@ -89,6 +89,11 @@ def cmd_clean(args):
 
 
 def cmd_convert(args):
+    import logging
+
+    # Surface the end-of-run summary (games converted, examples written,
+    # forced positions skipped).
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     from rl18xx.agent.alphazero.pretraining import convert_games_to_training_dataset
     from rl18xx.agent.alphazero.encoder import Encoder_1830
     from rl18xx.agent.alphazero.checkpointer import get_latest_model
@@ -99,6 +104,7 @@ def cmd_convert(args):
         game_data_dir=args.data_dir,
         encoder=encoder,
         save_path=args.output,
+        skip_forced=not args.keep_forced,
     )
 
 
@@ -286,6 +292,10 @@ def build_parser():
     p.add_argument("--data-dir", type=str, default="human_games/1830_clean", help="Directory with cleaned game JSON files")
     p.add_argument("--output", type=str, default="human_games/lmdb_v2", help="Output directory for LMDB data")
     p.add_argument("--model-dir", type=str, default="model_checkpoints", help="Model checkpoint (determines encoder)")
+    p.add_argument(
+        "--keep-forced", action="store_true",
+        help="Also record positions with a single legal action (skipped by default; self-play never records them)",
+    )
 
     # refit-price-head (fit the price head on a frozen checkpoint)
     p = sub.add_parser("refit-price-head", help="Fit a fresh price head on the current-best checkpoint's frozen trunk")
