@@ -1517,7 +1517,18 @@ def convert_game_to_training_data(
     game: BaseGame,
     encoder: Encoder_1830,
     config: Optional[TrainingConfig] = None,
+    skip_forced: bool = True,
+    stats: Optional[dict] = None,
 ) -> Tuple[list[Any], list[Any]]:
+    """Turn every decision of a cleaned human game into a training example.
+
+    With ``skip_forced`` (the default), positions whose legal set has exactly
+    one action index are replayed but not recorded: their policy target is
+    trivial, and their value targets are extra correlated copies of the game's
+    single outcome. Self-play never records them either (the MCTS applies
+    forced actions without searching). ``stats``, if given, accumulates
+    ``positions`` (examples written) and ``forced_skipped`` counts.
+    """
     if config is None:
         config = TrainingConfig()
     training_data = []
@@ -1578,15 +1589,10 @@ def convert_game_to_training_data(
     LOGGER.debug(f"Game result: {result}")
     LOGGER.debug(f"Game value (normalized net-worth fractions): {actual_value}")
     skipped_actions = 0
+    forced_skipped = 0
     _skipped_examples_by_type: dict = {}
     for action in game.raw_actions:
         LOGGER.debug(f"Processing action: {action}")
-        # Encode the game state exactly as the engine sees it — no
-        # bid-ladder rewriting. With the ContinuousPriceHead, the model
-        # learns from raw observed prices and the encoder no longer needs to
-        # massage bids into a "minimum + multiples of 5" canonical form.
-        encoded_game_state = encoder.encode(fresh_game_state)
-
         # Enumerate legal actions via the Rust factored helper (native, fast)
         # and use the same list for both:
         #   1. the categorical pi target (one-hot on the matching slot)
@@ -1615,6 +1621,16 @@ def convert_game_to_training_data(
             except (KeyError, ValueError):
                 continue
         legal_action_indices = sorted(legal_set)
+        if skip_forced and len(legal_action_indices) == 1:
+            forced_skipped += 1
+            fresh_game_state.process_action(action)
+            continue
+
+        # Encode the game state exactly as the engine sees it — no
+        # bid-ladder rewriting. With the ContinuousPriceHead, the model
+        # learns from raw observed prices and the encoder no longer needs to
+        # massage bids into a "minimum + multiples of 5" canonical form.
+        encoded_game_state = encoder.encode(fresh_game_state)
 
         epsilon = config.pretrain_label_smoothing
         pi = torch.zeros(action_mapper.action_encoding_size)
@@ -1643,6 +1659,13 @@ def convert_game_to_training_data(
             skipped_actions, len(game.raw_actions),
             _skipped_examples_by_type,
         )
+    LOGGER.debug(
+        "convert_game_to_training_data: skipped %d forced (single-legal-action) positions of %d actions",
+        forced_skipped, len(game.raw_actions),
+    )
+    if stats is not None:
+        stats["positions"] = stats.get("positions", 0) + len(training_data) + len(validation_data)
+        stats["forced_skipped"] = stats.get("forced_skipped", 0) + forced_skipped
 
     return training_data, validation_data
 
@@ -1652,6 +1675,7 @@ def convert_games_to_training_dataset(
     encoder: Encoder_1830,
     save_path: Union[str, Path],
     config: Optional[TrainingConfig] = None,
+    skip_forced: bool = True,
 ):
     if config is None:
         config = TrainingConfig()
@@ -1684,6 +1708,7 @@ def convert_games_to_training_dataset(
     converted = 0
     skipped = 0
     errors = 0
+    stats = {"positions": 0, "forced_skipped": 0}
     for game in tqdm(games, desc="Converting games to training data"):
         if game["id"] in progress:
             skipped += 1
@@ -1696,7 +1721,9 @@ def convert_games_to_training_dataset(
                 progress[game["id"]] = True
                 atomic_write_json(progress_file, progress)
                 continue
-            train, val = convert_game_to_training_data(game_obj, encoder, config=config)
+            train, val = convert_game_to_training_data(
+                game_obj, encoder, config=config, skip_forced=skip_forced, stats=stats
+            )
             if train:
                 dest = save_path / "training"
                 processor.write_samples(train, dest)
@@ -1712,6 +1739,14 @@ def convert_games_to_training_dataset(
         atomic_write_json(progress_file, progress)
 
     LOGGER.info(f"Conversion complete: {converted} converted, {skipped} already done, {errors} errors")
+    seen = stats["positions"] + stats["forced_skipped"]
+    if skip_forced:
+        LOGGER.info(
+            f"Wrote {stats['positions']} examples; skipped {stats['forced_skipped']} forced (single-legal-action) "
+            f"positions ({stats['forced_skipped'] / max(seen, 1):.1%} of {seen})"
+        )
+    else:
+        LOGGER.info(f"Wrote {stats['positions']} examples (forced single-legal-action positions kept)")
 
 
 def _refit_value_heads(
