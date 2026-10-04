@@ -17,10 +17,11 @@
         "gradient_accumulation_steps": 1,
         "max_training_window": 1000000,
         "train_samples_per_iteration": 40000,
-        "value_lr_multiplier": 1.0,
+        "value_lr_multiplier": 0.3,
         "use_fp16_training": true,
         "pretrain_label_smoothing": 0.03,
-        "pretrain_validation_percentage": 0.05
+        "pretrain_validation_percentage": 0.05,
+        "value_stop_grad": true
     },
     "num_readouts": 8,
     "target_experiences": 20,
@@ -35,5 +36,12 @@
     "use_inference_server": false,
     "inference_batch_size": 512,
     "inference_batch_timeout_ms": 2.0,
-    "selfplay_tensorboard": true
+    "selfplay_tensorboard": true,
+    "start_positions_path": "human_games/start_positions_1830_4p.jsonl",
+    "random_start_fraction": 0.2,
+    "random_start_max_price_multiple": 2.0,
+    "selfplay_overrides": {},
+    "eval_every": 10,
+    "eval_games": 120,
+    "eval_workers": 16
 }
