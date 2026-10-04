@@ -12,7 +12,10 @@ net worth), so a side's expected score is 0.5 when the checkpoints are equally
 strong. Games use the self-play ``auction_unlock`` variant both checkpoints
 were trained under; moves are sampled from visit counts before
 ``--softpick`` engine moves and argmax after, with no Dirichlet noise and no
-resignation. A game still in the private auction after ``--stall``
+resignation. With ``--start-positions`` games start at the first Stock Round
+from self-play's start positions (human auction endings, plus
+``--random-start-fraction`` random ones), each start played in all six seat
+arrangements. A game still in the private auction after ``--stall``
 decisions, or still running after ``--max-length``, is scored on net worth.
 Limits count decisions (moves with more than one legal action), as self-play
 does.
@@ -159,9 +162,23 @@ def play_game(game_idx: int, seat_names: tuple, settings: dict) -> dict:
     np.random.seed(seed % (2**32))
     start = time.time()
 
-    rust_game = RustBaseGame({i + 1: f"Player {i + 1}" for i in range(NUM_PLAYERS)})
-    rust_game.set_auction_unlock(True)
-    game = RustGameAdapter(rust_game)
+    start_label = None
+    if settings.get("start_positions"):
+        # Self-play's starts (first Stock Round). Seeded by the start index so
+        # all six seat arrangements of a start play from the same position.
+        from rl18xx.agent.alphazero.start_positions import apply_actions, new_game, sample_start_position
+
+        start_rng = random.Random(f"{settings['seed']}:{game_idx // len(ARRANGEMENTS)}")
+        start_position = sample_start_position(
+            NUM_PLAYERS, settings["start_positions"], settings["random_start_fraction"], rng=start_rng
+        )
+        game = new_game(NUM_PLAYERS)
+        apply_actions(game, start_position.actions)
+        start_label = start_position.label
+    else:
+        rust_game = RustBaseGame({i + 1: f"Player {i + 1}" for i in range(NUM_PLAYERS)})
+        rust_game.set_auction_unlock(True)
+        game = RustGameAdapter(rust_game)
 
     players = {}
     for name in sorted(set(seat_names)):
@@ -224,6 +241,7 @@ def play_game(game_idx: int, seat_names: tuple, settings: dict) -> dict:
         "termination": termination,
         "engine_moves": int(game.move_number),
         "decision_count": decision_count,
+        "start": start_label,
         "decisions": dict(decisions),
         "net_worth": [net_worth[s] for s in range(NUM_PLAYERS)],
         "worth_share": [max(net_worth[s], 0.0) / total for s in range(NUM_PLAYERS)],
@@ -281,6 +299,11 @@ def main():
     parser.add_argument("--workers", type=int, default=48)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--start-positions", default=None,
+        help="Start games at the first Stock Round from this start-position file, as self-play does",
+    )
+    parser.add_argument("--random-start-fraction", type=float, default=0.2)
     parser.add_argument("--out", type=Path, default=None, help="Output directory (default logs/eval/<timestamp>)")
     args = parser.parse_args()
 
@@ -304,6 +327,8 @@ def main():
         "stall": args.stall,
         "seed": args.seed,
         "players": players,
+        "start_positions": args.start_positions,
+        "random_start_fraction": args.random_start_fraction,
     }
     (out_dir / "settings.json").write_text(
         json.dumps({**settings, "matches": args.match, "games_per_match": games_per_match}, indent=2)

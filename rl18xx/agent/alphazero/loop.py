@@ -1218,7 +1218,8 @@ class PeriodicEvaluator:
     The score is the newer checkpoint's share of wins with two seats each
     (0.5 = no stronger than where the run started). It is logged as
     ``Eval/Score_vs_Start`` at the evaluated iteration and appended to
-    logs/loop/eval_history.jsonl. Other keys: ``eval_games`` (120),
+    logs/loop/eval_history.jsonl. Games start where self-play's do
+    (``start_positions_path``). Other keys: ``eval_games`` (120),
     ``eval_workers`` (16), ``eval_readouts`` (the loop's readouts).
     """
 
@@ -1253,6 +1254,10 @@ class PeriodicEvaluator:
             "--batch-size", "256",
             "--out", str(out_dir),
         ]
+        # Play from the positions self-play trains on (first Stock Round).
+        if file_cfg.get("start_positions_path"):
+            cmd += ["--start-positions", str(file_cfg["start_positions_path"])]
+            cmd += ["--random-start-fraction", str(file_cfg.get("random_start_fraction", 0.2))]
         env = dict(os.environ, OMP_NUM_THREADS="2", PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
         out_dir.mkdir(parents=True, exist_ok=True)
         with open(out_dir / "eval.log", "w") as log:
