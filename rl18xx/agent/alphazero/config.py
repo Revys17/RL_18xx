@@ -432,6 +432,19 @@ class SelfPlayHyperparams:
     # cut off mid-resolution; at 400, 27 of 28 finished on their own (median
     # 592 moves; humans 587).
     auction_stall_moves: int = 400
+    # Start self-play games at the first Stock Round instead of the private
+    # auction (rl18xx/agent/alphazero/start_positions.py; Rust MCTS player
+    # only). ``start_positions_path`` is a JSONL of human post-auction action
+    # prefixes (scripts/build_start_positions.py; 4-player only today). Each
+    # game takes a random auction ending with probability
+    # ``random_start_fraction`` — and always when the file has no starts for
+    # its player count — else a uniformly chosen human start. A random ending
+    # gives each private to a uniformly random player at a uniform multiple of
+    # $5 in [face, random_start_max_price_multiple * face] (the SV at face),
+    # within every player's starting cash. None plays the auction as before.
+    start_positions_path: Optional[str] = None
+    random_start_fraction: float = 0.2
+    random_start_max_price_multiple: float = 2.0
     c_puct_base: float = 19652
     c_puct_init: float = 1.25
     # Rust MCTS selection Q (``RustMCTSPlayer.set_q_config``). False keeps
@@ -548,6 +561,8 @@ class SelfPlayHyperparams:
     def __post_init__(self):
         assert self.softpick_move_cutoff % 2 == 0
         assert self.num_readouts > 0
+        assert 0.0 <= self.random_start_fraction <= 1.0, self.random_start_fraction
+        assert self.random_start_max_price_multiple >= 1.0, self.random_start_max_price_multiple
         # Defensive validation: keys must be 2..6 ints and weights non-negative.
         for k, v in self.player_count_distribution.items():
             assert isinstance(k, int) and 2 <= k <= 6, (

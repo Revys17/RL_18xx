@@ -32,6 +32,7 @@ from rl18xx.agent.alphazero.mcts import (
     unrotate_value,
 )
 from rl18xx.agent.alphazero.self_play import _compute_net_worth, _slice_price_components
+from rl18xx.agent.alphazero.start_positions import apply_actions, new_game, sample_start_position
 from rl18xx.rust_adapter import RustGameAdapter
 
 LOGGER = logging.getLogger(__name__)
@@ -174,15 +175,35 @@ class RustMCTSPlayer:
             return 4
         return random.choices(counts, weights=weights, k=1)[0]
 
-    def get_new_game_state(self) -> RustGameAdapter:
-        from engine_rs import BaseGame as RustBaseGame
-
+    def _empty_game(self, auction_unlock: bool) -> RustGameAdapter:
+        """A game with no actions yet, at this player's player count."""
         num_players = self._sample_num_players()
         self._num_players = num_players
-        players = {i + 1: f"Player {i + 1}" for i in range(num_players)}
-        game = RustBaseGame(players)
-        game.set_auction_unlock(bool(getattr(self.config, "auction_unlock", True)))
-        return RustGameAdapter(game)
+        return new_game(num_players, auction_unlock=auction_unlock)
+
+    def get_new_game_state(self) -> RustGameAdapter:
+        """A new self-play game: an empty one, or — with ``start_positions_path``
+        set — one at its first Stock Round from a sampled start position
+        (``self.start_label`` says which). A start's auction is real 1830, so
+        those games run with ``auction_unlock`` off."""
+        path = getattr(self.config, "start_positions_path", None)
+        if not path:
+            self.start_label = None
+            return self._empty_game(bool(getattr(self.config, "auction_unlock", True)))
+        game = self._empty_game(auction_unlock=False)
+        start = sample_start_position(
+            self._num_players,
+            path,
+            random_fraction=float(self.config.random_start_fraction),
+            max_price_multiple=float(self.config.random_start_max_price_multiple),
+            # Fresh OS entropy, not the global ``random``: loop workers reseed
+            # that with their pid before every game, so each worker would
+            # repeat one start all iteration.
+            rng=random.Random(),
+        )
+        apply_actions(game, start.actions)
+        self.start_label = start.label
+        return game
 
     # ------------------------------------------------------- initialization
     def initialize_game(self, game_state: Optional[RustGameAdapter] = None):
@@ -190,6 +211,12 @@ class RustMCTSPlayer:
             game_state = self.get_new_game_state()
         else:
             self._num_players = len(game_state.players)
+            self.start_label = None
+        # extract_data rebuilds the positions from an empty game under the same
+        # rule variant, replaying this game's actions so far as seed actions.
+        self._replay_auction_unlock = bool(
+            getattr(getattr(game_state, "_game", None), "auction_unlock", getattr(self.config, "auction_unlock", True))
+        )
 
         self._game_state = game_state  # Python-side handle, kept for replays.
         # Pass PW knobs into the Rust player so its progressive-widening
@@ -216,8 +243,9 @@ class RustMCTSPlayer:
         self.result_string: Optional[str] = None
         self.searches_pi: list = []
         self.price_targets: list[list[tuple]] = []
-        # Seed with any actions already in the game (test fixtures), as
-        # MCTSPlayer.initialize_game does.
+        # Seed with any actions already in the game (a start position's
+        # auction, test fixtures), as MCTSPlayer.initialize_game does. They
+        # have no search behind them, so they never become training examples.
         self.played_actions = (
             list(game_state.raw_actions) if hasattr(game_state, "raw_actions") else []
         )
@@ -790,7 +818,9 @@ class RustMCTSPlayer:
             self.forced_action_dicts.extend(pad)
 
         result = torch.tensor(self.result)
-        game_state = self.get_new_game_state()
+        # An empty game, not get_new_game_state(): that samples a new start
+        # position, while the seed actions already hold this game's.
+        game_state = self._empty_game(self._replay_auction_unlock)
         # Replay any pre-MCTS seed actions on the fresh game state first.
         seed_actions = (
             self.played_actions[:-n_chosen] if n_chosen > 0 else list(self.played_actions)
