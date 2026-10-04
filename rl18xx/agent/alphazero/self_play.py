@@ -165,6 +165,11 @@ def _compute_net_worth(game) -> dict:
 
 class MCTSPlayer(Agent):
     def __init__(self, config: SelfPlayConfig):
+        if getattr(config, "start_positions_path", None):
+            raise ValueError(
+                "start_positions_path is only implemented for the Rust MCTS player (use_rust_mcts=True); "
+                "MCTSPlayer always starts at the private auction"
+            )
         self.config = config
         self.network = config.network
         # Phase 3: route inference through the cross-process server when
@@ -1057,6 +1062,9 @@ class SelfPlay:
             self.config.network = AlphaZeroTransformerModel(model_config)
         if self.config.network is not None:
             self.config.network.eval()
+        # How the game being played started ("human:<id>" / "random" with
+        # start_positions_path set), recorded in its status file as "start".
+        self._start_label: Optional[str] = None
 
     def _training_data_target(self):
         """``(model name, encoder)`` for this game's training examples.
@@ -1135,6 +1143,8 @@ class SelfPlay:
             status_data["result_per_player"] = list(result_per_player)
         if auction_unlock_discounts is not None:
             status_data["auction_unlock_discounts"] = int(auction_unlock_discounts)
+        if self._start_label is not None:
+            status_data["start"] = self._start_label
         try:
             atomic_write_json(file, status_data, indent=4)
         except IOError as e:
@@ -1160,6 +1170,7 @@ class SelfPlay:
             player = _RustMCTSPlayer(self.config)
         else:
             player = MCTSPlayer(self.config)
+        self._start_label = getattr(player, "start_label", None)
 
         game_start_time = time.time()
         self.update_self_play_game_progress(

@@ -98,6 +98,9 @@ def setup_logging(level: int, log_file: str, console: bool = False) -> logging.L
     root_logger.addHandler(file_handler)
 
 
+START_POSITION_KEYS = ("start_positions_path", "random_start_fraction", "random_start_max_price_multiple")
+
+
 @dataclass
 class LoopConfig:
     num_loop_iterations: int
@@ -136,6 +139,14 @@ class LoopConfig:
     # the event files grow quickly over thousands of games. Hot-reloadable:
     # flip to true in loop_config.json to inspect a run in flight.
     selfplay_tensorboard: bool = False
+    # Start self-play games at the first Stock Round (SelfPlayHyperparams has
+    # the details): a JSONL of human post-auction prefixes from
+    # scripts/build_start_positions.py, the fraction of games that take a
+    # random auction ending instead, and its price cap as a multiple of face.
+    # None plays the private auction. Hot-reloadable (read per game).
+    start_positions_path: Optional[str] = None
+    random_start_fraction: float = 0.2
+    random_start_max_price_multiple: float = 2.0
 
 
 @dataclass
@@ -208,6 +219,7 @@ def load_loop_config(
                 "use_inference_server",
                 "inference_batch_size",
                 "inference_batch_timeout_ms",
+                *START_POSITION_KEYS,
             ):
                 if key in file_config and file_config[key] is not None:
                     resign_overrides[key] = file_config[key]
@@ -364,6 +376,13 @@ def run_self_play(
                 if key in file_cfg and file_cfg[key] is not None:
                     server_kwargs[key] = file_cfg[key]
 
+    # Start positions (first Stock Round instead of the auction), per game.
+    start_kwargs: dict = {}
+    if file_cfg:
+        for key in START_POSITION_KEYS:
+            if key in file_cfg and file_cfg[key] is not None:
+                start_kwargs[key] = file_cfg[key]
+
     # Per-game TensorBoard logging is opt-in via ``selfplay_tensorboard`` in
     # loop_config.json — event files get large over long runs.
     selfplay_metrics = None
@@ -386,6 +405,7 @@ def run_self_play(
             inference_client=inference_client,
             **resign_kwargs,
             **server_kwargs,
+            **start_kwargs,
         )
         selfplay = SelfPlay(self_play_config)
         selfplay.run_game()
@@ -1068,14 +1088,27 @@ def _aggregate_selfplay_stats(
     # policy has learned not to lock the auction and the variant should be
     # turned off (SelfPlayHyperparams.auction_unlock).
     unlock_games = completed_games = 0
+    # Start positions (start_positions_path): games from a human post-auction
+    # position vs. a random auction ending; the rest played the auction.
+    human_starts = random_starts = 0
     for status_file in _iteration_status_files(loop, sp.started_unix):
         status_json = _safe_read_json(status_file)
         if status_json and status_json.get("status") == "Completed":
             completed_games += 1
             unlock_games += status_json.get("auction_unlock_discounts", 0) > 0
+            start = status_json.get("start") or ""
+            human_starts += start.startswith("human:")
+            random_starts += start == "random"
     if completed_games:
         metrics.add_scalar("SelfPlay/Auction_Unlock_Game_Rate", unlock_games / completed_games, loop)
         LOGGER.info(f"Loop {loop+1}: auction_unlock fired in {unlock_games}/{completed_games} games")
+        if human_starts or random_starts:
+            metrics.add_scalar("SelfPlay/Human_Start_Game_Rate", human_starts / completed_games, loop)
+            metrics.add_scalar("SelfPlay/Random_Start_Game_Rate", random_starts / completed_games, loop)
+            LOGGER.info(
+                f"Loop {loop+1}: starts: {human_starts} human, {random_starts} random, "
+                f"{completed_games - human_starts - random_starts} at the auction"
+            )
 
     timing_sums = {k: 0.0 for k in _SELFPLAY_TIMING_KEYS}
     timing_count = 0
