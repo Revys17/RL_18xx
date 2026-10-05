@@ -526,8 +526,11 @@ class SelfPlayHyperparams:
     # around move 80, mid-auction. Human 4p games run a median of 587 moves.
     resign_min_move: int = 200
     # Minimum ``min_over_window(Q_leader)`` required to resign. Holdout
-    # calibration adjusts this between iterations.
-    resign_high_threshold: float = 0.65
+    # calibration adjusts this between iterations (+0.05 when over 5% of the
+    # holdouts' would-be resignations were wrong). A resigned game is scored
+    # as a win for the leader, so start strict: at 0.65 a freshly pretrained
+    # model resigned 34 of its first 80 games at the earliest decision allowed.
+    resign_high_threshold: float = 0.9
     # Minimum ``min_over_window(Q_leader - Q_second)`` required to resign.
     # Held fixed by the calibration (margin, not confidence claim).
     resign_gap_threshold: float = 0.30

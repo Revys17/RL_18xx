@@ -29,7 +29,7 @@
     "enable_resign": true,
     "resign_window": 8,
     "resign_min_move": 200,
-    "resign_high_threshold": 0.65,
+    "resign_high_threshold": 0.9,
     "resign_gap_threshold": 0.3,
     "noresign_holdout_rate": 0.1,
     "resign_high_threshold_min": 0.45,

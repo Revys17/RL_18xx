@@ -24,6 +24,12 @@ from rl18xx.agent.alphazero import loop as loop_mod
 
 
 @pytest.fixture(autouse=True)
+def isolated_loop_config(tmp_path, monkeypatch):
+    """Calibration reads loop_config.json; never the repo's (a live run's)."""
+    monkeypatch.setattr(loop_mod, "LOOP_CONFIG_PATH", tmp_path / "isolated_loop_config.json")
+
+
+@pytest.fixture(autouse=True)
 def restore_mcts_node_q():
     """Several tests below stub ``MCTSNode.Q`` to a fixed property so they
     can drive ``check_resign`` with known Q vectors. Save and restore the
@@ -336,6 +342,30 @@ def test_calibration_persists_threshold_to_disk(tmp_path, monkeypatch):
     assert config_path.exists()
     persisted = json.loads(config_path.read_text())
     assert persisted["resign_high_threshold"] == pytest.approx(0.70)
+
+
+def test_calibration_continues_from_a_threshold_edited_into_the_file(tmp_path, monkeypatch):
+    """Workers read the threshold per game, so an edit to loop_config.json
+    takes effect mid-iteration; calibration must not overwrite it with the
+    value loaded when the iteration started."""
+    monkeypatch.setattr(loop_mod, "SELF_PLAY_GAMES_STATUS_PATH", tmp_path)
+    config_path = tmp_path / "loop_config.json"
+    config_path.write_text(json.dumps({"resign_high_threshold": 0.9}))
+    monkeypatch.setattr(loop_mod, "LOOP_CONFIG_PATH", config_path)
+    cfg = loop_mod.LoopConfig(
+        num_loop_iterations=1, num_games_per_iteration=10, num_threads=1,
+        training_config=TrainingConfig(), num_readouts=8,
+        resign_high_threshold=0.65, resign_high_threshold_min=0.45,
+    )
+    for i in range(5):  # all wrong -> tighten by 0.05
+        _write_holdout_game(
+            tmp_path, loop=0, game_idx=i, holdout=True,
+            would_have_resigned={"leader": 0, "move_number": 100},
+            result_per_player=[0.1, 0.9, 0.0, 0.0],
+        )
+    loop_mod.calibrate_resign_threshold(0, cfg, loop_mod.LoopMetrics())
+    assert cfg.resign_high_threshold == pytest.approx(0.95)
+    assert json.loads(config_path.read_text())["resign_high_threshold"] == pytest.approx(0.95)
 
 
 # --------------------- holdout sampling ---------------------------------

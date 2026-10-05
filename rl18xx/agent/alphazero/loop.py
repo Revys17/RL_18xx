@@ -122,7 +122,7 @@ class LoopConfig:
     enable_resign: bool = True
     resign_window: int = 8
     resign_min_move: int = 200
-    resign_high_threshold: float = 0.65
+    resign_high_threshold: float = 0.9
     resign_gap_threshold: float = 0.30
     noresign_holdout_rate: float = 0.10
     resign_high_threshold_min: float = 0.45
@@ -1033,6 +1033,12 @@ def calibrate_resign_threshold(
         if len(loop_metrics.recent_resign_fp_rates) > 3:
             loop_metrics.recent_resign_fp_rates = loop_metrics.recent_resign_fp_rates[-3:]
 
+    # A threshold edited into loop_config.json mid-iteration (self-play workers
+    # read it per game) is where calibration continues from; the copy loaded
+    # at the iteration's start would overwrite the edit.
+    file_cfg = _safe_read_json(LOOP_CONFIG_PATH) if LOOP_CONFIG_PATH.exists() else None
+    if file_cfg and file_cfg.get("resign_high_threshold") is not None:
+        loop_config.resign_high_threshold = float(file_cfg["resign_high_threshold"])
     old_threshold = float(loop_config.resign_high_threshold)
     min_threshold = float(loop_config.resign_high_threshold_min)
     adjustment = 0.0
