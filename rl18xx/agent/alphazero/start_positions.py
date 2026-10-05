@@ -185,14 +185,18 @@ def random_allocation(
     rng: random.Random,
     max_price_multiple: float = 2.0,
     max_tries: int = 10_000,
+    sv_discount_fraction: float = 0.25,
 ) -> dict:
     """``{company: (player id, price)}``: each private to a uniformly random
     player at a uniform multiple of $5 in ``[face, max_price_multiple * face]``,
     resampled until every player can pay for theirs out of ``cash``.
 
     ``companies`` is the auction's ``(sym, face value)`` list, cheapest first.
-    The cheapest private (the SV) always goes at face: in the waterfall nobody
-    can bid on it, only buy it at its price.
+    The cheapest private (the SV) can't be bid on, only bought at its price,
+    which an all-pass round lowers by $5: with probability
+    ``sv_discount_fraction`` it goes $5-$20 below face (uniformly; at $0 the
+    engine hands it to the next player, so its owner is ``None`` here and is
+    filled in by :func:`_realize`), otherwise at face.
     """
     players = sorted(cash)
     for _ in range(max_tries):
@@ -201,10 +205,15 @@ def random_allocation(
         for i, (sym, face) in enumerate(companies):
             assert face % 5 == 0, f"{sym} face value {face} is not a multiple of $5"
             top = max(face, int(face * max_price_multiple) // 5 * 5)
-            price = face if i == 0 else rng.randrange(face, top + 5, 5)
-            owner = rng.choice(players)
+            if i == 0:
+                discounted = rng.random() < sv_discount_fraction
+                price = face - 5 * rng.randint(1, face // 5) if discounted else face
+            else:
+                price = rng.randrange(face, top + 5, 5)
+            owner = rng.choice(players) if price > 0 else None
             allocation[sym] = (owner, price)
-            spend[owner] += price
+            if owner is not None:
+                spend[owner] += price
         if all(spend[p] <= cash[p] for p in players):
             return allocation
     raise RuntimeError(f"no affordable allocation of {companies} in {max_tries} tries (cash {cash})")
@@ -213,21 +222,48 @@ def random_allocation(
 def _realize(game: RustGameAdapter, allocation: dict, faces: dict, rng: random.Random) -> list[dict]:
     """Legal actions that end ``game``'s auction with exactly ``allocation``.
 
-    First every owner places a bid of exactly its price on each of its privates
+    Every owner places a bid of exactly its price on each of its privates
     priced above face (one bid per turn; nobody else bids; the rest pass).
-    Then the cheapest private, which has no bid, is bought at face by its
-    owner on their turn while the others pass, and each purchase resolves the
+    Then the cheapest private, which has no bid, is bought by its owner on
+    their turn while the others pass, and each purchase resolves the
     sole-bidder privates behind it. The B&O owner pars at a uniformly random
     legal price. An active action (bid or buy) comes at least once every N
-    turns, so the passes never complete an all-pass round: no discount, no
-    private payout.
+    turns, so those passes never complete an all-pass round.
+
+    A discounted SV takes one all-pass round per $5 below face, played after a
+    random number of the bids: who acts last before the passes decides who
+    gets the first chance at the discounted SV -- or, at $0, who the engine
+    hands it to (recorded into ``allocation``).
     """
     rs = game._game
+    actions = []
+
+    def play(action):
+        game.process_action(dict(action))
+        actions.append(action)
+
+    sv = rs.auction_companies()[0]
     pending = {p.id: [] for p in rs.players}
     for sym, (owner, price) in allocation.items():
-        if price > faces[sym]:
+        if owner is not None and price > faces[sym]:
             pending[owner].append((sym, price))
-    actions = []
+    discount_rounds = (faces[sv] - allocation[sv][1]) // 5
+    if discount_rounds:
+        # Someone with a bid still to place is reached every N turns, so these
+        # passes can't complete an all-pass round early.
+        early_bids = rng.randint(0, sum(len(bids) for bids in pending.values()))
+        while early_bids:
+            player = rs.current_player.id
+            if pending[player]:
+                play(_bid(player, *pending[player].pop()))
+                early_bids -= 1
+            else:
+                play(_pass(player))
+        for _ in range(discount_rounds):
+            for _ in rs.players:
+                play(_pass(rs.current_player.id))
+        if allocation[sv][0] is None:
+            allocation[sv] = (position_summary(game)["owners"][sv], 0)
     for _ in range(50 * len(allocation) * len(pending)):
         if not in_auction(game):
             return actions
@@ -253,8 +289,7 @@ def _realize(game: RustGameAdapter, allocation: dict, faces: dict, rng: random.R
                 action = _bid(player, cheapest, rs.auction_min_bid(cheapest))
             else:
                 action = _pass(player)
-        game.process_action(dict(action))
-        actions.append(action)
+        play(action)
     raise RuntimeError(f"auction for {allocation} did not end; actions so far: {actions}")
 
 
@@ -262,6 +297,7 @@ def random_start_actions(
     num_players: int,
     rng: Optional[random.Random] = None,
     max_price_multiple: float = 2.0,
+    sv_discount_fraction: float = 0.25,
 ) -> list[dict]:
     """Actions that end the auction with a random allocation of the privates
     (:func:`random_allocation`) and a random B&O par, leaving the game at its
@@ -271,7 +307,9 @@ def random_start_actions(
     rs = game._game
     faces = {sym: rs.company_by_id(sym).value for sym in rs.auction_companies()}
     cash = {p.id: p.cash for p in rs.players}
-    allocation = random_allocation(list(faces.items()), cash, rng, max_price_multiple)
+    allocation = random_allocation(
+        list(faces.items()), cash, rng, max_price_multiple, sv_discount_fraction=sv_discount_fraction
+    )
     actions = _realize(game, allocation, faces, rng)
 
     # The engine's position must match the sample exactly.
@@ -282,7 +320,8 @@ def random_start_actions(
         if action["type"] == "bid":
             assert action["company"] not in bought, f"two bids on {action['company']}: {actions}"
             bought[action["company"]] = (action["entity"], action["price"])
-    assert bought == allocation, (bought, allocation)
+    # A $0 SV is handed over by the engine, not bought.
+    assert bought == {sym: sale for sym, sale in allocation.items() if sale[1] > 0}, (bought, allocation)
     assert summary["owners"] == {sym: owner for sym, (owner, _) in allocation.items()}, (summary, allocation)
     spent = dict.fromkeys(cash, 0)
     for owner, price in allocation.values():

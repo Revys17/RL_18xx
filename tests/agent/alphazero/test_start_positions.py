@@ -130,17 +130,20 @@ def test_load_and_sample_start_positions(tmp_path):
 def test_random_starts_are_legal_first_stock_round_positions(num_players, seeds):
     for seed in seeds:
         actions = sp.random_start_actions(num_players, random.Random(seed))
+        summary = sp.position_summary(sp.apply_actions(sp.new_game(num_players), actions))
         prices = {a["company"]: (a["entity"], a["price"]) for a in actions if a["type"] == "bid"}
+        if "SV" not in prices:  # discounted to $0 by four all-pass rounds and handed over
+            prices["SV"] = (summary["owners"]["SV"], 0)
         assert sorted(prices) == sorted(FACES)
-        assert prices["SV"][1] == 20
+        assert prices["SV"][1] in (0, 5, 10, 15, 20)
         for sym, (_, price) in prices.items():
-            assert FACES[sym] <= price <= 2 * FACES[sym] and price % 5 == 0, (seed, sym, price)
+            if sym != "SV":
+                assert FACES[sym] <= price <= 2 * FACES[sym] and price % 5 == 0, (seed, sym, price)
         spent = {}
         for owner, price in prices.values():
             spent[owner] = spent.get(owner, 0) + price
         assert all(total <= STARTING_CASH[num_players] for total in spent.values())
 
-        summary = sp.position_summary(sp.apply_actions(sp.new_game(num_players), actions))
         assert summary["round"] == "Stock"
         assert summary["owners"] == {sym: owner for sym, (owner, _) in prices.items()}
         assert summary["cash"] == {p: STARTING_CASH[num_players] - spent.get(p, 0) for p in range(1, num_players + 1)}
@@ -156,6 +159,26 @@ def test_random_starts_vary_and_respect_the_price_cap():
     assert all(a["price"] == FACES[a["company"]] for a in at_face if a["type"] == "bid")
     bids = [a for s in range(20) for a in sp.random_start_actions(4, random.Random(s)) if a["type"] == "bid"]
     assert any(a["price"] > 1.5 * FACES[a["company"]] for a in bids)
+
+
+def test_random_starts_sometimes_discount_the_sv():
+    """An all-pass round while the SV is the cheapest private takes $5 off it
+    (real 1830); four of them make it free to the next player."""
+    sv_prices, free_sv_owners = [], set()
+    for seed in range(300):
+        actions = sp.random_start_actions(4, random.Random(seed))
+        bids = [a["price"] for a in actions if a["type"] == "bid" and a["company"] == "SV"]
+        sv_prices.append(bids[0] if bids else 0)
+        if not bids:
+            summary = sp.position_summary(sp.apply_actions(sp.new_game(4), actions))
+            free_sv_owners.add(summary["owners"]["SV"])
+    assert set(sv_prices) == {0, 5, 10, 15, 20}
+    assert 0.1 < sum(p < 20 for p in sv_prices) / len(sv_prices) < 0.4
+    # Bids placed before the all-pass rounds shift who passes first, so the
+    # free SV doesn't always go to the player who opened the auction.
+    assert len(free_sv_owners) > 1
+    never = [a for s in range(20) for a in sp.random_start_actions(4, random.Random(s), sv_discount_fraction=0.0)]
+    assert all(a["price"] == 20 for a in never if a["type"] == "bid" and a["company"] == "SV")
 
 
 def test_random_allocation_is_seeded():
