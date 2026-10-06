@@ -66,7 +66,10 @@ class _Game:
 def _sample_price(game, index: int, price_row: Optional[np.ndarray], rng: np.random.Generator, eps: float):
     """Price for a legal ``index``: None for categorical moves, the engine price for
     fixed-price ones, and for price-head slots a cell drawn from the head (mixed
-    with ``eps`` uniform, as the Rust search does) and a price inside it."""
+    with ``eps`` uniform) and a price inside it. Keep ``eps`` 0 for play: the
+    Rust search's ``price_explore_eps`` only orders which price cells it
+    expands -- it still plays the most-visited move -- but here a mixed draw
+    is the price actually paid, i.e. a uniformly random price."""
     from rl18xx.agent.alphazero import price_pmf
 
     rs = game._game
@@ -209,7 +212,7 @@ def generate(
     max_decisions: int = 1000,
     start_positions: str = "human_games/start_positions_1830_4p.jsonl",
     random_start_fraction: float = 0.2,
-    price_eps: float = 0.05,
+    price_eps: float = 0.0,
     validation_percentage: float = 0.05,
     batch_size: int = 512,
     write_every: int = 1000,

@@ -89,7 +89,7 @@ class PGConfig:
     sl_opponent_fraction: float = 0.5
     learner_temperature: float = 1.0
     opponent_temperature: float = 1.0
-    opponent_price_eps: float = 0.05
+    opponent_price_eps: float = 0.0
     max_decisions: int = 1000
     start_positions: str = "human_games/start_positions_1830_4p.jsonl"
     random_start_fraction: float = 0.2

@@ -436,8 +436,8 @@ def build_parser():
     )
     p.add_argument("--opponent-temperature", type=float, default=1.0, help="Sampling temperature of opponents")
     p.add_argument(
-        "--opponent-price-eps", type=float, default=0.05,
-        help="Uniform mixing into opponents' price draws (the learner's is 0); 0 keeps the training score a clean match",
+        "--opponent-price-eps", type=float, default=0.0,
+        help="Uniform mixing into opponents' price draws (the learner's is always 0): random prices, a test option only",
     )
     p.add_argument("--gae-lambda", type=float, default=1.0, help="1 = Monte Carlo returns")
     p.add_argument("--max-updates", type=int, default=1000)
