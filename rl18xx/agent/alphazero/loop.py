@@ -665,13 +665,13 @@ def evaluate_candidate(
     return win_rate
 
 
-def ensure_seed_model(model_type: str = "transformer", force: bool = False):
-    """Create an initial model checkpoint if none exists.
+def ensure_seed_model(model_type: str = "transformer", force: bool = False, model_dir: str = MODEL_CHECKPOINT_DIR):
+    """Create an initial model checkpoint in ``model_dir`` if none exists.
 
     ``force=True`` always creates a new seed session, which becomes the latest
     session and therefore the model the next pretrain / training run picks up.
     """
-    p = Path(MODEL_CHECKPOINT_DIR)
+    p = Path(model_dir)
     # Check for any session directories (new format: <arch>/<session>/)
     has_checkpoints = False
     if p.exists():
@@ -710,11 +710,11 @@ def ensure_seed_model(model_type: str = "transformer", force: bool = False):
         LOGGER.info(f"Seeding model initialization with seed={config.seed}")
         model = AlphaZeroGNNModel(config)
 
-    checkpoint_num = save_model(model, MODEL_CHECKPOINT_DIR)
+    checkpoint_num = save_model(model, model_dir)
     # Bootstrap the current_best pointer so self-play workers can find the seed
     # via the same code path as the steady-state (pointer-based) load.
     set_current_best(
-        MODEL_CHECKPOINT_DIR,
+        model_dir,
         model.architecture_name(),
         session_name_for(model),
         checkpoint_num,

@@ -11,7 +11,7 @@ A game scores share-of-winners per seat (1/k for each of k tied leaders on
 net worth), so a side's expected score is 0.5 when the checkpoints are equally
 strong. Games use the self-play ``auction_unlock`` variant both checkpoints
 were trained under; moves are sampled from visit counts before
-``--softpick`` engine moves and argmax after, with no Dirichlet noise and no
+``--softpick`` decisions and argmax after, with no Dirichlet noise and no
 resignation. With ``--start-positions`` games start at the first Stock Round
 from self-play's start positions (human auction endings, plus
 ``--random-start-fraction`` random ones), each start played in all six seat
@@ -27,7 +27,9 @@ A player is a checkpoint -- ``<num>`` (in the current_best session),
 ``<session>/<num>``, or a path to a ``.pth``; or ``<policy>+<value>``, two
 of those, to search with one checkpoint's policy and the other's value
 (composite_model.PolicyValueComposite) -- optionally followed by
-``@<readouts>`` (default ``--readouts``), ``/<c_puct_init>`` (applied in every
+``@<readouts>`` (default ``--readouts``; the budget at every decision, narrow
+ones included -- self-play gives positions with <= 5 legal moves
+``min_readouts`` instead), ``/<c_puct_init>`` (applied in every
 round: it replaces SelfPlayConfig's per-round c_puct_by_round table) and
 ``:<option>,<option>...``:
 
@@ -37,6 +39,12 @@ round: it replaces SelfPlayConfig's per-round c_puct_by_round table) and
 - ``value=networth``: leaf values from a net-worth heuristic instead of the
   network (SelfPlayConfig.leaf_value_heuristic), to test the search alone;
   with ``mix=<w>`` the heuristic gets weight w and the network 1 - w
+- ``min=<n>``: readouts at positions with <= 5 legal moves (self-play's
+  ``min_readouts``; default: the player's own budget)
+
+Standard errors treat games as independent; the six arrangements of one start
+are correlated, which (over the 21 runs checked 2026-10-06) moved a
+start-clustered SE by 0.81-1.11x of the reported one.
 
     uv run python scripts/eval_head_to_head.py --match 7@200 7@64 --games 120
     uv run python scripts/eval_head_to_head.py --match 7@64/0.6 7@64 --games 120
@@ -71,6 +79,11 @@ ARRANGEMENTS = [
     tuple("A" if seat in pair else "B" for seat in range(NUM_PLAYERS))
     for pair in itertools.combinations(range(NUM_PLAYERS), 2)
 ]
+# Game ids of match m are m * MATCH_STRIDE + g. A multiple of the six
+# arrangements, so every start is played in all six in every match (with
+# 1_000_000, matches after the first split some starts 2/4); the start comes
+# from g alone, so all matches of one run play the same starts.
+MATCH_STRIDE = 1_200_000
 
 
 def resolve_checkpoint(spec: str) -> Path:
@@ -96,7 +109,12 @@ def parse_player(spec: str, default_readouts: int) -> tuple:
     spec, _, options = spec.partition(":")
     checkpoint, _, search = spec.partition("@")
     readouts, _, c_puct = search.partition("/")
-    overrides = {"num_readouts": int(readouts) if readouts else default_readouts}
+    budget = int(readouts) if readouts else default_readouts
+    # min_readouts is self-play's budget at narrow positions (<= 5 legal moves,
+    # ~half of all decisions); left at its default 50 it overrode the spec there,
+    # so "@200 vs @8" averaged ~119 vs ~31 readouts a decision. A spec's budget
+    # applies everywhere unless ``min=<n>`` restores a separate one.
+    overrides = {"num_readouts": budget, "min_readouts": budget}
     if c_puct:
         overrides.update(c_puct_init=float(c_puct), c_puct_by_round={})
     for option in filter(None, options.split(",")):
@@ -109,6 +127,8 @@ def parse_player(spec: str, default_readouts: int) -> tuple:
             overrides["leaf_value_heuristic"] = "net_worth"
         elif key == "mix":
             overrides["leaf_value_heuristic_weight"] = float(value)
+        elif key == "min":
+            overrides["min_readouts"] = int(value)
         else:
             raise SystemExit(f"Unknown player option {option!r} in {spec!r}")
     paths = "+".join(str(resolve_checkpoint(part)) for part in checkpoint.split("+"))
@@ -169,7 +189,7 @@ def play_game(game_idx: int, seat_names: tuple, settings: dict) -> dict:
         # all six seat arrangements of a start play from the same position.
         from rl18xx.agent.alphazero.start_positions import apply_actions, new_game, sample_start_position
 
-        start_rng = random.Random(f"{settings['seed']}:{game_idx // len(ARRANGEMENTS)}")
+        start_rng = random.Random(f"{settings['seed']}:{(game_idx % MATCH_STRIDE) // len(ARRANGEMENTS)}")
         start_position = sample_start_position(
             NUM_PLAYERS, settings["start_positions"], settings["random_start_fraction"], rng=start_rng
         )
@@ -355,7 +375,7 @@ def main():
         for g in range(games_per_match):
             arrangement = ARRANGEMENTS[g % len(ARRANGEMENTS)]
             seat_names = tuple(a if side == "A" else b for side in arrangement)
-            jobs.append((match_index, arrangement, match_index * 1_000_000 + g, seat_names))
+            jobs.append((match_index, arrangement, match_index * MATCH_STRIDE + g, seat_names))
 
     results = defaultdict(list)
     results_path = out_dir / "games.jsonl"

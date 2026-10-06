@@ -50,7 +50,10 @@ def cmd_pretrain(args):
 
     # Seed the model directory so do_pretraining's get_latest_model() call
     # works on a fresh checkout (it would otherwise FileNotFoundError).
-    ensure_seed_model(model_type=args.model_type, force=args.fresh)
+    # In --model-dir: with --fresh and another directory (a value network's)
+    # the seed used to land in model_checkpoints and repoint the policy's
+    # current_best.json.
+    ensure_seed_model(model_type=args.model_type, force=args.fresh, model_dir=args.model_dir)
 
     config = TrainingConfig(
         num_epochs=args.epochs,
@@ -164,6 +167,7 @@ def cmd_policy_gradient(args):
         critic_lr=args.critic_lr,
         kl_coef=args.kl_coef,
         kl_target=args.kl_target,
+        kl_coef_min=args.kl_coef_min,
         entropy_coef=args.entropy_coef,
         learner_temperature=args.learner_temperature,
         opponent_temperature=args.opponent_temperature,
@@ -429,6 +433,7 @@ def build_parser():
     p.add_argument("--critic-lr", type=float, default=3e-5)
     p.add_argument("--kl-coef", type=float, default=0.02, help="KL(learner || supervised) penalty")
     p.add_argument("--kl-target", type=float, default=None, help="Adapt --kl-coef toward this KL per decision")
+    p.add_argument("--kl-coef-min", type=float, default=0.005, help="Floor for the adapted --kl-coef")
     p.add_argument("--entropy-coef", type=float, default=0.0)
     p.add_argument(
         "--learner-temperature", type=float, default=1.0,

@@ -4,8 +4,9 @@ actions up to its first Stock Round, one game per line.
 Self-play can start at Stock Round 1 instead of the private auction
 (``SelfPlayHyperparams.start_positions_path``; see
 ``rl18xx/agent/alphazero/start_positions.py``). This takes the cleaned human
-games (``pretraining.load_games_from_json``), keeps the finished ones with the
-requested player count and no optional rules, replays each through the Rust
+games (``pretraining.load_games_from_json``), keeps those with the requested
+player count and no optional rules -- finished or not (~13% are unfinished;
+only their auction is used) -- replays each through the Rust
 engine until the auction (and the B&O par) is over, and writes
 
     {"id": "<game id>", "num_players": 4, "actions": [{"type": "bid", ...}, ...]}

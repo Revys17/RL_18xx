@@ -5,7 +5,9 @@ Round starts, each start played in all six 2-2 seat arrangements, scored by
 share of winners (0.5 = equal) -- but every seat samples its move straight from
 its policy (and prices from its price head), so thousands of games take
 minutes. A player is a checkpoint spec as in ``eval_head_to_head.py``
-optionally followed by ``@<temperature>`` (default 1). Lower temperature
+optionally followed by ``@<temperature>`` (default 1), which applies to the
+move; prices are drawn from the price head as is (as the policy-gradient
+learner draws them), mixed with ``--price-eps`` uniform. Lower temperature
 sharpens a policy, which by itself beats the same policy at temperature 1, so
 compare a trained policy against its starting point at several temperatures to
 tell learning from sharpening.
@@ -41,11 +43,12 @@ ARRANGEMENTS = [
 
 
 def parse_player(spec: str) -> tuple:
-    """``(checkpoint path, temperature)`` of ``<checkpoint>[@<temperature>]``."""
+    """``(checkpoint path(s), temperature)`` of ``<checkpoint>[+<value>][@<temperature>]``."""
     from eval_head_to_head import resolve_checkpoint
 
     checkpoint, _, temperature = spec.partition("@")
-    return str(resolve_checkpoint(checkpoint)), float(temperature) if temperature else 1.0
+    paths = "+".join(str(resolve_checkpoint(part)) for part in checkpoint.split("+"))
+    return paths, float(temperature) if temperature else 1.0
 
 
 def play_games(game_indices: list, settings: dict) -> list:
