@@ -1,0 +1,762 @@
+"""Policy-gradient refinement of the supervised policy (AlphaGo's RL-policy stage).
+
+AlphaGo went supervised policy -> policy improved by self-play policy gradient
+(REINFORCE against a pool of its earlier versions, no search) -> value network
+trained on that policy's games -> search. This module is the second step for
+1830, with a few later improvements:
+
+- **Games**: 4-player games from the first Stock Round (``start_positions``).
+  The learner holds ``learner_seats`` random seats; the others go to one
+  opponent: the supervised policy, or (``1 - sl_opponent_fraction`` of the
+  games, once snapshots exist) a snapshot of the learner from the pool.
+  Every seat samples its moves from its policy at temperature 1 and its
+  prices from its price head; forced moves are applied without the network.
+- **Objective**: each learner decision is credited with its own seat's win
+  share (1/k for k tied leaders on net worth) minus a critic's estimate --
+  ``A = R - V(s)`` with Monte Carlo returns (``gae_lambda`` 1), or a
+  lambda-return over the seat's own decisions. Updates use PPO's clipped
+  ratio against the probability the move was sampled with (generation runs
+  continuously, so a row may come from a policy a few updates old), price
+  draws included in the move's probability.
+- **Anchor**: a KL(learner || supervised) penalty over the legal moves (and
+  the chosen slot's price cells) keeps the policy near human play; with
+  ``kl_target`` the coefficient adapts toward that KL per decision.
+  Fine-tuning on search targets without an anchor drifted the policy away from
+  human play and made it weaker (the SR1-start run, 2026-10).
+- **Critic**: a separate value network (``value_checkpoint``, e.g. the network
+  trained on policy-only games) gives the baseline at generation time -- the
+  learner's inference server is a ``PolicyValueComposite`` -- and keeps
+  training on the learner's games (each position seen once), so it stays
+  calibrated as the policy changes and becomes the next value network.
+
+Progress is the learner's score in its games against the supervised policy:
+the summed win share of its seats, 0.5 per two seats when equally strong (as
+``scripts/eval_head_to_head.py`` scores, but without search). Checkpoints
+land in ``<out_dir>/<run>/{learner,critic}/<update>.pth`` (every
+``snapshot_every``-th kept; those join the opponent pool), TensorBoard in
+``runs/alphazero_runs/<run>``, and one JSON line per update in
+``<out_dir>/<run>/history.jsonl``. Touch ``<out_dir>/<run>/STOP`` to end a run
+after the current update.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+import os
+import random
+import time
+import uuid
+from collections import Counter, defaultdict, deque
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+LOGGER = logging.getLogger(__name__)
+
+NUM_PLAYERS = 4
+
+
+@dataclass
+class PGConfig:
+    policy_checkpoint: str
+    value_checkpoint: str
+    out_dir: str = "model_checkpoints_pg"
+    run_name: Optional[str] = None
+    # Generation
+    workers: int = 48
+    games_per_task: int = 32
+    tasks_in_flight_per_worker: int = 2
+    learner_seats: int = 2
+    positions_per_seat: int = 32
+    sl_opponent_fraction: float = 0.5
+    opponent_temperature: float = 1.0
+    opponent_price_eps: float = 0.05
+    max_decisions: int = 1000
+    start_positions: str = "human_games/start_positions_1830_4p.jsonl"
+    random_start_fraction: float = 0.2
+    inference_batch_size: int = 512
+    # Updates
+    rows_per_update: int = 65536
+    minibatch: int = 256
+    ppo_epochs: int = 1
+    clip: float = 0.2
+    lr: float = 1e-5
+    critic_lr: float = 3e-5
+    kl_coef: float = 0.02
+    kl_target: Optional[float] = None
+    entropy_coef: float = 0.0
+    gae_lambda: float = 1.0
+    normalize_advantages: bool = False
+    score_loss_weight: float = 1.0
+    max_updates: int = 1000
+    snapshot_every: int = 10
+    pool_refresh_every: int = 5
+    score_window: int = 2000
+
+
+# ---------------------------------------------------------------------------
+# Worker side: games
+# ---------------------------------------------------------------------------
+
+_CLIENTS: dict = {}
+
+
+def worker_init(server_queues: dict):
+    """Pool initializer: take one slot on every inference server ("learner", "sl", "pool")."""
+    from rl18xx.agent.alphazero.inference_server import InferenceClient
+
+    for name, (request_q, reply_qs, ticket_q) in server_queues.items():
+        worker_id = ticket_q.get()
+        _CLIENTS[name] = InferenceClient(request_q=request_q, reply_q=reply_qs[worker_id], worker_id=worker_id)
+    logging.getLogger().setLevel(logging.WARNING)
+
+
+@dataclass
+class _PGGame:
+    game: object  # RustGameAdapter
+    uid: str
+    opponent: str  # "sl" or "pool"
+    seat_models: list  # server name per seat
+    decisions: int = 0
+    price_row: Optional[np.ndarray] = None
+    termination: Optional[str] = None
+    values: dict = field(default_factory=dict)  # learner seat -> critic value at each of its decisions
+    seen: dict = field(default_factory=dict)  # learner seat -> decisions so far
+    reservoir: dict = field(default_factory=dict)  # learner seat -> [(decision number, row)]
+
+
+def choose_price(game, index: int, price_row: Optional[np.ndarray], rng: np.random.Generator, eps: float):
+    """``(price, (slot, cell, lo, hi) or None, log P(cell))`` for a legal ``index``:
+    no price for categorical moves, the engine price for fixed-price ones, and
+    for price-head slots a cell drawn from the head (mixed with ``eps``
+    uniform) and a price inside it."""
+    from rl18xx.agent.alphazero import price_pmf
+
+    rs = game._game
+    price_range = rs.price_range_for_index(int(index))
+    if price_range is None:
+        return None, None, 0.0
+    lo, hi = price_range
+    slot = rs.price_head_slot_for_index(int(index))
+    if lo == hi or slot is None:
+        return int(lo), None, 0.0
+    slot_index, lo, hi = slot
+    cells = price_pmf.price_cells(price_pmf.SLOT_TYPES[slot_index], int(lo), int(hi))
+    probs = cells.cell_probs(price_row[slot_index] if price_row is not None else None)
+    live = cells.nonempty
+    mixed = np.where(live, (1.0 - eps) * probs + eps / live.sum(), 0.0)
+    mixed = mixed / mixed.sum()
+    cell = int(rng.choice(len(mixed), p=mixed))
+    return int(cells.sample_price(cell, rng)), (int(slot_index), cell, int(lo), int(hi)), float(np.log(mixed[cell]))
+
+
+def seat_advantages(values: list, reward: float, lam: float) -> np.ndarray:
+    """Lambda-return advantages over one seat's decisions: ``delta_t = v_{t+1} - v_t``
+    (``reward`` after the last), ``A_t = delta_t + lam * A_{t+1}``. With lam 1
+    every decision gets ``reward - v_t``."""
+    advantages = np.zeros(len(values), dtype=np.float32)
+    following = 0.0
+    for t in range(len(values) - 1, -1, -1):
+        next_value = values[t + 1] if t + 1 < len(values) else reward
+        following = (next_value - values[t]) + lam * following
+        advantages[t] = following
+    return advantages
+
+
+def outcome(game) -> tuple:
+    """``(win share, net-worth fractions)`` per seat (player-id order)."""
+    from rl18xx.agent.alphazero.self_play import _compute_net_worth
+
+    net_worth = _compute_net_worth(game)
+    worth = np.array([float(net_worth[pid]) for pid in sorted(net_worth)], dtype=np.float64)
+    best = worth.max()
+    winners = worth >= best - 1e-6
+    win_share = winners / winners.sum()
+    clipped = worth.clip(min=0)
+    fractions = clipped / clipped.sum() if clipped.sum() > 0 else np.full(len(worth), 1.0 / len(worth))
+    return win_share.astype(np.float32), fractions.astype(np.float32)
+
+
+def play_pg_games(num_games: int, settings: dict) -> dict:
+    """Pool task: play ``num_games`` concurrent games and return the learner's
+    sampled decisions (with advantages) and each game's result."""
+    from rl18xx.agent.alphazero.mcts import _rust_encode
+    from rl18xx.agent.alphazero.policy_selfplay import _advance
+    from rl18xx.agent.alphazero.start_positions import apply_actions, new_game, sample_start_position
+
+    rng = np.random.default_rng()
+    py_rng = random.Random()
+    k = settings["positions_per_seat"]
+    start_time = time.time()
+
+    games = []
+    for _ in range(num_games):
+        start = sample_start_position(
+            NUM_PLAYERS, settings["start_positions"], settings["random_start_fraction"], rng=py_rng
+        )
+        game = apply_actions(new_game(NUM_PLAYERS), start.actions)
+        opponent = "pool" if settings["pool_ready"] and py_rng.random() >= settings["sl_opponent_fraction"] else "sl"
+        learner = set(py_rng.sample(range(NUM_PLAYERS), settings["learner_seats"]))
+        seat_models = ["learner" if seat in learner else opponent for seat in range(NUM_PLAYERS)]
+        g = _PGGame(game=game, uid=uuid.uuid4().hex, opponent=opponent, seat_models=seat_models)
+        for seat in learner:
+            g.values[seat], g.seen[seat], g.reservoir[seat] = [], 0, []
+        games.append(g)
+
+    finished, active, decisions_total = [], list(games), 0
+    while active:
+        pending = []
+        for g in active:
+            legal = _advance(g, settings, rng)
+            if legal is None:
+                finished.append(g)
+            else:
+                pending.append((g, legal))
+        active = [g for g, _ in pending]
+        if not pending:
+            break
+        encoded = [_rust_encode(g.game) for g, _ in pending]
+        by_model = defaultdict(list)
+        for i, (g, _) in enumerate(pending):
+            # The encoder's rotation is the mover's seat (player-id order).
+            by_model[g.seat_models[int(encoded[i][6])]].append(i)
+        # Both servers work at once: send every request before waiting on any.
+        sent = {
+            name: _CLIENTS[name].send([encoded[i] for i in rows], legal_indices=[pending[i][1] for i in rows])
+            for name, rows in by_model.items()
+        }
+        for name, rows in by_model.items():
+            client = _CLIENTS[name]
+            probs, _, values = client.receive(sent[name])
+            price = client.last_price_components
+            price_logits = price["price_logits"].numpy() if price is not None else None
+            is_learner = name == "learner"
+            temperature = 1.0 if is_learner else settings["opponent_temperature"]
+            for j, i in enumerate(rows):
+                g, legal = pending[i]
+                seat = int(encoded[i][6])
+                p = probs[j].numpy()[legal].astype(np.float64)
+                if temperature != 1.0:
+                    p = np.power(np.clip(p, 1e-12, None), 1.0 / temperature)
+                p = p / p.sum() if p.sum() > 0 else np.full(len(legal), 1.0 / len(legal))
+                pos = int(rng.choice(len(legal), p=p))
+                choice = legal[pos]
+                g.price_row = price_logits[j] if price_logits is not None else None
+                eps = 0.0 if is_learner else settings["opponent_price_eps"]
+                price_value, price_info, cell_logp = choose_price(g.game, choice, g.price_row, rng, eps)
+                if is_learner:
+                    t = len(g.values[seat])
+                    g.values[seat].append(float(values[j][0]))  # canonical slot 0 is the mover
+                    row = (encoded[i], np.asarray(legal, dtype=np.int32), int(choice), float(np.log(p[pos]) + cell_logp), price_info)
+                    g.seen[seat] += 1
+                    if len(g.reservoir[seat]) < k:
+                        g.reservoir[seat].append((t, row))
+                    else:
+                        r = int(rng.integers(0, g.seen[seat]))
+                        if r < k:
+                            g.reservoir[seat][r] = (t, row)
+                g.game._game.apply_action_index(choice, price_value)
+                g.decisions += 1
+                decisions_total += 1
+
+    records = []
+    for g in finished:
+        win_share, fractions = outcome(g.game)
+        rows = []
+        for seat, kept in g.reservoir.items():
+            advantages = seat_advantages(g.values[seat], float(win_share[seat]), settings["gae_lambda"])
+            for t, (enc, legal, choice, logp, price_info) in kept:
+                rows.append((enc, legal, choice, logp, price_info, float(advantages[t]), fractions))
+        records.append(
+            {
+                "uid": g.uid,
+                "opponent": g.opponent,
+                "pool_label": settings.get("pool_label"),
+                "learner_seats": sorted(g.values),
+                "win_share": win_share.tolist(),
+                "decisions": g.decisions,
+                "learner_decisions": sum(len(v) for v in g.values.values()),
+                "termination": g.termination,
+                "first_values": {seat: v[0] for seat, v in g.values.items() if v},
+                "rows": rows,
+            }
+        )
+    return {"games": records, "decisions": decisions_total, "seconds": time.time() - start_time}
+
+
+# ---------------------------------------------------------------------------
+# Learner side: losses
+# ---------------------------------------------------------------------------
+
+
+def batch_tensors(rows: list, device) -> dict:
+    """Stack learner rows ``(encoded, legal, choice, old_logp, price_info,
+    advantage, fractions)`` into device tensors."""
+    from rl18xx.agent.alphazero import price_pmf
+    from rl18xx.agent.alphazero.mcts import POLICY_SIZE
+
+    n = len(rows)
+    game_state = torch.stack([r[0][0].reshape(-1) for r in rows]).float().to(device, non_blocking=True)
+    nodes = torch.stack([r[0][1] for r in rows]).float().to(device, non_blocking=True)
+    lengths = torch.tensor([len(r[1]) for r in rows])
+    row_ids = torch.repeat_interleave(torch.arange(n), lengths)
+    col_ids = torch.from_numpy(np.concatenate([r[1] for r in rows]).astype(np.int64))
+    legal = torch.zeros(n, POLICY_SIZE, dtype=torch.bool)
+    legal[row_ids, col_ids] = True
+    price_rows, price_slots, price_cells, price_masks = [], [], [], []
+    for b, r in enumerate(rows):
+        if r[4] is not None:
+            slot, cell, lo, hi = r[4]
+            price_rows.append(b)
+            price_slots.append(slot)
+            price_cells.append(cell)
+            price_masks.append(price_pmf.price_cells(price_pmf.SLOT_TYPES[slot], lo, hi).nonempty)
+    # Value targets rotated into the encoder's frame (the mover first).
+    fractions = torch.stack(
+        [torch.roll(torch.as_tensor(r[6]), shifts=-int(r[0][6]), dims=0) for r in rows]
+    ).float()
+    out = {
+        "game_state": game_state,
+        "nodes": nodes,
+        "legal": legal.to(device, non_blocking=True),
+        "choice": torch.tensor([r[2] for r in rows], dtype=torch.long, device=device),
+        "old_logp": torch.tensor([r[3] for r in rows], dtype=torch.float32, device=device),
+        "advantage": torch.tensor([r[5] for r in rows], dtype=torch.float32, device=device),
+        "fractions": fractions.to(device),
+        "price_rows": torch.tensor(price_rows, dtype=torch.long, device=device),
+        "price_slots": torch.tensor(price_slots, dtype=torch.long, device=device),
+        "price_cells": torch.tensor(price_cells, dtype=torch.long, device=device),
+        "price_masks": (
+            torch.from_numpy(np.stack(price_masks)).to(device)
+            if price_masks
+            else torch.zeros(0, price_pmf.NUM_CELLS, dtype=torch.bool, device=device)
+        ),
+    }
+    return out
+
+
+def _masked_log_softmax(logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """log_softmax over the ``mask``ed entries; 0 (not -inf) elsewhere so products with probabilities stay finite."""
+    log_p = torch.log_softmax(logits.float().masked_fill(~mask, float("-inf")), dim=-1)
+    return log_p.masked_fill(~mask, 0.0)
+
+
+def pg_losses(
+    policy_logits: torch.Tensor,
+    price_logits: Optional[torch.Tensor],
+    sl_policy_logits: torch.Tensor,
+    sl_price_logits: Optional[torch.Tensor],
+    batch: dict,
+    clip: float,
+    kl_coef: float,
+    entropy_coef: float,
+) -> dict:
+    """PPO-clipped policy gradient plus ``kl_coef`` * KL(learner || supervised).
+
+    A move's log-probability is its index's (softmax over the legal moves) plus,
+    for price-head moves, its price cell's (softmax over the slot's non-empty
+    cells) -- the probabilities the move was sampled with."""
+    legal = batch["legal"]
+    log_p = _masked_log_softmax(policy_logits, legal)
+    sl_log_p = _masked_log_softmax(sl_policy_logits, legal)
+    p = log_p.exp() * legal
+    new_logp = log_p.gather(1, batch["choice"].unsqueeze(1)).squeeze(1)
+    kl = (p * (log_p - sl_log_p)).sum(dim=1)
+    entropy = -(p * log_p).sum(dim=1)
+
+    price_kl = torch.zeros((), device=policy_logits.device)
+    if price_logits is not None and batch["price_rows"].numel():
+        rows, slots, masks = batch["price_rows"], batch["price_slots"], batch["price_masks"]
+        cell_log_p = _masked_log_softmax(price_logits[rows, slots], masks)
+        sl_cell_log_p = _masked_log_softmax(sl_price_logits[rows, slots], masks)
+        new_logp = new_logp.index_add(0, rows, cell_log_p.gather(1, batch["price_cells"].unsqueeze(1)).squeeze(1))
+        cell_kl = (cell_log_p.exp() * masks * (cell_log_p - sl_cell_log_p)).sum(dim=1)
+        kl = kl.index_add(0, rows, cell_kl)
+        price_kl = cell_kl.mean()
+
+    advantage = batch["advantage"]
+    log_ratio = new_logp - batch["old_logp"]
+    ratio = log_ratio.exp()
+    surrogate = torch.minimum(ratio * advantage, ratio.clamp(1.0 - clip, 1.0 + clip) * advantage)
+    pg_loss = -surrogate.mean()
+    total = pg_loss + kl_coef * kl.mean() - entropy_coef * entropy.mean()
+    return {
+        "total": total,
+        "pg_loss": pg_loss.detach(),
+        "kl_sl": kl.mean().detach(),
+        "price_kl_sl": price_kl.detach(),
+        "entropy": entropy.mean().detach(),
+        "clip_frac": ((ratio - 1.0).abs() > clip).float().mean().detach(),
+        "approx_kl": (-log_ratio).mean().detach(),
+        "ratio_max": ratio.max().detach(),
+    }
+
+
+def critic_losses(win_loss_logits: torch.Tensor, score_pred: torch.Tensor, fractions: torch.Tensor) -> dict:
+    """Win-share CE and net-worth MSE against the game outcome (encoder frame)."""
+    from rl18xx.agent.alphazero.train import _derive_dual_value_targets
+
+    win_target, score_target = _derive_dual_value_targets(fractions)
+    pad = win_loss_logits.shape[1] - win_target.shape[1]
+    if pad:
+        win_target = F.pad(win_target, (0, pad))
+        score_target = F.pad(score_target, (0, pad))
+    log_v = torch.log_softmax(win_loss_logits.float(), dim=1)
+    ce = -(win_target * log_v).sum(dim=1).mean()
+    mse = F.mse_loss(score_pred.float(), score_target)
+    hit = win_target.gather(1, log_v.argmax(dim=1, keepdim=True)).mean()
+    return {"ce": ce, "mse": mse, "winner_hit": hit.detach()}
+
+
+# ---------------------------------------------------------------------------
+# Learner side: run
+# ---------------------------------------------------------------------------
+
+
+def _save(model, path: Path) -> None:
+    """A self-describing checkpoint (as ``checkpointer.save_model`` writes) at ``path``."""
+    from rl18xx.agent.alphazero.checkpointer import (
+        ARCHITECTURE_KEY,
+        CONFIG_KEY,
+        STATE_DICT_KEY,
+        _atomic_save_torch,
+    )
+
+    config_payload = model.config.to_json()
+    config_payload.pop("device", None)
+    config_payload[ARCHITECTURE_KEY] = model.architecture_name()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_save_torch(
+        path,
+        {STATE_DICT_KEY: model.state_dict(), CONFIG_KEY: config_payload, ARCHITECTURE_KEY: model.architecture_name()},
+    )
+
+
+def use_tf32() -> None:
+    """TF32 matmuls: ~1.6x faster than fp32 and within ~0.01 nats of it on a
+    sampled move's log-probability, where bf16 is off by 0.2 on average (up to
+    3) -- enough to put a sixth of PPO's ratios outside the clip on their own.
+    Generation and training both use it, so the ratio sees one precision."""
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
+
+def load_server_model(checkpoint_paths: str):
+    """Inference-server loader (module-level so it pickles): TF32, then one
+    checkpoint or a ``<policy>+<value>`` composite."""
+    from rl18xx.agent.alphazero.composite_model import load_policy_value
+
+    use_tf32()
+    return load_policy_value(checkpoint_paths)
+
+
+def _load(path) -> torch.nn.Module:
+    from rl18xx.agent.alphazero.policy_selfplay import load_checkpoint_model
+
+    return load_checkpoint_model(str(path))
+
+
+class _Scores:
+    """Rolling learner score per opponent kind (summed win share of its seats)."""
+
+    def __init__(self, window: int):
+        self.window = {"sl": deque(maxlen=window), "pool": deque(maxlen=window)}
+        self.recent = {"sl": [], "pool": []}
+
+    def add(self, record: dict):
+        score = sum(record["win_share"][s] for s in record["learner_seats"])
+        self.window[record["opponent"]].append(score)
+        self.recent[record["opponent"]].append(score)
+
+    def summary(self) -> dict:
+        out = {}
+        for kind, values in self.window.items():
+            if len(values) > 1:
+                out[f"score_vs_{kind}"] = float(np.mean(values))
+                out[f"score_vs_{kind}_se"] = float(np.std(values, ddof=1) / math.sqrt(len(values)))
+                out[f"games_vs_{kind}_window"] = len(values)
+            if self.recent[kind]:
+                out[f"score_vs_{kind}_update"] = float(np.mean(self.recent[kind]))
+            self.recent[kind] = []
+        return out
+
+
+def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
+    """Run the policy-gradient stage; returns the run directory."""
+    from torch.utils.tensorboard import SummaryWriter
+
+    from rl18xx.agent.alphazero.inference_server import start_inference_server
+
+    use_tf32()
+    if resume:
+        run_dir = Path(resume)
+        state = json.loads((run_dir / "state.json").read_text())
+        # The run keeps its own settings; only its length can change.
+        cfg = PGConfig(**{**state["config"], "max_updates": cfg.max_updates})
+        update = int(state["snapshot_update"])
+        pool = list(state["pool"])
+        kl_coef = float(state["kl_coef"])
+        learner_path = run_dir / "learner" / f"{update}.pth"
+        critic_path = run_dir / "critic" / f"{update}.pth"
+    else:
+        name = cfg.run_name or datetime.now().strftime("pg_%Y%m%d_%H%M%S")
+        cfg.run_name = name
+        run_dir = Path(cfg.out_dir) / name
+        if run_dir.exists():
+            raise SystemExit(f"{run_dir} exists; pass --resume to continue it")
+        run_dir.mkdir(parents=True)
+        update, pool, kl_coef = 0, [], cfg.kl_coef
+        learner_path, critic_path = Path(cfg.policy_checkpoint), Path(cfg.value_checkpoint)
+    (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
+    LOGGER.info(f"Policy-gradient run {run_dir} from update {update}: {asdict(cfg)}")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    learner, critic, sl = _load(learner_path), _load(critic_path), _load(cfg.policy_checkpoint)
+    for model in (learner, critic):
+        model.train()
+    sl.eval()
+    for param in sl.parameters():
+        param.requires_grad_(False)
+    learner_opt = torch.optim.AdamW(learner.parameters(), lr=cfg.lr, weight_decay=0.0)
+    critic_opt = torch.optim.AdamW(critic.parameters(), lr=cfg.critic_lr, weight_decay=0.0)
+    if resume and (run_dir / "optimizer.pth").exists():
+        opt_state = torch.load(run_dir / "optimizer.pth", map_location="cpu")
+        learner_opt.load_state_dict(opt_state["learner"])
+        critic_opt.load_state_dict(opt_state["critic"])
+
+    current_learner = run_dir / "learner" / f"{update}.pth"
+    current_critic = run_dir / "critic" / f"{update}.pth"
+    if not current_learner.exists():
+        _save(learner, current_learner)
+        _save(critic, current_critic)
+    writer = SummaryWriter(str(Path("runs") / "alphazero_runs" / run_dir.name))
+    history = (run_dir / "history.jsonl").open("a")
+
+    servers = {
+        "learner": f"{current_learner}+{current_critic}",
+        "sl": str(cfg.policy_checkpoint),
+        "pool": pool[-1] if pool else str(cfg.policy_checkpoint),
+    }
+    handles = {
+        name: start_inference_server(
+            num_workers=cfg.workers,
+            model_factory=load_server_model,
+            checkpoint_path=path,
+            batch_size=cfg.inference_batch_size,
+            autocast_device=None,
+        )
+        for name, path in servers.items()
+    }
+    pool_label = servers["pool"]
+    queues = {name: (h.request_q, h.reply_qs, h.ticket_q) for name, h in handles.items()}
+    scores = _Scores(cfg.score_window)
+    rng = np.random.default_rng()
+    stop_file = run_dir / "STOP"
+
+    def settings() -> dict:
+        return {
+            "positions_per_seat": cfg.positions_per_seat,
+            "learner_seats": cfg.learner_seats,
+            "sl_opponent_fraction": cfg.sl_opponent_fraction,
+            "pool_ready": bool(pool),
+            "pool_label": pool_label,
+            "opponent_temperature": cfg.opponent_temperature,
+            "opponent_price_eps": cfg.opponent_price_eps,
+            "price_eps": cfg.opponent_price_eps,  # forced moves' prices (policy_selfplay._advance)
+            "max_decisions": cfg.max_decisions,
+            "start_positions": cfg.start_positions,
+            "random_start_fraction": cfg.random_start_fraction,
+            "gae_lambda": cfg.gae_lambda,
+        }
+
+    buffer, gen, total_games = [], Counter(), 0
+    gen_started = run_started = time.time()
+    terminations, lengths = Counter(), []
+    critic_first_values = []
+    try:
+        executor = ProcessPoolExecutor(max_workers=cfg.workers, initializer=worker_init, initargs=(queues,))
+        try:
+            futures = {
+                executor.submit(play_pg_games, cfg.games_per_task, settings())
+                for _ in range(cfg.workers * cfg.tasks_in_flight_per_worker)
+            }
+            while update < cfg.max_updates and not stop_file.exists():
+                done, futures = wait(futures, timeout=60, return_when=FIRST_COMPLETED)
+                for future in done:
+                    result = future.result()
+                    gen["decisions"] += result["decisions"]
+                    for record in result["games"]:
+                        gen["games"] += 1
+                        scores.add(record)
+                        terminations[record["termination"]] += 1
+                        lengths.append(record["decisions"])
+                        for seat, value in record["first_values"].items():
+                            critic_first_values.append((value, record["win_share"][int(seat)]))
+                        buffer.extend(record["rows"])
+                    futures.add(executor.submit(play_pg_games, cfg.games_per_task, settings()))
+                if len(buffer) < cfg.rows_per_update:
+                    continue
+
+                t0 = time.time()
+                stats = _update(learner, critic, sl, learner_opt, critic_opt, buffer, cfg, kl_coef, device, rng)
+                train_seconds = time.time() - t0
+                buffer = []
+                update += 1
+
+                previous = (current_learner, current_critic)
+                current_learner = run_dir / "learner" / f"{update}.pth"
+                current_critic = run_dir / "critic" / f"{update}.pth"
+                _save(learner, current_learner)
+                _save(critic, current_critic)
+                handles["learner"].reload(f"{current_learner}+{current_critic}")
+                snapshot = update % cfg.snapshot_every == 0
+                for path in previous:
+                    number = int(path.stem)
+                    if number % cfg.snapshot_every != 0 and path.parent.parent == run_dir and path.exists():
+                        path.unlink()
+                if snapshot:
+                    pool.append(str(current_learner))
+                    torch.save(
+                        {"learner": learner_opt.state_dict(), "critic": critic_opt.state_dict()},
+                        run_dir / "optimizer.pth",
+                    )
+                    (run_dir / "state.json").write_text(
+                        json.dumps(
+                            {"config": asdict(cfg), "snapshot_update": update, "pool": pool, "kl_coef": kl_coef},
+                            indent=2,
+                        )
+                    )
+                if pool and update % cfg.pool_refresh_every == 0:
+                    pool_label = pool[int(rng.integers(0, len(pool)))]
+                    handles["pool"].reload(pool_label)
+
+                if cfg.kl_target is not None:
+                    if stats["kl_sl"] > 1.5 * cfg.kl_target:
+                        kl_coef *= 1.5
+                    elif stats["kl_sl"] < cfg.kl_target / 1.5:
+                        kl_coef /= 1.5
+
+                elapsed = time.time() - gen_started
+                total_games += gen["games"]
+                record = {
+                    "update": update,
+                    "time": datetime.now().isoformat(timespec="seconds"),
+                    **stats,
+                    **scores.summary(),
+                    "kl_coef": kl_coef,
+                    "games": gen["games"],
+                    "games_total": total_games,
+                    # Results arrive in bursts (a task returns 32 games at once), so the
+                    # per-update rate is noisy; the run average is the throughput.
+                    "games_per_hour": gen["games"] / elapsed * 3600,
+                    "games_per_hour_run": total_games / (time.time() - run_started) * 3600,
+                    "decisions_per_second": gen["decisions"] / elapsed,
+                    "mean_decisions": float(np.mean(lengths)) if lengths else 0.0,
+                    "terminations": dict(terminations),
+                    "train_seconds": train_seconds,
+                    "pool_size": len(pool),
+                    "pool_opponent": pool_label if pool else None,
+                }
+                if critic_first_values:
+                    v, r = np.array(critic_first_values).T
+                    record["critic_start_brier"] = float(np.mean((v - r) ** 2))
+                gen.clear()
+                gen_started = time.time()
+                terminations, lengths, critic_first_values = Counter(), [], []
+                history.write(json.dumps(record) + "\n")
+                history.flush()
+                for key, value in record.items():
+                    if isinstance(value, (int, float)) and key not in ("update",):
+                        writer.add_scalar(f"PG/{key}", value, update)
+                LOGGER.info(
+                    f"update {update}: vs SL {record.get('score_vs_sl', float('nan')):.3f}"
+                    f"±{record.get('score_vs_sl_se', float('nan')):.3f} "
+                    f"(this update {record.get('score_vs_sl_update', float('nan')):.3f}), "
+                    f"kl_sl {stats['kl_sl']:.4f}, entropy {stats['entropy']:.3f}, clip {stats['clip_frac']:.3f}, "
+                    f"critic CE {stats['critic_ce']:.4f}, {record['games_per_hour_run']:.0f} games/h, "
+                    f"train {train_seconds:.0f}s"
+                )
+        finally:
+            # Queued tasks are dropped; running ones finish against the still-live servers.
+            executor.shutdown(wait=True, cancel_futures=True)
+    finally:
+        history.close()
+        writer.close()
+        for handle in handles.values():
+            handle.shutdown()
+    return run_dir
+
+
+def _update(learner, critic, sl, learner_opt, critic_opt, rows, cfg: PGConfig, kl_coef, device, rng) -> dict:
+    """One pass of PPO over ``rows`` (``cfg.ppo_epochs`` times) and one critic pass."""
+    advantages = np.array([r[5] for r in rows], dtype=np.float32)
+    if cfg.normalize_advantages:
+        scale = float(advantages.std()) or 1.0
+        rows = [r[:5] + (r[5] / scale,) + r[6:] for r in rows]
+    sums, count, first = Counter(), 0, {}
+    critic_sums, critic_count = Counter(), 0
+    explained = []
+    for epoch in range(cfg.ppo_epochs):
+        order = rng.permutation(len(rows))
+        for start in range(0, len(rows), cfg.minibatch):
+            batch = batch_tensors([rows[i] for i in order[start : start + cfg.minibatch]], device)
+            with torch.no_grad():
+                sl_logits, _, _, _ = sl(batch["game_state"], batch["nodes"])
+                sl_price = sl.last_price_components["price_logits"]
+            policy_logits, _, _, _ = learner(batch["game_state"], batch["nodes"])
+            price = learner.last_price_components["price_logits"]
+            losses = pg_losses(
+                policy_logits, price, sl_logits, sl_price, batch, cfg.clip, kl_coef, cfg.entropy_coef
+            )
+            if not torch.isfinite(losses["total"]):
+                raise RuntimeError(f"Policy gradient diverged: non-finite loss ({ {k: float(v) for k, v in losses.items()} })")
+            learner_opt.zero_grad(set_to_none=True)
+            losses["total"].backward()
+            norm = torch.nn.utils.clip_grad_norm_(learner.parameters(), max_norm=1.0)
+            if not torch.isfinite(norm):
+                raise RuntimeError("Policy gradient diverged: non-finite gradient norm")
+            learner_opt.step()
+            n = len(batch["choice"])
+            if count == 0:
+                first = {"clip_frac_first": float(losses["clip_frac"]), "approx_kl_first": float(losses["approx_kl"])}
+            count += n
+            for key, value in losses.items():
+                if key != "total":
+                    sums[key] += float(value) * n
+            sums["grad_norm"] += float(norm) * n
+
+            if epoch == 0:
+                _, win_loss_logits, score_pred, _ = critic(batch["game_state"], batch["nodes"], value_only=True)
+                c = critic_losses(win_loss_logits, score_pred, batch["fractions"])
+                loss = c["ce"] + cfg.score_loss_weight * c["mse"]
+                if not torch.isfinite(loss):
+                    raise RuntimeError("Critic diverged: non-finite loss")
+                critic_opt.zero_grad(set_to_none=True)
+                loss.backward()
+                norm = torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=1.0)
+                if not torch.isfinite(norm):
+                    raise RuntimeError("Critic diverged: non-finite gradient norm")
+                critic_opt.step()
+                critic_count += n
+                critic_sums["ce"] += float(c["ce"].detach()) * n
+                critic_sums["mse"] += float(c["mse"].detach()) * n
+                critic_sums["winner_hit"] += float(c["winner_hit"]) * n
+    stats = {key: value / max(count, 1) for key, value in sums.items()}
+    stats.update(first)
+    stats.update({f"critic_{key}": value / max(critic_count, 1) for key, value in critic_sums.items()})
+    stats.update(
+        rows=len(rows),
+        adv_mean=float(advantages.mean()),
+        adv_std=float(advantages.std()),
+        adv_abs_mean=float(np.abs(advantages).mean()),
+        price_rows=sum(1 for r in rows if r[4] is not None),
+    )
+    return stats

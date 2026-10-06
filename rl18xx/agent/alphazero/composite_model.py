@@ -36,7 +36,12 @@ class PolicyValueComposite:
     def run_many_encoded(self, encoded_game_states, *args, **kwargs):
         probs, log_probs, _ = self.policy_model.run_many_encoded(encoded_game_states, *args, **kwargs)
         self.last_price_components = getattr(self.policy_model, "last_price_components", None)
-        _, _, values = self.value_model.run_many_encoded(encoded_game_states, *args, **kwargs)
+        # A value-only forward skips the value network's policy head (most of its cost).
+        run_values = getattr(self.value_model, "run_values_encoded", None)
+        if run_values is not None:
+            values = run_values(encoded_game_states)
+        else:
+            _, _, values = self.value_model.run_many_encoded(encoded_game_states, *args, **kwargs)
         return probs, log_probs, values
 
     def run_encoded(self, encoded_game_state):

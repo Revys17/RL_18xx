@@ -91,29 +91,36 @@ def cmd_clean(args):
     )
 
 
+def _resolve_checkpoint(spec, model_dir):
+    """``<session>/<num>`` or a ``.pth`` path under ``model_dir``; None -> its current best."""
+    from pathlib import Path
+
+    from rl18xx.agent.alphazero.checkpointer import get_current_best
+
+    if spec:
+        if spec.endswith(".pth"):
+            return Path(spec)
+        session, num = spec.rsplit("/", 1)
+        matches = list(Path(model_dir).glob(f"*/{session}/{int(num)}.pth"))
+        if not matches:
+            raise SystemExit(f"No checkpoint {spec} under {model_dir}")
+        return matches[0]
+    best = get_current_best(model_dir)
+    if best is None:
+        raise SystemExit(f"No current_best.json under {model_dir}")
+    return Path(model_dir) / best["arch"] / best["session"] / f"{int(best['checkpoint_num'])}.pth"
+
+
 def cmd_policy_selfplay(args):
     import json
     import multiprocessing
     from pathlib import Path
 
     multiprocessing.set_start_method("spawn", force=True)
-    from rl18xx.agent.alphazero.checkpointer import get_current_best
     from rl18xx.agent.alphazero.policy_selfplay import generate
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    if args.checkpoint:
-        spec = args.checkpoint
-        if spec.endswith(".pth"):
-            checkpoint = Path(spec)
-        else:
-            session, num = spec.rsplit("/", 1)
-            matches = list(Path(args.model_dir).glob(f"*/{session}/{int(num)}.pth"))
-            if not matches:
-                raise SystemExit(f"No checkpoint {spec} under {args.model_dir}")
-            checkpoint = matches[0]
-    else:
-        best = get_current_best(args.model_dir)
-        checkpoint = Path(args.model_dir) / best["arch"] / best["session"] / f"{int(best['checkpoint_num'])}.pth"
+    checkpoint = _resolve_checkpoint(args.checkpoint, args.model_dir)
     stats = generate(
         checkpoint=checkpoint,
         out_dir=Path(args.output),
@@ -129,6 +136,43 @@ def cmd_policy_selfplay(args):
         random_start_fraction=args.random_start_fraction,
     )
     print(json.dumps({"checkpoint": str(checkpoint), **stats}, indent=2))
+
+
+def cmd_policy_gradient(args):
+    import multiprocessing
+
+    multiprocessing.set_start_method("spawn", force=True)
+    from rl18xx.agent.alphazero.policy_gradient import PGConfig, run
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    config = PGConfig(
+        policy_checkpoint=str(_resolve_checkpoint(args.policy, args.model_dir)),
+        value_checkpoint=str(_resolve_checkpoint(args.value, args.value_model_dir)),
+        out_dir=args.out_dir,
+        run_name=args.run_name,
+        workers=args.workers,
+        games_per_task=args.games_per_task,
+        learner_seats=args.learner_seats,
+        positions_per_seat=args.positions_per_seat,
+        sl_opponent_fraction=args.sl_opponent_fraction,
+        rows_per_update=args.rows_per_update,
+        minibatch=args.minibatch,
+        ppo_epochs=args.ppo_epochs,
+        clip=args.clip,
+        lr=args.lr,
+        critic_lr=args.critic_lr,
+        kl_coef=args.kl_coef,
+        kl_target=args.kl_target,
+        entropy_coef=args.entropy_coef,
+        gae_lambda=args.gae_lambda,
+        max_updates=args.max_updates,
+        snapshot_every=args.snapshot_every,
+        pool_refresh_every=args.pool_refresh_every,
+        max_decisions=args.max_decisions,
+        start_positions=args.start_positions,
+        random_start_fraction=args.random_start_fraction,
+    )
+    print(run(config, resume=args.resume))
 
 
 def cmd_convert(args):
@@ -355,6 +399,40 @@ def build_parser():
     p.add_argument("--start-positions", type=str, default="human_games/start_positions_1830_4p.jsonl")
     p.add_argument("--random-start-fraction", type=float, default=0.2)
 
+    # policy-gradient (AlphaGo's RL-policy stage: refine the supervised policy by self-play)
+    p = sub.add_parser(
+        "policy-gradient",
+        help="Refine a policy by policy-gradient self-play against itself and an opponent pool (no search)",
+    )
+    p.add_argument("--policy", type=str, default=None, help="Policy <session>/<num> or .pth (default: current best)")
+    p.add_argument("--model-dir", type=str, default="model_checkpoints")
+    p.add_argument("--value", type=str, default=None, help="Critic <session>/<num> or .pth (default: its current best)")
+    p.add_argument("--value-model-dir", type=str, default="model_checkpoints_value")
+    p.add_argument("--out-dir", type=str, default="model_checkpoints_pg")
+    p.add_argument("--run-name", type=str, default=None)
+    p.add_argument("--resume", type=str, default=None, help="Run directory to continue from its last snapshot")
+    p.add_argument("--workers", type=int, default=48)
+    p.add_argument("--games-per-task", type=int, default=32)
+    p.add_argument("--learner-seats", type=int, default=2)
+    p.add_argument("--positions-per-seat", type=int, default=32, help="Learner decisions kept per seat per game")
+    p.add_argument("--sl-opponent-fraction", type=float, default=0.5, help="Games against the supervised policy")
+    p.add_argument("--rows-per-update", type=int, default=65536)
+    p.add_argument("--minibatch", type=int, default=256)
+    p.add_argument("--ppo-epochs", type=int, default=1)
+    p.add_argument("--clip", type=float, default=0.2)
+    p.add_argument("--lr", type=float, default=1e-5)
+    p.add_argument("--critic-lr", type=float, default=3e-5)
+    p.add_argument("--kl-coef", type=float, default=0.02, help="KL(learner || supervised) penalty")
+    p.add_argument("--kl-target", type=float, default=None, help="Adapt --kl-coef toward this KL per decision")
+    p.add_argument("--entropy-coef", type=float, default=0.0)
+    p.add_argument("--gae-lambda", type=float, default=1.0, help="1 = Monte Carlo returns")
+    p.add_argument("--max-updates", type=int, default=1000)
+    p.add_argument("--snapshot-every", type=int, default=10)
+    p.add_argument("--pool-refresh-every", type=int, default=5)
+    p.add_argument("--max-decisions", type=int, default=1000)
+    p.add_argument("--start-positions", type=str, default="human_games/start_positions_1830_4p.jsonl")
+    p.add_argument("--random-start-fraction", type=float, default=0.2)
+
     # convert (encode games to LMDB for pretraining)
     p = sub.add_parser("convert", help="Convert cleaned game JSONs to LMDB training data")
     p.add_argument("--data-dir", type=str, default="human_games/1830_clean", help="Directory with cleaned game JSON files")
@@ -419,6 +497,7 @@ if __name__ == "__main__":
         "clean": cmd_clean,
         "convert": cmd_convert,
         "policy-selfplay": cmd_policy_selfplay,
+        "policy-gradient": cmd_policy_gradient,
         "refit-price-head": cmd_refit_price_head,
         "arena": cmd_arena,
         "dashboard": cmd_dashboard,

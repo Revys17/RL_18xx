@@ -1679,7 +1679,9 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
 
     # --- Architecture-specific batch assembly (run/run_many live on AlphaZeroModel) ---
 
-    def _forward_encoded_batch(self, encoded_game_states: list) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    def _forward_encoded_batch(
+        self, encoded_game_states: list, value_only: bool = False
+    ) -> Tuple[Optional[Tensor], Tensor, Tensor, Tensor]:
         """Assemble a batch from encoded tuples and run ``forward``.
 
         Each tuple is one of:
@@ -1735,7 +1737,18 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         active_player_tensor = torch.tensor(active_player_indices, dtype=torch.long, device=self.device)
         num_players_tensor = torch.tensor(num_players_list, dtype=torch.long, device=self.device)
 
-        return self.forward(batched_gs, batched_nodes, round_type_tensor, active_player_tensor, num_players_tensor)
+        return self.forward(
+            batched_gs, batched_nodes, round_type_tensor, active_player_tensor, num_players_tensor, value_only=value_only
+        )
+
+    def run_values_encoded(self, encoded_game_states: list) -> Tensor:
+        """Per-seat win probabilities (canonical frame) without the policy and
+        price heads, which are most of a forward pass: for a network used only
+        for its value (``composite_model``, a policy-gradient critic)."""
+        if len(encoded_game_states) == 0:
+            raise ValueError("Received no game states to run.")
+        _, win_loss_logits, _, _ = self._forward_encoded_batch(encoded_game_states, value_only=True)
+        return F.softmax(win_loss_logits, dim=-1)
 
     @staticmethod
     def _infer_num_players_from_state_size(size: int) -> int:
@@ -1759,7 +1772,8 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         round_type_idx: Optional[Tensor] = None,
         active_player_idx: Optional[Tensor] = None,
         num_players: Optional[Tensor] = None,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        value_only: bool = False,
+    ) -> Tuple[Optional[Tensor], Tensor, Tensor, Tensor]:
         """
         Forward pass of the Transformer model.
 
@@ -1778,6 +1792,9 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
                 ``max_players`` (i.e. no attention masking) — the training
                 pipeline must supply real counts for shorter games to honour
                 the padded slots.
+            value_only: skip the policy and price heads (about two thirds of
+                the compute); ``policy_logits`` is then None and
+                ``last_policy_components`` / ``last_price_components`` are cleared.
 
         Returns:
             ``(policy_logits, win_loss_logits, score_pred, aux_action_count_pred)``.
@@ -1864,18 +1881,23 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         # ``policy_components`` dict is stashed on the model as
         # ``last_policy_components`` so the decomposed training loss can fetch
         # it without changing the long-standing forward-return contract.
-        policy_logits, policy_components = self.policy_head(x, node_embeds)
-        self.last_policy_components = policy_components
+        if value_only:
+            policy_logits = None
+            self.last_policy_components = None
+            self.last_price_components = None
+        else:
+            policy_logits, policy_components = self.policy_head(x, node_embeds)
+            self.last_policy_components = policy_components
 
-        # 5b. Price head — cell logits per (action_type, entity) slot.
-        # Stashed on the model alongside ``last_policy_components`` so the
-        # training loss + MCTS PW can consume it without changing the
-        # long-standing 4-tuple forward contract.
-        self.last_price_components = {
-            "price_logits": self.price_head(x),
-            "slot_index": self.price_head.slot_index,
-            "num_slots": self.price_head.num_slots,
-        }
+            # 5b. Price head — cell logits per (action_type, entity) slot.
+            # Stashed on the model alongside ``last_policy_components`` so the
+            # training loss + MCTS PW can consume it without changing the
+            # long-standing 4-tuple forward contract.
+            self.last_price_components = {
+                "price_logits": self.price_head(x),
+                "slot_index": self.price_head.slot_index,
+                "num_slots": self.price_head.num_slots,
+            }
 
         # 6. Dual Value Heads — both take the canonicalized trunk (active
         # player at slot 0), no explicit indicator. MCTS softmaxes

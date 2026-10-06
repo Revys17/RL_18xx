@@ -622,6 +622,11 @@ class InferenceClient:
         Returns ``(probs, None, values)`` like the model's API minus
         log-probs, which aren't shipped (no MCTS caller uses them).
         """
+        return self.receive(self.send(encoded_game_states, legal_indices))
+
+    def send(self, encoded_game_states: list, legal_indices: Optional[list] = None):
+        """Submit a request without waiting; pass the result to :meth:`receive`.
+        Lets a worker with clients on several servers keep them busy at once."""
         if not encoded_game_states:
             raise ValueError("Received no game states to run.")
         rid = self._next_request_id
@@ -636,7 +641,11 @@ class InferenceClient:
                 encoded_states=packed if packed is not None else list(encoded_game_states),
             )
         )
+        return rid, packed, len(encoded_game_states)
 
+    def receive(self, pending):
+        """Wait for the reply to a :meth:`send` and unpack it like ``run_many_encoded``."""
+        rid, packed, num_states = pending
         # The reply queue is per-worker; anything else on it is a stale reply
         # to an earlier timed-out request.
         deadline = time.monotonic() + self.client_config.request_timeout_s
@@ -645,7 +654,7 @@ class InferenceClient:
             if remaining <= 0:
                 raise TimeoutError(
                     f"InferenceClient: timeout after {self.client_config.request_timeout_s}s "
-                    f"waiting for a reply to {len(encoded_game_states)} leaves"
+                    f"waiting for a reply to {num_states} leaves"
                 )
             try:
                 reply = self.reply_q.get(timeout=min(remaining, 1.0))

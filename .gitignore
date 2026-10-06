@@ -142,6 +142,7 @@ logs/
 training_examples/
 model_checkpoints/
 model_checkpoints_value/
+model_checkpoints_pg/
 runs/
 self_play_games_status/
 human_games/
