@@ -24,7 +24,9 @@ does.
     uv run python scripts/eval_head_to_head.py --match 107 7 --match 57 7 --games 120
 
 A player is a checkpoint -- ``<num>`` (in the current_best session),
-``<session>/<num>``, or a path to a ``.pth`` -- optionally followed by
+``<session>/<num>``, or a path to a ``.pth``; or ``<policy>+<value>``, two
+of those, to search with one checkpoint's policy and the other's value
+(composite_model.PolicyValueComposite) -- optionally followed by
 ``@<readouts>`` (default ``--readouts``), ``/<c_puct_init>`` (applied in every
 round: it replaces SelfPlayConfig's per-round c_puct_by_round table) and
 ``:<option>,<option>...``:
@@ -109,17 +111,16 @@ def parse_player(spec: str, default_readouts: int) -> tuple:
             overrides["leaf_value_heuristic_weight"] = float(value)
         else:
             raise SystemExit(f"Unknown player option {option!r} in {spec!r}")
-    return resolve_checkpoint(checkpoint), overrides
+    paths = "+".join(str(resolve_checkpoint(part)) for part in checkpoint.split("+"))
+    return paths, overrides
 
 
 def model_factory(checkpoint_path):
-    """Inference-server model loader for one fixed checkpoint (module-level so it pickles)."""
-    from rl18xx.agent.alphazero.checkpointer import _load_model_from_session_checkpoint
+    """Inference-server model loader: one checkpoint, or ``<policy>+<value>``
+    paths for a composite (module-level so it pickles)."""
+    from rl18xx.agent.alphazero.composite_model import load_policy_value
 
-    path = Path(checkpoint_path)
-    model = _load_model_from_session_checkpoint(path.parent, path)
-    model.eval()
-    return model
+    return load_policy_value(checkpoint_path)
 
 
 _CLIENTS: dict = {}

@@ -9,6 +9,7 @@ Usage:
     python main.py replay <log_file>   Replay a game from a log file in the browser
 """
 import argparse
+import logging
 import sys
 
 
@@ -57,6 +58,8 @@ def cmd_pretrain(args):
         lr=args.lr,
         value_lr_multiplier=args.value_lr_multiplier,
         value_loss_weight=args.value_loss_weight,
+        policy_loss_weight=args.policy_loss_weight,
+        price_loss_weight=args.price_loss_weight,
         pretrain_value_joint_epochs=None if args.value_joint_epochs < 0 else args.value_joint_epochs,
         pretrain_value_refit=not args.no_value_refit,
     )
@@ -86,6 +89,44 @@ def cmd_clean(args):
         output_dir=args.output,
         overwrite=args.overwrite,
     )
+
+
+def cmd_policy_selfplay(args):
+    import json
+    import multiprocessing
+    from pathlib import Path
+
+    multiprocessing.set_start_method("spawn", force=True)
+    from rl18xx.agent.alphazero.checkpointer import get_current_best
+    from rl18xx.agent.alphazero.policy_selfplay import generate
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if args.checkpoint:
+        spec = args.checkpoint
+        if spec.endswith(".pth"):
+            checkpoint = Path(spec)
+        else:
+            session, num = spec.rsplit("/", 1)
+            matches = list(Path(args.model_dir).glob(f"*/{session}/{int(num)}.pth"))
+            if not matches:
+                raise SystemExit(f"No checkpoint {spec} under {args.model_dir}")
+            checkpoint = matches[0]
+    else:
+        best = get_current_best(args.model_dir)
+        checkpoint = Path(args.model_dir) / best["arch"] / best["session"] / f"{int(best['checkpoint_num'])}.pth"
+    stats = generate(
+        checkpoint=checkpoint,
+        out_dir=Path(args.output),
+        num_games=args.games,
+        workers=args.workers,
+        games_per_task=args.games_per_task,
+        positions_per_game=args.positions_per_game,
+        temperature=args.temperature,
+        max_decisions=args.max_decisions,
+        start_positions=args.start_positions,
+        random_start_fraction=args.random_start_fraction,
+    )
+    print(json.dumps({"checkpoint": str(checkpoint), **stats}, indent=2))
 
 
 def cmd_convert(args):
@@ -273,6 +314,13 @@ def build_parser():
         help="Weight of the value loss in the total (default: 0.1)"
     )
     p.add_argument(
+        "--policy-loss-weight", type=float, default=1.0,
+        help="Weight of the policy loss (default: 1.0; 0 trains a value network only)",
+    )
+    p.add_argument(
+        "--price-loss-weight", type=float, default=0.1, help="Weight of the price-head loss (default: 0.1)"
+    )
+    p.add_argument(
         "--no-value-refit", action="store_true",
         help="Skip re-fitting the value heads on the frozen best checkpoint after training",
     )
@@ -286,6 +334,22 @@ def build_parser():
     p.add_argument("--data-dir", type=str, default="human_games/1830", help="Directory of raw game JSONs (default: human_games/1830)")
     p.add_argument("--output", type=str, default="human_games/1830_clean", help="Output directory for cleaned JSONs (default: human_games/1830_clean)")
     p.add_argument("--overwrite", action="store_true", help="Overwrite already-cleaned outputs (default: skip)")
+
+    # policy-selfplay (fast search-free games -> value-network training data)
+    p = sub.add_parser(
+        "policy-selfplay", help="Play search-free self-play games with a checkpoint's policy and write value data"
+    )
+    p.add_argument("--checkpoint", type=str, default=None, help="<session>/<num> or a .pth (default: current best)")
+    p.add_argument("--model-dir", type=str, default="model_checkpoints")
+    p.add_argument("--output", type=str, required=True, help="LMDB root (training/ and validation/ inside)")
+    p.add_argument("--games", type=int, default=1000)
+    p.add_argument("--workers", type=int, default=48)
+    p.add_argument("--games-per-task", type=int, default=32, help="Games each worker plays concurrently")
+    p.add_argument("--positions-per-game", type=int, default=4, help="Positions kept per game (uniform sample)")
+    p.add_argument("--temperature", type=float, default=1.0, help="Policy sampling temperature")
+    p.add_argument("--max-decisions", type=int, default=1000)
+    p.add_argument("--start-positions", type=str, default="human_games/start_positions_1830_4p.jsonl")
+    p.add_argument("--random-start-fraction", type=float, default=0.2)
 
     # convert (encode games to LMDB for pretraining)
     p = sub.add_parser("convert", help="Convert cleaned game JSONs to LMDB training data")
@@ -350,6 +414,7 @@ if __name__ == "__main__":
         "pretrain": cmd_pretrain,
         "clean": cmd_clean,
         "convert": cmd_convert,
+        "policy-selfplay": cmd_policy_selfplay,
         "refit-price-head": cmd_refit_price_head,
         "arena": cmd_arena,
         "dashboard": cmd_dashboard,

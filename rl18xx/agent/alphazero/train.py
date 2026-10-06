@@ -550,7 +550,7 @@ def compute_losses(
         )
 
     total_loss = (
-        policy_loss
+        config.policy_loss_weight * policy_loss
         + config.value_loss_weight * win_loss_loss
         + config.score_loss_weight * score_loss
         + config.price_loss_weight * price_loss_value
@@ -845,7 +845,7 @@ def train_model(
                     )
 
                 total_loss = (
-                    policy_loss
+                    config.policy_loss_weight * policy_loss
                     + config.value_loss_weight * value_loss
                     + config.score_loss_weight * score_loss
                     + config.price_loss_weight * price_loss_value

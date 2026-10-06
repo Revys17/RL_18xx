@@ -252,6 +252,9 @@ class TrainingConfig:
     weight_decay: float = 1e-4
     shuffle_examples: bool = True
     value_loss_weight: float = 1.0
+    # Weight of the policy loss. 0 trains a value network only (AlphaGo-style:
+    # a separate value net on search-free self-play positions, its policy unused).
+    policy_loss_weight: float = 1.0
     # NLL weight for the continuous price head. Multiplies the per-example
     # ``Normal(mean, exp(log_std)).log_prob(price)`` loss summed across
     # price-bearing legal actions. Default kept small (0.1) so the price
@@ -324,6 +327,7 @@ class TrainingConfig:
             "weight_decay": self.weight_decay,
             "shuffle_examples": self.shuffle_examples,
             "value_loss_weight": self.value_loss_weight,
+            "policy_loss_weight": self.policy_loss_weight,
             "price_loss_weight": self.price_loss_weight,
             "score_loss_weight": self.score_loss_weight,
             "entropy_weight": self.entropy_weight,
