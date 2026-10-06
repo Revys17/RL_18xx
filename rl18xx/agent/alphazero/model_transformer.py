@@ -1886,18 +1886,26 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
             self.last_policy_components = None
             self.last_price_components = None
         else:
-            policy_logits, policy_components = self.policy_head(x, node_embeds)
-            self.last_policy_components = policy_components
+            # The policy and price heads run in fp32 even under autocast. Their
+            # logits carry large per-position offsets that softmax ignores --
+            # checkpoint 10's LayTile hex logits sit near -945 with ~+-22 between
+            # hexes -- and bf16's spacing of 4 at that magnitude collapsed the
+            # hex distribution: in bf16 the top tile lay changed in ~40% of
+            # positions with one, so bf16 training and validation saw a
+            # different policy from the one played (fp32).
+            with torch.autocast(device_type=x.device.type, enabled=False):
+                policy_logits, policy_components = self.policy_head(x.float(), node_embeds.float())
+                self.last_policy_components = policy_components
 
-            # 5b. Price head — cell logits per (action_type, entity) slot.
-            # Stashed on the model alongside ``last_policy_components`` so the
-            # training loss + MCTS PW can consume it without changing the
-            # long-standing 4-tuple forward contract.
-            self.last_price_components = {
-                "price_logits": self.price_head(x),
-                "slot_index": self.price_head.slot_index,
-                "num_slots": self.price_head.num_slots,
-            }
+                # 5b. Price head — cell logits per (action_type, entity) slot.
+                # Stashed on the model alongside ``last_policy_components`` so the
+                # training loss + MCTS PW can consume it without changing the
+                # long-standing 4-tuple forward contract.
+                self.last_price_components = {
+                    "price_logits": self.price_head(x.float()),
+                    "slot_index": self.price_head.slot_index,
+                    "num_slots": self.price_head.num_slots,
+                }
 
         # 6. Dual Value Heads — both take the canonicalized trunk (active
         # player at slot 0), no explicit indicator. MCTS softmaxes
