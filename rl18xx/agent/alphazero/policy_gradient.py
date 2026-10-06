@@ -585,7 +585,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
             "learner_temperature": cfg.learner_temperature,
             "opponent_temperature": cfg.opponent_temperature,
             "opponent_price_eps": cfg.opponent_price_eps,
-            "price_eps": cfg.opponent_price_eps,  # forced moves' prices (policy_selfplay._advance)
+            "price_eps": 0.0,  # forced moves (fixed prices only; open-price moves are decisions)
             "max_decisions": cfg.max_decisions,
             "start_positions": cfg.start_positions,
             "random_start_fraction": cfg.random_start_fraction,

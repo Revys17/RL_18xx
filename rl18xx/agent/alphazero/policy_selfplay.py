@@ -90,19 +90,36 @@ def _sample_price(game, index: int, price_row: Optional[np.ndarray], rng: np.ran
     return int(cells.sample_price(cell, rng))
 
 
+def has_price_choice(rs, index: int) -> bool:
+    """Whether a legal ``index`` still leaves its price open (a price-head slot
+    with more than one legal price), so playing it is a decision."""
+    price_range = rs.price_range_for_index(int(index))
+    return price_range is not None and price_range[0] < price_range[1] and (
+        rs.price_head_slot_for_index(int(index)) is not None
+    )
+
+
 def _advance(g: _Game, settings: dict, rng: np.random.Generator) -> Optional[list]:
-    """Apply forced moves until a decision (returns its legal indices) or the end (None)."""
+    """Apply forced moves until a decision (returns its legal indices) or the end (None).
+
+    A single legal index whose price is still open -- e.g. a corporation that
+    must buy a train and can only buy it from another corporation, at any
+    price from $1 to its cash -- is a decision, not a forced move: its price
+    comes from the mover's network at this position (it used to come from
+    the game's previous network output, a stale position and possibly another
+    seat's network, and was never trained on)."""
     rs = g.game._game
     while True:
         if g.game.finished:
             g.termination = g.termination or "finished"
             return None
         if g.decisions >= settings["max_decisions"]:
+            # Scored on net worth as it stands (the Rust engine has no end_game).
             g.game.end_game()
             g.termination = "max_length"
             return None
         legal = [int(i) for i in rs.factored_legal_indices()]
-        if len(legal) > 1:
+        if len(legal) > 1 or (len(legal) == 1 and has_price_choice(rs, legal[0])):
             return legal
         if not legal:
             raise RuntimeError(f"game {g.uid}: no legal action in an unfinished game")

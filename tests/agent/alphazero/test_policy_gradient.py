@@ -80,7 +80,7 @@ def test_learner_seats_play_against_one_opponent_and_only_their_decisions_are_ke
         assert len(game["rows"]) == sum(min(5, n) for n in game["seat_decisions"].values())  # 5 per seat
         for encoded, legal, choice, old_logp, price_info, advantage, fractions in game["rows"]:
             assert int(encoded[6]) in game["learner_seats"]  # the mover is a learner seat
-            assert len(legal) > 1 and choice in legal
+            assert choice in legal and (len(legal) > 1 or price_info is not None)  # a choice of move or price
             if price_info is None:
                 assert old_logp == pytest.approx(-math.log(len(legal)))  # uniform prior
             assert advantage == pytest.approx(game["win_share"][int(encoded[6])] - CRITIC_VALUE)
