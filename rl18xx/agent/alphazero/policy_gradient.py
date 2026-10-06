@@ -104,6 +104,7 @@ class PGConfig:
     critic_lr: float = 3e-5
     kl_coef: float = 0.02
     kl_target: Optional[float] = None
+    kl_coef_min: float = 0.005  # floor for the adaptive coefficient
     entropy_coef: float = 0.0
     gae_lambda: float = 1.0
     normalize_advantages: bool = False
@@ -656,7 +657,10 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                     if stats["kl_sl"] > 1.5 * cfg.kl_target:
                         kl_coef *= 1.5
                     elif stats["kl_sl"] < cfg.kl_target / 1.5:
-                        kl_coef /= 1.5
+                        # Floored: far below the target the coefficient would otherwise
+                        # decay toward 0 (pg3: 4e-6 by update 21) and take ~20 updates
+                        # to matter again once the KL reached it.
+                        kl_coef = max(kl_coef / 1.5, cfg.kl_coef_min)
 
                 elapsed = time.time() - gen_started
                 total_games += gen["games"]
