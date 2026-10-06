@@ -71,3 +71,32 @@ def test_sampled_prices_lie_in_the_legal_range():
             assert price is None
         else:
             assert price_range[0] <= price <= price_range[1]
+
+
+def test_opening_decisions_use_the_opening_temperature(monkeypatch, start_file):
+    """Low temperature after the opening sharpens play: with a client that
+    prefers one legal move, temperature 0.05 picks it every time after the
+    opening, while the opening (temperature 1) still varies."""
+
+    class _PeakedClient(_UniformClient):
+        def run_many_encoded(self, states, legal_indices=None):
+            probs = []
+            for legal in legal_indices:
+                p = torch.zeros(POLICY_SIZE)
+                p[legal] = 1.0
+                p[legal[0]] = 4.0
+                probs.append(p / p.sum())
+            return probs, None, [torch.zeros(6) for _ in states]
+
+    client = _PeakedClient()
+    monkeypatch.setattr(inference_server, "get_worker_client", lambda: client)
+    settings = {
+        "positions_per_game": 200, "temperature": 0.05, "opening_decisions": 10, "opening_temperature": 1.0,
+        "max_decisions": 40, "start_positions": start_file, "random_start_fraction": 1.0, "price_eps": 0.05,
+    }
+    game = policy_selfplay.play_policy_games(1, settings)["games"][0]
+    probs_by_decision = [row[2] for row in game["rows"]]  # reservoir keeps all 40 (k=200)
+    assert len(probs_by_decision) == 40
+    late = [float(pi.max()) for pi in probs_by_decision[10:]]
+    early = [float(pi.max()) for pi in probs_by_decision[:10]]
+    assert min(late) > 0.99 and max(early) < 0.99

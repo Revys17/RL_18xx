@@ -122,6 +122,8 @@ def cmd_policy_selfplay(args):
         games_per_task=args.games_per_task,
         positions_per_game=args.positions_per_game,
         temperature=args.temperature,
+        opening_decisions=args.opening_decisions,
+        opening_temperature=args.opening_temperature,
         max_decisions=args.max_decisions,
         start_positions=args.start_positions,
         random_start_fraction=args.random_start_fraction,
@@ -346,7 +348,9 @@ def build_parser():
     p.add_argument("--workers", type=int, default=48)
     p.add_argument("--games-per-task", type=int, default=32, help="Games each worker plays concurrently")
     p.add_argument("--positions-per-game", type=int, default=4, help="Positions kept per game (uniform sample)")
-    p.add_argument("--temperature", type=float, default=1.0, help="Policy sampling temperature")
+    p.add_argument("--temperature", type=float, default=1.0, help="Policy sampling temperature after the opening")
+    p.add_argument("--opening-decisions", type=int, default=0, help="Decisions sampled at --opening-temperature")
+    p.add_argument("--opening-temperature", type=float, default=1.0)
     p.add_argument("--max-decisions", type=int, default=1000)
     p.add_argument("--start-positions", type=str, default="human_games/start_positions_1830_4p.jsonl")
     p.add_argument("--random-start-fraction", type=float, default=0.2)

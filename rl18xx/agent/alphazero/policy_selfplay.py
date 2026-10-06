@@ -10,9 +10,13 @@ contributes only ``positions_per_game`` positions (a uniform reservoir sample
 of its decisions).
 
 Every game starts at the first Stock Round (``start_positions``), each player
-samples its moves from the policy (``temperature``) and prices from the price
-head, forced moves are applied without the network, and the game is scored on
-net worth when it finishes or reaches ``max_decisions``. Rows are written in
+samples its moves from the policy and prices from the price head, forced moves
+are applied without the network, and the game is scored on net worth when it
+finishes or reaches ``max_decisions``. The first ``opening_decisions`` moves
+are sampled at ``opening_temperature`` (diverse games) and the rest at
+``temperature`` -- below 1 the outcome reflects sharper play, closer to how a
+searching agent plays, as AlphaGo's value data used its strong policy after a
+diverse opening. Rows are written in
 the human-data layout -- ``(encoded_state, legal_indices, pi, value,
 price_targets)`` with the full encoded state (its rotation at index 6) and the
 value as net-worth fractions in player-id order -- to
@@ -161,8 +165,10 @@ def play_policy_games(num_games: int, settings: dict) -> dict:
         price_logits = price["price_logits"].numpy() if price is not None else None
         for i, (g, legal) in enumerate(batch):
             p = probs[i].numpy()[legal].astype(np.float64)
-            if settings["temperature"] != 1.0:
-                p = np.power(np.clip(p, 1e-12, None), 1.0 / settings["temperature"])
+            opening = g.decisions < settings.get("opening_decisions", 0)
+            temperature = settings.get("opening_temperature", 1.0) if opening else settings["temperature"]
+            if temperature != 1.0:
+                p = np.power(np.clip(p, 1e-12, None), 1.0 / temperature)
             p = p / p.sum() if p.sum() > 0 else np.full(len(legal), 1.0 / len(legal))
             choice = legal[int(rng.choice(len(legal), p=p))]
             # Uniform reservoir sample of the game's decisions.
@@ -198,6 +204,8 @@ def generate(
     games_per_task: int = 32,
     positions_per_game: int = 4,
     temperature: float = 1.0,
+    opening_decisions: int = 0,
+    opening_temperature: float = 1.0,
     max_decisions: int = 1000,
     start_positions: str = "human_games/start_positions_1830_4p.jsonl",
     random_start_fraction: float = 0.2,
@@ -215,6 +223,8 @@ def generate(
     settings = {
         "positions_per_game": positions_per_game,
         "temperature": temperature,
+        "opening_decisions": opening_decisions,
+        "opening_temperature": opening_temperature,
         "max_decisions": max_decisions,
         "start_positions": start_positions,
         "random_start_fraction": random_start_fraction,
