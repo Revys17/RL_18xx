@@ -141,6 +141,7 @@ dmypy.json
 logs/
 training_examples/
 model_checkpoints/
+model_checkpoints_value/
 runs/
 self_play_games_status/
 human_games/
