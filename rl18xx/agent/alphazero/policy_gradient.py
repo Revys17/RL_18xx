@@ -9,8 +9,18 @@ trained on that policy's games -> search. This module is the second step for
   The learner holds ``learner_seats`` random seats; the others go to one
   opponent: the supervised policy, or (``1 - sl_opponent_fraction`` of the
   games, once snapshots exist) a snapshot of the learner from the pool.
-  Every seat samples its moves from its policy at temperature 1 and its
+  Every seat samples its moves from its policy (the learner at
+  ``learner_temperature``, the opponent at ``opponent_temperature``) and its
   prices from its price head; forced moves are applied without the network.
+- **Temperature**: at temperature 1 every seat often samples weak moves, and
+  sharpening alone wins (checkpoint 10 at 0.5 scores 0.87 against itself at
+  1), so a learner trained at 1 spends its updates and its KL budget getting
+  sharper rather than ranking moves better (2026-10-06: its training score
+  rose 0.65 -> 0.73 over updates 20-50 while its score at matched
+  temperature 0.5 stayed ~0.54). With ``learner_temperature`` tau the learner's
+  policy *is* softmax(logits / tau): moves are sampled from it, the gradient
+  and the KL anchor (to the supervised policy at the same tau) are taken
+  through it, and opponents at the same tau make the score a matched one.
 - **Objective**: each learner decision is credited with its own seat's win
   share (1/k for k tied leaders on net worth) minus a critic's estimate --
   ``A = R - V(s)`` with Monte Carlo returns (``gae_lambda`` 1), or a
@@ -77,6 +87,7 @@ class PGConfig:
     learner_seats: int = 2
     positions_per_seat: int = 32
     sl_opponent_fraction: float = 0.5
+    learner_temperature: float = 1.0
     opponent_temperature: float = 1.0
     opponent_price_eps: float = 0.05
     max_decisions: int = 1000
@@ -239,7 +250,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             price = client.last_price_components
             price_logits = price["price_logits"].numpy() if price is not None else None
             is_learner = name == "learner"
-            temperature = 1.0 if is_learner else settings["opponent_temperature"]
+            temperature = settings["learner_temperature"] if is_learner else settings["opponent_temperature"]
             for j, i in enumerate(rows):
                 g, legal = pending[i]
                 seat = int(encoded[i][6])
@@ -358,15 +369,17 @@ def pg_losses(
     clip: float,
     kl_coef: float,
     entropy_coef: float,
+    temperature: float = 1.0,
 ) -> dict:
     """PPO-clipped policy gradient plus ``kl_coef`` * KL(learner || supervised).
 
-    A move's log-probability is its index's (softmax over the legal moves) plus,
-    for price-head moves, its price cell's (softmax over the slot's non-empty
-    cells) -- the probabilities the move was sampled with."""
+    A move's log-probability is its index's (softmax over the legal moves of
+    the logits / ``temperature``) plus, for price-head moves, its price cell's
+    (softmax over the slot's non-empty cells) -- the probabilities the move was
+    sampled with. The KL compares both policies at ``temperature``."""
     legal = batch["legal"]
-    log_p = _masked_log_softmax(policy_logits, legal)
-    sl_log_p = _masked_log_softmax(sl_policy_logits, legal)
+    log_p = _masked_log_softmax(policy_logits / temperature, legal)
+    sl_log_p = _masked_log_softmax(sl_policy_logits / temperature, legal)
     p = log_p.exp() * legal
     new_logp = log_p.gather(1, batch["choice"].unsqueeze(1)).squeeze(1)
     kl = (p * (log_p - sl_log_p)).sum(dim=1)
@@ -568,6 +581,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
             "sl_opponent_fraction": cfg.sl_opponent_fraction,
             "pool_ready": bool(pool),
             "pool_label": pool_label,
+            "learner_temperature": cfg.learner_temperature,
             "opponent_temperature": cfg.opponent_temperature,
             "opponent_price_eps": cfg.opponent_price_eps,
             "price_eps": cfg.opponent_price_eps,  # forced moves' prices (policy_selfplay._advance)
@@ -714,7 +728,8 @@ def _update(learner, critic, sl, learner_opt, critic_opt, rows, cfg: PGConfig, k
             policy_logits, _, _, _ = learner(batch["game_state"], batch["nodes"])
             price = learner.last_price_components["price_logits"]
             losses = pg_losses(
-                policy_logits, price, sl_logits, sl_price, batch, cfg.clip, kl_coef, cfg.entropy_coef
+                policy_logits, price, sl_logits, sl_price, batch, cfg.clip, kl_coef, cfg.entropy_coef,
+                temperature=cfg.learner_temperature,
             )
             if not torch.isfinite(losses["total"]):
                 raise RuntimeError(f"Policy gradient diverged: non-finite loss ({ {k: float(v) for k, v in losses.items()} })")

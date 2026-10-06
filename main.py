@@ -164,6 +164,8 @@ def cmd_policy_gradient(args):
         kl_coef=args.kl_coef,
         kl_target=args.kl_target,
         entropy_coef=args.entropy_coef,
+        learner_temperature=args.learner_temperature,
+        opponent_temperature=args.opponent_temperature,
         gae_lambda=args.gae_lambda,
         max_updates=args.max_updates,
         snapshot_every=args.snapshot_every,
@@ -425,6 +427,11 @@ def build_parser():
     p.add_argument("--kl-coef", type=float, default=0.02, help="KL(learner || supervised) penalty")
     p.add_argument("--kl-target", type=float, default=None, help="Adapt --kl-coef toward this KL per decision")
     p.add_argument("--entropy-coef", type=float, default=0.0)
+    p.add_argument(
+        "--learner-temperature", type=float, default=1.0,
+        help="The learner plays and is trained as softmax(logits / T) (KL anchor at the same T)",
+    )
+    p.add_argument("--opponent-temperature", type=float, default=1.0, help="Sampling temperature of opponents")
     p.add_argument("--gae-lambda", type=float, default=1.0, help="1 = Monte Carlo returns")
     p.add_argument("--max-updates", type=int, default=1000)
     p.add_argument("--snapshot-every", type=int, default=10)

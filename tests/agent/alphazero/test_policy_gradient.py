@@ -48,6 +48,7 @@ def _settings(start_file, **overrides):
         "sl_opponent_fraction": 0.5,
         "pool_ready": False,
         "pool_label": None,
+        "learner_temperature": 1.0,
         "opponent_temperature": 1.0,
         "opponent_price_eps": 0.05,
         "price_eps": 0.05,
@@ -93,6 +94,50 @@ def test_games_use_the_pool_once_it_has_snapshots(monkeypatch, start_file):
     result = pg.play_pg_games(4, _settings(start_file, pool_ready=True, sl_opponent_fraction=0.0, max_decisions=8))
     assert {g["opponent"] for g in result["games"]} == {"pool"}
     assert clients["pool"].rotations and not clients["sl"].rotations
+
+
+def test_a_tempered_learner_records_the_probability_it_sampled_with(monkeypatch, start_file):
+    """At learner temperature 0.5 a move's recorded probability is its prior
+    squared, renormalized over the legal moves."""
+
+    class _Peaked(_Client):
+        def run_many_encoded(self, states, legal_indices=None):
+            self.rotations.extend(int(s[6]) for s in states)
+            probs = []
+            for legal in legal_indices:
+                p = torch.zeros(POLICY_SIZE)
+                p[legal] = 1.0
+                p[legal[0]] = 3.0
+                probs.append(p / p.sum())
+            return probs, None, [torch.full((6,), CRITIC_VALUE) for _ in states]
+
+        def send(self, states, legal_indices=None):
+            return states, legal_indices
+
+        def receive(self, pending):
+            return self.run_many_encoded(*pending)
+
+    monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Peaked(), "sl": _Peaked(), "pool": _Peaked()})
+    result = pg.play_pg_games(2, _settings(start_file, learner_temperature=0.5, positions_per_seat=50))
+    rows = [r for g in result["games"] for r in g["rows"] if r[4] is None]
+    assert rows
+    for encoded, legal, choice, old_logp, *_ in rows:
+        weights = np.ones(len(legal))
+        weights[0] = 9.0  # (3 / 1) ** (1 / 0.5)
+        expected = np.log(weights[list(legal).index(choice)] / weights.sum())
+        assert old_logp == pytest.approx(expected, abs=1e-5)
+
+
+def test_tempered_losses_are_on_policy_for_tempered_samples():
+    logits = torch.tensor([[2.0, 1.0, 0.0, 5.0]], requires_grad=True)
+    tau = 0.5
+    old = float(torch.log_softmax(logits[0, :3].detach() / tau, dim=0)[1])
+    batch = _batch([[0.0] * 4], [[0, 1, 2]], [1], [old], [1.0])
+    out = pg.pg_losses(logits, None, logits.detach(), None, batch, 0.2, 0.1, 0.0, temperature=tau)
+    assert float(out["approx_kl"]) == pytest.approx(0.0, abs=1e-6)
+    assert float(out["kl_sl"]) == pytest.approx(0.0, abs=1e-7)
+    out["total"].backward()
+    assert logits.grad[0, 1] < 0 and logits.grad[0, 3] == 0
 
 
 def _batch(logits_rows, legal_rows, choices, old_logp, advantage, price=None):
