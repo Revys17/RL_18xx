@@ -157,6 +157,7 @@ def cmd_policy_gradient(args):
         sl_opponent_fraction=args.sl_opponent_fraction,
         rows_per_update=args.rows_per_update,
         minibatch=args.minibatch,
+        microbatch=args.microbatch,
         ppo_epochs=args.ppo_epochs,
         clip=args.clip,
         lr=args.lr,
@@ -166,6 +167,7 @@ def cmd_policy_gradient(args):
         entropy_coef=args.entropy_coef,
         learner_temperature=args.learner_temperature,
         opponent_temperature=args.opponent_temperature,
+        opponent_price_eps=args.opponent_price_eps,
         gae_lambda=args.gae_lambda,
         max_updates=args.max_updates,
         snapshot_every=args.snapshot_every,
@@ -419,7 +421,8 @@ def build_parser():
     p.add_argument("--positions-per-seat", type=int, default=32, help="Learner decisions kept per seat per game")
     p.add_argument("--sl-opponent-fraction", type=float, default=0.5, help="Games against the supervised policy")
     p.add_argument("--rows-per-update", type=int, default=65536)
-    p.add_argument("--minibatch", type=int, default=256)
+    p.add_argument("--minibatch", type=int, default=256, help="Rows per optimizer step")
+    p.add_argument("--microbatch", type=int, default=256, help="Rows per forward/backward (accumulated to --minibatch)")
     p.add_argument("--ppo-epochs", type=int, default=1)
     p.add_argument("--clip", type=float, default=0.2)
     p.add_argument("--lr", type=float, default=1e-5)
@@ -432,6 +435,10 @@ def build_parser():
         help="The learner plays and is trained as softmax(logits / T) (KL anchor at the same T)",
     )
     p.add_argument("--opponent-temperature", type=float, default=1.0, help="Sampling temperature of opponents")
+    p.add_argument(
+        "--opponent-price-eps", type=float, default=0.05,
+        help="Uniform mixing into opponents' price draws (the learner's is 0); 0 keeps the training score a clean match",
+    )
     p.add_argument("--gae-lambda", type=float, default=1.0, help="1 = Monte Carlo returns")
     p.add_argument("--max-updates", type=int, default=1000)
     p.add_argument("--snapshot-every", type=int, default=10)

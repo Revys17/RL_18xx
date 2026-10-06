@@ -77,7 +77,7 @@ def test_learner_seats_play_against_one_opponent_and_only_their_decisions_are_ke
         assert game["opponent"] == "sl" and len(game["learner_seats"]) == 2
         assert game["termination"] == "max_length" and game["decisions"] == 40
         assert sum(game["win_share"]) == pytest.approx(1.0)
-        assert len(game["rows"]) == min(10, game["learner_decisions"])
+        assert len(game["rows"]) == sum(min(5, n) for n in game["seat_decisions"].values())  # 5 per seat
         for encoded, legal, choice, old_logp, price_info, advantage, fractions in game["rows"]:
             assert int(encoded[6]) in game["learner_seats"]  # the mover is a learner seat
             assert len(legal) > 1 and choice in legal
@@ -253,3 +253,29 @@ def test_value_only_forward_matches_the_full_forward():
         assert torch.allclose(model.run_values_encoded(encoded), values)
         policy, *_ = model._forward_encoded_batch(encoded, value_only=True)
     assert policy is None and model.last_price_components is None
+
+
+def test_microbatches_accumulate_to_the_minibatch_step(monkeypatch, start_file):
+    import copy
+
+    from rl18xx.agent.alphazero.config import ModelTransformerConfig
+    from rl18xx.agent.alphazero.model_transformer import AlphaZeroTransformerModel
+
+    monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Client(), "sl": _Client(), "pool": _Client()})
+    rows = [r for g in pg.play_pg_games(1, _settings(start_file, max_decisions=12))["games"] for r in g["rows"]][:6]
+    torch.manual_seed(0)
+    base = [AlphaZeroTransformerModel(ModelTransformerConfig(device=torch.device("cpu"))) for _ in range(3)]
+    results = []
+    for micro in (6, 2):
+        learner, critic, sl = (copy.deepcopy(m) for m in base)
+        opts = [torch.optim.SGD(m.parameters(), lr=0.1) for m in (learner, critic)]
+        cfg = pg.PGConfig(policy_checkpoint="", value_checkpoint="", minibatch=6, microbatch=micro)
+        stats = pg._update(learner, critic, sl, *opts, rows, cfg, 0.02, torch.device("cpu"), np.random.default_rng(0))
+        assert stats["optimizer_steps"] == 1
+        results.append(learner)
+    diffs = [float((a - b).abs().max()) for a, b in zip(results[0].parameters(), results[1].parameters())]
+    moved = [float((a - b).abs().max()) for a, b in zip(results[0].parameters(), base[0].parameters())]
+    # Float rounding only -- up to ~3%, in the hex transformer's biases, whose
+    # gradients sum over 93 hexes a row; with the economic transformer's dropout
+    # left on, each microbatch drew its own masks and the steps differed by 11%.
+    assert max(diffs) < 0.05 * max(moved)

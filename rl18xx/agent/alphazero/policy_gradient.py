@@ -96,7 +96,8 @@ class PGConfig:
     inference_batch_size: int = 512
     # Updates
     rows_per_update: int = 65536
-    minibatch: int = 256
+    minibatch: int = 256  # rows per optimizer step
+    microbatch: int = 256  # rows per forward/backward (gradients accumulate up to minibatch)
     ppo_epochs: int = 1
     clip: float = 0.2
     lr: float = 1e-5
@@ -295,6 +296,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
                 "win_share": win_share.tolist(),
                 "decisions": g.decisions,
                 "learner_decisions": sum(len(v) for v in g.values.values()),
+                "seat_decisions": {seat: len(v) for seat, v in g.values.items()},
                 "termination": g.termination,
                 "first_values": {seat: v[0] for seat, v in g.values.items() if v},
                 "rows": rows,
@@ -533,8 +535,6 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     learner, critic, sl = _load(learner_path), _load(critic_path), _load(cfg.policy_checkpoint)
-    for model in (learner, critic):
-        model.train()
     sl.eval()
     for param in sl.parameters():
         param.requires_grad_(False)
@@ -710,65 +710,82 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
 
 
 def _update(learner, critic, sl, learner_opt, critic_opt, rows, cfg: PGConfig, kl_coef, device, rng) -> dict:
-    """One pass of PPO over ``rows`` (``cfg.ppo_epochs`` times) and one critic pass."""
-    advantages = np.array([r[5] for r in rows], dtype=np.float32)
+    """One pass of PPO over ``rows`` (``cfg.ppo_epochs`` times) and one critic pass.
+
+    The networks train in eval mode: the economic transformer's layers carry
+    dropout (0.1), which in train mode makes the policy being updated a
+    different one from the policy that played the games (eval mode, on the
+    inference server) and puts noise into every PPO ratio."""
+    learner.eval()
+    critic.eval()
+    advantages =np.array([r[5] for r in rows], dtype=np.float32)
     if cfg.normalize_advantages:
         scale = float(advantages.std()) or 1.0
         rows = [r[:5] + (r[5] / scale,) + r[6:] for r in rows]
-    sums, count, first = Counter(), 0, {}
+    sums, count, first, steps = Counter(), 0, {}, 0
     critic_sums, critic_count = Counter(), 0
-    explained = []
+    micro = min(cfg.microbatch, cfg.minibatch)
     for epoch in range(cfg.ppo_epochs):
         order = rng.permutation(len(rows))
         for start in range(0, len(rows), cfg.minibatch):
-            batch = batch_tensors([rows[i] for i in order[start : start + cfg.minibatch]], device)
-            with torch.no_grad():
-                sl_logits, _, _, _ = sl(batch["game_state"], batch["nodes"])
-                sl_price = sl.last_price_components["price_logits"]
-            policy_logits, _, _, _ = learner(batch["game_state"], batch["nodes"])
-            price = learner.last_price_components["price_logits"]
-            losses = pg_losses(
-                policy_logits, price, sl_logits, sl_price, batch, cfg.clip, kl_coef, cfg.entropy_coef,
-                temperature=cfg.learner_temperature,
-            )
-            if not torch.isfinite(losses["total"]):
-                raise RuntimeError(f"Policy gradient diverged: non-finite loss ({ {k: float(v) for k, v in losses.items()} })")
+            # One optimizer step per minibatch, its gradient accumulated over
+            # microbatches (the policy head's activations bound the microbatch).
+            step_rows = order[start : start + cfg.minibatch]
             learner_opt.zero_grad(set_to_none=True)
-            losses["total"].backward()
+            critic_opt.zero_grad(set_to_none=True)
+            for micro_start in range(0, len(step_rows), micro):
+                batch = batch_tensors([rows[i] for i in step_rows[micro_start : micro_start + micro]], device)
+                n = len(batch["choice"])
+                share = n / len(step_rows)
+                with torch.no_grad():
+                    sl_logits, _, _, _ = sl(batch["game_state"], batch["nodes"])
+                    sl_price = sl.last_price_components["price_logits"]
+                policy_logits, _, _, _ = learner(batch["game_state"], batch["nodes"])
+                price = learner.last_price_components["price_logits"]
+                losses = pg_losses(
+                    policy_logits, price, sl_logits, sl_price, batch, cfg.clip, kl_coef, cfg.entropy_coef,
+                    temperature=cfg.learner_temperature,
+                )
+                if not torch.isfinite(losses["total"]):
+                    raise RuntimeError(
+                        f"Policy gradient diverged: non-finite loss ({ {k: float(v) for k, v in losses.items()} })"
+                    )
+                (losses["total"] * share).backward()
+                if count == 0:
+                    first = {"clip_frac_first": float(losses["clip_frac"]), "approx_kl_first": float(losses["approx_kl"])}
+                count += n
+                for key, value in losses.items():
+                    if key != "total":
+                        sums[key] += float(value) * n
+
+                if epoch == 0:
+                    _, win_loss_logits, score_pred, _ = critic(batch["game_state"], batch["nodes"], value_only=True)
+                    c = critic_losses(win_loss_logits, score_pred, batch["fractions"])
+                    loss = c["ce"] + cfg.score_loss_weight * c["mse"]
+                    if not torch.isfinite(loss):
+                        raise RuntimeError("Critic diverged: non-finite loss")
+                    (loss * share).backward()
+                    critic_count += n
+                    critic_sums["ce"] += float(c["ce"].detach()) * n
+                    critic_sums["mse"] += float(c["mse"].detach()) * n
+                    critic_sums["winner_hit"] += float(c["winner_hit"]) * n
             norm = torch.nn.utils.clip_grad_norm_(learner.parameters(), max_norm=1.0)
             if not torch.isfinite(norm):
                 raise RuntimeError("Policy gradient diverged: non-finite gradient norm")
             learner_opt.step()
-            n = len(batch["choice"])
-            if count == 0:
-                first = {"clip_frac_first": float(losses["clip_frac"]), "approx_kl_first": float(losses["approx_kl"])}
-            count += n
-            for key, value in losses.items():
-                if key != "total":
-                    sums[key] += float(value) * n
-            sums["grad_norm"] += float(norm) * n
-
+            sums["grad_norm"] += float(norm) * len(step_rows)
+            steps += 1
             if epoch == 0:
-                _, win_loss_logits, score_pred, _ = critic(batch["game_state"], batch["nodes"], value_only=True)
-                c = critic_losses(win_loss_logits, score_pred, batch["fractions"])
-                loss = c["ce"] + cfg.score_loss_weight * c["mse"]
-                if not torch.isfinite(loss):
-                    raise RuntimeError("Critic diverged: non-finite loss")
-                critic_opt.zero_grad(set_to_none=True)
-                loss.backward()
                 norm = torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=1.0)
                 if not torch.isfinite(norm):
                     raise RuntimeError("Critic diverged: non-finite gradient norm")
                 critic_opt.step()
-                critic_count += n
-                critic_sums["ce"] += float(c["ce"].detach()) * n
-                critic_sums["mse"] += float(c["mse"].detach()) * n
-                critic_sums["winner_hit"] += float(c["winner_hit"]) * n
     stats = {key: value / max(count, 1) for key, value in sums.items()}
     stats.update(first)
     stats.update({f"critic_{key}": value / max(critic_count, 1) for key, value in critic_sums.items()})
     stats.update(
         rows=len(rows),
+        optimizer_steps=steps,
         adv_mean=float(advantages.mean()),
         adv_std=float(advantages.std()),
         adv_abs_mean=float(np.abs(advantages).mean()),
