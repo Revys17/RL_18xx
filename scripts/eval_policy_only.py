@@ -1,0 +1,232 @@
+"""Search-free head-to-head between two policies, each at its own temperature.
+
+Like ``eval_head_to_head.py`` -- 4-player games from self-play's first-Stock-
+Round starts, each start played in all six 2-2 seat arrangements, scored by
+share of winners (0.5 = equal) -- but every seat samples its move straight from
+its policy (and prices from its price head), so thousands of games take
+minutes. A player is a checkpoint spec as in ``eval_head_to_head.py``
+optionally followed by ``@<temperature>`` (default 1). Lower temperature
+sharpens a policy, which by itself beats the same policy at temperature 1, so
+compare a trained policy against its starting point at several temperatures to
+tell learning from sharpening.
+
+    uv run python scripts/eval_policy_only.py --match model_checkpoints_pg/<run>/learner/20.pth 10 \\
+        --match 10@0.5 10 --games 1200
+"""
+
+import argparse
+import itertools
+import json
+import math
+import os
+import random
+import sys
+import time
+from collections import Counter, defaultdict
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+NUM_PLAYERS = 4
+ARRANGEMENTS = [
+    tuple("A" if seat in pair else "B" for seat in range(NUM_PLAYERS))
+    for pair in itertools.combinations(range(NUM_PLAYERS), 2)
+]
+
+
+def parse_player(spec: str) -> tuple:
+    """``(checkpoint path, temperature)`` of ``<checkpoint>[@<temperature>]``."""
+    from eval_head_to_head import resolve_checkpoint
+
+    checkpoint, _, temperature = spec.partition("@")
+    return str(resolve_checkpoint(checkpoint)), float(temperature) if temperature else 1.0
+
+
+def play_games(game_indices: list, settings: dict) -> list:
+    """Pool task: play the given games concurrently; returns one record per game."""
+    from rl18xx.agent.alphazero import policy_gradient as pg
+    from rl18xx.agent.alphazero.mcts import _rust_encode
+    from rl18xx.agent.alphazero.policy_selfplay import _advance
+    from rl18xx.agent.alphazero.start_positions import apply_actions, new_game, sample_start_position
+
+    rng = np.random.default_rng()
+    games = []
+    for idx in game_indices:
+        # Seeded by the start index, so all six arrangements of a start share it.
+        start_rng = random.Random(f"{settings['seed']}:{idx // len(ARRANGEMENTS)}")
+        start = sample_start_position(
+            NUM_PLAYERS, settings["start_positions"], settings["random_start_fraction"], rng=start_rng
+        )
+        game = apply_actions(new_game(NUM_PLAYERS), start.actions)
+        games.append(
+            SimpleNamespace(
+                game=game, uid=str(idx), idx=idx, seats=ARRANGEMENTS[idx % len(ARRANGEMENTS)],
+                decisions=0, price_row=None, termination=None,
+            )
+        )
+
+    finished, active = [], list(games)
+    while active:
+        pending = []
+        for g in active:
+            legal = _advance(g, settings, rng)
+            if legal is None:
+                finished.append(g)
+            else:
+                pending.append((g, legal))
+        active = [g for g, _ in pending]
+        if not pending:
+            break
+        encoded = [_rust_encode(g.game) for g, _ in pending]
+        by_side = defaultdict(list)
+        for i, (g, _) in enumerate(pending):
+            by_side[g.seats[int(encoded[i][6])]].append(i)
+        sent = {
+            side: pg._CLIENTS[settings["servers"][side]].send(
+                [encoded[i] for i in rows], legal_indices=[pending[i][1] for i in rows]
+            )
+            for side, rows in by_side.items()
+        }
+        for side, rows in by_side.items():
+            client = pg._CLIENTS[settings["servers"][side]]
+            probs, _, _ = client.receive(sent[side])
+            price = client.last_price_components
+            price_logits = price["price_logits"].numpy() if price is not None else None
+            temperature = settings["temperatures"][side]
+            for j, i in enumerate(rows):
+                g, legal = pending[i]
+                p = probs[j].numpy()[legal].astype(np.float64)
+                if temperature != 1.0:
+                    p = np.power(np.clip(p, 1e-12, None), 1.0 / temperature)
+                p = p / p.sum() if p.sum() > 0 else np.full(len(legal), 1.0 / len(legal))
+                choice = legal[int(rng.choice(len(legal), p=p))]
+                g.price_row = price_logits[j] if price_logits is not None else None
+                price_value, _, _ = pg.choose_price(g.game, choice, g.price_row, rng, settings["price_eps"])
+                g.game._game.apply_action_index(choice, price_value)
+                g.decisions += 1
+
+    records = []
+    for g in finished:
+        win_share, fractions = pg.outcome(g.game)
+        records.append(
+            {
+                "idx": g.idx,
+                "seats": list(g.seats),
+                "win_share": win_share.tolist(),
+                "worth_share": fractions.tolist(),
+                "decisions": g.decisions,
+                "termination": g.termination,
+            }
+        )
+    return records
+
+
+def summarize(a: str, b: str, records: list) -> dict:
+    scores = [sum(r["win_share"][s] for s, side in enumerate(r["seats"]) if side == "A") for r in records]
+    worth = [sum(r["worth_share"][s] for s, side in enumerate(r["seats"]) if side == "A") for r in records]
+    by_arrangement = defaultdict(list)
+    for r, score in zip(records, scores):
+        by_arrangement["".join(r["seats"])].append(score)
+    n = len(scores)
+    return {
+        "A": a,
+        "B": b,
+        "games": n,
+        "A_score": float(np.mean(scores)),
+        "A_score_se": float(np.std(scores, ddof=1) / math.sqrt(n)) if n > 1 else float("nan"),
+        "A_worth_share": float(np.mean(worth)),
+        "by_arrangement": {k: round(float(np.mean(v)), 3) for k, v in sorted(by_arrangement.items())},
+        "terminations": dict(Counter(r["termination"] for r in records)),
+        "mean_decisions": float(np.mean([r["decisions"] for r in records])),
+    }
+
+
+def run_match(a_spec: str, b_spec: str, args) -> dict:
+    from rl18xx.agent.alphazero import policy_gradient as pg
+    from rl18xx.agent.alphazero.inference_server import start_inference_server
+
+    players = {"A": parse_player(a_spec), "B": parse_player(b_spec)}
+    paths = sorted({path for path, _ in players.values()})
+    handles = {
+        path: start_inference_server(
+            num_workers=args.workers,
+            model_factory=pg.load_server_model,
+            checkpoint_path=path,
+            batch_size=512,
+            autocast_device=None,
+        )
+        for path in paths
+    }
+    settings = {
+        "servers": {side: path for side, (path, _) in players.items()},
+        "temperatures": {side: t for side, (_, t) in players.items()},
+        "seed": args.seed,
+        "start_positions": args.start_positions,
+        "random_start_fraction": args.random_start_fraction,
+        "max_decisions": args.max_decisions,
+        "price_eps": args.price_eps,
+    }
+    num_games = math.ceil(args.games / len(ARRANGEMENTS)) * len(ARRANGEMENTS)
+    chunks = [list(range(i, min(i + args.games_per_task, num_games))) for i in range(0, num_games, args.games_per_task)]
+    queues = {path: (h.request_q, h.reply_qs, h.ticket_q) for path, h in handles.items()}
+    records, started = [], time.time()
+    try:
+        with ProcessPoolExecutor(max_workers=args.workers, initializer=pg.worker_init, initargs=(queues,)) as pool:
+            futures = {pool.submit(play_games, chunk, settings) for chunk in chunks}
+            while futures:
+                done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                for future in done:
+                    records.extend(future.result())
+    finally:
+        for handle in handles.values():
+            handle.shutdown()
+    summary = summarize(a_spec, b_spec, records)
+    summary["seconds"] = round(time.time() - started, 1)
+    return summary, records
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--match", nargs=2, action="append", metavar=("A", "B"), required=True)
+    parser.add_argument("--games", type=int, default=1200, help="Games per match (rounded up to a multiple of 6)")
+    parser.add_argument("--workers", type=int, default=16)
+    parser.add_argument("--games-per-task", type=int, default=30)
+    parser.add_argument("--max-decisions", type=int, default=1000)
+    parser.add_argument("--price-eps", type=float, default=0.0, help="Uniform mixing into both sides' price draws")
+    parser.add_argument("--start-positions", type=str, default="human_games/start_positions_1830_4p.jsonl")
+    parser.add_argument("--random-start-fraction", type=float, default=0.2)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--out", type=str, default=None, help="Directory for summary.json and games.jsonl")
+    args = parser.parse_args()
+
+    import multiprocessing
+
+    multiprocessing.set_start_method("spawn", force=True)
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    summaries, all_records = [], []
+    for a, b in args.match:
+        summary, records = run_match(a, b, args)
+        summaries.append(summary)
+        all_records.extend({"match": f"{a} vs {b}", **r} for r in records)
+        print(
+            f"{a} vs {b}: {summary['A_score']:.3f} ± {summary['A_score_se']:.3f} over {summary['games']} games "
+            f"(worth share {summary['A_worth_share']:.3f}, {summary['seconds']:.0f}s)",
+            flush=True,
+        )
+    if args.out:
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "summary.json").write_text(json.dumps(summaries, indent=2))
+        with (out / "games.jsonl").open("w") as f:
+            for r in all_records:
+                f.write(json.dumps(r) + "\n")
+
+
+if __name__ == "__main__":
+    main()
