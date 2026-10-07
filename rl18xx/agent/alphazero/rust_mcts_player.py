@@ -521,7 +521,11 @@ class RustMCTSPlayer:
             return int(self._rust_player.pick_best_action())
         if len(legal) == 1:
             return int(legal[0])
-        visit_counts = np.asarray(self._rust_player.child_n_at_root(), dtype=np.float64)
+        # child_n_at_root is dense (POLICY_SIZE, by action index); take the legal
+        # moves' counts in ``legal`` order. Read as if already in that order (as
+        # until 2026-10-07), the sampled position was an action index clamped to
+        # the last legal move, so softpick moves were mostly the last legal action.
+        visit_counts = np.asarray(self._rust_player.child_n_at_root(), dtype=np.float64)[np.asarray(legal, dtype=np.int64)]
         total = visit_counts.sum()
         if total == 0:
             # No visits; fall back to uniform over legal actions.

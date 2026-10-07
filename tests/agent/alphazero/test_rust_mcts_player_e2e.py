@@ -121,6 +121,38 @@ def test_policy_target_is_the_visit_distribution_after_the_softpick_cutoff():
     assert np.allclose(np.sort(pi[pi > 0]), np.sort(visits[visits > 0] / visits.sum()))
 
 
+def test_softpick_samples_moves_in_proportion_to_their_visits(tmp_path):
+    """Before the softpick cutoff the move is sampled from the root's visit counts.
+    child_n_at_root is dense (by action index); read as one entry per legal move,
+    the sample was an action index clamped to the last legal move (2026-06..10).
+    Played at the first Stock Round, where the legal indices are far from
+    0..n-1 (at the auction start they are 0..n-1 and the mix-up is invisible)."""
+    import random
+
+    from rl18xx.agent.alphazero.start_positions import apply_actions, new_game, sample_start_position
+
+    empty = tmp_path / "starts.jsonl"
+    empty.write_text("")
+    start = sample_start_position(4, str(empty), 1.0, rng=random.Random(0))
+    game = apply_actions(new_game(4), start.actions)
+    player = RustMCTSPlayer(_make_config(num_readouts=64, min_readouts=64, softpick_move_cutoff=1000))
+    player.initialize_game(game)
+    assert [int(i) for i in player._rust_player.legal_action_indices_at_root()] != list(
+        range(len(player._rust_player.legal_action_indices_at_root()))
+    )
+    while player.root.N < 64:
+        player.tree_search()
+    legal = [int(i) for i in player._rust_player.legal_action_indices_at_root()]
+    visits = np.asarray(player._rust_player.child_n_at_root(), dtype=np.float64)
+    share = {i: visits[i] / visits[legal].sum() for i in legal}
+    random.seed(0)
+    picks = [player.pick_move() for _ in range(2000)]
+    assert all(share[move] > 0 for move in picks)  # only searched moves are ever played
+    counts = {i: picks.count(i) / len(picks) for i in set(picks)}
+    assert len(counts) > 3
+    assert all(abs(counts.get(i, 0.0) - share[i]) < 0.05 for i in legal)
+
+
 def test_rust_mcts_player_short_game_extracts_data():
     """Drive ~30 moves through the SelfPlay.play() pattern and verify
     extract_data yields at least one tuple of the expected shape."""
