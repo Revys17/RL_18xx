@@ -56,6 +56,13 @@ land in ``<out_dir>/<run>/{learner,critic}/<update>.pth`` (every
 ``runs/alphazero_runs/<run>``, and one JSON line per update in
 ``<out_dir>/<run>/history.jsonl``. Touch ``<out_dir>/<run>/STOP`` to end a run
 after the current update.
+
+With ``save_game_every`` N (off by default) about one game in N (sampled at
+random) also keeps its action log, as ``<out_dir>/<run>/games/u<update>_<id>.json``
+(``game_records``) with a line in ``<out_dir>/<run>/games.jsonl``: the update
+(updates completed when the game was collected), which seats the learner held,
+the opponent and its checkpoint, the start, termination and result -- to
+browse in the dashboard's game viewer (``/games``).
 """
 
 from __future__ import annotations
@@ -129,6 +136,8 @@ class PGConfig:
     snapshot_every: int = 10
     pool_refresh_every: int = 5
     score_window: int = 2000
+    # 0: off. N: keep the action log of about one game in N for the game viewer.
+    save_game_every: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +169,7 @@ class _PGGame:
     values: dict = field(default_factory=dict)  # learner seat -> critic value at each of its decisions
     seen: dict = field(default_factory=dict)  # learner seat -> decisions so far
     reservoir: dict = field(default_factory=dict)  # learner seat -> [(decision number, row)]
+    start: Optional[str] = None  # the start position's label
 
 
 def choose_price(game, index: int, price_row: Optional[np.ndarray], rng: np.random.Generator, eps: float):
@@ -235,7 +245,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
         opponent = "pool" if settings["pool_ready"] and py_rng.random() >= settings["sl_opponent_fraction"] else "sl"
         learner = set(py_rng.sample(range(NUM_PLAYERS), settings["learner_seats"]))
         seat_models = ["learner" if seat in learner else opponent for seat in range(NUM_PLAYERS)]
-        g = _PGGame(game=game, uid=uuid.uuid4().hex, opponent=opponent, seat_models=seat_models)
+        g = _PGGame(game=game, uid=uuid.uuid4().hex, opponent=opponent, seat_models=seat_models, start=start.label)
         for seat in learner:
             g.values[seat], g.seen[seat], g.reservoir[seat] = [], 0, []
         games.append(g)
@@ -297,6 +307,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
                 decisions_total += 1
 
     records = []
+    save_every = settings.get("save_game_every", 0)
     for g in finished:
         win_share, fractions = outcome(g.game)
         rows = []
@@ -304,22 +315,70 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             advantages = seat_advantages(g.values[seat], float(win_share[seat]), settings["gae_lambda"])
             for t, (enc, legal, choice, logp, price_info) in kept:
                 rows.append((enc, legal, choice, logp, price_info, float(advantages[t]), fractions))
-        records.append(
-            {
-                "uid": g.uid,
-                "opponent": g.opponent,
-                "pool_label": settings.get("pool_label"),
-                "learner_seats": sorted(g.values),
-                "win_share": win_share.tolist(),
-                "decisions": g.decisions,
-                "learner_decisions": sum(len(v) for v in g.values.values()),
-                "seat_decisions": {seat: len(v) for seat, v in g.values.items()},
-                "termination": g.termination,
-                "first_values": {seat: v[0] for seat, v in g.values.items() if v},
-                "rows": rows,
+        record = {
+            "uid": g.uid,
+            "opponent": g.opponent,
+            "pool_label": settings.get("pool_label"),
+            "learner_seats": sorted(g.values),
+            "win_share": win_share.tolist(),
+            "decisions": g.decisions,
+            "learner_decisions": sum(len(v) for v in g.values.values()),
+            "seat_decisions": {seat: len(v) for seat, v in g.values.items()},
+            "termination": g.termination,
+            "first_values": {seat: v[0] for seat, v in g.values.items() if v},
+            "rows": rows,
+        }
+        if save_every and py_rng.random() * save_every < 1.0:
+            from rl18xx.agent.alphazero.self_play import _compute_net_worth
+
+            net_worth = _compute_net_worth(g.game)
+            record["saved_game"] = {
+                "start": g.start,
+                "net_worth": [float(net_worth[pid]) for pid in sorted(net_worth)],
+                "worth_share": fractions.tolist(),
+                "raw_actions": list(g.game.raw_actions),
             }
-        )
+        records.append(record)
     return {"games": records, "decisions": decisions_total, "seconds": time.time() - start_time}
+
+
+def save_game(run_dir: Path, record: dict, update: int, learner_checkpoint: str, opponent_checkpoint: str, cfg) -> str:
+    """Keep a ``save_game_every`` game's action log (``record["saved_game"]``) as
+    ``<run_dir>/games/u<update>_<id>.json`` with a line in ``<run_dir>/games.jsonl``;
+    returns the file's name."""
+    from rl18xx.agent.alphazero.game_records import append_index, make_game_record, save_game_record
+
+    saved = record["saved_game"]
+    learner = set(int(seat) for seat in record["learner_seats"])
+    name = f"u{update}_{record['uid'][:8]}"
+    opponent = "pool snapshot" if record["opponent"] == "pool" else "fixed opponent"
+    entry = {
+        "name": name,
+        "kind": "policy_gradient",
+        "run": run_dir.name,
+        "update": update,
+        "learner_checkpoint": learner_checkpoint,
+        "learner_seats": sorted(learner),
+        "opponent": record["opponent"],
+        "opponent_checkpoint": opponent_checkpoint,
+        "sides": ["A" if seat in learner else "B" for seat in range(NUM_PLAYERS)],
+        "seat_labels": [
+            f"learner (update {update})" if seat in learner else f"{opponent} {opponent_checkpoint}"
+            for seat in range(NUM_PLAYERS)
+        ],
+        "learner_temperature": cfg.learner_temperature,
+        "opponent_temperature": cfg.opponent_temperature,
+        "start": saved["start"],
+        "termination": record["termination"],
+        "decisions": record["decisions"],
+        "win_share": record["win_share"],
+        "net_worth": saved["net_worth"],
+        "worth_share": saved["worth_share"],
+    }
+    meta = {**entry, "description": f"policy-gradient {run_dir.name} update {update}: learner vs {opponent}"}
+    entry["game_file"] = save_game_record(run_dir, name, make_game_record(saved["raw_actions"], NUM_PLAYERS, meta=meta))
+    append_index(run_dir, entry)
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -531,8 +590,8 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
     if resume:
         run_dir = Path(resume)
         state = json.loads((run_dir / "state.json").read_text())
-        # The run keeps its own settings; only its length can change.
-        cfg = PGConfig(**{**state["config"], "max_updates": cfg.max_updates})
+        # The run keeps its own settings; only its length and game saving can change.
+        cfg = PGConfig(**{**state["config"], "max_updates": cfg.max_updates, "save_game_every": cfg.save_game_every})
         update = int(state["snapshot_update"])
         pool = list(state["pool"])
         kl_coef = float(state["kl_coef"])
@@ -611,6 +670,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
             "start_positions": cfg.start_positions,
             "random_start_fraction": cfg.random_start_fraction,
             "gae_lambda": cfg.gae_lambda,
+            "save_game_every": cfg.save_game_every,
         }
 
     buffer, gen, total_games = [], Counter(), 0
@@ -637,6 +697,12 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                         for seat, value in record["first_values"].items():
                             critic_first_values.append((value, record["win_share"][int(seat)]))
                         buffer.extend(record["rows"])
+                        if record.get("saved_game"):
+                            opponent_checkpoint = servers["sl"] if record["opponent"] == "sl" else record["pool_label"]
+                            try:
+                                save_game(run_dir, record, update, str(current_learner), str(opponent_checkpoint), cfg)
+                            except OSError as e:
+                                LOGGER.warning(f"Could not save game {record['uid']}: {e}")
                     futures.add(executor.submit(play_pg_games, cfg.games_per_task, settings()))
                 if len(buffer) < cfg.rows_per_update:
                     continue

@@ -14,6 +14,12 @@ tell learning from sharpening.
 
     uv run python scripts/eval_policy_only.py --match model_checkpoints_pg/<run>/learner/20.pth 10 \\
         --match 10@0.5 10 --games 1200
+
+``--save-games N`` (with ``--out``) also keeps the action logs of each match's
+first N games (game indices 0..N-1: every seat arrangement of the first N/6
+starts) as ``<out>/games/m<match>_<idx>.json`` (``game_records``), each named
+by its ``games.jsonl`` record (``game_file``), to browse in the dashboard's
+game viewer (``/games``) or with ``main.py replay``. Off by default.
 """
 
 import argparse
@@ -70,7 +76,7 @@ def play_games(game_indices: list, settings: dict) -> list:
         games.append(
             SimpleNamespace(
                 game=game, uid=str(idx), idx=idx, seats=ARRANGEMENTS[idx % len(ARRANGEMENTS)],
-                decisions=0, price_row=None, termination=None,
+                decisions=0, price_row=None, termination=None, start=start.label,
             )
         )
 
@@ -117,16 +123,23 @@ def play_games(game_indices: list, settings: dict) -> list:
     records = []
     for g in finished:
         win_share, fractions = pg.outcome(g.game)
-        records.append(
-            {
-                "idx": g.idx,
-                "seats": list(g.seats),
-                "win_share": win_share.tolist(),
-                "worth_share": fractions.tolist(),
-                "decisions": g.decisions,
-                "termination": g.termination,
-            }
-        )
+        record = {
+            "idx": g.idx,
+            "seats": list(g.seats),
+            "win_share": win_share.tolist(),
+            "worth_share": fractions.tolist(),
+            "decisions": g.decisions,
+            "termination": g.termination,
+        }
+        if g.idx < settings.get("save_games", 0):
+            # --save-games: the action log, and what the game viewer shows with it.
+            from rl18xx.agent.alphazero.self_play import _compute_net_worth
+
+            net_worth = _compute_net_worth(g.game)
+            record["start"] = g.start
+            record["net_worth"] = [float(net_worth[pid]) for pid in sorted(net_worth)]
+            record["raw_actions"] = list(g.game.raw_actions)
+        records.append(record)
     return records
 
 
@@ -174,6 +187,7 @@ def run_match(a_spec: str, b_spec: str, args) -> dict:
         "random_start_fraction": args.random_start_fraction,
         "max_decisions": args.max_decisions,
         "price_eps": args.price_eps,
+        "save_games": getattr(args, "save_games", 0),
     }
     num_games = math.ceil(args.games / len(ARRANGEMENTS)) * len(ARRANGEMENTS)
     chunks = [list(range(i, min(i + args.games_per_task, num_games))) for i in range(0, num_games, args.games_per_task)]
@@ -194,6 +208,29 @@ def run_match(a_spec: str, b_spec: str, args) -> dict:
     return summary, records
 
 
+def save_game_logs(out: Path, match_index: int, a: str, b: str, records: list) -> None:
+    """Write the records' action logs (``raw_actions``, present for ``--save-games``
+    games) to ``<out>/games/m<match>_<idx>.json`` and name each file in its record."""
+    from rl18xx.agent.alphazero.game_records import make_game_record, save_game_record
+
+    labels = {"A": a, "B": b}
+    for r in sorted(records, key=lambda r: r["idx"]):
+        actions = r.pop("raw_actions", None)
+        if actions is None:
+            continue
+        name = f"m{match_index}_{r['idx']}"
+        r["seat_labels"] = [labels[side] for side in r["seats"]]
+        meta = {
+            "name": name,
+            "kind": "policy_only",
+            "match": f"{a} vs {b}",
+            "description": f"eval_policy_only {a} vs {b}, game {r['idx']}",
+            "sides": list(r["seats"]),
+            **{k: v for k, v in r.items() if k != "seats"},
+        }
+        r["game_file"] = save_game_record(out, name, make_game_record(actions, NUM_PLAYERS, meta=meta))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--match", nargs=2, action="append", metavar=("A", "B"), required=True)
@@ -206,16 +243,24 @@ def main():
     parser.add_argument("--random-start-fraction", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=str, default=None, help="Directory for summary.json and games.jsonl")
+    parser.add_argument(
+        "--save-games", type=int, default=0,
+        help="Keep the action logs of each match's first N games in <out>/games/ for the game viewer (needs --out)",
+    )
     args = parser.parse_args()
+    if args.save_games and not args.out:
+        parser.error("--save-games needs --out")
 
     import multiprocessing
 
     multiprocessing.set_start_method("spawn", force=True)
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     summaries, all_records = [], []
-    for a, b in args.match:
+    for match_index, (a, b) in enumerate(args.match):
         summary, records = run_match(a, b, args)
         summaries.append(summary)
+        if args.save_games:
+            save_game_logs(Path(args.out), match_index, a, b, records)
         all_records.extend({"match": f"{a} vs {b}", **r} for r in records)
         print(
             f"{a} vs {b}: {summary['A_score']:.3f} ± {summary['A_score_se']:.3f} over {summary['games']} games "

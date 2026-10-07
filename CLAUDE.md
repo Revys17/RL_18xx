@@ -45,8 +45,10 @@ uv run python scripts/eval_value_head.py # Value-head quality by game stage (cur
 uv run python main.py policy-selfplay --output training_examples/value_v2 --games 400000  # Value-net data
 uv run python main.py policy-gradient --policy <session>/<num> --value <session>/<num>  # RL-policy stage
 uv run python main.py arena              # Run agent vs agent matches
-uv run python main.py dashboard          # Start training dashboard (port 5001)
-uv run python main.py replay <log_file>  # Replay a game in the browser
+uv run python main.py dashboard          # Start training dashboard (port 5001); http://localhost:5001/games browses saved games
+uv run python main.py replay <game_file> # Check a saved game in the Python engine, print its viewer URL (--log: the game log)
+uv run python scripts/eval_policy_only.py --match A B --out logs/eval/<name> --save-games 60  # + keep 60 games/match to view
+uv run python main.py policy-gradient ... --save-game-every 1000  # + keep ~1 in 1000 training games to view
 
 # Services (via startup.sh)
 ./startup.sh                     # Starts TensorBoard (:6006) + Dashboard (:5001)
@@ -91,13 +93,14 @@ A PyO3 crate that re-implements the engine for speed (it recently reached full 1
 - **Pretraining** (`pretraining.py`): Supervised pre-training from human game data (JSON exports from 18xx.games; cleaning uses the Rust engine). Two-stage by default: a joint run with a small value-loss weight, early-stopped on validation loss, then the value heads are re-fit on the frozen best checkpoint (`_refit_value_heads`) because on ~2,900 games the value head memorizes after under an epoch while the policy keeps improving. Logs value winner accuracy vs. the equal-odds baseline each epoch. `main.py convert` keeps forced positions (exactly one legal action index) by default — dropping them (`--skip-forced`, as self-play does) made pretraining clearly worse (lmdb_v5/lmdb_v6 skip them; lmdb_v6k keeps them). Each human action must match exactly one policy index (`_matching_choices`: token cities resolved through the board, train purchases by the seller, CS/DH abilities as the private); ambiguous or unmatched actions are skipped and counted, never guessed. lmdb_v5 and earlier took the first match, so ~2% of their labels (most `place_token`, some `buy_train`) were wrong. The train/validation split is a hash of the game id (`in_validation_split`), stable across conversions from lmdb_v6 on.
 - **AlphaGo-style stages** (the current direction): the supervised policy, then -- with no search -- (a) `main.py policy-selfplay` (`policy_selfplay.py`) plays fast policy-only games (~60k games/hour on 48 workers) and keeps a few positions per game as value-network data (value nets live in `model_checkpoints_value/`, trained with `main.py pretrain --model-dir model_checkpoints_value --policy-loss-weight 0 ...`); (b) `main.py policy-gradient` (`policy_gradient.py`) refines the policy by PPO-clipped policy gradient against the supervised policy and a pool of its own snapshots, with a KL penalty to the supervised policy and a separate critic (a value net, trained on as it goes); checkpoints in `model_checkpoints_pg/<run>/`, progress = `score_vs_sl` in `history.jsonl` / TensorBoard `PG/*`. `composite_model.PolicyValueComposite` searches or serves with one network's policy and another's value (`eval_head_to_head.py` player `<policy>+<value>`); `run_values_encoded` / `forward(value_only=True)` skip the policy head (~2/3 of a forward). A much better value net (2026-10-06: v2, 400k policy games) did not make 64-readout search stronger, which is why the policy-gradient stage comes next.
 - **Inference server** (`inference_server.py`), **Metrics** (`metrics.py`).
+- **Saved games / game viewer** (`game_records.py`, `rl18xx/agent/dashboard/game_viewer.py`): a *collection* is a directory with `games/<name>.json` (one game's action log) and a `games.jsonl` index. `eval_head_to_head.py` saves every game (bare action lists; seats from `settings.json`); `eval_policy_only.py --save-games N` (first N games per match) and `policy-gradient --save-game-every N` (~1 in N, into `model_checkpoints_pg/<run>/games/`) write `make_game_record` files: an 18xx.games-style export with the seats' labels, update, opponent, start and result under `"rl18xx"`. All off by default. The dashboard's `/games` page lists collections under `logs/eval`, `model_checkpoints_pg` and `logs/games` and steps through a game (map, players, corporations, market, log; arrow keys) by replaying it in the Python engine (~0.2 s per full game, cached per worker). `main.py replay <file>` copies files from elsewhere (e.g. a self-play log's `Game actions:` line) into `logs/games/replays/`.
 
 ### Client (`rl18xx/client/`)
 
-Integration with the online 18xx.games platform:
+Integration with a self-hosted 18xx.games server (the Ruby backend, `http://localhost:9292` with accounts a/b/c/z -- never the public site):
 - `ruby_backend_api_client.py`: API client for the Ruby backend.
-- `game_sync.py`: Synchronizes local game state with an online game.
-- `replay_game_from_log_file.py`: Replays games from JSON action logs in the browser.
+- `game_sync.py`: Mirrors a local game onto that server (`arena --browser`, `main.py replay --local-server`).
+- `replay_game_from_log_file.py`: `main.py replay`: replays a saved game locally and points at the dashboard's game viewer (no server needed).
 
 ### Agent Interface (`rl18xx/agent/agent.py`)
 

@@ -6,7 +6,7 @@ Usage:
     python main.py convert             Encode cleaned game JSONs to LMDB for pretraining
     python main.py arena               Run an arena match between agents
     python main.py dashboard           Start the training dashboard web server
-    python main.py replay <log_file>   Replay a game from a log file in the browser
+    python main.py replay <game_file>  Check a saved game in the Python engine and open it in the game viewer
 """
 import argparse
 import logging
@@ -183,6 +183,7 @@ def cmd_policy_gradient(args):
         max_decisions=args.max_decisions,
         start_positions=args.start_positions,
         random_start_fraction=args.random_start_fraction,
+        save_game_every=args.save_game_every,
     )
     print(run(config, resume=args.resume))
 
@@ -283,9 +284,12 @@ def cmd_dashboard(args):
 
 
 def cmd_replay(args):
-    from rl18xx.client.replay_game_from_log_file import replay_game_from_log_file
+    from rl18xx.client.replay_game_from_log_file import replay_game_from_log_file, replay_on_local_server
 
-    replay_game_from_log_file(args.log_file)
+    if args.local_server:
+        replay_on_local_server(args.log_file, args.local_server)
+    else:
+        replay_game_from_log_file(args.log_file, print_log=args.log)
 
 
 def build_parser():
@@ -463,6 +467,10 @@ def build_parser():
     p.add_argument("--max-decisions", type=int, default=1000)
     p.add_argument("--start-positions", type=str, default="human_games/start_positions_1830_4p.jsonl")
     p.add_argument("--random-start-fraction", type=float, default=0.2)
+    p.add_argument(
+        "--save-game-every", type=int, default=0,
+        help="Keep the action log of about one game in N in <run>/games/ for the dashboard's game viewer (0 = off)",
+    )
 
     # convert (encode games to LMDB for pretraining)
     p = sub.add_parser("convert", help="Convert cleaned game JSONs to LMDB training data")
@@ -499,7 +507,10 @@ def build_parser():
     )
     p.add_argument("--model-dir", type=str, default=None, help="Model checkpoint directory")
     p.add_argument("--readouts", type=int, default=200, help="MCTS readouts per move (default: 200)")
-    p.add_argument("--browser", action="store_true", help="Show game in browser via 18xx.games")
+    p.add_argument(
+        "--browser", action="store_true",
+        help="Mirror the game onto a self-hosted 18xx server at localhost:9292 (GameSync), not the public site",
+    )
 
     # dashboard
     p = sub.add_parser("dashboard", help="Start the training dashboard")
@@ -508,8 +519,16 @@ def build_parser():
     p.add_argument("--debug", action="store_true", help="Enable Flask debug mode")
 
     # replay
-    p = sub.add_parser("replay", help="Replay a game from a log file in the browser")
-    p.add_argument("log_file", type=str, help="Path to the game log file")
+    p = sub.add_parser("replay", help="Check a saved game in the Python engine and open it in the game viewer")
+    p.add_argument(
+        "log_file", type=str,
+        help="A saved game (<collection>/games/<name>.json), an 18xx.games-style export, or a self-play log",
+    )
+    p.add_argument("--log", action="store_true", help="Also print the game log")
+    p.add_argument(
+        "--local-server", type=str, default=None,
+        help="Instead, re-create the game on this self-hosted 18xx server (e.g. http://localhost:9292)",
+    )
 
     return parser
 

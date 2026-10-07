@@ -5,6 +5,7 @@ import math
 import os
 import subprocess
 from dataclasses import fields
+from rl18xx.agent.alphazero import game_records
 from rl18xx.agent.alphazero.config import TrainingConfig
 from rl18xx.shared.atomic_io import atomic_write_json
 import time
@@ -67,6 +68,10 @@ MODEL_CHECKPOINT_DIR = REPO_ROOT / "model_checkpoints"
 # sidecar of per-epoch loss + accuracy arrays that the Pretraining tab plots).
 RUNS_ROOT = REPO_ROOT / "runs" / "alphazero_runs"
 TENSORBOARD_PORT = 6006
+# Saved-game collections (game_records): directories under these, relative to
+# REPO_ROOT, with a games/ dir. eval_head_to_head.py / eval_policy_only.py
+# write under logs/eval, the policy-gradient stage under model_checkpoints_pg.
+GAME_ROOTS = game_records.DEFAULT_ROOTS
 
 # Per-iteration scalars the loop logs only to TensorBoard, merged into the
 # metrics-history records under these keys. TensorBoard steps are 0-based loop
@@ -748,6 +753,118 @@ def api_system_metrics():
         return jsonify(response)
     except Exception as e:
         return jsonify({"error": f"Failed to get system metrics: {e}"}), 500
+
+
+# ----------------------------------------------------------------- saved games
+# The game viewer: /games lists the saved-game collections (game_records) and
+# their games; /games/view steps through one, replayed in the Python engine
+# (game_viewer).
+
+
+def _requested_game():
+    """``((collection dir, game file, listing entry), None)`` for ``?collection=&game=``,
+    or ``(None, error response)``."""
+    collection_id = request.args.get("collection", "")
+    directory = game_records.resolve_collection(REPO_ROOT, collection_id, GAME_ROOTS)
+    if directory is None:
+        return None, (jsonify({"error": f"Unknown game collection {collection_id!r}"}), 404)
+    name = request.args.get("game", "")
+    path = game_records.resolve_game_file(directory, name)
+    if path is None:
+        return None, (jsonify({"error": f"No game {name!r} in {collection_id}"}), 404)
+    return (directory, path, game_records.game_context(directory, name)), None
+
+
+def _game_summary(path, entry):
+    from rl18xx.agent.dashboard import game_viewer
+
+    return game_viewer.game_summary(path, entry.get("auction_unlock"))
+
+
+@app.route("/games")
+def games_page():
+    return render_template("games.html")
+
+
+@app.route("/games/view")
+def game_view_page():
+    return render_template(
+        "game_view.html", collection=request.args.get("collection", ""), game=request.args.get("game", "")
+    )
+
+
+@app.route("/api/game_collections")
+def api_game_collections():
+    """Saved-game collections under GAME_ROOTS, newest first."""
+    return jsonify(game_records.find_collections(REPO_ROOT, GAME_ROOTS))
+
+
+@app.route("/api/game_collection")
+def api_game_collection():
+    """``?collection=<id>``: the collection's saved games (its listing entries)."""
+    collection_id = request.args.get("collection", "")
+    directory = game_records.resolve_collection(REPO_ROOT, collection_id, GAME_ROOTS)
+    if directory is None:
+        return jsonify({"error": f"Unknown game collection {collection_id!r}"}), 404
+    kind, title = game_records.describe_collection(directory)
+    return jsonify({"id": collection_id, "kind": kind, "title": title, "games": game_records.list_games(directory)})
+
+
+@app.route("/api/game")
+def api_game():
+    """``?collection=&game=``: the whole game (game_viewer.game_summary) plus its listing ``entry``."""
+    found, error = _requested_game()
+    if error:
+        return error
+    _, path, entry = found
+    try:
+        summary = _game_summary(path, entry)
+    except (OSError, ValueError) as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({**summary, "entry": entry})
+
+
+@app.route("/api/game_state")
+def api_game_state():
+    """``?collection=&game=&step=N``: the position after N actions (game_viewer.state_at).
+    ``auction_unlock`` (0/1) should be the summary's, which it defaults to."""
+    found, error = _requested_game()
+    if error:
+        return error
+    _, path, entry = found
+    from rl18xx.agent.dashboard import game_viewer
+
+    unlock = request.args.get("auction_unlock")
+    try:
+        if unlock is None:
+            unlock = _game_summary(path, entry)["auction_unlock"]
+        else:
+            unlock = unlock.lower() in ("1", "true", "yes")
+        return jsonify(game_viewer.state_at(path, request.args.get("step", default=0, type=int), unlock))
+    except (OSError, ValueError) as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/game_export")
+def api_game_export():
+    """``?collection=&game=``: the game as an 18xx.games-style JSON file
+    (game_records.make_game_record, metadata included) to download."""
+    found, error = _requested_game()
+    if error:
+        return error
+    _, path, entry = found
+    try:
+        loaded = game_records.load_game_file(path)
+        unlock = _game_summary(path, entry)["auction_unlock"]
+    except (OSError, ValueError) as e:
+        return jsonify({"error": str(e)}), 500
+    collection_id = request.args.get("collection", "")
+    name = f"{collection_id.replace('/', '_')}_{path.stem}"
+    meta = {**{k: v for k, v in entry.items() if k != "game_file"}, **loaded.meta, "name": name}
+    record = game_records.make_game_record(loaded.actions, loaded.num_players, auction_unlock=unlock, meta=meta)
+    response = jsonify(record)
+    response.headers["Content-Disposition"] = f'attachment; filename="{name}.json"'
+    return response
 
 
 @app.route("/", methods=["GET", "POST"])

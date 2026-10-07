@@ -38,8 +38,11 @@ test_accounts = [
 ]
 
 class GameSync:
-    def __init__(self, game: Optional[BaseGame] = None):
-        self.api_client = ApiClient()
+    """Mirror a game onto a self-hosted 18xx.games server (default
+    http://localhost:9292) whose accounts a/b/c/z play the four seats."""
+
+    def __init__(self, game: Optional[BaseGame] = None, base_url: str = "http://localhost:9292"):
+        self.api_client = ApiClient(base_url)
         self.local_game = self.get_fresh_game_state()
         self.action_mapper = ActionMapper()
         self.setup_new_online_game()

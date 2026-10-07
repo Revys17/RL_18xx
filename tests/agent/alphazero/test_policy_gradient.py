@@ -96,6 +96,19 @@ def test_games_use_the_pool_once_it_has_snapshots(monkeypatch, start_file):
     assert clients["pool"].rotations and not clients["sl"].rotations
 
 
+def test_games_keep_their_action_logs_only_with_save_game_every(monkeypatch, start_file):
+    from rl18xx.agent.alphazero.start_positions import RANDOM_START
+
+    monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Client(), "sl": _Client(), "pool": _Client()})
+    plain = pg.play_pg_games(2, _settings(start_file, max_decisions=8))
+    assert not any("saved_game" in g for g in plain["games"])  # off by default
+    kept = pg.play_pg_games(2, _settings(start_file, max_decisions=8, save_game_every=1))
+    for game in kept["games"]:
+        saved = game["saved_game"]
+        assert saved["start"] == RANDOM_START and len(saved["net_worth"]) == 4
+        assert saved["raw_actions"][0]["type"] in ("bid", "pass")  # from the start's auction on
+
+
 def test_a_tempered_learner_records_the_probability_it_sampled_with(monkeypatch, start_file):
     """At learner temperature 0.5 a move's recorded probability is its prior
     squared, renormalized over the legal moves."""

@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Saved Games</title>
+    <style>
+        :root {
+            --bg: #0f1117; --bg-card: #1a1d27; --bg-card-hover: #222633;
+            --border: #2a2e3a; --text: #e0e0e0; --text-muted: #8b8fa3; --text-dim: #5c6078;
+            --accent: #6c8cff; --accent-dim: #3d5199;
+            --green: #4ade80; --yellow: #fbbf24; --red: #f87171; --orange: #fb923c;
+            --side-a: #6c8cff; --side-b: #fb923c;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh; }
+        .container { max-width: 1600px; margin: 0 auto; padding: 16px; }
+        .header { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; margin-bottom: 16px; border-bottom: 1px solid var(--border); gap: 12px; flex-wrap: wrap; }
+        h1 { font-size: 1.25rem; font-weight: 600; }
+        .header-link { color: var(--accent); text-decoration: none; font-size: 0.85rem; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--accent-dim); }
+        .header-link:hover { background: var(--accent-dim); }
+        .layout { display: grid; grid-template-columns: 360px 1fr; gap: 16px; align-items: start; }
+        @media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+        .panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+        .panel h2 { font-size: 0.95rem; font-weight: 600; margin-bottom: 10px; }
+        input[type=text], select { width: 100%; padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.85rem; }
+        .collections { max-height: calc(100vh - 190px); overflow-y: auto; margin-top: 10px; }
+        .coll { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; cursor: pointer; }
+        .coll:hover { background: var(--bg-card-hover); }
+        .coll.active { border-color: var(--accent); background: var(--bg-card-hover); }
+        .coll-id { font-size: 0.85rem; font-weight: 600; word-break: break-all; }
+        .coll-title { font-size: 0.75rem; color: var(--text-muted); word-break: break-word; }
+        .coll-meta { font-size: 0.7rem; color: var(--text-dim); display: flex; gap: 10px; margin-top: 2px; }
+        .kind { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.5px; padding: 1px 6px; border-radius: 4px; background: var(--bg); border: 1px solid var(--border); color: var(--text-muted); }
+        .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+        .toolbar input[type=text] { max-width: 320px; }
+        .toolbar select { width: auto; }
+        .muted { color: var(--text-muted); font-size: 0.8rem; }
+        .legend { display: flex; flex-direction: column; gap: 2px; font-size: 0.8rem; margin-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+        th { text-align: left; color: var(--text-muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); cursor: pointer; white-space: nowrap; user-select: none; }
+        th.sorted::after { content: ' \25BE'; } th.sorted.asc::after { content: ' \25B4'; }
+        td { padding: 5px 8px; border-bottom: 1px solid rgba(42,46,58,0.6); vertical-align: top; font-variant-numeric: tabular-nums; }
+        tr.game-row { cursor: pointer; }
+        tr.game-row:hover td { background: var(--bg-card-hover); }
+        .seat { display: inline-flex; align-items: center; gap: 4px; margin: 1px 6px 1px 0; white-space: nowrap; }
+        .side { display: inline-block; min-width: 16px; text-align: center; font-size: 0.65rem; font-weight: 700; border-radius: 3px; padding: 0 3px; color: #0f1117; }
+        .side.A { background: var(--side-a); } .side.B { background: var(--side-b); } .side.X { background: var(--text-dim); }
+        .winner { color: var(--yellow); font-weight: 700; }
+        .table-wrap { max-height: calc(100vh - 260px); overflow-y: auto; }
+        .error { color: var(--red); font-size: 0.85rem; }
+        a.plain { color: inherit; text-decoration: none; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>Saved Games</h1>
+        <div style="display:flex;gap:10px;align-items:center;">
+            <span class="muted">Games kept by eval_head_to_head.py, eval_policy_only.py --save-games and policy-gradient --save-game-every</span>
+            <a class="header-link" href="/">Training dashboard</a>
+        </div>
+    </div>
+    <div class="layout">
+        <div class="panel">
+            <h2>Collections</h2>
+            <input type="text" id="coll-filter" placeholder="Filter collections..." oninput="renderCollections()">
+            <div class="collections" id="collections"><div class="muted">Loading...</div></div>
+        </div>
+        <div class="panel">
+            <h2 id="games-title">Select a collection</h2>
+            <div class="legend" id="legend"></div>
+            <div class="toolbar" id="toolbar" style="display:none;">
+                <input type="text" id="game-filter" placeholder="Filter (label, start, termination...)" oninput="renderGames()">
+                <select id="winner-filter" onchange="renderGames()">
+                    <option value="">Any winner</option>
+                    <option value="A">Side A won</option>
+                    <option value="B">Side B won</option>
+                </select>
+                <span class="muted" id="games-count"></span>
+            </div>
+            <div class="table-wrap"><table id="games-table"></table></div>
+        </div>
+    </div>
+</div>
+<script>
+let collections = [], current = null, games = [], sortKey = null, sortAsc = true;
+
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function shortLabel(s) {
+    if (s == null) return '';
+    s = String(s);
+    return s.split(/(\s+vs\s+|\+)/).map(part => {
+        if (/^\s+vs\s+$/.test(part) || part === '+') return part;
+        let p = part.replace(/model_checkpoints(_pg|_value)?\//g, '').replace(/AlphaZeroTransformer\//g, '').replace(/\.pth/g, '');
+        if (p.startsWith('/')) p = p.split('/').slice(-2).join('/');
+        return p;
+    }).join('');
+}
+function fmtTime(unix) { if (!unix) return ''; const d = new Date(unix * 1000); return d.toLocaleString(); }
+function sideOf(g, seat) { return (g.sides && g.sides[seat]) || 'X'; }
+
+async function loadCollections() {
+    try {
+        const r = await fetch('/api/game_collections');
+        collections = await r.json();
+        if (!Array.isArray(collections)) throw new Error(collections.error || 'bad response');
+    } catch (e) {
+        document.getElementById('collections').innerHTML = `<div class="error">Failed to load: ${esc(e.message)}</div>`;
+        return;
+    }
+    renderCollections();
+    const wanted = new URLSearchParams(location.search).get('collection');
+    if (wanted) selectCollection(wanted, false);
+    else if (collections.length) selectCollection(collections[0].id, false);
+}
+
+document.getElementById('collections').addEventListener('click', ev => {
+    const item = ev.target.closest('[data-id]');
+    if (item) selectCollection(item.dataset.id);
+});
+
+function renderCollections() {
+    const q = document.getElementById('coll-filter').value.toLowerCase();
+    const el = document.getElementById('collections');
+    const shown = collections.filter(c => !q || (c.id + ' ' + c.title).toLowerCase().includes(q));
+    if (!shown.length) { el.innerHTML = '<div class="muted">No saved games found under logs/eval, model_checkpoints_pg or logs/games.</div>'; return; }
+    el.innerHTML = shown.map(c => `
+        <div class="coll ${current && current.id === c.id ? 'active' : ''}" data-id="${esc(c.id)}">
+            <div class="coll-id">${esc(c.id)}</div>
+            <div class="coll-title" title="${esc(c.title)}">${esc(shortLabel(c.title))}</div>
+            <div class="coll-meta"><span class="kind">${esc(c.kind.replace(/_/g, ' '))}</span><span>${c.games} games</span><span>${esc(fmtTime(c.updated_unix))}</span></div>
+        </div>`).join('');
+}
+
+async function selectCollection(id, push = true) {
+    if (push) history.pushState(null, '', '/games?collection=' + encodeURIComponent(id));
+    current = collections.find(c => c.id === id) || {id};
+    renderCollections();
+    document.getElementById('games-title').textContent = id;
+    document.getElementById('games-table').innerHTML = '<tr><td class="muted">Loading...</td></tr>';
+    try {
+        const r = await fetch('/api/game_collection?collection=' + encodeURIComponent(id));
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || r.statusText);
+        current = {...current, ...data};
+        games = data.games;
+    } catch (e) {
+        document.getElementById('games-table').innerHTML = `<tr><td class="error">${esc(e.message)}</td></tr>`;
+        return;
+    }
+    document.getElementById('games-title').textContent = `${id} — ${current.title || ''}`;
+    document.getElementById('toolbar').style.display = 'flex';
+    renderLegend();
+    renderGames();
+}
+
+function renderLegend() {
+    // One line per side label seen (per match for multi-match collections).
+    const seen = new Map();
+    for (const g of games) {
+        (g.seat_labels || []).forEach((label, seat) => {
+            const side = sideOf(g, seat);
+            const key = side + '|' + label;
+            if (!seen.has(key)) seen.set(key, {side, label});
+        });
+    }
+    const items = [...seen.values()].slice(0, 12);
+    document.getElementById('legend').innerHTML = items.map(i =>
+        `<div><span class="side ${esc(i.side)}">${esc(i.side === 'X' ? '?' : i.side)}</span> <span title="${esc(i.label)}">${esc(shortLabel(i.label))}</span></div>`).join('');
+}
+
+const COLUMNS = [
+    {key: 'name', label: 'Game', value: g => isNaN(+g.name) ? g.name : +g.name},
+    {key: 'seats', label: 'Seats (winner highlighted) and net worth', value: g => (g.winners || []).join(',')},
+    {key: 'termination', label: 'End', value: g => g.termination || ''},
+    {key: 'decisions', label: 'Decisions', value: g => g.decisions ?? -1},
+    {key: 'engine_moves', label: 'Actions', value: g => g.engine_moves ?? -1},
+    {key: 'start', label: 'Start', value: g => g.start || ''},
+    {key: 'update', label: 'Update', value: g => g.update ?? -1, optional: true},
+    {key: 'opponent', label: 'Opponent', value: g => g.opponent || '', optional: true},
+    {key: 'match', label: 'Match', value: g => g.match || '', optional: true},
+];
+
+function sortBy(key) {
+    if (sortKey === key) sortAsc = !sortAsc; else { sortKey = key; sortAsc = true; }
+    renderGames();
+}
+
+function renderGames() {
+    const q = document.getElementById('game-filter').value.toLowerCase();
+    const wf = document.getElementById('winner-filter').value;
+    let rows = games.filter(g => {
+        if (wf && !(g.winners || []).some(s => sideOf(g, s) === wf)) return false;
+        if (!q) return true;
+        return JSON.stringify([g.name, g.seat_labels, g.start, g.termination, g.match, g.opponent, g.update]).toLowerCase().includes(q);
+    });
+    const matches = new Set(games.map(g => g.match).filter(Boolean));
+    const cols = COLUMNS.filter(c => !c.optional || (c.key === 'match' ? matches.size > 1 : games.some(g => g[c.key] != null)));
+    if (sortKey) {
+        const col = COLUMNS.find(c => c.key === sortKey);
+        rows = rows.slice().sort((a, b) => { const x = col.value(a), y = col.value(b); return (x < y ? -1 : x > y ? 1 : 0) * (sortAsc ? 1 : -1); });
+    }
+    document.getElementById('games-count').textContent = `${rows.length} of ${games.length} games`;
+    const head = '<tr>' + cols.map(c => `<th class="${sortKey === c.key ? 'sorted' + (sortAsc ? ' asc' : '') : ''}" onclick="sortBy('${c.key}')">${c.label}</th>`).join('') + '</tr>';
+    const body = rows.map(g => {
+        const href = `/games/view?collection=${encodeURIComponent(current.id)}&game=${encodeURIComponent(g.name)}`;
+        const cells = cols.map(c => {
+            if (c.key === 'name') return `<td><a class="plain" href="${href}">${esc(g.name)}</a></td>`;
+            if (c.key === 'seats') {
+                const n = Math.max((g.seat_labels || []).length, (g.net_worth || g.win_share || []).length);
+                const parts = [];
+                for (let s = 0; s < n; s++) {
+                    const win = (g.winners || []).includes(s);
+                    const worth = g.net_worth ? ` $${Math.round(g.net_worth[s])}` : (g.win_share ? '' : '');
+                    const label = g.seat_labels ? shortLabel(g.seat_labels[s]) : `Player ${s + 1}`;
+                    parts.push(`<span class="seat ${win ? 'winner' : ''}" title="Player ${s + 1}: ${esc(g.seat_labels ? g.seat_labels[s] : '')}"><span class="side ${esc(sideOf(g, s))}">${s + 1}</span>${esc(label)}${worth}${win ? ' ★' : ''}</span>`);
+                }
+                return `<td>${parts.join('')}</td>`;
+            }
+            const v = g[c.key];
+            return `<td>${esc(c.key === 'match' || c.key === 'opponent' ? shortLabel(v) : (v ?? ''))}</td>`;
+        }).join('');
+        return `<tr class="game-row" data-href="${esc(href)}">${cells}</tr>`;
+    }).join('');
+    document.getElementById('games-table').innerHTML = head + body;
+}
+
+document.getElementById('games-table').addEventListener('click', ev => {
+    const row = ev.target.closest('tr[data-href]');
+    if (row && !ev.target.closest('a')) location.href = row.dataset.href;
+});
+window.addEventListener('popstate', () => {
+    const wanted = new URLSearchParams(location.search).get('collection');
+    if (wanted) selectCollection(wanted, false);
+});
+loadCollections();
+</script>
+</body>
+</html>

@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Viewer</title>
+    <style>
+        :root {
+            --bg: #0f1117; --bg-card: #1a1d27; --bg-card-hover: #222633;
+            --border: #2a2e3a; --text: #e0e0e0; --text-muted: #8b8fa3; --text-dim: #5c6078;
+            --accent: #6c8cff; --accent-dim: #3d5199;
+            --green: #4ade80; --yellow: #fbbf24; --red: #f87171; --orange: #fb923c;
+            --side-a: #6c8cff; --side-b: #fb923c;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.45; min-height: 100vh; }
+        .container { max-width: 1800px; margin: 0 auto; padding: 12px 16px; }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+        h1 { font-size: 1.1rem; font-weight: 600; word-break: break-all; }
+        .sub { font-size: 0.8rem; color: var(--text-muted); }
+        .header-link { color: var(--accent); text-decoration: none; font-size: 0.85rem; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--accent-dim); white-space: nowrap; }
+        .header-link:hover { background: var(--accent-dim); }
+        .seats { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+        .seat-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; font-size: 0.8rem; }
+        .seat-card.won { border-color: var(--yellow); }
+        .side { display: inline-block; min-width: 16px; text-align: center; font-size: 0.65rem; font-weight: 700; border-radius: 3px; padding: 0 3px; color: #0f1117; background: var(--text-dim); }
+        .side.A { background: var(--side-a); } .side.B { background: var(--side-b); }
+        .controls { position: sticky; top: 0; z-index: 5; background: var(--bg); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+        button, select { background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 4px 9px; font-size: 0.85rem; cursor: pointer; }
+        button:hover { border-color: var(--accent); }
+        button.on { border-color: var(--accent); background: var(--accent-dim); }
+        input[type=range] { flex: 1; min-width: 200px; accent-color: var(--accent); }
+        .stepinfo { font-size: 0.85rem; font-variant-numeric: tabular-nums; min-width: 300px; }
+        .grid { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 12px; align-items: start; }
+        @media (max-width: 1200px) { .grid { grid-template-columns: 1fr; } }
+        .panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; overflow-x: auto; }
+        .panel h2 { font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+        .map-wrap svg { width: 100%; height: auto; display: block; background: #f5f1e6; border-radius: 6px; }
+        .map-wrap.zoom { overflow: auto; max-height: 80vh; }
+        .map-wrap.zoom svg { width: 180%; }
+        table { border-collapse: collapse; font-size: 0.8rem; width: 100%; }
+        th { text-align: right; color: var(--text-muted); font-weight: 600; padding: 3px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+        td { text-align: right; padding: 3px 6px; border-bottom: 1px solid rgba(42,46,58,0.6); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        th:first-child, td:first-child { text-align: left; }
+        tr.active td { background: rgba(108,140,255,0.12); }
+        tr.dim td { color: var(--text-dim); }
+        .chip { display: inline-block; padding: 0 5px; border-radius: 3px; font-size: 0.72rem; font-weight: 700; border: 1px solid rgba(0,0,0,0.3); }
+        .pres { font-weight: 700; text-decoration: underline; }
+        .tag { font-size: 0.65rem; padding: 0 4px; border-radius: 3px; border: 1px solid var(--border); color: var(--text-muted); margin-left: 4px; }
+        .tag.pd { color: var(--yellow); border-color: var(--yellow); }
+        .tag.move { color: var(--green); border-color: var(--green); }
+        .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
+        .log { max-height: calc(100vh - 210px); overflow-y: auto; font-size: 0.78rem; font-family: 'SF Mono', Consolas, monospace; }
+        .log div { padding: 1px 4px; cursor: pointer; border-radius: 3px; }
+        .log div:hover { background: var(--bg-card-hover); }
+        .log .heading { color: var(--accent); font-weight: 700; margin-top: 4px; }
+        .log .current { background: rgba(251,191,36,0.15); }
+        .log .future { color: var(--text-dim); }
+        .log .stepno { color: var(--text-dim); display: inline-block; min-width: 34px; }
+        .action-box { font-size: 0.8rem; }
+        .action-box pre { font-size: 0.72rem; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 6px; margin-top: 6px; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; }
+        .market { border-collapse: separate; border-spacing: 2px; width: auto; }
+        .market td { text-align: center; padding: 1px 2px; min-width: 38px; font-size: 0.7rem; color: #222; border: none; vertical-align: top; border-radius: 3px; }
+        .market td.empty { background: transparent; }
+        .error { color: var(--red); font-size: 0.85rem; margin: 6px 0; }
+        .note { color: var(--text-muted); font-size: 0.78rem; }
+        kbd { font-size: 0.7rem; border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; color: var(--text-muted); }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <div>
+            <h1 id="title">Loading game...</h1>
+            <div class="sub" id="subtitle"></div>
+            <div class="seats" id="seats"></div>
+        </div>
+        <div style="display:flex;gap:8px;">
+            <a class="header-link" id="back-link" href="/games">All games</a>
+            <a class="header-link" id="export-link" href="#" title="18xx.games-style JSON of this game (BaseGame.load / a self-hosted 18xx server can import it)">Download JSON</a>
+        </div>
+    </div>
+    <div class="error" id="error" style="display:none;"></div>
+    <div class="controls">
+        <button onclick="go(0)" title="Start (Home)">&#x23EE;</button>
+        <button onclick="jumpRound(-1)" title="Previous round (PageUp / Shift+Left)">&#x23EA;</button>
+        <button onclick="go(step - 1)" title="Previous action (Left)">&#x25C0;</button>
+        <button id="play-btn" onclick="togglePlay()" title="Play / pause (Space)">&#x25B6; Play</button>
+        <button onclick="go(step + 1)" title="Next action (Right)">&#x25B6;</button>
+        <button onclick="jumpRound(1)" title="Next round (PageDown / Shift+Right)">&#x23E9;</button>
+        <button onclick="go(maxStep)" title="End (End)">&#x23ED;</button>
+        <select id="speed" title="Autoplay speed">
+            <option value="1000">1/s</option><option value="400" selected>2.5/s</option><option value="150">7/s</option><option value="40">25/s</option>
+        </select>
+        <select id="round-select" onchange="go(+this.value)" style="max-width:240px;"></select>
+        <input type="range" id="slider" min="0" max="0" value="0" oninput="go(+this.value, true)">
+        <span class="stepinfo" id="stepinfo"></span>
+    </div>
+    <div class="grid">
+        <div>
+            <div class="panel">
+                <h2><span id="round-title">Map</span>
+                    <span><button id="zoom-btn" onclick="toggleZoom()">Zoom</button>
+                    <button id="names-btn" class="on" onclick="toggleNames()">Names</button></span></h2>
+                <div class="map-wrap" id="map-wrap"><svg id="map" xmlns="http://www.w3.org/2000/svg"></svg></div>
+            </div>
+            <div class="panel"><h2>Players <span class="note" id="bank-info"></span></h2><table id="players"></table></div>
+            <div class="panel"><h2>Corporations <span class="note" id="op-order"></span></h2><table id="corps"></table></div>
+            <div class="two">
+                <div class="panel"><h2>Trains <span class="note" id="phase-info"></span></h2><div id="depot" style="font-size:0.8rem;"></div></div>
+                <div class="panel"><h2>Privates</h2><table id="privates"></table></div>
+            </div>
+            <div class="panel"><h2>Stock market</h2><table class="market" id="market"></table></div>
+        </div>
+        <div>
+            <div class="panel action-box"><h2>Last action</h2><div id="action"></div></div>
+            <div class="panel">
+                <h2>Log <label class="note"><input type="checkbox" id="show-future" onchange="renderLog()"> show rest of game</label></h2>
+                <div class="log" id="log"></div>
+                <div class="note" style="margin-top:6px;">Click a line to jump to it. <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> step, <kbd>Shift</kbd>+arrows round, <kbd>Space</kbd> play.</div>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+const COLLECTION = {{ collection|tojson }};
+const GAME = {{ game|tojson }};
+const TILE_COLORS = {white: '#EAE0C8', yellow: '#fde900', green: '#71BF44', brown: '#CB7745', gray: '#BCBDC0', red: '#E05050', blue: '#35A7FF', sepia: '#d2b48c'};
+const PHASE_COLORS = {yellow: '#fde900', green: '#71BF44', brown: '#CB7745', gray: '#BCBDC0', diesel: '#888'};
+const ROUTE_COLORS = ['#d62728', '#1f77b4', '#9467bd', '#ff7f0e', '#17becf', '#e377c2'];
+const R = 40, W = Math.sqrt(3) / 2 * R, PAD = 8;
+
+let game = null, state = null, step = 0, maxStep = 0, corpInfo = {}, playTimer = null;
+let showNames = true, pending = null, requested = null;
+
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function shortLabel(s) {
+    if (s == null) return '';
+    return String(s).split(/(\s+vs\s+|\+)/).map(part => {
+        if (/^\s+vs\s+$/.test(part) || part === '+') return part;
+        let p = part.replace(/model_checkpoints(_pg|_value)?\//g, '').replace(/AlphaZeroTransformer\//g, '').replace(/\.pth/g, '');
+        if (p.startsWith('/')) p = p.split('/').slice(-2).join('/');
+        return p;
+    }).join('');
+}
+function money(v) { return v == null ? '' : '$' + v; }
+function seatLabels() { return (game.entry && game.entry.seat_labels) || game.meta.seat_labels || null; }
+function seatSides() { return (game.entry && game.entry.sides) || game.meta.sides || null; }
+function sideChip(seat) {
+    const sides = seatSides();
+    const side = sides ? sides[seat] : '';
+    return `<span class="side ${esc(side)}">${seat + 1}</span>`;
+}
+function playerSeat(name) { const m = /^Player (\d+)$/.exec(name || ''); return m ? +m[1] - 1 : null; }
+function playerLabel(name) {
+    const seat = playerSeat(name);
+    const labels = seatLabels();
+    return seat != null && labels ? shortLabel(labels[seat]) : '';
+}
+function corpChip(name) {
+    const c = corpInfo[name];
+    if (!c) return esc(name);
+    return `<span class="chip" style="background:${esc(c.color)};color:${esc(c.text_color)}" title="${esc(c.full_name)}">${esc(name)}</span>`;
+}
+
+// ------------------------------------------------------------------ loading
+async function init() {
+    const params = new URLSearchParams(location.search);
+    document.getElementById('back-link').href = '/games?collection=' + encodeURIComponent(COLLECTION);
+    document.getElementById('export-link').href = `/api/game_export?collection=${encodeURIComponent(COLLECTION)}&game=${encodeURIComponent(GAME)}`;
+    let r, data;
+    try {
+        r = await fetch(`/api/game?collection=${encodeURIComponent(COLLECTION)}&game=${encodeURIComponent(GAME)}`);
+        data = await r.json();
+    } catch (e) { return showError('Failed to load the game: ' + e.message); }
+    if (!r.ok) return showError(data.error || r.statusText);
+    game = data;
+    maxStep = game.playable_steps;
+    if (game.error) showError(`The Python engine stopped at ${game.error}; showing the game up to there.`);
+    renderHeader();
+    const slider = document.getElementById('slider');
+    slider.max = maxStep;
+    document.getElementById('round-select').innerHTML = game.rounds.filter(m => m.kind !== 'phase')
+        .map(m => `<option value="${m.step}">${esc(m.label)} (step ${m.step})</option>`).join('');
+    let start = params.has('step') ? +params.get('step') : agentsStart();
+    await go(Math.max(0, Math.min(start, maxStep)));
+}
+
+function agentsStart() {
+    // Start-position games: the actions before Stock Round 1 are the start
+    // (a human or random auction ending), not the agents' play.
+    const e = game.entry || {}, start = e.start || game.meta.start;
+    if (!start) return 0;
+    const sr1 = game.rounds.find(m => m.label === 'Stock Round 1');
+    return sr1 ? sr1.step : 0;
+}
+
+function showError(msg) { const el = document.getElementById('error'); el.style.display = 'block'; el.textContent = msg; }
+
+function renderHeader() {
+    const e = game.entry || {}, m = game.meta || {};
+    document.getElementById('title').textContent = `Game ${GAME} · ${COLLECTION}`;
+    document.title = `Game ${GAME} - ${COLLECTION}`;
+    const bits = [];
+    const term = e.termination || m.termination;
+    if (term) bits.push(`ended: ${term}`);
+    if (e.decisions != null || m.decisions != null) bits.push(`${e.decisions ?? m.decisions} decisions`);
+    bits.push(`${game.steps} actions`);
+    const start = e.start || m.start;
+    if (start) bits.push(`start: ${start} (steps 1–${agentsStart()} are the start position)`);
+    if (e.match || m.match) bits.push(`match: ${shortLabel(e.match || m.match)}`);
+    if (m.update != null || e.update != null) bits.push(`update ${e.update ?? m.update}`);
+    if (m.opponent || e.opponent) bits.push(`opponent: ${e.opponent || m.opponent}`);
+    if (game.auction_unlock) bits.push('auction_unlock variant');
+    document.getElementById('subtitle').textContent = bits.join(' · ');
+    const labels = seatLabels();
+    const worth = e.net_worth || m.net_worth;
+    const winners = e.winners || m.winners || [];
+    let html = '';
+    for (let s = 0; s < game.num_players; s++) {
+        const name = `Player ${s + 1}`;
+        const w = worth ? worth[s] : game.result[name];
+        html += `<div class="seat-card ${winners.includes(s) ? 'won' : ''}" title="${esc(labels ? labels[s] : '')}">${sideChip(s)} <b>${name}</b> ${esc(labels ? shortLabel(labels[s]) : '')} · ${money(Math.round(w))}${winners.includes(s) ? ' ★' : ''}</div>`;
+    }
+    document.getElementById('seats').innerHTML = html;
+}
+
+async function go(target, fromSlider = false) {
+    target = Math.max(0, Math.min(maxStep, Math.round(target)));
+    requested = target;
+    if (pending) return;  // the latest request is fetched when the current one lands
+    while (requested !== null) {
+        const want = requested; requested = null;
+        pending = fetch(`/api/game_state?collection=${encodeURIComponent(COLLECTION)}&game=${encodeURIComponent(GAME)}&step=${want}&auction_unlock=${game.auction_unlock ? 1 : 0}`)
+            .then(r => r.json());
+        let data;
+        try { data = await pending; } catch (e) { pending = null; return showError('Failed to load the position: ' + e.message); }
+        pending = null;
+        if (data.error && data.step === undefined) return showError(data.error);
+        state = data; step = data.step;
+        render(fromSlider);
+    }
+}
+
+function jumpRound(dir) {
+    const marks = game.rounds.filter(m => m.kind === 'stock' || m.kind === 'operating' || m.kind === 'other').map(m => m.step);
+    const uniq = [...new Set(marks)].sort((a, b) => a - b);
+    const target = dir > 0 ? uniq.find(s => s > step) : [...uniq].reverse().find(s => s < step);
+    go(target ?? (dir > 0 ? maxStep : 0));
+}
+
+function togglePlay() {
+    const btn = document.getElementById('play-btn');
+    if (playTimer) { clearInterval(playTimer); playTimer = null; btn.innerHTML = '&#x25B6; Play'; btn.classList.remove('on'); return; }
+    btn.innerHTML = '&#x23F8; Pause'; btn.classList.add('on');
+    playTimer = setInterval(() => { if (step >= maxStep) togglePlay(); else if (!pending) go(step + 1); }, +document.getElementById('speed').value);
+}
+document.getElementById('speed').addEventListener('change', () => { if (playTimer) { togglePlay(); togglePlay(); } });
+function toggleZoom() { document.getElementById('map-wrap').classList.toggle('zoom'); document.getElementById('zoom-btn').classList.toggle('on'); }
+function toggleNames() { showNames = !showNames; document.getElementById('names-btn').classList.toggle('on', showNames); renderMap(); }
+
+document.addEventListener('keydown', ev => {
+    // The slider and selects handle their own keys.
+    if (!game || ev.target.tagName === 'SELECT' || (ev.target.tagName === 'INPUT' && ev.target.type !== 'checkbox')) return;
+    if (ev.key === 'ArrowRight') { ev.preventDefault(); ev.shiftKey ? jumpRound(1) : go(step + 1); }
+    else if (ev.key === 'ArrowLeft') { ev.preventDefault(); ev.shiftKey ? jumpRound(-1) : go(step - 1); }
+    else if (ev.key === 'PageDown') { ev.preventDefault(); jumpRound(1); }
+    else if (ev.key === 'PageUp') { ev.preventDefault(); jumpRound(-1); }
+    else if (ev.key === 'Home') { ev.preventDefault(); go(0); }
+    else if (ev.key === 'End') { ev.preventDefault(); go(maxStep); }
+    else if (ev.key === ' ') { ev.preventDefault(); togglePlay(); }
+});
+
+// ------------------------------------------------------------------ rendering
+function render(fromSlider) {
+    corpInfo = Object.fromEntries(state.corporations.map(c => [c.name, c]));
+    if (!fromSlider) document.getElementById('slider').value = step;
+    const url = new URL(location.href); url.searchParams.set('step', step); history.replaceState(null, '', url);
+    const rd = state.round || {};
+    const heading = currentHeading();
+    const toMove = state.finished ? 'game over' : (rd.entity ? `to move: ${rd.entity}${rd.entity_player && rd.entity_player !== rd.entity ? ' (' + rd.entity_player + ')' : ''}${rd.step ? ' · ' + rd.step : ''}` : '');
+    document.getElementById('stepinfo').textContent = `Step ${step} / ${maxStep} · ${heading} · ${toMove}`;
+    document.getElementById('round-title').textContent = `${heading} · Phase ${state.phase.name}`;
+    const sel = document.getElementById('round-select');
+    const opts = [...sel.options].map(o => +o.value);
+    let idx = -1; opts.forEach((v, i) => { if (v <= step) idx = i; });
+    if (idx >= 0) sel.selectedIndex = idx;
+    if (state.error) showError(`The Python engine stopped at ${state.error}`);
+    renderMap(); renderPlayers(); renderCorps(); renderDepot(); renderPrivates(); renderMarket(); renderAction(); renderLog();
+}
+
+function currentHeading() {
+    let label = 'Private auction';
+    for (const m of game.rounds) { if (m.step > step) break; if (m.kind === 'stock' || m.kind === 'operating') label = m.label; }
+    return state && state.finished ? 'Game over' : label;
+}
+
+function hexCenter(h, minX, minY) { return [PAD + W + (h.x - minX) * W, PAD + R + (h.y - minY) * 1.5 * R]; }
+function edgePoint(cx, cy, e, f = 1) { const a = (120 + 60 * e) * Math.PI / 180; return [cx + W * f * Math.cos(a), cy + W * f * Math.sin(a)]; }
+function hexPoints(cx, cy) {
+    const pts = [];
+    for (let k = 0; k < 6; k++) { const a = (60 * k - 30) * Math.PI / 180; pts.push(`${(cx + R * Math.cos(a)).toFixed(1)},${(cy + R * Math.sin(a)).toFixed(1)}`); }
+    return pts.join(' ');
+}
+
+function nodePositions(h, cx, cy) {
+    const exits = {};
+    for (const [a, b] of h.paths) {
+        if (a && b && a.edge !== undefined && b.node) (exits[b.node] = exits[b.node] || []).push(a.edge);
+        if (a && b && b.edge !== undefined && a.node) (exits[a.node] = exits[a.node] || []).push(b.edge);
+    }
+    const refs = [...h.cities.map((_, i) => 'c' + i), ...h.towns.map((_, i) => 't' + i), ...h.offboards.map((_, i) => 'o' + i)];
+    const pos = {center: [cx, cy]};
+    if (refs.length <= 1) { refs.forEach(r => pos[r] = [cx, cy]); return pos; }
+    refs.forEach((r, i) => {
+        const ex = exits[r] || [];
+        if (!ex.length) {
+            pos[r] = [cx + (i - (refs.length - 1) / 2) * R * 0.9, cy];
+        } else if (r[0] === 't' && ex.length === 2) {
+            const A = edgePoint(cx, cy, ex[0]), B = edgePoint(cx, cy, ex[1]);
+            pos[r] = [0.25 * A[0] + 0.5 * cx + 0.25 * B[0], 0.25 * A[1] + 0.5 * cy + 0.25 * B[1]];
+        } else {
+            let vx = 0, vy = 0;
+            ex.forEach(e => { const p = edgePoint(0, 0, e); vx += p[0]; vy += p[1]; });
+            const len = Math.hypot(vx, vy);
+            pos[r] = len < 1e-6 ? [cx, cy] : [cx + vx / len * R * 0.45, cy + vy / len * R * 0.45];
+        }
+    });
+    return pos;
+}
+
+function revenueText(rev) {
+    if (!rev || !rev.length) return '';
+    return rev.map(([c, v]) => v).join('/');
+}
+
+function renderMap() {
+    const svg = document.getElementById('map');
+    const hexes = state.hexes;
+    const minX = Math.min(...hexes.map(h => h.x)), maxX = Math.max(...hexes.map(h => h.x));
+    const minY = Math.min(...hexes.map(h => h.y)), maxY = Math.max(...hexes.map(h => h.y));
+    const width = 2 * PAD + 2 * W + (maxX - minX) * W, height = 2 * PAD + 2 * R + (maxY - minY) * 1.5 * R;
+    svg.setAttribute('viewBox', `0 0 ${width.toFixed(0)} ${height.toFixed(0)}`);
+    const hl = new Set((state.highlight || {}).hexes || []);
+    const centers = {};
+    let base = '', track = '', nodes = '', text = '', outline = '';
+    for (const h of hexes) {
+        const [cx, cy] = hexCenter(h, minX, minY);
+        centers[h.id] = [cx, cy];
+        base += `<polygon points="${hexPoints(cx, cy)}" fill="${TILE_COLORS[h.color] || '#ddd'}" stroke="#777" stroke-width="1"><title>${esc(h.id)}${h.location ? ' ' + esc(h.location) : ''} · tile ${esc(h.tile)}${h.rotation ? ' rot ' + h.rotation : ''}</title></polygon>`;
+        if (hl.has(h.id)) outline += `<polygon points="${hexPoints(cx, cy)}" fill="none" stroke="#e11d48" stroke-width="4" opacity="0.85"/>`;
+        const pos = nodePositions(h, cx, cy);
+        const tw = R * 0.16;
+        for (const [a, b] of h.paths) {
+            if (!a || !b) continue;
+            const offboard = h.color === 'red';
+            const pa = a.edge !== undefined ? edgePoint(cx, cy, a.edge) : pos[a.node] || [cx, cy];
+            const pb = b.edge !== undefined ? edgePoint(cx, cy, b.edge) : pos[b.node] || [cx, cy];
+            let d;
+            if (a.edge !== undefined && b.edge !== undefined) d = `M${pa[0].toFixed(1)},${pa[1].toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${pb[0].toFixed(1)},${pb[1].toFixed(1)}`;
+            else if (offboard) {
+                const e = a.edge !== undefined ? pa : pb, n = a.edge !== undefined ? pb : pa;
+                const m = [e[0] + (n[0] - e[0]) * 0.55, e[1] + (n[1] - e[1]) * 0.55];
+                d = `M${e[0].toFixed(1)},${e[1].toFixed(1)} L${m[0].toFixed(1)},${m[1].toFixed(1)}`;
+            } else d = `M${pa[0].toFixed(1)},${pa[1].toFixed(1)} L${pb[0].toFixed(1)},${pb[1].toFixed(1)}`;
+            track += `<path d="${d}" stroke="#fff" stroke-width="${(tw + 3).toFixed(1)}" fill="none"/><path d="${d}" stroke="#000" stroke-width="${tw.toFixed(1)}" fill="none"/>`;
+        }
+        h.towns.forEach((t, i) => {
+            const [x, y] = pos['t' + i] || [cx, cy];
+            nodes += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(R * 0.11).toFixed(1)}" fill="#000"/>`;
+            const rv = revenueText(t.revenue);
+            if (rv && rv !== '0') nodes += svgBubble(x + R * 0.22, y - R * 0.2, rv);
+        });
+        h.cities.forEach((c, i) => {
+            const [x, y] = pos['c' + i] || [cx, cy];
+            nodes += drawCity(c, x, y);
+            const rv = revenueText(c.revenue);
+            if (rv && rv !== '0') nodes += svgBubble(x + R * 0.27 * Math.max(1, c.slots) + R * 0.05, y - R * 0.3, rv);
+        });
+        h.offboards.forEach(o => {
+            const rev = o.revenue || [];
+            const bw = R * 0.36, total = bw * rev.length;
+            rev.forEach(([color, v], j) => {
+                const x = cx - total / 2 + j * bw, y = cy - R * 0.17;
+                nodes += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${(R * 0.32).toFixed(1)}" fill="${PHASE_COLORS[color] || '#fff'}" stroke="#000" stroke-width="0.8"/>`;
+                nodes += `<text x="${(x + bw / 2).toFixed(1)}" y="${(y + R * 0.24).toFixed(1)}" font-size="${(R * 0.22).toFixed(1)}" text-anchor="middle" font-weight="700">${esc(v)}</text>`;
+            });
+        });
+        if (h.label) text += `<text x="${(cx - R * 0.72).toFixed(1)}" y="${(cy - R * 0.3).toFixed(1)}" font-size="${(R * 0.26).toFixed(1)}" font-weight="700">${esc(h.label)}</text>`;
+        text += `<text x="${cx.toFixed(1)}" y="${(cy - R * 0.72).toFixed(1)}" font-size="${(R * 0.17).toFixed(1)}" text-anchor="middle" fill="#555">${esc(h.id)}</text>`;
+        if (showNames && h.location) text += `<text x="${cx.toFixed(1)}" y="${(cy + R * 0.74).toFixed(1)}" font-size="${(R * 0.17).toFixed(1)}" text-anchor="middle" fill="#222">${esc(h.location)}</text>`;
+        if (/^\d/.test(h.tile)) text += `<text x="${(cx + R * 0.55).toFixed(1)}" y="${(cy + R * 0.42).toFixed(1)}" font-size="${(R * 0.16).toFixed(1)}" text-anchor="middle" fill="#333">#${esc(h.tile)}</text>`;
+        for (const u of h.upgrades || []) {
+            const water = (u.terrains || []).includes('water');
+            text += `<text x="${(cx - R * 0.45).toFixed(1)}" y="${(cy + R * 0.5).toFixed(1)}" font-size="${(R * 0.2).toFixed(1)}" text-anchor="middle" fill="${water ? '#1d4ed8' : '#7c2d12'}" font-weight="700">${water ? '≈' : '▲'}$${u.cost}</text>`;
+        }
+    }
+    let routes = '';
+    ((state.highlight || {}).routes || []).forEach((route, i) => {
+        const color = ROUTE_COLORS[i % ROUTE_COLORS.length];
+        for (const chain of route.connections || []) {
+            const pts = chain.map(id => centers[id]).filter(Boolean);
+            if (pts.length < 2) continue;
+            routes += `<polyline points="${pts.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')}" stroke="${color}" stroke-width="${(R * 0.14).toFixed(1)}" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.75"/>`;
+        }
+    });
+    svg.innerHTML = base + track + nodes + text + routes + outline;
+}
+
+function svgBubble(x, y, label) {
+    const r = R * 0.17;
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="#fff" stroke="#000" stroke-width="0.8"/><text x="${x.toFixed(1)}" y="${(y + r * 0.42).toFixed(1)}" font-size="${(R * 0.17).toFixed(1)}" text-anchor="middle">${esc(label)}</text>`;
+}
+
+function drawCity(c, x, y) {
+    const r = R * 0.26, n = Math.max(1, c.slots);
+    let out = '';
+    if (n > 1) out += `<rect x="${(x - r * n).toFixed(1)}" y="${(y - r).toFixed(1)}" width="${(2 * r * n).toFixed(1)}" height="${(2 * r).toFixed(1)}" rx="${r.toFixed(1)}" fill="#fff" stroke="#000" stroke-width="1.5"/>`;
+    const reserved = (c.reservations || []).slice();
+    for (let i = 0; i < n; i++) {
+        const sx = x + (i - (n - 1) / 2) * 2 * r;
+        const token = c.tokens[i];
+        if (token) {
+            const corp = corpInfo[token] || {};
+            out += `<circle cx="${sx.toFixed(1)}" cy="${y.toFixed(1)}" r="${(r - 1).toFixed(1)}" fill="${esc(corp.color || '#999')}" stroke="#000" stroke-width="1.2"><title>${esc(token)}</title></circle>`;
+            out += `<text x="${sx.toFixed(1)}" y="${(y + r * 0.28).toFixed(1)}" font-size="${(r * (token.length > 3 ? 0.62 : 0.75)).toFixed(1)}" text-anchor="middle" font-weight="700" fill="${esc(corp.text_color || '#fff')}">${esc(token)}</text>`;
+        } else {
+            out += `<circle cx="${sx.toFixed(1)}" cy="${y.toFixed(1)}" r="${(r - 1).toFixed(1)}" fill="#fff" stroke="#000" stroke-width="1.5"/>`;
+            const res = reserved.shift();
+            if (res) out += `<text x="${sx.toFixed(1)}" y="${(y + r * 0.25).toFixed(1)}" font-size="${(r * 0.62).toFixed(1)}" text-anchor="middle" fill="#888">${esc(res)}</text>`;
+        }
+    }
+    return out;
+}
+
+function renderPlayers() {
+    const corps = state.corporations.filter(c => c.ipoed);
+    let html = '<tr><th>Player</th><th>Cash</th><th>Value</th><th>Certs</th>' + corps.map(c => `<th>${corpChip(c.name)}</th>`).join('') + '<th>Privates</th></tr>';
+    for (const p of state.players) {
+        const seat = playerSeat(p.name);
+        const label = playerLabel(p.name);
+        html += `<tr class="${p.active ? 'active' : ''}"><td>${seat != null ? sideChip(seat) : ''} ${esc(p.name)} <span class="note">${esc(label)}</span>${p.priority ? '<span class="tag pd">PD</span>' : ''}${p.active ? '<span class="tag move">to move</span>' : ''}${p.bankrupt ? '<span class="tag">bankrupt</span>' : ''}</td>`
+            + `<td>${money(p.cash)}</td><td>${money(p.value)}</td><td>${p.certs}${p.cert_limit ? '/' + p.cert_limit : ''}</td>`
+            + corps.map(c => { const pct = p.shares[c.name]; return `<td class="${p.presidencies.includes(c.name) ? 'pres' : ''}">${pct ? pct + '%' : ''}</td>`; }).join('')
+            + `<td>${esc(p.companies.join(' '))}</td></tr>`;
+    }
+    document.getElementById('players').innerHTML = html;
+    document.getElementById('bank-info').textContent = `Bank ${money(state.bank)}${state.players.length ? '' : ''}`;
+}
+
+function renderCorps() {
+    const rd = state.round || {};
+    let html = '<tr><th>Corporation</th><th>President</th><th>Par</th><th>Price</th><th>Treasury</th><th>IPO</th><th>Market</th><th>Trains</th><th>Tokens</th><th>Privates</th></tr>';
+    const corps = state.corporations.slice().sort((a, b) => (b.ipoed - a.ipoed));
+    for (const c of corps) {
+        const moving = rd.entity === c.name;
+        html += `<tr class="${moving ? 'active' : ''} ${c.ipoed ? '' : 'dim'}"><td>${corpChip(c.name)} <span class="note">${esc(c.full_name)}</span>${c.floated ? '' : (c.ipoed ? '<span class="tag">not floated</span>' : '')}${c.closed ? '<span class="tag">closed</span>' : ''}${moving ? '<span class="tag move">operating</span>' : ''}</td>`
+            + `<td>${esc(c.president || '')}${c.president ? ' <span class="note">' + esc(playerLabel(c.president)) + '</span>' : ''}</td>`
+            + `<td>${money(c.par)}</td><td>${money(c.price)}</td><td>${c.ipoed ? money(c.cash) : ''}</td>`
+            + `<td>${c.ipoed && c.ipo_pct ? c.ipo_pct + '%' : ''}</td><td>${c.market_pct ? c.market_pct + '%' : ''}</td>`
+            + `<td>${esc(c.trains.join(' '))}</td><td>${c.tokens_left}/${c.tokens_total}</td><td>${esc(c.companies.join(' '))}</td></tr>`;
+    }
+    document.getElementById('corps').innerHTML = html;
+    document.getElementById('op-order').innerHTML = rd.operating_order && rd.operating_order.length ? 'order: ' + rd.operating_order.map(corpChip).join(' ') : '';
+}
+
+function renderDepot() {
+    const d = state.depot;
+    const avail = d.available.map(t => `${esc(t.name)} (${money(t.price)})`).join(', ');
+    const up = d.upcoming.map(t => `${esc(t.name)}×${t.count}`).join(' ');
+    const disc = d.discarded.map(t => `${esc(t.name)}×${t.count}`).join(' ');
+    document.getElementById('depot').innerHTML = `<div><b>For sale:</b> ${avail || '-'}</div><div><b>Bank:</b> ${up || '-'}</div>${disc ? `<div><b>Discarded:</b> ${disc}</div>` : ''}`;
+    document.getElementById('phase-info').textContent = `phase ${state.phase.name} · train limit ${state.phase.train_limit ?? '?'} · tiles ${state.phase.tiles.join(', ')}`;
+}
+
+function renderPrivates() {
+    let html = '<tr><th>Private</th><th>Owner</th><th>Value</th><th>Revenue</th></tr>';
+    for (const c of state.companies) {
+        html += `<tr class="${c.closed ? 'dim' : ''}"><td>${esc(c.sym)} <span class="note">${esc(c.name)}</span></td><td>${c.closed ? 'closed' : (corpInfo[c.owner] ? corpChip(c.owner) : esc(c.owner || 'bank'))}</td><td>${money(c.value)}</td><td>${money(c.revenue)}</td></tr>`;
+    }
+    document.getElementById('privates').innerHTML = html;
+}
+
+function marketColor(types) {
+    if (types.includes('close')) return '#555';
+    if (types.includes('unlimited')) return '#fdba74';
+    if (types.includes('multiple_buy')) return '#c08457';
+    if (types.includes('no_cert_limit')) return '#fde68a';
+    return '#e5e7eb';
+}
+
+function renderMarket() {
+    let html = '';
+    for (const row of state.market) {
+        html += '<tr>' + row.map(cell => {
+            if (!cell) return '<td class="empty"></td>';
+            const par = cell.types.includes('par');
+            return `<td style="background:${marketColor(cell.types)};${par ? 'box-shadow: inset 0 0 0 2px #dc2626;' : ''}">${cell.price}${cell.corporations.length ? '<br>' + cell.corporations.map(corpChip).join('<br>') : ''}</td>`;
+        }).join('') + '</tr>';
+    }
+    document.getElementById('market').innerHTML = html;
+}
+
+function actorOf(action) {
+    if (!action) return '';
+    if (action.entity_type === 'player') return `Player ${action.entity}`;
+    const c = corpInfo[action.entity];
+    return c && c.president ? `${action.entity} (${c.president})` : String(action.entity);
+}
+
+function renderAction() {
+    const a = state.last_action;
+    const el = document.getElementById('action');
+    if (!a) { el.innerHTML = '<div class="note">Start of the game (no action yet).</div>'; return; }
+    const lines = game.log.filter(([s]) => s === step).map(([, m]) => esc(m));
+    const actor = actorOf(a);
+    const seat = playerSeat(a.entity_type === 'player' ? `Player ${a.entity}` : ((corpInfo[a.entity] || {}).president));
+    el.innerHTML = `<div>${seat != null ? sideChip(seat) : ''} <b>${esc(actor)}</b> <span class="note">${esc(seat != null ? shortLabel((seatLabels() || [])[seat] || '') : '')}</span> — <b>${esc(a.type)}</b></div>`
+        + (lines.length ? `<div style="margin-top:4px;">${lines.join('<br>')}</div>` : '')
+        + `<details><summary class="note" style="cursor:pointer;margin-top:4px;">action JSON</summary><pre>${esc(JSON.stringify(a, null, 1))}</pre></details>`;
+}
+
+let lastLogStep = null;
+function renderLog() {
+    const future = document.getElementById('show-future').checked;
+    const el = document.getElementById('log');
+    const rows = [];
+    for (const [s, msg] of game.log) {
+        if (s > step && !future) break;
+        const heading = msg.startsWith('--');
+        const cls = [heading ? 'heading' : '', s === step && step > 0 ? 'current' : '', s > step ? 'future' : ''].join(' ');
+        rows.push(`<div class="${cls}" data-step="${s}"><span class="stepno">${s}</span>${esc(msg)}</div>`);
+    }
+    el.innerHTML = rows.join('');
+    const cur = el.querySelector('.current') || (future ? null : el.lastElementChild);
+    if (cur) cur.scrollIntoView({block: 'nearest'});
+    if (!future && !cur) el.scrollTop = el.scrollHeight;
+}
+document.getElementById('log').addEventListener('click', ev => {
+    const row = ev.target.closest('[data-step]');
+    if (row) go(+row.dataset.step);
+});
+
+init();
+</script>
+</body>
+</html>
