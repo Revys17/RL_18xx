@@ -230,8 +230,22 @@ def _path_end(tile, end):
     return {"node": ref} if ref else {"node": "center"}
 
 
+def _loc(node, rotation: int) -> Optional[float]:
+    """A node's drawing position as a (fractional) edge number on the placed
+    tile -- the tile definition's ``loc`` turned by the tile's rotation, as
+    its paths' edges are -- or None where the definition gives none (the node
+    is placed from its exits). Altoona (H12) needs it: its city sits beside
+    the 1-4 track that bypasses it."""
+    loc = getattr(node, "loc", None)
+    try:
+        return (float(loc) + rotation) % 6 if loc is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _hex(hex_) -> dict:
     tile = hex_.tile
+    rotation = int(tile.rotation or 0)
     cities = []
     for city in tile.cities:
         cities.append(
@@ -240,6 +254,7 @@ def _hex(hex_) -> dict:
                 "tokens": [_name(getattr(token, "corporation", None)) if token else None for token in city.tokens],
                 "reservations": [_name(r) for r in (city.reservations or []) if r is not None],
                 "revenue": _revenue(city.revenue),
+                "loc": _loc(city, rotation),
             }
         )
     upgrades = [
@@ -253,12 +268,12 @@ def _hex(hex_) -> dict:
         "y": hex_.y,
         "tile": tile.name,
         "color": tile.color,
-        "rotation": int(tile.rotation or 0),
+        "rotation": rotation,
         "location": hex_.location_name if not getattr(hex_, "hide_location_name", False) else None,
         "label": str(label) if label is not None and str(label) != "None" else None,
         "paths": [[_path_end(tile, p.a), _path_end(tile, p.b)] for p in tile.paths],
         "cities": cities,
-        "towns": [{"revenue": _revenue(town.revenue)} for town in tile.towns],
+        "towns": [{"revenue": _revenue(town.revenue), "loc": _loc(town, rotation)} for town in tile.towns],
         "offboards": [{"revenue": _revenue(off.revenue)} for off in tile.offboards],
         "upgrades": [u for u in upgrades if u["cost"]],
     }

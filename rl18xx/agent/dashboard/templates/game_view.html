@@ -312,8 +312,16 @@ function nodePositions(h, cx, cy) {
     }
     const refs = [...h.cities.map((_, i) => 'c' + i), ...h.towns.map((_, i) => 't' + i), ...h.offboards.map((_, i) => 'o' + i)];
     const pos = {center: [cx, cy]};
-    if (refs.length <= 1) { refs.forEach(r => pos[r] = [cx, cy]); return pos; }
+    // A node the tile places itself (loc: a fractional edge on the placed tile)
+    // sits toward that edge -- Altoona's city beside its 1-4 bypass track.
+    const locs = {};
+    h.cities.forEach((c, i) => { if (c.loc != null) locs['c' + i] = c.loc; });
+    h.towns.forEach((t, i) => { if (t.loc != null) locs['t' + i] = t.loc; });
+    for (const [r, loc] of Object.entries(locs)) pos[r] = edgePoint(cx, cy, loc, 0.55);
+    const free = refs.filter(r => !(r in locs));
+    if (refs.length <= 1) { free.forEach(r => pos[r] = [cx, cy]); return pos; }
     refs.forEach((r, i) => {
+        if (r in locs) return;
         const ex = exits[r] || [];
         if (!ex.length) {
             pos[r] = [cx + (i - (refs.length - 1) / 2) * R * 0.9, cy];

@@ -302,3 +302,21 @@ def test_replay_refuses_the_public_site():
 
     with pytest.raises(SystemExit):
         replay.replay_on_local_server("unused.json", "https://18xx.games")
+
+
+def test_altoona_keeps_its_city_beside_the_bypass_track(tmp_path, played):
+    """H12's city has a loc (2.5): the viewer must draw it beside the 1-4 track
+    that bypasses it, not on it (it was drawn in the hex centre, on the bypass)."""
+    path = tmp_path / "g.json"
+    path.write_text(json.dumps(game_records.make_game_record(played[0]["saved_game"]["raw_actions"], NUM_PLAYERS)))
+    altoona = next(h for h in game_viewer.state_at(path, 0, False)["hexes"] if h["id"] == "H12")
+    assert [{"edge": 1}, {"edge": 4}] in altoona["paths"]  # the bypass, no city on it
+    assert [c["loc"] for c in altoona["cities"]] == [2.5]
+
+
+def test_a_node_loc_turns_with_its_tile():
+    from types import SimpleNamespace
+
+    assert game_viewer._loc(SimpleNamespace(loc="2.5"), 0) == 2.5
+    assert game_viewer._loc(SimpleNamespace(loc="2.5"), 4) == 0.5
+    assert game_viewer._loc(SimpleNamespace(loc=None), 3) is None
