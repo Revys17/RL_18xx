@@ -12,7 +12,16 @@ auction and starts at Stock Round 1 from either
   JSONL file by ``scripts/build_start_positions.py``; or
 * a **random start** (``random_start_fraction`` of the games, and every game
   whose player count has no human starts) — a legal auction realizing a random
-  allocation of the privates (:func:`random_start_actions`).
+  allocation of the privates (:func:`random_start_actions`); or
+* a **mid-game start** (``midgame_fraction`` of the games, when a mid-game file
+  is given) — a recorded human game up to the beginning of one of its later
+  Stock Rounds (``scripts/build_midgame_positions.py``). Games starting at Stock
+  Round 1 rarely reach the positions that drive most of 1830's strategy -- trains
+  about to rust, a company left without trains, a dump or a bankruptcy in the
+  air -- because self-play settled into slow games where they seldom arise
+  (2026-10-07: trained agents' dumps hit a trainless company 10% of the time
+  against humans' 38%, and bankruptcies were ~9x rarer); mid-game starts put the
+  agents into such positions without rewarding any strategy.
 
 A start is a list of action dicts applied to a fresh game, so both engines and
 the game's action log stay valid, and ``RustMCTSPlayer.extract_data`` rebuilds
@@ -35,6 +44,7 @@ LOGGER = logging.getLogger(__name__)
 
 HUMAN_START_PREFIX = "human:"
 RANDOM_START = "random"
+MIDGAME_PREFIX = "midgame:"
 
 # What ``process_action`` reads from an auction action (bid / pass / par).
 # Everything else in a recorded action — ``user``, ``created_at``, ``id`` — is
@@ -145,6 +155,82 @@ def human_start_prefix(game: dict) -> tuple[Optional[list[dict]], Optional[str]]
 
 
 _LOADED: dict = {}
+
+
+def human_midgame_cuts(game: dict, first_round: int = 2, last_round: int = 6) -> tuple:
+    """A cleaned human game's actions and where its Stock Rounds ``first_round``..
+    ``last_round`` begin.
+
+    The game is replayed through the Rust engine (base rules) with the
+    pretraining importer's leniency -- a pass the engine rejects is dropped --
+    and its applied actions are read back from the engine (``raw_actions``), so
+    every prefix replays strictly. Returns ``(actions, cuts, None)`` -- the
+    actions up to the last cut and ``{round: prefix length}``, each prefix ending
+    where that Stock Round's first player is about to act -- or
+    ``(None, None, reason)``.
+    """
+    from rl18xx.agent.alphazero.pretraining import _process_pass_leniently
+
+    players = game.get("players") or []
+    ids = [p.get("id") if isinstance(p, dict) else None for p in players]
+    if not 2 <= len(players) <= 6 or ids != list(range(1, len(players) + 1)):
+        return None, None, "player_ids"
+    state = new_game(len(players))
+    stock_round, previous, cuts = 0, None, {}
+    for raw in game.get("actions") or []:
+        action = {k: v for k, v in raw.items() if k not in ("user", "created_at", "id")}
+        if action.get("type") == "message":
+            continue
+        if action.get("type") == "pass":
+            _process_pass_leniently(state, dict(action), use_rust=True)
+        else:
+            try:
+                state.process_action(dict(action))
+            except Exception as e:
+                LOGGER.debug("Game %s: engine rejected %s: %s", game.get("id"), action, e)
+                return None, None, "engine_error"
+        if state.finished:
+            break
+        round_type = state._game.round.round_type
+        if round_type == "Stock" and previous != "Stock":
+            stock_round += 1
+            if first_round <= stock_round <= last_round:
+                cuts[stock_round] = len(state.raw_actions)
+            if stock_round >= last_round:
+                break
+        previous = round_type
+    if not cuts:
+        return None, None, "no_later_stock_round"
+    actions = [dict(a) for a in list(state.raw_actions)[: max(cuts.values())]]
+    return actions, cuts, None
+
+
+_LOADED_MIDGAME: dict = {}
+
+
+def load_midgame_positions(path) -> dict:
+    """``{num_players: [(game id, actions, {round: prefix length}), ...]}`` from a
+    mid-game JSONL file (``scripts/build_midgame_positions.py``). Read once per
+    process and cached."""
+    key = str(Path(path).resolve())
+    if key not in _LOADED_MIDGAME:
+        by_players: dict = {}
+        with open(path) as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                cuts = {int(k): int(v) for k, v in record["cuts"].items()}
+                by_players.setdefault(int(record["num_players"]), []).append(
+                    (str(record["id"]), tuple(record["actions"]), cuts)
+                )
+        _LOADED_MIDGAME[key] = by_players
+        LOGGER.info(
+            "Loaded mid-game positions from %s: %s",
+            path,
+            {n: len(games) for n, games in sorted(by_players.items())},
+        )
+    return _LOADED_MIDGAME[key]
 
 
 def load_start_positions(path) -> dict:
@@ -338,11 +424,22 @@ def sample_start_position(
     random_fraction: float = 0.2,
     max_price_multiple: float = 2.0,
     rng: Optional[random.Random] = None,
+    midgame_path=None,
+    midgame_fraction: float = 0.0,
 ) -> StartPosition:
-    """A start for a new ``num_players`` self-play game: a random start with
-    probability ``random_fraction`` (always, when ``path`` has no starts for
-    this player count), else a uniformly chosen human start from ``path``."""
+    """A start for a new ``num_players`` self-play game: with probability
+    ``midgame_fraction`` (when ``midgame_path`` has games for this player count)
+    a mid-game start -- a uniformly chosen game and one of its Stock Rounds;
+    otherwise a random start with probability ``random_fraction`` (always, when
+    ``path`` has no starts for this player count), else a uniformly chosen human
+    start from ``path``."""
     rng = rng or random.Random()
+    if midgame_path and midgame_fraction > 0 and rng.random() < midgame_fraction:
+        games = load_midgame_positions(midgame_path).get(num_players, [])
+        if games:
+            game_id, actions, cuts = rng.choice(games)
+            stock_round = rng.choice(sorted(cuts))
+            return StartPosition(f"{MIDGAME_PREFIX}{game_id}:sr{stock_round}", actions[: cuts[stock_round]])
     human = load_start_positions(path).get(num_players, []) if path else []
     if human and rng.random() >= random_fraction:
         return rng.choice(human)

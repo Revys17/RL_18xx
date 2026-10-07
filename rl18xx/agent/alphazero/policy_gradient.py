@@ -36,6 +36,11 @@ trained on that policy's games -> search. This module is the second step for
   a fixed anchor caps the total distance -- pg3 plateaued at its 0.08 budget
   around update 350 -- while a moving one caps the speed. Without any anchor,
   noisy updates random-walk (pg2 drifted to 0.19 and got weaker).
+- **Starts**: every game begins at the first Stock Round (human or random
+  auction endings) or, in ``midgame_fraction`` of them, at a later Stock Round
+  of a recorded human game (``midgame_positions``; see ``start_positions``),
+  which puts the agents into positions self-play rarely reaches. ``starts`` in
+  the history counts the games by kind.
 - **Opponents**: the fixed opponent (``opponent_checkpoint``, default the
   starting policy) in ``sl_opponent_fraction`` of the games, the pool of
   learner snapshots (seeded with the starting policy) in the rest. With a
@@ -116,6 +121,10 @@ class PGConfig:
     max_decisions: int = 1000
     start_positions: str = "human_games/start_positions_1830_4p.jsonl"
     random_start_fraction: float = 0.2
+    # Mid-game starts (start_positions.sample_start_position): this share of the
+    # games begins at a later Stock Round of a recorded human game.
+    midgame_positions: Optional[str] = None
+    midgame_fraction: float = 0.0
     inference_batch_size: int = 512
     # Updates
     rows_per_update: int = 65536
@@ -239,7 +248,12 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
     games = []
     for _ in range(num_games):
         start = sample_start_position(
-            NUM_PLAYERS, settings["start_positions"], settings["random_start_fraction"], rng=py_rng
+            NUM_PLAYERS,
+            settings["start_positions"],
+            settings["random_start_fraction"],
+            rng=py_rng,
+            midgame_path=settings.get("midgame_positions"),
+            midgame_fraction=settings.get("midgame_fraction", 0.0),
         )
         game = apply_actions(new_game(NUM_PLAYERS), start.actions)
         opponent = "pool" if settings["pool_ready"] and py_rng.random() >= settings["sl_opponent_fraction"] else "sl"
@@ -325,6 +339,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             "learner_decisions": sum(len(v) for v in g.values.values()),
             "seat_decisions": {seat: len(v) for seat, v in g.values.items()},
             "termination": g.termination,
+            "start_kind": g.start.split(":")[0] if g.start else None,
             "first_values": {seat: v[0] for seat, v in g.values.items() if v},
             "rows": rows,
         }
@@ -591,7 +606,15 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
         run_dir = Path(resume)
         state = json.loads((run_dir / "state.json").read_text())
         # The run keeps its own settings; only its length and game saving can change.
-        cfg = PGConfig(**{**state["config"], "max_updates": cfg.max_updates, "save_game_every": cfg.save_game_every})
+        cfg = PGConfig(
+            **{
+                **state["config"],
+                "max_updates": cfg.max_updates,
+                "save_game_every": cfg.save_game_every,
+                "midgame_positions": cfg.midgame_positions,
+                "midgame_fraction": cfg.midgame_fraction,
+            }
+        )
         update = int(state["snapshot_update"])
         pool = list(state["pool"])
         kl_coef = float(state["kl_coef"])
@@ -669,13 +692,15 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
             "max_decisions": cfg.max_decisions,
             "start_positions": cfg.start_positions,
             "random_start_fraction": cfg.random_start_fraction,
+            "midgame_positions": cfg.midgame_positions,
+            "midgame_fraction": cfg.midgame_fraction,
             "gae_lambda": cfg.gae_lambda,
             "save_game_every": cfg.save_game_every,
         }
 
     buffer, gen, total_games = [], Counter(), 0
     gen_started = run_started = time.time()
-    terminations, lengths = Counter(), []
+    terminations, lengths, starts = Counter(), [], Counter()
     critic_first_values = []
     try:
         executor = ProcessPoolExecutor(max_workers=cfg.workers, initializer=worker_init, initargs=(queues,))
@@ -693,6 +718,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                         gen["games"] += 1
                         scores.add(record)
                         terminations[record["termination"]] += 1
+                        starts[record.get("start_kind")] += 1
                         lengths.append(record["decisions"])
                         for seat, value in record["first_values"].items():
                             critic_first_values.append((value, record["win_share"][int(seat)]))
@@ -778,6 +804,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                     "decisions_per_second": gen["decisions"] / elapsed,
                     "mean_decisions": float(np.mean(lengths)) if lengths else 0.0,
                     "terminations": dict(terminations),
+                    "starts": dict(starts),
                     "train_seconds": train_seconds,
                     "pool_size": len(pool),
                     "pool_opponent": pool_label if pool else None,
@@ -787,7 +814,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                     record["critic_start_brier"] = float(np.mean((v - r) ** 2))
                 gen.clear()
                 gen_started = time.time()
-                terminations, lengths, critic_first_values = Counter(), [], []
+                terminations, lengths, critic_first_values, starts = Counter(), [], [], Counter()
                 history.write(json.dumps(record) + "\n")
                 history.flush()
                 for key, value in record.items():

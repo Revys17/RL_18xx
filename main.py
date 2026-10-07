@@ -184,6 +184,8 @@ def cmd_policy_gradient(args):
         start_positions=args.start_positions,
         random_start_fraction=args.random_start_fraction,
         save_game_every=args.save_game_every,
+        midgame_positions=args.midgame_positions if args.midgame_fraction > 0 else None,
+        midgame_fraction=args.midgame_fraction,
     )
     print(run(config, resume=args.resume))
 
@@ -436,6 +438,11 @@ def build_parser():
         "--opponent", type=str, default=None,
         help="Fixed opponent <session>/<num> or .pth (default: the starting policy)",
     )
+    p.add_argument(
+        "--midgame-fraction", type=float, default=0.0,
+        help="Share of games starting at a later Stock Round of a recorded human game (with --resume: from now on)",
+    )
+    p.add_argument("--midgame-positions", type=str, default="human_games/midgame_positions_1830_4p.jsonl")
     p.add_argument(
         "--anchor-every", type=int, default=0,
         help="Move the KL anchor to the learner every N updates (0: anchor at the starting policy)",

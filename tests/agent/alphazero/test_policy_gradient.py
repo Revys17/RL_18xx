@@ -1,4 +1,5 @@
 """Policy-gradient refinement (policy_gradient): games, advantages and losses."""
+import json
 import math
 
 import numpy as np
@@ -292,3 +293,19 @@ def test_microbatches_accumulate_to_the_minibatch_step(monkeypatch, start_file):
     # gradients sum over 93 hexes a row; with the economic transformer's dropout
     # left on, each microbatch drew its own masks and the steps differed by 11%.
     assert max(diffs) < 0.05 * max(moved)
+
+
+def test_games_can_start_mid_game(monkeypatch, tmp_path, start_file):
+    from tests.agent.alphazero.test_start_positions import _randomly_played_game
+    from rl18xx.agent.alphazero import start_positions as sp
+
+    game = _randomly_played_game(tmp_path, stock_rounds=2)
+    actions, cuts, _ = sp.human_midgame_cuts(game, first_round=2, last_round=2)
+    path = tmp_path / "midgame.jsonl"
+    path.write_text(json.dumps({"id": "g", "num_players": 4, "actions": actions, "cuts": {"2": cuts[2]}}) + "\n")
+    monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Client(), "sl": _Client(), "pool": _Client()})
+    result = pg.play_pg_games(3, _settings(start_file, midgame_positions=str(path), midgame_fraction=1.0, max_decisions=10))
+    assert [g["start_kind"] for g in result["games"]] == ["midgame"] * 3
+    for g in result["games"]:
+        for encoded, *_ in g["rows"]:
+            assert int(encoded[4]) in (0, 1)  # Stock / Operating: decisions after the start, never the auction

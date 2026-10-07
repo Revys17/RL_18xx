@@ -348,3 +348,58 @@ def test_loop_passes_start_position_keys_to_self_play(tmp_path, monkeypatch):
     loop_config = loop.load_loop_config(1, 1, 1, loop.TrainingConfig(), 8)
     assert loop_config.start_positions_path == "starts.jsonl" and loop_config.random_start_fraction == 0.3
     assert json.loads(config_path.read_text())["random_start_max_price_multiple"] == 2.0
+
+
+# ------------------------------------------------------------- mid-game starts
+def _randomly_played_game(tmp_path, stock_rounds: int = 3, seed: int = 0) -> dict:
+    """A game played by random legal moves from a random auction ending until its
+    ``stock_rounds``-th Stock Round, as a cleaned export (players 1..4)."""
+    rng = random.Random(seed)
+    empty = tmp_path / f"starts_{seed}.jsonl"
+    empty.write_text("")
+    start = sp.sample_start_position(4, str(empty), 1.0, rng=rng)
+    game = sp.apply_actions(sp.new_game(4), start.actions)
+    seen, previous = 0, None
+    for _ in range(3000):
+        round_type = game._game.round.round_type
+        if round_type == "Stock" and previous != "Stock":
+            seen += 1
+            if seen > stock_rounds:
+                break
+        previous = round_type
+        legal = [int(i) for i in game._game.factored_legal_indices()]
+        index = rng.choice(legal)
+        price_range = game._game.price_range_for_index(index)
+        game._game.apply_action_index(index, None if price_range is None else int(price_range[0]))
+    return {"id": f"random{seed}", "players": [{"id": i, "name": f"Player {i}"} for i in range(1, 5)],
+            "actions": list(game.raw_actions)}
+
+
+def test_midgame_cuts_stop_where_each_later_stock_round_begins(tmp_path):
+    game = _randomly_played_game(tmp_path)
+    actions, cuts, reason = sp.human_midgame_cuts(game, first_round=2, last_round=3)
+    assert reason is None and sorted(cuts) == [2, 3] and cuts[2] < cuts[3] == len(actions)
+    for stock_round, length in cuts.items():
+        state = sp.apply_actions(sp.new_game(4), actions[:length])
+        assert state._game.round.round_type == "Stock" and not state.finished
+        # One action fewer is still the round before (an Operating Round).
+        assert sp.apply_actions(sp.new_game(4), actions[: length - 1])._game.round.round_type != "Stock"
+
+
+def test_a_share_of_starts_are_midgame_positions(tmp_path):
+    game = _randomly_played_game(tmp_path, seed=1)
+    actions, cuts, _ = sp.human_midgame_cuts(game, first_round=2, last_round=3)
+    path = tmp_path / "midgame.jsonl"
+    path.write_text(json.dumps({"id": game["id"], "num_players": 4, "actions": actions,
+                                "cuts": {str(k): v for k, v in cuts.items()}}) + "\n")
+    empty = tmp_path / "none.jsonl"
+    empty.write_text("")
+    rng = random.Random(0)
+    starts = [sp.sample_start_position(4, str(empty), 1.0, rng=rng, midgame_path=str(path), midgame_fraction=0.5)
+              for _ in range(200)]
+    midgame = [s for s in starts if s.label.startswith(sp.MIDGAME_PREFIX)]
+    assert 70 < len(midgame) < 130 and {s.label for s in midgame} == {f"midgame:{game['id']}:sr2", f"midgame:{game['id']}:sr3"}
+    for start in midgame[:4]:
+        state = sp.apply_actions(sp.new_game(4), start.actions)
+        assert state._game.round.round_type == "Stock"
+    assert all(s.label == sp.RANDOM_START for s in starts if s not in midgame)
