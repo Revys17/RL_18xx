@@ -42,10 +42,17 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 NUM_PLAYERS = 4
-ARRANGEMENTS = [
-    tuple("A" if seat in pair else "B" for seat in range(NUM_PLAYERS))
-    for pair in itertools.combinations(range(NUM_PLAYERS), 2)
-]
+
+
+def arrangements(a_seats: int) -> list:
+    """Every way to give side A ``a_seats`` of the four seats (B the rest)."""
+    return [
+        tuple("A" if seat in chosen else "B" for seat in range(NUM_PLAYERS))
+        for chosen in itertools.combinations(range(NUM_PLAYERS), a_seats)
+    ]
+
+
+ARRANGEMENTS = arrangements(2)
 
 
 def parse_player(spec: str) -> tuple:
@@ -65,17 +72,18 @@ def play_games(game_indices: list, settings: dict) -> list:
     from rl18xx.agent.alphazero.start_positions import apply_actions, new_game, sample_start_position
 
     rng = np.random.default_rng()
+    seatings = [tuple(a) for a in settings.get("arrangements", ARRANGEMENTS)]
     games = []
     for idx in game_indices:
-        # Seeded by the start index, so all six arrangements of a start share it.
-        start_rng = random.Random(f"{settings['seed']}:{idx // len(ARRANGEMENTS)}")
+        # Seeded by the start index, so all arrangements of a start share it.
+        start_rng = random.Random(f"{settings['seed']}:{idx // len(seatings)}")
         start = sample_start_position(
             NUM_PLAYERS, settings["start_positions"], settings["random_start_fraction"], rng=start_rng
         )
         game = apply_actions(new_game(NUM_PLAYERS), start.actions)
         games.append(
             SimpleNamespace(
-                game=game, uid=str(idx), idx=idx, seats=ARRANGEMENTS[idx % len(ARRANGEMENTS)],
+                game=game, uid=str(idx), idx=idx, seats=seatings[idx % len(seatings)],
                 decisions=0, price_row=None, termination=None, start=start.label,
             )
         )
@@ -150,11 +158,15 @@ def summarize(a: str, b: str, records: list) -> dict:
     for r, score in zip(records, scores):
         by_arrangement["".join(r["seats"])].append(score)
     n = len(scores)
+    a_seats = records[0]["seats"].count("A") if records else 2
     return {
         "A": a,
         "B": b,
         "games": n,
+        "a_seats": a_seats,
+        # Side A's summed win share; equally strong sides score a_seats / 4.
         "A_score": float(np.mean(scores)),
+        "A_score_equal": a_seats / NUM_PLAYERS,
         "A_score_se": float(np.std(scores, ddof=1) / math.sqrt(n)) if n > 1 else float("nan"),
         "A_worth_share": float(np.mean(worth)),
         "by_arrangement": {k: round(float(np.mean(v)), 3) for k, v in sorted(by_arrangement.items())},
@@ -188,8 +200,10 @@ def run_match(a_spec: str, b_spec: str, args) -> dict:
         "max_decisions": args.max_decisions,
         "price_eps": args.price_eps,
         "save_games": getattr(args, "save_games", 0),
+        "arrangements": arrangements(getattr(args, "a_seats", 2)),
     }
-    num_games = math.ceil(args.games / len(ARRANGEMENTS)) * len(ARRANGEMENTS)
+    seatings = settings["arrangements"]
+    num_games = math.ceil(args.games / len(seatings)) * len(seatings)
     chunks = [list(range(i, min(i + args.games_per_task, num_games))) for i in range(0, num_games, args.games_per_task)]
     queues = {path: (h.request_q, h.reply_qs, h.ticket_q) for path, h in handles.items()}
     records, started = [], time.time()
@@ -234,7 +248,13 @@ def save_game_logs(out: Path, match_index: int, a: str, b: str, records: list) -
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--match", nargs=2, action="append", metavar=("A", "B"), required=True)
-    parser.add_argument("--games", type=int, default=1200, help="Games per match (rounded up to a multiple of 6)")
+    parser.add_argument(
+        "--games", type=int, default=1200, help="Games per match (rounded up to a multiple of the arrangements)"
+    )
+    parser.add_argument(
+        "--a-seats", type=int, default=2, choices=(1, 2, 3),
+        help="Seats side A holds (2: 2v2 in six arrangements; 1 / 3: 1v3 / 3v1 in four); equal strength scores a_seats/4",
+    )
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--games-per-task", type=int, default=30)
     parser.add_argument("--max-decisions", type=int, default=1000)
@@ -264,7 +284,8 @@ def main():
         all_records.extend({"match": f"{a} vs {b}", **r} for r in records)
         print(
             f"{a} vs {b}: {summary['A_score']:.3f} ± {summary['A_score_se']:.3f} over {summary['games']} games "
-            f"(worth share {summary['A_worth_share']:.3f}, {summary['seconds']:.0f}s)",
+            + (f"[{summary['a_seats']}v{NUM_PLAYERS - summary['a_seats']}, equal = {summary['A_score_equal']:.2f}] " if summary["a_seats"] != 2 else "")
+            + f"(worth share {summary['A_worth_share']:.3f}, {summary['seconds']:.0f}s)",
             flush=True,
         )
     if args.out:
