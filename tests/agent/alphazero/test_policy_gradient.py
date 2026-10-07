@@ -135,7 +135,7 @@ def test_tempered_losses_are_on_policy_for_tempered_samples():
     batch = _batch([[0.0] * 4], [[0, 1, 2]], [1], [old], [1.0])
     out = pg.pg_losses(logits, None, logits.detach(), None, batch, 0.2, 0.1, 0.0, temperature=tau)
     assert float(out["approx_kl"]) == pytest.approx(0.0, abs=1e-6)
-    assert float(out["kl_sl"]) == pytest.approx(0.0, abs=1e-7)
+    assert float(out["kl_anchor"]) == pytest.approx(0.0, abs=1e-7)
     out["total"].backward()
     assert logits.grad[0, 1] < 0 and logits.grad[0, 3] == 0
 
@@ -165,7 +165,7 @@ def test_policy_gradient_raises_good_moves_and_lowers_bad_ones():
     logits = torch.zeros(2, 4, requires_grad=True)
     batch = _batch([[0.0] * 4] * 2, [[0, 1, 2], [0, 1, 2]], [0, 1], [-math.log(3)] * 2, [0.5, -0.5])
     out = pg.pg_losses(logits, None, logits.detach(), None, batch, clip=0.2, kl_coef=0.1, entropy_coef=0.0)
-    assert float(out["kl_sl"]) == pytest.approx(0.0, abs=1e-7)  # learner == supervised
+    assert float(out["kl_anchor"]) == pytest.approx(0.0, abs=1e-7)  # learner == supervised
     assert float(out["approx_kl"]) == pytest.approx(0.0, abs=1e-6)  # on-policy
     out["total"].backward()
     assert logits.grad[0, 0] < 0 and logits.grad[1, 1] > 0  # descent raises row 0's move, lowers row 1's
@@ -183,7 +183,7 @@ def test_clipped_ratio_stops_the_push_and_kl_pulls_back_to_the_supervised_policy
 
     logits.grad = None
     out = pg.pg_losses(logits, None, torch.zeros(1, 3), None, batch, clip=0.2, kl_coef=1.0, entropy_coef=0.0)
-    assert float(out["kl_sl"]) > 0
+    assert float(out["kl_anchor"]) > 0
     out["total"].backward()
     assert logits.grad[0, 0] > 0  # descent lowers the move the supervised policy doesn't favor
 

@@ -158,6 +158,10 @@ def cmd_policy_gradient(args):
         learner_seats=args.learner_seats,
         positions_per_seat=args.positions_per_seat,
         sl_opponent_fraction=args.sl_opponent_fraction,
+        opponent_checkpoint=(
+            str(_resolve_checkpoint(args.opponent, args.model_dir)) if args.opponent else None
+        ),
+        anchor_every=args.anchor_every,
         rows_per_update=args.rows_per_update,
         minibatch=args.minibatch,
         microbatch=args.microbatch,
@@ -423,7 +427,15 @@ def build_parser():
     p.add_argument("--games-per-task", type=int, default=32)
     p.add_argument("--learner-seats", type=int, default=2)
     p.add_argument("--positions-per-seat", type=int, default=32, help="Learner decisions kept per seat per game")
-    p.add_argument("--sl-opponent-fraction", type=float, default=0.5, help="Games against the supervised policy")
+    p.add_argument("--sl-opponent-fraction", type=float, default=0.5, help="Games against the fixed opponent")
+    p.add_argument(
+        "--opponent", type=str, default=None,
+        help="Fixed opponent <session>/<num> or .pth (default: the starting policy)",
+    )
+    p.add_argument(
+        "--anchor-every", type=int, default=0,
+        help="Move the KL anchor to the learner every N updates (0: anchor at the starting policy)",
+    )
     p.add_argument("--rows-per-update", type=int, default=65536)
     p.add_argument("--minibatch", type=int, default=256, help="Rows per optimizer step")
     p.add_argument("--microbatch", type=int, default=256, help="Rows per forward/backward (accumulated to --minibatch)")

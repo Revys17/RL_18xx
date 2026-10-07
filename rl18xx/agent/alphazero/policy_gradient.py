@@ -28,11 +28,20 @@ trained on that policy's games -> search. This module is the second step for
   ratio against the probability the move was sampled with (generation runs
   continuously, so a row may come from a policy a few updates old), price
   draws included in the move's probability.
-- **Anchor**: a KL(learner || supervised) penalty over the legal moves (and
-  the chosen slot's price cells) keeps the policy near human play; with
-  ``kl_target`` the coefficient adapts toward that KL per decision.
-  Fine-tuning on search targets without an anchor drifted the policy away from
-  human play and made it weaker (the SR1-start run, 2026-10).
+- **Anchor**: a KL(learner || anchor) penalty over the legal moves (and
+  the chosen slot's price cells) limits how far the policy moves; with
+  ``kl_target`` the coefficient adapts toward that KL per decision. The anchor
+  is the starting policy, or with ``anchor_every`` N the learner itself as of
+  every N-th update (as DeepNash's R-NaD resets its regularization policy):
+  a fixed anchor caps the total distance -- pg3 plateaued at its 0.08 budget
+  around update 350 -- while a moving one caps the speed. Without any anchor,
+  noisy updates random-walk (pg2 drifted to 0.19 and got weaker).
+- **Opponents**: the fixed opponent (``opponent_checkpoint``, default the
+  starting policy) in ``sl_opponent_fraction`` of the games, the pool of
+  learner snapshots (seeded with the starting policy) in the rest. With a
+  moving anchor, keeping the supervised policy as the fixed opponent makes
+  ``score_vs_sl`` a check that self-play gains still hold against human-like
+  play.
 - **Critic**: a separate value network (``value_checkpoint``, e.g. the network
   trained on policy-only games) gives the baseline at generation time -- the
   learner's inference server is a ``PolicyValueComposite`` -- and keeps
@@ -87,6 +96,13 @@ class PGConfig:
     learner_seats: int = 2
     positions_per_seat: int = 32
     sl_opponent_fraction: float = 0.5
+    # The fixed opponent ("sl" server); None: the starting policy.
+    opponent_checkpoint: Optional[str] = None
+    # Games against the pool start at once, the pool seeded with the starting policy.
+    seed_pool: bool = True
+    # 0: the KL anchor is the starting policy for the whole run. N: every N
+    # updates the anchor becomes the current learner (a multiple of snapshot_every).
+    anchor_every: int = 0
     learner_temperature: float = 1.0
     opponent_temperature: float = 1.0
     opponent_price_eps: float = 0.0
@@ -374,7 +390,7 @@ def pg_losses(
     entropy_coef: float,
     temperature: float = 1.0,
 ) -> dict:
-    """PPO-clipped policy gradient plus ``kl_coef`` * KL(learner || supervised).
+    """PPO-clipped policy gradient plus ``kl_coef`` * KL(learner || anchor).
 
     A move's log-probability is its index's (softmax over the legal moves of
     the logits / ``temperature``) plus, for price-head moves, its price cell's
@@ -407,8 +423,8 @@ def pg_losses(
     return {
         "total": total,
         "pg_loss": pg_loss.detach(),
-        "kl_sl": kl.mean().detach(),
-        "price_kl_sl": price_kl.detach(),
+        "kl_anchor": kl.mean().detach(),
+        "price_kl_anchor": price_kl.detach(),
         "entropy": entropy.mean().detach(),
         "clip_frac": ((ratio - 1.0).abs() > clip).float().mean().detach(),
         "approx_kl": (-log_ratio).mean().detach(),
@@ -520,6 +536,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
         update = int(state["snapshot_update"])
         pool = list(state["pool"])
         kl_coef = float(state["kl_coef"])
+        anchor_update = int(state.get("anchor_update", 0))
         learner_path = run_dir / "learner" / f"{update}.pth"
         critic_path = run_dir / "critic" / f"{update}.pth"
     else:
@@ -529,15 +546,19 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
         if run_dir.exists():
             raise SystemExit(f"{run_dir} exists; pass --resume to continue it")
         run_dir.mkdir(parents=True)
-        update, pool, kl_coef = 0, [], cfg.kl_coef
+        update, kl_coef, anchor_update = 0, cfg.kl_coef, 0
+        pool = [str(cfg.policy_checkpoint)] if cfg.seed_pool else []
         learner_path, critic_path = Path(cfg.policy_checkpoint), Path(cfg.value_checkpoint)
+    if cfg.anchor_every and cfg.anchor_every % cfg.snapshot_every:
+        raise SystemExit("--anchor-every must be a multiple of --snapshot-every (the anchor's checkpoint is kept)")
     (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
     LOGGER.info(f"Policy-gradient run {run_dir} from update {update}: {asdict(cfg)}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    learner, critic, sl = _load(learner_path), _load(critic_path), _load(cfg.policy_checkpoint)
-    sl.eval()
-    for param in sl.parameters():
+    anchor_path = run_dir / "learner" / f"{anchor_update}.pth" if anchor_update else Path(cfg.policy_checkpoint)
+    learner, critic, anchor = _load(learner_path), _load(critic_path), _load(anchor_path)
+    anchor.eval()
+    for param in anchor.parameters():
         param.requires_grad_(False)
     learner_opt = torch.optim.AdamW(learner.parameters(), lr=cfg.lr, weight_decay=0.0)
     critic_opt = torch.optim.AdamW(critic.parameters(), lr=cfg.critic_lr, weight_decay=0.0)
@@ -556,7 +577,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
 
     servers = {
         "learner": f"{current_learner}+{current_critic}",
-        "sl": str(cfg.policy_checkpoint),
+        "sl": str(cfg.opponent_checkpoint or cfg.policy_checkpoint),
         "pool": pool[-1] if pool else str(cfg.policy_checkpoint),
     }
     handles = {
@@ -621,7 +642,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                     continue
 
                 t0 = time.time()
-                stats = _update(learner, critic, sl, learner_opt, critic_opt, buffer, cfg, kl_coef, device, rng)
+                stats = _update(learner, critic, anchor, learner_opt, critic_opt, buffer, cfg, kl_coef, device, rng)
                 train_seconds = time.time() - t0
                 buffer = []
                 update += 1
@@ -632,6 +653,11 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                 _save(learner, current_learner)
                 _save(critic, current_critic)
                 handles["learner"].reload(f"{current_learner}+{current_critic}")
+                if cfg.anchor_every and update % cfg.anchor_every == 0:
+                    # The KL now measures change since this update: a fresh budget around
+                    # a policy the run reached, rather than one fixed reference.
+                    anchor.load_state_dict(learner.state_dict())
+                    anchor_update = update
                 snapshot = update % cfg.snapshot_every == 0
                 for path in previous:
                     number = int(path.stem)
@@ -645,7 +671,13 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                     )
                     (run_dir / "state.json").write_text(
                         json.dumps(
-                            {"config": asdict(cfg), "snapshot_update": update, "pool": pool, "kl_coef": kl_coef},
+                            {
+                                "config": asdict(cfg),
+                                "snapshot_update": update,
+                                "pool": pool,
+                                "kl_coef": kl_coef,
+                                "anchor_update": anchor_update,
+                            },
                             indent=2,
                         )
                     )
@@ -654,9 +686,9 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                     handles["pool"].reload(pool_label)
 
                 if cfg.kl_target is not None:
-                    if stats["kl_sl"] > 1.5 * cfg.kl_target:
+                    if stats["kl_anchor"] > 1.5 * cfg.kl_target:
                         kl_coef *= 1.5
-                    elif stats["kl_sl"] < cfg.kl_target / 1.5:
+                    elif stats["kl_anchor"] < cfg.kl_target / 1.5:
                         # Floored: far below the target the coefficient would otherwise
                         # decay toward 0 (pg3: 4e-6 by update 21) and take ~20 updates
                         # to matter again once the KL reached it.
@@ -670,6 +702,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                     **stats,
                     **scores.summary(),
                     "kl_coef": kl_coef,
+                    "anchor_update": anchor_update,
                     "games": gen["games"],
                     "games_total": total_games,
                     # Results arrive in bursts (a task returns 32 games at once), so the
@@ -698,7 +731,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                     f"update {update}: vs SL {record.get('score_vs_sl', float('nan')):.3f}"
                     f"±{record.get('score_vs_sl_se', float('nan')):.3f} "
                     f"(this update {record.get('score_vs_sl_update', float('nan')):.3f}), "
-                    f"kl_sl {stats['kl_sl']:.4f}, entropy {stats['entropy']:.3f}, clip {stats['clip_frac']:.3f}, "
+                    f"kl_anchor {stats['kl_anchor']:.4f}, entropy {stats['entropy']:.3f}, clip {stats['clip_frac']:.3f}, "
                     f"critic CE {stats['critic_ce']:.4f}, {record['games_per_hour_run']:.0f} games/h, "
                     f"train {train_seconds:.0f}s"
                 )
@@ -713,7 +746,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
     return run_dir
 
 
-def _update(learner, critic, sl, learner_opt, critic_opt, rows, cfg: PGConfig, kl_coef, device, rng) -> dict:
+def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfig, kl_coef, device, rng) -> dict:
     """One pass of PPO over ``rows`` (``cfg.ppo_epochs`` times) and one critic pass.
 
     The networks train in eval mode: the economic transformer's layers carry
@@ -742,8 +775,8 @@ def _update(learner, critic, sl, learner_opt, critic_opt, rows, cfg: PGConfig, k
                 n = len(batch["choice"])
                 share = n / len(step_rows)
                 with torch.no_grad():
-                    sl_logits, _, _, _ = sl(batch["game_state"], batch["nodes"])
-                    sl_price = sl.last_price_components["price_logits"]
+                    sl_logits, _, _, _ = anchor(batch["game_state"], batch["nodes"])
+                    sl_price = anchor.last_price_components["price_logits"]
                 policy_logits, _, _, _ = learner(batch["game_state"], batch["nodes"])
                 price = learner.last_price_components["price_logits"]
                 losses = pg_losses(
