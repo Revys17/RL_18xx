@@ -4,11 +4,15 @@ const assert = require('node:assert/strict');
 const R = require('../src/common.js');
 const { fakeDocument } = require('./fakes.js');
 
-test('the game id comes from a /game/<id> path only', () => {
+test('the game id comes from a /game/<id> or /hotseat/<id> path only', () => {
   assert.equal(R.parseGameId('/game/123'), 123);
   assert.equal(R.parseGameId('/game/123/'), 123);
   assert.equal(R.parseGameId('/game/123?action=40'), 123);
   assert.equal(R.parseGameId('/game/abc'), null);
+  assert.equal(R.parseGameId('/hotseat/hs_opxjyeuw_1791492391'), 'hs_opxjyeuw_1791492391');
+  assert.equal(R.parseGameId('/hotseat/hs_opxjyeuw_1791492391?pin=x'), 'hs_opxjyeuw_1791492391');
+  assert.equal(R.isHotseat(R.parseGameId('/hotseat/hs_a_1')), true);
+  assert.equal(R.isHotseat(R.parseGameId('/game/123')), false);
   assert.equal(R.parseGameId('/hotseat/123'), null);
   assert.equal(R.parseGameId('/'), null);
   assert.equal(R.parseGameId(undefined), null);

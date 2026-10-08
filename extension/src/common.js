@@ -19,10 +19,18 @@
   // The hex outline of the 18xx.games map (upstream assets/app/lib/hex.rb POINTS).
   const HEX_POINTS = '100,0 50,87 -50,87 -100,0 -50,-87 50,-87';
 
-  /** The game id of an 18xx.games game page path (/game/<id>), or null. */
+  /** The game id of an 18xx.games game page path: a number for /game/<id>, the
+   * ``hs_...`` string for a hotseat game (/hotseat/<id>), or null. */
   function parseGameId(pathname) {
     const match = /^\/game\/(\d+)(?:[/?#]|$)/.exec(pathname || '');
-    return match ? Number(match[1]) : null;
+    if (match) return Number(match[1]);
+    const hotseat = /^\/hotseat\/(hs_[A-Za-z0-9_]+)(?:[/?#]|$)/.exec(pathname || '');
+    return hotseat ? hotseat[1] : null;
+  }
+
+  /** A hotseat game (``hs_...``) lives in the browser's localStorage, not on the server. */
+  function isHotseat(id) {
+    return typeof id === 'string';
   }
 
   /** The game as the backend needs it: chat and per-user settings stay in the page
@@ -128,6 +136,7 @@
     MUTATION_DEBOUNCE_MS,
     HEX_POINTS,
     parseGameId,
+    isHotseat,
     stripGame,
     normalizeBackendUrl,
     isLoopbackBackend,

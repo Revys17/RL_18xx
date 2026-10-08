@@ -112,6 +112,20 @@ test('a new log line triggers a fetch, but never sooner than 10 s after the last
   assert.ok(t.fetches[1].t - t.fetches[0].t >= R.MIN_FETCH_INTERVAL_MS);
 });
 
+test('a hotseat game is read again on every new log line, with no 10 s spacing', async () => {
+  const t = setup({ pathname: '/hotseat/hs_abcdefgh_1' });
+  t.controller.checkLocation();
+  await settle();
+  assert.deepEqual(t.fetches.map((f) => f.id), ['hs_abcdefgh_1']);
+  t.document.log.push('Player 1 bids $45 on C&A');
+  t.controller.onMutations();
+  await t.clock.advance(2_000); // just the debounce
+  assert.equal(t.fetches.length, 2);
+  t.controller.refresh();
+  await settle();
+  assert.equal(t.fetches.length, 3);
+});
+
 test('a burst of triggers still means at most one fetch per 10 s', async () => {
   const t = setup();
   t.controller.checkLocation();

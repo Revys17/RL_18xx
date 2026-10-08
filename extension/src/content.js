@@ -1,10 +1,12 @@
-// Content script for 18xx.games game pages (/game/<id>).
+// Content script for 18xx.games game pages (/game/<id>, and hotseat games at /hotseat/<id>).
 //
 // It reads the open game from the site itself -- GET /api/game/<id> on the same
 // origin, without cookies, the request the site's own page makes -- and never
 // more than once every 10 s: when the game opens, when the site's game log shows
 // a new line (seen by a debounced MutationObserver, no network), and when the
-// panel's refresh button is pressed; a hidden tab waits until it is shown. The
+// panel's refresh button is pressed; a hidden tab waits until it is shown. A
+// hotseat game is read from the page's localStorage instead (where the site keeps
+// it), so it needs no spacing. The
 // game goes to the background worker, which asks the local advisor backend; the
 // answer is drawn in the panel (panel.js), and the recommended hex is outlined
 // on the site's map when it can be found. The site is a single-page app, so the
@@ -113,7 +115,7 @@
         state.again = true;
         return;
       }
-      const wait = gate.waitMs();
+      const wait = R.isHotseat(state.gameId) ? 0 : gate.waitMs();
       if (wait > 0) {
         if (!state.timer) {
           state.timer = env.setTimeout(() => {
@@ -174,7 +176,7 @@
     }
 
     function refresh() {
-      const wait = gate.waitMs();
+      const wait = R.isHotseat(state.gameId) ? 0 : gate.waitMs();
       if (wait > 0 && !state.fetching) {
         state.statuses = [{ kind: 'info', text: `Refreshing in ${Math.ceil(wait / 1000)} s (at most once every 10 s).` }];
         render();
@@ -323,6 +325,11 @@
       location: root.location,
       document: root.document,
       fetchGame: async (id) => {
+        if (R.isHotseat(id)) {
+          const stored = root.localStorage.getItem(id);
+          if (!stored) throw new Error(`hotseat game ${id} isn't in this browser's storage`);
+          return JSON.parse(stored);
+        }
         const url = new URL(`/api/game/${encodeURIComponent(id)}`, root.location.origin).href;
         const response = await fetch(url, { credentials: 'omit', headers: { Accept: 'application/json' } });
         if (!response.ok) throw new Error(`the site answered HTTP ${response.status}`);
