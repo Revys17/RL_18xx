@@ -1273,6 +1273,250 @@ def get_game_object_for_game(game: dict, use_rust: bool = True) -> BaseGame:
     return game_or_none
 
 
+class HumanActionRejected(Exception):
+    """The engine rejected a recorded human action (``action``, as it was finally
+    sent, after any substitution) with ``error``."""
+
+    def __init__(self, action: dict, error: Exception):
+        super().__init__(f"{type(error).__name__}: {error}")
+        self.action = action
+        self.error = error
+
+
+def replay_human_action(
+    game_state,
+    filtered_actions: list,
+    i: int,
+    player_mapping: dict,
+    use_rust: bool = True,
+    drop_rules: bool = True,
+    before_apply=None,
+) -> Optional[str]:
+    """Apply the recorded action ``filtered_actions[i]`` (:func:`filter_actions`
+    output; mutated in place) to ``game_state``, with the importer's leniency:
+    player ids mapped through ``player_mapping`` (18xx.games user id -> engine
+    player id), passes inserted where a stream skips a blocking step, stray
+    passes skipped or dropped, legal-action substitutions. Some of those
+    decisions look ahead at actions ``i + 1`` and ``i + 2``.
+
+    Returns the reason the game should be dropped from the training data
+    (``"cross_player_company_purchase"``, ...), or None. With ``drop_rules``
+    off (following a live game, where every action must be tried) those checks
+    are skipped and the engine decides. ``before_apply(game_state, action)`` is
+    called right before the action itself is applied (not for a skipped one).
+    Raises :class:`HumanActionRejected` when the engine rejects the action.
+    """
+    action = filtered_actions[i]
+
+    LOGGER.debug(f"Processing action: {action}")
+    if action["entity_type"] == "player":
+        if action.get("user", None) and action["entity"] != action["user"]:
+            LOGGER.debug(f"Master mode or bug!!")
+        action["entity"] = player_mapping[action["entity"]]
+        action["user"] = action["entity"]
+    else:
+        entity_owner = game_state.get(action["entity_type"], action["entity"]).player()
+        if action.get("user", None):
+            if action["user"] not in player_mapping:
+                LOGGER.debug(f"Non-playing user played via master mode. Changing to entity owner.")
+            elif entity_owner.id != player_mapping[action["user"]]:
+                LOGGER.debug(f"In-game user played via master mode. Changing to entity owner.")
+            action["user"] = entity_owner.id
+
+    # If a player buys a company from a different player, we don't want to use this game.
+    if drop_rules and action["type"] == "buy_company":
+        company_purchaser = game_state.get(action["entity_type"], action["entity"]).player()
+        company_owner = game_state.company_by_id(action["company"]).player()
+        if company_purchaser.id != company_owner.id:
+            LOGGER.debug(f"Skipping game because there's a cross-player company purchase")
+            LOGGER.debug(f"Company purchaser: {company_purchaser}, company owner: {company_owner}")
+            LOGGER.debug(f"Game actions: {game_state.raw_actions}")
+            return "cross_player_company_purchase"
+
+    # If a player buys a train from a different player, we don't want to use this game.
+    if drop_rules and action["type"] == "buy_train":
+        # A train id the engine never created means the recording ran
+        # under train rules we don't model; there is nothing to replay.
+        train = game_state.train_by_id(action["train"])
+        if train is None:
+            LOGGER.debug(f"Skipping game because it buys unknown train {action['train']}")
+            return "unknown_train"
+        train_purchaser = game_state.get(action["entity_type"], action["entity"])
+        train_owner = train.owner
+        if train_owner.is_corporation():
+            if train_purchaser.player() != train_owner.player():
+                LOGGER.debug(f"Skipping game because there's a cross-player train purchase")
+                LOGGER.debug(f"Train purchaser: {train_purchaser.player()}")
+                LOGGER.debug(f"Train owner: {train_owner.player()}")
+                LOGGER.debug(f"Game actions: {game_state.raw_actions}")
+                return "cross_player_train_purchase"
+
+        # Detect "phase-skip" depot buys: in some 2021-era online games
+        # (e.g. 58217, 78203, 64349), the user bought a higher-grade
+        # train (e.g. a 3-train) from the depot while a lower-grade
+        # train of the previous tier was still at the front of the
+        # depot queue. The older Ruby 18xx engine only validated the
+        # train variant, not depot containment, so the action was
+        # accepted at the time; current Ruby and our Python port both
+        # reject it. Drop such games rather than try to fudge the
+        # depot state.
+        if not action.get("exchange"):
+            bought = game_state.train_by_id(action["train"])
+            # Only check depot buys (where the train is currently owned
+            # by the depot, not by another corp).
+            if bought is not None and not bought.owner.is_corporation():
+                depot_trains = game_state.depot.depot_trains()
+                # The legitimate depot-buyable names at this moment.
+                buyable_names = {t.name for t in depot_trains}
+                if bought.name not in buyable_names and bought in game_state.depot.upcoming:
+                    LOGGER.debug(
+                        f"Skipping game because of a Ruby-quirky depot phase-skip: "
+                        f"action bought train {bought.id} (name={bought.name}) "
+                        f"while depot front exposes only {sorted(buyable_names)}"
+                    )
+                    return "ruby_depot_phase_skip"
+
+    # If the MH takes an action out of turn, we don't want to use this game.
+    if drop_rules and action["entity_type"] == "company" and action["entity"] == "MH":
+        mh_owner = game_state.company_by_id("MH").player()
+        current_player = game_state.current_entity.player()
+        if mh_owner != current_player:
+            LOGGER.debug(f"Skipping game because the MH took an action out of turn")
+            LOGGER.debug(f"MH owner: {mh_owner}, current player: {current_player}")
+            LOGGER.debug(f"Game actions: {game_state.raw_actions}")
+            return "mh_out_of_turn"
+
+    # CS / DH any-time tile-lay abilities are only legal during an
+    # Operating Round (CS: any step of the owning corp's OR turn via the
+    # SpecialTrack step; DH: only in lieu of the owning corp's LayTile).
+    # A handful of human games (e.g. 26846 with CS, 27514 with DH) attempt
+    # to use these powers during a Stock Round — Ruby's online engine
+    # accepted it via a looser interpretation, but our engine (and the
+    # printed rules) reject it. Drop these games so they don't break
+    # cleaning. Note: legal uses during the corp's OR turn fall through
+    # to SpecialTrack and are handled by the engine without any filter.
+    if (
+        drop_rules
+        and action["entity_type"] == "company"
+        and action["entity"] in ("CS", "DH")
+        and action["type"] == "lay_tile"
+        and not game_state.round.operating
+    ):
+        LOGGER.debug(
+            f"Skipping game because {action['entity']} tile-lay attempted "
+            f"outside an Operating Round (round={type(game_state.round).__name__})"
+        )
+        return "company_tile_lay_outside_or"
+
+    if should_add_pass(action, game_state):
+        pass_action = {
+            "type": "pass",
+            "entity": game_state.current_entity.id,
+            "entity_type": game_state.current_entity.__class__.__name__.lower(),
+            "user": game_state.current_entity.player().id,
+        }
+        LOGGER.debug(f"Adding pass action {pass_action} before action: {action}")
+        _process_pass_leniently(game_state, pass_action, use_rust)
+
+    # Some human Ruby game streams skip ``run_routes`` entirely for a
+    # corp that has a train but no profitable route — Ruby's online
+    # engine allowed it, our engine (and current Ruby) requires an
+    # explicit empty run_routes to advance past the blocking Route step.
+    # Synthesize one when the action belongs to a step that comes
+    # AFTER Route in the OR sequence (BuyTrain, Dividend, DiscardTrain)
+    # so the only way to reach it is to clear Route first. Actions
+    # belonging to earlier steps (buy_company, lay_tile, etc.) flow
+    # through their own non-blocking step without disturbing Route.
+    # See game 86319 where ERIE skips straight to buy_train.
+    active_step = game_state.round.active_step()
+    if (
+        isinstance(active_step, RouteStep)
+        and action["type"] in ("buy_train", "dividend", "discard_train")
+        and action.get("entity_type") == "corporation"
+        and game_state.current_entity.id == action.get("entity")
+    ):
+        run_routes_action = {
+            "type": "run_routes",
+            "entity": game_state.current_entity.id,
+            "entity_type": "corporation",
+            "user": game_state.current_entity.player().id,
+            "routes": [],
+        }
+        LOGGER.debug(
+            f"Inserting empty run_routes for {game_state.current_entity.id} "
+            f"before action {action} (Route step blocking but stream skips it)"
+        )
+        game_state.process_action(run_routes_action)
+
+    if should_skip_action(filtered_actions, action, game_state, i):
+        LOGGER.debug(f"Skipping action: {action}")
+        return None
+
+    # If the player is trying to buy a share from the ipo after buying from the market when the company is in brown (or vice versa), we can't use this game.
+    if drop_rules and isinstance(game_state.round.active_step(), BuySellParShares) and action["type"] == "buy_shares":
+        # Company-driven share buys (e.g. MH exchanging for an NYC IPO
+        # share) flow through ExchangeStep, not through
+        # ``BuySellParShares.can_buy_shares``. Skip the per-player
+        # legality check for those — the filter is for normal player
+        # buys only. (Ruby's online engine also routes MH exchange
+        # through a separate ability path; Python's port mirrors that.)
+        if action["entity_type"] != "company":
+            shares = [game_state.share_by_id(share) for share in action["shares"]]
+            if not game_state.round.active_step().can_buy_shares(game_state.current_entity, shares):
+                LOGGER.debug(f"Skipping game because the player is trying to buy an illegal share.")
+                LOGGER.debug(f"Game actions: {game_state.raw_actions}")
+                return "illegal_share_buy"
+
+    if action["type"] not in ["pass", "bankrupt"]:
+        # Don't check passes because we have a lot of extra passes
+        # Don't check bankrupt because we don't allow bankruptcies as often
+        # `check_action_in_action_helper` returns None when no substitution
+        # is needed (either matched cleanly or no acceptable replacement
+        # was found) and a serialized action dict when the caller should
+        # swap in the replacement.
+        replacement_action = check_action_in_action_helper(action, game_state)
+        if replacement_action is not None:
+            LOGGER.debug(f"Substituting action based on action helper actions.")
+            LOGGER.debug(f"Original action: {action}")
+            LOGGER.debug(f"Replacement action: {replacement_action}")
+            action = replacement_action
+
+    # Mis-attributed corp action (e.g., game 54156's master-mode dividend
+    # re-do). After should_add_pass / should_skip_action / action-helper
+    # substitution have applied their corrections, if action.entity still
+    # doesn't match the current operator, this is a genuine Ruby
+    # mis-attribution that the engines (both strict now) would reject.
+    # Drop the game.
+    if (
+        drop_rules
+        and action["entity_type"] == "corporation"
+        and action["type"] in ("lay_tile", "place_token", "run_routes", "dividend", "buy_train", "buy_company", "pass")
+        and action["entity"] != game_state.current_entity.id
+    ):
+        LOGGER.debug(f"Skipping game because action entity does not match current operator")
+        LOGGER.debug(f"Action: {action}")
+        LOGGER.debug(f"Current operator: {game_state.current_entity.id}")
+        return "entity_mismatch"
+
+    if action["type"] == "pass":
+        # Stray passes the engine can't route are dropped here (the
+        # engines no longer swallow them internally) — same net effect
+        # as the historical engine-side skip, regardless of
+        # optional_rules.
+        if before_apply is not None:
+            before_apply(game_state, action)
+        _process_pass_leniently(game_state, action, use_rust)
+        return None
+
+    if before_apply is not None:
+        before_apply(game_state, action)
+    try:
+        game_state.process_action(action)
+    except Exception as e:
+        raise HumanActionRejected(action, e) from e
+    return None
+
+
 def _get_game_object_for_game_with_reason(game: dict, use_rust: bool = True):
     """Internal: same as :func:`get_game_object_for_game` but additionally
     returns the drop reason (or ``None`` if the game cleaned successfully).
@@ -1311,206 +1555,11 @@ def _get_game_object_for_game_with_reason(game: dict, use_rust: bool = True):
 
     filtered_actions = filter_actions(game["actions"])
 
-    for i, action in enumerate(filtered_actions):
-        LOGGER.debug(f"Processing action: {action}")
-        if action["entity_type"] == "player":
-            if action.get("user", None) and action["entity"] != action["user"]:
-                LOGGER.debug(f"Master mode or bug!!")
-            action["entity"] = player_mapping[action["entity"]]
-            action["user"] = action["entity"]
-        else:
-            entity_owner = game_state.get(action["entity_type"], action["entity"]).player()
-            if action.get("user", None):
-                if action["user"] not in player_mapping:
-                    LOGGER.debug(f"Non-playing user played via master mode. Changing to entity owner.")
-                elif entity_owner.id != player_mapping[action["user"]]:
-                    LOGGER.debug(f"In-game user played via master mode. Changing to entity owner.")
-                action["user"] = entity_owner.id
-
-        # If a player buys a company from a different player, we don't want to use this game.
-        if action["type"] == "buy_company":
-            company_purchaser = game_state.get(action["entity_type"], action["entity"]).player()
-            company_owner = game_state.company_by_id(action["company"]).player()
-            if company_purchaser.id != company_owner.id:
-                LOGGER.debug(f"Skipping game because there's a cross-player company purchase")
-                LOGGER.debug(f"Company purchaser: {company_purchaser}, company owner: {company_owner}")
-                LOGGER.debug(f"Game actions: {game_state.raw_actions}")
-                return None, "cross_player_company_purchase"
-
-        # If a player buys a train from a different player, we don't want to use this game.
-        if action["type"] == "buy_train":
-            # A train id the engine never created means the recording ran
-            # under train rules we don't model; there is nothing to replay.
-            train = game_state.train_by_id(action["train"])
-            if train is None:
-                LOGGER.debug(f"Skipping game because it buys unknown train {action['train']}")
-                return None, "unknown_train"
-            train_purchaser = game_state.get(action["entity_type"], action["entity"])
-            train_owner = train.owner
-            if train_owner.is_corporation():
-                if train_purchaser.player() != train_owner.player():
-                    LOGGER.debug(f"Skipping game because there's a cross-player train purchase")
-                    LOGGER.debug(f"Train purchaser: {train_purchaser.player()}")
-                    LOGGER.debug(f"Train owner: {train_owner.player()}")
-                    LOGGER.debug(f"Game actions: {game_state.raw_actions}")
-                    return None, "cross_player_train_purchase"
-
-            # Detect "phase-skip" depot buys: in some 2021-era online games
-            # (e.g. 58217, 78203, 64349), the user bought a higher-grade
-            # train (e.g. a 3-train) from the depot while a lower-grade
-            # train of the previous tier was still at the front of the
-            # depot queue. The older Ruby 18xx engine only validated the
-            # train variant, not depot containment, so the action was
-            # accepted at the time; current Ruby and our Python port both
-            # reject it. Drop such games rather than try to fudge the
-            # depot state.
-            if not action.get("exchange"):
-                bought = game_state.train_by_id(action["train"])
-                # Only check depot buys (where the train is currently owned
-                # by the depot, not by another corp).
-                if bought is not None and not bought.owner.is_corporation():
-                    depot_trains = game_state.depot.depot_trains()
-                    # The legitimate depot-buyable names at this moment.
-                    buyable_names = {t.name for t in depot_trains}
-                    if bought.name not in buyable_names and bought in game_state.depot.upcoming:
-                        LOGGER.debug(
-                            f"Skipping game because of a Ruby-quirky depot phase-skip: "
-                            f"action bought train {bought.id} (name={bought.name}) "
-                            f"while depot front exposes only {sorted(buyable_names)}"
-                        )
-                        return None, "ruby_depot_phase_skip"
-
-        # If the MH takes an action out of turn, we don't want to use this game.
-        if action["entity_type"] == "company" and action["entity"] == "MH":
-            mh_owner = game_state.company_by_id("MH").player()
-            current_player = game_state.current_entity.player()
-            if mh_owner != current_player:
-                LOGGER.debug(f"Skipping game because the MH took an action out of turn")
-                LOGGER.debug(f"MH owner: {mh_owner}, current player: {current_player}")
-                LOGGER.debug(f"Game actions: {game_state.raw_actions}")
-                return None, "mh_out_of_turn"
-
-        # CS / DH any-time tile-lay abilities are only legal during an
-        # Operating Round (CS: any step of the owning corp's OR turn via the
-        # SpecialTrack step; DH: only in lieu of the owning corp's LayTile).
-        # A handful of human games (e.g. 26846 with CS, 27514 with DH) attempt
-        # to use these powers during a Stock Round — Ruby's online engine
-        # accepted it via a looser interpretation, but our engine (and the
-        # printed rules) reject it. Drop these games so they don't break
-        # cleaning. Note: legal uses during the corp's OR turn fall through
-        # to SpecialTrack and are handled by the engine without any filter.
-        if (
-            action["entity_type"] == "company"
-            and action["entity"] in ("CS", "DH")
-            and action["type"] == "lay_tile"
-            and not game_state.round.operating
-        ):
-            LOGGER.debug(
-                f"Skipping game because {action['entity']} tile-lay attempted "
-                f"outside an Operating Round (round={type(game_state.round).__name__})"
-            )
-            return None, "company_tile_lay_outside_or"
-
-        if should_add_pass(action, game_state):
-            pass_action = {
-                "type": "pass",
-                "entity": game_state.current_entity.id,
-                "entity_type": game_state.current_entity.__class__.__name__.lower(),
-                "user": game_state.current_entity.player().id,
-            }
-            LOGGER.debug(f"Adding pass action {pass_action} before action: {action}")
-            _process_pass_leniently(game_state, pass_action, use_rust)
-
-        # Some human Ruby game streams skip ``run_routes`` entirely for a
-        # corp that has a train but no profitable route — Ruby's online
-        # engine allowed it, our engine (and current Ruby) requires an
-        # explicit empty run_routes to advance past the blocking Route step.
-        # Synthesize one when the action belongs to a step that comes
-        # AFTER Route in the OR sequence (BuyTrain, Dividend, DiscardTrain)
-        # so the only way to reach it is to clear Route first. Actions
-        # belonging to earlier steps (buy_company, lay_tile, etc.) flow
-        # through their own non-blocking step without disturbing Route.
-        # See game 86319 where ERIE skips straight to buy_train.
-        active_step = game_state.round.active_step()
-        if (
-            isinstance(active_step, RouteStep)
-            and action["type"] in ("buy_train", "dividend", "discard_train")
-            and action.get("entity_type") == "corporation"
-            and game_state.current_entity.id == action.get("entity")
-        ):
-            run_routes_action = {
-                "type": "run_routes",
-                "entity": game_state.current_entity.id,
-                "entity_type": "corporation",
-                "user": game_state.current_entity.player().id,
-                "routes": [],
-            }
-            LOGGER.debug(
-                f"Inserting empty run_routes for {game_state.current_entity.id} "
-                f"before action {action} (Route step blocking but stream skips it)"
-            )
-            game_state.process_action(run_routes_action)
-
-        if should_skip_action(filtered_actions, action, game_state, i):
-            LOGGER.debug(f"Skipping action: {action}")
-            continue
-
-        # If the player is trying to buy a share from the ipo after buying from the market when the company is in brown (or vice versa), we can't use this game.
-        if isinstance(game_state.round.active_step(), BuySellParShares) and action["type"] == "buy_shares":
-            # Company-driven share buys (e.g. MH exchanging for an NYC IPO
-            # share) flow through ExchangeStep, not through
-            # ``BuySellParShares.can_buy_shares``. Skip the per-player
-            # legality check for those — the filter is for normal player
-            # buys only. (Ruby's online engine also routes MH exchange
-            # through a separate ability path; Python's port mirrors that.)
-            if action["entity_type"] != "company":
-                shares = [game_state.share_by_id(share) for share in action["shares"]]
-                if not game_state.round.active_step().can_buy_shares(game_state.current_entity, shares):
-                    LOGGER.debug(f"Skipping game because the player is trying to buy an illegal share.")
-                    LOGGER.debug(f"Game actions: {game_state.raw_actions}")
-                    return None, "illegal_share_buy"
-
-        if action["type"] not in ["pass", "bankrupt"]:
-            # Don't check passes because we have a lot of extra passes
-            # Don't check bankrupt because we don't allow bankruptcies as often
-            # `check_action_in_action_helper` returns None when no substitution
-            # is needed (either matched cleanly or no acceptable replacement
-            # was found) and a serialized action dict when the caller should
-            # swap in the replacement.
-            replacement_action = check_action_in_action_helper(action, game_state)
-            if replacement_action is not None:
-                LOGGER.debug(f"Substituting action based on action helper actions.")
-                LOGGER.debug(f"Original action: {action}")
-                LOGGER.debug(f"Replacement action: {replacement_action}")
-                action = replacement_action
-
-        # Mis-attributed corp action (e.g., game 54156's master-mode dividend
-        # re-do). After should_add_pass / should_skip_action / action-helper
-        # substitution have applied their corrections, if action.entity still
-        # doesn't match the current operator, this is a genuine Ruby
-        # mis-attribution that the engines (both strict now) would reject.
-        # Drop the game.
-        if (
-            action["entity_type"] == "corporation"
-            and action["type"] in ("lay_tile", "place_token", "run_routes", "dividend", "buy_train", "buy_company", "pass")
-            and action["entity"] != game_state.current_entity.id
-        ):
-            LOGGER.debug(f"Skipping game because action entity does not match current operator")
-            LOGGER.debug(f"Action: {action}")
-            LOGGER.debug(f"Current operator: {game_state.current_entity.id}")
-            return None, "entity_mismatch"
-
-        if action["type"] == "pass":
-            # Stray passes the engine can't route are dropped here (the
-            # engines no longer swallow them internally) — same net effect
-            # as the historical engine-side skip, regardless of
-            # optional_rules.
-            _process_pass_leniently(game_state, action, use_rust)
-            continue
-
+    for i in range(len(filtered_actions)):
         try:
-            game_state.process_action(action)
-        except Exception as e:
+            reason = replay_human_action(game_state, filtered_actions, i, player_mapping, use_rust)
+        except HumanActionRejected as rejected:
+            e = rejected.error
             LOGGER.debug(f"Error processing action: {e}")
             if optional_rules:
                 LOGGER.info(f"Skipping game {game['id']} because of optional rules")
@@ -1519,9 +1568,11 @@ def _get_game_object_for_game_with_reason(game: dict, use_rust: bool = True):
 
             LOGGER.error(f"Game id: {game['id']}")
             LOGGER.error(f"Actions processed so far: {game_state.raw_actions}")
-            LOGGER.error(f"Action being processed: {action}")
+            LOGGER.error(f"Action being processed: {rejected.action}")
             LOGGER.error(f"All actions: {game['actions']}")
             raise e
+        if reason is not None:
+            return None, reason
 
     LOGGER.debug(f"Finished processing game {game['id']}")
     LOGGER.debug(f"Game actions: {game_state.raw_actions}")
