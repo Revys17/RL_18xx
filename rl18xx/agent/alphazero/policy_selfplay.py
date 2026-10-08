@@ -30,7 +30,7 @@ import logging
 import random
 import time
 import uuid
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -237,7 +237,11 @@ def generate(
     """Play ``num_games`` policy-only games with ``checkpoint`` and write their
     sampled positions to ``out_dir/{training,validation}``. Returns stats."""
     from rl18xx.agent.alphazero.dataset import TrainingExampleProcessor
-    from rl18xx.agent.alphazero.inference_server import start_inference_server, worker_init_inference
+    from rl18xx.agent.alphazero.inference_server import (
+        start_inference_server,
+        wait_checking_servers,
+        worker_init_inference,
+    )
     from rl18xx.agent.alphazero.pretraining import in_validation_split
 
     settings = {
@@ -286,7 +290,7 @@ def generate(
                 futures.add(pool.submit(play_policy_games, n, settings))
                 submitted += n
             while futures:
-                done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                done, futures = wait_checking_servers(futures, {"policy": server}, pool)
                 for future in done:
                     result = future.result()
                     stats["decisions"] += result["decisions"]

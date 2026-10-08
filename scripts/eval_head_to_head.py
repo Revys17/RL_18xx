@@ -62,7 +62,7 @@ import random
 import sys
 import time
 from collections import Counter, defaultdict
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -355,7 +355,7 @@ def main():
         json.dumps({**settings, "matches": args.match, "games_per_match": games_per_match}, indent=2)
     )
 
-    from rl18xx.agent.alphazero.inference_server import start_inference_server
+    from rl18xx.agent.alphazero.inference_server import start_inference_server, wait_checking_servers
 
     servers = {}
     for path in paths:
@@ -390,7 +390,7 @@ def main():
             }
             done_count = 0
             while pending:
-                finished, _ = wait(list(pending), return_when=FIRST_COMPLETED)
+                finished, _ = wait_checking_servers(list(pending), servers, pool)
                 for future in finished:
                     match_index, arrangement = pending.pop(future)
                     try:

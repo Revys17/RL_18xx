@@ -80,7 +80,7 @@ import random
 import time
 import uuid
 from collections import Counter, defaultdict, deque
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -599,7 +599,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
     """Run the policy-gradient stage; returns the run directory."""
     from torch.utils.tensorboard import SummaryWriter
 
-    from rl18xx.agent.alphazero.inference_server import start_inference_server
+    from rl18xx.agent.alphazero.inference_server import start_inference_server, wait_checking_servers
 
     use_tf32()
     if resume:
@@ -710,7 +710,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                 for _ in range(cfg.workers * cfg.tasks_in_flight_per_worker)
             }
             while update < cfg.max_updates and not stop_file.exists():
-                done, futures = wait(futures, timeout=60, return_when=FIRST_COMPLETED)
+                done, futures = wait_checking_servers(futures, handles, executor, timeout=60)
                 for future in done:
                     result = future.result()
                     gen["decisions"] += result["decisions"]

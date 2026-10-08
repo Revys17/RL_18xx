@@ -33,6 +33,7 @@ import logging
 import multiprocessing as mp
 import queue
 import time
+from concurrent.futures import FIRST_COMPLETED, wait
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -785,6 +786,8 @@ class ServerHandle:
         return self._send("health", timeout_s=timeout_s)
 
     def shutdown(self, timeout_s: float = 30.0):
+        if self.process is not None and not self.process.is_alive():
+            return  # died already: nothing would answer
         try:
             self._send("shutdown", timeout_s=timeout_s)
         except TimeoutError:
@@ -794,6 +797,29 @@ class ServerHandle:
                 self.process.join(timeout=5.0)
                 if self.process.is_alive():
                     self.process.terminate()
+
+
+def wait_checking_servers(futures, handles: dict, executor, timeout: float = 30.0):
+    """``concurrent.futures.wait(futures, timeout, FIRST_COMPLETED)`` that fails if a server died.
+
+    Workers block forever on the replies of a dead inference server, so a plain
+    wait (and the executor's shutdown) would hang instead of failing: an
+    evaluation sharing a full GPU lost a server to an out-of-memory error and
+    waited for hours. If any of ``handles`` (name -> ServerHandle) has exited,
+    the executor's workers are killed, so its shutdown returns, and this raises.
+    """
+    done, pending = wait(futures, timeout=timeout, return_when=FIRST_COMPLETED)
+    dead = [
+        f"{name} (exit code {handle.process.exitcode})"
+        for name, handle in handles.items()
+        if handle.process is not None and not handle.process.is_alive()
+    ]
+    if dead:
+        for process in list((getattr(executor, "_processes", None) or {}).values()):
+            process.terminate()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise RuntimeError(f"inference server died: {', '.join(dead)}")
+    return done, pending
 
 
 def _server_main(

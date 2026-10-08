@@ -35,7 +35,7 @@ import random
 import sys
 import time
 from collections import Counter, defaultdict
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -271,7 +271,7 @@ def summarize(a: str, b: str, records: list) -> dict:
 
 def run_match(a_spec: str, b_spec: str, args) -> dict:
     from rl18xx.agent.alphazero import policy_gradient as pg
-    from rl18xx.agent.alphazero.inference_server import start_inference_server
+    from rl18xx.agent.alphazero.inference_server import start_inference_server, wait_checking_servers
 
     players = {"A": parse_player(a_spec), "B": parse_player(b_spec)}
     paths = sorted({path for path, _, _ in players.values()})
@@ -306,7 +306,7 @@ def run_match(a_spec: str, b_spec: str, args) -> dict:
         with ProcessPoolExecutor(max_workers=args.workers, initializer=pg.worker_init, initargs=(queues,)) as pool:
             futures = {pool.submit(play_games, chunk, settings) for chunk in chunks}
             while futures:
-                done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                done, futures = wait_checking_servers(futures, handles, pool)
                 for future in done:
                     records.extend(future.result())
     finally:

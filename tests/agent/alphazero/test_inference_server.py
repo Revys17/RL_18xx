@@ -575,3 +575,48 @@ def test_each_process_pool_gets_worker_slots():
                 pool.shutdown(wait=False, cancel_futures=True)
     finally:
         handle.shutdown(timeout_s=30)
+
+
+def _pool_worker_round_trips_forever(signature):
+    from rl18xx.agent.alphazero.inference_server import get_worker_client
+
+    while True:
+        get_worker_client().run_many_encoded([signature])
+
+
+def test_wait_checking_servers_fails_when_a_server_dies():
+    """Pools waiting on a dead server's replies used to hang: its workers, and
+    the executor's shutdown, never returned (an evaluation lost a server to a
+    CUDA out-of-memory error and waited for hours). Now the wait raises and the
+    workers are killed, so the pool shuts down."""
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+
+    from rl18xx.agent.alphazero.inference_server import (
+        start_inference_server,
+        wait_checking_servers,
+        worker_init_inference,
+    )
+
+    handle = start_inference_server(
+        num_workers=2, model_factory=_mock_factory, checkpoint_path=None, batch_size=4, batch_timeout_ms=2.0
+    )
+    try:
+        with ProcessPoolExecutor(
+            2,
+            mp_context=mp.get_context("spawn"),
+            initializer=worker_init_inference,
+            initargs=(handle.request_q, handle.reply_qs, handle.ticket_q),
+        ) as pool:
+            futures = {pool.submit(_pool_worker_round_trips_forever, i) for i in (3, 5)}
+            done, futures = wait_checking_servers(futures, {"model": handle}, pool, timeout=5.0)
+            assert not done
+            handle.process.kill()
+            handle.process.join(timeout=10)
+            started = time.monotonic()
+            with pytest.raises(RuntimeError, match="inference server died: model"):
+                while True:
+                    wait_checking_servers(futures, {"model": handle}, pool, timeout=1.0)
+        assert time.monotonic() - started < 30
+    finally:
+        handle.shutdown(timeout_s=5)
