@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>1830 advisor: debug</title>
+    <style>
+        body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 16px; max-width: 760px; }
+        textarea { width: 100%; height: 280px; font: 12px monospace; }
+        .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+        .note { color: #6b7280; }
+    </style>
+</head>
+<body>
+    <h2>1830 advisor: debug page</h2>
+    <p class="note">Paste or load a game as 18xx.games' <code>GET /api/game/&lt;id&gt;</code> returns it; the
+        advisor's panel (the browser extension's own code) shows the backend's advice for it. Nothing is sent
+        anywhere but this backend.</p>
+    <div class="row">
+        <input type="file" id="file" accept=".json,application/json">
+        <button id="advise">Advise</button>
+        <label>readouts <input type="number" id="readouts" value="200" min="16" max="5000" step="16"></label>
+    </div>
+    <textarea id="game" placeholder='{"id": 123, "title": "1830", "players": [...], "actions": [...]}'></textarea>
+    <script src="/debug/src/common.js"></script>
+    <script src="/debug/src/panel.js"></script>
+    <script>
+    const R = window.RL18XX;
+    let advice = null, think = { state: 'idle' }, statuses = [];
+    const panel = new R.Panel(document, {
+        onRefresh: advise,
+        onThink: startThink,
+        onHoverMove: () => {},
+    }, { corner: 'top-right' });
+    const render = () => panel.update({ statuses, advice, think, readouts: +document.getElementById('readouts').value });
+
+    async function post(path, body) {
+        const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const data = await response.json().catch(() => null);
+        return response.ok ? { ok: true, data } : { ok: false, error: (data && data.error) || `HTTP ${response.status}`, data };
+    }
+
+    async function advise() {
+        let game;
+        try { game = JSON.parse(document.getElementById('game').value); }
+        catch (e) { statuses = [{ kind: 'error', text: `Not JSON: ${e.message}` }]; return render(); }
+        statuses = [{ kind: 'info', text: 'Asking the backend…' }]; render();
+        const response = await post('/api/advise', R.stripGame(game));
+        if (!response.ok) { statuses = [{ kind: 'error', text: response.error }]; advice = null; return render(); }
+        advice = response.data;
+        statuses = advice.supported ? (advice.started === false ? [{ kind: 'info', text: advice.reason }] : [])
+            : [{ kind: 'warn', text: `Unsupported game: ${advice.reason}` }];
+        render();
+    }
+
+    async function startThink() {
+        if (!advice) return;
+        think = { state: 'running', progress: 0 }; render();
+        const response = await post('/api/think', { game_id: advice.game_id, position: advice.position, readouts: +document.getElementById('readouts').value });
+        if (!response.ok && !(response.data && response.data.job)) { think = { state: 'error', error: response.error }; return render(); }
+        const job = response.ok ? response.data.job : response.data.job.job;
+        const poll = async () => {
+            const status = await post(`/api/think/${job}`, {});
+            if (!status.ok) think = { state: 'error', error: status.error };
+            else if (status.data.status === 'running') { think = { state: 'running', progress: status.data.progress }; setTimeout(poll, 1000); }
+            else if (status.data.status === 'done') think = { state: 'done', result: status.data.result, position: status.data.position };
+            else think = { state: 'error', error: status.data.error };
+            render();
+        };
+        setTimeout(poll, 500);
+    }
+
+    document.getElementById('advise').addEventListener('click', advise);
+    document.getElementById('file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (file) { document.getElementById('game').value = await file.text(); advise(); }
+    });
+    </script>
+</body>
+</html>

@@ -7,6 +7,7 @@ Usage:
     python main.py arena               Run an arena match between agents
     python main.py dashboard           Start the training dashboard web server
     python main.py replay <game_file>  Check a saved game in the Python engine and open it in the game viewer
+    python main.py advisor             Serve the model advisor's backend for the browser extension (extension/)
 """
 import argparse
 import logging
@@ -294,6 +295,13 @@ def cmd_replay(args):
         replay_game_from_log_file(args.log_file, print_log=args.log)
 
 
+def cmd_advisor(args):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from rl18xx.agent.advisor.app import run
+
+    run(args)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="rl18xx",
@@ -537,6 +545,27 @@ def build_parser():
         help="Instead, re-create the game on this self-hosted 18xx server (e.g. http://localhost:9292)",
     )
 
+    # advisor
+    from rl18xx.agent.advisor import DEFAULT_AUCTION_POLICY, DEFAULT_POLICY, DEFAULT_VALUE
+
+    p = sub.add_parser(
+        "advisor",
+        help="Serve the model advisor's backend (127.0.0.1 only) for the browser extension in extension/",
+    )
+    p.add_argument("--port", type=int, default=5002, help="Port on 127.0.0.1 (default: 5002)")
+    p.add_argument("--policy", type=str, default=DEFAULT_POLICY, help="Policy checkpoint for recommended moves")
+    p.add_argument(
+        "--auction-policy", type=str, default=DEFAULT_AUCTION_POLICY,
+        help="Policy checkpoint for the private auction (policy-gradient runs never trained on it)",
+    )
+    p.add_argument("--value", type=str, default=DEFAULT_VALUE, help="Value checkpoint for win estimates")
+    p.add_argument("--device", type=str, default=None, help="cuda / cpu (default: cuda if available)")
+    p.add_argument("--cpu-threads", type=int, default=4, help="Torch threads when on CPU (default: 4)")
+    p.add_argument(
+        "--debug-page", action="store_true",
+        help="Also serve /debug: paste a game JSON and see the extension's panel for it",
+    )
+
     return parser
 
 
@@ -559,5 +588,6 @@ if __name__ == "__main__":
         "arena": cmd_arena,
         "dashboard": cmd_dashboard,
         "replay": cmd_replay,
+        "advisor": cmd_advisor,
     }
     commands[args.command](args)

@@ -29,17 +29,21 @@ CONFIG_KEY = "config"
 CURRENT_BEST_FILENAME = "current_best.json"
 
 
-def _build_transformer_model(config_data: dict, checkpoint_path: Optional[str]) -> AlphaZeroModel:
+def _build_transformer_model(config_data: dict, checkpoint_path: Optional[str], device=None) -> AlphaZeroModel:
     from rl18xx.agent.alphazero.model_transformer import AlphaZeroTransformerModel
 
     config = ModelTransformerConfig.from_json(config_data)
     config.model_checkpoint_file = checkpoint_path
+    if device is not None:
+        config.device = torch.device(device)
     return AlphaZeroTransformerModel(config)
 
 
-def _build_gnn_model(config_data: dict, checkpoint_path: Optional[str]) -> AlphaZeroModel:
+def _build_gnn_model(config_data: dict, checkpoint_path: Optional[str], device=None) -> AlphaZeroModel:
     config = ModelGNNConfig.from_json(config_data)
     config.model_checkpoint_file = checkpoint_path
+    if device is not None:
+        config.device = torch.device(device)
     return AlphaZeroGNNModel(config)
 
 
@@ -196,13 +200,13 @@ def _pad_policy_head_state_dict(
     return out
 
 
-def _instantiate_model(checkpoint_dict: dict, checkpoint_path: str) -> AlphaZeroModel:
+def _instantiate_model(checkpoint_dict: dict, checkpoint_path: str, device=None) -> AlphaZeroModel:
     """Construct a model from a normalized checkpoint dict and load its weights.
 
     The factory is invoked with `model_checkpoint_file=None` so the model's own
     `load_weights` (which expects a raw state_dict on disk) is skipped — the
     state_dict has already been extracted from the bundled .pth and is loaded
-    explicitly here.
+    explicitly here. ``device`` builds it there (default: the best available).
     """
     arch = checkpoint_dict[ARCHITECTURE_KEY]
     config_data = dict(checkpoint_dict[CONFIG_KEY] or {})
@@ -226,7 +230,7 @@ def _instantiate_model(checkpoint_dict: dict, checkpoint_path: str) -> AlphaZero
             f"Unknown model architecture {arch!r}. Known: {sorted(_ARCHITECTURE_REGISTRY)}"
         ) from None
 
-    model = factory(config_data, None)
+    model = factory(config_data, None, device=device)
     # Record where the weights came from for downstream tooling that inspects
     # the in-memory model (e.g. logging which checkpoint a worker loaded).
     model.config.model_checkpoint_file = checkpoint_path
@@ -472,14 +476,15 @@ def get_current_best(checkpoint_dir: str, arch: Optional[str] = None) -> Optiona
     return max(candidates, key=lambda d: d.get("session", ""))
 
 
-def _load_model_from_session_checkpoint(session_dir: Path, checkpoint_path: Path) -> AlphaZeroModel:
+def _load_model_from_session_checkpoint(session_dir: Path, checkpoint_path: Path, device=None) -> AlphaZeroModel:
     """Shared helper: load a model from a specific session+checkpoint.
 
     Reads the bundled .pth (or falls back to legacy state_dict + sidecar
-    config.json) and instantiates the right model class from the registry.
+    config.json) and instantiates the right model class from the registry, on
+    ``device`` (default: the best available).
     """
     checkpoint_dict = _load_checkpoint_dict(checkpoint_path)
-    model = _instantiate_model(checkpoint_dict, str(checkpoint_path))
+    model = _instantiate_model(checkpoint_dict, str(checkpoint_path), device=device)
     checkpoint_num = int(checkpoint_path.stem)
     LOGGER.info(
         f"Loaded model from: {session_dir.parent.name}/{session_dir.name}/checkpoint {checkpoint_num}"

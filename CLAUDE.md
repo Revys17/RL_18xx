@@ -48,6 +48,7 @@ uv run python main.py policy-gradient --policy <session>/<num> --value <session>
 uv run python main.py arena              # Run agent vs agent matches
 uv run python main.py dashboard          # Start training dashboard (port 5001); http://localhost:5001/games browses saved games
 uv run python main.py replay <game_file> # Check a saved game in the Python engine, print its viewer URL (--log: the game log)
+uv run python main.py advisor            # Model advisor backend (127.0.0.1:5002) for the browser extension in extension/
 uv run python scripts/eval_policy_only.py --match A B --out logs/eval/<name> --save-games 60  # + keep 60 games/match to view
 uv run python main.py policy-gradient ... --save-game-every 1000  # + keep ~1 in 1000 training games to view
 
@@ -102,6 +103,10 @@ Integration with a self-hosted 18xx.games server (the Ruby backend, `http://loca
 - `ruby_backend_api_client.py`: API client for the Ruby backend.
 - `game_sync.py`: Mirrors a local game onto that server (`arena --browser`, `main.py replay --local-server`).
 - `replay_game_from_log_file.py`: `main.py replay`: replays a saved game locally and points at the dashboard's game viewer (no server needed).
+
+### Advisor (`rl18xx/agent/advisor/`, `extension/`)
+
+Model help while playing real games on 18xx.games: a browser extension (`extension/`, Manifest V3, Chrome + Firefox; install steps in `extension/README.md`) floats a panel over the site's game page, reads the game from the site (`/api/game/<id>`, same origin, at most every 10 s) and asks the local backend `main.py advisor` (Flask on 127.0.0.1, answers extension origins only, never contacts 18xx.games). The backend follows each game incrementally in the Rust engine (`live_game.py`: `pretraining.filter_actions` + `replay_human_action`, the human importer with its training-data drop rules off; an undo rebuilds) and answers win estimates (value net), the policy's top-5 moves with prices (the supervised policy during the auction), the model's probability for the last moves, and an optional Rust-MCTS search (`advisor.py`, `describe.py`). Read-only: the user makes the moves on the site. Test game: `tests/fixtures/advisor/game_1830_4p.json` (`scripts/make_advisor_fixture.py`, no human data).
 
 ### Agent Interface (`rl18xx/agent/agent.py`)
 

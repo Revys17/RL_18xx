@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>1830 advisor options</title>
+    <style>
+        body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 16px; min-width: 360px; }
+        label { display: block; margin: 10px 0 2px; font-weight: 600; }
+        input[type=text], input[type=number], select { width: 100%; box-sizing: border-box; padding: 4px 6px; }
+        .row { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+        .note { color: #6b7280; font-size: 12px; }
+        #status { margin-top: 10px; min-height: 1.5em; }
+        .ok { color: #15803d; } .bad { color: #b91c1c; }
+    </style>
+</head>
+<body>
+    <label><input type="checkbox" id="enabled"> Show the advisor on 18xx.games game pages</label>
+
+    <label for="backendUrl">Backend URL</label>
+    <input type="text" id="backendUrl" placeholder="http://127.0.0.1:5002">
+    <div class="note">The advisor backend on this machine (<code>python main.py advisor</code>):
+        http://127.0.0.1:&lt;port&gt; or http://localhost:&lt;port&gt; only.</div>
+
+    <label for="readouts">"Think harder" readouts</label>
+    <input type="number" id="readouts" min="16" max="5000" step="16">
+
+    <label for="corner">Panel position</label>
+    <select id="corner">
+        <option value="top-right">Top right</option>
+        <option value="top-left">Top left</option>
+        <option value="bottom-right">Bottom right</option>
+        <option value="bottom-left">Bottom left</option>
+    </select>
+    <div class="note">Dragging the panel's title bar moves it; a new corner (or "Reset position") puts it back.</div>
+
+    <div class="row">
+        <button id="save">Save</button>
+        <button id="reset">Reset position</button>
+        <button id="test">Test the backend</button>
+    </div>
+    <div id="status"></div>
+    <script src="common.js"></script>
+    <script src="options.js"></script>
+</body>
+</html>
