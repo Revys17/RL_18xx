@@ -69,7 +69,11 @@ def load_model(path, device):
 
     path = Path(path)
     if not path.is_file():
-        raise FileNotFoundError(f"No checkpoint at {path}")
+        # Checkpoints are gitignored, so they exist only in the checkout that trained them.
+        raise FileNotFoundError(
+            f"No checkpoint at {path.resolve()}. Run from the checkout that holds the checkpoints "
+            f"or pass --policy / --auction-policy / --value as absolute paths."
+        )
     model = _load_model_from_session_checkpoint(path.parent, path, device=device)
     model.eval()
     return model
