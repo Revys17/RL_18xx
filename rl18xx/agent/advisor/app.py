@@ -23,15 +23,18 @@ files or logs).
 - ``GET /debug`` (``--debug-page`` only): paste or upload a game JSON and see
   the extension's panel for it.
 
-Only requests addressed to 127.0.0.1 / localhost (no DNS rebinding) from a
-browser extension (``Origin: chrome-extension://...`` or ``moz-extension://...``,
-which web pages can't forge) reach the API -- plus, with ``--debug-page``, the
-backend's own page.
+It serves on 127.0.0.1 unless ``--host`` says otherwise (``--host 0.0.0.0`` for a
+browser on another machine of the LAN). Only requests addressed to an IP address,
+localhost or this machine's host name (no DNS rebinding) from a browser extension
+(``Origin: chrome-extension://...`` or ``moz-extension://...``, which web pages
+can't forge) reach the API -- plus, with ``--debug-page``, the backend's own page.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+import socket
 import threading
 import traceback
 from collections import OrderedDict
@@ -98,6 +101,20 @@ def _failure(what: str, game_id, error: Exception):
     return jsonify({"error": f"{what} failed: {type(error).__name__}: {error}"}), 500
 
 
+def host_allowed(hostname: Optional[str]) -> bool:
+    """Whether a request's Host names this machine: an IP address, localhost or the
+    machine's own name. Any other name could be a DNS-rebinding page's domain."""
+    if not hostname:
+        return False
+    if hostname in LOCAL_HOSTNAMES or hostname.lower() in {socket.gethostname().lower(), socket.getfqdn().lower()}:
+        return True
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return True
+
+
 def create_app(advisor: Advisor, *, port: int, debug_page: bool = False) -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
@@ -109,8 +126,8 @@ def create_app(advisor: Advisor, *, port: int, debug_page: bool = False) -> Flas
 
     @app.before_request
     def guard():
-        if urlsplit(f"//{request.host or ''}").hostname not in LOCAL_HOSTNAMES:
-            return jsonify({"error": "This server only answers on 127.0.0.1 / localhost"}), 403
+        if not host_allowed(urlsplit(f"//{request.host or ''}").hostname):
+            return jsonify({"error": "This server only answers to an IP address or this machine's name"}), 403
         if request.path.startswith("/api/") and not origin_allowed(request.headers.get("Origin", "")):
             return jsonify({"error": "Only the advisor's browser extension may use this API"}), 403
         return None
@@ -216,7 +233,7 @@ def create_app(advisor: Advisor, *, port: int, debug_page: bool = False) -> Flas
 
 
 def run(args) -> None:
-    """``main.py advisor``: load the checkpoints and serve on 127.0.0.1."""
+    """``main.py advisor``: load the checkpoints and serve on ``--host`` (127.0.0.1 by default)."""
     import torch
 
     from rl18xx.agent.advisor.advisor import AdvisorModels
@@ -226,7 +243,10 @@ def run(args) -> None:
         torch.set_num_threads(args.cpu_threads)
     models = AdvisorModels.load(args.policy, args.auction_policy, args.value, device)
     app = create_app(Advisor(models), port=args.port, debug_page=args.debug_page)
-    LOGGER.info("Advisor backend on http://127.0.0.1:%d (device %s)", args.port, device)
+    host = getattr(args, "host", "127.0.0.1")
+    LOGGER.info("Advisor backend on http://%s:%d (device %s)", host, args.port, device)
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        LOGGER.info("Reachable from other machines: set the extension's backend URL to http://<this machine>:%d", args.port)
     if args.debug_page:
         LOGGER.info("Debug page: http://127.0.0.1:%d/debug", args.port)
-    app.run(host="127.0.0.1", port=args.port, threaded=True, use_reloader=False)
+    app.run(host=host, port=args.port, threaded=True, use_reloader=False)

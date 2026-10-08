@@ -38,8 +38,8 @@
     return out;
   }
 
-  /** ``http://127.0.0.1:<port>`` or ``http://localhost:<port>`` (no path), or null:
-   * the extension only talks to a backend on this machine. */
+  /** ``http://<host>:<port>`` (no path) of the advisor backend, or null: this machine
+   * (127.0.0.1 / localhost) or another one on the LAN (``main.py advisor --host 0.0.0.0``). */
   function normalizeBackendUrl(url) {
     let parsed;
     try {
@@ -47,10 +47,17 @@
     } catch (e) {
       return null;
     }
-    if (parsed.protocol !== 'http:') return null;
-    if (!['127.0.0.1', 'localhost'].includes(parsed.hostname)) return null;
+    if (parsed.protocol !== 'http:' || !parsed.hostname) return null;
+    if (parsed.username || parsed.password) return null;
     if ((parsed.pathname && parsed.pathname !== '/') || parsed.search || parsed.hash) return null;
     return `http://${parsed.host}`;
+  }
+
+  /** Whether a backend URL is on this machine (the manifest's host permissions cover
+   * it; any other host needs an optional permission granted from the options page). */
+  function isLoopbackBackend(url) {
+    const parsed = new URL(url);
+    return ['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname);
   }
 
   /** Spaces fetches at least ``minInterval`` ms apart. */
@@ -123,6 +130,7 @@
     parseGameId,
     stripGame,
     normalizeBackendUrl,
+    isLoopbackBackend,
     FetchGate,
     logSignature,
     parseTranslate,

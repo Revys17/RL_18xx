@@ -26,13 +26,21 @@ test('chat and user settings stay in the page', () => {
   assert.equal(game.actions.length, 3, 'the input is not modified');
 });
 
-test('only a loopback backend URL is accepted', () => {
+test('a backend URL is http://<host>:<port> with no path', () => {
   assert.equal(R.normalizeBackendUrl('http://127.0.0.1:5002'), 'http://127.0.0.1:5002');
   assert.equal(R.normalizeBackendUrl(' http://localhost:6000/ '), 'http://localhost:6000');
+  assert.equal(R.normalizeBackendUrl('http://192.168.0.186:5002'), 'http://192.168.0.186:5002');
+  assert.equal(R.normalizeBackendUrl('http://workstation:5002/'), 'http://workstation:5002');
   assert.equal(R.normalizeBackendUrl('https://127.0.0.1:5002'), null);
-  assert.equal(R.normalizeBackendUrl('http://18xx.games'), null);
+  assert.equal(R.normalizeBackendUrl('http://user:pw@192.168.0.186:5002'), null);
   assert.equal(R.normalizeBackendUrl('http://127.0.0.1:5002/api'), null);
   assert.equal(R.normalizeBackendUrl('not a url'), null);
+});
+
+test('only this machine is a loopback backend', () => {
+  assert.equal(R.isLoopbackBackend('http://127.0.0.1:5002'), true);
+  assert.equal(R.isLoopbackBackend('http://localhost:5002'), true);
+  assert.equal(R.isLoopbackBackend('http://192.168.0.186:5002'), false);
 });
 
 test('the fetch gate spaces fetches 10 s apart', () => {

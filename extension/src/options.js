@@ -21,12 +21,30 @@
     $('corner').value = panel.corner;
   }
 
-  async function save() {
+  /** Access to a backend on another machine: an optional host permission, asked for
+   * while the click that saves is still running (browsers grant them only then). */
+  function backendPermission(backendUrl) {
+    if (R.isLoopbackBackend(backendUrl) || !api.permissions) return Promise.resolve(true);
+    const parsed = new URL(backendUrl);
+    return api.permissions.request({ origins: [`${parsed.protocol}//${parsed.hostname}/*`] });
+  }
+
+  function save() {
     const backendUrl = R.normalizeBackendUrl($('backendUrl').value);
     if (!backendUrl) {
-      show('The backend URL must be http://127.0.0.1:<port> or http://localhost:<port>.', false);
-      return false;
+      show('The backend URL must look like http://<host>:<port>, e.g. http://192.168.0.10:5002.', false);
+      return Promise.resolve(false);
     }
+    return backendPermission(backendUrl).then((granted) => {
+      if (!granted) {
+        show(`The extension needs permission to reach ${backendUrl}.`, false);
+        return false;
+      }
+      return store(backendUrl);
+    });
+  }
+
+  async function store(backendUrl) {
     const readouts = Math.max(16, Math.min(5000, parseInt($('readouts').value, 10) || R.DEFAULTS.readouts));
     const stored = await api.storage.local.get('panel');
     const panel = Object.assign({}, R.DEFAULTS.panel, stored.panel);

@@ -570,9 +570,15 @@ def build_parser():
 
     p = sub.add_parser(
         "advisor",
-        help="Serve the model advisor's backend (127.0.0.1 only) for the browser extension in extension/",
+        help="Serve the model advisor's backend for the browser extension in extension/",
     )
-    p.add_argument("--port", type=int, default=5002, help="Port on 127.0.0.1 (default: 5002)")
+    p.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        help="Address to serve on (default 127.0.0.1; 0.0.0.0 for a browser on another machine of the LAN)",
+    )
+    p.add_argument("--port", type=int, default=5002, help="Port (default: 5002)")
     p.add_argument("--policy", type=str, default=DEFAULT_POLICY, help="Policy checkpoint for recommended moves")
     p.add_argument(
         "--auction-policy", type=str, default=DEFAULT_AUCTION_POLICY,

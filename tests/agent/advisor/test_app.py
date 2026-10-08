@@ -55,6 +55,15 @@ def test_requests_for_another_host_name_are_refused(client):
     assert response.status_code == 403
 
 
+def test_requests_to_an_address_or_this_machines_name_are_answered(client):
+    """A browser on another machine of the LAN (``--host 0.0.0.0``) addresses the backend by IP or host name."""
+    import socket
+
+    for host in ("192.168.0.186:5002", "100.85.42.25:5002", "[fd00::1]:5002", f"{socket.gethostname()}:5002"):
+        response = client.get("/api/health", headers={**CHROME, "Host": host})
+        assert response.status_code == 200, host
+
+
 @pytest.mark.parametrize("headers", [CHROME, FIREFOX])
 def test_extensions_get_answers_with_cors_headers(client, headers):
     response = client.get("/api/health", headers=headers)

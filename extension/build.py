@@ -10,8 +10,9 @@ background worker as a service worker, Firefox as background scripts. Writes
 
 Permissions: storage, the 18xx.games origin (and any ``--extra-origin``), and
 the advisor backend on this machine (http://127.0.0.1 and http://localhost, any
-port). Match patterns can't name a port, so an extra origin covers its host on
-every port.
+port), and -- optional, asked for when the options page saves one -- a backend on
+another machine (any http host). Match patterns can't name a port, so an extra
+origin covers its host on every port.
 """
 
 import argparse
@@ -26,6 +27,7 @@ FILES = ("common.js", "panel.js", "content.js", "background.js", "options.html",
 VERSION = "0.1.0"
 SITE = "https://18xx.games/*"
 BACKEND = ("http://127.0.0.1/*", "http://localhost/*")
+REMOTE_BACKEND = "http://*/*"  # a backend on another machine (--host 0.0.0.0), granted from the options page
 GECKO_ID = "rl18xx-advisor@rl18xx.local"
 
 
@@ -47,6 +49,7 @@ def manifest(browser: str, extra_origins=()) -> dict:
         "description": "Shows a local 1830 model's win estimates and suggested moves on 18xx.games game pages.",
         "permissions": ["storage"],
         "host_permissions": list(dict.fromkeys(sites + list(BACKEND))),
+        "optional_host_permissions": [REMOTE_BACKEND],
         "content_scripts": [
             {"matches": sites, "js": ["common.js", "panel.js", "content.js"], "run_at": "document_idle"}
         ],

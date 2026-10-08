@@ -31,6 +31,7 @@ def test_the_build_writes_a_chrome_and_a_firefox_extension(tmp_path):
             "http://localhost/*",
             "http://127.0.0.1/*",
         }
+        assert manifest["optional_host_permissions"] == ["http://*/*"]
         script = manifest["content_scripts"][0]
         assert script["matches"] == ["https://18xx.games/*", "http://localhost/*"]
         for name in script["js"] + [manifest["options_ui"]["page"]]:
