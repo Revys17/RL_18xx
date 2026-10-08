@@ -969,10 +969,12 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                 for key, value in record.items():
                     if isinstance(value, (int, float)) and key not in ("update",):
                         writer.add_scalar(f"PG/{key}", value, update)
+                # League mode scores the learner against the league (a multiple of a fair share).
+                kind = "league" if league else "sl"
                 LOGGER.info(
-                    f"update {update}: vs SL {record.get('score_vs_sl', float('nan')):.3f}"
-                    f"±{record.get('score_vs_sl_se', float('nan')):.3f} "
-                    f"(this update {record.get('score_vs_sl_update', float('nan')):.3f}), "
+                    f"update {update}: vs {'league' if league else 'SL'} {record.get(f'score_vs_{kind}', float('nan')):.3f}"
+                    f"±{record.get(f'score_vs_{kind}_se', float('nan')):.3f} "
+                    f"(this update {record.get(f'score_vs_{kind}_update', float('nan')):.3f}), "
                     f"kl_anchor {stats['kl_anchor']:.4f}, entropy {stats['entropy']:.3f}, clip {stats['clip_frac']:.3f}, "
                     f"critic CE {stats['critic_ce']:.4f}, {record['games_per_hour_run']:.0f} games/h, "
                     f"train {train_seconds:.0f}s"
