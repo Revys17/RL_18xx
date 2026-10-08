@@ -4,7 +4,11 @@ Like ``eval_head_to_head.py`` -- 4-player games from self-play's first-Stock-
 Round starts, each start played in all six 2-2 seat arrangements, scored by
 share of winners (0.5 = equal) -- but every seat samples its move straight from
 its policy (and prices from its price head), so thousands of games take
-minutes. A player is a checkpoint spec as in ``eval_head_to_head.py``
+minutes. With ``:rush`` / ``:trains`` / ``:bo`` after a player, scripted rules
+(:func:`scripted_choice`: buy trains to rush the phases, withhold to fund them,
+help float the B&O) override its policy where they apply -- a crude rusher, to
+test whether rushing beats a policy (a loss says little: the rusher is crude).
+A player is a checkpoint spec as in ``eval_head_to_head.py``
 optionally followed by ``@<temperature>`` (default 1), which applies to the
 move; prices are drawn from the price head as is (as the policy-gradient
 learner draws them), mixed with ``--price-eps`` uniform. Lower temperature
@@ -55,13 +59,100 @@ def arrangements(a_seats: int) -> list:
 ARRANGEMENTS = arrangements(2)
 
 
+RUSH_RULES = {"rush": ("bo", "trains", "withhold"), "trains": ("trains", "withhold"), "bo": ("bo",)}
+# 1830 train limits by phase.
+TRAIN_LIMIT = {"2": 4, "3": 4, "4": 3, "5": 2, "6": 2, "D": 2}
+
+
 def parse_player(spec: str) -> tuple:
-    """``(checkpoint path(s), temperature)`` of ``<checkpoint>[+<value>][@<temperature>]``."""
+    """``(checkpoint path(s), temperature, rules)`` of
+    ``<checkpoint>[+<value>][@<temperature>][:rush|:trains|:bo]``."""
     from eval_head_to_head import resolve_checkpoint
 
+    spec, _, option = spec.partition(":")
     checkpoint, _, temperature = spec.partition("@")
+    if option and option not in RUSH_RULES:
+        raise SystemExit(f"Unknown player option {option!r} (one of {sorted(RUSH_RULES)})")
     paths = "+".join(str(resolve_checkpoint(part)) for part in checkpoint.split("+"))
-    return paths, float(temperature) if temperature else 1.0
+    return paths, float(temperature) if temperature else 1.0, RUSH_RULES.get(option, ())
+
+
+_RULE_MAPPER = None
+
+
+def _mapper():
+    """The action mapper and an index -> action-type classifier (per process)."""
+    global _RULE_MAPPER
+    if _RULE_MAPPER is None:
+        import bisect
+
+        from rl18xx.agent.alphazero.action_mapper import ActionMapper
+
+        mapper = ActionMapper()
+        offsets = sorted((offset, name) for name, offset in mapper.action_offsets.items())
+        starts = [offset for offset, _ in offsets]
+        _RULE_MAPPER = (mapper, lambda index: offsets[bisect.bisect_right(starts, index) - 1][1])
+    return _RULE_MAPPER
+
+
+def scripted_choice(game, legal: list, rules: tuple):
+    """The move a scripted rusher's ``rules`` dictate here, or None (the network plays).
+
+    * ``bo``: in a Stock Round, while the B&O hasn't floated, buy B&O shares
+      (up to two) once this player presides over a company of its own, unless it
+      is the B&O's president (floating it ends the B&O private's $30 a round to
+      its owner);
+    * ``trains``: buy the cheapest train the bank sells that the company can pay
+      for, while it is under the phase's train limit (rushing the phases);
+    * ``withhold``: withhold while the company is under its train limit and can't
+      pay for the bank's next train.
+    """
+    mapper, kind_of = _mapper()
+    by_kind: dict = {}
+    for index in legal:
+        by_kind.setdefault(kind_of(index), []).append(index)
+    round_type = game._game.round.round_type
+    if round_type == "Stock" and "bo" in rules and by_kind.get("BuyShares"):
+        bo = game.corporation_by_id("B&O")
+        floated = bo.floated() if callable(bo.floated) else bo.floated
+        if not floated:
+            for index in by_kind["BuyShares"]:
+                action = mapper.map_index_to_action(index, game)
+                corp = action.bundle.corporation
+                corp = corp() if callable(corp) else corp
+                player = action.entity
+                if corp.id != "B&O" or getattr(getattr(bo, "owner", None), "id", None) == player.id:
+                    continue
+                presides = any(
+                    c.id != "B&O" and getattr(getattr(c, "owner", None), "id", None) == player.id
+                    for c in game.corporations
+                )
+                if presides and player.percent_of(bo) < 20:
+                    return index
+    if round_type == "Operating":
+        limit = TRAIN_LIMIT.get(str(game.phase.name), 2)
+        if "trains" in rules:
+            best = None
+            for index in by_kind.get("BuyTrain", []) + by_kind.get("BuyTrainDFull", []):
+                action = mapper.map_index_to_action(index, game)
+                if type(getattr(action.train, "owner", None)).__name__ != "_DepotProxy":
+                    continue
+                corp, price = action.entity, action.price
+                if price is None or price > corp.cash or len(list(corp.trains or [])) >= limit:
+                    continue
+                if best is None or price < best[0]:
+                    best = (price, index)
+            if best is not None:
+                return best[1]
+        if "withhold" in rules:
+            for index in by_kind.get("Dividend", []):
+                action = mapper.map_index_to_action(index, game)
+                if getattr(action, "kind", None) != "withhold":
+                    continue
+                corp, upcoming = action.entity, game.depot.min_depot_train
+                if len(list(corp.trains or [])) < limit and upcoming is not None and corp.cash < upcoming.price:
+                    return index
+    return None
 
 
 def play_games(game_indices: list, settings: dict) -> list:
@@ -122,7 +213,10 @@ def play_games(game_indices: list, settings: dict) -> list:
                 if temperature != 1.0:
                     p = np.power(np.clip(p, 1e-12, None), 1.0 / temperature)
                 p = p / p.sum() if p.sum() > 0 else np.full(len(legal), 1.0 / len(legal))
-                choice = legal[int(rng.choice(len(legal), p=p))]
+                rules = settings.get("rules", {}).get(side, ())
+                choice = scripted_choice(g.game, legal, rules) if rules else None
+                if choice is None:
+                    choice = legal[int(rng.choice(len(legal), p=p))]
                 g.price_row = price_logits[j] if price_logits is not None else None
                 price_value, _, _ = pg.choose_price(g.game, choice, g.price_row, rng, settings["price_eps"])
                 g.game._game.apply_action_index(choice, price_value)
@@ -180,7 +274,7 @@ def run_match(a_spec: str, b_spec: str, args) -> dict:
     from rl18xx.agent.alphazero.inference_server import start_inference_server
 
     players = {"A": parse_player(a_spec), "B": parse_player(b_spec)}
-    paths = sorted({path for path, _ in players.values()})
+    paths = sorted({path for path, _, _ in players.values()})
     handles = {
         path: start_inference_server(
             num_workers=args.workers,
@@ -192,8 +286,9 @@ def run_match(a_spec: str, b_spec: str, args) -> dict:
         for path in paths
     }
     settings = {
-        "servers": {side: path for side, (path, _) in players.items()},
-        "temperatures": {side: t for side, (_, t) in players.items()},
+        "servers": {side: path for side, (path, _, _) in players.items()},
+        "temperatures": {side: t for side, (_, t, _) in players.items()},
+        "rules": {side: rules for side, (_, _, rules) in players.items()},
         "seed": args.seed,
         "start_positions": args.start_positions,
         "random_start_fraction": args.random_start_fraction,
