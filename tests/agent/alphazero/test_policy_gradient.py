@@ -309,3 +309,52 @@ def test_games_can_start_mid_game(monkeypatch, tmp_path, start_file):
     for g in result["games"]:
         for encoded, *_ in g["rows"]:
             assert int(encoded[4]) in (0, 1)  # Stock / Operating: decisions after the start, never the auction
+
+
+# ------------------------------------------------------------------ league mode
+def test_league_plays_the_members_the_learner_beats_least_most():
+    league = pg.League(["a", "b", "c"], power=2.0, prior=4.0)
+    assert league.weights() == pytest.approx([1 / 3] * 3)  # unseen: p = 0.5 each
+    for _ in range(50):
+        league.record("a", 1.0)  # the learner always finishes ahead of a
+        league.record("b", 0.0)  # and always behind b
+    w = dict(zip(league.members, league.weights()))
+    assert w["b"] > w["c"] > w["a"] and w["a"] > 0  # floored, never dropped
+    rng = np.random.default_rng(0)
+    draws = [league.sample(rng) for _ in range(2000)]
+    assert draws.count("b") > draws.count("c") > draws.count("a")
+    league.add("d")
+    assert league.win_rate("d") == pytest.approx(0.5)
+    restored = pg.League.from_state(league.state(), power=2.0)
+    assert restored.weights() == pytest.approx(league.weights())
+
+
+def test_league_games_deal_seats_from_the_opponent_slots(monkeypatch, start_file):
+    import random
+
+    clients = {"learner": _Client(), "opp0": _Client(), "opp1": _Client(), "opp2": _Client()}
+    monkeypatch.setattr(pg, "_CLIENTS", clients)
+    league = {
+        "slots": ["opp0", "opp1", "opp2"],
+        "slot_labels": {"opp0": "m0", "opp1": "m1", "opp2": "m2"},
+        "learner_seat_weights": {"1": 1.0, "2": 1.0, "3": 1.0},
+    }
+    counts = {pg._deal_seats({"league": league}, random.Random(i))[0].__len__() for i in range(60)}
+    assert counts == {1, 2, 3}
+    result = pg.play_pg_games(6, _settings(start_file, league=league, max_decisions=12))
+    for g in result["games"]:
+        assert g["opponent"] == "league"
+        others = set(range(4)) - set(g["learner_seats"])
+        assert set(g["seat_members"]) == others and set(g["seat_members"].values()) <= {"m0", "m1", "m2"}
+        assert len(g["pairwise"]) == len(others) and all(r in (0.0, 0.5, 1.0) for _, r in g["pairwise"])
+    scores = pg._Scores(100)
+    for g in result["games"]:
+        scores.add(g)
+    assert "score_vs_league" in scores.summary() or len(result["games"]) < 2
+
+
+def test_population_files_list_paths_or_objects(tmp_path):
+    (tmp_path / "a.json").write_text(json.dumps(["x.pth", {"path": "y.pth", "label": "y"}]))
+    (tmp_path / "b.json").write_text(json.dumps({"members": [{"path": "z.pth"}]}))
+    assert pg.load_population(tmp_path / "a.json") == ["x.pth", "y.pth"]
+    assert pg.load_population(tmp_path / "b.json") == ["z.pth"]

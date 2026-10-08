@@ -115,6 +115,17 @@ class PGConfig:
     # 0: the KL anchor is the starting policy for the whole run. N: every N
     # updates the anchor becomes the current learner (a multiple of snapshot_every).
     anchor_every: int = 0
+    # League mode (population set): opponents come from a population of checkpoints
+    # rather than the fixed opponent + pool. Each game deals the learner 1-3 seats
+    # (learner_seat_weights) and every other seat one of opponent_slots servers, each
+    # holding a population member; every slot_refresh_every updates one slot reloads a
+    # member sampled by prioritized fictitious self-play (League).
+    population: Optional[str] = None
+    opponent_slots: int = 3
+    learner_seat_weights: Optional[dict] = None
+    pfsp_power: float = 2.0
+    slot_refresh_every: int = 2
+    league_add_snapshots: bool = True
     learner_temperature: float = 1.0
     opponent_temperature: float = 1.0
     opponent_price_eps: float = 0.0
@@ -178,6 +189,7 @@ class _PGGame:
     values: dict = field(default_factory=dict)  # learner seat -> critic value at each of its decisions
     seen: dict = field(default_factory=dict)  # learner seat -> decisions so far
     reservoir: dict = field(default_factory=dict)  # learner seat -> [(decision number, row)]
+    seat_members: dict = field(default_factory=dict)  # league mode: opponent seat -> member label
     start: Optional[str] = None  # the start position's label
 
 
@@ -233,6 +245,81 @@ def outcome(game) -> tuple:
     return win_share.astype(np.float32), fractions.astype(np.float32)
 
 
+DEFAULT_LEARNER_SEAT_WEIGHTS = {1: 0.4, 2: 0.4, 3: 0.2}
+
+
+def load_population(path) -> list:
+    """Checkpoint paths of a population file: a JSON list of paths or of
+    ``{"path": ..., ...}`` objects, or ``{"members": [...]}``."""
+    data = json.loads(Path(path).read_text())
+    members = data["members"] if isinstance(data, dict) else data
+    return [m["path"] if isinstance(m, dict) else str(m) for m in members]
+
+
+class League:
+    """The opponents of a league-mode run, sampled by prioritized fictitious self-play
+    (AlphaStar): a member is drawn with weight ``(1 - p) ** power``, ``p`` the
+    learner's (decayed) rate of finishing ahead of it, so members it rarely beats are
+    played most. A new member starts at ``p`` 0.5 (``prior`` pseudo-games)."""
+
+    def __init__(self, members=(), power: float = 2.0, floor: float = 0.02, decay: float = 0.995, prior: float = 4.0):
+        self.power, self.floor, self.decay, self.prior = power, floor, decay, prior
+        self.stats: dict = {}
+        for member in members:
+            self.add(member)
+
+    def add(self, member: str) -> None:
+        self.stats.setdefault(str(member), [0.5 * self.prior, self.prior])
+
+    @property
+    def members(self) -> list:
+        return list(self.stats)
+
+    def record(self, member: str, learner_result: float) -> None:
+        """One comparison: 1 if the learner finished ahead of ``member``'s seat, 0.5 tied, 0 behind."""
+        if member not in self.stats:
+            return
+        wins, games = self.stats[member]
+        self.stats[member] = [wins * self.decay + learner_result, games * self.decay + 1.0]
+
+    def win_rate(self, member: str) -> float:
+        wins, games = self.stats[member]
+        return wins / games
+
+    def weights(self) -> np.ndarray:
+        rates = np.array([self.win_rate(m) for m in self.stats])
+        w = np.maximum((1.0 - rates) ** self.power, self.floor)
+        return w / w.sum()
+
+    def sample(self, rng: np.random.Generator) -> str:
+        return self.members[int(rng.choice(len(self.stats), p=self.weights()))]
+
+    def state(self) -> dict:
+        return {"stats": self.stats}
+
+    @classmethod
+    def from_state(cls, state: dict, **kwargs) -> "League":
+        league = cls(**kwargs)
+        league.stats = {k: list(v) for k, v in state["stats"].items()}
+        return league
+
+
+def _deal_seats(settings: dict, py_rng: random.Random) -> tuple:
+    """``(learner seats, seat -> server name, seat -> member label)`` for a new game."""
+    league = settings.get("league")
+    if not league:
+        opponent = "pool" if settings["pool_ready"] and py_rng.random() >= settings["sl_opponent_fraction"] else "sl"
+        learner = set(py_rng.sample(range(NUM_PLAYERS), settings["learner_seats"]))
+        models = ["learner" if seat in learner else opponent for seat in range(NUM_PLAYERS)]
+        return learner, models, {}
+    counts, weights = zip(*sorted((int(k), float(v)) for k, v in league["learner_seat_weights"].items()))
+    count = py_rng.choices(counts, weights=weights)[0]
+    learner = set(py_rng.sample(range(NUM_PLAYERS), count))
+    models = ["learner" if seat in learner else py_rng.choice(league["slots"]) for seat in range(NUM_PLAYERS)]
+    labels = {seat: league["slot_labels"][models[seat]] for seat in range(NUM_PLAYERS) if seat not in learner}
+    return learner, models, labels
+
+
 def play_pg_games(num_games: int, settings: dict) -> dict:
     """Pool task: play ``num_games`` concurrent games and return the learner's
     sampled decisions (with advantages) and each game's result."""
@@ -256,10 +343,10 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             midgame_fraction=settings.get("midgame_fraction", 0.0),
         )
         game = apply_actions(new_game(NUM_PLAYERS), start.actions)
-        opponent = "pool" if settings["pool_ready"] and py_rng.random() >= settings["sl_opponent_fraction"] else "sl"
-        learner = set(py_rng.sample(range(NUM_PLAYERS), settings["learner_seats"]))
-        seat_models = ["learner" if seat in learner else opponent for seat in range(NUM_PLAYERS)]
+        learner, seat_models, seat_members = _deal_seats(settings, py_rng)
+        opponent = "league" if settings.get("league") else seat_models[min(set(range(NUM_PLAYERS)) - learner)]
         g = _PGGame(game=game, uid=uuid.uuid4().hex, opponent=opponent, seat_models=seat_models, start=start.label)
+        g.seat_members = seat_members
         for seat in learner:
             g.values[seat], g.seen[seat], g.reservoir[seat] = [], 0, []
         games.append(g)
@@ -343,6 +430,14 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             "first_values": {seat: v[0] for seat, v in g.values.items() if v},
             "rows": rows,
         }
+        if g.seat_members:
+            # League mode: per opponent seat, did the learner's best seat finish ahead of it?
+            best = max(float(fractions[seat]) for seat in g.values)
+            record["seat_members"] = g.seat_members
+            record["pairwise"] = [
+                (member, 1.0 if best > float(fractions[seat]) else 0.5 if best == float(fractions[seat]) else 0.0)
+                for seat, member in g.seat_members.items()
+            ]
         if save_every and py_rng.random() * save_every < 1.0:
             from rl18xx.agent.alphazero.self_play import _compute_net_worth
 
@@ -366,7 +461,8 @@ def save_game(run_dir: Path, record: dict, update: int, learner_checkpoint: str,
     saved = record["saved_game"]
     learner = set(int(seat) for seat in record["learner_seats"])
     name = f"u{update}_{record['uid'][:8]}"
-    opponent = "pool snapshot" if record["opponent"] == "pool" else "fixed opponent"
+    opponent = {"pool": "pool snapshot", "league": "league member"}.get(record["opponent"], "fixed opponent")
+    members = {int(k): v for k, v in (record.get("seat_members") or {}).items()}
     entry = {
         "name": name,
         "kind": "policy_gradient",
@@ -378,7 +474,7 @@ def save_game(run_dir: Path, record: dict, update: int, learner_checkpoint: str,
         "opponent_checkpoint": opponent_checkpoint,
         "sides": ["A" if seat in learner else "B" for seat in range(NUM_PLAYERS)],
         "seat_labels": [
-            f"learner (update {update})" if seat in learner else f"{opponent} {opponent_checkpoint}"
+            f"learner (update {update})" if seat in learner else members.get(seat, f"{opponent} {opponent_checkpoint}")
             for seat in range(NUM_PLAYERS)
         ],
         "learner_temperature": cfg.learner_temperature,
@@ -574,11 +670,17 @@ class _Scores:
     """Rolling learner score per opponent kind (summed win share of its seats)."""
 
     def __init__(self, window: int):
-        self.window = {"sl": deque(maxlen=window), "pool": deque(maxlen=window)}
-        self.recent = {"sl": [], "pool": []}
+        self.window = defaultdict(lambda: deque(maxlen=window))
+        self.recent = defaultdict(list)
+        for kind in ("sl", "pool"):  # reported even before their first game, as before
+            self.window[kind] = deque(maxlen=window)
+            self.recent[kind] = []
 
     def add(self, record: dict):
         score = sum(record["win_share"][s] for s in record["learner_seats"])
+        if record["opponent"] == "league":
+            # The learner holds 1-3 seats: its win share as a multiple of a fair one (1.0 = even).
+            score /= len(record["learner_seats"]) / NUM_PLAYERS
         self.window[record["opponent"]].append(score)
         self.recent[record["opponent"]].append(score)
 
@@ -619,6 +721,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
         pool = list(state["pool"])
         kl_coef = float(state["kl_coef"])
         anchor_update = int(state.get("anchor_update", 0))
+        league_state = state.get("league")
         learner_path = run_dir / "learner" / f"{update}.pth"
         critic_path = run_dir / "critic" / f"{update}.pth"
     else:
@@ -630,6 +733,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
         run_dir.mkdir(parents=True)
         update, kl_coef, anchor_update = 0, cfg.kl_coef, 0
         pool = [str(cfg.policy_checkpoint)] if cfg.seed_pool else []
+        league_state = None
         learner_path, critic_path = Path(cfg.policy_checkpoint), Path(cfg.value_checkpoint)
     if cfg.anchor_every and cfg.anchor_every % cfg.snapshot_every:
         raise SystemExit("--anchor-every must be a multiple of --snapshot-every (the anchor's checkpoint is kept)")
@@ -657,11 +761,28 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
     writer = SummaryWriter(str(Path("runs") / "alphazero_runs" / run_dir.name))
     history = (run_dir / "history.jsonl").open("a")
 
-    servers = {
-        "learner": f"{current_learner}+{current_critic}",
-        "sl": str(cfg.opponent_checkpoint or cfg.policy_checkpoint),
-        "pool": pool[-1] if pool else str(cfg.policy_checkpoint),
-    }
+    rng = np.random.default_rng()
+    league = None
+    if cfg.population:
+        league_kw = {"power": cfg.pfsp_power}
+        league = (
+            League.from_state(league_state, **league_kw)
+            if league_state
+            else League(load_population(cfg.population), **league_kw)
+        )
+        if not league.members:
+            raise SystemExit(f"population {cfg.population} has no members")
+        servers = {
+            "learner": f"{current_learner}+{current_critic}",
+            **{f"opp{i}": league.sample(rng) for i in range(cfg.opponent_slots)},
+        }
+    else:
+        servers = {
+            "learner": f"{current_learner}+{current_critic}",
+            "sl": str(cfg.opponent_checkpoint or cfg.policy_checkpoint),
+            "pool": pool[-1] if pool else str(cfg.policy_checkpoint),
+        }
+    slot_labels = {name: path for name, path in servers.items() if name.startswith("opp")}
     handles = {
         name: start_inference_server(
             num_workers=cfg.workers,
@@ -672,10 +793,9 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
         )
         for name, path in servers.items()
     }
-    pool_label = servers["pool"]
+    pool_label = servers.get("pool")
     queues = {name: (h.request_q, h.reply_qs, h.ticket_q) for name, h in handles.items()}
     scores = _Scores(cfg.score_window)
-    rng = np.random.default_rng()
     stop_file = run_dir / "STOP"
 
     def settings() -> dict:
@@ -696,6 +816,15 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
             "midgame_fraction": cfg.midgame_fraction,
             "gae_lambda": cfg.gae_lambda,
             "save_game_every": cfg.save_game_every,
+            "league": (
+                {
+                    "slots": sorted(slot_labels),
+                    "slot_labels": dict(slot_labels),
+                    "learner_seat_weights": cfg.learner_seat_weights or DEFAULT_LEARNER_SEAT_WEIGHTS,
+                }
+                if league
+                else None
+            ),
         }
 
     buffer, gen, total_games = [], Counter(), 0
@@ -717,6 +846,9 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                     for record in result["games"]:
                         gen["games"] += 1
                         scores.add(record)
+                        if league:
+                            for member, result in record.get("pairwise", []):
+                                league.record(member, result)
                         terminations[record["termination"]] += 1
                         starts[record.get("start_kind")] += 1
                         lengths.append(record["decisions"])
@@ -724,7 +856,11 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                             critic_first_values.append((value, record["win_share"][int(seat)]))
                         buffer.extend(record["rows"])
                         if record.get("saved_game"):
-                            opponent_checkpoint = servers["sl"] if record["opponent"] == "sl" else record["pool_label"]
+                            opponent_checkpoint = (
+                                servers.get("sl") if record["opponent"] == "sl"
+                                else record["pool_label"] if record["opponent"] == "pool"
+                                else "league"
+                            )
                             try:
                                 save_game(run_dir, record, update, str(current_learner), str(opponent_checkpoint), cfg)
                             except OSError as e:
@@ -757,6 +893,8 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                         path.unlink()
                 if snapshot:
                     pool.append(str(current_learner))
+                    if league and cfg.league_add_snapshots:
+                        league.add(str(current_learner))
                     torch.save(
                         {"learner": learner_opt.state_dict(), "critic": critic_opt.state_dict()},
                         run_dir / "optimizer.pth",
@@ -769,13 +907,19 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                                 "pool": pool,
                                 "kl_coef": kl_coef,
                                 "anchor_update": anchor_update,
+                                "league": league.state() if league else None,
                             },
                             indent=2,
                         )
                     )
-                if pool and update % cfg.pool_refresh_every == 0:
+                if not league and pool and update % cfg.pool_refresh_every == 0:
                     pool_label = pool[int(rng.integers(0, len(pool)))]
                     handles["pool"].reload(pool_label)
+                if league and update % cfg.slot_refresh_every == 0:
+                    slot = f"opp{(update // cfg.slot_refresh_every) % cfg.opponent_slots}"
+                    member = league.sample(rng)
+                    handles[slot].reload(member)
+                    slot_labels[slot] = member
 
                 if cfg.kl_target is not None:
                     if stats["kl_anchor"] > 1.5 * cfg.kl_target:
@@ -809,6 +953,11 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                     "pool_size": len(pool),
                     "pool_opponent": pool_label if pool else None,
                 }
+                if league:
+                    hardest = sorted(league.members, key=league.win_rate)[:3]
+                    record["league_size"] = len(league.members)
+                    record["league_hardest"] = [[member, round(league.win_rate(member), 3)] for member in hardest]
+                    record["league_slots"] = dict(slot_labels)
                 if critic_first_values:
                     v, r = np.array(critic_first_values).T
                     record["critic_start_brier"] = float(np.mean((v - r) ** 2))

@@ -163,6 +163,15 @@ def cmd_policy_gradient(args):
             str(_resolve_checkpoint(args.opponent, args.model_dir)) if args.opponent else None
         ),
         anchor_every=args.anchor_every,
+        population=args.population,
+        opponent_slots=args.opponent_slots,
+        learner_seat_weights=(
+            {int(k): float(v) for k, v in (part.split(":") for part in args.learner_seat_weights.split(","))}
+            if args.learner_seat_weights
+            else None
+        ),
+        pfsp_power=args.pfsp_power,
+        slot_refresh_every=args.slot_refresh_every,
         rows_per_update=args.rows_per_update,
         minibatch=args.minibatch,
         microbatch=args.microbatch,
@@ -451,6 +460,17 @@ def build_parser():
         help="Share of games starting at a later Stock Round of a recorded human game (with --resume: from now on)",
     )
     p.add_argument("--midgame-positions", type=str, default="human_games/midgame_positions_1830_4p.jsonl")
+    p.add_argument(
+        "--population", type=str, default=None,
+        help="League mode: JSON list of checkpoint paths; opponents are drawn per seat from it (prioritized by how often they beat the learner) instead of --opponent and the pool",
+    )
+    p.add_argument("--opponent-slots", type=int, default=3, help="League mode: opponent servers (members at once)")
+    p.add_argument(
+        "--learner-seat-weights", type=str, default=None,
+        help="League mode: seats the learner holds per game, e.g. 1:0.4,2:0.4,3:0.2 (the default)",
+    )
+    p.add_argument("--pfsp-power", type=float, default=2.0, help="League mode: weight (1 - win rate) ** power")
+    p.add_argument("--slot-refresh-every", type=int, default=2, help="League mode: reload one slot every N updates")
     p.add_argument(
         "--anchor-every", type=int, default=0,
         help="Move the KL anchor to the learner every N updates (0: anchor at the starting policy)",
