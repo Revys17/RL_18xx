@@ -172,6 +172,8 @@ def cmd_policy_gradient(args):
         ),
         pfsp_power=args.pfsp_power,
         slot_refresh_every=args.slot_refresh_every,
+        league_snapshot_every=args.league_snapshot_every,
+        league_max_snapshots=args.league_max_snapshots,
         rows_per_update=args.rows_per_update,
         minibatch=args.minibatch,
         microbatch=args.microbatch,
@@ -471,6 +473,11 @@ def build_parser():
     )
     p.add_argument("--pfsp-power", type=float, default=2.0, help="League mode: weight (1 - win rate) ** power")
     p.add_argument("--slot-refresh-every", type=int, default=2, help="League mode: reload one slot every N updates")
+    p.add_argument(
+        "--league-snapshot-every", type=int, default=50,
+        help="League mode: add the learner's snapshot to the league every N updates (a multiple of the snapshot interval)",
+    )
+    p.add_argument("--league-max-snapshots", type=int, default=4, help="League mode: own snapshots kept in the league")
     p.add_argument(
         "--anchor-every", type=int, default=0,
         help="Move the KL anchor to the learner every N updates (0: anchor at the starting policy)",

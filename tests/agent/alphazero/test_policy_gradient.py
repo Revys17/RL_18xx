@@ -325,6 +325,10 @@ def test_league_plays_the_members_the_learner_beats_least_most():
     assert draws.count("b") > draws.count("c") > draws.count("a")
     league.add("d")
     assert league.win_rate("d") == pytest.approx(0.5)
+    league.remove("d")
+    assert "d" not in league.members
+    league.record("d", 1.0)  # results for a removed member are ignored
+    assert "d" not in league.members
     restored = pg.League.from_state(league.state(), power=2.0)
     assert restored.weights() == pytest.approx(league.weights())
 
@@ -346,7 +350,13 @@ def test_league_games_deal_seats_from_the_opponent_slots(monkeypatch, start_file
         assert g["opponent"] == "league"
         others = set(range(4)) - set(g["learner_seats"])
         assert set(g["seat_members"]) == others and set(g["seat_members"].values()) <= {"m0", "m1", "m2"}
-        assert len(g["pairwise"]) == len(others) and all(r in (0.0, 0.5, 1.0) for _, r in g["pairwise"])
+        assert len(g["pairwise"]) == len(others)
+        # Per member seat: the share of the learner's seats that finished ahead of it (not the best seat's result).
+        mine = [g["worth_share"][s] for s in g["learner_seats"]]
+        for (member, ahead), seat in zip(g["pairwise"], sorted(others)):
+            theirs = g["worth_share"][seat]
+            assert member == g["seat_members"][seat]
+            assert ahead == pytest.approx(np.mean([1.0 if m > theirs else 0.5 if m == theirs else 0.0 for m in mine]))
     scores = pg._Scores(100)
     for g in result["games"]:
         scores.add(g)

@@ -126,6 +126,11 @@ class PGConfig:
     pfsp_power: float = 2.0
     slot_refresh_every: int = 2
     league_add_snapshots: bool = True
+    # The learner's own snapshots join the league every league_snapshot_every updates,
+    # and only the latest league_max_snapshots stay: each new one starts at an even
+    # win rate, so unbounded they took most of lx1's games (30 of its 40 members).
+    league_snapshot_every: int = 50
+    league_max_snapshots: int = 4
     learner_temperature: float = 1.0
     opponent_temperature: float = 1.0
     opponent_price_eps: float = 0.0
@@ -270,6 +275,9 @@ class League:
 
     def add(self, member: str) -> None:
         self.stats.setdefault(str(member), [0.5 * self.prior, self.prior])
+
+    def remove(self, member: str) -> None:
+        self.stats.pop(str(member), None)
 
     @property
     def members(self) -> list:
@@ -422,6 +430,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             "pool_label": settings.get("pool_label"),
             "learner_seats": sorted(g.values),
             "win_share": win_share.tolist(),
+            "worth_share": fractions.tolist(),
             "decisions": g.decisions,
             "learner_decisions": sum(len(v) for v in g.values.values()),
             "seat_decisions": {seat: len(v) for seat, v in g.values.items()},
@@ -431,11 +440,14 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             "rows": rows,
         }
         if g.seat_members:
-            # League mode: per opponent seat, did the learner's best seat finish ahead of it?
-            best = max(float(fractions[seat]) for seat in g.values)
+            # League mode: per opponent seat, the share of the learner's seats that finished
+            # ahead of it (ties half). The mean, not the learner's best seat: the best of k
+            # seats finishes ahead of an equal opponent k / (k + 1) of the time, which made
+            # members look beaten (pg4/750 at 0.74 while it won 2v2 0.76) and starved them.
+            mine = [float(fractions[seat]) for seat in g.values]
             record["seat_members"] = g.seat_members
             record["pairwise"] = [
-                (member, 1.0 if best > float(fractions[seat]) else 0.5 if best == float(fractions[seat]) else 0.0)
+                (member, float(np.mean([1.0 if m > float(fractions[seat]) else 0.5 if m == float(fractions[seat]) else 0.0 for m in mine])))
                 for seat, member in g.seat_members.items()
             ]
         if save_every and py_rng.random() * save_every < 1.0:
@@ -893,8 +905,11 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                         path.unlink()
                 if snapshot:
                     pool.append(str(current_learner))
-                    if league and cfg.league_add_snapshots:
+                    if league and cfg.league_add_snapshots and update % cfg.league_snapshot_every == 0:
                         league.add(str(current_learner))
+                        own = [m for m in league.members if Path(m).parent.parent == run_dir]
+                        for member in own[: max(0, len(own) - cfg.league_max_snapshots)]:
+                            league.remove(member)
                     torch.save(
                         {"learner": learner_opt.state_dict(), "critic": critic_opt.state_dict()},
                         run_dir / "optimizer.pth",
