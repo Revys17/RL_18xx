@@ -403,6 +403,24 @@ class League:
         return league
 
 
+def league_for_run(cfg, league_state: Optional[dict]) -> Optional[League]:
+    """A league-mode run's league: restored from its saved state on a resume (members
+    its population file has gained since join at an even win rate), else built from
+    the file; None outside league mode."""
+    if not cfg.population:
+        return None
+    kw = {"power": cfg.pfsp_power}
+    if league_state:
+        league = League.from_state(league_state, **kw)
+        for member in load_population(cfg.population):
+            league.add(member)
+    else:
+        league = League(load_population(cfg.population), **kw)
+    if not league.members:
+        raise SystemExit(f"population {cfg.population} has no members")
+    return league
+
+
 def _deal_seats(settings: dict, py_rng: random.Random) -> tuple:
     """``(learner seats, seat -> server name, seat -> member label)`` for a new game."""
     league = settings.get("league")
@@ -833,16 +851,17 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
     if resume:
         run_dir = Path(resume)
         state = json.loads((run_dir / "state.json").read_text())
-        # The run keeps its own settings; only its length and game saving can change.
-        cfg = PGConfig(
-            **{
-                **state["config"],
-                "max_updates": cfg.max_updates,
-                "save_game_every": cfg.save_game_every,
-                "midgame_positions": cfg.midgame_positions,
-                "midgame_fraction": cfg.midgame_fraction,
-            }
-        )
+        # The run keeps its own settings; only its length, game saving, mid-game starts
+        # and (league mode) its population file can change -- a new file's members join.
+        overrides = {
+            "max_updates": cfg.max_updates,
+            "save_game_every": cfg.save_game_every,
+            "midgame_positions": cfg.midgame_positions,
+            "midgame_fraction": cfg.midgame_fraction,
+        }
+        if cfg.population:
+            overrides["population"] = cfg.population
+        cfg = PGConfig(**{**state["config"], **overrides})
         update = int(state["snapshot_update"])
         pool = list(state["pool"])
         kl_coef = float(state["kl_coef"])
@@ -895,16 +914,8 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
         # An exploiter's baseline is the critic's score head, which learns its shaped reward.
         return f"{policy}+{critic}{value_head}"
 
-    league = None
-    if cfg.population:
-        league_kw = {"power": cfg.pfsp_power}
-        league = (
-            League.from_state(league_state, **league_kw)
-            if league_state
-            else League(load_population(cfg.population), **league_kw)
-        )
-        if not league.members:
-            raise SystemExit(f"population {cfg.population} has no members")
+    league = league_for_run(cfg, league_state)
+    if league:
         servers = {
             "learner": learner_spec(current_learner, current_critic),
             **{f"opp{i}": league.sample(rng) for i in range(cfg.opponent_slots)},
