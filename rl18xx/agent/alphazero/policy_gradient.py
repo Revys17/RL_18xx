@@ -163,6 +163,11 @@ class PGConfig:
     score_window: int = 2000
     # 0: off. N: keep the action log of about one game in N for the game viewer.
     save_game_every: int = 0
+    # What the learner is rewarded for (parse_reward): "win" (the win share, as every
+    # main run), or an exploiter's goal -- "placement", "bankrupt", "president:<CORP>",
+    # "rusher". A goal other than "win" also retargets the critic's score head to the
+    # reward and uses it as the baseline.
+    reward: str = "win"
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +201,92 @@ class _PGGame:
     reservoir: dict = field(default_factory=dict)  # learner seat -> [(decision number, row)]
     seat_members: dict = field(default_factory=dict)  # league mode: opponent seat -> member label
     start: Optional[str] = None  # the start position's label
+    phase_triggers: dict = field(default_factory=dict)  # "rusher": seat -> phase changes its moves caused
+
+
+# Exploiters' goals (PGConfig.reward): the win share plus a bonus, so they stay
+# competitive but lean a different way, or placement points instead of the win.
+GOAL_BONUS = 0.5  # "bankrupt", "president:<CORP>"
+RUSH_BONUS, RUSH_MAX = 0.15, 4  # "rusher": per phase change its own purchase caused
+PLACEMENT_POINTS = (1.0, 0.5, 0.2, 0.0)
+CORPORATIONS = ("PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M")
+REWARDS = ("win", "placement", "bankrupt", "president", "rusher")
+
+
+def parse_reward(spec: Optional[str]) -> tuple:
+    """``(kind, corporation or None)`` of a reward spec: ``win`` (the default),
+    ``placement``, ``bankrupt``, ``president:<CORP>`` or ``rusher``."""
+    kind, _, arg = str(spec or "win").partition(":")
+    if kind not in REWARDS:
+        raise ValueError(f"unknown reward {spec!r}: one of win, placement, bankrupt, president:<CORP>, rusher")
+    if kind == "president":
+        if arg not in CORPORATIONS:
+            raise ValueError(f"president:<CORP> needs one of {', '.join(CORPORATIONS)}, got {arg!r}")
+        return kind, arg
+    if arg:
+        raise ValueError(f"reward {kind!r} takes no argument")
+    return kind, None
+
+
+def placement_points(worth) -> np.ndarray:
+    """Per seat: 1st 1, 2nd 0.5, 3rd 0.2, 4th 0 by net worth; tied seats share their places' points."""
+    worth = np.asarray(worth, dtype=np.float64)
+    points = np.array(PLACEMENT_POINTS[: len(worth)] + (0.0,) * max(0, len(worth) - len(PLACEMENT_POINTS)))
+    order = np.argsort(-worth, kind="stable")
+    out = np.zeros(len(worth))
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and abs(worth[order[j + 1]] - worth[order[i]]) < 1e-6:
+            j += 1
+        out[order[i : j + 1]] = points[i : j + 1].mean()
+        i = j + 1
+    return out
+
+
+def shaped_reward(spec, win_share, worth, bankrupt, presidents, triggers, learner_seats) -> np.ndarray:
+    """Per-seat reward of a finished game under ``spec`` (:func:`parse_reward`).
+
+    ``bankrupt`` -- per seat; ``presidents`` -- corporation -> president's seat (or
+    None); ``triggers`` -- per seat, phase changes its own moves caused. The
+    "bankrupt" bonus goes to a seat that didn't go bankrupt when another player did
+    (in 1830 that ends the game); for the learner's seats only an opponent's
+    bankruptcy counts, so a learner with two seats can't farm it off itself.
+    """
+    kind, corporation = parse_reward(spec)
+    win_share = np.asarray(win_share, dtype=np.float64)
+    if kind == "win":
+        return win_share
+    if kind == "placement":
+        return placement_points(worth)
+    seats = range(len(win_share))
+    if kind == "bankrupt":
+        learner = set(learner_seats)
+        bonus = [
+            float(not bankrupt[s] and any(bankrupt[o] for o in seats if o != s and not (s in learner and o in learner)))
+            for s in seats
+        ]
+        return win_share + GOAL_BONUS * np.array(bonus)
+    if kind == "president":
+        return win_share + GOAL_BONUS * np.array([float(presidents.get(corporation) == s) for s in seats])
+    return win_share + RUSH_BONUS * np.minimum(np.asarray(triggers, dtype=np.float64), RUSH_MAX)
+
+
+def game_facts(game) -> tuple:
+    """``(net worth, bankrupt, presidents)`` per seat (player-id order) of a game's end."""
+    from rl18xx.agent.alphazero.self_play import _compute_net_worth
+
+    net_worth = _compute_net_worth(game)
+    pids = sorted(net_worth)
+    seat_of = {pid: s for s, pid in enumerate(pids)}
+    worth = np.array([float(net_worth[pid]) for pid in pids])
+    flags = {p.id: bool(p.bankrupt) for p in game._game.players}
+    bankrupt = [flags.get(pid, False) for pid in pids]
+    presidents = {}
+    for corporation in CORPORATIONS:
+        owner = game.corporation_by_id(corporation).owner
+        presidents[corporation] = seat_of.get(getattr(owner, "id", None))
+    return worth, bankrupt, presidents
 
 
 def choose_price(game, index: int, price_row: Optional[np.ndarray], rng: np.random.Generator, eps: float):
@@ -337,6 +428,8 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
 
     rng = np.random.default_rng()
     py_rng = random.Random()
+    reward_spec = settings.get("reward", "win")
+    track_phases = parse_reward(reward_spec)[0] == "rusher"
     k = settings["positions_per_seat"]
     start_time = time.time()
 
@@ -411,7 +504,10 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
                         r = int(rng.integers(0, g.seen[seat]))
                         if r < k:
                             g.reservoir[seat][r] = (t, row)
+                phase_before = g.game._game.phase.name if track_phases else None
                 g.game._game.apply_action_index(choice, price_value)
+                if track_phases and g.game._game.phase.name != phase_before:
+                    g.phase_triggers[seat] = g.phase_triggers.get(seat, 0) + 1
                 g.decisions += 1
                 decisions_total += 1
 
@@ -419,11 +515,17 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
     save_every = settings.get("save_game_every", 0)
     for g in finished:
         win_share, fractions = outcome(g.game)
+        reward, score_target = win_share, None
+        if reward_spec != "win":
+            worth, bankrupt, presidents = game_facts(g.game)
+            triggers = [g.phase_triggers.get(s, 0) for s in range(NUM_PLAYERS)]
+            reward = shaped_reward(reward_spec, win_share, worth, bankrupt, presidents, triggers, g.values)
+            score_target = reward.astype(np.float32)  # the critic's score head learns the reward
         rows = []
         for seat, kept in g.reservoir.items():
-            advantages = seat_advantages(g.values[seat], float(win_share[seat]), settings["gae_lambda"])
+            advantages = seat_advantages(g.values[seat], float(reward[seat]), settings["gae_lambda"])
             for t, (enc, legal, choice, logp, price_info) in kept:
-                rows.append((enc, legal, choice, logp, price_info, float(advantages[t]), fractions))
+                rows.append((enc, legal, choice, logp, price_info, float(advantages[t]), fractions, score_target))
         record = {
             "uid": g.uid,
             "opponent": g.opponent,
@@ -431,6 +533,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             "learner_seats": sorted(g.values),
             "win_share": win_share.tolist(),
             "worth_share": fractions.tolist(),
+            "reward": [float(x) for x in reward],
             "decisions": g.decisions,
             "learner_decisions": sum(len(v) for v in g.values.values()),
             "seat_decisions": {seat: len(v) for seat, v in g.values.items()},
@@ -535,6 +638,12 @@ def batch_tensors(rows: list, device) -> dict:
     fractions = torch.stack(
         [torch.roll(torch.as_tensor(r[6]), shifts=-int(r[0][6]), dims=0) for r in rows]
     ).float()
+    # Exploiter runs: the critic's score head learns the shaped reward (same frame).
+    score_target = None
+    if len(rows[0]) > 7 and rows[0][7] is not None:
+        score_target = torch.stack(
+            [torch.roll(torch.as_tensor(r[7]), shifts=-int(r[0][6]), dims=0) for r in rows]
+        ).float()
     out = {
         "game_state": game_state,
         "nodes": nodes,
@@ -543,6 +652,7 @@ def batch_tensors(rows: list, device) -> dict:
         "old_logp": torch.tensor([r[3] for r in rows], dtype=torch.float32, device=device),
         "advantage": torch.tensor([r[5] for r in rows], dtype=torch.float32, device=device),
         "fractions": fractions.to(device),
+        "score_target": score_target.to(device) if score_target is not None else None,
         "price_rows": torch.tensor(price_rows, dtype=torch.long, device=device),
         "price_slots": torch.tensor(price_slots, dtype=torch.long, device=device),
         "price_cells": torch.tensor(price_cells, dtype=torch.long, device=device),
@@ -614,11 +724,15 @@ def pg_losses(
     }
 
 
-def critic_losses(win_loss_logits: torch.Tensor, score_pred: torch.Tensor, fractions: torch.Tensor) -> dict:
-    """Win-share CE and net-worth MSE against the game outcome (encoder frame)."""
+def critic_losses(
+    win_loss_logits: torch.Tensor, score_pred: torch.Tensor, fractions: torch.Tensor, score_target=None
+) -> dict:
+    """Win-share CE and net-worth MSE against the game outcome (encoder frame); with
+    ``score_target`` (an exploiter's shaped reward) the score head regresses that instead."""
     from rl18xx.agent.alphazero.train import _derive_dual_value_targets
 
-    win_target, score_target = _derive_dual_value_targets(fractions)
+    win_target, derived = _derive_dual_value_targets(fractions)
+    score_target = derived if score_target is None else score_target
     pad = win_loss_logits.shape[1] - win_target.shape[1]
     if pad:
         win_target = F.pad(win_target, (0, pad))
@@ -774,6 +888,13 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
     history = (run_dir / "history.jsonl").open("a")
 
     rng = np.random.default_rng()
+    parse_reward(cfg.reward)  # fail fast on a bad spec
+    value_head = "" if cfg.reward == "win" else "#score"
+
+    def learner_spec(policy, critic) -> str:
+        # An exploiter's baseline is the critic's score head, which learns its shaped reward.
+        return f"{policy}+{critic}{value_head}"
+
     league = None
     if cfg.population:
         league_kw = {"power": cfg.pfsp_power}
@@ -785,12 +906,12 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
         if not league.members:
             raise SystemExit(f"population {cfg.population} has no members")
         servers = {
-            "learner": f"{current_learner}+{current_critic}",
+            "learner": learner_spec(current_learner, current_critic),
             **{f"opp{i}": league.sample(rng) for i in range(cfg.opponent_slots)},
         }
     else:
         servers = {
-            "learner": f"{current_learner}+{current_critic}",
+            "learner": learner_spec(current_learner, current_critic),
             "sl": str(cfg.opponent_checkpoint or cfg.policy_checkpoint),
             "pool": pool[-1] if pool else str(cfg.policy_checkpoint),
         }
@@ -828,6 +949,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
             "midgame_fraction": cfg.midgame_fraction,
             "gae_lambda": cfg.gae_lambda,
             "save_game_every": cfg.save_game_every,
+            "reward": cfg.reward,
             "league": (
                 {
                     "slots": sorted(slot_labels),
@@ -892,7 +1014,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                 current_critic = run_dir / "critic" / f"{update}.pth"
                 _save(learner, current_learner)
                 _save(critic, current_critic)
-                handles["learner"].reload(f"{current_learner}+{current_critic}")
+                handles["learner"].reload(learner_spec(current_learner, current_critic))
                 if cfg.anchor_every and update % cfg.anchor_every == 0:
                     # The KL now measures change since this update: a fresh budget around
                     # a policy the run reached, rather than one fixed reference.
@@ -1056,7 +1178,7 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfi
 
                 if epoch == 0:
                     _, win_loss_logits, score_pred, _ = critic(batch["game_state"], batch["nodes"], value_only=True)
-                    c = critic_losses(win_loss_logits, score_pred, batch["fractions"])
+                    c = critic_losses(win_loss_logits, score_pred, batch["fractions"], batch["score_target"])
                     loss = c["ce"] + cfg.score_loss_weight * c["mse"]
                     if not torch.isfinite(loss):
                         raise RuntimeError("Critic diverged: non-finite loss")

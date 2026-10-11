@@ -1750,6 +1750,15 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         _, win_loss_logits, _, _ = self._forward_encoded_batch(encoded_game_states, value_only=True)
         return F.softmax(win_loss_logits, dim=-1)
 
+    def run_scores_encoded(self, encoded_game_states: list) -> Tensor:
+        """The score head's per-seat output (canonical frame), without the policy and
+        price heads: the baseline of a policy-gradient exploiter whose critic
+        regresses its shaped reward there (``composite_model`` ``#score``)."""
+        if len(encoded_game_states) == 0:
+            raise ValueError("Received no game states to run.")
+        _, _, score_pred, _ = self._forward_encoded_batch(encoded_game_states, value_only=True)
+        return score_pred
+
     @staticmethod
     def _infer_num_players_from_state_size(size: int) -> int:
         """Reverse the encoder layout to recover the player count from a flat state size.

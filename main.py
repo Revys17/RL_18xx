@@ -174,6 +174,7 @@ def cmd_policy_gradient(args):
         slot_refresh_every=args.slot_refresh_every,
         league_snapshot_every=args.league_snapshot_every,
         league_max_snapshots=args.league_max_snapshots,
+        reward=args.reward,
         rows_per_update=args.rows_per_update,
         minibatch=args.minibatch,
         microbatch=args.microbatch,
@@ -478,6 +479,12 @@ def build_parser():
         help="League mode: add the learner's snapshot to the league every N updates (a multiple of the snapshot interval)",
     )
     p.add_argument("--league-max-snapshots", type=int, default=4, help="League mode: own snapshots kept in the league")
+    p.add_argument(
+        "--reward", type=str, default="win",
+        help="The learner's goal: win (default), or an exploiter's -- placement (1st 1, 2nd 0.5, 3rd 0.2), "
+        "bankrupt (+0.5 when another player goes bankrupt), president:<CORP> (+0.5 for its presidency at the end), "
+        "rusher (+0.15 per phase change its purchases cause, up to 4)",
+    )
     p.add_argument(
         "--anchor-every", type=int, default=0,
         help="Move the KL anchor to the learner every N updates (0: anchor at the starting policy)",

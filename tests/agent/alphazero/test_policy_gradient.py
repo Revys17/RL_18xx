@@ -79,7 +79,8 @@ def test_learner_seats_play_against_one_opponent_and_only_their_decisions_are_ke
         assert game["termination"] == "max_length" and game["decisions"] == 40
         assert sum(game["win_share"]) == pytest.approx(1.0)
         assert len(game["rows"]) == sum(min(5, n) for n in game["seat_decisions"].values())  # 5 per seat
-        for encoded, legal, choice, old_logp, price_info, advantage, fractions in game["rows"]:
+        for encoded, legal, choice, old_logp, price_info, advantage, fractions, score_target in game["rows"]:
+            assert score_target is None  # the win reward: the critic's score head keeps the net-worth shares
             assert int(encoded[6]) in game["learner_seats"]  # the mover is a learner seat
             assert choice in legal and (len(legal) > 1 or price_info is not None)  # a choice of move or price
             if price_info is None:
@@ -368,3 +369,92 @@ def test_population_files_list_paths_or_objects(tmp_path):
     (tmp_path / "b.json").write_text(json.dumps({"members": [{"path": "z.pth"}]}))
     assert pg.load_population(tmp_path / "a.json") == ["x.pth", "y.pth"]
     assert pg.load_population(tmp_path / "b.json") == ["z.pth"]
+
+
+def test_reward_specs_parse_and_bad_ones_fail():
+    assert pg.parse_reward(None) == ("win", None)
+    assert pg.parse_reward("placement") == ("placement", None)
+    assert pg.parse_reward("president:B&O") == ("president", "B&O")
+    for bad in ("president", "president:XYZ", "rusher:4", "money"):
+        with pytest.raises(ValueError):
+            pg.parse_reward(bad)
+
+
+def test_placement_points_by_net_worth_with_ties_sharing():
+    assert pg.placement_points([900, 500, 1200, 100]).tolist() == [0.5, 0.2, 1.0, 0.0]
+    # two tied for first share 1st and 2nd place points
+    assert pg.placement_points([800, 800, 300, 100]).tolist() == pytest.approx([0.75, 0.75, 0.2, 0.0])
+
+
+def test_exploiter_goals_add_their_bonus_to_the_win_share():
+    win = [0.0, 1.0, 0.0, 0.0]
+    worth = [500, 900, 400, 100]
+    none = [False] * 4
+    presidents = {"PRR": 0, "B&O": 2, "NYC": None}
+    triggers = [3, 0, 7, 0]
+    shaped = lambda spec, bankrupt=none, learner=(0, 1): pg.shaped_reward(
+        spec, win, worth, bankrupt, presidents, triggers, learner
+    ).tolist()
+    assert shaped("win") == win
+    assert shaped("placement") == [0.5, 1.0, 0.2, 0.0]
+    assert shaped("president:PRR") == [0.5, 1.0, 0.0, 0.0]
+    assert shaped("president:NYC") == win
+    assert shaped("rusher") == pytest.approx([0.45, 1.0, 0.6, 0.0])  # capped at 4 phase changes
+    # Seat 3 (an opponent) went bankrupt: everyone else gets the bonus.
+    assert shaped("bankrupt", [False, False, False, True]) == [0.5, 1.5, 0.5, 0.0]
+    # A learner seat's own bankruptcy doesn't pay its other learner seat, but pays the opponents.
+    assert shaped("bankrupt", [True, False, False, False], learner=(0, 1)) == [0.0, 1.0, 0.5, 0.5]
+
+
+def test_an_exploiters_critic_regresses_its_shaped_reward():
+    fractions = torch.tensor([[0.6, 0.2, 0.1, 0.1]])
+    score_pred = torch.zeros(1, 4)
+    logits = torch.zeros(1, 4)
+    plain = pg.critic_losses(logits, score_pred, fractions)
+    shaped = pg.critic_losses(logits, score_pred, fractions, torch.tensor([[1.5, 0.5, 0.5, 0.0]]))
+    assert plain["mse"].item() == pytest.approx(float((fractions**2).mean()))
+    assert shaped["mse"].item() == pytest.approx((1.5**2 + 0.25 + 0.25) / 4)
+    assert shaped["ce"].item() == pytest.approx(plain["ce"].item())  # the win head still learns who won
+
+
+def test_score_head_composite_serves_the_score_head_as_value():
+    from rl18xx.agent.alphazero.composite_model import PolicyValueComposite
+
+    class _Policy:
+        def run_many_encoded(self, states):
+            return ["p"] * len(states), None, ["policy value"] * len(states)
+
+    class _Critic:
+        def run_values_encoded(self, states):
+            return "win probabilities"
+
+        def run_scores_encoded(self, states):
+            return "scores"
+
+    assert PolicyValueComposite(_Policy(), _Critic()).run_many_encoded([1])[2] == "win probabilities"
+    assert PolicyValueComposite(_Policy(), _Critic(), "score").run_many_encoded([1])[2] == "scores"
+    with pytest.raises(ValueError):
+        PolicyValueComposite(_Policy(), _Critic(), "margin")
+
+
+def test_games_under_an_exploiter_goal_carry_the_reward_to_rows_and_critic(monkeypatch, start_file):
+    monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Client(), "sl": _Client(), "pool": _Client()})
+    result = pg.play_pg_games(4, _settings(start_file, reward="president:PRR", max_decisions=12))
+    assert result["games"]
+    for g in result["games"]:
+        bonus = [r - w for r, w in zip(g["reward"], g["win_share"])]
+        assert all(b in (0.0, pg.GOAL_BONUS) for b in bonus) and sum(b > 0 for b in bonus) <= 1
+        for row in g["rows"]:
+            assert len(row) == 8 and list(row[7]) == pytest.approx(g["reward"])
+    batch = pg.batch_tensors([row for g in result["games"] for row in g["rows"]], "cpu")
+    assert batch["score_target"] is not None and batch["score_target"].shape == batch["fractions"].shape
+    plain = pg.play_pg_games(2, _settings(start_file, max_decisions=12))
+    assert pg.batch_tensors([row for g in plain["games"] for row in g["rows"]], "cpu")["score_target"] is None
+
+
+def test_game_facts_at_a_games_start():
+    from rl18xx.agent.alphazero.start_positions import new_game
+
+    worth, bankrupt, presidents = pg.game_facts(new_game(4))
+    assert len(worth) == 4 and bankrupt == [False] * 4
+    assert set(presidents) == set(pg.CORPORATIONS) and all(s is None for s in presidents.values())
