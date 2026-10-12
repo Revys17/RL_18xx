@@ -473,3 +473,56 @@ def test_a_resumed_league_keeps_its_win_rates_and_takes_new_members(tmp_path):
     assert resumed.members == ["a", "b", "c"]
     assert resumed.win_rate("a") == pytest.approx(league.win_rate("a")) and resumed.win_rate("c") == 0.5
     assert pg.league_for_run(pg.PGConfig(policy_checkpoint="p", value_checkpoint="v"), None) is None
+
+
+def test_rust_goal_pays_for_opponents_trains_rusted_by_its_own_purchases():
+    win = [0.0, 1.0, 0.0, 0.0]
+    shaped = pg.shaped_reward("rust", win, [1, 2, 3, 4], [False] * 4, {}, [2, 0, 9, 0], (0, 2)).tolist()
+    assert shaped == pytest.approx([0.2, 1.0, 0.6, 0.0])  # 0.1 per train, at most 6
+
+
+def test_rusted_trains_are_other_players_trains_no_corporation_holds_after_the_move():
+    class _Train:
+        def __init__(self, id_):
+            self.id = id_
+
+    class _Corp:
+        def __init__(self, owner, trains):
+            self.owner_id_str, self.trains = owner, [_Train(t) for t in trains]
+
+    class _Game:
+        def __init__(self, corps):
+            self.corporations = corps
+
+    before = pg.held_trains(_Game([_Corp("player:1", ["2-0", "3-0"]), _Corp("player:2", ["2-1", "2-2"]), _Corp("", ["2-3"])]))
+    assert before == {"2-0": "player:1", "3-0": "player:1", "2-1": "player:2", "2-2": "player:2"}  # unowned corps skipped
+    # player 1 buys the first 4-train: every 2-train rusts; player 2's two count, player 1's own doesn't
+    after = _Game([_Corp("player:1", ["3-0", "4-0"]), _Corp("player:2", []), _Corp("", [])])
+    assert pg.rusted_by_move(before, after, "player:1") == 2
+    # a train sold from player 2's corporation to player 1's is not rusted
+    moved = _Game([_Corp("player:1", ["2-0", "3-0", "2-1"]), _Corp("player:2", ["2-2"]), _Corp("", ["2-3"])])
+    assert pg.rusted_by_move(before, moved, "player:1") == 0
+
+
+def test_pinned_members_get_their_minimum_share_and_pfsp_splits_the_rest(tmp_path):
+    league = pg.League(["a", "b", "rusher"], power=2.0, min_shares={"rusher": 0.2})
+    for _ in range(300):
+        league.record("rusher", 1.0)  # the learner always beats the rusher
+        league.record("a", 0.0)
+    w = dict(zip(league.members, league.weights()))
+    assert sum(w.values()) == pytest.approx(1.0)
+    assert w["rusher"] >= 0.2 and w["a"] > w["b"]
+    restored = pg.League.from_state(league.state(), power=2.0)
+    assert restored.weights() == pytest.approx(league.weights())
+    pop = tmp_path / "pop.json"
+    pop.write_text(json.dumps({"members": ["a", {"path": "rusher", "min_share": 0.1}, {"path": "b", "note": "x"}]}))
+    assert pg.load_min_shares(pop) == {"rusher": 0.1}
+    cfg = pg.PGConfig(policy_checkpoint="p", value_checkpoint="v", population=str(pop))
+    assert pg.league_for_run(cfg, league.state()).min_shares == {"rusher": 0.1}  # the file's pins win on a resume
+
+
+def test_games_under_the_rust_goal_play_through(monkeypatch, start_file):
+    monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Client(), "sl": _Client(), "pool": _Client()})
+    result = pg.play_pg_games(3, _settings(start_file, reward="rust", max_decisions=30))
+    for g in result["games"]:
+        assert all(r >= w for r, w in zip(g["reward"], g["win_share"]))

@@ -165,7 +165,7 @@ class PGConfig:
     save_game_every: int = 0
     # What the learner is rewarded for (parse_reward): "win" (the win share, as every
     # main run), or an exploiter's goal -- "placement", "bankrupt", "president:<CORP>",
-    # "rusher". A goal other than "win" also retargets the critic's score head to the
+    # "rusher", "rust". A goal other than "win" also retargets the critic's score head to the
     # reward and uses it as the baseline.
     reward: str = "win"
 
@@ -202,23 +202,25 @@ class _PGGame:
     seat_members: dict = field(default_factory=dict)  # league mode: opponent seat -> member label
     start: Optional[str] = None  # the start position's label
     phase_triggers: dict = field(default_factory=dict)  # "rusher": seat -> phase changes its moves caused
+    rusted: dict = field(default_factory=dict)  # "rust": seat -> opponents' trains its moves rusted
 
 
 # Exploiters' goals (PGConfig.reward): the win share plus a bonus, so they stay
 # competitive but lean a different way, or placement points instead of the win.
 GOAL_BONUS = 0.5  # "bankrupt", "president:<CORP>"
 RUSH_BONUS, RUSH_MAX = 0.15, 4  # "rusher": per phase change its own purchase caused
+RUST_BONUS, RUST_MAX = 0.1, 6  # "rust": per opponent's train its own purchase rusted
 PLACEMENT_POINTS = (1.0, 0.5, 0.2, 0.0)
 CORPORATIONS = ("PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M")
-REWARDS = ("win", "placement", "bankrupt", "president", "rusher")
+REWARDS = ("win", "placement", "bankrupt", "president", "rusher", "rust")
 
 
 def parse_reward(spec: Optional[str]) -> tuple:
     """``(kind, corporation or None)`` of a reward spec: ``win`` (the default),
-    ``placement``, ``bankrupt``, ``president:<CORP>`` or ``rusher``."""
+    ``placement``, ``bankrupt``, ``president:<CORP>``, ``rusher`` or ``rust``."""
     kind, _, arg = str(spec or "win").partition(":")
     if kind not in REWARDS:
-        raise ValueError(f"unknown reward {spec!r}: one of win, placement, bankrupt, president:<CORP>, rusher")
+        raise ValueError(f"unknown reward {spec!r}: one of win, placement, bankrupt, president:<CORP>, rusher, rust")
     if kind == "president":
         if arg not in CORPORATIONS:
             raise ValueError(f"president:<CORP> needs one of {', '.join(CORPORATIONS)}, got {arg!r}")
@@ -248,7 +250,8 @@ def shaped_reward(spec, win_share, worth, bankrupt, presidents, triggers, learne
     """Per-seat reward of a finished game under ``spec`` (:func:`parse_reward`).
 
     ``bankrupt`` -- per seat; ``presidents`` -- corporation -> president's seat (or
-    None); ``triggers`` -- per seat, phase changes its own moves caused. The
+    None); ``triggers`` -- per seat, the phase changes ("rusher") or the opponents'
+    trains rusted ("rust") its own moves caused. The
     "bankrupt" bonus goes to a seat that didn't go bankrupt when another player did
     (in 1830 that ends the game); for the learner's seats only an opponent's
     bankruptcy counts, so a learner with two seats can't farm it off itself.
@@ -269,7 +272,24 @@ def shaped_reward(spec, win_share, worth, bankrupt, presidents, triggers, learne
         return win_share + GOAL_BONUS * np.array(bonus)
     if kind == "president":
         return win_share + GOAL_BONUS * np.array([float(presidents.get(corporation) == s) for s in seats])
+    if kind == "rust":
+        return win_share + RUST_BONUS * np.minimum(np.asarray(triggers, dtype=np.float64), RUST_MAX)
     return win_share + RUSH_BONUS * np.minimum(np.asarray(triggers, dtype=np.float64), RUSH_MAX)
+
+
+def held_trains(rs) -> dict:
+    """Train id -> owning player ("player:<id>") of every train a player's corporation holds."""
+    return {t.id: c.owner_id_str for c in rs.corporations if c.owner_id_str.startswith("player:") for t in c.trains}
+
+
+def rusted_by_move(before: dict, rs, mover: str) -> int:
+    """Trains of other players' corporations (``before``: :func:`held_trains` ahead of
+    the move) that no corporation holds after it: rusted by the phase change it caused
+    (a train sold between corporations is still held; discards come in a later step)."""
+    if not before:
+        return 0
+    now = {t.id for c in rs.corporations for t in c.trains}
+    return sum(1 for train, owner in before.items() if owner != mover and train not in now)
 
 
 def game_facts(game) -> tuple:
@@ -352,14 +372,33 @@ def load_population(path) -> list:
     return [m["path"] if isinstance(m, dict) else str(m) for m in members]
 
 
+def load_min_shares(path) -> dict:
+    """Path -> ``min_share`` of the population file's members that set one: the
+    least share of games they get whatever their win rate (a style the learner should
+    keep meeting even once it beats it, e.g. a rusher or a bankruptcy hunter)."""
+    data = json.loads(Path(path).read_text())
+    members = data["members"] if isinstance(data, dict) else data
+    return {m["path"]: float(m["min_share"]) for m in members if isinstance(m, dict) and m.get("min_share")}
+
+
 class League:
     """The opponents of a league-mode run, sampled by prioritized fictitious self-play
     (AlphaStar): a member is drawn with weight ``(1 - p) ** power``, ``p`` the
     learner's (decayed) rate of finishing ahead of it, so members it rarely beats are
-    played most. A new member starts at ``p`` 0.5 (``prior`` pseudo-games)."""
+    played most. A new member starts at ``p`` 0.5 (``prior`` pseudo-games). Members
+    with a ``min_shares`` entry are drawn at least that often."""
 
-    def __init__(self, members=(), power: float = 2.0, floor: float = 0.02, decay: float = 0.995, prior: float = 4.0):
+    def __init__(
+        self,
+        members=(),
+        power: float = 2.0,
+        floor: float = 0.02,
+        decay: float = 0.995,
+        prior: float = 4.0,
+        min_shares: Optional[dict] = None,
+    ):
         self.power, self.floor, self.decay, self.prior = power, floor, decay, prior
+        self.min_shares: dict = dict(min_shares or {})
         self.stats: dict = {}
         for member in members:
             self.add(member)
@@ -388,18 +427,27 @@ class League:
     def weights(self) -> np.ndarray:
         rates = np.array([self.win_rate(m) for m in self.stats])
         w = np.maximum((1.0 - rates) ** self.power, self.floor)
-        return w / w.sum()
+        w = w / w.sum()
+        pinned = np.array([self.min_shares.get(m, 0.0) for m in self.stats])
+        total = pinned.sum()
+        if total > 0:
+            # Reserve the pinned shares, then split the rest by PFSP.
+            if total > 1.0:
+                pinned, total = pinned / total, 1.0
+            w = (1.0 - total) * w + pinned
+        return w
 
     def sample(self, rng: np.random.Generator) -> str:
         return self.members[int(rng.choice(len(self.stats), p=self.weights()))]
 
     def state(self) -> dict:
-        return {"stats": self.stats}
+        return {"stats": self.stats, "min_shares": self.min_shares}
 
     @classmethod
     def from_state(cls, state: dict, **kwargs) -> "League":
         league = cls(**kwargs)
         league.stats = {k: list(v) for k, v in state["stats"].items()}
+        league.min_shares = dict(state.get("min_shares") or {})
         return league
 
 
@@ -416,6 +464,7 @@ def league_for_run(cfg, league_state: Optional[dict]) -> Optional[League]:
             league.add(member)
     else:
         league = League(load_population(cfg.population), **kw)
+    league.min_shares = load_min_shares(cfg.population)  # the file's pins, also on a resume
     if not league.members:
         raise SystemExit(f"population {cfg.population} has no members")
     return league
@@ -448,6 +497,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
     py_rng = random.Random()
     reward_spec = settings.get("reward", "win")
     track_phases = parse_reward(reward_spec)[0] == "rusher"
+    track_rust = parse_reward(reward_spec)[0] == "rust"
     k = settings["positions_per_seat"]
     start_time = time.time()
 
@@ -522,10 +572,16 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
                         r = int(rng.integers(0, g.seen[seat]))
                         if r < k:
                             g.reservoir[seat][r] = (t, row)
-                phase_before = g.game._game.phase.name if track_phases else None
-                g.game._game.apply_action_index(choice, price_value)
-                if track_phases and g.game._game.phase.name != phase_before:
-                    g.phase_triggers[seat] = g.phase_triggers.get(seat, 0) + 1
+                rs = g.game._game
+                phase_before = rs.phase.name if (track_phases or track_rust) else None
+                trains_before = held_trains(rs) if track_rust else None
+                rs.apply_action_index(choice, price_value)
+                if phase_before is not None and rs.phase.name != phase_before:
+                    if track_phases:
+                        g.phase_triggers[seat] = g.phase_triggers.get(seat, 0) + 1
+                    if track_rust:
+                        mover = f"player:{sorted(p.id for p in rs.players)[seat]}"
+                        g.rusted[seat] = g.rusted.get(seat, 0) + rusted_by_move(trains_before, rs, mover)
                 g.decisions += 1
                 decisions_total += 1
 
@@ -536,7 +592,8 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
         reward, score_target = win_share, None
         if reward_spec != "win":
             worth, bankrupt, presidents = game_facts(g.game)
-            triggers = [g.phase_triggers.get(s, 0) for s in range(NUM_PLAYERS)]
+            counts = g.rusted if parse_reward(reward_spec)[0] == "rust" else g.phase_triggers
+            triggers = [counts.get(s, 0) for s in range(NUM_PLAYERS)]
             reward = shaped_reward(reward_spec, win_share, worth, bankrupt, presidents, triggers, g.values)
             score_target = reward.astype(np.float32)  # the critic's score head learns the reward
         rows = []

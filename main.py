@@ -465,7 +465,7 @@ def build_parser():
     p.add_argument("--midgame-positions", type=str, default="human_games/midgame_positions_1830_4p.jsonl")
     p.add_argument(
         "--population", type=str, default=None,
-        help="League mode: JSON list of checkpoint paths; opponents are drawn per seat from it (prioritized by how often they beat the learner) instead of --opponent and the pool",
+        help="League mode: JSON list of checkpoint paths (or {\"path\", \"min_share\"} objects: drawn at least that often); opponents are drawn per seat from it (prioritized by how often they beat the learner) instead of --opponent and the pool",
     )
     p.add_argument("--opponent-slots", type=int, default=3, help="League mode: opponent servers (members at once)")
     p.add_argument(
@@ -483,7 +483,7 @@ def build_parser():
         "--reward", type=str, default="win",
         help="The learner's goal: win (default), or an exploiter's -- placement (1st 1, 2nd 0.5, 3rd 0.2), "
         "bankrupt (+0.5 when another player goes bankrupt), president:<CORP> (+0.5 for its presidency at the end), "
-        "rusher (+0.15 per phase change its purchases cause, up to 4)",
+        "rusher (+0.15 per phase change its purchases cause, up to 4), rust (+0.1 per opponent train its purchases rust, up to 6)",
     )
     p.add_argument(
         "--anchor-every", type=int, default=0,
