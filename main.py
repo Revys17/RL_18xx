@@ -199,6 +199,7 @@ def cmd_policy_gradient(args):
         save_game_every=args.save_game_every,
         midgame_positions=args.midgame_positions if args.midgame_fraction > 0 else None,
         midgame_fraction=args.midgame_fraction,
+        auction_fraction=args.auction_fraction,
     )
     print(run(config, resume=args.resume))
 
@@ -463,6 +464,10 @@ def build_parser():
         help="Share of games starting at a later Stock Round of a recorded human game (with --resume: from now on)",
     )
     p.add_argument("--midgame-positions", type=str, default="human_games/midgame_positions_1830_4p.jsonl")
+    p.add_argument(
+        "--auction-fraction", type=float, default=0.0,
+        help="Share of games starting at the waterfall auction, the learner's bids trained too (with --resume: from now on)",
+    )
     p.add_argument(
         "--population", type=str, default=None,
         help="League mode: JSON list of checkpoint paths (or {\"path\", \"min_share\"} objects: drawn at least that often); opponents are drawn per seat from it (prioritized by how often they beat the learner) instead of --opponent and the pool",

@@ -141,6 +141,9 @@ class PGConfig:
     # games begins at a later Stock Round of a recorded human game.
     midgame_positions: Optional[str] = None
     midgame_fraction: float = 0.0
+    # Share of games that start at the waterfall auction (with the auction_unlock
+    # variant, so all-pass rounds can't stall it): the learner's bids are trained too.
+    auction_fraction: float = 0.0
     inference_batch_size: int = 512
     # Updates
     rows_per_update: int = 65536
@@ -491,7 +494,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
     sampled decisions (with advantages) and each game's result."""
     from rl18xx.agent.alphazero.mcts import _rust_encode
     from rl18xx.agent.alphazero.policy_selfplay import _advance
-    from rl18xx.agent.alphazero.start_positions import apply_actions, new_game, sample_start_position
+    from rl18xx.agent.alphazero.start_positions import AUCTION_START, apply_actions, new_game, sample_start_position
 
     rng = np.random.default_rng()
     py_rng = random.Random()
@@ -510,8 +513,11 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             rng=py_rng,
             midgame_path=settings.get("midgame_positions"),
             midgame_fraction=settings.get("midgame_fraction", 0.0),
+            auction_fraction=settings.get("auction_fraction", 0.0),
         )
         game = apply_actions(new_game(NUM_PLAYERS), start.actions)
+        if start.label == AUCTION_START:
+            game._game.set_auction_unlock(True)
         learner, seat_models, seat_members = _deal_seats(settings, py_rng)
         opponent = "league" if settings.get("league") else seat_models[min(set(range(NUM_PLAYERS)) - learner)]
         g = _PGGame(game=game, uid=uuid.uuid4().hex, opponent=opponent, seat_models=seat_models, start=start.label)
@@ -915,6 +921,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
             "save_game_every": cfg.save_game_every,
             "midgame_positions": cfg.midgame_positions,
             "midgame_fraction": cfg.midgame_fraction,
+            "auction_fraction": cfg.auction_fraction,
         }
         if cfg.population:
             overrides["population"] = cfg.population
@@ -1015,6 +1022,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
             "random_start_fraction": cfg.random_start_fraction,
             "midgame_positions": cfg.midgame_positions,
             "midgame_fraction": cfg.midgame_fraction,
+            "auction_fraction": cfg.auction_fraction,
             "gae_lambda": cfg.gae_lambda,
             "save_game_every": cfg.save_game_every,
             "reward": cfg.reward,

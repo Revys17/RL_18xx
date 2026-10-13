@@ -526,3 +526,14 @@ def test_games_under_the_rust_goal_play_through(monkeypatch, start_file):
     result = pg.play_pg_games(3, _settings(start_file, reward="rust", max_decisions=30))
     for g in result["games"]:
         assert all(r >= w for r, w in zip(g["reward"], g["win_share"]))
+
+
+def test_auction_starts_play_the_waterfall_auction_with_the_unlock(monkeypatch, start_file):
+    from rl18xx.agent.alphazero.start_positions import AUCTION_START, sample_start_position
+
+    assert sample_start_position(4, None, 0.0, auction_fraction=1.0).label == AUCTION_START
+    monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Client(), "sl": _Client(), "pool": _Client()})
+    result = pg.play_pg_games(3, _settings(start_file, auction_fraction=1.0, max_decisions=25))
+    for g in result["games"]:
+        assert g["start_kind"] == AUCTION_START
+        assert g["rows"]  # the learner's auction decisions are trained

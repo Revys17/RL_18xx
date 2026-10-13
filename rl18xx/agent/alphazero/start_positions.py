@@ -44,6 +44,7 @@ LOGGER = logging.getLogger(__name__)
 
 HUMAN_START_PREFIX = "human:"
 RANDOM_START = "random"
+AUCTION_START = "auction"  # a fresh game: the waterfall auction is played too
 MIDGAME_PREFIX = "midgame:"
 
 # What ``process_action`` reads from an auction action (bid / pass / par).
@@ -426,14 +427,18 @@ def sample_start_position(
     rng: Optional[random.Random] = None,
     midgame_path=None,
     midgame_fraction: float = 0.0,
+    auction_fraction: float = 0.0,
 ) -> StartPosition:
     """A start for a new ``num_players`` self-play game: with probability
-    ``midgame_fraction`` (when ``midgame_path`` has games for this player count)
-    a mid-game start -- a uniformly chosen game and one of its Stock Rounds;
-    otherwise a random start with probability ``random_fraction`` (always, when
-    ``path`` has no starts for this player count), else a uniformly chosen human
-    start from ``path``."""
+    ``auction_fraction`` the beginning of the game (the auction is played; the
+    caller turns on ``auction_unlock``); else with probability ``midgame_fraction``
+    (when ``midgame_path`` has games for this player count) a mid-game start -- a
+    uniformly chosen game and one of its Stock Rounds; otherwise a random start with
+    probability ``random_fraction`` (always, when ``path`` has no starts for this
+    player count), else a uniformly chosen human start from ``path``."""
     rng = rng or random.Random()
+    if auction_fraction > 0 and rng.random() < auction_fraction:
+        return StartPosition(AUCTION_START, ())
     if midgame_path and midgame_fraction > 0 and rng.random() < midgame_fraction:
         games = load_midgame_positions(midgame_path).get(num_players, [])
         if games:
