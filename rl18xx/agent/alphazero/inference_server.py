@@ -218,6 +218,47 @@ def _gather_legal_priors(probs: Any, start: int, legal: list) -> np.ndarray:
     return rows[row_ids, col_ids].float().cpu().numpy()
 
 
+def _batched_legal_replies(batch: list, spans: list, probs: Any, values: Any, price: Optional[dict]) -> list:
+    """Replies for a batch whose requests all carry legal indices: the legal priors,
+    values and price logits of the whole batch move to the CPU in one transfer each
+    and are sliced per request there (what ``_gather_legal_priors``,
+    ``_rows_to_numpy`` and ``_slice_price_rows_for_reply`` give per request)."""
+    if not isinstance(probs, torch.Tensor):
+        probs = torch.stack([torch.as_tensor(r) for r in probs])
+    if not isinstance(values, torch.Tensor):
+        values = torch.stack([torch.as_tensor(r) for r in values])
+    legal = [ix for req in batch for ix in req.encoded_states.legal_indices]
+    lengths = np.array([len(ix) for ix in legal], dtype=np.int64)
+    row_ids = torch.repeat_interleave(torch.arange(len(legal), device=probs.device), torch.from_numpy(lengths).to(probs.device))
+    col_ids = torch.from_numpy(np.concatenate([np.asarray(ix, dtype=np.int64) for ix in legal])).to(probs.device)
+    priors = probs[row_ids, col_ids].float().cpu().numpy()
+    values_np = values.detach().to(torch.float32).cpu().numpy()
+    logits = price.get("price_logits") if price is not None else None
+    logits_np = logits.detach().float().cpu().numpy() if logits is not None else None
+    offsets = np.concatenate([[0], np.cumsum(lengths)])
+    replies = []
+    for req, (start, n) in zip(batch, spans):
+        price_rows = None
+        if logits_np is not None:
+            price_rows = {
+                "price_logits": logits_np[start : start + n],
+                "slot_index": price.get("slot_index"),
+                "num_slots": price.get("num_slots"),
+            }
+        replies.append(
+            InferenceReply(
+                request_id=req.request_id,
+                probs=priors[offsets[start] : offsets[start + n]],
+                log_probs=None,
+                value=values_np[start : start + n],
+                price_components=price_rows,
+                batched=True,
+                legal_lengths=lengths[start : start + n],
+            )
+        )
+    return replies
+
+
 def _slice_price_rows_for_reply(batched: Optional[dict], start: int, n: int) -> Optional[dict]:
     """Rows ``[start, start + n)`` of the model's batched price components, as
     numpy, for a batched reply (``slot_index`` / ``num_slots`` sent once)."""
@@ -413,6 +454,7 @@ class InferenceServer:
         return batch
 
     def _run_forward(self, batch: list[InferenceRequest]) -> list[InferenceReply]:
+        tu = time.monotonic()
         encoded_states: list = []
         spans: list[tuple[int, int]] = []
         for req in batch:
@@ -429,12 +471,28 @@ class InferenceServer:
             if self.autocast_device
             else _NullCtx()
         )
+        tf = time.monotonic()
         with torch.no_grad(), autocast_ctx:
             probs, log_probs, values = self._model.run_many_encoded(encoded_states)
+        if _PROFILE:
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            _PROFILE.add("unpack", tf - tu)
+            _PROFILE.add("forward", time.monotonic() - tf)
+        tr = time.monotonic()
         # Pull the model's batched price-components stash (might be None
         # for the GNN model) and slice per-leaf in numpy form so the reply
         # serializes cleanly.
         batched_price_components = getattr(self._model, "last_price_components", None)
+        if all(isinstance(req.encoded_states, PackedStates) and req.encoded_states.legal_indices is not None for req in batch):
+            # The usual case (policy-only play, policy-gradient workers): gather every
+            # request's legal priors, values and price rows in one transfer each, then
+            # slice on the CPU -- per-request transfers each waited on the GPU and took
+            # more of the server's time than the forward pass.
+            replies = _batched_legal_replies(batch, spans, probs, values, batched_price_components)
+            if _PROFILE:
+                _PROFILE.add("replies", time.monotonic() - tr)
+            return replies
         replies: list[InferenceReply] = []
         for req, (start, n) in zip(batch, spans):
             if req.encoded_states is None:
@@ -466,6 +524,8 @@ class InferenceServer:
                     legal_lengths=legal_lengths,
                 )
             )
+        if _PROFILE:
+            _PROFILE.add("replies", time.monotonic() - tr)
         return replies
 
     def _dispatch_replies(self, batch: list[InferenceRequest], replies: list[InferenceReply]):
@@ -516,13 +576,21 @@ class InferenceServer:
                 continue
 
             # 4. ACCEPTING: drain a batch + forward + reply.
+            tc = time.monotonic()
             batch = self._collect_batch()
             if not batch:
+                if _PROFILE:
+                    _PROFILE.add("idle", time.monotonic() - tc)
                 continue
             t0 = time.monotonic()
             replies = self._run_forward(batch)
             elapsed_ms = (time.monotonic() - t0) * 1000.0
+            td = time.monotonic()
             self._dispatch_replies(batch, replies)
+            if _PROFILE:
+                _PROFILE.add("collect", t0 - tc)
+                _PROFILE.add("dispatch", time.monotonic() - td)
+                _PROFILE.batch(sum(self._request_size(req) for req in batch))
             leaves = sum(self._request_size(req) for req in batch)
             self.stats.batches_served += 1
             self.stats.requests_served += leaves
@@ -551,6 +619,50 @@ class InferenceServer:
         replies = self._run_forward(batch)
         self._dispatch_replies(batch, replies)
         return True
+
+
+class _StageProfile:
+    """``RL18XX_SERVER_PROFILE=<seconds>``: every that many seconds a server logs how
+    its time split between waiting for requests (idle), collecting a batch (incl.
+    unpickling), unpacking states, the forward pass (synchronized), building
+    replies and dispatching them."""
+
+    def __init__(self, every_s: float):
+        import os
+
+        self.every_s, self.pid = every_s, os.getpid()
+        self.reset()
+
+    def reset(self):
+        self.t = {k: 0.0 for k in ("idle", "collect", "unpack", "forward", "replies", "dispatch")}
+        self.batches = self.leaves = 0
+        self.start = time.monotonic()
+
+    def add(self, stage: str, seconds: float):
+        self.t[stage] += seconds
+
+    def batch(self, leaves: int):
+        self.batches += 1
+        self.leaves += leaves
+        wall = time.monotonic() - self.start
+        if wall >= self.every_s:
+            parts = "  ".join(f"{k} {100 * v / wall:4.1f}%" for k, v in self.t.items())
+            print(
+                f"[server {self.pid}] {wall:.0f}s: {self.batches} batches, {self.leaves / max(1, self.batches):.1f} "
+                f"states/batch, {self.leaves / wall:.0f} states/s | {parts}",
+                flush=True,
+            )
+            self.reset()
+
+
+def _profile_from_env():
+    import os
+
+    every = os.environ.get("RL18XX_SERVER_PROFILE")
+    return _StageProfile(float(every)) if every else None
+
+
+_PROFILE = _profile_from_env()
 
 
 class _NullCtx:

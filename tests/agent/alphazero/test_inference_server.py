@@ -620,3 +620,36 @@ def test_wait_checking_servers_fails_when_a_server_dies():
         assert time.monotonic() - started < 30
     finally:
         handle.shutdown(timeout_s=5)
+
+
+def test_batched_legal_replies_match_the_per_request_slices():
+    """The batch-at-once reply path gives each request what the per-request
+    helpers did: its legal priors, its value rows and its price-logit rows."""
+    from rl18xx.agent.alphazero.inference_server import (
+        PackedStates,
+        _batched_legal_replies,
+        _gather_legal_priors,
+        _rows_to_numpy,
+        _slice_price_rows_for_reply,
+    )
+
+    rng = np.random.default_rng(0)
+    sizes = [3, 1, 4]
+    total = sum(sizes)
+    probs = torch.softmax(torch.from_numpy(rng.normal(size=(total, 50))).float(), dim=1)
+    values = torch.from_numpy(rng.random((total, 6))).float()
+    price = {"price_logits": torch.from_numpy(rng.normal(size=(total, 7))).float(), "slot_index": [1] * total, "num_slots": 3}
+    batch, spans, start = [], [], 0
+    for i, n in enumerate(sizes):
+        legal = [np.sort(rng.choice(50, size=int(rng.integers(1, 9)), replace=False)).astype(np.int32) for _ in range(n)]
+        packed = PackedStates(np.zeros((n, 4)), np.zeros((n, 2, 2)), [(0,)] * n, legal_indices=legal)
+        batch.append(InferenceRequest(request_id=i, worker_id=0, encoded_states=packed))
+        spans.append((start, n))
+        start += n
+    replies = _batched_legal_replies(batch, spans, probs, values, price)
+    for req, (start, n), reply in zip(batch, spans, replies):
+        legal = req.encoded_states.legal_indices
+        np.testing.assert_allclose(reply.probs, _gather_legal_priors(probs, start, legal))
+        np.testing.assert_allclose(reply.value, _rows_to_numpy(values, start, n, torch.float32))
+        np.testing.assert_allclose(reply.price_components["price_logits"], _slice_price_rows_for_reply(price, start, n)["price_logits"])
+        assert reply.legal_lengths.tolist() == [len(ix) for ix in legal] and reply.batched
