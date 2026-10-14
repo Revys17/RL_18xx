@@ -1153,6 +1153,24 @@ class HierarchicalPolicyHead(nn.Module):
         self.register_buffer("other_indices", torch.tensor(other_indices, dtype=torch.long))
         self.other_head = nn.Linear(d_trunk, self.num_other)
 
+    def _rotation_logits(self, trunk: Tensor, node_embs_mapper: Tensor) -> Tensor:
+        """``rotation_head(trunk ⊕ node_emb_at_hex ⊕ tile_emb)`` for every (hex, tile)
+        pair, (B, H, T, R). A linear layer of a concatenation is the sum of its column
+        blocks applied to each part, so each part is projected at its own size and the
+        three broadcast-add into the (B, H, T, hidden) grid -- rather than materializing
+        the (B, H, T, 800) input (4.5 GB at B = 330) and multiplying it, which took half
+        of a forward pass. Same weights, same function."""
+        B, H, T = trunk.shape[0], node_embs_mapper.shape[1], self.num_tiles
+        first, activation, last = self.rotation_head
+        d_trunk, d_map = trunk.shape[-1], node_embs_mapper.shape[-1]
+        w = first.weight  # (hidden, d_trunk + d_map + d_tile)
+        hidden = (
+            F.linear(trunk, w[:, :d_trunk], first.bias).view(B, 1, 1, -1)  # (B, 1, 1, hidden)
+            + F.linear(node_embs_mapper, w[:, d_trunk : d_trunk + d_map]).unsqueeze(2)  # (B, H, 1, hidden)
+            + F.linear(self.tile_embedding.weight, w[:, d_trunk + d_map :]).view(1, 1, T, -1)  # (1, 1, T, hidden)
+        )  # (B, H, T, hidden)
+        return last(activation(hidden))
+
     def forward(self, trunk: Tensor, node_embeds: Tensor) -> Tuple[Tensor, dict]:
         """
         Args:
@@ -1189,13 +1207,7 @@ class HierarchicalPolicyHead(nn.Module):
         log_p_tile_given_hex = F.log_softmax(tile_logits, dim=-1)  # (B, H, T)
 
         # P(rot | hex, tile): emit a (B, H, T, R) grid in parallel.
-        # Build the 4D input via broadcasted concatenation.
-        tile_embs_table = self.tile_embedding.weight  # (T, d_tile)
-        trunk_4d = trunk.view(B, 1, 1, -1).expand(-1, H, T, -1)  # (B, H, T, d_trunk)
-        node_4d = node_embs_mapper.unsqueeze(2).expand(-1, -1, T, -1)  # (B, H, T, d_map)
-        tile_4d = tile_embs_table.view(1, 1, T, -1).expand(B, H, -1, -1)  # (B, H, T, d_tile)
-        rot_input = torch.cat([trunk_4d, node_4d, tile_4d], dim=-1)  # (B, H, T, d_trunk + d_map + d_tile)
-        rot_logits = self.rotation_head(rot_input)  # (B, H, T, R)
+        rot_logits = self._rotation_logits(trunk, node_embs_mapper)  # (B, H, T, R)
         log_p_rot_given_hex_tile = F.log_softmax(rot_logits, dim=-1)  # (B, H, T, R)
 
         # Joint log-probability for LayTile slots: log P(h) + log P(t|h) + log P(r|h,t).
