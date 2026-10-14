@@ -228,8 +228,13 @@ class AlphaZeroModel(nn.Module):
         encoded_game_states = [self.encoder.encode(game_state) for game_state in game_states]
         return self.run_many_encoded(encoded_game_states)
 
+    def _policy_row_hints(self, legal_indices) -> dict:
+        """Extra ``_forward_encoded_batch`` arguments a model derives from the states'
+        legal moves (the transformer skips work for masked-out action blocks)."""
+        return {}
+
     def run_many_encoded(
-        self, encoded_game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]]
+        self, encoded_game_states: List[Tuple[Tensor, Tensor, Tensor, Tensor]], legal_indices: Optional[list] = None
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """Run the network for inference and return (probabilities, log_probs, values).
 
@@ -241,10 +246,15 @@ class AlphaZeroModel(nn.Module):
         training to give the trunk a dense per-game gradient. The score
         prediction is therefore discarded here; callers that want it should
         use ``_forward_encoded_batch`` directly.
+
+        With ``legal_indices`` (per state) the probabilities are exact only on each
+        state's legal moves -- what every caller reads -- and the model may skip
+        work for blocks that hold none (``_policy_row_hints``).
         """
         if len(encoded_game_states) == 0:
             raise ValueError("Received no game states to run.")
-        policy_logits, win_loss_logits, _score_pred, _aux = self._forward_encoded_batch(encoded_game_states)
+        hints = self._policy_row_hints(legal_indices) if legal_indices is not None else {}
+        policy_logits, win_loss_logits, _score_pred, _aux = self._forward_encoded_batch(encoded_game_states, **hints)
         probabilities = F.softmax(policy_logits, dim=1)
         log_probs = F.log_softmax(policy_logits, dim=1)
         # Training treats the win-loss head as a classifier over players

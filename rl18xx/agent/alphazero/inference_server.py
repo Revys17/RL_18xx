@@ -218,6 +218,18 @@ def _gather_legal_priors(probs: Any, start: int, legal: list) -> np.ndarray:
     return rows[row_ids, col_ids].float().cpu().numpy()
 
 
+def _accepts_legal_indices(model) -> bool:
+    """Whether ``model.run_many_encoded`` takes ``legal_indices`` (the repo's models
+    do; test doubles and older wrappers may not)."""
+    import inspect
+
+    try:
+        params = inspect.signature(model.run_many_encoded).parameters
+    except (TypeError, ValueError):
+        return False
+    return "legal_indices" in params or any(p.kind == p.VAR_KEYWORD for p in params.values())
+
+
 def _batched_legal_replies(batch: list, spans: list, probs: Any, values: Any, price: Optional[dict]) -> list:
     """Replies for a batch whose requests all carry legal indices: the legal priors,
     values and price logits of the whole batch move to the CPU in one transfer each
@@ -472,8 +484,16 @@ class InferenceServer:
             else _NullCtx()
         )
         tf = time.monotonic()
+        all_legal = all(
+            isinstance(req.encoded_states, PackedStates) and req.encoded_states.legal_indices is not None for req in batch
+        )
+        kwargs = {}
+        if all_legal and _accepts_legal_indices(self._model):
+            # Only each state's legal priors go back, so the model may skip work for
+            # action blocks with no legal move (e.g. the tile-lay grid).
+            kwargs["legal_indices"] = [ix for req in batch for ix in req.encoded_states.legal_indices]
         with torch.no_grad(), autocast_ctx:
-            probs, log_probs, values = self._model.run_many_encoded(encoded_states)
+            probs, log_probs, values = self._model.run_many_encoded(encoded_states, **kwargs)
         if _PROFILE:
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
@@ -484,7 +504,7 @@ class InferenceServer:
         # for the GNN model) and slice per-leaf in numpy form so the reply
         # serializes cleanly.
         batched_price_components = getattr(self._model, "last_price_components", None)
-        if all(isinstance(req.encoded_states, PackedStates) and req.encoded_states.legal_indices is not None for req in batch):
+        if all_legal:
             # The usual case (policy-only play, policy-gradient workers): gather every
             # request's legal priors, values and price rows in one transfer each, then
             # slice on the CPU -- per-request transfers each waited on the GPU and took

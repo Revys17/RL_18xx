@@ -40,6 +40,7 @@ class PolicyValueComposite:
 
     def run_many_encoded(self, encoded_game_states, *args, **kwargs):
         probs, log_probs, _ = self.policy_model.run_many_encoded(encoded_game_states, *args, **kwargs)
+        kwargs.pop("legal_indices", None)  # only the policy network uses them
         self.last_price_components = getattr(self.policy_model, "last_price_components", None)
         if self.value_head == "score":
             return probs, log_probs, self.value_model.run_scores_encoded(encoded_game_states)

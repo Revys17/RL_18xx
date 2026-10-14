@@ -17,6 +17,7 @@ import math
 import logging
 from typing import Optional, List, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -1153,13 +1154,24 @@ class HierarchicalPolicyHead(nn.Module):
         self.register_buffer("other_indices", torch.tensor(other_indices, dtype=torch.long))
         self.other_head = nn.Linear(d_trunk, self.num_other)
 
-    def _rotation_logits(self, trunk: Tensor, node_embs_mapper: Tensor) -> Tensor:
+    def _rotation_logits(self, trunk: Tensor, node_embs_mapper: Tensor, rows: Optional[Tensor] = None) -> Tensor:
         """``rotation_head(trunk ⊕ node_emb_at_hex ⊕ tile_emb)`` for every (hex, tile)
         pair, (B, H, T, R). A linear layer of a concatenation is the sum of its column
         blocks applied to each part, so each part is projected at its own size and the
         three broadcast-add into the (B, H, T, hidden) grid -- rather than materializing
         the (B, H, T, 800) input (4.5 GB at B = 330) and multiplying it, which took half
-        of a forward pass. Same weights, same function."""
+        of a forward pass. Same weights, same function.
+
+        ``rows`` (B,) bool: only those rows are computed; the others get zero logits.
+        Callers pass the rows with a legal tile lay -- elsewhere every LayTile action is
+        masked out of the softmax and every loss, so the grid there is never used (and
+        gets no gradient), and a tile lay is legal at only ~17% of decisions."""
+        if rows is not None and not bool(rows.all()):
+            out = trunk.new_zeros(trunk.shape[0], node_embs_mapper.shape[1], self.num_tiles, self.num_rotations)
+            selected = rows.nonzero(as_tuple=True)[0]
+            if selected.numel():
+                out[selected] = self._rotation_logits(trunk[selected], node_embs_mapper[selected])
+            return out
         B, H, T = trunk.shape[0], node_embs_mapper.shape[1], self.num_tiles
         first, activation, last = self.rotation_head
         d_trunk, d_map = trunk.shape[-1], node_embs_mapper.shape[-1]
@@ -1171,11 +1183,13 @@ class HierarchicalPolicyHead(nn.Module):
         )  # (B, H, T, hidden)
         return last(activation(hidden))
 
-    def forward(self, trunk: Tensor, node_embeds: Tensor) -> Tuple[Tensor, dict]:
+    def forward(self, trunk: Tensor, node_embeds: Tensor, lay_tile_rows: Optional[Tensor] = None) -> Tuple[Tensor, dict]:
         """
         Args:
             trunk: (B, d_trunk) trunk features
             node_embeds: (B, N, d_map) per-hex Transformer embeddings
+            lay_tile_rows: optional (B,) bool -- the rows with a legal tile lay; the
+                rotation grid is computed only for them (see ``_rotation_logits``)
 
         Returns:
             flat_logits: (B, policy_size) assembled flat policy. The LayTile
@@ -1207,7 +1221,7 @@ class HierarchicalPolicyHead(nn.Module):
         log_p_tile_given_hex = F.log_softmax(tile_logits, dim=-1)  # (B, H, T)
 
         # P(rot | hex, tile): emit a (B, H, T, R) grid in parallel.
-        rot_logits = self._rotation_logits(trunk, node_embs_mapper)  # (B, H, T, R)
+        rot_logits = self._rotation_logits(trunk, node_embs_mapper, lay_tile_rows)  # (B, H, T, R)
         log_p_rot_given_hex_tile = F.log_softmax(rot_logits, dim=-1)  # (B, H, T, R)
 
         # Joint log-probability for LayTile slots: log P(h) + log P(t|h) + log P(r|h,t).
@@ -1692,7 +1706,7 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
     # --- Architecture-specific batch assembly (run/run_many live on AlphaZeroModel) ---
 
     def _forward_encoded_batch(
-        self, encoded_game_states: list, value_only: bool = False
+        self, encoded_game_states: list, value_only: bool = False, lay_tile_rows: Optional[Tensor] = None
     ) -> Tuple[Optional[Tensor], Tensor, Tensor, Tensor]:
         """Assemble a batch from encoded tuples and run ``forward``.
 
@@ -1750,8 +1764,27 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         num_players_tensor = torch.tensor(num_players_list, dtype=torch.long, device=self.device)
 
         return self.forward(
-            batched_gs, batched_nodes, round_type_tensor, active_player_tensor, num_players_tensor, value_only=value_only
+            batched_gs,
+            batched_nodes,
+            round_type_tensor,
+            active_player_tensor,
+            num_players_tensor,
+            value_only=value_only,
+            lay_tile_rows=lay_tile_rows,
         )
+
+    def lay_tile_rows(self, legal) -> Optional[Tensor]:
+        """(B,) bool on the model's device: the rows with a legal tile lay, from a
+        (B, policy_size) legal mask or a list of per-state legal index arrays."""
+        lo = int(self.policy_head.lay_tile_offset)
+        hi = lo + int(self.policy_head.num_lay_tile)
+        if isinstance(legal, Tensor):
+            return legal[:, lo:hi].any(dim=1).to(self.device)
+        flags = [bool(((np.asarray(ix) >= lo) & (np.asarray(ix) < hi)).any()) for ix in legal]
+        return torch.tensor(flags, dtype=torch.bool, device=self.device)
+
+    def _policy_row_hints(self, legal_indices) -> dict:
+        return {"lay_tile_rows": self.lay_tile_rows(legal_indices)}
 
     def run_values_encoded(self, encoded_game_states: list) -> Tensor:
         """Per-seat win probabilities (canonical frame) without the policy and
@@ -1794,6 +1827,7 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         active_player_idx: Optional[Tensor] = None,
         num_players: Optional[Tensor] = None,
         value_only: bool = False,
+        lay_tile_rows: Optional[Tensor] = None,
     ) -> Tuple[Optional[Tensor], Tensor, Tensor, Tensor]:
         """
         Forward pass of the Transformer model.
@@ -1915,7 +1949,7 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
             # positions with one, so bf16 training and validation saw a
             # different policy from the one played (fp32).
             with torch.autocast(device_type=x.device.type, enabled=False):
-                policy_logits, policy_components = self.policy_head(x.float(), node_embeds.float())
+                policy_logits, policy_components = self.policy_head(x.float(), node_embeds.float(), lay_tile_rows)
                 self.last_policy_components = policy_components
 
                 # 5b. Price head — cell logits per (action_type, entity) slot.

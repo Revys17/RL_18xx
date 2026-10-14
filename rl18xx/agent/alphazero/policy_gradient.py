@@ -1231,10 +1231,13 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfi
                 batch = batch_tensors([rows[i] for i in step_rows[micro_start : micro_start + micro]], device)
                 n = len(batch["choice"])
                 share = n / len(step_rows)
+                # Rows without a legal tile lay skip the tile grid: every LayTile action is
+                # masked out of these losses there, so its logits never matter.
+                tile_rows = learner.lay_tile_rows(batch["legal"]) if hasattr(learner, "lay_tile_rows") else None
                 with torch.no_grad():
-                    sl_logits, _, _, _ = anchor(batch["game_state"], batch["nodes"])
+                    sl_logits, _, _, _ = anchor(batch["game_state"], batch["nodes"], lay_tile_rows=tile_rows)
                     sl_price = anchor.last_price_components["price_logits"]
-                policy_logits, _, _, _ = learner(batch["game_state"], batch["nodes"])
+                policy_logits, _, _, _ = learner(batch["game_state"], batch["nodes"], lay_tile_rows=tile_rows)
                 price = learner.last_price_components["price_logits"]
                 losses = pg_losses(
                     policy_logits, price, sl_logits, sl_price, batch, cfg.clip, kl_coef, cfg.entropy_coef,
