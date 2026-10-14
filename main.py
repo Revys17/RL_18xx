@@ -486,7 +486,7 @@ def build_parser():
     p.add_argument("--league-max-snapshots", type=int, default=4, help="League mode: own snapshots kept in the league")
     p.add_argument(
         "--reward", type=str, default="win",
-        help="The learner's goal: win (default), or an exploiter's -- placement (1st 1, 2nd 0.5, 3rd 0.2), "
+        help="The learner's goal: win (default), or an exploiter's -- placement (1st 1, 2nd 0.5, 3rd 0.2; or placement:1,0.3,0.1,0), "
         "bankrupt (+0.5 when another player goes bankrupt), president:<CORP> (+0.5 for its presidency at the end), "
         "rusher (+0.15 per phase change its purchases cause, up to 4), rust (+0.1 per opponent train its purchases rust, up to 6)",
     )

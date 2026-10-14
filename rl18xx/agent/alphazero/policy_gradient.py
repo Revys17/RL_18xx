@@ -226,11 +226,21 @@ REWARDS = ("win", "placement", "bankrupt", "president", "rusher", "rust")
 
 
 def parse_reward(spec: Optional[str]) -> tuple:
-    """``(kind, corporation or None)`` of a reward spec: ``win`` (the default),
-    ``placement``, ``bankrupt``, ``president:<CORP>``, ``rusher`` or ``rust``."""
+    """``(kind, argument or None)`` of a reward spec: ``win`` (the default),
+    ``placement`` (or ``placement:<1st>,<2nd>,<3rd>,<4th>`` points, e.g.
+    ``placement:1,0.3,0.1,0``; the argument is then the points tuple), ``bankrupt``,
+    ``president:<CORP>``, ``rusher`` or ``rust``."""
     kind, _, arg = str(spec or "win").partition(":")
     if kind not in REWARDS:
         raise ValueError(f"unknown reward {spec!r}: one of win, placement, bankrupt, president:<CORP>, rusher, rust")
+    if kind == "placement" and arg:
+        try:
+            points = tuple(float(x) for x in arg.split(","))
+        except ValueError:
+            raise ValueError(f"placement points must be numbers, got {arg!r}") from None
+        if len(points) < 2 or any(a < b for a, b in zip(points, points[1:])):
+            raise ValueError(f"placement points must be non-increasing by place, got {arg!r}")
+        return kind, points
     if kind == "president":
         if arg not in CORPORATIONS:
             raise ValueError(f"president:<CORP> needs one of {', '.join(CORPORATIONS)}, got {arg!r}")
@@ -240,10 +250,11 @@ def parse_reward(spec: Optional[str]) -> tuple:
     return kind, None
 
 
-def placement_points(worth) -> np.ndarray:
-    """Per seat: 1st 1, 2nd 0.5, 3rd 0.2, 4th 0 by net worth; tied seats share their places' points."""
+def placement_points(worth, points: tuple = PLACEMENT_POINTS) -> np.ndarray:
+    """Per seat the points of its place by net worth (default 1st 1, 2nd 0.5, 3rd 0.2,
+    4th 0); tied seats share their places' points."""
     worth = np.asarray(worth, dtype=np.float64)
-    points = np.array(PLACEMENT_POINTS[: len(worth)] + (0.0,) * max(0, len(worth) - len(PLACEMENT_POINTS)))
+    points = np.array(tuple(points)[: len(worth)] + (0.0,) * max(0, len(worth) - len(points)))
     order = np.argsort(-worth, kind="stable")
     out = np.zeros(len(worth))
     i = 0
@@ -271,7 +282,7 @@ def shaped_reward(spec, win_share, worth, bankrupt, presidents, triggers, learne
     if kind == "win":
         return win_share
     if kind == "placement":
-        return placement_points(worth)
+        return placement_points(worth, corporation or PLACEMENT_POINTS)
     seats = range(len(win_share))
     if kind == "bankrupt":
         learner = set(learner_seats)

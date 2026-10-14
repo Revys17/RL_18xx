@@ -569,3 +569,14 @@ def test_baselines_at_update_time_leave_the_reward_to_the_learner(monkeypatch, s
     shaped = pg.PGConfig(policy_checkpoint="p", value_checkpoint="v", reward="placement")
     out, _ = pg.subtract_baselines(_Critic(), rows, shaped, "cpu")
     assert [r[5] for r in out] == pytest.approx([r[5] - 0.9 for r in rows])  # score head: the shaped reward
+
+
+def test_custom_placement_points():
+    assert pg.parse_reward("placement:1,0.3,0.1,0") == ("placement", (1.0, 0.3, 0.1, 0.0))
+    for bad in ("placement:1,a", "placement:0,1,0,0", "placement:1"):
+        with pytest.raises(ValueError):
+            pg.parse_reward(bad)
+    worth = [500, 900, 400, 100]
+    shaped = pg.shaped_reward("placement:1,0.3,0.1,0", [0, 1, 0, 0], worth, [False] * 4, {}, [0] * 4, (0, 1))
+    assert shaped.tolist() == pytest.approx([0.3, 1.0, 0.1, 0.0])
+    assert pg.shaped_reward("placement", [0, 1, 0, 0], worth, [False] * 4, {}, [0] * 4, (0, 1)).tolist() == [0.5, 1.0, 0.2, 0.0]
