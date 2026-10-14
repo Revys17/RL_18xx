@@ -537,3 +537,35 @@ def test_auction_starts_play_the_waterfall_auction_with_the_unlock(monkeypatch, 
     for g in result["games"]:
         assert g["start_kind"] == AUCTION_START
         assert g["rows"]  # the learner's auction decisions are trained
+
+
+def test_baselines_at_update_time_leave_the_reward_to_the_learner(monkeypatch, start_file):
+    """With baseline_at_update the workers keep each seat's reward as the advantage
+    field (no critic during play); subtract_baselines then removes the critic's value
+    of each row's position -- the gae_lambda = 1 advantage the server path computed."""
+    monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Client(), "sl": _Client(), "pool": _Client()})
+    result = pg.play_pg_games(3, _settings(start_file, baseline_at_update=True))
+    rows = [row for g in result["games"] for row in g["rows"]]
+    for g in result["games"]:
+        assert g["first_values"] == {}
+        for row in g["rows"]:
+            assert row[5] == pytest.approx(g["win_share"][int(row[0][6])])  # the mover's reward
+
+    class _Critic:
+        def eval(self):
+            return self
+
+        def __call__(self, game_state, nodes, value_only=False):
+            n = game_state.shape[0]
+            win = torch.log(torch.tensor([[0.3, 0.2, 0.25, 0.25]]).repeat(n, 1))
+            score = torch.tensor([[0.9, 0.1, 0.0, 0.0]]).repeat(n, 1)
+            return None, win, score, None
+
+    cfg = pg.PGConfig(policy_checkpoint="p", value_checkpoint="v")
+    out, stats = pg.subtract_baselines(_Critic(), rows, cfg, "cpu", chunk=4)
+    assert [r[5] for r in out] == pytest.approx([r[5] - 0.3 for r in rows])  # win head: P(mover wins)
+    assert out[0][:5] == rows[0][:5] and out[0][6:] == rows[0][6:]
+    assert stats["critic_row_brier"] == pytest.approx(np.mean([(0.3 - r[5]) ** 2 for r in rows]))
+    shaped = pg.PGConfig(policy_checkpoint="p", value_checkpoint="v", reward="placement")
+    out, _ = pg.subtract_baselines(_Critic(), rows, shaped, "cpu")
+    assert [r[5] for r in out] == pytest.approx([r[5] - 0.9 for r in rows])  # score head: the shaped reward

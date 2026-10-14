@@ -1166,12 +1166,17 @@ class HierarchicalPolicyHead(nn.Module):
         Callers pass the rows with a legal tile lay -- elsewhere every LayTile action is
         masked out of the softmax and every loss, so the grid there is never used (and
         gets no gradient), and a tile lay is legal at only ~17% of decisions."""
-        if rows is not None and not bool(rows.all()):
-            out = trunk.new_zeros(trunk.shape[0], node_embs_mapper.shape[1], self.num_tiles, self.num_rotations)
-            selected = rows.nonzero(as_tuple=True)[0]
-            if selected.numel():
-                out[selected] = self._rotation_logits(trunk[selected], node_embs_mapper[selected])
-            return out
+        if rows is not None:
+            # ``rows`` lives on the CPU, so choosing them never waits on the GPU
+            # mid-forward (a device-side check here made the forward slower than no skip).
+            rows = rows.cpu() if rows.is_cuda else rows
+            if not bool(rows.all()):
+                out = trunk.new_zeros(trunk.shape[0], node_embs_mapper.shape[1], self.num_tiles, self.num_rotations)
+                selected = rows.nonzero(as_tuple=True)[0]
+                if selected.numel():
+                    selected = selected.to(trunk.device, non_blocking=True)
+                    out[selected] = self._rotation_logits(trunk[selected], node_embs_mapper[selected])
+                return out
         B, H, T = trunk.shape[0], node_embs_mapper.shape[1], self.num_tiles
         first, activation, last = self.rotation_head
         d_trunk, d_map = trunk.shape[-1], node_embs_mapper.shape[-1]
@@ -1774,14 +1779,15 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         )
 
     def lay_tile_rows(self, legal) -> Optional[Tensor]:
-        """(B,) bool on the model's device: the rows with a legal tile lay, from a
-        (B, policy_size) legal mask or a list of per-state legal index arrays."""
+        """(B,) bool on the CPU: the rows with a legal tile lay, from a (B, policy_size)
+        legal mask (best passed while still on the CPU) or a list of per-state legal
+        index arrays."""
         lo = int(self.policy_head.lay_tile_offset)
         hi = lo + int(self.policy_head.num_lay_tile)
         if isinstance(legal, Tensor):
-            return legal[:, lo:hi].any(dim=1).to(self.device)
+            return legal[:, lo:hi].any(dim=1).cpu()
         flags = [bool(((np.asarray(ix) >= lo) & (np.asarray(ix) < hi)).any()) for ix in legal]
-        return torch.tensor(flags, dtype=torch.bool, device=self.device)
+        return torch.tensor(flags, dtype=torch.bool)
 
     def _policy_row_hints(self, legal_indices) -> dict:
         return {"lay_tile_rows": self.lay_tile_rows(legal_indices)}

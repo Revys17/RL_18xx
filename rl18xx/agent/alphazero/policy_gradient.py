@@ -72,6 +72,7 @@ browse in the dashboard's game viewer (``/games``).
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import math
@@ -158,6 +159,12 @@ class PGConfig:
     kl_coef_min: float = 0.005  # floor for the adaptive coefficient
     entropy_coef: float = 0.0
     gae_lambda: float = 1.0
+    # With gae_lambda 1 a decision's advantage is its seat's reward minus the critic's
+    # value of the position, needed only for the sampled training rows: the learner
+    # computes those values in one batched pass before each update, so the learner's
+    # inference server serves the policy alone instead of running the critic at every
+    # learner decision of every game (~40% of that server's work).
+    baseline_at_update: bool = True
     normalize_advantages: bool = False
     score_loss_weight: float = 1.0
     max_updates: int = 1000
@@ -603,8 +610,13 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             reward = shaped_reward(reward_spec, win_share, worth, bankrupt, presidents, triggers, g.values)
             score_target = reward.astype(np.float32)  # the critic's score head learns the reward
         rows = []
+        baseline_at_update = settings.get("baseline_at_update", False)
         for seat, kept in g.reservoir.items():
-            advantages = seat_advantages(g.values[seat], float(reward[seat]), settings["gae_lambda"])
+            if baseline_at_update:
+                # The learner subtracts the critic's value before the update (subtract_baselines).
+                advantages = np.full(len(g.values[seat]), float(reward[seat]))
+            else:
+                advantages = seat_advantages(g.values[seat], float(reward[seat]), settings["gae_lambda"])
             for t, (enc, legal, choice, logp, price_info) in kept:
                 rows.append((enc, legal, choice, logp, price_info, float(advantages[t]), fractions, score_target))
         record = {
@@ -620,7 +632,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             "seat_decisions": {seat: len(v) for seat, v in g.values.items()},
             "termination": g.termination,
             "start_kind": g.start.split(":")[0] if g.start else None,
-            "first_values": {seat: v[0] for seat, v in g.values.items() if v},
+            "first_values": {} if baseline_at_update else {seat: v[0] for seat, v in g.values.items() if v},
             "rows": rows,
         }
         if g.seat_members:
@@ -693,6 +705,15 @@ def save_game(run_dir: Path, record: dict, update: int, learner_checkpoint: str,
 # ---------------------------------------------------------------------------
 
 
+@functools.lru_cache(maxsize=1)
+def _lay_tile_range() -> tuple:
+    """``(start, end)`` of the LayTile block in the policy index layout."""
+    from rl18xx.agent.alphazero.action_mapper import ActionMapper
+
+    info = ActionMapper().get_lay_tile_index_info()
+    return int(info["offset"]), int(info["offset"]) + int(info["num_hexes"] * info["num_tiles"] * info["num_rotations"])
+
+
 def batch_tensors(rows: list, device) -> dict:
     """Stack learner rows ``(encoded, legal, choice, old_logp, price_info,
     advantage, fractions)`` into device tensors."""
@@ -707,6 +728,10 @@ def batch_tensors(rows: list, device) -> dict:
     col_ids = torch.from_numpy(np.concatenate([r[1] for r in rows]).astype(np.int64))
     legal = torch.zeros(n, POLICY_SIZE, dtype=torch.bool)
     legal[row_ids, col_ids] = True
+    # Rows with a legal tile lay, decided on the CPU (the policy head skips its tile grid
+    # elsewhere without waiting on the GPU).
+    lo, hi = _lay_tile_range()
+    lay_tile_rows = legal[:, lo:hi].any(dim=1)
     price_rows, price_slots, price_cells, price_masks = [], [], [], []
     for b, r in enumerate(rows):
         if r[4] is not None:
@@ -729,6 +754,7 @@ def batch_tensors(rows: list, device) -> dict:
         "game_state": game_state,
         "nodes": nodes,
         "legal": legal.to(device, non_blocking=True),
+        "lay_tile_rows": lay_tile_rows,
         "choice": torch.tensor([r[2] for r in rows], dtype=torch.long, device=device),
         "old_logp": torch.tensor([r[3] for r in rows], dtype=torch.float32, device=device),
         "advantage": torch.tensor([r[5] for r in rows], dtype=torch.float32, device=device),
@@ -914,10 +940,12 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
     if resume:
         run_dir = Path(resume)
         state = json.loads((run_dir / "state.json").read_text())
-        # The run keeps its own settings; only its length, game saving, mid-game starts
-        # and (league mode) its population file can change -- a new file's members join.
+        # The run keeps its own settings; only its length, game saving, mid-game starts,
+        # the microbatch (gradient accumulation: same step, different memory/speed) and
+        # (league mode) its population file can change -- a new file's members join.
         overrides = {
             "max_updates": cfg.max_updates,
+            "microbatch": cfg.microbatch,
             "save_game_every": cfg.save_game_every,
             "midgame_positions": cfg.midgame_positions,
             "midgame_fraction": cfg.midgame_fraction,
@@ -973,8 +1001,11 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
     rng = np.random.default_rng()
     parse_reward(cfg.reward)  # fail fast on a bad spec
     value_head = "" if cfg.reward == "win" else "#score"
+    baseline_at_update = cfg.baseline_at_update and cfg.gae_lambda == 1.0
 
     def learner_spec(policy, critic) -> str:
+        if baseline_at_update:
+            return str(policy)  # the critic's values are computed at update time
         # An exploiter's baseline is the critic's score head, which learns its shaped reward.
         return f"{policy}+{critic}{value_head}"
 
@@ -1024,6 +1055,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
             "midgame_fraction": cfg.midgame_fraction,
             "auction_fraction": cfg.auction_fraction,
             "gae_lambda": cfg.gae_lambda,
+            "baseline_at_update": baseline_at_update,
             "save_game_every": cfg.save_game_every,
             "reward": cfg.reward,
             "league": (
@@ -1080,7 +1112,11 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                     continue
 
                 t0 = time.time()
+                baseline_stats = {}
+                if baseline_at_update:
+                    buffer, baseline_stats = subtract_baselines(critic, buffer, cfg, device)
                 stats = _update(learner, critic, anchor, learner_opt, critic_opt, buffer, cfg, kl_coef, device, rng)
+                stats.update(baseline_stats)
                 train_seconds = time.time() - t0
                 buffer = []
                 update += 1
@@ -1203,6 +1239,27 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
     return run_dir
 
 
+def subtract_baselines(critic, rows: list, cfg: PGConfig, device, chunk: int = 1024) -> tuple:
+    """Rows whose advantage field holds their seat's reward, with the critic's value of
+    each position subtracted (the gae_lambda = 1 advantage): the win head's mover
+    probability, or the score head's mover output for an exploiter's shaped reward --
+    what the learner's server returned during play, computed here in one batched pass
+    for the sampled rows only. Also returns the critic's Brier-style error on them."""
+    critic.eval()
+    shaped = cfg.reward != "win"
+    values = []
+    with torch.no_grad():
+        for start in range(0, len(rows), chunk):
+            batch = batch_tensors(rows[start : start + chunk], device)
+            _, win_loss_logits, score_pred, _ = critic(batch["game_state"], batch["nodes"], value_only=True)
+            mover = score_pred[:, 0] if shaped else torch.softmax(win_loss_logits.float(), dim=-1)[:, 0]
+            values.append(mover.float().cpu().numpy())
+    values = np.concatenate(values) if values else np.zeros(0, dtype=np.float32)
+    out = [r[:5] + (float(r[5]) - float(v),) + r[6:] for r, v in zip(rows, values)]
+    rewards = np.array([float(r[5]) for r in rows])
+    return out, {"critic_row_brier": float(np.mean((values - rewards) ** 2)) if len(rows) else float("nan")}
+
+
 def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfig, kl_coef, device, rng) -> dict:
     """One pass of PPO over ``rows`` (``cfg.ppo_epochs`` times) and one critic pass.
 
@@ -1233,7 +1290,7 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfi
                 share = n / len(step_rows)
                 # Rows without a legal tile lay skip the tile grid: every LayTile action is
                 # masked out of these losses there, so its logits never matter.
-                tile_rows = learner.lay_tile_rows(batch["legal"]) if hasattr(learner, "lay_tile_rows") else None
+                tile_rows = batch.get("lay_tile_rows")
                 with torch.no_grad():
                     sl_logits, _, _, _ = anchor(batch["game_state"], batch["nodes"], lay_tile_rows=tile_rows)
                     sl_price = anchor.last_price_components["price_logits"]

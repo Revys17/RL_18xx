@@ -248,15 +248,17 @@ class AlphaZeroModel(nn.Module):
         use ``_forward_encoded_batch`` directly.
 
         With ``legal_indices`` (per state) the probabilities are exact only on each
-        state's legal moves -- what every caller reads -- and the model may skip
-        work for blocks that hold none (``_policy_row_hints``).
+        state's legal moves -- what every caller reads -- the model may skip work for
+        blocks that hold none (``_policy_row_hints``), and ``log_probs`` is None.
         """
         if len(encoded_game_states) == 0:
             raise ValueError("Received no game states to run.")
         hints = self._policy_row_hints(legal_indices) if legal_indices is not None else {}
         policy_logits, win_loss_logits, _score_pred, _aux = self._forward_encoded_batch(encoded_game_states, **hints)
         probabilities = F.softmax(policy_logits, dim=1)
-        log_probs = F.log_softmax(policy_logits, dim=1)
+        # Callers that pass legal_indices read only the legal priors (the inference
+        # server's batched replies); the (B, policy_size) log-softmax would be discarded.
+        log_probs = None if legal_indices is not None else F.log_softmax(policy_logits, dim=1)
         # Training treats the win-loss head as a classifier over players
         # (softmax + KL-div in train.py), so inference returns calibrated
         # per-player probabilities in [0, 1] rather than raw logits. MCTS
