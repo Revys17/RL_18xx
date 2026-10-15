@@ -335,7 +335,15 @@
         if (!response.ok) throw new Error(`the site answered HTTP ${response.status}`);
         return response.json();
       },
-      send: (message) => api.runtime.sendMessage(message),
+      send: (message) => {
+        // After the extension is reloaded or updated, scripts already running in open
+        // tabs lose chrome.runtime ("Cannot read properties of undefined (reading
+        // 'sendMessage')"); only a fresh page gets a working copy.
+        if (!api || !api.runtime || !api.runtime.sendMessage) {
+          throw new Error('the extension was reloaded or updated -- reload this page');
+        }
+        return api.runtime.sendMessage(message);
+      },
       makePanel: (callbacks, placement) => new R.Panel(root.document, callbacks, placement),
       now: () => Date.now(),
       setTimeout: (fn, ms) => root.setTimeout(fn, ms),
