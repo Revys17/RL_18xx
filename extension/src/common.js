@@ -33,6 +33,24 @@
     return typeof id === 'string';
   }
 
+  /** The move the site's history view shows -- ``?action=<id>`` in the URL, the game as
+   * of the action with that id -- or null for the live game. */
+  function parseViewAction(search) {
+    const value = new URLSearchParams(search || '').get('action');
+    return value !== null && /^\d+$/.test(value) ? Number(value) : null;
+  }
+
+  /** The game as the site's history view shows it: its actions up to id ``actionId``
+   * (all of them for null). ``acting`` names who moves in the live game, so a past
+   * position drops it. */
+  function truncateGame(game, actionId) {
+    if (actionId === null || actionId === undefined) return game;
+    const out = Object.assign({}, game);
+    out.actions = (game.actions || []).filter((a) => typeof a.id !== 'number' || a.id <= actionId);
+    delete out.acting;
+    return out;
+  }
+
   /** The game as the backend needs it: chat and per-user settings stay in the page
    * (the backend's importer skips chat messages anyway). */
   function stripGame(game) {
@@ -137,6 +155,8 @@
     HEX_POINTS,
     parseGameId,
     isHotseat,
+    parseViewAction,
+    truncateGame,
     stripGame,
     normalizeBackendUrl,
     isLoopbackBackend,

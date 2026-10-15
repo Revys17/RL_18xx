@@ -84,3 +84,16 @@ test('percentages and escaping', () => {
   assert.equal(R.percent(null), '–');
   assert.equal(R.escapeHtml('<b a="1">&\''), '&lt;b a=&quot;1&quot;&gt;&amp;&#39;');
 });
+
+test('the history view comes from ?action=<id> and keeps the actions up to it', () => {
+  assert.equal(R.parseViewAction('?action=40'), 40);
+  assert.equal(R.parseViewAction('?foo=1&action=7'), 7);
+  assert.equal(R.parseViewAction(''), null);
+  assert.equal(R.parseViewAction('?action=abc'), null);
+  const game = { acting: [1], actions: [{ id: 1 }, { id: 2 }, { id: 3 }] };
+  assert.equal(R.truncateGame(game, null), game);
+  const past = R.truncateGame(game, 2);
+  assert.deepEqual(past.actions.map((a) => a.id), [1, 2]);
+  assert.equal('acting' in past, false);
+  assert.equal(game.actions.length, 3, 'the input is not modified');
+});

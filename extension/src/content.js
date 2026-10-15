@@ -30,6 +30,9 @@
     const state = {
       options: env.options,
       gameId: null,
+      viewAction: null, // the site's history view (?action=<id>), or null for the live game
+      game: null, // the last game read from the site, for history steps without a fetch
+      adviseSeq: 0, // only the latest advice request's answer is shown
       panel: null,
       advice: null,
       statuses: [],
@@ -69,6 +72,7 @@
       Object.assign(state, {
         panel: null,
         advice: null,
+        game: null,
         statuses: [],
         think: { state: 'idle' },
         signature: null,
@@ -77,12 +81,23 @@
       });
     }
 
-    /** Follow the game in the page's path (call when the path may have changed). */
+    /** Follow the game in the page's path, and the move its history view shows (call when
+     * the URL may have changed). Stepping through the history re-advises from the game
+     * already read -- no request to the site; back at the live game it is read again. */
     function checkLocation() {
       const id = state.options.enabled ? R.parseGameId(env.location.pathname) : null;
-      if (id === state.gameId) return;
+      const view = id === null ? null : R.parseViewAction(env.location.search);
+      if (id === state.gameId) {
+        if (id !== null && view !== state.viewAction) {
+          state.viewAction = view;
+          if (state.game) adviseCached();
+          if (view === null || !state.game) requestFetch();
+        }
+        return;
+      }
       teardown();
       state.gameId = id;
+      state.viewAction = view;
       if (id === null) return;
       state.panel = env.makePanel(
         {
@@ -143,9 +158,8 @@
           return;
         }
         if (id !== state.gameId) return;
-        const response = await env.send({ type: 'advise', game: R.stripGame(game) });
-        if (id !== state.gameId) return;
-        showAdvice(response);
+        state.game = game;
+        await advise(id, game);
       } catch (e) {
         if (id === state.gameId) setStatus('error', `The advisor failed: ${e.message || e}`);
       } finally {
@@ -157,6 +171,21 @@
           requestFetch();
         }
       }
+    }
+
+    /** Ask for advice on ``game`` as of the history view; a newer request's answer wins. */
+    async function advise(id, game) {
+      const seq = ++state.adviseSeq;
+      const response = await env.send({ type: 'advise', game: R.stripGame(R.truncateGame(game, state.viewAction)) });
+      if (id !== state.gameId || seq !== state.adviseSeq) return;
+      showAdvice(response);
+    }
+
+    function adviseCached() {
+      const id = state.gameId;
+      advise(id, state.game).catch((e) => {
+        if (id === state.gameId) setStatus('error', `The advisor failed: ${e.message || e}`);
+      });
     }
 
     function showAdvice(response) {
@@ -171,6 +200,9 @@
       if (!advice.supported) state.statuses = [{ kind: 'warn', text: `Unsupported game: ${advice.reason}` }];
       else if (advice.started === false) state.statuses = [{ kind: 'info', text: advice.reason || 'Not started yet.' }];
       else state.statuses = [];
+      if (state.viewAction !== null) {
+        state.statuses.unshift({ kind: 'info', text: `History: the position after move ${state.viewAction}.` });
+      }
       render();
       highlightMove(topMapMove());
     }
@@ -187,6 +219,10 @@
     /** The page changed: look for a new line in the game log once it settles. */
     function onMutations() {
       if (state.gameId === null) return;
+      if (state.viewAction !== null) {
+        ensureHighlight(); // the history view's log changes as it steps; nothing to read
+        return;
+      }
       if (state.mutationTimer) env.clearTimeout(state.mutationTimer);
       state.mutationTimer = env.setTimeout(() => {
         state.mutationTimer = null;

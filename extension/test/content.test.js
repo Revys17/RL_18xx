@@ -14,10 +14,10 @@ const GAME = {
   actions: [{ type: 'bid', id: 1 }, { type: 'message', message: 'gl hf', id: 2 }],
 };
 
-function setup({ pathname = '/game/123', advise = { ok: true, data: sampleAdvice() }, thinkStatus = [] } = {}) {
+function setup({ pathname = '/game/123', search = '', game = GAME, advise = { ok: true, data: sampleAdvice() }, thinkStatus = [] } = {}) {
   const clock = fakeClock();
   const document = fakeDocument({ log: ['-- Operating Round 1.1 --'], hexes: [[186.6, 250], [1918.65, 850]] });
-  const location = { pathname };
+  const location = { pathname, search };
   const fetches = [];
   const sent = [];
   const panels = [];
@@ -32,7 +32,7 @@ function setup({ pathname = '/game/123', advise = { ok: true, data: sampleAdvice
     saveOptions: () => {},
     fetchGame: async (id) => {
       fetches.push({ id, t: clock.t });
-      return JSON.parse(JSON.stringify(GAME));
+      return JSON.parse(JSON.stringify(game));
     },
     send: async (message) => {
       sent.push(message);
@@ -242,4 +242,46 @@ test('switched off, it does nothing', async () => {
   await settle();
   assert.equal(t.fetches.length, 0);
   assert.equal(t.panels.length, 0);
+});
+
+test('the site\'s history view is advised from the game already read, without a request', async () => {
+  const game = {
+    id: 123, title: '1830', players: [{ id: 101, name: 'Player 1' }], acting: [101],
+    actions: [{ type: 'bid', id: 1 }, { type: 'pass', id: 2 }, { type: 'par', id: 3 }, { type: 'buy_shares', id: 4 }],
+  };
+  const t = setup({ game });
+  t.controller.checkLocation();
+  await settle();
+  assert.equal(t.fetches.length, 1);
+  assert.deepEqual(t.sent[0].game.actions.map((a) => a.id), [1, 2, 3, 4]);
+
+  t.location.search = '?action=2'; // the site's history: the position after action 2
+  t.controller.checkLocation();
+  await settle();
+  assert.equal(t.fetches.length, 1, 'no request to the site');
+  const historic = t.sent[t.sent.length - 1].game;
+  assert.deepEqual(historic.actions.map((a) => a.id), [1, 2]);
+  assert.equal('acting' in historic, false, 'the live mover does not apply to a past position');
+  assert.match(t.lastView().statuses[0].text, /after move 2/);
+
+  t.document.log.push('a line the history view shows'); // stepping changes the log: no fetch
+  t.controller.onMutations();
+  await t.clock.advance(20_000);
+  assert.equal(t.fetches.length, 1);
+
+  t.location.search = ''; // back to the live game: advised at once, and read again
+  t.controller.checkLocation();
+  await settle();
+  assert.deepEqual(t.sent[t.sent.length - 1].game.actions.map((a) => a.id), [1, 2, 3, 4]);
+  await t.clock.advance(10_000);
+  assert.equal(t.fetches.length, 2);
+  assert.equal(t.lastView().statuses.some((s) => /History/.test(s.text)), false);
+});
+
+test('opening a game straight into its history view advises that position', async () => {
+  const game = { id: 123, title: '1830', players: [], actions: [{ type: 'bid', id: 1 }, { type: 'pass', id: 2 }, { type: 'par', id: 3 }] };
+  const t = setup({ search: '?action=1', game });
+  t.controller.checkLocation();
+  await settle();
+  assert.deepEqual(t.sent[0].game.actions.map((a) => a.id), [1]);
 });
