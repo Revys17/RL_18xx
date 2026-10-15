@@ -952,11 +952,14 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
         run_dir = Path(resume)
         state = json.loads((run_dir / "state.json").read_text())
         # The run keeps its own settings; only its length, game saving, mid-game starts,
-        # the microbatch (gradient accumulation: same step, different memory/speed) and
-        # (league mode) its population file can change -- a new file's members join.
+        # the microbatch (gradient accumulation: same step, different memory/speed), the
+        # games each worker task plays at once (bigger inference batches; ~2x games/hour at
+        # 96 vs 32 in a league run, whose opponent servers otherwise see ~35-state batches)
+        # and (league mode) its population file can change -- a new file's members join.
         overrides = {
             "max_updates": cfg.max_updates,
             "microbatch": cfg.microbatch,
+            "games_per_task": cfg.games_per_task,
             "save_game_every": cfg.save_game_every,
             "midgame_positions": cfg.midgame_positions,
             "midgame_fraction": cfg.midgame_fraction,
