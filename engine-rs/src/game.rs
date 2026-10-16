@@ -272,6 +272,14 @@ pub struct BaseGame {
     /// Ruby `@optional_rules`, validated against the title's
     /// `GameTitle::optional_rules` at construction.
     pub(crate) optional_rules: Vec<String>,
+    /// Per-hex edge-crossing costs (`HexDef.borders` entries with a cost —
+    /// 1867's $80 waters): hex -> [(edge, cost)]. Static, Arc-shared; empty
+    /// for 1830.
+    pub(crate) border_costs: Arc<HashMap<String, Vec<(u8, i32)>>>,
+    /// Borders whose crossing cost has been paid, as (hex, edge) — Ruby
+    /// `remove_border_calculate_cost!` deletes a paid border from BOTH
+    /// tiles, so it is charged once.
+    pub(crate) paid_borders: Vec<(String, u8)>,
 }
 
 // crate-visible wrappers that forward to the (private) PyO3-exposed methods
@@ -517,6 +525,8 @@ impl BaseGame {
             auction_unlock: self.auction_unlock,
             auction_unlock_discounts: self.auction_unlock_discounts,
             optional_rules: self.optional_rules.clone(),
+            border_costs: Arc::clone(&self.border_costs),
+            paid_borders: self.paid_borders.clone(),
         }
     }
 
@@ -1831,6 +1841,54 @@ impl BaseGame {
 
     /// Update market cell occupancy when a corp's share price changes.
     /// Removes from old cell, adds to new cell.
+    /// The edge-crossing (water) cost of laying `base_tile_id` at
+    /// `rotation` on `hex_id`, plus the borders it pays off — Ruby
+    /// Tracker#remove_border_calculate_cost!: a border with a cost is paid
+    /// when the new tile exits through it AND the neighbor's tile exits back
+    /// (`hex.targeting?(neighbor) && neighbor.targeting?(hex)`); paying
+    /// deletes it from both tiles, so a later lay never pays it again.
+    pub(crate) fn tile_border_cost(
+        &self,
+        hex_id: &str,
+        base_tile_id: &str,
+        rotation: u8,
+    ) -> (i32, Vec<(String, u8)>) {
+        let Some(borders) = self.border_costs.get(hex_id) else {
+            return (0, Vec::new());
+        };
+        let Some(td) = self.tile_catalog.get(base_tile_id) else {
+            return (0, Vec::new());
+        };
+        let exits = td.rotated(rotation).edges;
+        let mut cost = 0;
+        let mut paid = Vec::new();
+        for &(edge, c) in borders {
+            if !exits.contains(&edge)
+                || self.paid_borders.iter().any(|(h, e)| h == hex_id && *e == edge)
+            {
+                continue;
+            }
+            let Some(nb) = self.hex_adjacency.get(hex_id).and_then(|m| m.get(&edge)) else {
+                continue;
+            };
+            let inv = (edge + 3) % 6;
+            let nb_targets_back = self.hex_idx.get(nb.as_str()).is_some_and(|&ni| {
+                self.hexes[ni]
+                    .tile
+                    .paths
+                    .iter()
+                    .any(|p| p.a.edge_num() == Some(inv) || p.b.edge_num() == Some(inv))
+            });
+            if !nb_targets_back {
+                continue;
+            }
+            cost += c;
+            paid.push((hex_id.to_string(), edge));
+            paid.push((nb.clone(), inv));
+        }
+        (cost, paid)
+    }
+
     pub(crate) fn update_market_cell(
         &mut self,
         corp_sym: &str,
@@ -2500,6 +2558,16 @@ impl BaseGame {
         let hex_defs = title.hex_definitions();
         let hexes: Vec<Hex> = hex_defs.iter().map(|d| build_hex_from_def(title, d)).collect();
 
+        // 6b. Edge-crossing border costs (1867 waters; none for 1830).
+        let mut border_costs: HashMap<String, Vec<(u8, i32)>> = HashMap::new();
+        for d in &hex_defs {
+            for b in d.borders.iter().filter(|b| !b.impassable) {
+                if let Some(cost) = b.cost {
+                    border_costs.entry(d.coord.to_string()).or_default().push((b.edge, cost));
+                }
+            }
+        }
+
         // 7. Hex adjacency
         let coords: Vec<&str> = hex_defs.iter().map(|h| h.coord).collect();
         let adjacency = crate::title::compute_adjacency(&coords, title.hex_layout());
@@ -2618,6 +2686,8 @@ impl BaseGame {
             auction_unlock: false,
             auction_unlock_discounts: 0,
             optional_rules,
+            border_costs: Arc::new(border_costs),
+            paid_borders: Vec::new(),
         };
         game.setup_national();
         if single_item_opener {

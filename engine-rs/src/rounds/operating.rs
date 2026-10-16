@@ -506,14 +506,20 @@ impl BaseGame {
             .ok_or_else(|| GameError::new(format!("Unknown hex: {}", hex_id)))?;
 
         // Pay terrain cost (+ the lay slot's surcharge — 1867's $20 second
-        // lay).
+        // lay, + any edge-crossing border the new track completes — 1867's
+        // $80 waters; Ruby lay_tile `upgrade_cost + border + extra_cost`).
+        let (border_cost, paid_borders) = {
+            let base = tile_id.split('-').next().unwrap_or(tile_id);
+            self.tile_border_cost(hex_id, base, rotation)
+        };
         let terrain_cost: i32 = self.hexes[hex_idx]
             .tile
             .upgrades
             .iter()
             .map(|u| u.cost)
             .sum::<i32>()
-            + slot.cost;
+            + slot.cost
+            + border_cost;
 
         if terrain_cost > 0 {
             let corp_sym = new_state
@@ -535,6 +541,7 @@ impl BaseGame {
             self.corporations[corp_idx].cash -= terrain_cost;
             self.bank.cash += terrain_cost;
         }
+        self.paid_borders.extend(paid_borders);
 
         // Replace the tile. Tile IDs may have variant suffix like "57-0"; strip it.
         let base_tile_id = tile_id.split('-').next().unwrap_or(tile_id);
@@ -3254,6 +3261,57 @@ mod g1867_or_tests {
         if let crate::rounds::Round::Operating(s) = &game.round {
             assert!(s.pending_tokens.is_empty());
         }
+    }
+
+    /// Ruby Tracker#remove_border_calculate_cost! — the $80 water borders
+    /// (map.rb: M9 edges 5/0, N10 edges 2/3, ...) are paid by the lay that
+    /// COMPLETES a crossing: the new tile exits through the border and the
+    /// neighbor's tile exits back. Probed on 29292 (file ids 52-53): CV
+    /// lays #6 rot 5 on M9 (N10 still blank: no charge), then #8 rot 0 on
+    /// N10 — Ruby charges $80 + the $20 second-lay fee there. A paid border
+    /// is deleted from both tiles: later upgrades never pay it again.
+    #[test]
+    fn water_border_paid_once_by_the_completing_lay() {
+        let mut game = new_4p_game();
+        rig_floated(&mut game, "CV", 8);
+        let ci = game.corp_idx["CV"];
+        game.corporations[ci].cash = 300;
+        enter_or(&mut game, "CV");
+        let at_lay = |game: &BaseGame| match &game.round {
+            crate::rounds::Round::Operating(s) => {
+                let mut s = s.clone();
+                if s.num_laid_track == 0 {
+                    s.step = OperatingStep::LayTile;
+                }
+                s
+            }
+            _ => unreachable!(),
+        };
+
+        // First lay: M9 #6 rot 5 — its water edges face a blank N10.
+        assert_eq!(game.tile_border_cost("M9", "6", 5).0, 0);
+        let s = at_lay(&game);
+        game.or_process_lay_tile(&s, "CV", "M9", "6-0", 5).unwrap();
+        assert_eq!(game.corporations[ci].cash, 300);
+
+        // Second lay: N10 #8 rot 0 targets M9 back across the water.
+        let (cost, paid) = game.tile_border_cost("N10", "8", 0);
+        assert_eq!(cost, 80);
+        assert_eq!(paid.len(), 2, "paid on both sides: {:?}", paid);
+        let s = at_lay(&game);
+        game.or_process_lay_tile(&s, "CV", "N10", "8-0", 0).unwrap();
+        assert_eq!(game.corporations[ci].cash, 300 - 20 - 80);
+
+        // Paid off: the same crossing never charges again.
+        assert_eq!(game.tile_border_cost("N10", "8", 0).0, 0);
+        assert_eq!(game.tile_border_cost("M9", "6", 5).0, 0);
+        // 1830 has no border costs at all.
+        let g1830 = crate::game::BaseGame::build_titled(
+            "1830",
+            vec![1, 2, 3, 4],
+            (1..=4).map(|i| (i, format!("P{}", i))).collect(),
+        );
+        assert!(g1830.border_costs.is_empty());
     }
 
     /// Park `sym`'s turn at the BuyTrain pc.
