@@ -1353,14 +1353,16 @@ impl BaseGame {
                                 && self.players.iter().find(|p| p.id == pid).map_or(false, |p| {
                                     // parring buys the president's cert
                                     // (its unit count × par)
+                                    // (1867: Ruby can_ipo_any? prices the
+                                    // unparred cert at `min_price`.)
                                     p.cash
-                                        >= self
-                                            .stock_market
-                                            .par_prices()
-                                            .first()
-                                            .copied()
-                                            .unwrap_or(0)
-                                            * c.president_share_units()
+                                        >= title.unparred_min_share_price().unwrap_or_else(|| {
+                                            self.stock_market
+                                                .par_prices()
+                                                .first()
+                                                .copied()
+                                                .unwrap_or(0)
+                                        }) * c.president_share_units()
                                 })
                         });
                     if can_par {

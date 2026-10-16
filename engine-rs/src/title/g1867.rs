@@ -76,6 +76,12 @@ impl GameTitle for G1867 {
     fn minor_capped_at_max_price(&self) -> bool {
         true
     }
+    /// game.rb:384-395 init_corporations: majors' `min_price` = the
+    /// cheapest `can_par?` market cell ($50 `50x`), minors'
+    /// MINIMUM_MINOR_PRICE = $50.
+    fn unparred_min_share_price(&self) -> Option<i32> {
+        Some(50)
+    }
     /// step/token.rb adjust_token_price_ability!: $40 × hex distance from
     /// the nearest placed token.
     fn token_price_by_distance(&self) -> bool {

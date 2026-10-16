@@ -1558,8 +1558,12 @@ impl BaseGame {
         // Minors are never parred directly (1867 founds them by bid) and a
         // title may gate startability by phase (1867 majors: phase 4+).
         let par_prices = self.stock_market.par_prices();
-        if let Some(&min_par) = par_prices.iter().min() {
-            let title = self.title_def();
+        let title = self.title_def();
+        // 1867: Ruby can_ipo_any? prices the unparred cert at `min_price`.
+        let min_par = title
+            .unparred_min_share_price()
+            .or_else(|| par_prices.iter().min().copied());
+        if let Some(min_par) = min_par {
             let can_par = self.corporations.iter().any(|c| {
                 c.ipo_price.is_none()
                     && c.corp_type != crate::title::CorpType::Minor
@@ -1827,6 +1831,26 @@ mod g1867_par_tests {
             "{:?}",
             offers
         );
+    }
+
+    /// Ruby G1867 can_ipo_any? = `phase >= 4 && !bought? && any unparred
+    /// major with can_buy?(entity, c.shares.first.to_bundle)` — and an
+    /// unparred cert is priced at `min_price` ($50 in 1867), so the 20%
+    /// president bundle "costs" $100 although the cheapest major par is
+    /// $70 × 2 = $140. A player with $100-139 is offered "par" (and must
+    /// pass explicitly) instead of being auto-passed. Probed on 26910 file
+    /// id 459: Erik Strong, $107, actions = ["par", "pass"]; the SR ends
+    /// only after his recorded pass (we had auto-passed him and ended it).
+    #[test]
+    fn par_offered_from_min_price_not_cheapest_par() {
+        let mut game = new_4p_1867();
+        set_phase(&mut game, "5");
+        game.events_fired.push("minors_cannot_start".into());
+        enter_stock_round(&mut game);
+        game.players[0].cash = 107;
+        assert!(game.player_has_actions(1, false, false));
+        game.players[0].cash = 99;
+        assert!(!game.player_has_actions(1, false, false));
     }
 
     /// The full major ladder per Ruby get_all_par_prices(%i[par_2 par]):

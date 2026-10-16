@@ -79,6 +79,17 @@ pub trait GameTitle: Sync {
     fn minor_capped_at_max_price(&self) -> bool {
         false
     }
+    /// The per-share price Ruby's `can_ipo_any?` affordability check uses
+    /// for an UNPARRED corporation: `can_buy?(entity, president_bundle)`
+    /// prices it at `Share#price_per_share` = `corporation.min_price`
+    /// (no par yet). 1867 sets every corp's `min_price` to $50 (majors:
+    /// the cheapest `can_par?` cell incl. the minor-only `par_1` cells;
+    /// minors: MINIMUM_MINOR_PRICE), so a player with $100-139 is OFFERED
+    /// "par" although no major par is affordable — and must pass
+    /// explicitly. None (default, 1830): the cheapest par cell.
+    fn unparred_min_share_price(&self) -> Option<i32> {
+        None
+    }
     /// Token cost = charter price × straight-line hex distance from the
     /// corp's nearest placed token (1867, G1867::Step::Token
     /// `adjust_token_price_ability!`). Default: flat charter price.
