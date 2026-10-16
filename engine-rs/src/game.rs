@@ -351,6 +351,22 @@ impl BaseGame {
             .cloned()
             .collect()
     }
+    /// The player deciding for the active entity: the active player, or in an
+    /// operating round the active corporation's president -- the rule of
+    /// ``RustGameAdapter.active_players``, so the search tree and the encoder's
+    /// rotation agree on whose move it is. ``active_players_pub`` alone is
+    /// empty during a corporation's turn.
+    pub(crate) fn acting_player_id_pub(&self) -> Option<u32> {
+        if let Some(p) = self.active_players_pub().first() {
+            return Some(p.id);
+        }
+        let eid = &self.round_state.active_entity_id;
+        if !eid.is_corporation() {
+            return None;
+        }
+        let corp = &self.corporations[*self.corp_idx.get(eid.corp_sym()?)?];
+        corp.owner_id.player_id()
+    }
     pub(crate) fn players_for_factored(&self) -> &Vec<crate::entities::Player> {
         &self.players
     }

@@ -280,11 +280,11 @@ impl RustMCTSPlayer {
         let num_legal = legal_action_indices.len();
         let mut player_ids: Vec<u32> = game.players_for_factored().iter().map(|p| p.id).collect();
         player_ids.sort_unstable();
-        let active_pid = game
-            .active_players_pub()
-            .first()
-            .map(|p| p.id)
-            .unwrap_or(player_ids[0]);
+        // The player choosing here (a corporation's president in an operating
+        // round). Until 2026-10-16 this read only active_players_pub, which is
+        // empty during a corporation's turn, so every operating-round node
+        // searched for seat 0 whoever was moving.
+        let active_pid = game.acting_player_id_pub().unwrap_or(player_ids[0]);
         let active_player_index = player_ids.iter().position(|&p| p == active_pid).unwrap_or(0);
         let num_players = player_ids.len();
 
