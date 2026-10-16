@@ -99,6 +99,11 @@ impl GameTitle for G1867 {
     fn final_phase_game_end(&self) -> bool {
         true
     }
+    /// game.rb:316 GAME_END_TIMING_PRIORITY = %i[one_more_full_or_set
+    /// current_or]: the final-phase set outranks a bank break.
+    fn game_end_timing_priority(&self) -> &'static [GameEndTiming] {
+        &[GameEndTiming::OneMoreFullOrSet, GameEndTiming::CurrentOr]
+    }
     /// game_end_set_final_turn! (game.rb:787-790): any latched trigger
     /// makes the final OR set 3 rounds and pins final_turn = turn + 1.
     fn game_end_final_ors(&self) -> Option<u8> {

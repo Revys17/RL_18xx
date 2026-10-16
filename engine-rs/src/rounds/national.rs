@@ -823,8 +823,11 @@ mod tests {
     }
 
     /// GAME_END_CHECK final_phase: :one_more_full_or_set — the final set
-    /// of turn `final_turn` completes first (and bank, when also latched,
-    /// wins with its earlier :current_or timing).
+    /// of turn `final_turn` completes first, and a bank break latched
+    /// later does NOT cut it short: 1867 GAME_END_TIMING_PRIORITY =
+    /// %i[one_more_full_or_set current_or] (game.rb:316) ranks the final
+    /// set first (Ruby HEAD on 244796: bank broken at file id 1099 in
+    /// phase 8, play continues to 1144, game_end_reason final_phase).
     #[test]
     fn final_phase_ends_after_one_more_full_or_set() {
         let mut game = new_4p_game();
@@ -838,11 +841,18 @@ mod tests {
         assert!(!game.should_end_now());
         game.turn += 1;
         assert!(game.should_end_now());
-        // A bank break supersedes: :current_or ends even a mid-set OR.
-        game.turn += 1; // past final_turn — one_more_full_or_set alone says no
-        assert!(!game.should_end_now());
+        // A bank break does NOT supersede: a mid-set OR of the final set
+        // still doesn't end the game; its last OR does.
         game.bank.cash = -1;
         game.check_game_end();
+        assert!(game.bank_broken);
+        let mut s = crate::rounds::OperatingState::new(1, 3, Vec::new());
+        s.finished = true;
+        game.round = crate::rounds::Round::Operating(s);
+        assert!(!game.should_end_now());
+        let mut s = crate::rounds::OperatingState::new(3, 3, Vec::new());
+        s.finished = true;
+        game.round = crate::rounds::Round::Operating(s);
         assert!(game.should_end_now());
     }
 

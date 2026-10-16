@@ -914,14 +914,19 @@ impl BaseGame {
         let Round::Operating(s) = &self.round else {
             return false;
         };
-        let mut timing: Option<GameEndTiming> = None;
+        let title = self.title_def();
+        let mut latched: Vec<GameEndTiming> = Vec::new();
         if self.bank_broken {
-            timing = Some(self.title_def().bank_game_end_timing());
+            latched.push(title.bank_game_end_timing());
         }
-        if self.title_def().final_phase_game_end() && self.in_final_phase() {
-            let t = GameEndTiming::OneMoreFullOrSet;
-            timing = Some(timing.map_or(t, |prev| prev.min(t)));
+        if title.final_phase_game_end() && self.in_final_phase() {
+            latched.push(GameEndTiming::OneMoreFullOrSet);
         }
+        // The latched timing listed first in the title's priority wins.
+        let priority = title.game_end_timing_priority();
+        let timing = latched
+            .into_iter()
+            .min_by_key(|t| priority.iter().position(|p| p == t).unwrap_or(usize::MAX));
         match timing {
             // :current_or — this OR is the last, wherever it sits in the set.
             Some(GameEndTiming::CurrentOr) => true,
@@ -4517,6 +4522,41 @@ mod tests {
         game.update_market_cell("KP", 0, 0, 0, 1);
         game.update_market_cell("KP", 0, 1, 0, 0);
         assert_eq!(game.debug_cell_corps(0, 0), vec!["OP", "AE", "KP"]);
+    }
+
+    /// 1867 GAME_END_TIMING_PRIORITY = %i[one_more_full_or_set current_or]
+    /// (game.rb:316): once phase 8 has latched the final-set timing, a
+    /// later bank break (:current_or) does not end the game at the current
+    /// OR. Found on 244796 (2026-10 scrape): the bank broke at file id 1099
+    /// in phase 8, mid-way through the final OR set; Ruby plays on to id
+    /// 1144 (game_end_reason final_phase) while we ended the game with that
+    /// OR (after id 1113). A bank break alone still ends at this OR.
+    #[test]
+    fn g1867_final_phase_set_outranks_bank_break() {
+        let players: HashMap<u32, String> = (1..=4).map(|i| (i, format!("P{}", i))).collect();
+        let mut game = BaseGame::build_titled("1867", vec![1, 2, 3, 4], players);
+        let set_phase = |game: &mut BaseGame, name: &str| {
+            let pd = game.title_def().phases().into_iter().find(|p| p.name == name).unwrap();
+            game.phase = Phase::new(
+                pd.name.to_string(),
+                pd.operating_rounds,
+                pd.train_limit,
+                pd.tiles.iter().map(|s| s.to_string()).collect(),
+            );
+        };
+        game.round = Round::Operating(crate::rounds::OperatingState::new(1, 3, vec!["CNR".into()]));
+        set_phase(&mut game, "8");
+        game.final_turn = Some(game.turn + 1);
+        game.bank_broken = true;
+        assert!(!game.should_end_now(), "the final OR set must complete");
+        set_phase(&mut game, "7");
+        assert!(game.should_end_now(), "bank alone: :current_or");
+        // 1830 keeps the base order (bank :full_or only).
+        let g30 = new_4p_game();
+        assert_eq!(
+            g30.title_def().game_end_timing_priority()[0],
+            crate::title::GameEndTiming::CurrentOr
+        );
     }
 
     #[test]

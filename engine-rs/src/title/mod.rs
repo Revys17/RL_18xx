@@ -272,6 +272,16 @@ pub trait GameTitle: Sync {
     fn final_phase_game_end(&self) -> bool {
         false
     }
+    /// Ruby GAME_END_TIMING_PRIORITY: when several triggers have latched,
+    /// the timing listed FIRST wins (base.rb game_end_check keeps a new
+    /// trigger only if its timing has a LOWER index than the latched one).
+    /// Base order: current_or, full_or, one_more_full_or_set (after
+    /// :immediate/:current_round, which no title here uses). 1867 REORDERS
+    /// it (game.rb:316 `%i[one_more_full_or_set current_or]`): once phase 8
+    /// is reached, a later bank break does NOT cut the final OR set short.
+    fn game_end_timing_priority(&self) -> &'static [GameEndTiming] {
+        &[GameEndTiming::CurrentOr, GameEndTiming::FullOr, GameEndTiming::OneMoreFullOrSet]
+    }
     /// `game_end_set_final_turn!` override (g_1867 game.rb:787-790): once
     /// ANY game-end trigger latches, the FINAL OR set built at the next
     /// SR→OR transition has this many ORs (1867: 3) and `final_turn` is
@@ -739,10 +749,9 @@ pub enum SellAfter {
 }
 
 /// When a latched game-end trigger actually ends the game (Ruby
-/// GAME_END_CHECK values; base.rb:3023-3036 `end_now?`). Ordered by Ruby's
-/// GAME_END_TIMING_PRIORITY — when several triggers are latched the
-/// EARLIEST timing wins (base.rb:2977 keeps the lower priority index), so
-/// `min` over this enum resolves the active timing.
+/// GAME_END_CHECK values; base.rb `end_now?`). When several triggers are
+/// latched, the title's `game_end_timing_priority` decides which timing
+/// is active (Ruby GAME_END_TIMING_PRIORITY — per title).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum GameEndTiming {
     /// `:current_or` — the next operating round to finish is the last.
