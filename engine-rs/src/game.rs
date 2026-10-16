@@ -1954,7 +1954,17 @@ impl BaseGame {
         new_row: u8,
         new_col: u8,
     ) {
-        if (old_row, old_col) != (new_row, new_col) || old_row == 0 && old_col == 0 {
+        // An in-place "move" (the target cell IS the current one) keeps the
+        // corp's position in the cell's arrival order — Ruby/Python
+        // StockMarket#move return early `if share_price ==
+        // corporation.share_price`. (A former `|| old == (0,0)` clause
+        // re-appended a corp stuck on the top-left cell — 1867's $35, where
+        // broke minors withhold in place every OR — to the END of the
+        // cell, flipping the operating order of tied corps.) Initial
+        // placements pass (0,0) as the "old" sentinel; their target is
+        // never (0,0) and the corp is not yet listed there, so they are
+        // unaffected.
+        if (old_row, old_col) != (new_row, new_col) {
             // Remove from old cell
             if let Some(corps) = self.market_cell_corps.get_mut(&(old_row, old_col)) {
                 corps.retain(|c| c != corp_sym);
@@ -4485,6 +4495,28 @@ mod tests {
         .unwrap();
         assert_eq!(game.corporations[ci].trains.len(), game.corp_train_limit(ci));
         assert!(matches!(game.round, Round::Operating(_)), "round moved on: {:?}", game.round_state);
+    }
+
+    /// Ruby StockMarket#move: `return if share_price ==
+    /// corporation.share_price` — an in-place move never re-orders a cell.
+    /// Probed on 25537 file id 142: KP, OP, AE reached the $35 cell in that
+    /// order and withheld there in place; Ruby keeps ["KP", "OP", "AE"]
+    /// (operating order ... KP, OP, AE) while we had re-appended each
+    /// withholder ([AE, KP, OP]) and rejected KP's recorded Track pass.
+    #[test]
+    fn in_place_market_move_keeps_cell_order() {
+        let players: HashMap<u32, String> = (1..=4).map(|i| (i, format!("P{}", i))).collect();
+        let mut game = BaseGame::build_titled("1867", vec![1, 2, 3, 4], players);
+        for sym in ["KP", "OP", "AE"] {
+            game.update_market_cell(sym, 0, 1, 0, 0); // arrive from $40
+        }
+        game.update_market_cell("KP", 0, 0, 0, 0); // withhold at $35: stays
+        game.update_market_cell("OP", 0, 0, 0, 0);
+        assert_eq!(game.debug_cell_corps(0, 0), vec!["KP", "OP", "AE"]);
+        // A real move away and back appends at the end.
+        game.update_market_cell("KP", 0, 0, 0, 1);
+        game.update_market_cell("KP", 0, 1, 0, 0);
+        assert_eq!(game.debug_cell_corps(0, 0), vec!["OP", "AE", "KP"]);
     }
 
     #[test]
