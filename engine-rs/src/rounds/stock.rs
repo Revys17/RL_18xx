@@ -520,11 +520,14 @@ impl BaseGame {
         // Determine if the president share is included
         let player_total = self.corporations[corp_idx].percent_owned_by(&player_eid);
         let remaining_after = player_total.saturating_sub(percent);
-        let includes_president = self.corporations[corp_idx]
+        // Ruby `was_president = corporation.president?(bundle.owner)`,
+        // taken BEFORE the transfer (1867's :down_block_pres keys on it).
+        let was_president = self.corporations[corp_idx]
             .shares
             .iter()
-            .any(|s| s.president && s.owner == player_eid)
-            && remaining_after < self.corporations[corp_idx].president_percent();
+            .any(|s| s.president && s.owner == player_eid);
+        let includes_president =
+            was_president && remaining_after < self.corporations[corp_idx].president_percent();
 
         // Snapshot pre-action owners of every share. This is used in two places:
         //   1. `handle_partial`: pick shares that were ALREADY in market before
@@ -618,10 +621,13 @@ impl BaseGame {
         self.players[player_idx].cash += revenue;
         self.bank.cash -= revenue;
 
-        // Share price drops: move DOWN once per share unit sold (1830 SELL_MOVEMENT = "down_share")
+        // Share price drops per the title's SELL_MOVEMENT: 1830 `down_share`
+        // moves DOWN once per share unit sold; 1867 `down_block_pres` once
+        // per sale, only for a president seller.
         let num_shares = percent as u32 / share_unit as u32;
+        let drops = self.sell_price_drops(num_shares, was_president);
         let (mut row, mut col) = (share_price.row, share_price.column);
-        for _ in 0..num_shares {
+        for _ in 0..drops {
             let (nr, nc) = self.stock_market.move_down(row, col);
             row = nr;
             col = nc;
@@ -1675,6 +1681,82 @@ mod g1867_par_tests {
         set_phase(&mut game, "3");
         let err = try_par(&mut game, "CPR", 200).unwrap_err();
         assert!(err.to_string().contains("not available in phase"), "{}", err);
+    }
+
+    /// Float `sym` at market column `col` with every cert held by player 1.
+    fn rig_major(game: &mut BaseGame, sym: &str, col: u8) {
+        let ci = game.corp_idx[sym];
+        let sp = game.stock_market.share_price_at(0, col).unwrap();
+        game.corporations[ci].share_price = Some(sp.clone());
+        game.corporations[ci].ipo_price = Some(sp);
+        game.update_market_cell(sym, 0, col, 0, col);
+        game.corporations[ci].floated = true;
+        game.corporations[ci].ever_operated = true;
+        for i in 0..game.corporations[ci].shares.len() {
+            game.corporations[ci].set_share_owner(i, crate::entities::EntityId::player(1));
+        }
+    }
+
+    fn sell(game: &mut BaseGame, pid: u32, sym: &str, idx: Vec<usize>) {
+        let order = game.player_order.clone();
+        game.round = Round::Stock(StockState::new(&order, pid));
+        game.update_round_state();
+        let state = match &game.round {
+            Round::Stock(s) => s.clone(),
+            _ => unreachable!(),
+        };
+        let pct = 10 * idx.len() as u8;
+        game.stock_process_sell_shares(&state, &pid.to_string(), sym, pct, &idx)
+            .unwrap();
+    }
+
+    /// G1867 SELL_MOVEMENT = :down_block_pres (game.rb:310; base.rb
+    /// sell_shares_and_change_price): a sale moves the price ONE step down
+    /// — LEFT on the 1-D column market — per sale (not per share), and only
+    /// when the seller was president before it. Probed in Ruby: 21673 file
+    /// id 456, a president's 30% sale took GTR $150 → $135 (one step, not
+    /// three); 22540 file ids 601/604 (president, 10%) moved NYC $220 → $200
+    /// and ICR $150 → $135, ids 754/758 (non-president) left CPR/ICR alone.
+    #[test]
+    fn sale_drops_one_step_only_for_the_president() {
+        let mut game = new_4p_1867();
+        rig_major(&mut game, "GTR", 16); // $180
+        let ci = game.corp_idx["GTR"];
+        for i in [5, 6] {
+            game.corporations[ci].set_share_owner(i, crate::entities::EntityId::player(2));
+        }
+        game.corporations[ci].set_share_owner(7, crate::entities::EntityId::corporation("GTR"));
+        game.corporations[ci].set_share_owner(8, crate::entities::EntityId::corporation("GTR"));
+
+        // The president sells three shares in one sale: one step left.
+        sell(&mut game, 1, "GTR", vec![1, 2, 3]);
+        assert_eq!(game.corporations[ci].share_price.as_ref().unwrap().price, 165);
+        // A non-president sale leaves the price alone.
+        sell(&mut game, 2, "GTR", vec![5]);
+        assert_eq!(game.corporations[ci].share_price.as_ref().unwrap().price, 165);
+    }
+
+    /// G1867::StockMarket#right: a MINOR on the $165 `max_price` cell
+    /// never moves right (1-D: it stays); majors there still move on.
+    /// Probed on 24359 file id 157: minor TN paid out at $165 and stayed.
+    #[test]
+    fn minor_capped_at_max_price_cell() {
+        let mut game = new_4p_1867();
+        rig_major(&mut game, "TN", 15); // minor, $165 "zCm"
+        rig_major(&mut game, "CPR", 15); // major, same cell
+        rig_major(&mut game, "BO", 14); // minor, $150
+        assert_eq!(game.market_right_for(game.corp_idx["TN"], 0, 15), (0, 15));
+        assert_eq!(game.market_right_for(game.corp_idx["CPR"], 0, 15), (0, 16));
+        assert_eq!(game.market_right_for(game.corp_idx["BO"], 0, 14), (0, 15));
+        // 1830 sales keep :down_share (one step per share).
+        let g1830 = BaseGame::build_titled(
+            "1830",
+            vec![1, 2, 3, 4],
+            (1..=4).map(|i| (i, format!("P{}", i))).collect(),
+        );
+        assert_eq!(g1830.sell_price_drops(3, false), 3);
+        assert_eq!(game.sell_price_drops(3, false), 0);
+        assert_eq!(game.sell_price_drops(3, true), 1);
     }
 
     /// The full major ladder per Ruby get_all_par_prices(%i[par_2 par]):

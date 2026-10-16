@@ -64,6 +64,21 @@ pub trait GameTitle: Sync {
     fn dividend_movement(&self) -> DividendMovement {
         DividendMovement::Standard
     }
+    /// Ruby `SELL_MOVEMENT` (base.rb `sell_shares_and_change_price`): how a
+    /// player's sale moves the share price. 1830 `:down_share` — one step
+    /// down per share sold; 1867 `:down_block_pres` — ONE step down per sale
+    /// (the whole bundle), and only when the seller was the president
+    /// before it (non-president sales leave the price alone).
+    fn sell_movement(&self) -> SellMovement {
+        SellMovement::DownShare
+    }
+    /// G1867::StockMarket#right (g_1867/stock_market.rb): a MINOR whose
+    /// current cell carries `max_price` never moves right (1-D: it stays;
+    /// 2-D: it moves up instead). The 1867 column market caps minors at
+    /// $165. Default false (1830 has no minors and no max_price cells).
+    fn minor_capped_at_max_price(&self) -> bool {
+        false
+    }
     /// Token cost = charter price × straight-line hex distance from the
     /// corp's nearest placed token (1867, G1867::Step::Token
     /// `adjust_token_price_ability!`). Default: flat charter price.
@@ -722,6 +737,17 @@ pub enum DividendMovement {
     /// G1867: right only when the distribution ≥ the share price; zero →
     /// left; in between → no movement.
     RightIfGePrice,
+}
+
+/// Sale price-movement policy (see [`GameTitle::sell_movement`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SellMovement {
+    /// Ruby `:down_share`: one `move_down` per share sold (1830).
+    DownShare,
+    /// Ruby `:down_block_pres`: one `move_down` per sale, only when the
+    /// seller was president before it (1867; `down` is `left` on a 1-D
+    /// market).
+    DownBlockPres,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -247,11 +247,12 @@ impl StockMarket {
     }
 
     /// Move share price down (price decrease). Returns new position.
-    /// Used when: corporation withholds revenue. A 1-D market has no
-    /// vertical movement.
+    /// Used when: shares are sold (1830 `:down_share`, 1867
+    /// `:down_block_pres`). On a 1-D market `down` IS `left` (Ruby
+    /// OneDimensionalMovement#down, stock_movement.rb: `@market.left`).
     pub fn move_down(&self, row: u8, col: u8) -> (u8, u8) {
         if self.movement == MarketMovement::OneDimensional {
-            return (row, col);
+            return self.move_left(row, col);
         }
         let new_row = row + 1;
         if self.cell_at(new_row, col).is_some() {

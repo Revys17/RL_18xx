@@ -1101,7 +1101,7 @@ impl BaseGame {
         if let Some(right) = movement {
             if let Some(sp) = self.corporations[corp_idx].share_price.clone() {
                 let (new_row, new_col) = if right {
-                    self.stock_market.move_right(sp.row, sp.column)
+                    self.market_right_for(corp_idx, sp.row, sp.column)
                 } else {
                     self.stock_market.move_left(sp.row, sp.column)
                 };
@@ -2024,11 +2024,13 @@ impl BaseGame {
         // be left with less than the president's percent after the sale.
         let player_total = self.corporations[corp_idx].percent_owned_by(&player_eid);
         let remaining_after = player_total.saturating_sub(percent);
-        let includes_president = self.corporations[corp_idx]
+        // Ruby `was_president`, before the transfer (1867 :down_block_pres).
+        let was_president = self.corporations[corp_idx]
             .shares
             .iter()
-            .any(|s| s.president && s.owner == player_eid)
-            && remaining_after < self.corporations[corp_idx].president_percent();
+            .any(|s| s.president && s.owner == player_eid);
+        let includes_president =
+            was_president && remaining_after < self.corporations[corp_idx].president_percent();
 
         // Transfer shares to market. When dumping the president, transfer the
         // non-president portion (= percent - president_face_value, i.e.
@@ -2092,10 +2094,12 @@ impl BaseGame {
         self.players[player_idx].cash += revenue;
         self.bank.cash -= revenue;
 
-        // Share price drops: move DOWN once per share unit sold
+        // Share price drops per the title's SELL_MOVEMENT (1830: DOWN once
+        // per share unit sold).
         let num_shares = percent as u32 / share_unit as u32;
+        let drops = self.sell_price_drops(num_shares, was_president);
         let (mut row, mut col) = (share_price.row, share_price.column);
-        for _ in 0..num_shares {
+        for _ in 0..drops {
             let (nr, nc) = self.stock_market.move_down(row, col);
             row = nr;
             col = nc;
@@ -2562,8 +2566,10 @@ impl BaseGame {
                                 self.bank.cash -= owner_half;
                             }
                         }
+                        // G1867::StockMarket#right: a minor on the $165
+                        // max_price cell stays put.
                         if let Some(sp) = self.corporations[corp_idx].share_price.clone() {
-                            let (nr, nc) = self.stock_market.move_right(sp.row, sp.column);
+                            let (nr, nc) = self.market_right_for(corp_idx, sp.row, sp.column);
                             if let Some(new_sp) = self.stock_market.share_price_at(nr, nc) {
                                 self.corporations[corp_idx].share_price = Some(new_sp);
                                 self.update_market_cell(&corp_sym, sp.row, sp.column, nr, nc);

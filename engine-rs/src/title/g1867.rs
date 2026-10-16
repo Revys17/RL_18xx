@@ -66,6 +66,16 @@ impl GameTitle for G1867 {
     fn dividend_movement(&self) -> DividendMovement {
         DividendMovement::RightIfGePrice
     }
+    /// game.rb:310 `SELL_MOVEMENT = :down_block_pres` (with
+    /// `POOL_SHARE_DROP = :none`): a sale drops the price one step — left,
+    /// on the column market — only when the seller was president.
+    fn sell_movement(&self) -> super::SellMovement {
+        super::SellMovement::DownBlockPres
+    }
+    /// G1867::StockMarket#right: minors stop at the $165 `max_price` cell.
+    fn minor_capped_at_max_price(&self) -> bool {
+        true
+    }
     /// step/token.rb adjust_token_price_ability!: $40 × hex distance from
     /// the nearest placed token.
     fn token_price_by_distance(&self) -> bool {

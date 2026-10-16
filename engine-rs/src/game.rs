@@ -1889,6 +1889,39 @@ impl BaseGame {
         (cost, paid)
     }
 
+    /// How many `move_down` steps a sale of `num_shares` share units applies
+    /// (Ruby `sell_shares_and_change_price` under the title's
+    /// SELL_MOVEMENT): 1830 `:down_share` one per share; 1867
+    /// `:down_block_pres` one per sale, only if the seller was president
+    /// before it.
+    pub(crate) fn sell_price_drops(&self, num_shares: u32, was_president: bool) -> u32 {
+        match self.title_def().sell_movement() {
+            crate::title::SellMovement::DownShare => num_shares,
+            crate::title::SellMovement::DownBlockPres => u32::from(was_president),
+        }
+    }
+
+    /// A RIGHT move of corporation `corp_idx`'s price from (row, col) —
+    /// `StockMarket::move_right` plus the title's corp-aware override
+    /// (G1867::StockMarket#right: a minor on a `max_price` cell does not
+    /// move right; on a 2-D market it moves up instead).
+    pub(crate) fn market_right_for(&self, corp_idx: usize, row: u8, col: u8) -> (u8, u8) {
+        let corp = &self.corporations[corp_idx];
+        if self.title_def().minor_capped_at_max_price()
+            && corp.corp_type == crate::title::CorpType::Minor
+            && corp
+                .share_price
+                .as_ref()
+                .is_some_and(|sp| sp.types.iter().any(|t| t == "max_price"))
+        {
+            return match self.stock_market.movement {
+                crate::title::MarketMovement::OneDimensional => (row, col),
+                crate::title::MarketMovement::TwoDimensional => self.stock_market.move_up(row, col),
+            };
+        }
+        self.stock_market.move_right(row, col)
+    }
+
     pub(crate) fn update_market_cell(
         &mut self,
         corp_sym: &str,
