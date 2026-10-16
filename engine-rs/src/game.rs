@@ -1127,11 +1127,21 @@ impl BaseGame {
                 // in operating order; with none the round finishes
                 // immediately (setup → next_entity! if finished?) and the
                 // transition loop moves straight on.
-                let state = crate::rounds::MergerState::new(
+                let mut state = crate::rounds::MergerState::new(
                     round_num,
                     total_ors,
                     self.merge_corporations(),
                 );
+                // ...unless another step is active: Ruby Round#finished? is
+                // `!active_step`, and the merger round's DiscardTrain (step
+                // F) blocks while any corp is over its train limit — e.g.
+                // the OR-end export that just advanced the phase and cut the
+                // limit, with every minor nationalized by the same export
+                // (probed 24679 file id 568 / 23812 id 549: "-- Merger Round
+                // --" with no minors, then the major's discard_train).
+                if state.finished && !self.merger_crowded_corps().is_empty() {
+                    state.finished = false;
+                }
                 self.round = Round::Merger(state);
             }
         }
@@ -4433,6 +4443,48 @@ mod tests {
         game.hexes[ei].tile = BaseGame::tile_from_def(&t623, 0);
         game.hexes[ei].tile.name = "623".into();
         assert!(game.upgradeable_tiles_for("E17").is_empty());
+    }
+
+    /// Ruby Round#finished? is `!active_step`: a merger round with NO
+    /// minors still waits while its DiscardTrain step has a crowded corp
+    /// (the OR-end export can cut the train limit AND nationalize every
+    /// minor at once — probed 24679 file id 567→568: "-- Merger Round 5.1
+    /// --" with no minors, then C&O's discard_train). Once the discard is
+    /// done the round finishes and the next OR starts.
+    #[test]
+    fn g1867_minorless_merger_round_waits_for_discard() {
+        let players: HashMap<u32, String> = (1..=4).map(|i| (i, format!("P{}", i))).collect();
+        let mut game = BaseGame::build_titled("1867", vec![1, 2, 3, 4], players);
+        let pd = game.title_def().phases().into_iter().find(|p| p.name == "6").unwrap();
+        game.phase = Phase::new(
+            pd.name.to_string(),
+            pd.operating_rounds,
+            pd.train_limit,
+            pd.tiles.iter().map(|s| s.to_string()).collect(),
+        );
+        let ci = game.corp_idx["CNR"];
+        let sp = game.stock_market.share_price_at(0, 14).unwrap();
+        game.corporations[ci].share_price = Some(sp.clone());
+        game.corporations[ci].ipo_price = Some(sp);
+        game.corporations[ci].floated = true;
+        for _ in 0..(game.corp_train_limit(ci) + 1) {
+            let mut t = game.depot.trains.remove(0);
+            t.owner = EntityId::corporation("CNR");
+            game.corporations[ci].trains.push(t);
+        }
+        assert!(game.merge_corporations().is_empty());
+        game.start_round(crate::steps::RoundStart::Merger { round_num: 1, total_ors: 2 });
+        let Round::Merger(s) = &game.round else { panic!("not a merger round") };
+        assert!(!s.finished, "the crowded CNR keeps the minorless round open");
+
+        let train = game.corporations[ci].trains[0].id.clone();
+        game.process_action_internal(&Action::DiscardTrain {
+            entity_id: "CNR".into(),
+            train_name: train,
+        })
+        .unwrap();
+        assert_eq!(game.corporations[ci].trains.len(), game.corp_train_limit(ci));
+        assert!(matches!(game.round, Round::Operating(_)), "round moved on: {:?}", game.round_state);
     }
 
     #[test]
