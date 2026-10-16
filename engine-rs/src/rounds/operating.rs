@@ -1668,7 +1668,11 @@ impl BaseGame {
             .map_or(false, |&ci| {
                 self.corporations[ci].closed || !self.corporations[ci].floated
             });
-        if buyer_dead {
+        // Ruby also force-ends the buyer's turn when a minor closed by the
+        // purchase's `minors_nationalized` was the round's current entity
+        // (see `note_ruby_force_next_entity`).
+        let forced = std::mem::take(&mut self.pending_force_next_entity);
+        if buyer_dead || forced {
             if let crate::rounds::Round::Operating(ref mut s) = self.round {
                 if s.current_corp_sym() == Some(corp_sym.as_str()) {
                     s.step = OperatingStep::Done;
@@ -3457,6 +3461,80 @@ mod g1867_or_tests {
         })
         .unwrap();
         assert!(!game.corporations[game.corp_idx["BO"]].closed);
+    }
+
+    /// Ruby quirk, kept for replay fidelity: the first 8-train's
+    /// `minors_nationalized` closes minors AFTER the phase change, when a
+    /// minor still holding a train is "crowded" (phase 8 gives minors no
+    /// train limit) and so is the round's current entity (DiscardTrain);
+    /// close_corporation then `force_next_entity!`s — the BUYER's turn ends
+    /// on the spot. Probed on 246533 file id 712: C&O buys the first 8
+    /// with $56 left and room for one more train, BBG (a minor with a
+    /// train) is nationalized, and the log goes straight to "... operates
+    /// GTR". Without a crowded minor the buyer's BuyTrain stays open.
+    #[test]
+    fn first_8_force_ends_the_buyers_turn_when_a_crowded_minor_closes() {
+        let run = |minor_has_train: bool| {
+            let mut game = new_4p_game();
+            let pd = game.title_def().phases().into_iter().find(|p| p.name == "7").unwrap();
+            game.phase = crate::core::Phase::new(
+                pd.name.to_string(),
+                pd.operating_rounds,
+                pd.train_limit,
+                pd.tiles.iter().map(|s| s.to_string()).collect(),
+            );
+            rig_floated(&mut game, "CNR", 16);
+            rig_floated(&mut game, "BO", 8);
+            rig_floated(&mut game, "CPR", 15);
+            let cnr = game.corp_idx["CNR"];
+            game.corporations[cnr].cash = 1100;
+            let take = |game: &mut BaseGame, name: &str| {
+                let i = game.depot.trains.iter().position(|t| t.name == name).unwrap();
+                game.depot.trains.remove(i)
+            };
+            // CPR keeps a 7 (an inter-corp train CNR could still buy).
+            let mut t7 = take(&mut game, "7");
+            t7.owner = EntityId::corporation("CPR");
+            game.corporations[game.corp_idx["CPR"]].trains.push(t7);
+            if minor_has_train {
+                let mut t6 = take(&mut game, "6");
+                t6.owner = EntityId::corporation("BO");
+                game.corporations[game.corp_idx["BO"]].trains.push(t6);
+            }
+            // The 8s head the depot.
+            game.depot.trains.retain(|t| t.name == "8" || t.name == "2+2" || t.name == "5+5E");
+            let mut s = crate::rounds::OperatingState::new(
+                1,
+                2,
+                vec!["BO".into(), "CNR".into(), "CPR".into()],
+            );
+            s.entity_index = 1;
+            s.step = OperatingStep::BuyTrain;
+            game.round = crate::rounds::Round::Operating(s);
+            game.update_round_state();
+            let eight = game.depot.trains.iter().find(|t| t.name == "8").unwrap().id.clone();
+            game.process_action_internal(&crate::actions::Action::BuyTrain {
+                entity_id: "CNR".into(),
+                train_name: eight,
+                price: 1000,
+                from: "depot".into(),
+                variant: None,
+                exchange: None,
+            })
+            .unwrap();
+            assert!(game.corporations[game.corp_idx["BO"]].closed);
+            match &game.round {
+                crate::rounds::Round::Operating(s) => {
+                    (s.current_corp_sym().map(str::to_string), s.step.clone())
+                }
+                _ => (None, OperatingStep::Done),
+            }
+        };
+        let (cur, _) = run(true);
+        assert_ne!(cur.as_deref(), Some("CNR"), "a crowded minor closed: CNR's turn is over");
+        let (cur, step) = run(false);
+        assert_eq!(cur.as_deref(), Some("CNR"));
+        assert_eq!(step, OperatingStep::BuyTrain, "no crowded minor: CNR may still buy");
     }
 
     /// `needed_cash` for the obligation is Ruby Depot#min_depot_price

@@ -280,6 +280,12 @@ pub struct BaseGame {
     /// `remove_border_calculate_cost!` deletes a paid border from BOTH
     /// tiles, so it is charged once.
     pub(crate) paid_borders: Vec<(String, u8)>,
+    /// Set inside a train purchase's events when Ruby would call
+    /// `@round.force_next_entity!` from `close_corporation` (the minor
+    /// being closed is the round's current entity — 1867's first 8-train,
+    /// see `minors_nationalized`); the buy handler ends the buyer's turn
+    /// and clears it. Always false between actions.
+    pub(crate) pending_force_next_entity: bool,
 }
 
 // crate-visible wrappers that forward to the (private) PyO3-exposed methods
@@ -527,6 +533,7 @@ impl BaseGame {
             optional_rules: self.optional_rules.clone(),
             border_costs: Arc::clone(&self.border_costs),
             paid_borders: self.paid_borders.clone(),
+            pending_force_next_entity: self.pending_force_next_entity,
         }
     }
 
@@ -1277,6 +1284,7 @@ impl BaseGame {
                 // ones nationalize into the CN (their 4-trains haven't
                 // rusted yet; Ruby fires events before rusting too).
                 "minors_nationalized" => {
+                    self.note_ruby_force_next_entity(base_name, &phase_defs, &train_defs);
                     self.event_minors_nationalized();
                 }
                 other => unimplemented!("train event {other}"),
@@ -1348,6 +1356,54 @@ impl BaseGame {
                     s.crowded_corps = crowded;
                 }
             }
+        }
+    }
+
+    /// Ruby side effect of nationalizing minors INSIDE a train purchase
+    /// (G1867 event_minors_nationalized! → nationalize! → close_corporation:
+    /// `@round.force_next_entity! if @round.current_entity == corporation`).
+    /// Ruby fires the event AFTER the phase change and the rusting
+    /// (Phase#buying_train!: next! → rust_trains! → events), so the round's
+    /// active step at that instant is DiscardTrain whenever some corp is
+    /// over the NEW limits, and its current entity is the first such corp in
+    /// definition order (`crowded_corps` = corps with trains > limit; in
+    /// phase 8 a minor's limit is 0 — the `{ major: 2 }` hash has no minor
+    /// key). When that corp is a minor about to be closed, Ruby force-ends
+    /// the BUYER's turn. Probed on 246533 file id 712 (BBG crowded and
+    /// nationalized: C&O's turn ends at once, "... operates GTR"), likewise
+    /// 264903 id 759 and 38753 id 510. Our events fire before the phase
+    /// change, so the crowded test is evaluated against the target phase
+    /// with this purchase's rust applied.
+    fn note_ruby_force_next_entity(
+        &mut self,
+        base_name: &str,
+        phase_defs: &[crate::title::PhaseDef],
+        train_defs: &[crate::title::TrainDef],
+    ) {
+        let in_live_or = matches!(&self.round, Round::Operating(s) if !s.finished);
+        if !in_live_or {
+            return;
+        }
+        let target = phase_defs.iter().find(|p| p.on == Some(base_name));
+        let (major_limit, minor_limit) = match target {
+            Some(p) => (p.train_limit as usize, p.minor_train_limit.unwrap_or(0) as usize),
+            None => (self.phase.train_limit as usize, 0),
+        };
+        let rusting: Vec<&str> = train_defs
+            .iter()
+            .filter(|td| td.rusts_on == Some(base_name))
+            .map(|td| td.name)
+            .collect();
+        let first_crowded = self.corporations.iter().find(|c| {
+            if !c.floated || c.closed || c.corp_type == crate::title::CorpType::National {
+                return false;
+            }
+            let n = c.trains.iter().filter(|t| !rusting.contains(&t.name.as_str())).count();
+            let limit = if c.corp_type == crate::title::CorpType::Minor { minor_limit } else { major_limit };
+            n > limit
+        });
+        if first_crowded.is_some_and(|c| c.corp_type == crate::title::CorpType::Minor) {
+            self.pending_force_next_entity = true;
         }
     }
 
@@ -2765,6 +2821,7 @@ impl BaseGame {
             optional_rules,
             border_costs: Arc::new(border_costs),
             paid_borders: Vec::new(),
+            pending_force_next_entity: false,
         };
         game.setup_national();
         if single_item_opener {
