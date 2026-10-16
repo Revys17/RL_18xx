@@ -122,6 +122,14 @@ impl GameTitle for G1867 {
     fn hex_definitions(&self) -> Vec<HexDef> {
         hex_definitions()
     }
+    /// map.rb:183-184: `%w[E17 D16 O7] => 'city=revenue:0;label=Y'`,
+    /// `J12 => 'city=revenue:0;label=Y;future_label=label:O,color:gray;...'`.
+    fn hex_label(&self, coord: &str) -> Option<&'static str> {
+        matches!(coord, "E17" | "D16" | "O7" | "J12").then_some("Y")
+    }
+    fn hex_future_label(&self, coord: &str) -> Option<(&'static str, &'static str)> {
+        (coord == "J12").then_some(("O", "gray"))
+    }
     fn preprinted_hex_dsl(&self, coord: &str) -> Option<(&'static str, &'static str)> {
         preprinted_hex_dsl(coord)
     }
@@ -1290,13 +1298,14 @@ pub fn tile_counts() -> Vec<(&'static str, u32)> {
 // NOT preprinted track — those live here as HexDef data;
 // `preprinted_hex_dsl` covers only the colored (fixed-track) hexes.
 //
-// Still-open map features — TODO(1867-map): stubs (G15 edge 1, L10 edge 0,
-// K13 edge 4; StubsAreRestricted), labels Y/M/T/O + future_label (J12 gray
-// O → tile X8) gating upgrades, the L12 TRIPLE city (three separate 1-slot
-// cities — DoubleCity is the closest current fit; the third city holds a
-// neutral CN token + the national reservation), 4-tier offboard revenue (green/gray tiers),
-// border-cost/impassable enforcement in the lay/graph code (the DATA is
-// in `borders` below).
+// White-hex labels (Y on E17/D16/O7/J12, J12's future_label O) come from
+// `hex_label`/`hex_future_label`; the $80 water borders are charged by the
+// lay code (`tile_border_cost`). Still-open map features —
+// TODO(1867-map): stubs (G15 edge 1, L10 edge 0, K13 edge 4;
+// StubsAreRestricted), the L12 TRIPLE city (three separate 1-slot cities —
+// DoubleCity is the closest current fit; the third city holds a neutral CN
+// token + the national reservation), IMPASSABLE-border enforcement in the
+// graph/adjacency (the DATA is in `borders` below).
 // ---------------------------------------------------------------------------
 
 /// Plain white hexes (map.rb HEXES white => '').
@@ -1394,7 +1403,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
         HexDef { coord: "N12", hex_type: City { revenue: 0, slots: 1 }, terrain_cost: 0, borders: NO_BORDERS },
         // G15 Peterborough: 'city=revenue:0;stub=edge:1' — TODO(1867-map).
         HexDef { coord: "G15", hex_type: City { revenue: 0, slots: 1 }, terrain_cost: 0, borders: NO_BORDERS },
-        // E17/D16/O7: 'city=revenue:0;label=Y' — TODO(1867-map) labels.
+        // E17/D16/O7: 'city=revenue:0;label=Y' (label via `hex_label`).
         HexDef { coord: "E17", hex_type: City { revenue: 0, slots: 1 }, terrain_cost: 0, borders: NO_BORDERS },
         HexDef { coord: "D16", hex_type: City { revenue: 0, slots: 1 }, terrain_cost: 0, borders: NO_BORDERS },
         HexDef { coord: "O7", hex_type: City { revenue: 0, slots: 1 }, terrain_cost: 0, borders: NO_BORDERS },

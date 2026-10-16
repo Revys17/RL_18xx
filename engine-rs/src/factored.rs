@@ -1194,7 +1194,7 @@ impl BaseGame {
         let current_tile = &hex.tile;
 
         let old_tile_def = self.tile_catalog.get(&current_tile.name);
-        let old_tile_def = match old_tile_def {
+        let mut old_tile_def = match old_tile_def {
             Some(def) => def.rotated(current_tile.rotation),
             None => {
                 crate::tiles::TileDef {
@@ -1219,6 +1219,7 @@ impl BaseGame {
                 }
             }
         };
+        self.apply_future_label(hex_id, &mut old_tile_def);
 
         let valid_exits = self.passable_exits_for(hex_id);
 

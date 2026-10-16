@@ -1841,6 +1841,20 @@ impl BaseGame {
 
     /// Update market cell occupancy when a corp's share price changes.
     /// Removes from old cell, adds to new cell.
+    /// Ruby `upgrades_to_correct_label?`: when the hex carries a
+    /// `future_label` for the colour the next upgrade would be (1867 J12:
+    /// O for gray), that label — not the current tile's — is the one the
+    /// new tile must match. Applied to the old tile's def before the
+    /// label check; a no-op without a title `hex_future_label`.
+    pub(crate) fn apply_future_label(&self, hex_id: &str, old: &mut crate::tiles::TileDef) {
+        if let Some((label, color)) = self.title_def().hex_future_label(hex_id) {
+            let next = old.color.next_color().map(|c| format!("{:?}", c).to_lowercase());
+            if next.as_deref() == Some(color) {
+                old.label = Some(label.to_string());
+            }
+        }
+    }
+
     /// The edge-crossing (water) cost of laying `base_tile_id` at
     /// `rotation` on `hex_id`, plus the borders it pays off — Ruby
     /// Tracker#remove_border_calculate_cost!: a border with a cost is paid
@@ -2448,6 +2462,11 @@ pub(crate) fn build_hex_from_def(title: &dyn GameTitle, def: &HexDef) -> Hex {
         }
         HexType::Path => Tile::new(format!("path_{}", coord), coord.clone()),
     };
+    // A label printed on the white hex (1867 `city=revenue:0;label=Y`).
+    let mut tile = tile;
+    if let Some(label) = title.hex_label(def.coord) {
+        tile.label = Some(label.to_string());
+    }
 
     Hex::new(coord, tile)
 }
@@ -3172,7 +3191,7 @@ impl BaseGame {
 
         // Get the current tile's TileDef from catalog or build from hex state
         let old_tile_def = self.tile_catalog.get(&current_tile.name);
-        let old_tile_def = match old_tile_def {
+        let mut old_tile_def = match old_tile_def {
             Some(def) => def.rotated(current_tile.rotation),
             None => {
                 // Build a minimal TileDef from current hex tile
@@ -3197,6 +3216,7 @@ impl BaseGame {
                 }
             }
         };
+        self.apply_future_label(hex_id, &mut old_tile_def);
 
         // Valid exit edges for this hex (edges that have neighbors)
         let valid_exits: Vec<u8> = self
@@ -3280,7 +3300,7 @@ impl BaseGame {
         let current_tile = &hex.tile;
 
         let old_tile_def = self.tile_catalog.get(&current_tile.name);
-        let old_tile_def = match old_tile_def {
+        let mut old_tile_def = match old_tile_def {
             Some(def) => def.rotated(current_tile.rotation),
             None => {
                 crate::tiles::TileDef {
@@ -3304,6 +3324,7 @@ impl BaseGame {
                 }
             }
         };
+        self.apply_future_label(hex_id, &mut old_tile_def);
 
         let valid_exits: Vec<u8> = self
             .hex_adjacency
@@ -3357,10 +3378,11 @@ impl BaseGame {
         let current_tile = &hex.tile;
 
         let old_tile_def = self.tile_catalog.get(&current_tile.name);
-        let old_tile_def = match old_tile_def {
+        let mut old_tile_def = match old_tile_def {
             Some(def) => def.rotated(current_tile.rotation),
             None => return Vec::new(),
         };
+        self.apply_future_label(hex_id, &mut old_tile_def);
 
         let tile_def = match self.tile_catalog.get(tile_name) {
             Some(def) => def,
@@ -4373,6 +4395,44 @@ mod tests {
         players.insert(3, "Carol".to_string());
         players.insert(4, "Dave".to_string());
         BaseGame::build(vec![1, 2, 3, 4], players)
+    }
+
+    /// 1867 map.rb:183-184 — E17/D16/O7/J12 are `city=revenue:0;label=Y`:
+    /// only the Y tiles (201/202/621) may be laid there
+    /// (`upgrades_to_correct_label?`), and J12's `future_label=label:O,
+    /// color:gray` makes its gray upgrade the O tile X8. Without the label
+    /// the gate offered only the plain city tiles on these hexes and
+    /// rejected recorded Y lays when no other lay was legal (probed:
+    /// 20224 file id 117 lays #621 on J12; 25477 id 98 lays #202 on O7;
+    /// 29225 id 227 lays #621 on D16 — all accepted by Ruby).
+    #[test]
+    fn g1867_white_y_labels_and_ottawa_future_label() {
+        let players: HashMap<u32, String> = (1..=4).map(|i| (i, format!("P{}", i))).collect();
+        let mut game = BaseGame::build_titled("1867", vec![1, 2, 3, 4], players);
+        game.phase.tiles = vec!["yellow".into(), "green".into(), "brown".into(), "gray".into()];
+        for hex in ["E17", "D16", "O7", "J12"] {
+            assert_eq!(game.hexes[game.hex_idx[hex]].tile.label.as_deref(), Some("Y"));
+            let mut names: Vec<String> =
+                game.upgradeable_tiles_for(hex).into_iter().map(|(t, _)| t).collect();
+            names.sort();
+            names.dedup();
+            assert_eq!(names, vec!["201", "202", "621"], "{}", hex);
+        }
+        // A plain white city keeps the unlabelled yellow cities.
+        assert!(game.upgradeable_tiles_for("M9").iter().any(|(t, _)| t == "57"));
+        // J12 brown Y (#623) → gray must carry the future label O: X8 only.
+        let hi = game.hex_idx["J12"];
+        let t623 = game.tile_catalog.get("623").unwrap().clone();
+        game.hexes[hi].tile = BaseGame::tile_from_def(&t623, 0);
+        game.hexes[hi].tile.name = "623".into();
+        let gray: Vec<String> =
+            game.upgradeable_tiles_for("J12").into_iter().map(|(t, _)| t).collect();
+        assert!(!gray.is_empty() && gray.iter().all(|t| t == "X8"), "{:?}", gray);
+        // The same brown Y tile elsewhere has no gray Y upgrade.
+        let ei = game.hex_idx["E17"];
+        game.hexes[ei].tile = BaseGame::tile_from_def(&t623, 0);
+        game.hexes[ei].tile.name = "623".into();
+        assert!(game.upgradeable_tiles_for("E17").is_empty());
     }
 
     #[test]

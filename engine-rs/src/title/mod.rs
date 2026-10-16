@@ -118,6 +118,20 @@ pub trait GameTitle: Sync {
         td.count
     }
     fn hex_definitions(&self) -> Vec<HexDef>;
+    /// The label printed on a NON-preprinted map hex (Ruby map DSL
+    /// `label=` on a white hex — 1867's `city=revenue:0;label=Y` on E17,
+    /// D16, O7, J12): upgrades must match it (`upgrades_to_correct_label?`).
+    /// Default: none (1830's labelled hexes are all preprinted tiles).
+    fn hex_label(&self, _coord: &str) -> Option<&'static str> {
+        None
+    }
+    /// Ruby `future_label` (map DSL `future_label=label:L,color:C`): when a
+    /// tile of colour `C` replaces the hex's tile, it must carry label `L`
+    /// instead of the current one (1867 J12 Ottawa: Y until the gray X8
+    /// `O`). Returns (label, colour name). Default: none.
+    fn hex_future_label(&self, _coord: &str) -> Option<(&'static str, &'static str)> {
+        None
+    }
     /// The preprinted tile DSL + color for a map hex, if any.
     fn preprinted_hex_dsl(&self, coord: &str) -> Option<(&'static str, &'static str)>;
     fn tile_counts(&self) -> Vec<(&'static str, u32)>;
