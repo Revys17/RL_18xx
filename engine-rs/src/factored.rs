@@ -869,10 +869,12 @@ impl BaseGame {
         }
 
         let entity_desc = entity_descriptor_corp(&corp_sym);
+        // Full buying power (= cash without loans; 1867 AutomaticLoan) —
+        // the same affordability the Track gate uses.
         let corp_cash = self
             .corp_idx
             .get(corp_sym.as_str())
-            .map_or(0, |&i| self.corporations[i].cash);
+            .map_or(0, |&i| self.corp_buying_power_full(i));
 
         // Blocked-hexes set (private companies' blocks_hexes abilities),
         // derived from the title data.

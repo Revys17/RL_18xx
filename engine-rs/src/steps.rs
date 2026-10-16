@@ -1443,10 +1443,14 @@ impl BaseGame {
     /// (candidate hexes minus ability-blocked hexes, terrain affordable).
     /// Ported verbatim from the old LayTile arm.
     fn track_has_layable_tile(&mut self, corp_sym: &str) -> bool {
+        // Affordability against FULL buying power: 1867's Track includes
+        // AutomaticLoan (lay costs beyond cash are loan-funded — probed on
+        // 27626 file id 112: minor OP, $0 cash + 2 takeable loans, lays #9
+        // on the $20 K11 water hex). = cash for loan-free titles (1830).
         let corp_cash = self
             .corp_idx
             .get(corp_sym)
-            .map_or(0, |&ci| self.corporations[ci].cash);
+            .map_or(0, |&ci| self.corp_buying_power_full(ci));
         let candidates = self.lay_tile_candidate_hexes(corp_sym);
         let blocked_hexes = self.ability_blocked_hexes();
         for (hex_id, edges) in &candidates {
@@ -1647,6 +1651,32 @@ mod tests {
                 .unwrap_or_else(|e| panic!("seed {} step {}: build_action: {}", seed, step, e));
             game.process_action_internal(&action)
                 .unwrap_or_else(|e| panic!("seed {} step {}: process {:?}: {}", seed, step, action, e));
+        }
+    }
+
+    /// The Track gate prices lays against FULL buying power: 1867's Track
+    /// step includes AutomaticLoan, so a broke minor with takeable loans can
+    /// still lay on the $20 K11 water hex (probed on 27626 file id 112:
+    /// minor OP, $0 cash, 0 loans, lays #9 on K11 — Ruby takes a loan).
+    /// For loan-free titles (1830) buying power IS cash.
+    #[test]
+    fn track_affordability_counts_takeable_loans() {
+        let players: HashMap<u32, String> = (1..=4).map(|i| (i, format!("P{}", i))).collect();
+        let mut g67 = BaseGame::build_titled("1867", vec![1, 2, 3, 4], players);
+        let ci = g67.corp_idx["OP"];
+        g67.corporations[ci].cash = 0;
+        assert_eq!(g67.corp_buying_power_full(ci), 90, "2 takeable minor loans × $45");
+        let toward_j12 = *g67.hex_adjacency["K11"]
+            .iter()
+            .find(|(_, n)| n.as_str() == "J12")
+            .unwrap()
+            .0;
+        assert!(!g67.has_layable_tile_for_corp("K11", &[toward_j12], 0));
+        assert!(g67.has_layable_tile_for_corp("K11", &[toward_j12], 90));
+
+        let g30 = new_4p_game();
+        for i in 0..g30.corporations.len() {
+            assert_eq!(g30.corp_buying_power_full(i), g30.corporations[i].cash);
         }
     }
 
