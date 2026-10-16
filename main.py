@@ -541,8 +541,8 @@ def build_parser():
     p = sub.add_parser("refit-price-head", help="Fit a fresh price head on the current-best checkpoint's frozen trunk")
     p.add_argument("--model-dir", type=str, default="model_checkpoints", help="Model checkpoint directory")
     p.add_argument(
-        "--data-dir", type=str, default="human_games/lmdb_v3",
-        help="Converted human-game LMDB root with training/ and validation/ (default: human_games/lmdb_v3)",
+        "--data-dir", type=str, default="human_games/lmdb_v6k",
+        help="Converted human-game LMDB root with training/ and validation/ (default: human_games/lmdb_v6k)",
     )
     p.add_argument("--batch-size", type=int, default=256, help="Batch size (default: 256)")
     p.add_argument("--lr", type=float, default=0.001, help="Learning rate (default: 0.001)")

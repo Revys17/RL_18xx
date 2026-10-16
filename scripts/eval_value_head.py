@@ -11,7 +11,7 @@ runs the model over each game's positions, and reports per progress decile:
 - value CE vs. the ln(N) equal-odds baseline
 
 Usage:
-    uv run python scripts/eval_value_head.py [--checkpoint SESSION/NUM] [--lmdb human_games/lmdb_v3/validation]
+    uv run python scripts/eval_value_head.py [--checkpoint SESSION/NUM] [--lmdb human_games/lmdb_v6k/validation]
 """
 
 import argparse
@@ -62,7 +62,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model-dir", default="model_checkpoints")
     parser.add_argument("--checkpoint", default=None, help="SESSION/NUM (default: current_best)")
-    parser.add_argument("--lmdb", default="human_games/lmdb_v3/validation")
+    parser.add_argument("--lmdb", default="human_games/lmdb_v6k/validation")
     parser.add_argument("--max-games", type=int, default=10_000)
     parser.add_argument("--deciles", type=int, default=10)
     args = parser.parse_args()
