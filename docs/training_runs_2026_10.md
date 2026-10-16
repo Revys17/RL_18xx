@@ -40,7 +40,7 @@ scratch directory).
 | `gx2_*_20261013` (round 3) | ckpt 10, 2 seats | fixed gen2/1500 | bankrupt / rust / placement | 300 | gen2 hard to exploit: 0.383 / 0.393 / 0.471 |
 | gen3 = `gen1_20261009` 1500-2000 | resume | league_v5, 15% of games start at the auction | win | 500 | 0.582 vs gen2; ~84k games/h after the speed-ups |
 | `rab_win/place/blend_20261014` (reward A/B) | gen3/2000 | league_v6 | win / placement 1,.5,.2,0 / 1,.3,.1,0 | 300 each | placement best: vs gen3 0.589 (1v3 0.295); round robin place-win 0.543 -> adopted |
-| **gen4** = `rab_place_20261014` 300-1800 | resume (games_per_task 96 from 1040) | league_v6, then v7 (+gen4/800, the placement exploiter pinned 10%) | placement | 1500 | **0.737 vs gen3, 1v3 0.478; beats all 31 population members** |
+| **gen4** = `rab_place_20261014` 300-1800 | resume (games_per_task 96 from 1040) | league_v6, then v7 (+gen4/800, the placement exploiter pinned 10%) | placement | 1500 | **0.737 vs gen3, 1v3 0.478; beats all 29 other population members** |
 
 Populations: `model_checkpoints_pg/populations/league_v1_base.json` ... `league_v7.json`
 (`min_share` pins a member's minimum sampling share).
