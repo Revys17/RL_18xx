@@ -998,16 +998,21 @@ impl BaseGame {
             )));
         }
 
-        // Price the routes. Titles whose imports record connections without
-        // revenue (1867) compute every route themselves via the title hook;
-        // otherwise the recorded revenue is authoritative (1830 — route
-        // validation is Phase 4).
+        // Price the routes. A RECORDED revenue is authoritative (Ruby
+        // Route#revenue is `@revenue ||= ...` and Action::RunRoutes passes
+        // the record's `revenue` in — the server's number at play time wins
+        // over a recomputation; 1830 always). Titles whose imports may record
+        // connections WITHOUT revenue (1867) compute those routes themselves
+        // via the title hook.
         let title = self.title_def();
         let mut total_revenue: i32 = extra_revenue;
         for r in routes {
-            total_revenue += match title.recorded_route_revenue(self, cur, r) {
-                Some(computed) => computed?,
-                None => r.revenue.unwrap_or(0),
+            total_revenue += match r.revenue {
+                Some(recorded) => recorded,
+                None => match title.recorded_route_revenue(self, cur, r) {
+                    Some(computed) => computed?,
+                    None => 0,
+                },
             };
         }
 
@@ -3318,6 +3323,46 @@ mod g1867_or_tests {
             (1..=4).map(|i| (i, format!("P{}", i))).collect(),
         );
         assert!(g1830.border_costs.is_empty());
+    }
+
+    /// Ruby Route#revenue is `@revenue ||= ...`, seeded from the record's
+    /// `revenue` (Action::RunRoutes.h_to_args) — a recorded revenue is
+    /// AUTHORITATIVE and never recomputed; only bare routes are priced.
+    /// Probed on 21490 file id 244: NO (owning Quebec Bridge) runs O7-P8;
+    /// a fresh Ruby Route prices it $80 (40 + 30 + the QB $10 hex bonus),
+    /// but the replay uses the recorded $70 ("NO runs a 2 train for $70").
+    #[test]
+    fn recorded_route_revenue_is_authoritative() {
+        let mut game = new_4p_game();
+        rig_floated(&mut game, "NO", 8);
+        let mut s = crate::rounds::OperatingState::new(1, 2, vec!["NO".to_string()]);
+        s.step = OperatingStep::RunRoutes;
+        game.round = crate::rounds::Round::Operating(s.clone());
+        let route = |revenue| crate::actions::RouteData {
+            train_name: "2-0".into(),
+            hexes: vec!["O7".into(), "P8".into()],
+            revenue,
+            connections: vec![vec!["O7".into(), "P8".into()]],
+            nodes: Vec::new(),
+        };
+        // The engine's own price for this route on the bare map differs
+        // from the recorded number, which is used as-is.
+        let computed = game
+            .title_def()
+            .recorded_route_revenue(&game, "NO", &route(None))
+            .unwrap()
+            .unwrap();
+        assert_ne!(computed, 70);
+        game.or_process_run_routes(&s, "NO", &[route(Some(70))], 0).unwrap();
+        let revenue = |g: &BaseGame| match &g.round {
+            crate::rounds::Round::Operating(st) => st.revenue,
+            _ => unreachable!(),
+        };
+        assert_eq!(revenue(&game), 70);
+        // A bare route (connections only) is priced by the engine.
+        game.round = crate::rounds::Round::Operating(s.clone());
+        game.or_process_run_routes(&s, "NO", &[route(None)], 0).unwrap();
+        assert_eq!(revenue(&game), computed);
     }
 
     /// Park `sym`'s turn at the BuyTrain pc.

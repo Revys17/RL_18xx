@@ -239,8 +239,8 @@ impl GameTitle for G1867 {
         (1, value)
     }
     /// 1867 imports may record connections WITHOUT revenue — the engine
-    /// prices every recorded route itself (compute_stops/revenue_for,
-    /// game.rb:662-680, 706-739).
+    /// prices those routes itself (compute_stops/revenue_for,
+    /// game.rb:662-680, 706-739); a recorded revenue wins (Ruby).
     fn recorded_route_revenue(
         &self,
         game: &crate::game::BaseGame,

@@ -266,12 +266,13 @@ pub trait GameTitle: Sync {
         ((value + 1) / 2, value * 2)
     }
 
-    /// Engine-computed revenue for a RECORDED route (its `connections`
-    /// chains), replacing whatever the import carried. None = the recorded
-    /// revenue is authoritative (1830: replay trusts the record; this hook
-    /// exists because 1867 imports may record connections WITHOUT revenue).
-    /// Titles that implement it compute for EVERY recorded route — recorded
-    /// values then serve as a cross-check oracle in the replay tests.
+    /// Engine-computed revenue for a recorded route (its `connections`
+    /// chains) that carries NO revenue of its own (1867 imports may record
+    /// connections without revenue). A recorded revenue is always
+    /// authoritative — Ruby `Route#revenue` is `@revenue ||= ...`, seeded
+    /// from the record — so this only prices the bare routes; None = the
+    /// title never computes (1830). The replay tests still cross-check the
+    /// computation against every recorded value (`route_revenue_py`).
     fn recorded_route_revenue(
         &self,
         _game: &crate::game::BaseGame,
