@@ -1541,7 +1541,9 @@ impl BaseGame {
             if !has_ipo && !has_market {
                 return false;
             }
-            let price = if has_market {
+            // `always_market_price` (1867): treasury shares sell at the
+            // current price too.
+            let price = if has_market || corp.always_market_price {
                 corp.share_price.as_ref().map_or(0, |sp| sp.price)
             } else {
                 corp.ipo_price.as_ref().map_or(0, |sp| sp.price)
@@ -1799,6 +1801,32 @@ mod g1867_par_tests {
             }
         }
         assert!(!game.stock_can_bid_minor(&state, 2));
+    }
+
+    /// `always_market_price: true` (every 1867 corp, entities.rb): treasury
+    /// shares sell at the CURRENT price, not par — the buy handler already
+    /// charged that; the buyable-share gate priced them at par. Probed on
+    /// 25139 file id 436: GWR par $135, now $120; a player with $124 buys
+    /// GWR_2 from the treasury in Ruby, our gate offered no buy_shares.
+    #[test]
+    fn treasury_shares_offered_at_market_price() {
+        let mut game = new_4p_1867();
+        rig_major(&mut game, "GWR", 12); // $120 now
+        let ci = game.corp_idx["GWR"];
+        game.corporations[ci].ipo_price = game.stock_market.share_price_at(0, 13); // par $135
+        for i in 5..game.corporations[ci].shares.len() {
+            game.corporations[ci].set_share_owner(i, crate::entities::EntityId::ipo("GWR"));
+        }
+        let order = game.player_order.clone();
+        game.round = Round::Stock(StockState::new(&order, 2));
+        game.update_round_state();
+        game.players[1].cash = 124;
+        let offers = game.buyable_shares_for_factored(2);
+        assert!(
+            offers.iter().any(|(sym, src, _, price)| sym == "GWR" && src == "ipo" && *price == 120),
+            "{:?}",
+            offers
+        );
     }
 
     /// The full major ladder per Ruby get_all_par_prices(%i[par_2 par]):

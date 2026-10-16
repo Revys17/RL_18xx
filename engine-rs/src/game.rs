@@ -3798,7 +3798,14 @@ impl BaseGame {
                     .enumerate()
                     .find(|(_, s)| s.owner == ipo_eid && !s.president);
                 if let Some((idx, share)) = ipo_share {
-                    let price = corp.ipo_price.as_ref().map_or(0, |sp| sp.price);
+                    // `always_market_price` corps (1867) sell treasury
+                    // shares at the CURRENT price, like the buy handler
+                    // (stock_process_buy_shares) charges — not at par.
+                    let price = if corp.always_market_price {
+                        corp_price
+                    } else {
+                        corp.ipo_price.as_ref().map_or(0, |sp| sp.price)
+                    };
                     if player_cash >= price
                         && player_pct + share.percent <= max_pct
                         && !at_cert_limit
