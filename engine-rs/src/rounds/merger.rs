@@ -881,14 +881,25 @@ impl BaseGame {
             }
             None => return Err(GameError::new("No token in that slot")),
         }
+        // Ruby `token.remove!` frees THIS token object. The corp's records
+        // only know the hex, and a merger survivor can hold two tokens on
+        // one multi-city hex (Montreal/Toronto) with DIFFERENT charter
+        // prices ($0 vs $20 after move_tokens took the charter in order) —
+        // so free the record matching the removed token's price, not just
+        // the hex's first (probed 248359 file ids 276-277: C&O's $0 and $20
+        // tokens both on L12; the city-1 ($20) token is removed and Ruby
+        // keeps the $0 one placed, next token $20 × distance 2 = $40 at
+        // id 334 — we had freed the $0 record and charged $0).
+        let removed_price = tok.as_ref().map(|t| t.price);
         *tok = None;
-        if let Some(t) = self.corporations[corp_idx]
-            .tokens
-            .iter_mut()
-            .find(|t| t.used && t.city_hex_id == hex_id)
-        {
-            t.used = false;
-            t.city_hex_id = String::new();
+        let records = &mut self.corporations[corp_idx].tokens;
+        let pick = records
+            .iter()
+            .position(|t| t.used && t.city_hex_id == hex_id && Some(t.price) == removed_price)
+            .or_else(|| records.iter().position(|t| t.used && t.city_hex_id == hex_id));
+        if let Some(i) = pick {
+            records[i].used = false;
+            records[i].city_hex_id = String::new();
         }
         self.clear_graph_cache();
 
@@ -1245,6 +1256,38 @@ mod g1867_merger_order_tests {
         s.corporations_removing_tokens = Some(vec!["CNR".to_string()]);
         game.round = crate::rounds::Round::Merger(s);
         game.update_round_state();
+    }
+
+    /// Ruby `token.remove!` frees the REMOVED token object: with two of the
+    /// survivor's tokens on one multi-city hex at different charter prices,
+    /// the freed charter token is the one in the named city. Probed on
+    /// 248359 (file ids 276-277, then 334): C&O holds $0 (city 0) and $20
+    /// (city 1) tokens on Montreal; removing city 1 leaves used [$0],
+    /// unused [$20, $40] — its next token costs $20 × distance 2 = $40.
+    #[test]
+    fn remove_token_frees_the_named_citys_charter_token() {
+        let mut game = new_4p_game();
+        let ci = game.corp_idx["CNR"];
+        game.corporations[ci].floated = true;
+        let hi = game.hex_idx["L12"];
+        for (ti, city) in [(0usize, 0usize), (1, 1)] {
+            game.corporations[ci].tokens[ti].used = true;
+            game.corporations[ci].tokens[ti].city_hex_id = "L12".into();
+            let tok = game.corporations[ci].tokens[ti].clone();
+            let slot = game.hexes[hi].tile.cities[city].tokens.iter().position(|t| t.is_none()).unwrap();
+            game.hexes[hi].tile.cities[city].tokens[slot] = Some(tok);
+        }
+        let prices: Vec<i32> = game.corporations[ci].tokens.iter().map(|t| t.price).collect();
+        assert_eq!(prices, vec![0, 20, 40]);
+        let mut s = crate::rounds::MergerState::new(1, 2, vec!["CNR".to_string()]);
+        s.corporations_removing_tokens = Some(vec!["CNR".to_string()]);
+        let slot1 = game.hexes[hi].tile.cities[1].tokens.iter().position(|t| t.is_some()).unwrap();
+        game.merger_process_remove_token(&mut s, "CNR", "L12", 1, slot1 as u8).unwrap();
+        let toks: Vec<(i32, bool)> =
+            game.corporations[ci].tokens.iter().map(|t| (t.price, t.used)).collect();
+        assert_eq!(toks, vec![(0, true), (20, false), (40, false)]);
+        let next = game.corporations[ci].next_token_index().unwrap();
+        assert_eq!(game.corporations[ci].tokens[next].price, 20);
     }
 
     fn buy_shares(pid: u32) -> crate::actions::Action {
