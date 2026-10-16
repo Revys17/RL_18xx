@@ -51,15 +51,30 @@ impl BaseGame {
         if self.events_fired.iter().any(|e| e.ends_with("minors_cannot_start")) {
             return false;
         }
-        if self.player_cash(player_id) < MIN_BID {
+        // `max_bid(entity) >= MIN_BID` (cash) and `can_buy?` → `can_gain?`:
+        // the minor's 100% cert must fit under the cert limit.
+        if self.stock_bid_max(player_id) < MIN_BID {
             return false;
         }
         let title = self.title_def();
+        // A CLOSED minor (nationalized: Ruby deletes it from @corporations)
+        // can never be restarted.
         self.corporations.iter().any(|c| {
             c.corp_type == CorpType::Minor
                 && c.ipo_price.is_none()
+                && !c.closed
                 && title.corporation_startable(&c.sym, &self.phase.name)
         })
+    }
+
+    /// Ruby ViaBid `max_bid(player, corporation)`: the player's cash, or 0
+    /// when the minor's cert would not fit (`can_gain?` — the cert limit;
+    /// a 100% minor always passes the holding check).
+    fn stock_bid_max(&self, player_id: u32) -> i32 {
+        if self.num_certs_internal(player_id) >= self.cert_limit as u32 {
+            return 0;
+        }
+        self.player_cash(player_id)
     }
 
     /// Ruby ViaBid `process_bid` — `selection_bid` when no auction is live,
@@ -116,7 +131,7 @@ impl BaseGame {
                 .active_bidders
                 .iter()
                 .copied()
-                .filter(|&p| p != player_id && self.player_cash(p) < new_min)
+                .filter(|&p| p != player_id && self.stock_bid_max(p) < new_min)
                 .collect();
             if !cant.is_empty() {
                 let a = new_state.bid_auction.as_mut().expect("auction");
@@ -172,7 +187,7 @@ impl BaseGame {
             let min_next = price + MIN_BID_INCREMENT;
             let active: Vec<u32> = (0..n)
                 .map(|i| state.player_order[(start + i) % n])
-                .filter(|&p| p == player_id || self.player_cash(p) >= min_next)
+                .filter(|&p| p == player_id || self.stock_bid_max(p) >= min_next)
                 .collect();
             new_state.bid_auction = Some(StockBidAuction {
                 corporation_sym: corporation_sym.to_string(),
@@ -342,7 +357,9 @@ impl BaseGame {
                 MIN_BID_INCREMENT
             )));
         }
-        let cash = self.player_cash(player_id);
+        // Ruby Auctioner#add_bid: `price > max_bid(entity, company)` —
+        // cash, or 0 at the cert limit.
+        let cash = self.stock_bid_max(player_id);
         if price > cash {
             return Err(GameError::new(format!(
                 "Cannot afford bid. Maximum possible bid is {}",

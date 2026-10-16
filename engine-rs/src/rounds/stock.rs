@@ -1759,6 +1759,48 @@ mod g1867_par_tests {
         assert_eq!(game.sell_price_drops(3, true), 1);
     }
 
+    /// ViaBid `can_bid_any?` (g_1867/step/buy_sell_par_shares.rb): only
+    /// minors still in `@corporations` count — a nationalized minor is
+    /// CLOSED and deleted there, so it can never be restarted — and the
+    /// 100% cert must fit (`can_buy?` → `can_gain?`, the cert limit).
+    /// Probed on 24683 file id 204 and 20229 id 238: with every surviving
+    /// minor started, Ruby auto-passes every player ("has no valid actions
+    /// and passes") and the SR ends, while the closed TN/NO (24683) / CA
+    /// (20229) kept a phantom "bid" alive here.
+    #[test]
+    fn closed_minors_and_cert_limit_end_minor_bidding() {
+        let mut game = new_4p_1867();
+        enter_stock_round(&mut game);
+        let state = match &game.round {
+            Round::Stock(s) => s.clone(),
+            _ => unreachable!(),
+        };
+        assert!(game.stock_can_bid_minor(&state, 1));
+        // At the cert limit: no bid (and max_bid is 0 in an auction).
+        let limit = game.cert_limit as u32;
+        'fill: for sym in ["CPR", "GTR", "NYC"] {
+            let ci = game.corp_idx[sym];
+            for i in 0..game.corporations[ci].shares.len() {
+                if game.num_certs_internal(1) >= limit {
+                    break 'fill;
+                }
+                game.corporations[ci].set_share_owner(i, crate::entities::EntityId::player(1));
+            }
+        }
+        assert_eq!(game.num_certs_internal(1), limit);
+        assert!(!game.stock_can_bid_minor(&state, 1));
+        assert!(game.stock_can_bid_minor(&state, 2));
+        // Every phase-2 minor closed (nationalized): nothing left to start.
+        for c in game.corporations.iter_mut() {
+            if c.corp_type == crate::title::CorpType::Minor
+                && !crate::title::g1867::GREEN_CORPORATIONS.contains(&c.sym.as_str())
+            {
+                c.closed = true;
+            }
+        }
+        assert!(!game.stock_can_bid_minor(&state, 2));
+    }
+
     /// The full major ladder per Ruby get_all_par_prices(%i[par_2 par]):
     /// all seven p cells ($70-135) plus the four z cells ($150-200).
     #[test]
