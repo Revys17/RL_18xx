@@ -1027,7 +1027,24 @@ impl BaseGame {
             self.corporations[corp_idx].set_share_owner(0, player_eid.clone());
             self.corporations[corp_idx].owner_id = player_eid;
         } else {
+            let pre_owners: Vec<EntityId> = self.corporations[corp_idx]
+                .shares
+                .iter()
+                .map(|sh| sh.owner.clone())
+                .collect();
+            let prev_president = self.corporations[corp_idx].president_id();
             self.corporations[corp_idx].set_share_owner(share_idx, player_eid);
+            // Ruby buy_shares → SharePool#buy_shares moves the presidency
+            // to a player who now holds MORE than the president (probed on
+            // 41021 file ids 403-405: Shadowspawn's 30% overtakes Tree
+            // Doctor's 20% — "Shadowspawn4884 becomes the president of
+            // GWR" — so phase D of the dealing rotates from HIM, and his
+            // own pass at 408 drops him from it). Only once a player holds
+            // the president cert (a treasury-held cert goes out by the 20%
+            // swap above).
+            if prev_president.is_some() {
+                self.check_president_change_with_snapshot(corp_idx, prev_president, pre_owners);
+            }
         }
 
         // One-buy players auto-pass; so does anyone who can't buy again.
@@ -1288,6 +1305,40 @@ mod g1867_merger_order_tests {
         assert_eq!(toks, vec![(0, true), (20, false), (40, false)]);
         let next = game.corporations[ci].next_token_index().unwrap();
         assert_eq!(game.corporations[ci].tokens[next].price, 20);
+    }
+
+    /// Ruby SharePool#buy_shares hands the presidency to a dealer who now
+    /// holds MORE than the president. Probed on 41021 file ids 403-405:
+    /// Tree Doctor takes the 20% GWR presidency, Shadowspawn buys twice
+    /// (30%) and "becomes the president of GWR" — phase D of the dealing
+    /// then rotates from him.
+    #[test]
+    fn post_merger_buy_moves_the_presidency_to_a_larger_holder() {
+        let mut game = new_4p_game();
+        let ci = game.corp_idx["CNR"];
+        let sp = game.stock_market.share_price_at(0, 10).unwrap();
+        game.corporations[ci].share_price = Some(sp.clone());
+        game.corporations[ci].ipo_price = Some(sp);
+        game.corporations[ci].floated = true;
+        let ipo = EntityId::ipo("CNR");
+        for i in 0..game.corporations[ci].shares.len() {
+            game.corporations[ci].set_share_owner(i, ipo.clone());
+        }
+        game.corporations[ci].set_share_owner(0, EntityId::player(1)); // 20% pres
+        game.corporations[ci].owner_id = EntityId::player(1);
+        game.corporations[ci].set_share_owner(1, EntityId::player(2)); // 10%
+        game.players[1].cash = 1000;
+        let mut s = crate::rounds::MergerState::new(1, 2, vec!["CNR".to_string()]);
+        s.converted = Some("CNR".to_string());
+        s.share_dealing_players = vec![2];
+        s.share_dealing_multiple = vec![2];
+        game.merger_process_buy_shares(&mut s, "2", "CNR", &[2]).unwrap();
+        assert_eq!(game.corporations[ci].president_id(), Some(1), "20% vs 20%: the president keeps it");
+        game.merger_process_buy_shares(&mut s, "2", "CNR", &[3]).unwrap();
+        assert_eq!(game.corporations[ci].president_id(), Some(2));
+        assert_eq!(game.corporations[ci].owner_id, EntityId::player(2));
+        assert_eq!(game.corporations[ci].percent_owned_by(&EntityId::player(2)), 30);
+        assert_eq!(game.corporations[ci].percent_owned_by(&EntityId::player(1)), 20);
     }
 
     fn buy_shares(pid: u32) -> crate::actions::Action {
