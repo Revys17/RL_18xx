@@ -653,3 +653,36 @@ def test_batched_legal_replies_match_the_per_request_slices():
         np.testing.assert_allclose(reply.value, _rows_to_numpy(values, start, n, torch.float32))
         np.testing.assert_allclose(reply.price_components["price_logits"], _slice_price_rows_for_reply(price, start, n)["price_logits"])
         assert reply.legal_lengths.tolist() == [len(ix) for ix in legal] and reply.batched
+
+
+def _missing_checkpoint_factory(path):
+    raise FileNotFoundError(path)
+
+
+def test_a_server_process_whose_model_cannot_load_exits_and_the_wait_says_so():
+    """A server process left idle by a failed initial load (a checkpoint deleted before
+    an eval loaded it) answered nothing and wait_checking_servers, which looks for dead
+    servers, waited forever; the process now exits."""
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+
+    from rl18xx.agent.alphazero.inference_server import (
+        start_inference_server,
+        wait_checking_servers,
+        worker_init_inference,
+    )
+
+    handle = start_inference_server(
+        num_workers=1, model_factory=_missing_checkpoint_factory, checkpoint_path="gone.pth", batch_size=4
+    )
+    handle.process.join(timeout=60)
+    assert not handle.process.is_alive() and handle.process.exitcode != 0
+    with ProcessPoolExecutor(
+        1,
+        mp_context=mp.get_context("spawn"),
+        initializer=worker_init_inference,
+        initargs=(handle.request_q, handle.reply_qs, handle.ticket_q),
+    ) as pool:
+        futures = {pool.submit(_pool_worker_round_trips_forever, 3)}
+        with pytest.raises(RuntimeError, match="inference server died"):
+            wait_checking_servers(futures, {"model": handle}, pool, timeout=1.0)

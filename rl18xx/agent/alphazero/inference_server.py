@@ -574,6 +574,11 @@ class InferenceServer:
             LOGGER.info("InferenceServer: ACCEPTING")
         except Exception as e:
             LOGGER.error(f"InferenceServer: initial model load failed: {e}", exc_info=True)
+            if getattr(self, "exit_on_load_failure", False):
+                # A server process that can't load its model must die: alive and idle,
+                # its workers wait forever and wait_checking_servers (which looks for
+                # dead servers) can't tell (a deleted checkpoint hung an eval for hours).
+                raise
             self.state = ServerState.IDLE
 
         while self.state != ServerState.SHUTDOWN:
@@ -977,6 +982,7 @@ def _server_main(
         batch_timeout_ms=batch_timeout_ms,
         autocast_device=autocast_device,
     )
+    server.exit_on_load_failure = True  # the process exits, so the coordinator sees it die
     server.run()
 
 
