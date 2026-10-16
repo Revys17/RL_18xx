@@ -41,6 +41,10 @@ round: it replaces SelfPlayConfig's per-round c_puct_by_round table) and
   with ``mix=<w>`` the heuristic gets weight w and the network 1 - w
 - ``min=<n>``: readouts at positions with <= 5 legal moves (self-play's
   ``min_readouts``; default: the player's own budget)
+- ``ptemp=<t>``: priors softmax(logits / t) (SelfPlayConfig.prior_temperature;
+  a policy-gradient learner's policy is softmax(logits / learner_temperature))
+- ``dedupe``: a leaf picked twice in one batch is backed up once
+  (SelfPlayConfig.dedupe_leaves)
 
 Standard errors treat games as independent; the six arrangements of one start
 are correlated, which (over the 21 runs checked 2026-10-06) moved a
@@ -129,6 +133,10 @@ def parse_player(spec: str, default_readouts: int) -> tuple:
             overrides["leaf_value_heuristic_weight"] = float(value)
         elif key == "min":
             overrides["min_readouts"] = int(value)
+        elif key == "ptemp":
+            overrides["prior_temperature"] = float(value)
+        elif key == "dedupe":
+            overrides["dedupe_leaves"] = True
         else:
             raise SystemExit(f"Unknown player option {option!r} in {spec!r}")
     paths = "+".join(str(resolve_checkpoint(part)) for part in checkpoint.split("+"))

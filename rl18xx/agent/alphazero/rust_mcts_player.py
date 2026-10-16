@@ -71,6 +71,15 @@ def _coerce_price_components_for_rust(leaf_pc: Optional[dict]) -> Optional[dict]
     }
 
 
+def _temper_priors(probs: np.ndarray, config) -> np.ndarray:
+    """``probs`` ** (1 / ``config.prior_temperature``): the Rust tree renormalizes
+    over the legal moves, which makes it softmax(logits / T) there."""
+    temperature = float(getattr(config, "prior_temperature", 1.0))
+    if temperature == 1.0:
+        return probs
+    return np.power(np.clip(probs, 0.0, None), 1.0 / temperature).astype(np.float32)
+
+
 def _active_player_index(adapter) -> int:
     """Return the active-player index in the canonical (sorted-by-id) ordering.
 
@@ -352,6 +361,9 @@ class RustMCTSPlayer:
         select_start = time.time()
         failsafe = 0
         max_attempts = parallel_readouts * 2
+        dedupe = bool(getattr(self.config, "dedupe_leaves", False))
+        pending: set = set()
+        duplicates: list[int] = []  # (dedupe) re-selected leaves: virtual loss only
         while len(leaves) < parallel_readouts and failsafe < max_attempts:
             failsafe += 1
             # Trace this leaf? Only if tracing is on for this move AND we
@@ -395,6 +407,11 @@ class RustMCTSPlayer:
                     self._traces_collected_this_move += 1
                 continue
             self._rust_player.add_virtual_loss(idx)
+            if dedupe:
+                if idx in pending:
+                    duplicates.append(idx)
+                    continue
+                pending.add(idx)
             leaves.append(idx)
             # Encode each leaf via the Rust-side BaseGame -> adapter shim.
             rust_game = self._rust_player.get_game_for_idx(idx)
@@ -430,13 +447,16 @@ class RustMCTSPlayer:
         batched_price_components = getattr(backend, "last_price_components", None)
 
         backup_start = time.time()
+        for idx in duplicates:
+            self._rust_player.revert_virtual_loss(idx)
         for i, (idx, probs, value) in enumerate(zip(leaves, move_probs, values)):
             self._rust_player.revert_virtual_loss(idx)
-            probs_np = (
-                probs.detach().cpu().numpy()
-                if isinstance(probs, torch.Tensor)
-                else np.asarray(probs)
-            ).astype(np.float32)
+            probs_np = _temper_priors(
+                (probs.detach().cpu().numpy() if isinstance(probs, torch.Tensor) else np.asarray(probs)).astype(
+                    np.float32
+                ),
+                self.config,
+            )
             value_np = (
                 value.detach().cpu().numpy()
                 if isinstance(value, torch.Tensor)
@@ -935,6 +955,7 @@ class _LeafShim:
             probs_np = probs.detach().cpu().numpy().astype(np.float32)
         else:
             probs_np = np.asarray(probs, dtype=np.float32)
+        probs_np = _temper_priors(probs_np, self._player.config)
         if isinstance(value, torch.Tensor):
             value_np = value.detach().cpu().numpy().astype(np.float32)
         else:

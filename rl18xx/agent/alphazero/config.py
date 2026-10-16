@@ -466,6 +466,14 @@ class SelfPlayHyperparams:
     leaf_value_heuristic: Optional[str] = None
     leaf_value_heuristic_scale: float = 100.0
     leaf_value_heuristic_weight: float = 1.0
+    # Rust MCTS priors: softmax(logits / prior_temperature) over the legal
+    # moves. A policy-gradient learner trained at learner_temperature tau *is*
+    # softmax(logits / tau), so its priors at 1 are flatter than the policy it learned.
+    prior_temperature: float = 1.0
+    # Rust MCTS: a leaf selected again within one batch (despite its virtual
+    # loss) is evaluated and backed up once, as minigo does; False backs up
+    # each copy, so a batch's duplicates count as visits carrying one value.
+    dedupe_leaves: bool = False
     c_puct_by_round: dict = field(default_factory=_default_c_puct_by_round)
     dirichlet_noise_alpha: float = 0.03
     dirichlet_noise_weight: float = 0.25
