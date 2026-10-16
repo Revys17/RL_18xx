@@ -8,6 +8,16 @@ leg: thousands of games, outcome-level assertions only.
 Usage:
     uv run python tests/g1867_corpus_audit.py [--glob 'human_games/1867/*.json']
         [--limit N] [--json /tmp/g1867_audit.json]
+        [--ruby-results tests/g1867_ruby_head_results.json]
+
+Recorded results can be STALE: the server scored old games under older
+rules (e.g. before its loan-drop scoring), and a full replay in Ruby HEAD
+scores them exactly as this engine does. ``--ruby-results`` (default: the
+committed tests/g1867_ruby_head_results.json, produced by
+scripts/g1867_ruby_diff.py --results-json; game id -> Ruby HEAD's final
+scores by seat, no player data) reclassifies a result_mismatch whose
+engine scores equal Ruby HEAD's as ``recorded_drift`` — reported, not a
+failure. Pass ``--ruby-results ''`` for the raw recorded-only comparison.
 
 Exit codes: 0 = every replayed game matched (drops are reported, not fatal);
 1 = at least one mismatch/rejection. While the title is unsupported, exits 2
@@ -64,7 +74,14 @@ def main() -> int:
     ap.add_argument("--glob", default="human_games/1867/*.json")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--json", dest="json_out", default=None)
+    ap.add_argument(
+        "--ruby-results",
+        default=str(Path(__file__).resolve().parent / "g1867_ruby_head_results.json"),
+    )
     args = ap.parse_args()
+    ruby_head: dict = {}
+    if args.ruby_results and Path(args.ruby_results).exists():
+        ruby_head = json.load(open(args.ruby_results)).get("games", {})
 
     paths = sorted(globmod.glob(args.glob))[: args.limit]
     counts: Counter[str] = Counter()
@@ -105,11 +122,19 @@ def main() -> int:
         recorded = {k: int(v) for k, v in (game.get("result") or {}).items()}
         recorded = align_recorded_keys(recorded, game, set(report.result))
         if recorded and report.result != recorded:
-            counts["result_mismatch"] += 1
+            names = [p["name"] for p in game.get("players", [])]
+            by_seat = {str(names.index(n) + 1): v for n, v in report.result.items() if n in names}
+            ruby = ruby_head.get(game_id)
+            kind = (
+                "recorded_drift"
+                if ruby is not None and ruby.get("scores_by_seat") == by_seat
+                else "result_mismatch"
+            )
+            counts[kind] += 1
             failures.append(
                 {
                     "id": game_id,
-                    "kind": "result_mismatch",
+                    "kind": kind,
                     "engine": report.result,
                     "recorded": recorded,
                 }

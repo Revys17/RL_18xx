@@ -4,16 +4,18 @@ Plan for extending the engine beyond 1830 to the other 18xx titles we want to tr
 for: **1867: The Railways of Canada** and **1822 / 1822CA: The Railways of Great Britain
 (+ Canada)**.
 
-## STATUS (2026-08-02) — start here
+## STATUS (2026-10-15) — start here
 
-- **Phase 1 (1867 RULES ENGINE) is substantially DONE and merged to `master`**
-  (`multi-title` fast-forwarded; hashes rewritten by the 2026-08-02
-  filter-repo purge — find seam commits by subject line). All four Ruby fixtures replay END TO
+- **Phase 1 (1867 RULES ENGINE) is substantially DONE** (merged to `master`
+  2026-08-02; the 2026-10-15 rules-fidelity seams follow on a branch —
+  find seam commits by subject line). All four Ruby fixtures replay END TO
   END with exact recorded final scores; the 300-game human-corpus audit stands at
-  114 exact-outcome / 95 rejected / 64 result_mismatch / 27 not_finished, with a
-  game-by-game no-regression diff maintained across every seam commit.
-  **Resume point: `docs/g1867_remaining_work.md`** — the checkpoint doc listing the
-  remaining rejection classes (share-price movement divergence is the dominant one),
+  206 exact-outcome / 60 Ruby-verified recorded drift / 3 result_mismatch /
+  4 rejected / 27 never-finished corpus files (was 114 / — / 64 / 95 / 27),
+  and a per-action Rust-vs-Ruby-HEAD diff of all 273 replayable sample games
+  finds no state divergence (`scripts/g1867_ruby_diff.py`).
+  **Resume point: `docs/g1867_remaining_work.md`** — status, the remaining
+  items (2-player variant, grid_market, trade-ins, two documented quirks),
   known failure points, probe rig, and per-commit gates. The 1867 **RL bridge**
   (action layout / encoder / MCTS / self-play; `alphazero_bridge_ready` is still
   false) is the remaining Phase 1 deliverable before 1867 training.

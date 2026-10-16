@@ -1,129 +1,191 @@
 # 1867 — status checkpoint & remaining work
 
-*Checkpoint written 2026-08-02; merged to `master` the same day. NOTE: the
-full local history was rewritten on 2026-08-02 (git filter-repo purge of
-the scraped-game archives) — commit hashes cited in older docs/memory
-predate the rewrite; the seam commits are identifiable by their subject
-lines (`git log --oneline --grep=1867`). This is the resume-point doc for the 1867
-port; the full history and architecture rationale live in
-`docs/multi_title_roadmap.md` and the per-commit bodies of `git log`
-(every seam commit carries a dense description).*
+*Checkpoint updated 2026-10-15 (rules-fidelity session: items 1-5 of the
+2026-08-02 list). Earlier checkpoint: 2026-08-02 (merged to `master` the
+same day; the local history was rewritten then — commit hashes in older
+docs/memory predate it; seam commits are identifiable by subject,
+`git log --oneline --grep=1867`). This is the resume-point doc for the
+1867 port; architecture rationale lives in `docs/multi_title_roadmap.md`
+and the per-commit bodies (every seam commit carries a dense
+description, including how it was confirmed against Ruby).*
 
 ## Where things stand
 
-**Rules engine: 1867 plays end to end.** All four Ruby fixtures
-(`tests/fixtures/1867/`) replay **completely with exact recorded final
-scores** (`tests/test_g1867_fixture_replay.py` — full-length watermarks,
-finish-line assertions, per-route revenue cross-check; no xfails).
-Against the 300-game human-corpus sample (`tests/g1867_corpus_audit.py`):
+**Rules engine: 1867 replays the human corpus as Ruby HEAD does.** All
+four Ruby fixtures (`tests/fixtures/1867/`) replay completely with exact
+recorded scores (`tests/test_g1867_fixture_replay.py`). The 300-game
+sample (`tests/g1867_corpus_audit.py --limit 300`):
 
-| bucket | count | meaning |
-|---|---|---|
-| outcome_match | **114** | full replay, exact final scores |
-| rejected | 95 | replay stops on a rejected action (classes below) |
-| result_mismatch | 64 | full replay, scores differ (see triage below) |
-| not_finished | 27 | full replay, engine doesn't flag game end |
+| bucket | 2026-08-02 | **2026-10-15** | meaning |
+|---|---|---|---|
+| outcome_match | 114 | **206** | full replay, exact recorded scores |
+| recorded_drift | — | **60** | full replay, scores ≠ record but **= Ruby HEAD's full replay** (see below) |
+| result_mismatch | 64 | **3** | full replay, scores ≠ record; Ruby HEAD can't replay these to compare |
+| rejected | 95 | **4** | replay stops on a rejected action (all explained below) |
+| not_finished | 27 | 27 | corpus file status `active`/`new` — **never replayed** (abandoned games; not an engine bucket) |
 
-Every landed rule was probed against the real Ruby engine
-(ruby:3.2-slim docker + tobymao/18xx clone — rig and gotchas below), and
-every commit passed: cargo (150), pytest (339), `parity_runner --random
-0:100` (1830 lockstep), and a **game-by-game corpus-audit diff proving
-zero regressions** (no rejection ever moved earlier).
+(`--ruby-results ''` gives the raw recorded-only view: 206 / 63 mismatch
+/ 4 rejected / 27.) Beyond the sample: the 2026-10 scrape (367 RECENT
+games) is 317 match / 19 rejected / 0 mismatch — all 19 rejections are
+2-player games (the unimplemented 2p variant, item 2 below); the full
+1,027-file 2020-22 corpus is 598 match / 108 mismatch (60 of them in the
+sample are Ruby-verified drift) / 84 rejected (60 of them 2-player) /
+154 grid_market skipped / 83 unfinished.
+
+**Ruby-HEAD verification of the whole sample** (`scripts/g1867_ruby_diff.py
+--all-replayable 300`, Ruby clone 46a592e, 2026-10-07): per-file-action
+state (corp price/cash, player cash, bank, round type) of all 273
+replayable games shows **no Rust-vs-Ruby divergence on any file action
+both engines reach**. 203 games replay fully in Ruby HEAD: our final
+scores equal Ruby's in **all 203** (143 match the record too; the other
+60 are recorded-result drift: old server scoring, e.g. before the
+loan-drop change). Game end lands on the same action in all 176 games
+Ruby ends by rule or not at all; the other 27 are `end_game` manual ends
+(the shared `filter_actions` strips that action), whose scores still
+match. The 70 games Ruby HEAD can't finish stop on the pre-#9655 merger
+order or on rules the server changed since (Montreal token slots, tile
+rotations, token-merger pricing — see the known issues).
 
 What exists mechanically: single-item opening auction; SR bid-founding +
 home-token choice + class-typed par ladder (majors z+p, minors x+p);
-minors/majors with incremental cap; flat-top map + two-lay rule +
-distance-priced tokens; loans/interest/LoanOperations/BuyCompanyPreloan;
-engine-computed route revenue (28/28 + 3668/3668 cross-checked); merger
-round (convert/merge/PostMergerShares/ReduceTokens); CN nationalization
-(trainless events, MajorTrainless choose, neutral tokens, Montreal
-reservation, 639); per-OR train export + GAME_END_CHECK timing;
-RedeemShares; Ruby `city_map` upgrade token transfer; loan-adjusted
-player valuation + end-game loan settlement.
+minors/majors with incremental cap (treasury shares at market price);
+flat-top map + two-lay rule + distance-priced tokens + $80 water
+borders + Y/O hex labels; loans/interest/LoanOperations/
+BuyCompanyPreloan with AutomaticLoan in Track and BuyTrain; engine-
+computed route revenue for bare routes (a recorded revenue is
+authoritative, as in Ruby); merger round (convert/merge/
+PostMergerShares/ReduceTokens, presidency changes while dealing);
+CN nationalization; per-OR train export + per-title GAME_END_TIMING
+priority; RedeemShares; Ruby `city_map` token transfer; loan-adjusted
+valuation + end-game loan settlement; 1867 share-price movement (block
+sells by presidents only, minors capped at $165, in-place moves keep cell
+order).
+
+## This session's seams (2026-10-15, one commit each, all Ruby-probed)
+
+1. **Water borders** — `border=...type:water,cost:80` charged by the lay
+   that completes the crossing (both tiles target each other), once.
+2. **Share price** — `:down_block_pres` (one step left per sale, only a
+   president seller); minors don't move right from the `m` cell.
+3. **Closed minors** can't be re-bid; minor bids respect the cert limit
+   (SR-end round flow).
+4. **Track affordability** uses full buying power (AutomaticLoan).
+5. **Recorded route revenue is authoritative** (Ruby `@revenue ||=`).
+6. **Treasury shares** are offered at the market price
+   (`always_market_price`).
+7. **White-hex labels** Y (E17/D16/O7/J12) + J12's future label O.
+8. **Minorless merger round** waits for a crowded corp's discard.
+9. **In-place market move** keeps the cell order (operating-order ties).
+10. **"par" offered from `min_price`** ($50) — Ruby's can_ipo_any? quirk.
+11. **ReduceTokens frees the removed city's charter token** (two tokens of
+    one survivor on Montreal) — matches Ruby HEAD's post-2025-05-18 token
+    merger (tobymao/18xx ea4e57e, #11750); see known issues for the 8 old
+    full-corpus games this rejects, exactly as Ruby HEAD does.
+12. **GAME_END_TIMING_PRIORITY per title** — 1867's final OR set outranks
+    a bank break.
+13. **First 8-train force-ends the buyer's turn** when a crowded minor
+    closes (Ruby `close_corporation` → `force_next_entity!`).
+14. **Post-merger dealing moves the presidency** to a larger holder.
 
 ## Remaining work (ordered by expected yield)
 
-1. **Share-price movement divergence** (~58 of the 95 rejections: ~22
-   "Lay Track cannot process lay_tile", ~27 SR Sell/Buy/Sell, 9
-   "Redeem Shares cannot process lay_tile"). One root cause suspected:
-   some 1-D market movement rule still differs (a probed example had our
-   NYC at $180 vs Ruby ≤$165, which flips operating order and cascades).
-   The sold-out bump (majors-only, `up == right`) and sell-movement are
-   already ported — probe 2-3 games from the audit JSON to find what's
-   left (candidates: sell-price left-per-block semantics, dividend edge,
-   price-protection). Highest-yield seam remaining.
-2. **Round-flow sequencing stragglers** (8 games): probed 21494@544 —
-   Ruby is in a *merger round* where we sit at BuyTrain. Something
-   upstream (likely tied to 1) shifts which OR/MR boundary a game is on.
-3. **Game-end detection** (27 not_finished + the `finished=False` drift
-   on games Ruby marks finished, e.g. 20505/23143): bank `:current_or` /
-   `final_phase :one_more_full_or_set` edges. Scores already match via
-   the virtual loan-walk, so this is bookkeeping, not valuation.
-4. **result_mismatch triage** (64): at least 3 are **recorded-result
-   drift** in old server games (proven: full Ruby replays at HEAD score
-   them exactly as we do — the stored results predate the server's
-   loan-drop scoring). Expect a mix of drift, class-1 fallout, and small
-   real rules gaps; triage with the audit JSON + Ruby probes.
-5. Small classes: merge-candidate validation (5), misc singletons.
-6. **Not yet implemented** (fail loudly if reached): phase-8 train
+1. **The RL bridge — the actual goal.** 1867 is still
+   `alphazero_bridge_ready() == false`. Needed: per-title action layout
+   (slot layout can't yet express 3 discounted trains, merger-round
+   actions, `choose`), encoder spec, native decode, MCTS wiring,
+   VALUE_SIZE/POLICY_SIZE plumbing (single-sourced behind
+   `engine_rs.policy_size_py()`), self-play integration. Constraint: the
+   1830 layout is FROZEN (checkpoint-compatible); 1867 gets clean
+   derivations. Rules-side, enumeration (as opposed to replay) is far less
+   exercised than dispatch: expect gaps when self-play first drives it
+   (e.g. tile-lay legality is not re-checked by the replay handler;
+   impassable borders are not enforced in the graph — see known issues).
+2. **2-player variant** (`TODO(1867-2p)`): 60 of the full corpus's 84
+   rejections and all 19 of the 2026-10 scrape's are 2-player games
+   rejected at the opening auction ("MB is not up for auction") — Ruby
+   removes two random privates (seeded by `settings.seed`; needs Ruby's
+   RNG semantics), trains per `TRAINS_REMOVE_2_PLAYER`, 70% ownership cap.
+3. **Not yet implemented** (fail loudly if reached): phase-8 train
    trade-in enforcement (`train_trade_allowed` discounts are data-wired
-   but unenforced), the `grid_market` optional rule (the only optional
-   rule in the 1867 corpus; its market data is unplumbed, and 1867 declares
-   no `GameTitle::optional_rules`, so the constructor rejects it), the 2-player
-   variant (70% cap / train+company removal, `TODO(1867-2p)`).
-7. **The RL bridge — the actual goal.** Everything above is the rules
-   engine; 1867 is still `alphazero_bridge_ready() == false`. Needed:
-   per-title action layout (slot layout can't yet express 3 discounted
-   trains, merger-round actions, `choose`), encoder spec, native decode,
-   MCTS wiring, VALUE_SIZE/POLICY_SIZE plumbing (already single-sourced
-   behind `engine_rs.policy_size_py()`), self-play integration. Design
-   constraint: the 1830 layout is FROZEN (checkpoint-compatible); 1867
-   gets clean derivations.
-8. Then **1822** (Phase 2 of `docs/multi_title_roadmap.md`).
+   but unenforced), the `grid_market` optional rule (154 full-corpus
+   games skipped; market data present, unplumbed; 1867 declares no
+   `GameTitle::optional_rules`).
+4. **Small open replay quirks** (documented with probes, not emulated):
+   - Ruby's stale `@crowded_corps` memo after the first 8 lets a CLOSED
+     minor (Ruby keeps its unbuyable trains, CLOSED_CORP_TRAINS_REMOVED)
+     record a later `discard_train`, reclaiming the train to the discard
+     pile — 38753 file id 516 ("TN discards 5"); we drop a closed
+     minor's trains at once. 1 full-corpus game (48699 likely the same,
+     past Ruby's horizon).
+   - The 4 sample rejections: 23812 (file id 607) and 25757 (651) are
+     rejected by **Ruby HEAD at the same file action**; 24437 (Ruby HEAD
+     stops at 899, we at 929) and 29948 (Ruby HEAD stops at 300 on the
+     pre-#9655 order, we at 309: an old-order PostMergerShares/
+     ReduceTokens interleaving where our dealing state still expects a
+     player) are past Ruby HEAD's replay horizon — unverifiable.
+   - The 3 unverifiable sample mismatches (21388, 23223, 28941) all stop
+     in Ruby HEAD on the pre-#9655 merger order.
+5. Then **1822** (Phase 2 of `docs/multi_title_roadmap.md`).
 
 ## Known issues / failure points (read before resuming)
 
+- **Old records vs current rules.** Ruby HEAD rejects some 2020-22
+  records on its own (pre-#9655 merger order; Montreal token slots; tile
+  rotations; the pre-2025-05-18 token-merger bug that handed merged
+  majors an extra $0 token). Our engine follows CURRENT rules: e.g. the
+  ReduceTokens fix (seam 11) makes 8 old full-corpus games reject a
+  later buy/token for want of cash — Ruby HEAD rejects 3 of them at the
+  very same file action (69817@428, 32537@630, 69520@610), the other 5
+  are past its horizon. Before "fixing" a corpus rejection, run
+  `scripts/g1867_ruby_diff.py` on it: if Ruby HEAD rejects the same
+  action, it is an old-record incompatibility, not our bug.
 - **Pre-#9655 merger-order accommodation**: current rules order the
   merger round ReduceTokens → PostMergerShares (GTG errata,
-  tobymao/18xx#9655); the 2020-21 corpus recorded the OLD order, and
-  current Ruby rejects its own records. Our dispatch gate admits both
-  orders *while both phases pend*; **enumeration/self-play stays
-  canonical** (ReduceTokens first). Don't "fix" the enumeration to match
-  old records.
-- **Corpus audit hygiene**: recorded `result` keys can be stale player
-  names (renames) — `align_recorded_keys` in the audit handles it; and
-  recorded results themselves can predate server scoring changes (the
-  loan-drop drift above). A mismatch is not automatically our bug:
-  confirm with a full Ruby-docker replay before chasing it.
-- **Action-id mapping when probing**: fixture/corpus `id` fields are
-  renumbered AND `pretraining.filter_actions` renumbers again. Map
-  filtered index → file id via `original_id` where present; most corpus
-  actions have none — match by `(created_at, type, entity)`. Probing the
-  wrong id fabricates phantom divergences (burned twice).
-- **Ruby probe rig**: `ruby:3.2-slim` image + shallow clone at
-  `/tmp/18xx` (re-clone if missing); `gem install require_all`, mount
-  the game dir, `Engine::Game.load(data, at_action: <FILE id>)`.
-  Probe templates from past sessions: `/tmp/probe_natl*.rb` (may need
-  re-creation after reboot).
-- **1830 safety**: all 1867 behavior is behind `GameTitle` hooks with
-  1830-inert defaults; shared code touched includes the dispatch gate,
-  skip/advance machinery, market movement, `min_depot_price`, and
-  game-end timing — each change was parity-gated per commit
-  (`parity_runner --random 0:100` + full pytest + the frozen-1830-layout
-  cargo pin). Before long 1830 training runs on a new engine build, run
-  the full-corpus ritual (`docs/verification_rituals.md`):
-  `tests/index_parity_corpus.py` (expect a fully clean exit-0 run — the
-  historical 87895 baseline entry was resolved 2026-08-02 by excising a
-  single inert dangling bid from the local corpus copy) — hours,
-  background it.
-- **Trainless-major freeze semantics**: while `trainless_major` is
-  non-empty the whole round freezes (Ruby blocking-step behavior) —
-  skip_steps/transition guards + the choose interceptor in
-  `game.rs::process_action_internal` own resume. If a future seam sees a
-  "stuck" round, check the queue first.
-- **Cheater token slots**: the Ruby `city_map` transfer can append
-  tokens past `normal_slots` (merged cities). Encoder work (item 7) must
-  decide how to represent over-capacity cities.
+  tobymao/18xx#9655); the 2020-21 corpus recorded the OLD order. Our
+  dispatch gate admits both orders *while both phases pend*;
+  enumeration/self-play stays canonical (ReduceTokens first).
+- **Recorded results drift**: the audit's `recorded_drift` bucket uses
+  the committed `tests/g1867_ruby_head_results.json` (game id → Ruby
+  HEAD's final scores by seat, no player data; regenerate with
+  `scripts/g1867_ruby_diff.py --all-replayable 300 --results-json ...`
+  when the Ruby clone moves). Result keys in corpus files can also be
+  stale player names — `align_recorded_keys` handles that.
+- **Action-id mapping when probing**: corpus `id`s are renumbered by
+  `pretraining.filter_actions`. `scripts/g1867_ruby_diff.py` tags every
+  filtered action with its originating FILE id and keys both engines'
+  snapshots by it (Ruby via `Game#process_to_action`). Never compare by
+  the filtered index.
+- **Impassable borders are data only** (`HexDef.borders` walls): the
+  graph/adjacency is geometric. Replay-neutral (recorded routes are
+  legal), but self-play enumeration could route/lay through a wall.
+- **Shared-code change reachable by 1830** (seam 9): `update_market_cell`
+  no longer re-appends a corp "moving" in place on the top-left cell. In
+  1830 that only happens on a sold-out bump of a corp on the $60 cell;
+  the new behaviour is exactly the Python oracle's. Verified with
+  `parity_runner --human` on an 81-game 1830 sample (0 failures) on top
+  of the standard gates.
+- **Trainless-major freeze**, **cheater token slots** (Ruby `city_map`
+  can append tokens past `normal_slots`), **1830 safety** (all 1867
+  behaviour behind `GameTitle` hooks with 1830-inert defaults; before
+  long 1830 training runs on a new engine build, run the full-corpus
+  ritual in `docs/verification_rituals.md`) — unchanged from 2026-08-02.
+
+## Ruby probe rig
+
+- `git clone --depth 1 https://github.com/tobymao/18xx.git logs/ruby/18xx`
+  (inside the worktree's ignored `logs/`; read-only use) and the
+  `ruby:3.2-slim` image (`docker pull ruby:3.2-slim` if missing).
+- `scripts/g1867_ruby_dump.rb` dumps a game per file action in Ruby;
+  `scripts/g1867_ruby_diff.py` runs it in docker (persistent gem dir
+  `logs/ruby/gems` for `require_all`, Ruby dumps cached in
+  `logs/ruby/dumps`), replays the same game in Rust, and prints the first
+  divergence, either engine's rejection, final-result and game-end
+  agreement. Typical: `--audit <audit.json>` (its failing games),
+  explicit ids, or `--all-replayable 300`.
+- For a targeted look, load at a FILE id and inspect:
+  `Engine::Game.load(data, at_action: id)` then `g.process_to_action(id2)`
+  and `g.log` — monkeypatching e.g. `Round::Operating#next_entity!` with
+  `caller` found the force_next_entity quirk (seam 13).
 
 ## Gates to keep green per commit (the working rhythm)
 
@@ -132,10 +194,13 @@ player valuation + end-game loan settlement.
 cd engine-rs && PYO3_PYTHON=$PWD/../.venv/bin/python \
   LD_LIBRARY_PATH=$(../.venv/bin/python -c 'import sysconfig;print(sysconfig.get_config_var("LIBDIR"))') \
   RUSTFLAGS="-L $(../.venv/bin/python -c 'import sysconfig;print(sysconfig.get_config_var("LIBDIR"))')" \
-  cargo test --release --no-default-features
-uv run pytest tests/
-uv run python tests/parity_runner.py --random 0:100
-uv run python tests/g1867_corpus_audit.py --limit 300 --json /tmp/audit.json
+  cargo test --release --no-default-features          # 172 on 2026-10-15
+CUDA_VISIBLE_DEVICES="" uv run pytest tests/          # 1029 passed / 3 skipped
+CUDA_VISIBLE_DEVICES="" uv run python tests/parity_runner.py --random 0:100
+CUDA_VISIBLE_DEVICES="" uv run python tests/g1867_corpus_audit.py --limit 300 --json /tmp/audit.json
 #   → diff game-by-game vs the previous audit JSON; rejections may only
-#     move DEEPER or convert. Keep fixture watermarks green (full-length).
+#     move DEEPER or convert; full replays may not start mismatching
+#     (a new mismatch must be shown Ruby-HEAD-equal with g1867_ruby_diff.py).
+#     Also worth a look: the 2026-10 scrape (recent games, Ruby HEAD
+#     replays them) and the full corpus.
 ```
