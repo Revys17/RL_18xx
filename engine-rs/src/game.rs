@@ -3861,12 +3861,22 @@ impl BaseGame {
     }
 
     /// Stock: whether current player has bought from IPO this turn.
-    /// Used by the cleaning pipeline's ``can_buy_shares`` mirror to detect
-    /// the ``multiple_buy_only_from_market`` restriction (player can't buy
-    /// from IPO after already buying from IPO/market this turn).
     fn stock_bought_from_ipo(&self) -> bool {
         match &self.round {
             Round::Stock(s) => s.bought_from_ipo,
+            _ => false,
+        }
+    }
+
+    /// Stock: Python ``BuySellParShares.can_buy_multiple`` for the current
+    /// turn (the crate's ``stock_can_buy_multiple``) — whether a turn that
+    /// already bought may buy another share of ``corp_sym`` from the market
+    /// pool (``from_market``) or the IPO. Used by the cleaning pipeline's
+    /// ``can_buy_shares`` mirror. False outside a stock round or for an
+    /// unknown corporation.
+    fn stock_can_buy_more(&self, corp_sym: &str, from_market: bool) -> bool {
+        match (&self.round, self.corp_idx.get(corp_sym)) {
+            (Round::Stock(s), Some(&ci)) => self.stock_can_buy_multiple(s, &self.corporations[ci], from_market),
             _ => false,
         }
     }
@@ -3917,11 +3927,6 @@ impl BaseGame {
             _ => return Vec::new(),
         };
 
-        // 1830: can buy multiple shares of the SAME corp if its share price
-        // is in the "multiple_buy" zone AND we haven't parred this turn AND
-        // we only bought from this same corp so far.
-        let bought_corp = stock_state.bought_corp_this_turn.as_deref();
-
         let player_cash = self
             .players
             .iter()
@@ -3942,20 +3947,13 @@ impl BaseGame {
                 continue;
             }
 
-            // Multiple buy check: after buying, can only buy more of same corp
-            // if it's in the "multiple_buy" zone and no par was done this turn.
-            // Note: we don't check bought_from_ipo here because share index
-            // divergence between Python and Rust can cause false positives.
-            // The enforcement happens in stock_process_buy_shares instead.
-            if stock_state.bought_this_turn {
-                let is_multiple_buy = corp
-                    .share_price
-                    .as_ref()
-                    .map_or(false, |sp| sp.types.iter().any(|t| t == "multiple_buy"));
-                let same_corp = bought_corp == Some(corp.sym.as_str());
-                if !is_multiple_buy || !same_corp || stock_state.parred_this_turn {
-                    continue;
-                }
+            // Multiple buy check (Python `can_buy_multiple`): after buying, can
+            // only buy more of the same corp, if it's in the "multiple_buy"
+            // zone and no par was done this turn — from the market pool, or
+            // the IPO too when the rules allow it (checked per source below;
+            // see `stock_can_buy_multiple` for why `bought_from_ipo` isn't).
+            if stock_state.bought_this_turn && !self.stock_can_buy_multiple(stock_state, corp, true) {
+                continue;
             }
 
             let corp_price = corp.share_price.as_ref().map_or(0, |sp| sp.price);
@@ -3983,8 +3981,9 @@ impl BaseGame {
             let at_cert_limit = !cert_exempt && player_certs >= self.cert_limit as u32;
 
             // IPO shares (non-president only — president is bought via par action).
-            // During multiple buy (bought_this_turn=true), only market shares allowed.
-            if !stock_state.bought_this_turn {
+            // During multiple buy (bought_this_turn=true), only market shares
+            // allowed — unless the rules allow multiple IPO buys.
+            if !stock_state.bought_this_turn || self.stock_can_buy_multiple(stock_state, corp, false) {
                 let ipo_share = corp
                     .shares
                     .iter()
@@ -4755,8 +4754,13 @@ mod tests {
         };
         assert!(BaseGame::validate_optional_rules("1830", None).unwrap().is_empty());
         assert_eq!(validate("1830", &["optional_6_train"]).unwrap(), vec!["optional_6_train"]);
-        assert!(validate("1830", &["multiple_brown_from_ipo"]).is_err());
+        assert_eq!(
+            validate("1830", &["multiple_brown_from_ipo", "optional_6_train"]).unwrap(),
+            vec!["multiple_brown_from_ipo", "optional_6_train"]
+        );
+        assert!(validate("1830", &["no_such_rule"]).is_err());
         assert!(validate("1867", &["optional_6_train"]).is_err());
+        assert!(validate("1867", &["multiple_brown_from_ipo"]).is_err());
     }
 
     #[test]

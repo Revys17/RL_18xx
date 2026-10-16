@@ -297,27 +297,16 @@ impl BaseGame {
         let player_id = self.validate_stock_turn(state, entity_id)?;
         let mut new_state = state.clone();
 
-        // Check if this buy is allowed (one buy per turn, unless buy_multiple applies)
+        // Check if this buy is allowed (one buy per turn, unless buy_multiple
+        // applies): the corp's share price has the "multiple_buy" type, no par
+        // was done this turn, and prior buys were of the same corp. The
+        // source half of can_buy_multiple (pool only, unless the title lifts
+        // it) is checked once the source is known, below.
         if new_state.bought_this_turn {
-            // Check can_buy_multiple: allowed if the corp's share price has "multiple_buy" type,
-            // no par was done this turn, and prior buys were of the same corp.
-            let corp_idx_check = self.corp_idx.get(corporation_sym).copied();
-            let can_buy_multiple = if let Some(ci) = corp_idx_check {
-                let corp = &self.corporations[ci];
-                let has_multiple_buy = corp
-                    .share_price
-                    .as_ref()
-                    .map_or(false, |sp| sp.types.iter().any(|t| t == "multiple_buy"));
-                has_multiple_buy
-                    && !new_state.parred_this_turn
-                    && new_state
-                        .bought_corp_this_turn
-                        .as_ref()
-                        .map_or(true, |c| c == corporation_sym)
-            } else {
-                false
-            };
-
+            let can_buy_multiple = self
+                .corp_idx
+                .get(corporation_sym)
+                .is_some_and(|&ci| self.stock_can_buy_multiple(&new_state, &self.corporations[ci], true));
             if !can_buy_multiple {
                 return Err(GameError::new("Already bought a share this turn"));
             }
@@ -380,9 +369,13 @@ impl BaseGame {
             self.implied_buy_cert(corp_idx, source)?
         };
 
-        // Enforce multiple_buy_only_from_market: if this is a second buy (multiple),
-        // the source must be market, not IPO.
-        if new_state.bought_this_turn && actual_source == "ipo" {
+        // Enforce multiple_buy_only_from_market: if this is a second buy
+        // (multiple), the source must be market, not IPO — unless the game's
+        // rules allow multiple IPO buys (1830 `multiple_brown_from_ipo`).
+        if new_state.bought_this_turn
+            && actual_source == "ipo"
+            && !self.stock_can_buy_multiple(&new_state, &self.corporations[corp_idx], false)
+        {
             return Err(GameError::new(
                 "Cannot buy from IPO during multiple buy — must buy from market",
             ));
@@ -808,6 +801,38 @@ impl BaseGame {
         corp.share_price
             .as_ref()
             .is_some_and(|sp| sp.types.iter().any(|t| EXEMPT_TYPES.contains(&t.as_str())))
+    }
+
+    /// Mirror of Python `BuySellParShares.can_buy_multiple(entity, corporation,
+    /// owner)` (round.py:1703-1716): whether a stock turn that has already
+    /// bought may buy another share of `corp` — from the market pool
+    /// (`from_market`) or the IPO. The corp's price must be in a
+    /// "multiple_buy" zone, the turn must not have parred, and every earlier
+    /// buy of the turn must be of `corp`. Under the title's
+    /// `multiple_buy_only_from_market` (1830 unless the game uses
+    /// `multiple_brown_from_ipo`) the share must also come from the pool.
+    ///
+    /// Python's other only-from-market clause, `round.bought_from_ipo`, is
+    /// raised only for a corporation-owned bundle
+    /// (`bundle.owner.is_corporation()`), and Python's 1830 IPO certificates
+    /// belong to the bank (`corporation_opts` ipo_owner), so it never fires.
+    /// `StockState::bought_from_ipo` records every IPO buy and is therefore
+    /// NOT consulted here (it would forbid the market buy after an IPO buy
+    /// that Python allows).
+    pub(crate) fn stock_can_buy_multiple(&self, state: &StockState, corp: &Corporation, from_market: bool) -> bool {
+        if !from_market && self.title_def().multiple_buy_only_from_market(&self.optional_rules) {
+            return false;
+        }
+        let buy_multiple = corp
+            .share_price
+            .as_ref()
+            .is_some_and(|sp| sp.types.iter().any(|t| t == "multiple_buy"));
+        buy_multiple
+            && !state.parred_this_turn
+            && state
+                .bought_corp_this_turn
+                .as_deref()
+                .map_or(true, |c| c == corp.sym)
     }
 
     /// Mirror of Python `Corporation.holding_ok(player, extra_percent=0)`
@@ -1427,71 +1452,15 @@ impl BaseGame {
             }
         }
 
-        // Already bought — can only sell (checked above), buy_multiple, or pass
+        // Already bought — can only sell (checked above), buy_multiple, or pass.
+        // Whether another buy is possible is exactly the enumeration's
+        // buyable-share set (Python `can_buy_any` → `can_buy_shares` →
+        // `can_buy_multiple`): same corp, "multiple_buy" zone, no par this
+        // turn, pool shares — or IPO shares too when the game's rules allow
+        // multiple IPO buys (1830 `multiple_brown_from_ipo`). Its cert-limit
+        // test exempts the zone's certs, as Python's `can_gain` does.
         if bought {
-            // Check if can_buy_multiple: any corp with multiple_buy share price
-            // that the player could still buy from (market only in 1830)
-            let (bought_corp, parred) = match &self.round {
-                crate::rounds::Round::Stock(s) => (
-                    s.bought_corp_this_turn.clone(),
-                    s.parred_this_turn,
-                ),
-                _ => return false,
-            };
-
-            // Can't buy multiple if parred this turn
-            if parred {
-                return false;
-            }
-
-            if !at_cert_limit {
-                let sold_corps = match &self.round {
-                    crate::rounds::Round::Stock(s) => &s.players_sold,
-                    _ => return false,
-                };
-
-                let can_buy_multiple = self.corporations.iter().any(|corp| {
-                    let has_multiple_buy = corp
-                        .share_price
-                        .as_ref()
-                        .map_or(false, |sp| sp.types.iter().any(|t| t == "multiple_buy"));
-                    if !has_multiple_buy {
-                        return false;
-                    }
-                    // Must be the same corp bought earlier (or first buy)
-                    if let Some(ref bc) = bought_corp {
-                        if bc != &corp.sym {
-                            return false;
-                        }
-                    }
-                    // Can't buy if sold this round
-                    if sold_corps
-                        .get(&player_id)
-                        .and_then(|m| m.get(&corp.sym))
-                        .is_some()
-                    {
-                        return false;
-                    }
-                    // Must buy from market (multiple_buy_only_from_market = true in 1830)
-                    let market_eid = EntityId::market();
-                    let has_market = corp
-                        .shares
-                        .iter()
-                        .any(|s| s.owner == market_eid && !s.president);
-                    if !has_market {
-                        return false;
-                    }
-                    // In multiple_buy zone, 60% limit is lifted (holding_ok returns true)
-                    // Check price affordable
-                    let price = corp.share_price.as_ref().map_or(0, |sp| sp.price);
-                    player_cash >= price
-                });
-                if can_buy_multiple {
-                    return true;
-                }
-            }
-
-            return false;
+            return !self.buyable_shares_for_factored(player_id).is_empty();
         }
 
         // Already acted (sold) but hasn't bought — can still buy/par
@@ -1866,5 +1835,227 @@ mod g1867_par_tests {
             .map(|sp| sp.price)
             .collect();
         assert_eq!(prices, vec![200, 180, 165, 150, 135, 120, 110, 100, 90, 80, 70]);
+    }
+}
+
+#[cfg(test)]
+mod multiple_brown_from_ipo_tests {
+    //! 1830's optional rule `multiple_brown_from_ipo` (Ruby/Python G1830
+    //! `multiple_buy_only_from_market?`): a stock turn may buy several shares
+    //! of a brown-zone ("multiple_buy") corporation — from the market pool
+    //! only under the base rules, from the IPO as well under the rule.
+    use crate::actions::{Action, GameError};
+    use crate::entities::EntityId;
+    use crate::game::BaseGame;
+    use crate::rounds::{Round, StockState};
+    use std::collections::HashMap;
+
+    const RULE: &str = "multiple_brown_from_ipo";
+    /// 1830 market cells: the $67 par, $27 brown ("multiple_buy") and $39
+    /// orange ("unlimited": ownership-exempt, but one buy per turn).
+    const PAR: (u8, u8) = (5, 6);
+    const BROWN: (u8, u8) = (6, 1);
+    const ORANGE: (u8, u8) = (3, 0);
+
+    /// A 4-player 1830 game in its first stock round (no sales yet:
+    /// SELL_AFTER = :first) with NYNH parred at $67 and parked on market
+    /// cell `cell`: player 2 is president with certs 0-3 (50%), certs 4-6
+    /// are in the IPO and 7-8 in the market pool. Player 1 ($600) acts.
+    fn game_with_nynh_at(rules: &[&str], cell: (u8, u8)) -> BaseGame {
+        let players: HashMap<u32, String> = (1..=4).map(|i| (i, format!("Player {i}"))).collect();
+        let rules = rules.iter().map(|r| r.to_string()).collect();
+        let mut game = BaseGame::build_with_rules("1830", vec![1, 2, 3, 4], players, rules);
+        let order = game.player_order.clone();
+        game.round = Round::Stock(StockState::new(&order, 1));
+        let par = game.stock_market.share_price_at(PAR.0, PAR.1).unwrap();
+        assert_eq!(par.price, 67);
+        let sp = game.stock_market.share_price_at(cell.0, cell.1).unwrap();
+        let ci = game.corp_idx["NYNH"];
+        let corp = &mut game.corporations[ci];
+        corp.ipo_price = Some(par);
+        corp.share_price = Some(sp);
+        corp.floated = true;
+        corp.owner_id = EntityId::player(2);
+        assert_eq!(corp.shares.len(), 9);
+        assert!(corp.shares[0].president);
+        for i in 0..corp.shares.len() {
+            let owner = match i {
+                0..=3 => EntityId::player(2),
+                4..=6 => EntityId::ipo("NYNH"),
+                _ => EntityId::market(),
+            };
+            corp.set_share_owner(i, owner);
+        }
+        game.update_market_cell("NYNH", 0, 0, cell.0, cell.1);
+        game.update_round_state();
+        game
+    }
+
+    fn current(game: &BaseGame) -> u32 {
+        match &game.round {
+            Round::Stock(s) => s.current_player_id(),
+            _ => panic!("not in a stock round"),
+        }
+    }
+
+    fn buy(game: &mut BaseGame, source: &str) -> Result<(), GameError> {
+        let pid = current(game);
+        game.process_action_internal(&Action::BuyShares {
+            entity_id: pid.to_string(),
+            corporation_sym: "NYNH".to_string(),
+            shares: vec![],
+            percent: 10,
+            source: source.to_string(),
+            share_indices: vec![],
+        })
+    }
+
+    /// NYNH's legal BuyShares sources in the factored enumeration.
+    fn nynh_sources(game: &mut BaseGame) -> Vec<String> {
+        let mut sources: Vec<String> = game
+            .get_factored_choices_impl()
+            .into_iter()
+            .filter(|la| {
+                la.action_type == "BuyShares" && la.entity.get("corp").and_then(|c| c.as_str()) == Some("NYNH")
+            })
+            .map(|la| la.params["source"].as_str().unwrap().to_string())
+            .collect();
+        sources.sort();
+        sources
+    }
+
+    fn player_1_percent(game: &BaseGame) -> u8 {
+        game.corporations[game.corp_idx["NYNH"]].percent_owned_by(&EntityId::player(1))
+    }
+
+    /// Mark the current turn as having bought `corp` (or parred) without
+    /// moving a certificate — a turn that stays open after its buy (e.g.
+    /// one with shares to sell).
+    fn mark_bought(game: &mut BaseGame, corp: &str, parred: bool) {
+        if let Round::Stock(s) = &mut game.round {
+            s.bought_this_turn = true;
+            s.bought_corp_this_turn = (!parred).then(|| corp.to_string());
+            s.parred_this_turn = parred;
+            s.acted_this_turn = true;
+        }
+    }
+
+    #[test]
+    fn base_rules_rebuy_brown_shares_from_the_pool_only() {
+        let mut game = game_with_nynh_at(&[], BROWN);
+        assert_eq!(nynh_sources(&mut game), ["ipo", "market"]);
+        buy(&mut game, "ipo").unwrap();
+        assert_eq!(current(&game), 1, "a brown-zone buy keeps the turn open");
+        assert_eq!(nynh_sources(&mut game), ["market"]);
+        let err = buy(&mut game, "ipo").unwrap_err();
+        assert!(err.to_string().contains("must buy from market"), "{err}");
+        // The market path is unchanged — including after an IPO buy
+        // (Python's `bought_from_ipo` never fires: its IPO is the bank).
+        buy(&mut game, "market").unwrap();
+        buy(&mut game, "market").unwrap();
+        assert_eq!(player_1_percent(&game), 30);
+        // Pool empty, IPO closed to re-buys, no sales in SR1: the turn
+        // passes on by itself.
+        assert_eq!(current(&game), 2);
+    }
+
+    #[test]
+    fn rule_rebuys_brown_shares_from_the_ipo_too() {
+        let mut game = game_with_nynh_at(&[RULE], BROWN);
+        assert_eq!(nynh_sources(&mut game), ["ipo", "market"]);
+        buy(&mut game, "ipo").unwrap();
+        assert_eq!(nynh_sources(&mut game), ["ipo", "market"]);
+        buy(&mut game, "ipo").unwrap();
+        buy(&mut game, "market").unwrap();
+        buy(&mut game, "ipo").unwrap();
+        assert_eq!(player_1_percent(&game), 40);
+        assert_eq!(nynh_sources(&mut game), ["market"], "the IPO is empty");
+        buy(&mut game, "market").unwrap();
+        assert_eq!(player_1_percent(&game), 50);
+        // Nothing left to buy: the turn passes on by itself.
+        assert_eq!(current(&game), 2);
+    }
+
+    /// The turn stays open after a brown IPO buy with an empty pool only
+    /// when the rule lets the IPO be bought again.
+    #[test]
+    fn empty_pool_ends_the_turn_only_under_the_base_rules() {
+        for (rules, open) in [(&[][..], false), (&[RULE][..], true)] {
+            let mut game = game_with_nynh_at(rules, BROWN);
+            let ci = game.corp_idx["NYNH"];
+            game.corporations[ci].set_share_owner(7, EntityId::player(3));
+            game.corporations[ci].set_share_owner(8, EntityId::player(3));
+            buy(&mut game, "ipo").unwrap();
+            assert_eq!(current(&game) == 1, open, "rules {rules:?}");
+        }
+    }
+
+    #[test]
+    fn non_brown_zones_stay_one_buy_per_turn() {
+        for rules in [&[][..], &[RULE][..]] {
+            for cell in [PAR, ORANGE] {
+                let mut game = game_with_nynh_at(rules, cell);
+                assert_eq!(nynh_sources(&mut game), ["ipo", "market"]);
+                buy(&mut game, "ipo").unwrap();
+                assert_eq!(current(&game), 2, "rules {rules:?} cell {cell:?}: one buy ends the SR1 turn");
+
+                let mut game = game_with_nynh_at(rules, cell);
+                mark_bought(&mut game, "NYNH", false);
+                assert!(nynh_sources(&mut game).is_empty(), "rules {rules:?} cell {cell:?}");
+                for source in ["ipo", "market"] {
+                    // The dispatch gate refuses it (no buy is legal), and so
+                    // does the buy handler itself.
+                    assert!(buy(&mut game, source).is_err());
+                    let Round::Stock(state) = game.round.clone() else { unreachable!() };
+                    let err = game
+                        .stock_process_buy_shares(&state, "1", "NYNH", 10, source, &[])
+                        .unwrap_err();
+                    assert!(err.to_string().contains("Already bought"), "{err}");
+                }
+            }
+        }
+    }
+
+    /// The rule lifts only the source restriction: a par, or a buy of
+    /// another corporation, still rules out more brown buys this turn.
+    #[test]
+    fn rule_keeps_the_par_and_same_corp_restrictions() {
+        for parred in [true, false] {
+            let mut game = game_with_nynh_at(&[RULE], BROWN);
+            mark_bought(&mut game, "PRR", parred);
+            assert!(nynh_sources(&mut game).is_empty(), "parred {parred}");
+            for source in ["ipo", "market"] {
+                assert!(buy(&mut game, source).is_err(), "parred {parred} {source}");
+                let Round::Stock(state) = game.round.clone() else { unreachable!() };
+                let err = game
+                    .stock_process_buy_shares(&state, "1", "NYNH", 10, source, &[])
+                    .unwrap_err();
+                assert!(err.to_string().contains("Already bought"), "{err}");
+            }
+        }
+    }
+
+    /// Brown-zone certs are cert-limit exempt (CERT_LIMIT_TYPES), so a
+    /// player at the limit may keep buying them in a turn — Python's
+    /// `can_gain` — and the turn stays open for it.
+    #[test]
+    fn cert_limit_does_not_end_a_brown_multi_buy() {
+        for rules in [&[][..], &[RULE][..]] {
+            let mut game = game_with_nynh_at(rules, BROWN);
+            game.cert_limit = 0;
+            buy(&mut game, "market").unwrap();
+            assert_eq!(current(&game), 1, "rules {rules:?}");
+            assert!(nynh_sources(&mut game).contains(&"market".to_string()));
+            buy(&mut game, "market").unwrap();
+        }
+    }
+
+    #[test]
+    fn only_1830_without_the_rule_restricts_the_source() {
+        let g1830 = crate::title::resolve("1830");
+        assert!(g1830.multiple_buy_only_from_market(&[]));
+        assert!(g1830.multiple_buy_only_from_market(&["optional_6_train".to_string()]));
+        assert!(!g1830.multiple_buy_only_from_market(&[RULE.to_string()]));
+        assert!(!crate::title::resolve("1867").multiple_buy_only_from_market(&[]));
     }
 }

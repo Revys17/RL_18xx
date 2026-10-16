@@ -15,9 +15,10 @@ per line. Actions keep only what ``process_action`` reads (no user ids,
 timestamps or chat). Every prefix is replayed again strictly, in both engines,
 and must reach the same first-Stock-Round position.
 
-The cleaned exports carry only the optional rules the engines implement, so
-the raw 18xx.games exports (``--raw-dir``) are consulted for the rest (e.g.
-``multiple_brown_from_ipo``).
+The cleaned exports carry only the optional rules the engines implemented when
+they were cleaned, so the raw 18xx.games exports (``--raw-dir``) are consulted
+for the rest (e.g. ``multiple_brown_from_ipo`` in exports cleaned before the
+engines implemented it).
 
 Usage:
     uv run python scripts/build_start_positions.py [--clean-dir human_games/1830_clean_all] \

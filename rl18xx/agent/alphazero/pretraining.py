@@ -1170,7 +1170,7 @@ def _city_location(state, city_str: Optional[str]) -> Optional[Tuple[str, int]]:
 # Optional rules both engines implement (at parity). A recorded game's other
 # optional rules are not modeled: it replays under the base rules and is
 # dropped ("optional_rules_engine_error") if the engine rejects an action.
-ENGINE_OPTIONAL_RULES = ("optional_6_train",)
+ENGINE_OPTIONAL_RULES = ("multiple_brown_from_ipo", "optional_6_train")
 
 
 def engine_optional_rules(game: dict) -> list:

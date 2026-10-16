@@ -129,6 +129,14 @@ pub trait GameTitle: Sync {
     fn num_trains(&self, td: &TrainDef, _optional_rules: &[String]) -> u32 {
         td.count
     }
+    /// Ruby `multiple_buy_only_from_market?` (base
+    /// `MULTIPLE_BUY_ONLY_FROM_MARKET = false`), given the game's (validated)
+    /// optional rules: a stock turn's further buys of a "multiple_buy"-zone
+    /// corporation must come from the market pool, not the IPO
+    /// (`BuySellParShares#can_buy_multiple?`). Default: off.
+    fn multiple_buy_only_from_market(&self, _optional_rules: &[String]) -> bool {
+        false
+    }
     fn hex_definitions(&self) -> Vec<HexDef>;
     /// The label printed on a NON-preprinted map hex (Ruby map DSL
     /// `label=` on a white hex — 1867's `city=revenue:0;label=Y` on E17,
@@ -478,6 +486,9 @@ impl GameTitle for G1830 {
     }
     fn num_trains(&self, td: &TrainDef, optional_rules: &[String]) -> u32 {
         g1830::num_trains(td, optional_rules)
+    }
+    fn multiple_buy_only_from_market(&self, optional_rules: &[String]) -> bool {
+        g1830::multiple_buy_only_from_market(optional_rules)
     }
     fn phases(&self) -> Vec<PhaseDef> {
         g1830::phases()

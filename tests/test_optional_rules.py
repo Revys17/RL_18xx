@@ -58,10 +58,13 @@ def test_both_engines_build_the_optional_third_six(rules, sixes):
 
 
 def test_rust_rejects_unimplemented_optional_rules():
-    # The Python engine models multiple_brown_from_ipo; the Rust engine does
-    # not, so accepting it would silently break parity.
-    with pytest.raises(ValueError, match="multiple_brown_from_ipo"):
-        RustGame(PLAYERS, optional_rules=["multiple_brown_from_ipo"])
+    # A rule the Rust title doesn't declare would replay under the wrong rules
+    # and silently break parity, so the constructor refuses it.
+    with pytest.raises(ValueError, match="no_such_rule"):
+        RustGame(PLAYERS, optional_rules=["no_such_rule"])
+    # Every 1830 optional rule is implemented.
+    rules = ["multiple_brown_from_ipo", "optional_6_train"]
+    assert list(RustGame(PLAYERS, optional_rules=rules).optional_rules) == rules
 
 
 @pytest.fixture(scope="module")

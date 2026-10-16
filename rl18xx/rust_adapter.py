@@ -948,21 +948,19 @@ class _StepProxy:
             if corp_sym in sold_corps:
                 return False
 
-        # multiple_buy_only_from_market: if the player already bought from IPO
-        # this turn, they may only buy more from market — and never from IPO
-        # again. Python's ``BuySellParShares.can_buy_multiple`` enforces this;
-        # the cleaning pipeline drops such games with reason
-        # ``illegal_share_buy``. Mirror that here so Rust drops with the same
-        # reason (otherwise the engine raises later and the audit categorizes
-        # the drop differently).
+        # A turn that already bought may buy again only as Python's
+        # ``BuySellParShares.can_buy_multiple`` allows: the same corp, in its
+        # "multiple_buy" (brown) zone, no par this turn -- and, under
+        # ``multiple_buy_only_from_market`` (1830 without
+        # ``multiple_brown_from_ipo``), from the market pool only. The engine
+        # answers it (``stock_can_buy_more``). The cleaning pipeline drops a
+        # game breaking it with reason ``illegal_share_buy``; mirroring it here
+        # makes Rust drop with the same reason (otherwise the engine raises
+        # later and the audit categorizes the drop differently).
         try:
             already_bought = bool(self._game.stock_bought_this_turn())
-            bought_from_ipo = bool(self._game.stock_bought_from_ipo())
-            bought_corp = self._game.stock_bought_corp_this_turn()
         except Exception:
             already_bought = False
-            bought_from_ipo = False
-            bought_corp = None
         if already_bought:
             sample = shares[0]
             corp = sample.corporation() if callable(getattr(sample, "corporation", None)) else sample.corporation
@@ -976,16 +974,7 @@ class _StepProxy:
             inner = getattr(sample, "_share", None)
             src = (inner.owner or "") if inner is not None else ""
             buying_from_ipo = src.startswith("ipo:") or src.startswith("corp:")
-            # In 1830 (multiple_buy_only_from_market): you can only multi-buy
-            # from market. If the next buy is from IPO, reject. And once you
-            # bought from IPO, you cannot buy anything else this turn.
-            if buying_from_ipo:
-                return False
-            if bought_from_ipo and src.startswith("ipo:"):
-                return False
-            # Different corp: not allowed in 1830 (must continue buying same
-            # corp).
-            if bought_corp and corp_sym and corp_sym != bought_corp:
+            if not corp_sym or not self._game.stock_can_buy_more(corp_sym, not buying_from_ipo):
                 return False
         # Find the cheapest of the requested shares (Python's ``min_share``).
         # Each share's price depends on its source (IPO vs market) and

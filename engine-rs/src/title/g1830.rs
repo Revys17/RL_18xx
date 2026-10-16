@@ -428,10 +428,17 @@ pub fn trains() -> Vec<TrainDef> {
     ]
 }
 
-/// The optional rules the engine implements: Ruby G1830::Meta OPTIONAL_RULES
-/// minus `multiple_brown_from_ipo` (the stock round hardcodes the base
-/// multiple-buy-only-from-market rule).
-pub const OPTIONAL_RULES: &[&str] = &["optional_6_train"];
+/// The optional rules the engine implements: all of Ruby G1830::Meta
+/// OPTIONAL_RULES.
+pub const OPTIONAL_RULES: &[&str] = &["multiple_brown_from_ipo", "optional_6_train"];
+
+/// Ruby G1830 `multiple_buy_only_from_market?` (game.rb): a stock turn's
+/// further buys of a brown-zone ("multiple_buy") corporation come only from
+/// the market pool — unless the game uses `multiple_brown_from_ipo`
+/// ("Multiple brown shares may be bought from IPO as well as from pool").
+pub fn multiple_buy_only_from_market(optional_rules: &[String]) -> bool {
+    !optional_rules.iter().any(|r| r == "multiple_brown_from_ipo")
+}
 
 /// Ruby G1830 `num_trains` (game.rb): `optional_6_train` adds a 3rd 6-train.
 pub fn num_trains(td: &TrainDef, optional_rules: &[String]) -> u32 {

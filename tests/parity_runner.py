@@ -18,6 +18,8 @@ Modes
   --human-games p1,p2,...      explicit game-file list (for reduced re-runs)
   --out FILE                  write JSON results (default: stdout)
   --max-steps N               cap steps/actions per game (default 100000 = full)
+  --optional-rules R1,R2      random mode: build both engines with these optional
+                              rules (human mode takes each game's own)
 
 Output JSON
 -----------
@@ -111,13 +113,14 @@ def _ctx(py):
     return {"round": rnd, "op_step": stp, "phase": phase, "entity": ent_s}
 
 
-def run_random_seed(seed, max_steps):
-    """Walk one random-walk game in lockstep. Returns the FIRST failure record
-    (the earliest divergence — its root cause is what needs fixing) or None."""
+def run_random_seed(seed, max_steps, optional_rules=()):
+    """Walk one random-walk game in lockstep, both engines built with
+    ``optional_rules``. Returns the FIRST failure record (the earliest
+    divergence — its root cause is what needs fixing) or None."""
     rng = random.Random(seed)
     names = {1: "P1", 2: "P2", 3: "P3", 4: "P4"}
-    py = GameMap().game_by_title("1830")(names)
-    rust = RustGame(names)
+    py = GameMap().game_by_title("1830")(names, optional_rules=list(optional_rules))
+    rust = RustGame(names, optional_rules=list(optional_rules))
     adapter = RustGameAdapter(rust)
     hp = FactoredActionHelper()
     ah = ActionHelper()
@@ -249,7 +252,11 @@ def main():
     ap.add_argument("--human-games", help="comma-separated explicit game file paths")
     ap.add_argument("--out", help="output JSON file (default stdout)")
     ap.add_argument("--max-steps", type=int, default=MAX_STEPS_DEFAULT)
+    ap.add_argument(
+        "--optional-rules", default="", help="random mode: comma-separated optional rules both engines are built with"
+    )
     args = ap.parse_args()
+    optional_rules = [r for r in args.optional_rules.split(",") if r.strip()]
 
     failures, python_side = [], []
     random_run = human_run = 0
@@ -263,7 +270,7 @@ def main():
     for seed in seeds:
         random_run += 1
         try:
-            f = run_random_seed(seed, args.max_steps)
+            f = run_random_seed(seed, args.max_steps, optional_rules)
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException:  # incl. pyo3 PanicException (a BaseException)

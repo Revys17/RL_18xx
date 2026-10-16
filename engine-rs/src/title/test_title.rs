@@ -76,6 +76,11 @@ impl GameTitle for Test5Share {
     fn phases(&self) -> Vec<PhaseDef> {
         g1830::phases()
     }
+    /// 1830's market (brown "multiple_buy" zone included), so 1830's
+    /// base-rules restriction too.
+    fn multiple_buy_only_from_market(&self, optional_rules: &[String]) -> bool {
+        g1830::multiple_buy_only_from_market(optional_rules)
+    }
     fn hex_definitions(&self) -> Vec<HexDef> {
         g1830::hex_definitions()
     }
