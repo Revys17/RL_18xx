@@ -513,7 +513,17 @@ impl BaseGame {
         {
             return true;
         }
-        self.g1822_graph(c).route_available
+        // Graph#route_info: a cached purchase-grade route survives
+        // Graph#clear (1822 never calls clear_graph_for), so once a
+        // corporation's route_info was computed with one it stays.
+        if self.g().route_purchase.contains(c) {
+            return true;
+        }
+        let g = self.g1822_graph(c);
+        if g.route_train_purchase {
+            self.g().route_purchase.insert(c);
+        }
+        g.route_available
     }
 
     pub(crate) fn g1822_pullman_choices(&self, c: &str) -> Vec<String> {
@@ -555,7 +565,13 @@ impl BaseGame {
                 let ci = self.ci(c);
                 let mut seen: Vec<String> = Vec::new();
                 let mut run = Vec::new();
-                for r in routes {
+                // Routes recorded without revenue are priced (and checked).
+                let priced: Option<Vec<i32>> = if routes.iter().any(|r| r.revenue.is_none()) {
+                    Some(self.g1822_price_recorded_routes(c, routes)?)
+                } else {
+                    None
+                };
+                for (ri, r) in routes.iter().enumerate() {
                     let Some(t) = self.corporations[ci].trains.iter().find(|t| t.id == r.train_name) else {
                         return err(format!("Cannot run another corporation's train {}", r.train_name));
                     };
@@ -566,9 +582,10 @@ impl BaseGame {
                         return err("Cannot run train that operated");
                     }
                     seen.push(t.id.clone());
-                    let revenue = match r.revenue {
-                        Some(v) => v,
-                        None => self.g1822_compute_route_revenue(c, r)?,
+                    let revenue = match (&priced, r.revenue) {
+                        (Some(p), _) => p[ri],
+                        (None, Some(v)) => v,
+                        (None, None) => 0,
                     };
                     run.push(RunRoute {
                         train_id: t.id.clone(),

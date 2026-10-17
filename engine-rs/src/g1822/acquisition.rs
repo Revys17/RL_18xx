@@ -200,11 +200,17 @@ impl BaseGame {
                 if choice == "exchange" {
                     self.g1822_move_exchange_token(&c);
                 } else {
-                    // find_token_by_type.destroy! + add_exchange_token
+                    // find_token_by_type.destroy! + add_exchange_token. The
+                    // offer tests tokens_by_type (unused tokens of ANY
+                    // type), so with only the destination token unused
+                    // find_token_by_type(:normal) is nil and Ruby crashes.
                     let cix = self.ci(&c);
-                    if let Some(pos) = self.corporations[cix].tokens.iter().position(|t| !t.used && t.token_type == "normal") {
-                        self.corporations[cix].tokens.remove(pos);
-                    }
+                    let Some(pos) =
+                        self.corporations[cix].tokens.iter().position(|t| !t.used && t.token_type == "normal")
+                    else {
+                        return err(format!("{c} has no available normal token for {co} (Ruby raises)"));
+                    };
+                    self.corporations[cix].tokens.remove(pos);
                     *self.gm().exchange_tokens.entry(c.clone()).or_insert(0) += 1;
                 }
                 self.close_company(co);
@@ -336,6 +342,8 @@ impl BaseGame {
                 if !self.corp_idx.contains_key(corporation_sym.as_str()) {
                     return err(format!("Unknown minor {corporation_sym}"));
                 }
+                // process_merge's entity_connects? computes the major's graph.
+                self.g1822_note_graph(&c);
                 let pay = self.g1822_pay_choices(&c, corporation_sym);
                 let tokens = if self.g1822_exchange_tokens(&c) > 0 {
                     vec!["replace".to_string(), "exchange".to_string()]

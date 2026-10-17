@@ -13,7 +13,7 @@ impl BaseGame {
     /// A JSON snapshot of the 1822 state in the shape of
     /// scripts/ruby_dump.rb's per-action rows (round, step, entity, phase,
     /// corps' price/cash/trains, player cash by id, bank).
-    fn g1822_snapshot(&self) -> PyResult<String> {
+    pub(crate) fn g1822_snapshot(&self) -> PyResult<String> {
         let Some(st) = self.g1822.as_deref() else {
             return Err(pyo3::exceptions::PyValueError::new_err("not an 1822-family game"));
         };
@@ -123,6 +123,217 @@ impl BaseGame {
     #[allow(dead_code)]
     fn g1822_owner_of(&self, company: &str) -> String {
         self.co_owner(company).0
+    }
+
+    /// The legal moves (see `g1822::legal`) as JSON: a list of
+    /// `{"wire": <18xx.games action dict>, "range": [lo, hi, step] | null}`.
+    /// A ranged move's dict holds `lo` in its price field (`price` for
+    /// bids and train buys, `amount` for partial debt payoff).
+    /// `policy`: None = the title's cross-player policy, "rules" = every
+    /// move the rules allow (Ruby-faithful), "restricted" = none across
+    /// players.
+    #[pyo3(signature = (policy=None))]
+    fn g1822_legal_moves_json(&mut self, policy: Option<&str>) -> PyResult<String> {
+        if self.g1822.is_none() {
+            return Err(pyo3::exceptions::PyValueError::new_err("not an 1822-family game"));
+        }
+        let policy = match policy {
+            None => self.title_def().generator_cross_player(),
+            Some("rules") => crate::title::CrossPlayerPolicy::RULES,
+            Some("restricted") => crate::title::CrossPlayerPolicy::RESTRICTED,
+            Some(p) => return Err(pyo3::exceptions::PyValueError::new_err(format!("unknown policy {p:?}"))),
+        };
+        let moves = self.g1822_legal_moves_with(policy);
+        let out: Vec<serde_json::Value> = moves
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "wire": self.g1822_move_wire(m),
+                    "range": m.price.map(|r| vec![r.lo, r.hi, r.step]),
+                })
+            })
+            .collect();
+        Ok(serde_json::Value::Array(out).to_string())
+    }
+
+    /// The auto-router's best run for `corp`: (total revenue incl. the
+    /// destination bonus, routes as run_routes JSON).
+    fn g1822_router_best(&self, corp: &str) -> (i32, String) {
+        let (routes, total) = self.g1822_best_routes(corp);
+        let rs: Vec<serde_json::Value> = routes
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "train": r.train_name, "hexes": r.hexes, "connections": r.connections,
+                    "nodes": r.nodes, "revenue": r.revenue,
+                })
+            })
+            .collect();
+        (total, serde_json::Value::Array(rs).to_string())
+    }
+
+    /// Debug: explain recorded routes (JSON list of run_routes entries).
+    fn g1822_router_explain_json(&self, corp: &str, routes_json: &str) -> Vec<String> {
+        let v: Vec<serde_json::Value> = serde_json::from_str(routes_json).unwrap_or_default();
+        let routes: Vec<crate::actions::RouteData> = v
+            .iter()
+            .map(|r| crate::actions::RouteData {
+                train_name: r["train"].as_str().unwrap_or("").to_string(),
+                hexes: serde_json::from_value(r["hexes"].clone()).unwrap_or_default(),
+                revenue: r["revenue"].as_i64().map(|x| x as i32),
+                connections: serde_json::from_value(r["connections"].clone()).unwrap_or_default(),
+                nodes: serde_json::from_value(r["nodes"].clone()).unwrap_or_default(),
+            })
+            .collect();
+        self.g1822_router_explain(corp, &routes)
+    }
+
+    /// Debug: the router's chains out of a node ("<hex>-<index>").
+    fn g1822_router_segs_json(&self, corp: &str, node: &str) -> Vec<String> {
+        self.g1822_router_segs_debug(corp, node)
+    }
+
+    /// Graph#compute for a corporation (debug): route_available, the
+    /// connected nodes ("HEX-kind-index"), connected hexes with edges.
+    fn g1822_graph_debug(&self, corp: &str) -> (bool, Vec<String>, Vec<(String, Vec<u8>)>) {
+        let g = self.g1822_graph(corp);
+        let mut nodes: Vec<String> = g
+            .connected_nodes
+            .iter()
+            .map(|n| format!("{}-{:?}-{}", self.hexes[n.hex].id, n.kind, n.index))
+            .collect();
+        nodes.sort();
+        let hexes = g
+            .connected_hexes
+            .iter()
+            .map(|(h, e)| {
+                let mut e = e.clone();
+                e.sort();
+                (self.hexes[*h].id.clone(), e)
+            })
+            .collect();
+        (g.route_available, nodes, hexes)
+    }
+
+    /// Debug: a hex's Ruby `neighbors` (edge, hex) and all adjacency.
+    fn g1822_neighbors_debug(&self, hex: &str) -> (Vec<(u8, String)>, Vec<(u8, String)>) {
+        let Some(&hi) = self.hex_idx.get(hex) else { return (vec![], vec![]) };
+        let n = self.g1822_neighbors();
+        let a: Vec<(u8, String)> = n
+            .get(&hi)
+            .map(|m| m.iter().map(|(e, h)| (*e, self.hexes[*h].id.clone())).collect())
+            .unwrap_or_default();
+        let mut b: Vec<(u8, String)> = self
+            .hex_adjacency
+            .get(hex)
+            .map(|m| m.iter().map(|(e, h)| (*e, h.clone())).collect())
+            .unwrap_or_default();
+        b.sort();
+        (a, b)
+    }
+
+    /// Debug: (upgrades_to, legal rotations) of a catalog tile on a hex for
+    /// a corporation's own lay.
+    fn g1822_rotations_debug(&self, corp: &str, hex: &str, tile: &str) -> (bool, Vec<u8>, Vec<u8>) {
+        let Some(&hi) = self.hex_idx.get(hex) else { return (false, vec![], vec![]) };
+        let Some(def) = self.tile_catalog.get(tile).cloned() else { return (false, vec![], vec![]) };
+        let up = self.g1822_upgrades_to(hi, &def, false);
+        let connected = self.g1822_graph(corp).connected_hexes.get(&hi).cloned().unwrap_or_default();
+        let nbrs = self.g1822_neighbors();
+        let rots = (0..6u8)
+            .filter(|&r| self.g1822_legal_rotation(super::tile_rules::RotRule::Normal, corp, hi, &def, r, &connected, &nbrs))
+            .collect();
+        (up, rots, connected)
+    }
+
+    /// The holder of a share certificate ("LNWR_3"): "market", "ipo:LNWR",
+    /// a player id, "taxhaven:P16" ... ("" when unknown).
+    fn g1822_share_owner(&self, share_id: &str) -> String {
+        let Some((sym, idx)) = share_id.rsplit_once('_') else { return String::new() };
+        let Ok(idx) = idx.parse::<usize>() else { return String::new() };
+        let Some(&ci) = self.corp_idx.get(sym) else { return String::new() };
+        self.corporations[ci].shares.get(idx).map(|s| s.owner.0.clone()).unwrap_or_default()
+    }
+
+    /// Resolve a wire `city` ("<tile id>-<city>", e.g. "X4-0-0", "P43-0-0")
+    /// to (hex, city index).
+    fn g1822_city_ref(&self, city: &str) -> (String, u8) {
+        let parts: Vec<&str> = city.split('-').collect();
+        if parts.len() < 3 {
+            return (String::new(), 0);
+        }
+        let inst = format!("{}-{}", parts[0], parts[1]);
+        let ci: u8 = parts[2].parse().unwrap_or(0);
+        let hex = self.g1822_resolve_hex(&format!("__tile:{inst}")).unwrap_or_default();
+        (hex, ci)
+    }
+
+    /// (name, owner) of a train id ("3-1"); owner "depot" for the depot.
+    fn g1822_train_info(&self, train_id: &str) -> (String, String) {
+        for c in &self.corporations {
+            if let Some(t) = c.trains.iter().find(|t| t.id == train_id) {
+                return (t.name.clone(), c.sym.clone());
+            }
+        }
+        for t in self.depot.trains.iter().chain(self.depot.discarded.iter()) {
+            if t.id == train_id {
+                return (t.name.clone(), "depot".to_string());
+            }
+        }
+        (String::new(), String::new())
+    }
+
+    /// Whether a state with no legal moves is one Ruby cannot continue
+    /// either (see g1822::fuzz::ruby_dead_end).
+    fn g1822_ruby_dead_end(&mut self) -> bool {
+        if self.g1822.is_none() {
+            return false;
+        }
+        let cands = self.g1822_candidates_debug();
+        let raises = cands.iter().any(|(_, e)| e.as_deref().map_or(false, |e| e.contains("(Ruby raises)")));
+        let broke_token = !cands.is_empty()
+            && cands
+                .iter()
+                .all(|(a, e)| a.starts_with("PlaceToken") && e.as_deref().map_or(false, |e| e.contains("cannot spend")));
+        raises || broke_token
+    }
+
+    /// `(step, action type)` → "generated" or "replay-only: <reason>" for
+    /// every pair an 1822 step can offer (the RL-readiness table).
+    #[staticmethod]
+    fn g1822_generator_table() -> Vec<(String, String, String)> {
+        use super::legal::{g1822_generator_status, GenStatus};
+        use super::Step::*;
+        let pairs: &[(super::Step, &[&str])] = &[
+            (BuySellParShares, &["bid", "buy_shares", "sell_shares", "par", "pass", "payoff_player_debt", "payoff_player_debt_partial", "choose_ability"]),
+            (Choose, &["choose", "pass"]),
+            (DiscardTrain, &["discard_train"]),
+            (PendingToken, &["place_token"]),
+            (FirstTurnHousekeeping, &["buy_train", "pass"]),
+            (AcquireCompany, &["acquire_company", "pass"]),
+            (SpecialChoose, &["choose"]),
+            (SpecialTrack, &["lay_tile", "pass"]),
+            (SpecialToken, &["place_token", "pass"]),
+            (Track, &["lay_tile", "pass", "choose_ability"]),
+            (DestinationToken, &["hex_token", "pass"]),
+            (Token, &["place_token", "pass", "choose_ability"]),
+            (Route, &["run_routes", "choose"]),
+            (Dividend, &["dividend", "choose"]),
+            (BuyTrain, &["buy_train", "sell_shares", "pass"]),
+            (MinorAcquisition, &["merge", "choose", "pass"]),
+            (IssueShares, &["buy_shares", "sell_shares", "pass", "choose_ability"]),
+        ];
+        let mut out = Vec::new();
+        for (step, types) in pairs {
+            for t in *types {
+                let s = match g1822_generator_status(*step, t) {
+                    GenStatus::Generated => "generated".to_string(),
+                    GenStatus::ReplayOnly(why) => format!("replay-only: {why}"),
+                };
+                out.push((format!("{step:?}"), t.to_string(), s));
+            }
+        }
+        out
     }
 }
 

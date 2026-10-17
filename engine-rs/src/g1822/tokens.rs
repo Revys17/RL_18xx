@@ -5,7 +5,7 @@
 //! tokens and `remove_extra_tokens!`.
 
 use crate::actions::{Action, GameError};
-use crate::entities::{EntityId, Token};
+use crate::entities::Token;
 use crate::game::BaseGame;
 
 use super::{err, Ent, PendingTok, COMPANY_CHPR, COMPANY_LCDR, MINOR_14_HOME_HEX, MINOR_14_ID, TOKEN_PRICE};
@@ -180,6 +180,9 @@ impl BaseGame {
         }
         city.tokens[slot] = Some(tok);
         self.g1822_consume_reservation(&hex_id, ci, corp);
+        if token_idx == 0 {
+            self.gm().home_city.insert(corp.to_string(), (hex_id.clone(), ci));
+        }
         self.clear_graph_cache();
         Ok(())
     }
@@ -616,6 +619,8 @@ impl BaseGame {
                     .ok_or_else(|| GameError::new("no tokens"))?;
                 let base_price = self.corporations[self.ci(c)].tokens[tidx].price;
                 let price = self.g1822_token_ability_price(c, &hex, base_price);
+                // Tokener#check_connected computes the corporation's graph.
+                self.g1822_note_graph(c);
                 let check = hex != super::data_london();
                 if check && !self.g1822_city_tokenable(c, hi, ci, price <= 0, false) {
                     return err(format!("{c} cannot lay token on {hex}"));

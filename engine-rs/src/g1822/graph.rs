@@ -30,7 +30,7 @@ pub struct Node {
     pub index: usize,
 }
 
-type PathRef = (usize, usize);
+pub(crate) type PathRef = (usize, usize);
 
 /// What Ruby's Graph#compute produces for one corporation.
 #[derive(Clone, Debug, Default)]
@@ -41,6 +41,8 @@ pub struct CorpGraph {
     pub connected_nodes: HashSet<Node>,
     /// reachable_hexes (hexes some walked path lies in).
     pub reachable_hexes: HashSet<usize>,
+    /// connected_paths ((hex, path index) of every walked path).
+    pub connected_paths: HashSet<PathRef>,
     pub route_available: bool,
     pub route_train_purchase: bool,
 }
@@ -333,9 +335,52 @@ impl BaseGame {
             connected_hexes: hexes,
             connected_nodes: nodes,
             reachable_hexes,
+            connected_paths: paths,
             route_available,
             route_train_purchase,
         }
+    }
+
+    /// Ruby `node.walk(corporation:)` from one node: every path walked.
+    pub(crate) fn g1822_walk_from(&self, corp: &str, start: Node) -> HashSet<PathRef> {
+        let neighbors = self.g1822_neighbors();
+        let ctx = Ctx {
+            game: self,
+            corp,
+            neighbors: &neighbors,
+        };
+        let mut paths: HashSet<PathRef> = HashSet::new();
+        let mut nodes: HashSet<Node> = HashSet::new();
+        let mut local: HashSet<Node> = HashSet::new();
+        let mut hexes: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
+        let mut visited: HashSet<Node> = HashSet::new();
+        let mut w = Walk {
+            visited_paths: HashSet::new(),
+            counter_edges: HashMap::new(),
+            counter_junctions: HashMap::new(),
+        };
+        let mut found = Found {
+            paths: &mut paths,
+            nodes: &mut nodes,
+            local_nodes: &mut local,
+            hexes: &mut hexes,
+        };
+        node_walk(&ctx, start, &mut visited, &mut w, false, &mut found);
+        paths
+    }
+
+    /// The nodes on path `p` (hex, kind, index).
+    pub(crate) fn g1822_path_nodes(&self, p: PathRef) -> Vec<Node> {
+        let pd = &self.hexes[p.0].tile.paths[p.1];
+        [&pd.a, &pd.b]
+            .iter()
+            .filter_map(|e| match e {
+                PathEndpoint::City(i) => Some(Node { hex: p.0, kind: NodeKind::City, index: *i }),
+                PathEndpoint::Town(i) => Some(Node { hex: p.0, kind: NodeKind::Town, index: *i }),
+                PathEndpoint::Offboard(i) => Some(Node { hex: p.0, kind: NodeKind::Offboard, index: *i }),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Ruby `hex.neighbors` (connect_hexes): adjacency minus neighbors of an
@@ -350,10 +395,11 @@ impl BaseGame {
                 for (&dir, nid) in adj {
                     let Some(&ni) = self.hex_idx.get(nid) else { continue };
                     let ntile = &self.hexes[ni].tile;
-                    let impassable_color = matches!(
-                        ntile.color,
-                        crate::tiles::TileColor::Gray | crate::tiles::TileColor::Red
-                    ) || self.g1822_hex_is_blue(&self.hexes[ni].id);
+                    // connect_hexes runs once at setup: the PREPRINTED colour
+                    // decides (a hex later upgraded to a gray tile, e.g. P2's
+                    // 169, stays a neighbour).
+                    let impassable_color = crate::title::g1822::hex_dsl(&self.hexes[ni].id)
+                        .map_or(false, |(_, c)| matches!(c, "gray" | "red" | "blue"));
                     if impassable_color {
                         let inv = (dir + 3) % 6;
                         let targets = ntile.paths.iter().any(|p| {
@@ -374,7 +420,7 @@ impl BaseGame {
         out
     }
 
-    fn g1822_hex_is_blue(&self, coord: &str) -> bool {
+    pub(crate) fn g1822_hex_is_blue(&self, coord: &str) -> bool {
         crate::title::g1822::hex_dsl(coord).map_or(false, |(_, c)| c == "blue")
     }
 
@@ -405,10 +451,25 @@ impl BaseGame {
             .map_or(false, |part| part.contains("ignore:1"))
     }
 
+    /// A Ruby Graph#compute for `corp` happened here: latch a
+    /// purchase-grade route (see G1822State::route_purchase).
+    pub(crate) fn g1822_note_graph(&self, corp: &str) {
+        if self.g().route_purchase.contains(corp) {
+            return;
+        }
+        if self.g1822_graph(corp).route_train_purchase {
+            self.g().route_purchase.insert(corp);
+        }
+    }
+
     /// Ruby Graph#can_token?(corporation): some connected city is
     /// tokenable (free: true) by the corporation.
     pub(crate) fn g1822_can_token(&self, corp: &str) -> bool {
         let g = self.g1822_graph(corp);
+        // A full Graph#compute also caches route_info (see route_purchase).
+        if g.route_train_purchase {
+            self.g().route_purchase.insert(corp);
+        }
         g.connected_nodes
             .iter()
             .filter(|n| n.kind == NodeKind::City)

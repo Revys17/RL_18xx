@@ -234,9 +234,22 @@ impl BaseGame {
                     _ => usize::MAX,
                 }
             };
-            president = majority
+            let candidates: Vec<&EntityId> = majority
                 .iter()
                 .filter(|e| self.corporations[ci].percent_owned_by(e) >= presidents_percent)
+                .collect();
+            // Ruby's min_by ranks every candidate by SharePool#distance over
+            // possible_presidents (the seated players): a tax haven among
+            // them makes `a < b` compare with nil, an ArgumentError, so
+            // Ruby refuses the action. Mirror that as a rejection.
+            if previous_president.is_some() && candidates.iter().any(|e| e.0 == TAX_HAVEN_OWNER) {
+                self.gm().pending_error = Some(format!(
+                    "{}: the presidency would be ranked against the tax haven (Ruby raises)",
+                    b.corp
+                ));
+            }
+            president = candidates
+                .into_iter()
                 .min_by_key(|e| distance(&previous_president, e))
                 .cloned();
         }

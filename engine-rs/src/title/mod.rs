@@ -234,6 +234,16 @@ pub trait GameTitle: Sync {
     fn train_buy_from_other_players(&self) -> bool {
         false
     }
+
+    /// Legal-move generator POLICY, not a rule: which purchases across
+    /// players the generator (self-play) offers. Replay and
+    /// `process_action` follow the title's rules whatever this says. The
+    /// default forbids them all (the project's choice: seller consent and
+    /// negotiated prices are not modelled). Only the 1822 generator reads
+    /// it today, so 1830/1867 are unaffected.
+    fn generator_cross_player(&self) -> CrossPlayerPolicy {
+        CrossPlayerPolicy::RESTRICTED
+    }
     /// Whether the president may fund an emergency train buy from hand
     /// (1830's EMR). False for loans-only EMR titles (1867: no share
     /// selling, no president cash — loans are the emergency money).
@@ -354,6 +364,28 @@ pub trait GameTitle: Sync {
     fn action_tile_order(&self) -> Vec<&'static str> {
         self.tile_counts().iter().map(|(id, _)| *id).collect()
     }
+}
+
+/// Which purchases between DIFFERENT players' holdings the legal-move
+/// generator offers (see `GameTitle::generator_cross_player`). "Other
+/// player" = the seller (a corporation's president, a minor's or a
+/// company's owning player) is not the buying corporation's president;
+/// a seller or buyer without a president counts as another player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CrossPlayerPolicy {
+    /// Buy a train from a corporation (or minor) another player presides.
+    pub trains: bool,
+    /// Acquire a private company another player owns.
+    pub companies: bool,
+    /// Acquire / merge a minor another player owns (bank minors: always).
+    pub minors: bool,
+}
+
+impl CrossPlayerPolicy {
+    /// Nothing across players (the default policy).
+    pub const RESTRICTED: Self = Self { trains: false, companies: false, minors: false };
+    /// Everything the rules allow (Ruby-faithful; replay checks, audits).
+    pub const RULES: Self = Self { trains: true, companies: true, minors: true };
 }
 
 /// One slot of a title's per-OR-turn tile-lay allowance (one Ruby

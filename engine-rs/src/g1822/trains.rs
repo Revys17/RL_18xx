@@ -116,17 +116,28 @@ impl BaseGame {
         !(t.name == "2P" || t.name == "LP" || t.name == "P+" || t.name.ends_with('+'))
     }
 
-    /// Train#min_price for a depot train: min over its card's variants.
-    fn g1822_depot_min_price(t: &Train) -> i32 {
-        let base = Self::g1822_base_name(t);
-        let vs = data::train_variants(base);
-        if vs.is_empty() {
-            return t.price;
+    /// A depot card's variants (name, price): the card's own list, but a
+    /// discarded train lost its variants (G1822 DiscardTrain calls
+    /// `remove_variants!`): only its current name.
+    pub(crate) fn g1822_card_variants(&self, t: &Train) -> Vec<(String, i32)> {
+        if self.depot.discarded.iter().any(|d| d.id == t.id) {
+            return vec![(t.name.clone(), t.price)];
         }
-        vs.iter()
-            .filter_map(|v| data::train_variant(base, v).map(|x| x.2))
-            .min()
-            .unwrap_or(t.price)
+        let base = Self::g1822_base_name(t);
+        let vs: Vec<(String, i32)> = data::train_variants(base)
+            .iter()
+            .filter_map(|v| data::train_variant(base, v).map(|x| (x.0.to_string(), x.2)))
+            .collect();
+        if vs.is_empty() {
+            vec![(t.name.clone(), t.price)]
+        } else {
+            vs
+        }
+    }
+
+    /// Train#min_price for a depot train: min over its card's variants.
+    fn g1822_depot_min_price(&self, t: &Train) -> i32 {
+        self.g1822_card_variants(t).iter().map(|v| v.1).min().unwrap_or(t.price)
     }
 
     /// The physical card's base name (Ruby train.sym): "L-3" → "L".
@@ -136,7 +147,7 @@ impl BaseGame {
 
     /// Depot#min_price(corporation) over depot + other corps' trains.
     fn g1822_min_price(&self, c: &str) -> Option<i32> {
-        let mut prices: Vec<i32> = self.g1822_depot_trains().iter().map(Self::g1822_depot_min_price).collect();
+        let mut prices: Vec<i32> = self.g1822_depot_trains().iter().map(|t| self.g1822_depot_min_price(t)).collect();
         if !self.g1822_other_trains(c).is_empty() {
             prices.push(1);
         }
@@ -147,7 +158,7 @@ impl BaseGame {
     pub(crate) fn g1822_min_depot_price(&self) -> i32 {
         let trains = self.g1822_depot_trains();
         let Some(t) = trains.iter().min_by_key(|t| t.price) else { return 0 };
-        Self::g1822_depot_min_price(t)
+        self.g1822_depot_min_price(t)
     }
 
     /// G1822 `discountable_trains_for`: each owned L can be upgraded to a 2
@@ -351,10 +362,15 @@ impl BaseGame {
             let pos = self.depot.discarded.iter().position(|t| t.id == train_id).unwrap();
             self.depot.discarded[pos].clone()
         };
-        // train.variant = action.variant
+        // train.variant = action.variant (a discarded card has no variants)
         let base = Self::g1822_base_name(&train).to_string();
+        let discarded = self.depot.discarded.iter().any(|d| d.id == train.id);
         if let Some(v) = variant {
-            if let Some((name, dist, vprice, _)) = data::train_variant(&base, v) {
+            if discarded {
+                if v != train.name {
+                    return err(format!("{v} is not a variant of {}", train.id));
+                }
+            } else if let Some((name, dist, vprice, _)) = data::train_variant(&base, v) {
                 train.name = name.to_string();
                 train.distance = dist;
                 train.price = vprice;
@@ -365,6 +381,21 @@ impl BaseGame {
         let cash = self.corporations[self.ci(c)].cash;
         let remaining = price - cash;
         if remaining > 0 && president_may_contribute && self.g1822_must_buy_train(c) {
+            // check_for_cheapest_train (EBUY_DEPOT_TRAIN_MUST_BE_CHEAPEST,
+            // EBUY_FROM_OTHERS :never): with the president's money only
+            // the cheapest depot card's cheapest variant(s) may be bought.
+            let depot = self.g1822_depot_trains();
+            if let Some(cheap) = depot.iter().min_by_key(|t| t.price) {
+                let vs = self.g1822_card_variants(cheap);
+                let min = vs.iter().map(|v| v.1).min().unwrap_or(0);
+                let names: Vec<String> = vs.into_iter().filter(|v| v.1 == min).map(|v| v.0).collect();
+                if !names.contains(&train.name) {
+                    return err(format!(
+                        "Cannot purchase {} train: cheaper train available ({})",
+                        train.name, names[0]
+                    ));
+                }
+            }
             if price > train.price && seller.is_none() {
                 return err("Cannot buy for more than cost");
             }
@@ -434,8 +465,9 @@ impl BaseGame {
         let amount = cost - cash;
         // take_cash_loan: bank pays, debt += amount × 1.5 (ceil).
         self.g1822_bank_pay(&EntityId::player(pid), amount);
-        let debt = amount + (amount * super::PLAYER_LOAN_INTEREST_RATE + 99) / 100;
-        *self.gm().player_debt.entry(pid).or_insert(0) += debt;
+        let debt = amount as i64 + (amount as i64 * super::PLAYER_LOAN_INTEREST_RATE as i64 + 99) / 100;
+        let e = self.gm().player_debt.entry(pid).or_insert(0);
+        *e = (*e as i64 + debt).min(i32::MAX as i64) as i32;
         Ok(())
     }
 
@@ -461,7 +493,7 @@ impl BaseGame {
     }
 
     /// EmergencyMoney#can_sell? (EBUY_SELL_MORE_THAN_NEEDED false).
-    fn g1822_emr_can_sell(&self, pid: u32, b: &Bundle) -> bool {
+    pub(crate) fn g1822_emr_can_sell(&self, pid: u32, b: &Bundle) -> bool {
         let eid = EntityId::player(pid);
         let c = &self.corporations[self.ci(&b.corp)];
         if b.shares.iter().any(|&i| c.shares[i].owner != eid) {

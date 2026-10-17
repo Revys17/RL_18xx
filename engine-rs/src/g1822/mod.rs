@@ -24,10 +24,15 @@
 
 pub mod acquisition;
 pub mod graph;
+pub mod legal;
+#[cfg(test)]
+mod fuzz;
 pub mod operating;
 pub mod py;
+pub mod router;
 pub mod shares;
 pub mod stock;
+pub mod tile_rules;
 pub mod tokens;
 pub mod track;
 pub mod trains;
@@ -415,6 +420,66 @@ pub struct G1822State {
     pub game_end_reason: Option<String>,
     pub stock_market_max_reached: bool,
     pub round: RoundSt,
+    /// An error a deep helper raised the way Ruby raises a non-GameError
+    /// mid-action (the action is refused and rolled back).
+    #[serde(default)]
+    pub pending_error: Option<String>,
+    /// Corporations whose Ruby `Graph#route_info` is latched with
+    /// `route_train_purchase` (Graph#clear keeps such entries and 1822
+    /// never calls clear_graph_for): once a corporation could run a route
+    /// it counts as able to for the rest of the game.
+    #[serde(default)]
+    pub route_purchase: Latch,
+    /// The city holding each corporation's FIRST token (Ruby
+    /// `tokens.first.city`: the destination bonus and destination check
+    /// need that very token, not any of the corporation's): (hex, city),
+    /// remapped when the hex is upgraded.
+    #[serde(default)]
+    pub home_city: BTreeMap<String, (String, usize)>,
+    /// Companies Ruby deleted from `@companies` without closing (minor
+    /// proxies after a float or an acquisition): their abilities live on
+    /// (e.g. consent blockers), their owner is the bank.
+    #[serde(default)]
+    pub deleted_open: Vec<String>,
+}
+
+/// A memo Ruby fills lazily while it evaluates step actions (read-side
+/// code sets it, so it needs interior mutability). Send + Sync.
+#[derive(Debug, Default)]
+pub struct Latch(std::sync::Mutex<Vec<String>>);
+
+impl Latch {
+    pub fn contains(&self, s: &str) -> bool {
+        self.0.lock().map(|v| v.iter().any(|x| x == s)).unwrap_or(false)
+    }
+    pub fn insert(&self, s: &str) {
+        if let Ok(mut v) = self.0.lock() {
+            if !v.iter().any(|x| x == s) {
+                v.push(s.to_string());
+            }
+        }
+    }
+    fn snapshot(&self) -> Vec<String> {
+        self.0.lock().map(|v| v.clone()).unwrap_or_default()
+    }
+}
+
+impl Clone for Latch {
+    fn clone(&self) -> Self {
+        Latch(std::sync::Mutex::new(self.snapshot()))
+    }
+}
+
+impl Serialize for Latch {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        self.snapshot().serialize(ser)
+    }
+}
+
+impl<'de> Deserialize<'de> for Latch {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        Ok(Latch(std::sync::Mutex::new(Vec::<String>::deserialize(de)?)))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -499,12 +564,16 @@ impl BaseGame {
             self.companies[i].owner = EntityId::none();
         }
         self.gm().bank_owned.retain(|c| c != sym);
+        self.gm().deleted_open.retain(|c| c != sym);
     }
     /// Ruby `@companies.delete(company)` — gone from the stacks and from
     /// every lookup.
     pub(crate) fn delete_company(&mut self, sym: &str) {
         self.gm().company_order.retain(|c| c != sym);
         self.gm().bank_owned.retain(|c| c != sym);
+        if !self.co_closed(sym) && !self.g().deleted_open.iter().any(|c| c == sym) {
+            self.gm().deleted_open.push(sym.to_string());
+        }
         if let Some(i) = self.co_idx(sym) {
             self.companies[i].closed = true;
             self.companies[i].owner = EntityId::none();
@@ -870,6 +939,10 @@ impl BaseGame {
             game_end_trigger: None,
             game_end_reason: None,
             stock_market_max_reached: false,
+            pending_error: None,
+            route_purchase: Latch::default(),
+            home_city: BTreeMap::new(),
+            deleted_open: Vec::new(),
             round: RoundSt::new(RoundKind::Stock, 1, players, vec![Step::DiscardTrain, Step::BuySellParShares]),
         };
         self.g1822 = Some(Box::new(state));
@@ -942,6 +1015,17 @@ impl BaseGame {
         }
     }
 
+    /// `g1822_process_action` without the rollback copy, for throwaway
+    /// clones (the legal-move filter): the state is garbage on error.
+    pub(crate) fn g1822_process_action_nobackup(&mut self, action: &Action) -> Result<(), GameError> {
+        if self.finished {
+            return err("Game is already finished");
+        }
+        self.g1822_process_inner(action)?;
+        self.move_number += 1;
+        Ok(())
+    }
+
     fn g1822_process_inner(&mut self, action: &Action) -> Result<(), GameError> {
         let ent = self.g1822_entity(action.entity_id());
         let atype = action.action_type();
@@ -974,7 +1058,11 @@ impl BaseGame {
             ));
         };
         self.rndm().acted[i] = true;
+        self.gm().pending_error = None;
         self.g1822_step_process(i, &ent, action)?;
+        if let Some(e) = self.gm().pending_error.take() {
+            return err(e);
+        }
         self.g1822_skip_steps();
         self.g1822_after_process(action)?;
         // process_single_action: game_end_check, then the round loop.

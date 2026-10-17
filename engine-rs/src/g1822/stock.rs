@@ -311,8 +311,10 @@ impl BaseGame {
         let debts: Vec<(u32, i32)> = self.g().player_debt.iter().map(|(&p, &d)| (p, d)).collect();
         for (p, d) in debts {
             if d > 0 {
-                let added = (d * PLAYER_LOAN_INTEREST_RATE + 99) / 100;
-                self.gm().player_debt.insert(p, d + added);
+                // i64: degenerate games compound debt past i32 (saturate).
+                let added = (d as i64 * PLAYER_LOAN_INTEREST_RATE as i64 + 99) / 100;
+                let total = (d as i64 + added).min(i32::MAX as i64) as i32;
+                self.gm().player_debt.insert(p, total);
             }
         }
     }
@@ -626,7 +628,7 @@ impl BaseGame {
     }
 
     /// Base BSPS `can_sell?(entity, bundle)` (SELL_BUY_ORDER :sell_buy).
-    fn g1822_can_sell(&self, owner: &EntityId, b: &Bundle) -> bool {
+    pub(crate) fn g1822_can_sell(&self, owner: &EntityId, b: &Bundle) -> bool {
         let c = &self.corporations[self.ci(&b.corp)];
         if b.shares.iter().any(|&i| c.shares[i].owner != *owner) {
             return false;

@@ -145,9 +145,16 @@ impl GameTitle for G1822 {
     fn hex_layout(&self) -> super::HexLayout {
         super::HexLayout::Flat
     }
-    /// ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS (base default true).
+    /// ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS (base default true): replay
+    /// accepts trains bought from another player's corporation.
     fn train_buy_from_other_players(&self) -> bool {
         true
+    }
+    /// The generator offers nothing across players (the project's policy,
+    /// as for 1830; docs/g1822_remaining_work.md lists the cases for the
+    /// user to confirm). Replay stays Ruby-faithful.
+    fn generator_cross_player(&self) -> super::CrossPlayerPolicy {
+        super::CrossPlayerPolicy::RESTRICTED
     }
     fn must_buy_train_always(&self) -> bool {
         true

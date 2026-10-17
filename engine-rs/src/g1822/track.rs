@@ -242,7 +242,7 @@ impl BaseGame {
     }
 
     /// G1822 tile_lays(entity) → the allowance slot for the current lay.
-    fn g1822_tile_lay(&self, operator: &str, hsbc: bool) -> Option<(bool, bool, bool)> {
+    pub(crate) fn g1822_tile_lay(&self, operator: &str, hsbc: bool) -> Option<(bool, bool, bool)> {
         // (lay, upgrade, cannot_reuse_same_hex)
         let n = self.rnd().num_laid_track;
         let upgraded = self.rnd().upgraded_track;
@@ -330,7 +330,11 @@ impl BaseGame {
             Action::LayTile { hex_id, tile_id, rotation, .. } => {
                 let Ent::Corp(c) = ent else { return err("lay_tile by a non-corporation") };
                 let c = c.clone();
+                // Ruby computes the operator's graph in legal_tile_rotation?
+                // (before) and check_track_restrictions! (after the lay).
+                self.g1822_note_graph(&c);
                 self.g1822_lay_tile_action(&c, &c, &[], hex_id, tile_id, *rotation, false)?;
+                self.g1822_note_graph(&c);
                 if !self.g1822_can_lay_tile(&c) {
                     self.rndm().passed[i] = true;
                 }
@@ -410,11 +414,40 @@ impl BaseGame {
             .get(&base)
             .cloned()
             .ok_or_else(|| GameError::new(format!("Unknown tile {tile_id}")))?;
-        // free / discount from the company abilities in play.
-        let mut free = false;
         let mut entities: Vec<String> = vec![entity.to_string()];
         entities.extend(combo.iter().cloned());
         let hex_id = self.hexes[hi].id.clone();
+        // Tracker#lay_tile's tile legality — what Ruby checks for a live
+        // player (process_action of a live game): upgrades_to? (always),
+        // legal_tile_rotation? (the step's own rule), and after the lay
+        // check_track_restrictions! for a corporation's own lay. Shared with
+        // the legal-move generator (g1822::tile_rules).
+        let is_company = self.company_idx.contains_key(entity);
+        if !self.g1822_upgrades_to(hi, &def, is_company) {
+            return err(format!("{} is not upgradeable to {}", self.hexes[hi].tile.name, base));
+        }
+        {
+            use super::tile_rules::RotRule;
+            let rule = if entity == COMPANY_LCDR && hex_id == crate::title::g1822::ENGLISH_CHANNEL_HEX {
+                RotRule::LcdrChannel
+            } else if entities.iter().any(|e| e == super::COMPANY_MTONR) {
+                RotRule::RemoveTown
+            } else {
+                RotRule::Normal
+            };
+            let connected: Vec<u8> = if rule == RotRule::LcdrChannel {
+                Vec::new()
+            } else {
+                self.g1822_graph(spender).connected_hexes.get(&hi).cloned().unwrap_or_default()
+            };
+            let nbrs = self.g1822_neighbors();
+            if !self.g1822_legal_rotation(rule, spender, hi, &def, rotation, &connected, &nbrs) {
+                return err(format!("{} is not legally rotated for {}", self.hexes[hi].tile.name, base));
+            }
+        }
+        let old_tile_for_check = (!is_company).then(|| self.hexes[hi].tile.clone());
+        // free / discount from the company abilities in play.
+        let mut free = false;
         for e in &entities {
             if !self.company_idx.contains_key(e.as_str()) {
                 continue;
@@ -459,7 +492,7 @@ impl BaseGame {
         };
         self.g1822_hex_lay(hi, &def, rotation, &instance)?;
         // costs
-        let (border, _) = self.g1822_remove_border_cost(hi, &entities);
+        let (border, _) = self.g1822_remove_border_cost(hi, &entities)?;
         let cost = if free {
             0
         } else {
@@ -484,6 +517,11 @@ impl BaseGame {
         };
         if cost > 0 {
             self.corp_spend(spender, cost)?;
+        }
+        if let Some(old_tile) = &old_tile_for_check {
+            if !self.g1822_track_restrictions_ok(entity, hi, old_tile) {
+                return err("Must use new track or change city value");
+            }
         }
         // update_token!: G1822 remove_extra_tokens! first.
         self.g1822_remove_extra_tokens(hi);
@@ -552,7 +590,7 @@ impl BaseGame {
     /// G1822 remove_border_calculate_cost!: water borders the new tile
     /// crosses (it targets the neighbour) are paid and deleted; the
     /// neighbour's copy only when its tile exits there. P10 knocks £40 off.
-    fn g1822_remove_border_cost(&mut self, hi: usize, entities: &[String]) -> (i32, Vec<String>) {
+    fn g1822_remove_border_cost(&mut self, hi: usize, entities: &[String]) -> Result<(i32, Vec<String>), GameError> {
         let hex_id = self.hexes[hi].id.clone();
         let borders = self.g().borders.get(&hex_id).cloned().unwrap_or_default();
         let exits: Vec<u8> = self.hexes[hi]
@@ -588,10 +626,61 @@ impl BaseGame {
             types.push(ty);
             total += cost;
         }
+        // P10 must cross an estuary; P21 must point into the Humber
+        // (Ruby raises these even while loading).
         if entities.iter().any(|e| e == COMPANY_GSWR) {
+            if total == 0 {
+                return err("Must lay tile with one path over an estuary crossing");
+            }
             total -= COMPANY_GSWR_DISCOUNT;
         }
-        (total, types)
+        if entities.first().map(String::as_str) == Some(COMPANY_HSBC) && total == 0 {
+            return err("Must lay tile with one path over the Hull / Grimsby estuary");
+        }
+        Ok((total, types))
+    }
+
+    /// The cost `g1822_lay_tile` would charge a corporation's OWN lay (no
+    /// company abilities) of a tile whose exits are `new_exits` on `hi`,
+    /// without laying it: terrain upgrades (with discounts) + the water
+    /// borders the tile crosses − the terrain-less hex discounts.
+    pub(crate) fn g1822_corp_lay_cost(
+        &self,
+        spender: &str,
+        hi: usize,
+        new_exits: &[u8],
+        neighbors: &std::collections::HashMap<usize, std::collections::BTreeMap<u8, usize>>,
+    ) -> i32 {
+        let hex_id = &self.hexes[hi].id;
+        let old_cost = self.g1822_upgrade_cost(hi, spender);
+        let border: i32 = self
+            .g()
+            .borders
+            .get(hex_id)
+            .map(|v| {
+                v.iter()
+                    .filter(|(edge, _, _)| {
+                        neighbors.get(&hi).map_or(false, |m| m.contains_key(edge)) && new_exits.contains(edge)
+                    })
+                    .map(|(_, cost, _)| *cost)
+                    .sum()
+            })
+            .unwrap_or(0);
+        let base = old_cost + border;
+        let d: i32 = self
+            .companies_of(&EntityId::corporation(spender))
+            .iter()
+            .flat_map(|co| self.g1822_abilities(co))
+            .filter(|a| {
+                a.kind == AbKind::TileDiscount && a.terrain.is_none() && (a.hexes.is_empty() || a.hexes.contains(hex_id))
+            })
+            .map(|a| a.discount)
+            .sum();
+        if d == 0 {
+            base
+        } else {
+            base - base.min(d)
+        }
     }
 
     /// Ruby Hex#lay: city map, reservations then tokens move to the new tile.
@@ -601,35 +690,21 @@ impl BaseGame {
         let mut new_tile = BaseGame::tile_from_def(def, rotation);
         new_tile.id = instance.to_string();
         new_tile.name = instance.to_string();
-        let old_exits = BaseGame::city_exits_from_tile(&old);
-        let new_exits = BaseGame::city_exits_from_tile(&new_tile);
         let n_old = old.cities.len();
         let n_new = new_tile.cities.len();
         // city_map_for
-        let mut map: Vec<Option<usize>> = vec![None; n_old];
-        if old_exits.iter().all(|e| e.is_empty()) && n_old == n_new {
-            for (i, m) in map.iter_mut().enumerate() {
-                *m = Some(i);
-            }
-        } else {
-            for (i, oe) in old_exits.iter().enumerate() {
-                if !oe.is_empty() {
-                    map[i] = new_exits.iter().position(|ne| oe.iter().all(|e| ne.contains(e)));
-                }
-            }
-        }
-        let mut claimed: Vec<usize> = map.iter().flatten().copied().collect();
-        for i in 0..n_old {
-            if map[i].is_some() {
-                continue;
-            }
-            let mut nc = if i < n_new { Some(i) } else { None };
-            if nc.map_or(false, |c| claimed.contains(&c)) {
-                nc = (0..n_new).find(|c| !claimed.contains(c));
-            }
-            map[i] = nc;
-            if let Some(c) = nc {
-                claimed.push(c);
+        let map = BaseGame::g1822_city_map(&old, &new_tile);
+        // first tokens on this hex follow their city
+        let homes: Vec<(String, usize)> = self
+            .g()
+            .home_city
+            .iter()
+            .filter(|(_, (h, _))| *h == hex_id)
+            .map(|(c, (_, ci))| (c.clone(), *ci))
+            .collect();
+        for (c, ci) in homes {
+            if let Some(Some(nc)) = map.get(ci) {
+                self.gm().home_city.insert(c, (hex_id.clone(), *nc));
             }
         }
         // reservations: new_city.reservations.concat(old's); old cleared.
@@ -719,6 +794,11 @@ impl BaseGame {
                     .map(str::to_string)
                     .ok_or_else(|| GameError::new("company not corporation-owned"))?;
                 let combo = self.g().pending_combo.clone();
+                // legal_tile_rotation? walks the operator's graph (not for
+                // P5's Channel rotation rule).
+                if co != COMPANY_LCDR {
+                    self.g1822_note_graph(&spender);
+                }
                 let tile_color = {
                     let base = tile_id.split('-').next().unwrap_or(tile_id);
                     self.tile_catalog.get(base).map(|d| d.color)
