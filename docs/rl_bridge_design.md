@@ -9,6 +9,16 @@ network (action indices, encoder, model, MCTS, data pipeline, evals) assumes
 1830. This document says what has to change so that 1867, and then about fifteen
 more titles, can be trained, and in what order.
 
+> **User decisions (2026-10-16), overriding the recommendations below where they differ:**
+> - **On hold**: no RL-bridge implementation until the 1830 agent is where the user wants
+>   it; the time goes into verifying the engines, with few agents at once.
+> - **Players: 3-6 for every title** (no 2-player or 7+ variants; `MAX_SEATS` stays 6).
+>   Engines may still replay other counts for validation, but no effort goes into
+>   2-player or 7+ rules.
+> - Moving 1830 onto the generic path: yes, as follow-up work once the bridge exists.
+> - First 1867 run: base rules, 3-6 players (no 2-player variant, no `grid_market`).
+> - Model sharing and GPU budget: decided later, with the bridge.
+
 ## 0. Summary
 
 **Recommended design**
