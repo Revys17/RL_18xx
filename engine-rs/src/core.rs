@@ -220,7 +220,9 @@ impl StockMarket {
             (row, new_col)
         } else {
             match self.movement {
-                MarketMovement::TwoDimensional => self.move_up(row, col),
+                MarketMovement::TwoDimensional | MarketMovement::TwoDimensionalUpDownRight => {
+                    self.move_up(row, col)
+                }
                 MarketMovement::OneDimensional => (row, col),
             }
         }
@@ -232,7 +234,9 @@ impl StockMarket {
     /// OneDimensional (1867): stay at the left edge.
     pub fn move_left(&self, row: u8, col: u8) -> (u8, u8) {
         let fallback = |s: &Self| match s.movement {
-            MarketMovement::TwoDimensional => s.move_down(row, col),
+            MarketMovement::TwoDimensional | MarketMovement::TwoDimensionalUpDownRight => {
+                s.move_down(row, col)
+            }
             MarketMovement::OneDimensional => (row, col),
         };
         if col == 0 {
@@ -268,6 +272,18 @@ impl StockMarket {
     pub fn move_up(&self, row: u8, col: u8) -> (u8, u8) {
         if self.movement == MarketMovement::OneDimensional {
             return self.move_right(row, col);
+        }
+        if self.movement == MarketMovement::TwoDimensionalUpDownRight {
+            // G1822::StockMarket#up: up when a cell exists above, else
+            // down-right (a missing target cell leaves the price put).
+            if row > 0 && self.cell_at(row - 1, col).is_some() {
+                return (row - 1, col);
+            }
+            return if self.cell_at(row + 1, col + 1).is_some() {
+                (row + 1, col + 1)
+            } else {
+                (row, col)
+            };
         }
         if row == 0 {
             return (row, col);

@@ -1,0 +1,1407 @@
+//! 1822 (and, later, its `G1822::Game` subclasses) — a Ruby-faithful step
+//! machine over the shared `BaseGame` state.
+//!
+//! Why a separate machine: 1822's rounds differ from 1830/1867 at almost
+//! every step boundary (bid boxes in the stock round, a choices round, a
+//! 16-step operating round with first-turn housekeeping, company
+//! acquisition, special track/token/choose steps, destination tokens,
+//! minor acquisition and share issuing), and replay fidelity depends on
+//! exactly WHICH step consumes each recorded action (a `pass` belongs to
+//! the first blocking step). Rather than flattening those steps into the
+//! shared program-counter OR, this module mirrors Ruby's
+//! `Round::Base#process_action` / `skip_steps` / `after_process` with per-
+//! step `passed` flags and per-step state, so each Ruby step ports as one
+//! unit (`actions`, `active?`, `blocks?`, `process_*`, `skip!`, `pass!`).
+//!
+//! Shared state lives where the other titles keep it (players, corps,
+//! companies, hexes, depot, stock market on `BaseGame`); the 1822-only
+//! state (bid boxes, stack order, tax haven, phase-revenue credits,
+//! exchange tokens, player debt, the live round's step states) lives in
+//! [`G1822State`] on `BaseGame::g1822`. Shared code reaches this module
+//! through a handful of title-gated hooks (`process_action_internal`,
+//! `step_action_types_impl`, `home_reservations`, the constructor) keyed on
+//! `BaseGame::g1822.is_some()` — 1830/1867 never take them.
+
+pub mod acquisition;
+pub mod graph;
+pub mod operating;
+pub mod py;
+pub mod shares;
+pub mod stock;
+pub mod tokens;
+pub mod track;
+pub mod trains;
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+
+use crate::actions::{Action, GameError};
+use crate::entities::{EntityId, Token, Train};
+use crate::game::BaseGame;
+use crate::title::g1822 as data;
+use crate::title::CorpType;
+
+// ---------------------------------------------------------------------------
+// Ruby's game RNG (base.rb initialize_seed / rand): a 31-bit LCG.
+// ---------------------------------------------------------------------------
+
+pub const RAND_A: u64 = 1_103_515_245;
+pub const RAND_C: u64 = 12_345;
+pub const RAND_M: u64 = 1 << 31;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RubyRand {
+    pub state: u64,
+}
+
+impl RubyRand {
+    pub fn new(seed: u64) -> Self {
+        RubyRand { state: seed % RAND_M }
+    }
+    /// `rand` — advances and returns the new state.
+    pub fn next(&mut self) -> u64 {
+        self.state = (RAND_A * self.state + RAND_C) % RAND_M;
+        self.state
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Constants (game.rb)
+// ---------------------------------------------------------------------------
+
+pub const BIDDING_BOX_MINOR_COUNT: usize = 4;
+pub const BIDDING_BOX_CONCESSION_COUNT: usize = 3;
+pub const BIDDING_BOX_PRIVATE_COUNT: usize = 3;
+pub const BIDDING_BOX_START_MINOR: &str = "M24";
+pub const BIDDING_BOX_START_CONCESSION: &str = "C1";
+pub const BIDDING_BOX_START_PRIVATE: &str = "P1";
+pub const BIDDING_TOKENS_PER_ACTION: u32 = 3;
+pub const MIN_BID_INCREMENT: i32 = 5;
+pub const MINOR_START_PAR_PRICE: i32 = 50;
+pub const MINOR_BIDBOX_PRICE: i32 = 200;
+pub const TOKEN_PRICE: i32 = 100;
+pub const UPGRADE_COST_L_TO_2: i32 = 80;
+pub const PLAYER_LOAN_INTEREST_RATE: i32 = 50;
+pub const TWO_HOME_CORPORATION: &str = "LNWR";
+pub const MINOR_14_ID: &str = "14";
+pub const MINOR_14_HOME_HEX: &str = "M38";
+
+pub const COMPANY_MTONR: &str = "P2";
+pub const COMPANY_LCDR: &str = "P5";
+pub const COMPANY_EGR: &str = "P8";
+pub const COMPANY_DOUBLE_CASH: &str = "P9";
+pub const COMPANY_DOUBLE_CASH_REVENUE: [i32; 8] = [0, 0, 0, 20, 20, 40, 40, 60];
+pub const COMPANY_GSWR: &str = "P10";
+pub const COMPANY_GSWR_DISCOUNT: i32 = 40;
+pub const COMPANY_BER: &str = "P11";
+pub const COMPANY_LSR: &str = "P12";
+pub const COMPANY_10X_REVENUE: &str = "P15";
+pub const COMPANY_OSTH: &str = "P16";
+pub const COMPANY_LUR: &str = "P17";
+pub const COMPANY_CHPR: &str = "P18";
+pub const COMPANY_5X_REVENUE: &str = "P20";
+pub const COMPANY_HSBC: &str = "P21";
+
+pub const PRIVATE_MAIL_CONTRACTS: &[&str] = &["P6", "P7"];
+pub const PLUS_EXPANSION_BIDBOX_1: &[&str] = &["P1", "P3", "P4", "P13", "P14", "P19"];
+pub const PLUS_EXPANSION_BIDBOX_2: &[&str] = &["P2", "P5", "P8", "P10", "P11", "P12", "P21"];
+pub const PLUS_EXPANSION_BIDBOX_3: &[&str] = &["P6", "P7", "P9", "P15", "P16", "P17", "P18", "P20"];
+pub const PRIVATE_REMOVE_REVENUE: &[&str] = &["P5", "P6", "P7", "P8", "P10", "P17", "P18", "P21"];
+pub const PRIVATE_PHASE_REVENUE: &[&str] = &["P15", "P20"];
+pub const PRIVATE_TRAINS: &[&str] = &["P1", "P3", "P4", "P13", "P14", "P19"];
+pub const EXTRA_TRAINS: &[&str] = &["2P", "P+", "LP"];
+pub const EXTRA_TRAIN_PULLMAN: &str = "P+";
+pub const EXTRA_TRAIN_PERMANENTS: &[&str] = &["2P", "LP"];
+pub const LOCAL_TRAINS: &[&str] = &["L", "LP"];
+pub const E_TRAIN: &str = "E";
+
+/// PRIVATE_COMPANIES_ACQUISITION: (acquirer classes, phase).
+pub fn private_acquisition(sym: &str) -> Option<(&'static [CorpType], u32)> {
+    use CorpType::{Major as J, Minor as N};
+    const MAJ: &[CorpType] = &[J];
+    const BOTH: &[CorpType] = &[J, N];
+    const NONE: &[CorpType] = &[];
+    Some(match sym {
+        "P1" => (MAJ, 5),
+        "P2" => (BOTH, 2),
+        "P3" => (MAJ, 2),
+        "P4" => (MAJ, 2),
+        "P5" => (MAJ, 3),
+        "P6" => (MAJ, 3),
+        "P7" => (MAJ, 3),
+        "P8" => (BOTH, 3),
+        "P9" => (BOTH, 3),
+        "P10" => (BOTH, 3),
+        "P11" => (BOTH, 2),
+        "P12" => (BOTH, 3),
+        "P13" => (BOTH, 5),
+        "P14" => (BOTH, 5),
+        "P15" => (BOTH, 2),
+        "P16" => (NONE, 0),
+        "P17" => (MAJ, 2),
+        "P18" => (MAJ, 5),
+        "P19" => (BOTH, 1),
+        "P20" => (BOTH, 3),
+        "P21" => (BOTH, 2),
+        _ => return None,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+/// Ruby step classes used by the 1822 rounds (round lists in game.rb
+/// `stock_round`, `choose_step`, `operating_round`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Step {
+    DiscardTrain,
+    BuySellParShares,
+    Choose,
+    PendingToken,
+    FirstTurnHousekeeping,
+    AcquireCompany,
+    SpecialChoose,
+    SpecialTrack,
+    SpecialToken,
+    Track,
+    DestinationToken,
+    Token,
+    Route,
+    Dividend,
+    BuyTrain,
+    MinorAcquisition,
+    IssueShares,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RoundKind {
+    Stock,
+    Choices,
+    Operating,
+}
+
+/// Ruby `players_sold[player][corp]` values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SoldWhen {
+    Now,
+    Prev,
+}
+
+/// The kinds of action Ruby keeps in `@round.current_actions` (BSPS).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CurAct {
+    Bid,
+    BuyShares,
+    Par,
+    SellShares,
+    Choose,
+}
+
+/// One standing bid (Ruby Action::Bid kept in `@bids[company]`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BidRec {
+    pub player: u32,
+    pub price: i32,
+}
+
+/// A pending home-token placement (Ruby `@round.pending_tokens` entry).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingTok {
+    pub corp: String,
+    pub hexes: Vec<String>,
+    /// Index into the corp's `tokens`.
+    pub token_idx: usize,
+}
+
+/// A recorded route, as kept for the dividend step (Ruby `@round.routes`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RunRoute {
+    pub train_id: String,
+    pub revenue: i32,
+    pub subsidy: i32,
+    pub connections: Vec<Vec<String>>,
+    pub hexes: Vec<String>,
+    pub nodes: Vec<String>,
+}
+
+/// MinorAcquisition `@acquire_state`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AcquireState {
+    SelectMinor,
+    ChoosePay,
+    ChooseToken,
+}
+
+/// The live round (Ruby `@round`): entities, entity index, steps with
+/// their `passed` / `acted` flags, and the round_state ivars the steps
+/// declare.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RoundSt {
+    pub kind: RoundKind,
+    pub round_num: u8,
+    /// Player ids (stock / choices) or corporation syms (operating), as
+    /// strings.
+    pub entities: Vec<String>,
+    pub entity_index: usize,
+    pub steps: Vec<Step>,
+    pub passed: Vec<bool>,
+    pub acted: Vec<bool>,
+
+    // -- stock (BuySellParShares round_state + G1822 additions) --
+    pub players_sold: BTreeMap<u32, BTreeMap<String, SoldWhen>>,
+    pub players_bought: BTreeMap<u32, BTreeMap<String, u32>>,
+    pub current_actions: Vec<CurAct>,
+    pub bought_from_ipo: bool,
+    pub last_to_act: Option<u32>,
+    pub pass_order: Vec<u32>,
+    pub tax_haven_bought: bool,
+    /// Bids per bid-box company, in placement order (Ruby `@round.bids`).
+    pub bids: BTreeMap<String, Vec<BidRec>>,
+    /// BSPS `@bid_actions` (reset each turn by `setup`).
+    pub bid_actions: u32,
+
+    // -- operating --
+    pub current_operator: Option<String>,
+    pub num_laid_track: u32,
+    pub upgraded_track: bool,
+    pub laid_hexes: Vec<String>,
+    pub tokened: bool,
+    pub teleported: Option<String>,
+    pub acquired_companies: Vec<String>,
+    pub pending_tokens: Vec<PendingTok>,
+    pub routes: Vec<RunRoute>,
+    pub extra_revenue: i32,
+    /// SpecialTrack `@company` (an extra-tile-lay company mid-use) and
+    /// `@extra_laided_track`.
+    pub special_track_company: Option<String>,
+    pub extra_laided_track: bool,
+    /// SpecialChoose `@company`.
+    pub special_choose_company: Option<String>,
+    /// Route `@pullman_train` (train id) and the original name/distance.
+    pub pullman_train: Option<String>,
+    pub pullman_original: Option<(String, u32)>,
+    /// Dividend `@extra_train_choice` ("" = none yet).
+    pub extra_train_choice: String,
+    /// BuyTrain `@last_share_sold_price`.
+    pub last_share_sold_price: Option<i32>,
+    /// MinorAcquisition step state (persists across entities like the
+    /// Ruby step object's ivars).
+    pub acquire_state: AcquireState,
+    pub selected_minor: Option<String>,
+    pub selected_share_num: u32,
+    pub pay_choices: Vec<String>,
+    pub token_choices: Vec<String>,
+    /// BuyTrain `@corporations_sold`.
+    pub corporations_sold: Vec<String>,
+    /// SpecialTrack `@in_process`.
+    pub special_track_in_process: bool,
+}
+
+impl RoundSt {
+    pub fn new(kind: RoundKind, round_num: u8, entities: Vec<String>, steps: Vec<Step>) -> Self {
+        let n = steps.len();
+        RoundSt {
+            kind,
+            round_num,
+            entities,
+            entity_index: 0,
+            steps,
+            passed: vec![false; n],
+            acted: vec![false; n],
+            players_sold: BTreeMap::new(),
+            players_bought: BTreeMap::new(),
+            current_actions: Vec::new(),
+            bought_from_ipo: false,
+            last_to_act: None,
+            pass_order: Vec::new(),
+            tax_haven_bought: false,
+            bids: BTreeMap::new(),
+            bid_actions: 0,
+            current_operator: None,
+            num_laid_track: 0,
+            upgraded_track: false,
+            laid_hexes: Vec::new(),
+            tokened: false,
+            teleported: None,
+            acquired_companies: Vec::new(),
+            pending_tokens: Vec::new(),
+            routes: Vec::new(),
+            extra_revenue: 0,
+            special_track_company: None,
+            extra_laided_track: false,
+            special_choose_company: None,
+            pullman_train: None,
+            pullman_original: None,
+            extra_train_choice: String::new(),
+            last_share_sold_price: None,
+            acquire_state: AcquireState::SelectMinor,
+            selected_minor: None,
+            selected_share_num: 0,
+            pay_choices: Vec::new(),
+            token_choices: Vec::new(),
+            corporations_sold: Vec::new(),
+            special_track_in_process: false,
+        }
+    }
+
+    pub fn step_index(&self, step: Step) -> Option<usize> {
+        self.steps.iter().position(|s| *s == step)
+    }
+}
+
+/// The tax haven (P16): a dummy shareholder with its own cash.
+pub const TAX_HAVEN_OWNER: &str = "taxhaven:P16";
+
+/// The 1822 family's own state (see the module docs).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct G1822State {
+    pub seed: u64,
+    /// Ruby `@companies` order (the bid-box stacks read it): companies
+    /// deleted from Ruby's list (floated / acquired minors' proxies,
+    /// non-starting ones) are absent.
+    pub company_order: Vec<String>,
+    pub bidbox_minors_cache: Vec<String>,
+    /// Ruby `company.owner == @bank` (bid-box companies up for auction).
+    pub bank_owned: Vec<String>,
+    pub nothing_sold_in_sr: bool,
+    /// P15/P20 dummy players' cash; `None` once the credit left play.
+    pub phase_revenue: BTreeMap<String, Option<i32>>,
+    pub tax_haven_cash: i32,
+    pub double_cash_choice: Option<u32>,
+    pub minor_14_city_exit: Option<u8>,
+    /// Trains reserved for the train privates (P1 5P, P3/P4 2P, P13/P14 P+).
+    pub company_trains: BTreeMap<String, Train>,
+    /// `exchange_token` ability counts per major.
+    pub exchange_tokens: BTreeMap<String, u32>,
+    /// Ruby `corporation.par_via_exchange` (concession company sym).
+    pub par_via_exchange: BTreeMap<String, String>,
+    /// Majors still holding their unplaced destination token ability.
+    pub destination_ability: Vec<String>,
+    pub player_debt: BTreeMap<u32, i32>,
+    /// Ruby City#reservations, positional by slot, keyed "HEX#city".
+    pub city_reservations: BTreeMap<String, Vec<Option<String>>>,
+    /// Ruby Tile#reservations (minor 14's London), keyed by hex.
+    pub tile_reservations: BTreeMap<String, Vec<String>>,
+    /// Company abilities still live (tile lays, teleport, discounts).
+    pub abilities: BTreeMap<String, Vec<track::Ab>>,
+    /// Corporation-level :token abilities: (hexes, price) — SECR's free
+    /// English Channel token; the £20 any-hex token from minor 14.
+    pub corp_token_abilities: BTreeMap<String, Vec<(Vec<String>, i32)>>,
+    /// P5's own token ability (count 1) still unused.
+    pub lcdr_token_ability: bool,
+    /// Live water borders with a cost: hex → (edge, cost, type).
+    pub borders: BTreeMap<String, Vec<(u8, i32, String)>>,
+    /// Next instance index per unlimited tile name.
+    pub tile_instances: BTreeMap<String, u32>,
+    /// combo_entities of the action being processed.
+    pub pending_combo: Vec<String>,
+    /// `share_price` of the buy/sell action being processed.
+    pub pending_share_price: Option<i32>,
+    /// Ruby Player#passed? for the stock-round entities.
+    pub round_passed_players: Vec<u32>,
+    /// `@operating_rounds` of the current OR set.
+    pub operating_rounds: u8,
+    /// Companies' current revenue (Ruby mutates `company.revenue`).
+    pub company_revenue: BTreeMap<String, i32>,
+    /// Corps' operating history entries (Ruby `operating_history.size`).
+    pub operating_history: BTreeMap<String, u32>,
+    /// Game end: Ruby `@game_end_triggered` reason/timing once latched.
+    pub game_end_trigger: Option<(String, String)>,
+    pub game_end_reason: Option<String>,
+    pub stock_market_max_reached: bool,
+    pub round: RoundSt,
+}
+
+// ---------------------------------------------------------------------------
+// Entities
+// ---------------------------------------------------------------------------
+
+/// A Ruby entity as resolved from an action's `entity` id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ent {
+    Player(u32),
+    Corp(String),
+    Company(String),
+}
+
+impl Ent {
+    pub fn id(&self) -> String {
+        match self {
+            Ent::Player(p) => p.to_string(),
+            Ent::Corp(s) | Ent::Company(s) => s.clone(),
+        }
+    }
+}
+
+pub fn err<T>(msg: impl Into<String>) -> Result<T, GameError> {
+    Err(GameError::new(msg))
+}
+
+impl BaseGame {
+    pub(crate) fn g(&self) -> &G1822State {
+        self.g1822.as_deref().expect("1822 state")
+    }
+    pub(crate) fn gm(&mut self) -> &mut G1822State {
+        self.g1822.as_deref_mut().expect("1822 state")
+    }
+    pub(crate) fn rnd(&self) -> &RoundSt {
+        &self.g().round
+    }
+    pub(crate) fn rndm(&mut self) -> &mut RoundSt {
+        &mut self.gm().round
+    }
+
+    /// Resolve an action entity id. 1822 corporation syms are numeric
+    /// ("1".."30" minors), so player ids MUST NOT collide with them (the
+    /// replay harness seats players at 1001+); corporations resolve first.
+    pub(crate) fn g1822_entity(&self, id: &str) -> Ent {
+        if let Some(&ci) = self.corp_idx.get(id) {
+            if !self.corporations[ci].closed {
+                return Ent::Corp(id.to_string());
+            }
+        }
+        if self.company_idx.contains_key(id) {
+            return Ent::Company(id.to_string());
+        }
+        if let Ok(pid) = id.parse::<u32>() {
+            if self.player_index(pid).is_some() {
+                return Ent::Player(pid);
+            }
+        }
+        if self.corp_idx.contains_key(id) {
+            return Ent::Corp(id.to_string());
+        }
+        Ent::Company(format!("__unknown:{id}"))
+    }
+
+    // -- company helpers --------------------------------------------------
+
+    pub(crate) fn co_idx(&self, sym: &str) -> Option<usize> {
+        self.company_idx.get(sym).copied()
+    }
+    pub(crate) fn co_owner(&self, sym: &str) -> EntityId {
+        self.co_idx(sym)
+            .map(|i| self.companies[i].owner.clone())
+            .unwrap_or_else(EntityId::none)
+    }
+    pub(crate) fn co_closed(&self, sym: &str) -> bool {
+        self.co_idx(sym).map_or(true, |i| self.companies[i].closed)
+    }
+    /// Ruby `company.close!`.
+    pub(crate) fn close_company(&mut self, sym: &str) {
+        if let Some(i) = self.co_idx(sym) {
+            self.companies[i].closed = true;
+            self.companies[i].owner = EntityId::none();
+        }
+        self.gm().bank_owned.retain(|c| c != sym);
+    }
+    /// Ruby `@companies.delete(company)` — gone from the stacks and from
+    /// every lookup.
+    pub(crate) fn delete_company(&mut self, sym: &str) {
+        self.gm().company_order.retain(|c| c != sym);
+        self.gm().bank_owned.retain(|c| c != sym);
+        if let Some(i) = self.co_idx(sym) {
+            self.companies[i].closed = true;
+            self.companies[i].owner = EntityId::none();
+        }
+    }
+    pub(crate) fn company_exists(&self, sym: &str) -> bool {
+        self.g().company_order.iter().any(|c| c == sym)
+    }
+    /// Companies owned by `owner` in Ruby `entity.companies` order
+    /// (acquisition order is approximated by the stack order).
+    pub(crate) fn companies_of(&self, owner: &EntityId) -> Vec<String> {
+        self.g()
+            .company_order
+            .iter()
+            .filter(|c| {
+                self.co_idx(c)
+                    .map_or(false, |i| !self.companies[i].closed && self.companies[i].owner == *owner)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Ruby `bank_companies(prefix)`: un-owned (or bank-owned) open
+    /// companies of a prefix, in `@companies` order.
+    pub(crate) fn bank_companies(&self, prefix: char) -> Vec<String> {
+        let st = self.g();
+        st.company_order
+            .iter()
+            .filter(|c| c.starts_with(prefix))
+            .filter(|c| {
+                self.co_idx(c).map_or(false, |i| {
+                    let co = &self.companies[i];
+                    !co.closed && (co.owner.is_none() || st.bank_owned.iter().any(|b| b == *c))
+                })
+            })
+            .cloned()
+            .collect()
+    }
+    pub(crate) fn bidbox_minors(&self) -> Vec<String> {
+        let cache = &self.g().bidbox_minors_cache;
+        self.bank_companies('M')
+            .into_iter()
+            .take(BIDDING_BOX_MINOR_COUNT)
+            .filter(|c| cache.contains(c))
+            .collect()
+    }
+    pub(crate) fn bidbox_concessions(&self) -> Vec<String> {
+        self.bank_companies('C')
+            .into_iter()
+            .take(BIDDING_BOX_CONCESSION_COUNT)
+            .collect()
+    }
+    pub(crate) fn bidbox_privates(&self) -> Vec<String> {
+        let privates = self.bank_companies('P');
+        if self.g1822_plus() && !self.optional_rules.iter().any(|r| r == "plus_expansion_single_stack") {
+            // One bid box per private category (first of each stack).
+            return [PLUS_EXPANSION_BIDBOX_1, PLUS_EXPANSION_BIDBOX_2, PLUS_EXPANSION_BIDBOX_3]
+                .iter()
+                .filter_map(|bx| privates.iter().find(|c| bx.contains(&c.as_str())).cloned())
+                .collect();
+        }
+        privates.into_iter().take(BIDDING_BOX_PRIVATE_COUNT).collect()
+    }
+
+    /// Whether the 1822+ expansion is in play.
+    pub(crate) fn g1822_plus(&self) -> bool {
+        self.optional_rules.iter().any(|r| r == "plus_expansion")
+    }
+
+    /// TAX_HAVEN_MULTIPLE / the tax_haven_multiple optional rule.
+    pub(crate) fn g1822_tax_haven_multiple(&self) -> bool {
+        self.optional_rules.iter().any(|r| r == "tax_haven_multiple")
+    }
+    pub(crate) fn bidbox_minors_refill(&mut self) {
+        let cache: Vec<String> = self
+            .bank_companies('M')
+            .into_iter()
+            .take(BIDDING_BOX_MINOR_COUNT)
+            .collect();
+        self.gm().bidbox_minors_cache = cache;
+    }
+    /// Ruby `setup_bidboxes` (G1822::Round::Stock#setup).
+    pub(crate) fn setup_bidboxes(&mut self) {
+        self.bidbox_minors_refill();
+        let mut boxed = self.bidbox_minors();
+        boxed.extend(self.bidbox_concessions());
+        boxed.extend(self.bidbox_privates());
+        for c in boxed {
+            if !self.g().bank_owned.contains(&c) {
+                self.gm().bank_owned.push(c);
+            }
+        }
+        self.gm().double_cash_choice = None;
+    }
+
+    // -- corporation helpers ----------------------------------------------
+
+    pub(crate) fn ci(&self, sym: &str) -> usize {
+        *self
+            .corp_idx
+            .get(sym)
+            .unwrap_or_else(|| panic!("unknown corporation {sym}"))
+    }
+    pub(crate) fn is_major(&self, sym: &str) -> bool {
+        self.corp_idx
+            .get(sym)
+            .map_or(false, |&i| self.corporations[i].corp_type == CorpType::Major)
+    }
+    pub(crate) fn is_minor(&self, sym: &str) -> bool {
+        self.corp_idx
+            .get(sym)
+            .map_or(false, |&i| self.corporations[i].corp_type == CorpType::Minor)
+    }
+    /// Ruby `find_corporation(company)` (proxy company M<n> → minor <n>).
+    pub(crate) fn minor_of_company(company: &str) -> String {
+        company[1..].to_string()
+    }
+    pub(crate) fn phase_num(&self) -> u32 {
+        self.phase.name.parse().unwrap_or(0)
+    }
+    pub(crate) fn player_debt(&self, pid: u32) -> i32 {
+        self.g().player_debt.get(&pid).copied().unwrap_or(0)
+    }
+    pub(crate) fn pay_player(&mut self, pid: u32, amount: i32) {
+        let i = self.player_index(pid).expect("player");
+        self.players[i].cash += amount;
+    }
+    /// Player → bank.
+    pub(crate) fn player_spend(&mut self, pid: u32, amount: i32) -> Result<(), GameError> {
+        let i = self.player_index(pid).expect("player");
+        if self.players[i].cash < amount {
+            return err(format!(
+                "{} has {} and cannot spend {}",
+                self.players[i].name, self.players[i].cash, amount
+            ));
+        }
+        self.players[i].cash -= amount;
+        self.bank.cash += amount;
+        Ok(())
+    }
+    pub(crate) fn bank_pay_player(&mut self, pid: u32, amount: i32) {
+        self.bank.cash -= amount;
+        self.pay_player(pid, amount);
+    }
+    pub(crate) fn bank_pay_corp(&mut self, sym: &str, amount: i32) {
+        let ci = self.ci(sym);
+        self.bank.cash -= amount;
+        self.corporations[ci].cash += amount;
+    }
+    pub(crate) fn corp_spend(&mut self, sym: &str, amount: i32) -> Result<(), GameError> {
+        let ci = self.ci(sym);
+        if self.corporations[ci].cash < amount {
+            return err(format!(
+                "{} has {} and cannot spend {}",
+                sym, self.corporations[ci].cash, amount
+            ));
+        }
+        self.corporations[ci].cash -= amount;
+        self.bank.cash += amount;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Construction (G1822 setup)
+// ---------------------------------------------------------------------------
+
+impl BaseGame {
+    /// Ruby `G1822::Game#setup` + the base init steps 1822 customizes
+    /// (init_companies / init_corporations starting lists, reservations,
+    /// the seeded company shuffle, company trains, exchange tokens,
+    /// destinations) and the initial stock round. Called once by the
+    /// constructor for 1822-family titles.
+    pub(crate) fn g1822_setup(&mut self, seed: u64) {
+        // Non-starting companies / corporations (the 1822+ ones) leave play
+        // (Ruby never instantiates them).
+        let plus = self.g1822_plus();
+        let starting_companies: Vec<String> = if plus {
+            data::STARTING_COMPANIES_PLUS
+        } else {
+            data::STARTING_COMPANIES
+        }
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let starting_corps: &[&str] = if plus {
+            data::STARTING_CORPORATIONS_PLUS
+        } else {
+            data::STARTING_CORPORATIONS
+        };
+        for co in &mut self.companies {
+            if !starting_companies.contains(&co.sym) {
+                co.closed = true;
+            }
+        }
+        for corp in &mut self.corporations {
+            if !starting_corps.contains(&corp.sym.as_str()) {
+                corp.closed = true;
+            }
+        }
+
+        // setup_companies: `@companies.sort_by! { rand }` over the
+        // init_companies order (COMPANIES order filtered to the starting
+        // list), then minors / concessions / privates with M24, C1, P1
+        // moved to the front of their stacks.
+        let mut rng = RubyRand::new(seed);
+        let mut keyed: Vec<(u64, usize, String)> = self
+            .companies
+            .iter()
+            .filter(|c| starting_companies.contains(&c.sym))
+            .enumerate()
+            .map(|(i, c)| (rng.next(), i, c.sym.clone()))
+            .collect();
+        keyed.sort_by_key(|(k, i, _)| (*k, *i));
+        let shuffled: Vec<String> = keyed.into_iter().map(|(_, _, s)| s).collect();
+        let by_prefix = |p: char| -> Vec<String> {
+            shuffled.iter().filter(|s| s.starts_with(p)).cloned().collect()
+        };
+        let mut minors = by_prefix('M');
+        let mut concessions = by_prefix('C');
+        let mut privates = by_prefix('P');
+        for (list, first) in [
+            (&mut minors, BIDDING_BOX_START_MINOR),
+            (&mut concessions, BIDDING_BOX_START_CONCESSION),
+            (&mut privates, BIDDING_BOX_START_PRIVATE),
+        ] {
+            if let Some(pos) = list.iter().position(|s| s == first) {
+                let s = list.remove(pos);
+                list.insert(0, s);
+            }
+        }
+        // 1822+ (without No Removals): privates regroup by bid box, then
+        // one box-2 private (never P5) and two box-3 privates leave play.
+        if plus && !self.optional_rules.iter().any(|r| r == "plus_expansion_no_removals") {
+            let in_box = |b: &[&str], s: &String| b.contains(&s.as_str());
+            let mut grouped: Vec<String> = Vec::new();
+            for bx in [PLUS_EXPANSION_BIDBOX_1, PLUS_EXPANSION_BIDBOX_2, PLUS_EXPANSION_BIDBOX_3] {
+                grouped.extend(privates.iter().filter(|s| in_box(bx, s)).cloned());
+            }
+            privates = grouped;
+            let mut removed: Vec<String> = Vec::new();
+            if let Some(pos) = privates
+                .iter()
+                .position(|s| s != COMPANY_LCDR && in_box(PLUS_EXPANSION_BIDBOX_2, s))
+            {
+                removed.push(privates.remove(pos));
+            }
+            for _ in 0..2 {
+                if let Some(pos) = privates.iter().position(|s| in_box(PLUS_EXPANSION_BIDBOX_3, s)) {
+                    removed.push(privates.remove(pos));
+                }
+            }
+            for r in removed {
+                if let Some(i) = self.co_idx(&r) {
+                    self.companies[i].closed = true;
+                }
+            }
+        }
+        let mut company_order = minors;
+        company_order.extend(concessions);
+        company_order.extend(privates);
+
+        // Company trains (find_and_remove_train_by_id): reserved, out of
+        // the depot. P1's 5P stays buyable; the 2P/P+ are not.
+        let mut company_trains = BTreeMap::new();
+        for (co, tid) in [
+            ("P3", "2P-0"),
+            ("P4", "2P-1"),
+            ("P1", "5P-0"),
+            ("P13", "P+-0"),
+            ("P14", "P+-1"),
+            ("P19", "LP-0"),
+        ] {
+            if let Some(pos) = self.depot.trains.iter().position(|t| t.id == tid) {
+                let t = self.depot.trains.remove(pos);
+                company_trains.insert(co.to_string(), t);
+            }
+        }
+
+        // Destination tokens (setup_destinations): one extra token of type
+        // :destination per major (price 0).
+        let mut destination_ability = Vec::new();
+        for corp in &mut self.corporations {
+            if corp.closed || data::destination(&corp.sym).is_none() {
+                continue;
+            }
+            let mut t = Token::new(corp.sym.clone(), 0);
+            t.token_type = "destination".to_string();
+            corp.tokens.push(t);
+            if corp.sym == TWO_HOME_CORPORATION {
+                destination_ability.push(corp.sym.clone());
+            }
+        }
+
+        // Exchange tokens (setup_exchange_tokens).
+        let exchange_tokens: BTreeMap<String, u32> = self
+            .corporations
+            .iter()
+            .filter(|c| !c.closed && data::exchange_tokens(&c.sym) > 0)
+            .map(|c| (c.sym.clone(), data::exchange_tokens(&c.sym)))
+            .collect();
+
+        // init_company_abilities: each concession's exchange-from-par
+        // ability sets its major's par_via_exchange.
+        let mut par_via_exchange = BTreeMap::new();
+        for (conc, corp) in [
+            ("C1", "LNWR"),
+            ("C2", "GWR"),
+            ("C3", "LBSCR"),
+            ("C4", "SECR"),
+            ("C5", "CR"),
+            ("C6", "MR"),
+            ("C7", "LYR"),
+            ("C8", "NBR"),
+            ("C9", "SWR"),
+            ("C10", "NER"),
+        ] {
+            par_via_exchange.insert(corp.to_string(), conc.to_string());
+        }
+
+        let company_revenue = self
+            .companies
+            .iter()
+            .map(|c| (c.sym.clone(), c.revenue))
+            .collect();
+
+        let mut phase_revenue = BTreeMap::new();
+        for c in PRIVATE_PHASE_REVENUE {
+            phase_revenue.insert(c.to_string(), Some(0));
+        }
+
+        let players: Vec<String> = self.players.iter().map(|p| p.id.to_string()).collect();
+        let state = G1822State {
+            seed,
+            company_order,
+            bidbox_minors_cache: Vec::new(),
+            bank_owned: Vec::new(),
+            nothing_sold_in_sr: true,
+            phase_revenue,
+            tax_haven_cash: 0,
+            double_cash_choice: None,
+            minor_14_city_exit: None,
+            company_trains,
+            exchange_tokens,
+            par_via_exchange,
+            destination_ability,
+            player_debt: BTreeMap::new(),
+            city_reservations: BTreeMap::new(),
+            tile_reservations: BTreeMap::new(),
+            abilities: track::initial_abilities(),
+            corp_token_abilities: [("SECR".to_string(), vec![(vec!["P43".to_string()], 0)])]
+                .into_iter()
+                .collect(),
+            lcdr_token_ability: true,
+            borders: BTreeMap::new(),
+            tile_instances: BTreeMap::new(),
+            pending_combo: Vec::new(),
+            pending_share_price: None,
+            round_passed_players: Vec::new(),
+            operating_rounds: 1,
+            company_revenue,
+            operating_history: BTreeMap::new(),
+            game_end_trigger: None,
+            game_end_reason: None,
+            stock_market_max_reached: false,
+            round: RoundSt::new(RoundKind::Stock, 1, players, vec![Step::DiscardTrain, Step::BuySellParShares]),
+        };
+        self.g1822 = Some(Box::new(state));
+        self.turn = 1;
+        // Home reservations (init_hexes, reservation_corporations order):
+        // a city slot (Tile#add_reservation! → City#get_slot), or the
+        // whole tile for minor 14 (London, no `city:`).
+        let corp_defs = self.title_def().corporations();
+        for cd in &corp_defs {
+            if !starting_corps.contains(&cd.sym) || cd.home_hex.is_empty() {
+                continue;
+            }
+            let city = (cd.home_city_index != u8::MAX).then_some(cd.home_city_index as usize);
+            self.g1822_add_reservation(cd.home_hex, city, cd.sym);
+        }
+        // Live water borders (border=edge:N,type:water,cost:C).
+        let mut borders = BTreeMap::new();
+        for (coord, dsl, _) in data::HEX_DSL {
+            let mut v = Vec::new();
+            for part in dsl.split(';') {
+                let Some(attrs) = part.trim().strip_prefix("border=") else { continue };
+                let (mut edge, mut cost, mut ty) = (0u8, None, String::new());
+                for kv in attrs.split(',') {
+                    let (k, val) = kv.split_once(':').unwrap_or((kv, ""));
+                    match k {
+                        "edge" => edge = val.parse().unwrap_or(0),
+                        "cost" => cost = val.parse().ok(),
+                        "type" => ty = val.to_string(),
+                        _ => {}
+                    }
+                }
+                if let Some(c) = cost {
+                    v.push((edge, c, ty));
+                }
+            }
+            if !v.is_empty() {
+                borders.insert(coord.to_string(), v);
+            }
+        }
+        self.gm().borders = borders;
+        // init_round = the first stock round.
+        self.g1822_start_stock_round();
+    }
+
+}
+
+// ---------------------------------------------------------------------------
+// The step machine (Ruby Round::Base)
+// ---------------------------------------------------------------------------
+
+impl BaseGame {
+    /// Ruby `Round::Base#process_action` for an 1822-family game.
+    /// Validate-and-mutate like Ruby, but atomically: a rejected action
+    /// leaves the game exactly as it was.
+    pub(crate) fn g1822_process_action(&mut self, action: &Action) -> Result<(), GameError> {
+        if self.finished {
+            return err("Game is already finished");
+        }
+        let backup = self.clone_for_search();
+        match self.g1822_process_inner(action) {
+            Ok(()) => {
+                self.move_number += 1;
+                self.g1822_sync_round_view();
+                Ok(())
+            }
+            Err(e) => {
+                *self = backup;
+                Err(e)
+            }
+        }
+    }
+
+    fn g1822_process_inner(&mut self, action: &Action) -> Result<(), GameError> {
+        let ent = self.g1822_entity(action.entity_id());
+        let atype = action.action_type();
+        let steps = self.rnd().steps.clone();
+        let mut chosen = None;
+        for (i, step) in steps.iter().enumerate() {
+            if !self.g1822_step_active(i) {
+                continue;
+            }
+            let process = self.g1822_step_actions(i, &ent).contains(&atype);
+            let blocking = self.g1822_step_blocking(i);
+            if blocking && !process {
+                return err(format!(
+                    "Blocking step {:?} cannot process action {} (entity {})",
+                    step,
+                    atype,
+                    action.entity_id()
+                ));
+            }
+            if blocking || process {
+                chosen = Some(i);
+                break;
+            }
+        }
+        let Some(i) = chosen else {
+            return err(format!(
+                "No step found for action {} (entity {})",
+                atype,
+                action.entity_id()
+            ));
+        };
+        self.rndm().acted[i] = true;
+        self.g1822_step_process(i, &ent, action)?;
+        self.g1822_skip_steps();
+        self.g1822_after_process(action)?;
+        // process_single_action: game_end_check, then the round loop.
+        self.g1822_game_end_check();
+        self.g1822_transition_loop()
+    }
+
+    /// Ruby `game_end_check` (GAME_END_LOCK_FIRST_TRIGGER): bank break
+    /// (:full_or during an OR, :current_or otherwise) or the stock market's
+    /// end cell (:current_or).
+    pub(crate) fn g1822_game_end_check(&mut self) {
+        if self.g().game_end_trigger.is_some() {
+            return;
+        }
+        if self.bank_broken || self.bank.cash < 0 {
+            self.bank_broken = true;
+            let timing = if self.rnd().kind == RoundKind::Operating { "full_or" } else { "current_or" };
+            self.gm().game_end_trigger = Some(("bank".to_string(), timing.to_string()));
+            return;
+        }
+        if self.g().stock_market_max_reached {
+            self.gm().game_end_trigger = Some(("stock_market".to_string(), "current_or".to_string()));
+        }
+    }
+
+    /// Ruby `end_now?(after)` for the round that just finished.
+    pub(crate) fn g1822_end_now(&self) -> bool {
+        let Some((_, timing)) = &self.g().game_end_trigger else { return false };
+        if self.rnd().kind != RoundKind::Operating {
+            return false;
+        }
+        match timing.as_str() {
+            "current_or" => true,
+            "full_or" => self.rnd().round_num as u32 >= self.g1822_operating_rounds_in_set(),
+            _ => false,
+        }
+    }
+
+    /// Whether the live round is finished (Ruby `@round.finished?`).
+    pub(crate) fn g1822_round_is_finished(&self) -> bool {
+        if self.finished {
+            return true;
+        }
+        match self.rnd().kind {
+            RoundKind::Stock => self.g1822_stock_finished(),
+            RoundKind::Choices => self.g1822_active_step().is_none(),
+            RoundKind::Operating => self.g1822_or_finished(),
+        }
+    }
+
+    /// The `while @round.finished? && !@finished` loop.
+    pub(crate) fn g1822_transition_loop(&mut self) -> Result<(), GameError> {
+        for _ in 0..64 {
+            if self.finished || !self.g1822_round_is_finished() {
+                return Ok(());
+            }
+            self.gm().round_passed_players.clear();
+            if self.g1822_end_now() {
+                let reason = self
+                    .g()
+                    .game_end_trigger
+                    .as_ref()
+                    .map(|(r, _)| r.clone())
+                    .unwrap_or_default();
+                self.g1822_end_game(&reason);
+                return Ok(());
+            }
+            if self.turn >= 100 {
+                self.g1822_end_game("dnf");
+                return Ok(());
+            }
+            self.g1822_next_round()?;
+        }
+        err("1822: round transitions did not settle")
+    }
+
+    /// Ruby `step.active?`.
+    pub(crate) fn g1822_step_active(&self, i: usize) -> bool {
+        let r = self.rnd();
+        match r.steps[i] {
+            Step::DiscardTrain => !self.g1822_crowded_corps().is_empty(),
+            Step::PendingToken => !r.pending_tokens.is_empty(),
+            _ => !r.passed[i],
+        }
+    }
+
+    /// Ruby `step.blocks?`.
+    pub(crate) fn g1822_step_blocks(&self, i: usize) -> bool {
+        let r = self.rnd();
+        match r.steps[i] {
+            Step::SpecialTrack => r.special_track_company.is_some(),
+            Step::SpecialToken => self.g1822_can_token_after_teleport(),
+            _ => true,
+        }
+    }
+
+    /// Ruby `step.current_entity` (`active_entities[0]`).
+    pub(crate) fn g1822_step_current_entity(&self, i: usize) -> Option<Ent> {
+        let r = self.rnd();
+        match r.steps[i] {
+            Step::DiscardTrain => self.g1822_crowded_corps().first().map(|c| Ent::Corp(c.clone())),
+            Step::PendingToken => r.pending_tokens.first().map(|p| Ent::Corp(p.corp.clone())),
+            Step::SpecialTrack if r.special_track_company.is_some() => {
+                r.special_track_company.clone().map(Ent::Company)
+            }
+            Step::SpecialToken if r.teleported.is_some() => r.teleported.clone().map(Ent::Company),
+            _ => self.g1822_round_entity(),
+        }
+    }
+
+    /// `entities[entity_index]` as an entity.
+    pub(crate) fn g1822_round_entity(&self) -> Option<Ent> {
+        let r = self.rnd();
+        let id = r.entities.get(r.entity_index)?;
+        Some(match r.kind {
+            RoundKind::Operating => Ent::Corp(id.clone()),
+            _ => Ent::Player(id.parse().ok()?),
+        })
+    }
+
+    /// Ruby `step.blocking?` = `blocks? && !current_actions.empty?`
+    /// (SpecialToken overrides `blocking?` with its `blocks?`).
+    pub(crate) fn g1822_step_blocking(&self, i: usize) -> bool {
+        if !self.g1822_step_blocks(i) {
+            return false;
+        }
+        if self.rnd().steps[i] == Step::SpecialToken {
+            return true;
+        }
+        match self.g1822_step_current_entity(i) {
+            Some(e) => {
+                if self.g1822_entity_closed(&e) {
+                    return false;
+                }
+                !self.g1822_step_actions(i, &e).is_empty()
+            }
+            None => false,
+        }
+    }
+
+    pub(crate) fn g1822_entity_closed(&self, e: &Ent) -> bool {
+        match e {
+            Ent::Corp(s) => self.corp_idx.get(s).map_or(true, |&i| self.corporations[i].closed),
+            Ent::Company(s) => self.co_closed(s),
+            Ent::Player(_) => false,
+        }
+    }
+
+    /// Ruby `round.active_step` (the first active blocking step).
+    pub(crate) fn g1822_active_step(&self) -> Option<usize> {
+        (0..self.rnd().steps.len()).find(|&i| self.g1822_step_active(i) && self.g1822_step_blocking(i))
+    }
+
+    /// Ruby `step.actions(entity)`.
+    pub(crate) fn g1822_step_actions(&self, i: usize, ent: &Ent) -> Vec<&'static str> {
+        match self.rnd().steps[i] {
+            Step::BuySellParShares => self.g1822_bsps_actions(ent),
+            Step::Choose => self.g1822_choose_actions(ent),
+            _ => self.g1822_or_step_actions(i, ent),
+        }
+    }
+
+    fn g1822_step_process(&mut self, i: usize, ent: &Ent, action: &Action) -> Result<(), GameError> {
+        match self.rnd().steps[i] {
+            Step::BuySellParShares => self.g1822_bsps_process(ent, action),
+            Step::Choose => self.g1822_choose_process(ent, action),
+            _ => self.g1822_or_step_process(i, ent, action),
+        }
+    }
+
+    /// Ruby `Round::Base#skip_steps`.
+    pub(crate) fn g1822_skip_steps(&mut self) {
+        for i in 0..self.rnd().steps.len() {
+            if !self.g1822_step_active(i) || !self.g1822_step_blocks(i) {
+                continue;
+            }
+            if let Some(Ent::Corp(c)) = self.g1822_round_entity() {
+                if self.corp_idx.get(&c).map_or(true, |&ci| self.corporations[ci].closed) {
+                    continue;
+                }
+            }
+            if self.g1822_step_blocking(i) {
+                break;
+            }
+            self.g1822_step_skip(i);
+        }
+    }
+
+    /// Ruby `step.skip!` (default: `pass!`).
+    fn g1822_step_skip(&mut self, i: usize) {
+        match self.rnd().steps[i] {
+            Step::BuySellParShares => self.g1822_bsps_pass(),
+            Step::Choose => self.rndm().passed[i] = true,
+            _ => self.g1822_or_step_skip(i),
+        }
+    }
+
+    fn g1822_after_process(&mut self, _action: &Action) -> Result<(), GameError> {
+        match self.rnd().kind {
+            RoundKind::Stock => {
+                if self.g1822_active_step().is_none() {
+                    self.g1822_stock_next_entity()?;
+                }
+            }
+            RoundKind::Choices => {}
+            RoundKind::Operating => self.g1822_or_after_process()?,
+        }
+        Ok(())
+    }
+
+    /// game.rb `next_round!`: SR → Choices → OR set → SR.
+    pub(crate) fn g1822_next_round(&mut self) -> Result<(), GameError> {
+        if self.finished {
+            return Ok(());
+        }
+        match self.rnd().kind {
+            RoundKind::Choices => {
+                self.g1822_reorder_players();
+                self.g1822_start_operating_round(1)?;
+            }
+            RoundKind::Stock => self.g1822_start_choices_round()?,
+            RoundKind::Operating => {
+                let round_num = self.rnd().round_num;
+                let total = self.g1822_operating_rounds_in_set();
+                if (round_num as u32) < total {
+                    self.g1822_start_operating_round(round_num + 1)?;
+                } else {
+                    self.turn += 1;
+                    self.g1822_start_stock_round();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Mirror the live 1822 round into the shared `Round` enum so generic
+    /// readers (PyO3 `round()`, `debug_state`, active entity) see it.
+    pub(crate) fn g1822_sync_round_view(&mut self) {
+        let r = self.rnd().clone();
+        match r.kind {
+            RoundKind::Stock | RoundKind::Choices => {
+                let ids: Vec<u32> = self.players.iter().map(|p| p.id).collect();
+                let current = self
+                    .g1822_active_step()
+                    .and_then(|i| self.g1822_step_current_entity(i));
+                let cur_pid = match current {
+                    Some(Ent::Player(p)) => p,
+                    _ => r.entities.get(r.entity_index).and_then(|s| s.parse().ok()).unwrap_or(ids[0]),
+                };
+                let mut s = crate::rounds::StockState::new(&ids, ids[0]);
+                s.current_player_index = s.player_order.iter().position(|&p| p == cur_pid).unwrap_or(0);
+                s.turn = self.turn;
+                self.round = crate::rounds::Round::Stock(s);
+                self.round_state.round_type = match r.kind {
+                    RoundKind::Choices => "Choices".to_string(),
+                    _ => "Stock".to_string(),
+                };
+                self.round_state.round_num = r.round_num;
+                self.round_state.active_entity_id = EntityId::player(cur_pid);
+            }
+            RoundKind::Operating => {
+                let mut s = crate::rounds::OperatingState::new(
+                    r.round_num,
+                    self.g1822_operating_rounds_in_set() as u8,
+                    r.entities.clone(),
+                );
+                s.entity_index = r.entity_index;
+                self.round = crate::rounds::Round::Operating(s);
+                self.round_state.round_type = "Operating".to_string();
+                self.round_state.round_num = r.round_num;
+                let current = self
+                    .g1822_active_step()
+                    .and_then(|i| self.g1822_step_current_entity(i));
+                self.round_state.active_entity_id = match current {
+                    Some(Ent::Corp(c)) => EntityId::corporation(&c),
+                    Some(Ent::Player(p)) => EntityId::player(p),
+                    Some(Ent::Company(c)) => EntityId(format!("company:{c}")),
+                    None => EntityId::none(),
+                };
+            }
+        }
+    }
+
+    /// The legal action types for the acting entity (Ruby `actions_for`
+    /// over the round's current entity, unioned with the current entity's
+    /// companies — the companies act in parallel).
+    pub(crate) fn g1822_action_types(&self) -> Vec<String> {
+        if self.finished {
+            return Vec::new();
+        }
+        let Some(bi) = self.g1822_active_step() else { return Vec::new() };
+        let Some(ent) = self.g1822_step_current_entity(bi) else { return Vec::new() };
+        let mut out: Vec<String> = Vec::new();
+        let mut push = |ts: Vec<&'static str>| {
+            for t in ts {
+                if !out.iter().any(|x| x == t) {
+                    out.push(t.to_string());
+                }
+            }
+        };
+        for i in 0..=bi {
+            if self.g1822_step_active(i) {
+                push(self.g1822_step_actions(i, &ent));
+            }
+        }
+        out
+    }
+
+    /// Ruby `@game.end_game!` bookkeeping for 1822.
+    pub(crate) fn g1822_end_game(&mut self, reason: &str) {
+        self.gm().game_end_reason = Some(reason.to_string());
+        self.finished = true;
+    }
+
+    /// Ruby `G1822::Game#player_value` (player.value + tax haven value).
+    pub(crate) fn g1822_player_value(&self, pid: u32) -> i32 {
+        let Some(pi) = self.player_index(pid) else { return 0 };
+        let p = &self.players[pi];
+        let eid = EntityId::player(pid);
+        let mut v = p.cash;
+        for c in &self.corporations {
+            if c.closed || c.ipo_price.is_none() {
+                continue;
+            }
+            for s in &c.shares {
+                if s.owner == eid {
+                    v += self.g1822_share_price(c, s.percent);
+                }
+            }
+        }
+        for co in &self.companies {
+            if !co.closed && co.owner == eid {
+                v += co.value;
+            }
+        }
+        v -= self.player_debt(pid);
+        // tax_haven_value: P16's owner gets the haven's cash + shares.
+        if self.co_owner(COMPANY_OSTH) == eid && !self.co_closed(COMPANY_OSTH) {
+            v += self.g1822_tax_haven_value();
+        }
+        v
+    }
+
+    /// Ruby `@tax_haven.value` (cash + share prices).
+    pub(crate) fn g1822_tax_haven_value(&self) -> i32 {
+        let th = EntityId(TAX_HAVEN_OWNER.to_string());
+        let mut v = self.g().tax_haven_cash;
+        for c in &self.corporations {
+            if c.closed || c.ipo_price.is_none() {
+                continue;
+            }
+            for s in &c.shares {
+                if s.owner == th {
+                    v += self.g1822_share_price(c, s.percent);
+                }
+            }
+        }
+        v
+    }
+
+    /// Ruby `Share#price` for a holder (market price; `always_market_price`
+    /// makes IPO and pool shares the same): `price × percent / share_percent`.
+    pub(crate) fn g1822_share_price(&self, c: &crate::entities::Corporation, percent: u8) -> i32 {
+        let price = c.share_price.as_ref().map_or(0, |sp| sp.price);
+        // num_shares(ceil: false) × price, ceiled.
+        let num = percent as f64 / c.share_unit_percent as f64;
+        (price as f64 * num).ceil() as i32
+    }
+
+    pub(crate) fn g1822_results(&self) -> std::collections::HashMap<u32, i32> {
+        self.players
+            .iter()
+            .map(|p| (p.id, self.g1822_player_value(p.id)))
+            .collect()
+    }
+}
+
+impl BaseGame {
+    pub(crate) fn g1822_action_bundle_pub(&self, sym: &str, percent: u8, idx: &[usize]) -> Result<shares::Bundle, GameError> {
+        self.g1822_action_bundle(sym, percent, idx)
+    }
+
+    /// Price a route whose record carries no revenue — not supported yet
+    /// for 1822 (every 18xx.games 1822 record carries revenue).
+    pub(crate) fn g1822_compute_route_revenue(&self, _corp: &str, r: &crate::actions::RouteData) -> Result<i32, GameError> {
+        err(format!("1822: route for {} carries no revenue", r.train_name))
+    }
+
+    /// The base revenues of a recorded route's first and last stops (mail
+    /// contracts): the first chain's first hex, the last chain's last hex.
+    pub(crate) fn g1822_route_stop_revenues(&self, r: &RunRoute) -> Vec<i32> {
+        // The record's `hexes` lists the visited stops in route order
+        // (Ruby Route#hexes over visited_stops).
+        r.hexes.iter().map(|h| self.g1822_hex_stop_revenue(h)).collect()
+    }
+
+    /// A hex's stop revenue at the current phase (the best node on it).
+    pub(crate) fn g1822_hex_stop_revenue(&self, hex: &str) -> i32 {
+        let Some(&hi) = self.hex_idx.get(hex) else { return 0 };
+        let tile = &self.hexes[hi].tile;
+        let tiers = data_tiered_city_revenue(hex, &self.phase.tiles);
+        let mut best = 0;
+        for c in &tile.cities {
+            best = best.max(tiers.unwrap_or(c.revenue));
+        }
+        for t in &tile.towns {
+            best = best.max(t.revenue);
+        }
+        for o in &tile.offboards {
+            best = best.max(o.phase_revenue(&self.phase.tiles));
+        }
+        best
+    }
+}
+
+/// A gray hex's phase-tiered city revenue ("revenue:yellow_40|green_50|...").
+pub(crate) fn data_tiered_city_revenue(hex: &str, phase_tiles: &[String]) -> Option<i32> {
+    let (dsl, _) = data::hex_dsl(hex)?;
+    let part = dsl.split(';').find(|p| p.starts_with("city=revenue:") && p.contains('|'))?;
+    let rev = part.strip_prefix("city=revenue:")?.split(',').next()?;
+    let mut out = None;
+    for tier in rev.split('|') {
+        let (color, v) = tier.split_once('_')?;
+        if phase_tiles.iter().any(|t| t == color) {
+            out = v.parse().ok();
+        }
+    }
+    out
+}
+
+pub(crate) fn data_london() -> &'static str {
+    data::LONDON_HEX
+}

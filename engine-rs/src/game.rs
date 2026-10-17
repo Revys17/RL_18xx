@@ -286,6 +286,10 @@ pub struct BaseGame {
     /// see `minors_nationalized`); the buy handler ends the buyer's turn
     /// and clears it. Always false between actions.
     pub(crate) pending_force_next_entity: bool,
+    /// 1822-family state (bid boxes, step machine, …). `Some` exactly for
+    /// titles with `GameTitle::is_g1822_family()`; every 1822 branch in
+    /// shared code keys off it, so 1830/1867 never take them.
+    pub(crate) g1822: Option<Box<crate::g1822::G1822State>>,
 }
 
 // crate-visible wrappers that forward to the (private) PyO3-exposed methods
@@ -550,6 +554,7 @@ impl BaseGame {
             border_costs: Arc::clone(&self.border_costs),
             paid_borders: self.paid_borders.clone(),
             pending_force_next_entity: self.pending_force_next_entity,
+            g1822: self.g1822.clone(),
         }
     }
 
@@ -561,6 +566,10 @@ impl BaseGame {
     pub(crate) fn process_action_internal(&mut self, action: &Action) -> Result<(), GameError> {
         if self.finished {
             return Err(GameError::new("Game is already finished"));
+        }
+        // 1822-family games run their own Ruby-faithful step machine.
+        if self.g1822.is_some() {
+            return self.g1822_process_action(action);
         }
 
         // Structural dispatch gate — Python `BaseRound.process_action`'s step
@@ -1901,6 +1910,9 @@ impl BaseGame {
     /// (the `end_game` settlement already moved the prices for real and
     /// returned the loans).
     pub fn calculate_results(&self) -> HashMap<u32, i32> {
+        if self.g1822.is_some() {
+            return self.g1822_results();
+        }
         let mut loan_adjusted: HashMap<String, i32> = HashMap::new();
         for corp in &self.corporations {
             if corp.loans == 0 || corp.closed {
@@ -2017,7 +2029,10 @@ impl BaseGame {
         {
             return match self.stock_market.movement {
                 crate::title::MarketMovement::OneDimensional => (row, col),
-                crate::title::MarketMovement::TwoDimensional => self.stock_market.move_up(row, col),
+                crate::title::MarketMovement::TwoDimensional
+                | crate::title::MarketMovement::TwoDimensionalUpDownRight => {
+                    self.stock_market.move_up(row, col)
+                }
             };
         }
         self.stock_market.move_right(row, col)
@@ -2623,6 +2638,19 @@ impl BaseGame {
         player_names: HashMap<u32, String>,
         optional_rules: Vec<String>,
     ) -> Self {
+        Self::build_seeded(title_name, player_ids, player_names, optional_rules, None)
+    }
+
+    /// `build_with_rules` with Ruby's game seed (`settings.seed`, else the
+    /// game id's digits; 0 when absent). Only titles that randomize at
+    /// setup consume it (1822's company stacks); 1830/1867 ignore it.
+    pub(crate) fn build_seeded(
+        title_name: &str,
+        player_ids: Vec<u32>,
+        player_names: HashMap<u32, String>,
+        optional_rules: Vec<String>,
+        seed: Option<u64>,
+    ) -> Self {
         let title = crate::title::resolve(title_name);
         let num_players = player_names.len() as u8;
         let cash = title.starting_cash(num_players);
@@ -2838,7 +2866,13 @@ impl BaseGame {
             border_costs: Arc::new(border_costs),
             paid_borders: Vec::new(),
             pending_force_next_entity: false,
+            g1822: None,
         };
+        if title.is_g1822_family() {
+            game.g1822_setup(seed.unwrap_or(0));
+            game.g1822_sync_round_view();
+            return game;
+        }
         game.setup_national();
         if single_item_opener {
             // Put the first company up (the Ruby step's `setup`) — needs
@@ -2882,11 +2916,12 @@ impl BaseGame {
     /// `new`). Raises ValueError for an unknown title — callers (e.g. the
     /// per-title replay harnesses) probe `supported_titles_py()` first.
     #[staticmethod]
-    #[pyo3(signature = (title, player_names, optional_rules=None))]
+    #[pyo3(signature = (title, player_names, optional_rules=None, seed=None))]
     fn new_titled(
         title: &str,
         player_names: &Bound<'_, PyDict>,
         optional_rules: Option<Vec<String>>,
+        seed: Option<u64>,
     ) -> PyResult<Self> {
         if !crate::title::all_titles().iter().any(|t| t.name() == title) {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -2902,7 +2937,25 @@ impl BaseGame {
             player_ids.push(id);
             names.insert(id, name);
         }
-        Ok(Self::build_with_rules(title, player_ids, names, optional_rules))
+        let t = crate::title::resolve(title);
+        if t.is_g1822_family() {
+            let n = player_ids.len() as u8;
+            if !(crate::title::g1822::MIN_PLAYERS..=crate::title::g1822::MAX_PLAYERS).contains(&n) {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "{title}: unsupported player count {n}"
+                )));
+            }
+            // Minor syms are numeric ("1".."30"): seat ids must not collide.
+            if let Some(bad) = player_ids
+                .iter()
+                .find(|id| t.corporations().iter().any(|c| c.sym == id.to_string()))
+            {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "{title}: player id {bad} collides with a corporation sym (use ids above 100)"
+                )));
+            }
+        }
+        Ok(Self::build_seeded(title, player_ids, names, optional_rules, seed))
     }
 
     // -- Getters --
@@ -3119,6 +3172,26 @@ impl BaseGame {
     /// The dict should have at minimum a "type" and "entity" key.
     fn process_action(&mut self, action_dict: &Bound<'_, PyDict>) -> PyResult<()> {
         let action = Action::from_py_dict(action_dict)?;
+        // 1822 tile lays may combine private abilities (Ruby
+        // `combo_entities`); the shared Action has no field for it.
+        if self.g1822.is_some() {
+            let combo: Vec<String> = match action_dict.get_item("combo_entities") {
+                Ok(Some(v)) => v.extract().unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            self.gm().pending_combo = combo;
+            // Ruby `bundle.share_price` named by buy/sell actions.
+            let atype = action.action_type();
+            let price: Option<i32> = if atype == "buy_shares" || atype == "sell_shares" {
+                match action_dict.get_item("share_price") {
+                    Ok(Some(v)) => v.extract().ok(),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            self.gm().pending_share_price = price;
+        }
         // Snapshot the input dict (as JSON) before mutating state so failures
         // don't leave a partial entry behind.
         let logged = py_to_json(action_dict.as_any())?;

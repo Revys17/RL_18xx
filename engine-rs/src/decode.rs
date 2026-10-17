@@ -386,8 +386,23 @@ impl BaseGame {
                 m.insert("city_index".to_string(), json!(city_index));
                 m.insert("slot".to_string(), json!(slot));
             }
-            Action::Choose { choice, .. } => {
+            Action::Choose { choice, .. } | Action::ChooseAbility { choice, .. } => {
                 m.insert("choice".to_string(), json!(choice));
+            }
+            // 1822 action families (no 1822 decode exists yet; serialized
+            // for completeness — compile-only addition).
+            Action::AcquireCompany { company_sym, .. } => {
+                m.insert("company".to_string(), json!(company_sym));
+            }
+            Action::HexToken { hex_id, token_type, .. } => {
+                m.insert("hex".to_string(), json!(hex_id));
+                if let Some(t) = token_type {
+                    m.insert("token_type".to_string(), json!(t));
+                }
+            }
+            Action::PayoffPlayerDebt { .. } => {}
+            Action::PayoffPlayerDebtPartial { amount, .. } => {
+                m.insert("amount".to_string(), json!(amount));
             }
         }
         serde_json::Value::Object(m)

@@ -444,6 +444,7 @@ pub fn parse_tile(name: &str, code: &str, color: TileColor) -> TileDef {
     let mut town_count = 0usize;
     let mut offboard_count = 0usize;
 
+    let mut junction_part = false;
     for part in &parts {
         let trimmed = part.trim();
         if trimmed.starts_with("city=") {
@@ -452,6 +453,8 @@ pub fn parse_tile(name: &str, code: &str, color: TileColor) -> TileDef {
             town_count += 1;
         } else if trimmed.starts_with("offboard=") {
             offboard_count += 1;
+        } else if trimmed == "junction" {
+            junction_part = true;
         }
     }
 
@@ -538,8 +541,23 @@ pub fn parse_tile(name: &str, code: &str, color: TileColor) -> TileDef {
                     _ => {}
                 }
             }
-            let a = parse_path_ref(a_ref, city_count, town_count, offboard_count);
-            let b = parse_path_ref(b_ref, city_count, town_count, offboard_count);
+            // A `_N` ref on a junction tile (1822's 80-83/544-546/60/169 and
+            // the blue port hexes: `junction;path=a:0,b:_0;...`) names the
+            // junction — the tile's only node-like part. No 1830/1867 DSL
+            // carries a junction part, so this never fires there.
+            let junction_ref = |r: &str| {
+                junction_part && city_count + town_count + offboard_count == 0 && r.starts_with('_')
+            };
+            let a = if junction_ref(a_ref) {
+                PathEndpoint::Junction
+            } else {
+                parse_path_ref(a_ref, city_count, town_count, offboard_count)
+            };
+            let b = if junction_ref(b_ref) {
+                PathEndpoint::Junction
+            } else {
+                parse_path_ref(b_ref, city_count, town_count, offboard_count)
+            };
             paths.push(PathDef { a, b, terminal });
         } else if let Some(attrs) = trimmed.strip_prefix("upgrade=") {
             let mut cost = 0i32;

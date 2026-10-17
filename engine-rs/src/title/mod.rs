@@ -1,3 +1,4 @@
+pub mod g1822;
 pub mod g1830;
 pub mod g1867;
 #[cfg(test)]
@@ -336,6 +337,15 @@ pub trait GameTitle: Sync {
         true
     }
 
+    /// Whether the title is 1822 or one of its `G1822::Game` subclasses.
+    /// Such games are driven end to end by `crate::g1822` (a Ruby-faithful
+    /// step machine) instead of the shared 1830/1867 round code; every
+    /// 1822-specific branch in shared files keys off `BaseGame::g1822`,
+    /// which is `Some` exactly for these titles. Default false.
+    fn is_g1822_family(&self) -> bool {
+        false
+    }
+
     /// Hex order for the flat action layout.
     fn action_hex_order(&self) -> Vec<&'static str> {
         self.hex_definitions().iter().map(|h| h.coord).collect()
@@ -381,6 +391,12 @@ pub enum MarketMovement {
     /// Single-row market (1867): prices only move along the row; there is
     /// no vertical movement and no edge fallback.
     OneDimensional,
+    /// 2-D grid whose `up` falls back to DOWN-RIGHT (r+1, c+1) when no cell
+    /// sits above (G1822::StockMarket#up — the compressed upper market);
+    /// otherwise TwoDimensional. Ruby's base movement moves `down` without
+    /// an existence check and `move` ignores a missing target cell; the
+    /// helpers here stay put instead, which is the same outcome.
+    TwoDimensionalUpDownRight,
 }
 
 /// 1830: Railways & Robber Barons.
@@ -470,13 +486,13 @@ impl GameTitle for G1830 {
 pub fn all_titles() -> &'static [&'static dyn GameTitle] {
     #[cfg(test)]
     {
-        static TITLES: [&'static dyn GameTitle; 3] =
-            [&G1830, &g1867::G1867, &test_title::Test5Share];
+        static TITLES: [&'static dyn GameTitle; 4] =
+            [&G1830, &g1867::G1867, &g1822::G1822, &test_title::Test5Share];
         &TITLES
     }
     #[cfg(not(test))]
     {
-        static TITLES: [&'static dyn GameTitle; 2] = [&G1830, &g1867::G1867];
+        static TITLES: [&'static dyn GameTitle; 3] = [&G1830, &g1867::G1867, &g1822::G1822];
         &TITLES
     }
 }
@@ -804,6 +820,9 @@ pub enum MarketZone {
     Orange,
     /// Multiple-buy zone (1830 brown).
     Brown,
+    /// Game-end cell (1822 `e`, Ruby `:endgame`): reaching it latches the
+    /// stock-market game-end trigger.
+    EndGame,
 }
 
 impl MarketZone {
@@ -819,6 +838,7 @@ impl MarketZone {
             MarketZone::Yellow => "no_cert_limit",
             MarketZone::Orange => "unlimited",
             MarketZone::Brown => "multiple_buy",
+            MarketZone::EndGame => "endgame",
         }
     }
 }

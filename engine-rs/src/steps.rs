@@ -385,6 +385,9 @@ impl BaseGame {
         if self.finished {
             return Vec::new();
         }
+        if self.g1822.is_some() {
+            return self.g1822_action_types();
+        }
         let snap = self.round.clone();
         let steps = self.round_step_descs(&snap);
 
