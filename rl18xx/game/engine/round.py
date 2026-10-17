@@ -1595,8 +1595,16 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
         if self.game.num_certs(entity) > self.game.cert_limit(entity):
             return True
         if not self.game.can_hold_above_corp_limit(entity):
-            return any(not corp.holding_ok(entity) for corp in self.game.corporations)
+            return bool(self.must_sell_corporations(entity))
         return False
+
+    def must_sell_corporations(self, entity):
+        # Ruby: only an over-limit corporation the player can actually sell forces a sale.
+        return [
+            corp
+            for corp in self.game.corporations
+            if not corp.holding_ok(entity) and self.can_sell_any_bundles(entity, corp)
+        ]
 
     def can_sell(self, entity, bundle):
         if not bundle:
@@ -1718,11 +1726,11 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
             )
         )
 
+    def can_sell_any_bundles(self, entity, corporation):
+        return any(self.can_sell(entity, bundle) for bundle in self.game.bundles_for_corporation(entity, corporation))
+
     def can_sell_any(self, entity):
-        return any(
-            any(self.can_sell(entity, bundle) for bundle in self.game.bundles_for_corporation(entity, corporation))
-            for corporation in self.game.corporations
-        )
+        return any(self.can_sell_any_bundles(entity, corporation) for corporation in self.game.corporations)
 
     def buyable_shares(self, entity):
         buyable_shares = []

@@ -852,36 +852,37 @@ impl BaseGame {
         corp.percent_owned_by(&player_eid) <= corp.max_ownership_percent
     }
 
-    /// Faithful port of Python `BuySellParShares.must_sell(entity)`
-    /// (rl18xx/game/engine/round.py:1592-1599). When this returns true, the
+    /// Port of Ruby/Python `BuySellParShares#must_sell?(entity)`
+    /// (step/buy_sell_par_shares.rb; round.py). When this returns true, the
     /// Stock-round step offers ONLY `SellShares` — Par/BuyShares/BuyCompany/Pass
     /// are all suppressed.
     ///
-    ///   def must_sell(self, entity):
-    ///       if not self.can_sell_any(entity): return False
-    ///       if self.game.num_certs(entity) > self.game.cert_limit(entity): return True
-    ///       if not self.game.can_hold_above_corp_limit(entity):
-    ///           return any(not corp.holding_ok(entity) for corp in self.game.corporations)
-    ///       return False
+    ///   def must_sell?(entity)
+    ///     return false unless can_sell_any?(entity)
+    ///     return true if @game.num_certs(entity) > @game.cert_limit(entity)
+    ///     !@game.can_hold_above_corp_limit?(entity) && !must_sell_corporations(entity).empty?
+    ///   def must_sell_corporations(entity)
+    ///     @game.corporations.select { |c| !c.holding_ok?(entity) && can_sell_any_bundles(entity, c) }
     ///
-    /// `sellable` is the `can_sell_any(entity)` analog (== `!sellable_bundles().is_empty()`),
+    /// — an over-limit corporation forces a sale only if the player can sell
+    /// some bundle of IT. `sellable` is the player's sellable-bundle set
+    /// (`sellable_bundles`, Ruby `can_sell?` over `bundles_for_corporation`),
     /// passed in by the caller which has already computed it. `certs` is
     /// `num_certs(entity)` (== `num_certs_internal`). For 1830
     /// `can_hold_above_corp_limit` is unconditionally false (base.py:2483), so the
     /// holding-limit branch is always evaluated — encoded explicitly here so the
-    /// correspondence to Python is exact and survives a future title that lifts it.
-    pub(crate) fn stock_must_sell(&self, player_id: u32, sellable: bool, certs: u32) -> bool {
-        if !sellable {
+    /// correspondence is exact and survives a future title that lifts it.
+    pub(crate) fn stock_must_sell(&self, player_id: u32, sellable: &[(String, usize, u8)], certs: u32) -> bool {
+        if sellable.is_empty() {
             return false;
         }
         if certs > self.cert_limit as u32 {
             return true;
         }
         if !self.can_hold_above_corp_limit() {
-            return self
-                .corporations
-                .iter()
-                .any(|corp| !self.corp_holding_ok(corp, player_id));
+            return self.corporations.iter().any(|corp| {
+                !self.corp_holding_ok(corp, player_id) && sellable.iter().any(|(sym, _, _)| *sym == corp.sym)
+            });
         }
         false
     }
@@ -2057,5 +2058,97 @@ mod multiple_brown_from_ipo_tests {
         assert!(g1830.multiple_buy_only_from_market(&["optional_6_train".to_string()]));
         assert!(!g1830.multiple_buy_only_from_market(&[RULE.to_string()]));
         assert!(!crate::title::resolve("1867").multiple_buy_only_from_market(&[]));
+    }
+}
+
+#[cfg(test)]
+mod must_sell_tests {
+    //! Ruby `BuySellParShares#must_sell?`: over the cert limit, or holding a
+    //! corporation above its holding limit THAT THE PLAYER CAN SELL
+    //! (`must_sell_corporations` → `can_sell_any_bundles`), leaves only
+    //! sell_shares. Same rig as tests/test_stock_round_must_sell.py.
+    use crate::entities::EntityId;
+    use crate::game::BaseGame;
+    use crate::rounds::{Round, StockState};
+    use std::collections::HashMap;
+
+    /// A 4-player 1830 stock round after the first (sales allowed): NYNH and
+    /// PRR parred at $67 and parked on the par cell. Player 1 is NYNH's
+    /// president with certs 0-3 (50%); `nynh_pool` of the other five certs are
+    /// in the market pool, the rest in the IPO. Player 2 is PRR's president
+    /// (cert 0) and player 1 holds PRR cert 1. NYNH's holding limit is
+    /// lowered to 40% so player 1 is over it. Player 1 acts.
+    fn rigged(nynh_pool: usize) -> BaseGame {
+        let players: HashMap<u32, String> = (1..=4).map(|i| (i, format!("Player {i}"))).collect();
+        let mut game = BaseGame::build_with_rules("1830", vec![1, 2, 3, 4], players, vec![]);
+        game.turn = 2;
+        let order = game.player_order.clone();
+        game.round = Round::Stock(StockState::new(&order, 1));
+        let par = game.stock_market.share_price_at(5, 6).unwrap();
+        for (sym, president) in [("NYNH", 1), ("PRR", 2)] {
+            let ci = game.corp_idx[sym];
+            let corp = &mut game.corporations[ci];
+            corp.ipo_price = Some(par.clone());
+            corp.share_price = Some(par.clone());
+            corp.owner_id = EntityId::player(president);
+            for i in 0..corp.shares.len() {
+                let owner = match (sym, i) {
+                    ("NYNH", 0..=3) => EntityId::player(1),
+                    ("NYNH", i) if i < 4 + nynh_pool => EntityId::market(),
+                    ("PRR", 0) => EntityId::player(2),
+                    ("PRR", 1) => EntityId::player(1),
+                    _ => EntityId::ipo(sym),
+                };
+                corp.set_share_owner(i, owner);
+            }
+            corp.floated = corp.check_floated();
+            game.update_market_cell(sym, 0, 0, 5, 6);
+        }
+        let ci = game.corp_idx["NYNH"];
+        game.corporations[ci].max_ownership_percent = 40;
+        game.update_round_state();
+        game
+    }
+
+    fn types(game: &mut BaseGame) -> Vec<String> {
+        let mut t = game.legal_action_types_for_factored();
+        t.sort();
+        t
+    }
+
+    fn must_sell(game: &BaseGame) -> bool {
+        let sellable = game.sellable_bundles_for_factored(1);
+        game.stock_must_sell(1, &sellable, game.num_certs_internal(1))
+    }
+
+    /// NYNH's pool is full (50%) and nobody else could take the presidency:
+    /// player 1 can't sell NYNH, so being over its limit forces nothing —
+    /// the turn is a normal one (PRR is still sellable).
+    #[test]
+    fn an_unsellable_over_limit_corp_forces_no_sale() {
+        let mut game = rigged(5);
+        assert!(!game.sellable_bundles_for_factored(1).iter().any(|b| b.0 == "NYNH"));
+        assert!(game.sellable_bundles_for_factored(1).iter().any(|b| b.0 == "PRR"));
+        assert!(!must_sell(&game));
+        let t = types(&mut game);
+        assert!(t.contains(&"sell_shares".to_string()) && t.contains(&"pass".to_string()), "{t:?}");
+    }
+
+    /// With room in the pool the over-limit NYNH can be sold: only sales.
+    #[test]
+    fn a_sellable_over_limit_corp_forces_a_sale() {
+        let mut game = rigged(3);
+        assert!(game.sellable_bundles_for_factored(1).iter().any(|b| b.0 == "NYNH"));
+        assert!(must_sell(&game));
+        assert_eq!(types(&mut game), ["sell_shares"]);
+    }
+
+    /// Over the cert limit still forces a sale whatever is sellable.
+    #[test]
+    fn over_the_cert_limit_forces_a_sale() {
+        let mut game = rigged(5);
+        game.cert_limit = 4;
+        assert!(must_sell(&game));
+        assert_eq!(types(&mut game), ["sell_shares"]);
     }
 }

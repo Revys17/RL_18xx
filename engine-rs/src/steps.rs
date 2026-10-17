@@ -913,9 +913,9 @@ impl BaseGame {
         match snap {
             Round::Stock(_) => {
                 if let StepEntity::Player(pid) = entity {
-                    let sellable = !self.sellable_bundles_for_factored(*pid).is_empty();
+                    let sellable = self.sellable_bundles_for_factored(*pid);
                     let certs = self.num_certs_internal(*pid);
-                    self.stock_must_sell(*pid, sellable, certs)
+                    self.stock_must_sell(*pid, &sellable, certs)
                 } else {
                     false
                 }
@@ -1329,10 +1329,11 @@ impl BaseGame {
                 }
                 let pid = *pid;
                 let buyable = !self.buyable_shares_for_factored(pid).is_empty();
-                let sellable = !self.sellable_bundles_for_factored(pid).is_empty();
+                let sellable_bundles = self.sellable_bundles_for_factored(pid);
+                let sellable = !sellable_bundles.is_empty();
                 let certs = self.num_certs_internal(pid);
-                // must_sell short-circuit (round.py:1527-1528): ONLY SellShares.
-                if self.stock_must_sell(pid, sellable, certs) {
+                // must_sell short-circuit (Ruby/Python actions): ONLY SellShares.
+                if self.stock_must_sell(pid, &sellable_bundles, certs) {
                     return vec!["sell_shares"];
                 }
                 let mut v = Vec::new();
