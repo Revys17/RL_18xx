@@ -148,6 +148,70 @@ per worker); a playout-cap "fast" move is a `PolicyRequest` in the same round
 is `player.searches_pi[-1]` and the price target `player.price_targets[-1]`
 after `play_move`.
 
+## Status of steps 3-4 (2026-10-17, CPU only; GPU pilot pending)
+
+Built: `rl18xx/agent/alphazero/search_learning.py`, `main.py search-learning`.
+Decisions taken (user, 2026-10-17): the policy is softmax(logits / T) with T
+the starting run's `learner_temperature` (0.5 for gen4) and the loss is the
+cross-entropy of log_softmax(logits / T) to the search target over the legal
+moves; targets `visits` (the validated value-driven PUCT: mean Q, c_puct 0.15
+everywhere, dedupe, par 8, priors at T) or `gumbel`; the price head's target
+is the searched grandchildren's visits by price cell; playout-cap
+randomization with p_full 0.25; all seats the learner (league hook:
+`deal_seats` / `opponent_servers`); KL to a moving anchor at T; the critic on
+outcomes with `critic_losses` (win CE + placement points); a replay window, no
+importance ratios.
+
+**Generation.** `Generator`: each worker keeps `games_per_worker` games going
+across pool tasks (every `task_seconds` it returns the games that ended), all
+of them in lockstep rounds; a searched decision gets a bare Rust tree
+(`_tree`), its move goes straight onto the game (the most-visited price for a
+price slot), and its row is written then (canonical encoding, legal moves,
+target, price-cell target) and completed at the game's end (net-worth shares;
+placement points for the score head; 32 rows flagged for the critic). Starts
+as policy-gradient runs; a start that no longer replays is skipped.
+
+**What changed in the design: pruned visit targets.** Measured on 40 human
+positions with gen4 at T = 0.5 (`scripts/search_target_stats.py`):
+
+| target | entropy | KL(target ‖ policy) | target mass where the policy < 1% |
+|---|---|---|---|
+| gen4's policy | 0.13 | 0 | 0.1% |
+| raw visits @64 / @200 | 0.77 / 0.56 | 2.39 / 1.58 | 18.6% / 12.3% |
+| pruned visits @64 / @200 | 0.16 / 0.17 | 0.18 / 0.35 | 1.7% / 2.2% |
+| Gumbel @64 / @200 | 0.13 / 0.18 | 0.06 / 0.27 | 1.4% / 3.1% |
+
+With first-play urgency at the parent's value, most root moves get a visit or
+two whatever their prior, so the raw distribution would teach the sharp policy
+those exploratory moves. `visit_target` "pruned" (default) applies KataGo's
+policy-target pruning (`RustMCTSPlayer.pruned_child_n_at_root`: every move but
+the most visited keeps only the visits its PUCT score needed against the most
+visited one; a move left with <= 1 visit gets 0). In all 40 positions the
+search's most visited move was the policy's argmax (@64 and @200): the
+signal is the shape and the few disagreements, so watch `top1_agreement`
+and `search_kl` in the history.
+
+**Training.** `_update`: `steps_per_update` steps of `minibatch` rows drawn
+from the window (microbatched), the critic on the sampled rows still flagged
+(each position once). History per update: `ce`, `search_kl` (KL(target ‖
+policy)), `target_entropy`, `top1_agreement`, `price_ce`, `kl_anchor`,
+`critic_*`, `reuse_update` / `reuse_run`, `row_age_mean`, games/h, searched
+rows/h, evaluations/s.
+
+**CPU rates per worker** (`scripts/bench_search_selfplay.py`, one core, in
+process, human / random / mid-game / auction starts as gen4's run, p_full 0.25):
+
+| network | n_full | decisions/s | searched rows/h | evaluations/s | evaluations per decision | games/h (608-decision games) |
+|---|---|---|---|---|---|---|
+| free (stub) | 64 | 180 | 162k | 3,170 | 17.6 | ~1,070 |
+| free (stub) | 200 | 77 | 70k | 4,021 | 52.1 | ~460 |
+| gen4 + critic, 8 CPU threads | 64 | 13.6 | 11.7k | 236 | 17.4 | (forward-bound) |
+
+The worker spends ~240-300 us per evaluation outside the network, so on the
+GPU the network sets the rate: at ~11-15k evaluations/s (a composite costs
+~1.33 forwards) about 630-850 decisions/s at n_full 64 (~150-210 rows/s) and
+210-290 at n_full 200 (~55-70 rows/s); 16 workers already supply more.
+
 ## Open questions (decided by the verification results)
 
 - The search budget n and `p_full`; how low `c_puct_init` should go (0.15

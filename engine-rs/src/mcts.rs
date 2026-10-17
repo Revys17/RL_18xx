@@ -1179,6 +1179,55 @@ impl RustMCTSPlayer {
         self.rng = rand::rngs::StdRng::seed_from_u64(seed);
     }
 
+    /// Root visit counts with KataGo's policy-target pruning (dense, policy
+    /// size): every move but the most visited keeps only the visits its PUCT
+    /// score needed to stay at or below the most-visited move's -- the visits
+    /// exploration alone explains are dropped -- and a move left with one
+    /// visit or none gets 0. The PUCT terms are the root's own (Q mode,
+    /// c_puct, priors), as ``argmax_action_score`` scores them after the search.
+    pub fn pruned_child_n_at_root(&self) -> Vec<f32> {
+        let root = &self.arena[self.root_idx];
+        let mut out = vec![0.0f32; crate::action_index::layout().total as usize];
+        let num_legal = root.legal_action_indices.len();
+        if num_legal == 0 {
+            return out;
+        }
+        let n_this = self.root_n;
+        let c_puct = 2.0 * ((1.0 + n_this + self.c_puct_base) / self.c_puct_base).ln()
+            + 2.0 * self.c_puct_init_for(self.root_idx);
+        let sqrt_n_s = (n_this - 1.0).max(1.0).sqrt();
+        let ap = root.active_player_index;
+        let q = |i: usize| -> f32 {
+            let n = root.child_n[i];
+            if self.mean_q {
+                if n > 0.0 { root.child_w[i][ap] / n } else { 0.0 }
+            } else {
+                root.child_w[i][ap] / (1.0 + n)
+            }
+        };
+        let best = (0..num_legal)
+            .max_by(|&a, &b| root.child_n[a].partial_cmp(&root.child_n[b]).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap();
+        let best_score = q(best) + c_puct * root.child_prior[best] * sqrt_n_s / (1.0 + root.child_n[best]);
+        for i in 0..num_legal {
+            let n = root.child_n[i];
+            let kept = if i == best || n <= 0.0 {
+                n
+            } else {
+                let gap = best_score - q(i);
+                let needed = if gap <= 0.0 {
+                    n // as good as the best: every visit was earned
+                } else {
+                    (c_puct * root.child_prior[i] * sqrt_n_s / gap - 1.0).ceil().max(0.0)
+                };
+                let kept = n.min(needed);
+                if kept <= 1.0 { 0.0 } else { kept }
+            };
+            out[root.legal_action_indices[i] as usize] = kept;
+        }
+        out
+    }
+
     /// Compute a policy-size-length visit-count policy at the root with
     /// temperature scaling. Mirrors Python ``MCTSNode.children_as_pi``.
     pub fn pi_at_root(&self, temperature: f32) -> Vec<f32> {

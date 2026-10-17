@@ -204,6 +204,68 @@ def cmd_policy_gradient(args):
     print(run(config, resume=args.resume))
 
 
+def cmd_search_learning(args):
+    import multiprocessing
+
+    multiprocessing.set_start_method("spawn", force=True)
+    from rl18xx.agent.alphazero.search_learning import SearchLearningConfig, run
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    resuming = args.resume and not (args.policy or args.value)  # a resumed run keeps its checkpoints
+    config = SearchLearningConfig(
+        policy_checkpoint="" if resuming else str(_resolve_checkpoint(args.policy, args.model_dir)),
+        value_checkpoint="" if resuming else str(_resolve_checkpoint(args.value, args.value_model_dir)),
+        out_dir=args.out_dir,
+        run_name=args.run_name,
+        learner_temperature=args.learner_temperature,
+        target=args.target,
+        visit_target=args.visit_target,
+        p_full=args.p_full,
+        n_full=args.n_full,
+        c_puct_init=args.c_puct,
+        mean_q=not args.no_mean_q,
+        fpu_reduction=args.fpu_reduction,
+        dedupe_leaves=not args.no_dedupe,
+        parallel_readouts=args.parallel_readouts,
+        prior_temperature=args.prior_temperature,
+        gumbel_k=args.gumbel_k,
+        gumbel_c_visit=args.gumbel_c_visit,
+        gumbel_c_scale=args.gumbel_c_scale,
+        gumbel_noise_scale=args.gumbel_noise_scale,
+        full_move_temperature=args.full_move_temperature,
+        value_head=args.value_head,
+        workers=args.workers,
+        games_per_worker=args.games_per_worker,
+        task_seconds=args.task_seconds,
+        max_decisions=args.max_decisions,
+        start_positions=args.start_positions,
+        random_start_fraction=args.random_start_fraction,
+        midgame_positions=args.midgame_positions if args.midgame_fraction > 0 else None,
+        midgame_fraction=args.midgame_fraction,
+        auction_fraction=args.auction_fraction,
+        inference_batch_size=args.inference_batch_size,
+        critic_positions_per_game=args.critic_positions_per_game,
+        reward=args.reward,
+        window_rows=args.window_rows,
+        rows_per_update=args.rows_per_update,
+        min_window_rows=args.min_window_rows,
+        steps_per_update=args.steps_per_update,
+        minibatch=args.minibatch,
+        microbatch=args.microbatch,
+        lr=args.lr,
+        critic_lr=args.critic_lr,
+        price_loss_weight=args.price_loss_weight,
+        score_loss_weight=args.score_loss_weight,
+        kl_coef=args.kl_coef,
+        kl_target=None if args.kl_target is not None and args.kl_target <= 0 else args.kl_target,
+        kl_coef_min=args.kl_coef_min,
+        anchor_every=args.anchor_every,
+        max_updates=args.max_updates,
+        snapshot_every=args.snapshot_every,
+    )
+    print(run(config, resume=args.resume))
+
+
 def cmd_convert(args):
     import logging
 
@@ -526,6 +588,78 @@ def build_parser():
         help="Keep the action log of about one game in N in <run>/games/ for the dashboard's game viewer (0 = off)",
     )
 
+    # search-learning (expert iteration: train the policy toward search targets)
+    from rl18xx.agent.alphazero.search_learning import SearchLearningConfig as _SL
+
+    p = sub.add_parser(
+        "search-learning",
+        help="Train the policy toward its search's targets and the critic on the games (expert iteration)",
+    )
+    p.add_argument("--policy", type=str, default=None, help="Starting policy <session>/<num> or .pth")
+    p.add_argument("--model-dir", type=str, default="model_checkpoints_pg")
+    p.add_argument("--value", type=str, default=None, help="The search's value network (critic) <session>/<num> or .pth")
+    p.add_argument("--value-model-dir", type=str, default="model_checkpoints_pg")
+    p.add_argument("--out-dir", type=str, default=_SL.out_dir)
+    p.add_argument("--run-name", type=str, default=None)
+    p.add_argument("--resume", type=str, default=None, help="Run directory to continue from its last snapshot")
+    p.add_argument(
+        "--learner-temperature", type=float, default=None,
+        help="The policy is softmax(logits / T), trained and searched so (default: the --policy run's learner_temperature)",
+    )
+    p.add_argument("--target", choices=("visits", "gumbel"), default=_SL.target,
+                   help="Policy target: the search's visit distribution, or the Gumbel root's completed-Q policy")
+    p.add_argument("--visit-target", choices=("pruned", "raw"), default=_SL.visit_target,
+                   help="--target visits: KataGo's policy-target pruning of exploration visits, or the raw visits")
+    p.add_argument("--p-full", type=float, default=_SL.p_full, help="Share of decisions searched (and trained on)")
+    p.add_argument("--n-full", type=int, default=_SL.n_full, help="Readouts of a searched decision")
+    p.add_argument("--c-puct", type=float, default=_SL.c_puct_init, help="c_puct_init in every round")
+    p.add_argument("--no-mean-q", action="store_true", help="minigo's W / (1 + N) instead of mean Q")
+    p.add_argument("--fpu-reduction", type=float, default=_SL.fpu_reduction)
+    p.add_argument("--no-dedupe", action="store_true", help="Back up a batch's duplicate leaves as visits")
+    p.add_argument("--parallel-readouts", type=int, default=_SL.parallel_readouts, help="Leaves per tree per batch")
+    p.add_argument("--prior-temperature", type=float, default=None, help="Search priors' temperature (default: T)")
+    p.add_argument("--gumbel-k", type=int, default=_SL.gumbel_k, help="--target gumbel: root moves kept")
+    p.add_argument("--gumbel-c-visit", type=float, default=_SL.gumbel_c_visit)
+    p.add_argument("--gumbel-c-scale", type=float, default=_SL.gumbel_c_scale)
+    p.add_argument("--gumbel-noise-scale", type=float, default=_SL.gumbel_noise_scale)
+    p.add_argument(
+        "--full-move-temperature", type=float, default=_SL.full_move_temperature,
+        help="--target visits: 0 plays the most-visited move, t > 0 samples it with weight N ** (1 / t)",
+    )
+    p.add_argument("--value-head", choices=("win", "score"), default=_SL.value_head,
+                   help="The critic head the search reads its leaf values from")
+    p.add_argument("--workers", type=int, default=_SL.workers)
+    p.add_argument("--games-per-worker", type=int, default=_SL.games_per_worker, help="Games each worker plays at once")
+    p.add_argument("--task-seconds", type=float, default=_SL.task_seconds, help="A worker reports its finished games this often")
+    p.add_argument("--max-decisions", type=int, default=_SL.max_decisions)
+    p.add_argument("--start-positions", type=str, default=_SL.start_positions)
+    p.add_argument("--random-start-fraction", type=float, default=_SL.random_start_fraction)
+    p.add_argument("--midgame-fraction", type=float, default=_SL.midgame_fraction)
+    p.add_argument("--midgame-positions", type=str, default="human_games/midgame_positions_1830_4p.jsonl")
+    p.add_argument("--auction-fraction", type=float, default=_SL.auction_fraction)
+    p.add_argument("--inference-batch-size", type=int, default=_SL.inference_batch_size)
+    p.add_argument("--critic-positions-per-game", type=int, default=_SL.critic_positions_per_game,
+                   help="Rows of each game the critic trains on (once each; 0 = all)")
+    p.add_argument("--reward", type=str, default=_SL.reward,
+                   help="The critic's score-head target: placement (gen4's critic; or placement:1,0.5,0.2,0) or win")
+    p.add_argument("--window-rows", type=int, default=_SL.window_rows, help="Replay window: the latest rows")
+    p.add_argument("--rows-per-update", type=int, default=_SL.rows_per_update, help="New rows between updates")
+    p.add_argument("--min-window-rows", type=int, default=_SL.min_window_rows, help="No update before the window has these")
+    p.add_argument("--steps-per-update", type=int, default=_SL.steps_per_update)
+    p.add_argument("--minibatch", type=int, default=_SL.minibatch, help="Rows per optimizer step")
+    p.add_argument("--microbatch", type=int, default=_SL.microbatch, help="Rows per forward/backward")
+    p.add_argument("--lr", type=float, default=_SL.lr)
+    p.add_argument("--critic-lr", type=float, default=_SL.critic_lr)
+    p.add_argument("--price-loss-weight", type=float, default=_SL.price_loss_weight)
+    p.add_argument("--score-loss-weight", type=float, default=_SL.score_loss_weight)
+    p.add_argument("--kl-coef", type=float, default=_SL.kl_coef, help="KL(learner || anchor) at T")
+    p.add_argument("--kl-target", type=float, default=_SL.kl_target, help="Adapt --kl-coef toward this KL (<= 0: fixed)")
+    p.add_argument("--kl-coef-min", type=float, default=_SL.kl_coef_min)
+    p.add_argument("--anchor-every", type=int, default=_SL.anchor_every,
+                   help="Move the KL anchor to the learner every N updates (0: the starting policy)")
+    p.add_argument("--max-updates", type=int, default=_SL.max_updates)
+    p.add_argument("--snapshot-every", type=int, default=_SL.snapshot_every)
+
     # convert (encode games to LMDB for pretraining)
     p = sub.add_parser("convert", help="Convert cleaned game JSONs to LMDB training data")
     p.add_argument("--data-dir", type=str, default="human_games/1830_clean", help="Directory with cleaned game JSON files")
@@ -629,6 +763,7 @@ if __name__ == "__main__":
         "convert": cmd_convert,
         "policy-selfplay": cmd_policy_selfplay,
         "policy-gradient": cmd_policy_gradient,
+        "search-learning": cmd_search_learning,
         "refit-price-head": cmd_refit_price_head,
         "arena": cmd_arena,
         "dashboard": cmd_dashboard,
