@@ -1591,11 +1591,21 @@ def fix_online_games(game_data_dir: str, output_dir: str, overwrite: bool = Fals
         if str(game["id"]) in fixed_games and not overwrite:
             LOGGER.debug(f"Skipping game {game['id']} because it has already been fixed")
             continue
-        fixed_game = get_game_object_for_game(game)
+        try:
+            fixed_game, reason = _get_game_object_for_game_with_reason(game)
+        except Exception as e:
+            # A recorded action the engine rejects outside the optional-rule cases.
+            # Since the engines follow Ruby HEAD (2026-10-16: the IPO lockout, ERIE's
+            # E11 reservation), some 2021 records the site accepted then are illegal
+            # now; the game is dropped with the reason, and the run goes on (one
+            # rejection used to end the whole loop). Audit these reasons: an engine
+            # bug looks the same.
+            LOGGER.warning(f"Game {game['id']}: the engine rejected a recorded action ({type(e).__name__}: {e})")
+            fixed_game, reason = None, f"engine_rejected: {type(e).__name__}: {e}"
         if fixed_game is None:
             with open(Path(output_dir) / f"{game['id']}.json", "w") as f:
                 json.dump(
-                    {"id": game["id"], "status": "error", "reason": "unusable due to optional rules", "actions": []},
+                    {"id": game["id"], "status": "error", "reason": reason or "unusable", "actions": []},
                     f,
                     indent=4,
                 )
