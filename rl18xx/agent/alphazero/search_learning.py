@@ -105,6 +105,10 @@ class SearchLearningConfig:
     target_temperature: float = 1.0
     p_full: float = 0.25
     n_full: int = 200
+    # Readouts of the other learner decisions (KataGo's fast searches: played, never
+    # trained on); 0 lets the policy play them at T. With 0 a game is mostly policy
+    # play, so the critic learns how the raw policy's games end, not search play's.
+    n_fast: int = 0
     c_puct_init: float = 0.15
     mean_q: bool = True
     fpu_reduction: float = 0.0
@@ -503,6 +507,9 @@ class Generator:
         if server == "learner" and len(legal) > 1 and self.rng.random() < s["p_full"]:
             g.pending = mover
             return TreeSearch(self._tree(rs), s["n_full"], key=server)
+        if server == "learner" and len(legal) > 1 and s.get("n_fast", 0) > 0:
+            g.pending = None  # a fast search: played, no row
+            return TreeSearch(self._tree(rs), s["n_fast"], key=server)
         g.pending = s["learner_temperature"] if server == "learner" else s.get("opponent_temperature", 1.0)
         return PolicyRequest(rs, legal, key=server)
 
@@ -536,11 +543,15 @@ class Generator:
                 target = visits
                 if s.get("visit_target", "pruned") == "pruned":
                     target = np.asarray(tree.pruned_child_n_at_root(), dtype=np.float64)[legal]
-            target = sharpen_target(target, legal, move, float(s.get("target_temperature", 1.0)))
             price, price_target = self._searched_price(tree, rs, move)
             # The tree is done with: the move goes straight onto the game (the
             # most-visited price, as advance_root would commit).
             rs.apply_action_index(move, price)
+            if g.pending is None:  # a fast search
+                self.counts["fast_search_decisions"] += 1
+                g.decisions += 1
+                return
+            target = sharpen_target(target, legal, move, float(s.get("target_temperature", 1.0)))
             state, nodes, _, rotation, _ = g.pending
             g.rows.append(
                 SearchRow(
@@ -837,6 +848,7 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "target": cfg.target,
         "p_full": cfg.p_full,
         "n_full": cfg.n_full,
+        "n_fast": cfg.n_fast,
         "learner_temperature": cfg.learner_temperature,
         "prior_temperature": cfg.prior_temperature,
         "c_puct_init": cfg.c_puct_init,
@@ -1063,11 +1075,16 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                     "games_total": totals["games"],
                     "games_per_hour": gen["games"] / elapsed * 3600,
                     "searched_rows_per_hour": gen["rows"] / elapsed * 3600,
-                    "decisions_per_second": (gen["searched_decisions"] + gen["fast_decisions"]) / elapsed,
+                    "decisions_per_second": (
+                        gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"]
+                    ) / elapsed,
                     "evaluations_per_second": (gen["leaves"] + gen["policy_states"]) / elapsed,
                     "searched_share": (
-                        gen["searched_decisions"] / max(gen["searched_decisions"] + gen["fast_decisions"], 1)
+                        gen["searched_decisions"]
+                        / max(gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"], 1)
                     ),
+                    "fast_search_share": gen["fast_search_decisions"]
+                    / max(gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"], 1),
                     "mean_decisions": gen["game_decisions"] / max(gen["games"], 1),
                     "skipped_starts": gen["skipped_starts"],
                     "dropped_games": gen["dropped_games"],

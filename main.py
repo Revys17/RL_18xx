@@ -223,6 +223,7 @@ def cmd_search_learning(args):
         target_temperature=args.target_temperature,
         p_full=args.p_full,
         n_full=args.n_full,
+        n_fast=args.n_fast,
         c_puct_init=args.c_puct,
         mean_q=not args.no_mean_q,
         fpu_reduction=args.fpu_reduction,
@@ -615,6 +616,8 @@ def build_parser():
                    help="Sharpen the search target to target ** (1 / t); 0: one-hot on the move the search played")
     p.add_argument("--p-full", type=float, default=_SL.p_full, help="Share of decisions searched (and trained on)")
     p.add_argument("--n-full", type=int, default=_SL.n_full, help="Readouts of a searched decision")
+    p.add_argument("--n-fast", type=int, default=_SL.n_fast,
+                   help="Readouts of the other learner decisions (played, not trained on); 0: the policy plays them")
     p.add_argument("--c-puct", type=float, default=_SL.c_puct_init, help="c_puct_init in every round")
     p.add_argument("--no-mean-q", action="store_true", help="minigo's W / (1 + N) instead of mean Q")
     p.add_argument("--fpu-reduction", type=float, default=_SL.fpu_reduction)
