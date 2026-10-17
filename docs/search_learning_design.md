@@ -90,6 +90,64 @@ how few games a round needs.
    cross-entropy in place of the PPO loss.
 5. A first run from gen4/1800 + its critic; judge every ~50 updates.
 
+## Status of steps 1-2 (2026-10-17, measured on CPU only)
+
+**Step 1 (built).** `rl18xx/agent/alphazero/lockstep.py` +
+`engine-rs/src/mcts_lockstep.rs`: `RustMCTSPlayer.start_search()` gives a
+`TreeSearch`; `LockstepSearcher.round()` has every tree select its batch as
+`tree_search` does, encodes the leaves in Rust into one stacked request per
+network (`mcts._native_encode`, bit-for-bit `_rust_encode` on 146k human
+positions) and scatters the sparse legal priors / values / price rows back in
+Rust. A lockstep tree ends identical to the same tree searched alone.
+`eval_head_to_head.py --games-per-task N` plays N games per worker from a
+shared queue in lockstep. Also: tree nodes no longer clone the whole JSON
+action log (they log only the actions since the root), which was most of an
+expansion's cost late in a game.
+
+Measured with `scripts/bench_search_harness.py` (48 human positions from SR1 to
+SR6, @64, the value-driven settings, interleaved runs of master and the branch):
+
+| | before (master) | after, one tree | after, lockstep |
+|---|---|---|---|
+| in-process, stub network: worker time outside the network per evaluation | 814-902 us | 704-764 us | 208-217 us (x32 trees) |
+| in-process, gen4 + critic on 8 CPU threads: share of time outside the forward | 19.5-20.0% | 17.9-18.8% | 4.6-4.7% |
+| inference server + 8 workers, stub network: evaluations/s | 4,108 | 4,760 | 15,912 (x16), 15,731 (x32) |
+
+With the stub network the old path is bound by the server process, which spent
+65% of its time receiving 17-leaf requests; lockstep requests carry ~180 (x16)
+to ~330 (x32) leaves and the server sat idle 22-28%, so 8 workers on 16 CPU
+threads were the limit (~2k evaluations/s each). What a lockstep worker still
+spends per evaluation (`scripts/bench_leaf_costs.py`): ~140 us selecting and
+expanding the leaf in Rust (cloning the parent's `BaseGame`, applying the move
+and its JSON log entry, two legal-move enumerations of ~20 us), ~60 us freeing
+finished trees (one game per node), ~14 us encoding, ~10 us of Python per leaf.
+The next CPU win is a cheaper `BaseGame` clone (Arc-shared immutable parts,
+no JSON logging off the played path) -- `game.rs` work.
+
+**Step 2 (built, off by default).** `engine-rs/src/gumbel.rs`,
+`SelfPlayConfig.gumbel_k` / `gumbel_c_visit` (50) / `gumbel_c_scale` (1) /
+`gumbel_noise_scale` (1), eval `:gumbel=<k>,gscale=,cvisit=,cscale=`. Root:
+top-k by g + log-prior, mctx's sequential-halving schedule over exactly the
+budget (in-flight simulations count toward a move's visits, `dedupe_leaves`
+duplicates don't, batches stop at the budget), the move
+argmax(g + logits + sigma(q)) over the most-visited kept moves, the target
+softmax(logits + sigma(completed q)) in `searches_pi` (unvisited moves get the
+root's v_mix; sigma(q) = (c_visit + max N) * c_scale * q, q the mover's mean
+0-1 share). Below the root: unchanged PUCT. Price-bearing root moves are
+single candidates whose q aggregates their price grandchildren (the policy
+head's view); the played price is the most-visited grandchild and the price
+target their visit distribution, as before. A reused subtree's visits count
+for q but not for the schedule. Logits are the tree's priors (after
+`prior_temperature`), so with ptemp 0.5 the target improves on
+softmax(logits / 0.5), not on the raw policy -- decide which in step 4.
+
+**For step 3.** Drive self-play games through `LockstepSearcher` (16-32 games
+per worker); a playout-cap "fast" move is a `PolicyRequest` in the same round
+(or a `TreeSearch` with a small budget); write rows at decision time with
+`_native_encode` instead of `extract_data`'s Python replay; the Gumbel target
+is `player.searches_pi[-1]` and the price target `player.price_targets[-1]`
+after `play_move`.
+
 ## Open questions (decided by the verification results)
 
 - The search budget n and `p_full`; how low `c_puct_init` should go (0.15

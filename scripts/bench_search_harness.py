@@ -11,33 +11,41 @@ operating rounds; ``--positions`` of them) and every one gets one search of
 (mean Q, c_puct 0.15 in every round, dedupe, 8 leaves per batch, prior
 temperature 0.5; ``--default-search`` for SelfPlayConfig's).
 
-``--mode inproc`` (one process): the network runs in-process; for the
-one-tree path it sits behind a client double that answers like the inference
-server does (legal priors only, densified by the client), so the per-leaf work
-matches an eval worker's. ``--mode server``: an inference server process (CPU)
-and ``--workers`` worker processes, each searching its share of the positions
--- the eval's layout, IPC included.
+``--concurrency``: 1 is the one-tree path (``suggest_move``), N > 1 lockstep
+with N trees per worker. ``--mode inproc`` (one process): the network runs
+in-process; for the one-tree path it sits behind a client double that answers
+like the inference server does (legal priors only, densified by the client),
+so the per-leaf work matches an eval worker's; reports evaluations/s and the
+time outside the network call per evaluation. ``--mode server``: an inference
+server process and ``--workers`` worker processes that each build their share
+of the positions, then all search (cycling through them) for ``--duration``
+seconds -- the eval's layout, IPC included; reports the evaluations the server
+answered in that window and the share of it the server was busy. Set
+``RL18XX_SERVER_PROFILE=<seconds>`` for the server's stage split.
 
 ``--model stub``: a stand-in network whose forward is nearly free (uniform
 priors, equal values, zero price logits): what is left is the harness. Or a
 checkpoint (``<policy.pth>[+<value.pth>]``, composite_model.load_policy_value).
 
-Never touches the GPU (it sets CUDA_VISIBLE_DEVICES=""):
+The GPU stays hidden (CUDA_VISIBLE_DEVICES="") unless ``--gpu`` is given:
 
-    uv run python scripts/bench_search_harness.py --model stub --mode inproc
-    uv run python scripts/bench_search_harness.py --model stub --mode server --workers 8 --games-per-worker 16
+    uv run python scripts/bench_search_harness.py --model stub --mode inproc --concurrency 1 32
+    uv run python scripts/bench_search_harness.py --model stub --mode server --workers 8 --concurrency 1 16
     uv run python scripts/bench_search_harness.py --model <learner.pth>+<critic.pth> --torch-threads 8
+    uv run python scripts/bench_search_harness.py --gpu --mode server --model <learner.pth>+<critic.pth> \
+        --workers 48 --positions 2000 --readouts 200 --concurrency 1 8 16 --duration 60
 """
 
 import os
+import sys
 
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
+if "--gpu" not in sys.argv:
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 import argparse  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
 import random  # noqa: E402
-import sys  # noqa: E402
 import time  # noqa: E402
 from concurrent.futures import ProcessPoolExecutor  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -163,7 +171,7 @@ class ServerDouble:
         lengths = torch.tensor([len(ix) for ix in legal_indices])
         rows = torch.repeat_interleave(torch.arange(len(legal_indices)), lengths)
         cols = torch.from_numpy(np.concatenate([np.asarray(ix, dtype=np.int64) for ix in legal_indices]))
-        priors = probs[rows, cols].float().numpy()
+        priors = probs[rows.to(probs.device), cols.to(probs.device)].float().cpu().numpy()
         dense = np.zeros((len(legal_indices), POLICY_SIZE), dtype=np.float32)
         offset = 0
         for row, ix in enumerate(legal_indices):
@@ -171,7 +179,7 @@ class ServerDouble:
             offset += len(ix)
         pc = self.network.last_price_components
         self.last_price_components = None if pc is None else {
-            "price_logits": torch.from_numpy(np.asarray(pc["price_logits"], dtype=np.float32)),
+            "price_logits": torch.as_tensor(pc["price_logits"]).detach().float().cpu(),
             "slot_index": pc.get("slot_index"),
             "num_slots": pc.get("num_slots"),
         }
@@ -450,6 +458,7 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--default-search", action="store_true", help="SelfPlayConfig's search settings")
     parser.add_argument("--out", type=Path, default=None, help="Append the results here as JSON lines")
+    parser.add_argument("--gpu", action="store_true", help="Let the network use the GPU (default: CPU only)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING)
     results = bench_inproc(args) if args.mode == "inproc" else bench_server(args)
