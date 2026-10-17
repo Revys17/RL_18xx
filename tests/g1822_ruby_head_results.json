@@ -1,0 +1,11519 @@
+{
+"games": {
+"29490": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"30125": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"30126": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"30128": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"30137": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"30142": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"30147": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"30160": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"30221": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"30228": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"30233": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"30241": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"30242": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"30257": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"30281": {
+"diverges_at": null,
+"ruby_rejects_at": 178
+},
+"30355": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"30357": {
+"diverges_at": null,
+"ruby_rejects_at": 135
+},
+"30397": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"30418": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"30447": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"30467": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"30484": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"30489": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"30492": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"30754": {
+"diverges_at": null,
+"ruby_rejects_at": 143
+},
+"30785": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"30816": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"30835": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"30853": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"30857": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"30893": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"30930": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"30985": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"31002": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"31010": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"31016": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"31020": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"31032": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31039": {
+"diverges_at": null,
+"ruby_rejects_at": 113
+},
+"31057": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"31105": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31114": {
+"diverges_at": null,
+"ruby_rejects_at": 104
+},
+"31118": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"31136": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31150": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31174": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31244": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"31245": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31268": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31289": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31306": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"31318": {
+"diverges_at": null,
+"ruby_rejects_at": 128
+},
+"31338": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31358": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31366": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"31369": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"31387": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"31411": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"31412": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"31423": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"31436": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31440": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"31452": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"31467": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"31480": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"31572": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31625": {
+"diverges_at": null,
+"ruby_rejects_at": 113
+},
+"31631": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"31668": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31756": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"31787": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"31800": {
+"diverges_at": null,
+"ruby_rejects_at": 123
+},
+"31812": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"31816": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"31843": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"31847": {
+"diverges_at": null,
+"ruby_rejects_at": 110
+},
+"31884": {
+"diverges_at": null,
+"ruby_rejects_at": 172
+},
+"31897": {
+"diverges_at": null,
+"ruby_rejects_at": 149
+},
+"31910": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"31915": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"31924": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"31930": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"31936": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"31938": {
+"diverges_at": null,
+"ruby_rejects_at": 112
+},
+"31943": {
+"diverges_at": null,
+"ruby_rejects_at": 126
+},
+"31947": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"31982": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"32021": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"32023": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"32045": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"32055": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"32062": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"32100": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"32151": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"32193": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"32200": {
+"diverges_at": null,
+"ruby_rejects_at": 114
+},
+"32228": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"32246": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"32252": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"32258": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"32273": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"32317": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"32362": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"32376": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"32385": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"32413": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"32426": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"32465": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"32470": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"32473": {
+"diverges_at": null,
+"ruby_rejects_at": 163
+},
+"32496": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"32507": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"32508": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"32525": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"32527": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"32567": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"32613": {
+"diverges_at": null,
+"ruby_rejects_at": 127
+},
+"32639": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"32646": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"32653": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"32663": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"32666": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"32709": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"32714": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"32728": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"32744": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"32819": {
+"diverges_at": null,
+"ruby_rejects_at": 103
+},
+"32861": {
+"diverges_at": null,
+"ruby_rejects_at": 97
+},
+"32882": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"32950": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"32982": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"33026": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"33034": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"33078": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"33131": {
+"diverges_at": null,
+"ruby_rejects_at": 113
+},
+"33174": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"33181": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"33208": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"33219": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"33229": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"33234": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"33254": {
+"diverges_at": null,
+"ruby_rejects_at": 114
+},
+"33477": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"33489": {
+"diverges_at": null,
+"ruby_rejects_at": 111
+},
+"33678": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"33714": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"33720": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"33741": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"33806": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"33818": {
+"diverges_at": null,
+"ruby_rejects_at": 119
+},
+"33977": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"33999": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"35000": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"35004": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"35036": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"35052": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"35077": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"35114": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"35125": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"35147": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"35152": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"35205": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"35207": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"35219": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"35239": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"35253": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"35290": {
+"diverges_at": null,
+"ruby_rejects_at": 116
+},
+"35321": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"35412": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"35470": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"35476": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"35514": {
+"diverges_at": null,
+"ruby_rejects_at": 163
+},
+"35518": {
+"diverges_at": null,
+"ruby_rejects_at": 107
+},
+"35535": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"35565": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"35579": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"35585": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"35638": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"35642": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"35685": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"35695": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"35699": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"35729": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"35734": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"35801": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"35835": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"35844": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"35867": {
+"diverges_at": null,
+"ruby_rejects_at": 121
+},
+"35875": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"35883": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"35893": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"35922": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"35947": {
+"diverges_at": null,
+"ruby_rejects_at": 130
+},
+"35953": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"35996": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"36084": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"36095": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"36102": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"36505": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"36511": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"36514": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"36517": {
+"diverges_at": null,
+"ruby_rejects_at": 143
+},
+"36564": {
+"diverges_at": null,
+"ruby_rejects_at": 161
+},
+"36570": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"36601": {
+"diverges_at": null,
+"ruby_rejects_at": 112
+},
+"36630": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"36634": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"36665": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"36670": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"36685": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"36698": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"36758": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"36789": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"36805": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"36822": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"36831": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"36868": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"36889": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"36910": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"36950": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"36983": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"37006": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"37023": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"37068": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"37123": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"37153": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"37156": {
+"diverges_at": null,
+"ruby_rejects_at": 124
+},
+"37157": {
+"diverges_at": null,
+"ruby_rejects_at": 130
+},
+"37160": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"37179": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"37180": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"37182": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"37192": {
+"diverges_at": null,
+"ruby_rejects_at": 103
+},
+"37239": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"37261": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"37281": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"37293": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"37299": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"37338": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"37346": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"37348": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"37376": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"37411": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"37416": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"37428": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"37430": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"37489": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"37492": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"37499": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"37521": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"37534": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"37544": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"37565": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"37587": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"37616": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"37621": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"37636": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"37642": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"37647": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"37653": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"37670": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"37688": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"37692": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"37697": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"37699": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"37700": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"37723": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 300,
+"2": 300,
+"3": 300,
+"4": 300,
+"5": 300,
+"6": 300,
+"7": 300
+}
+},
+"37734": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"37753": {
+"diverges_at": null,
+"ruby_rejects_at": 111
+},
+"37770": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"37784": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"37788": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"37806": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"37812": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"37815": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"37822": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"37831": {
+"diverges_at": null,
+"ruby_rejects_at": 140
+},
+"37832": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"37842": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"37856": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"37873": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"37891": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"37896": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"37906": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"37920": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"37951": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"37955": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"37963": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"37978": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"38003": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"38086": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"38089": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"38109": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"38113": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"38177": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"38178": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"38179": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"38187": {
+"diverges_at": null,
+"ruby_rejects_at": 97
+},
+"38193": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"38201": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"38238": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"38262": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"38267": {
+"diverges_at": null,
+"ruby_rejects_at": 124
+},
+"38326": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"38381": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"38384": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"38402": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"38411": {
+"diverges_at": null,
+"ruby_rejects_at": 26
+},
+"38454": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"38456": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"38501": {
+"diverges_at": null,
+"ruby_rejects_at": 117
+},
+"38517": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"38586": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"38593": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"38602": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"38603": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 350,
+"2": 350,
+"3": 350,
+"4": 350,
+"5": 350,
+"6": 350
+}
+},
+"38624": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 350,
+"2": 350,
+"3": 350,
+"4": 350,
+"5": 350,
+"6": 350
+}
+},
+"38627": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"38655": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"38675": {
+"diverges_at": null,
+"ruby_rejects_at": 111
+},
+"38694": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"38697": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"38711": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"38749": {
+"diverges_at": null,
+"ruby_rejects_at": 24
+},
+"38756": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"38771": {
+"diverges_at": null,
+"ruby_rejects_at": 115
+},
+"38772": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"38773": {
+"diverges_at": null,
+"ruby_rejects_at": 135
+},
+"38777": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"38808": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"38843": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"38848": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"38858": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"38865": {
+"diverges_at": null,
+"ruby_rejects_at": 110
+},
+"38866": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"38873": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"38874": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"38894": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"38905": {
+"diverges_at": null,
+"ruby_rejects_at": 25
+},
+"38928": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"38933": {
+"diverges_at": null,
+"ruby_rejects_at": 195
+},
+"38942": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"38949": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"38989": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"39000": {
+"diverges_at": null,
+"ruby_rejects_at": 141
+},
+"39009": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"39023": {
+"diverges_at": null,
+"ruby_rejects_at": 24
+},
+"39042": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"39047": {
+"diverges_at": null,
+"ruby_rejects_at": 109
+},
+"39055": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"39057": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"39062": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"39087": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"39114": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"39121": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"39134": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"39170": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"39190": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"39205": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"39297": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"39319": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"39324": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"39331": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"39348": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"39384": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"39388": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"39390": {
+"diverges_at": null,
+"ruby_rejects_at": 21
+},
+"39418": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"39457": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"39462": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"39472": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"39479": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"39577": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"39625": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"39682": {
+"diverges_at": null,
+"ruby_rejects_at": 19
+},
+"39769": {
+"diverges_at": null,
+"ruby_rejects_at": 109
+},
+"39779": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"39840": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"39843": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"39851": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"39868": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"39874": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"39876": {
+"diverges_at": null,
+"ruby_rejects_at": 113
+},
+"39900": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"39904": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"39935": {
+"diverges_at": null,
+"ruby_rejects_at": 130
+},
+"39963": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"39964": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"39982": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"40005": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"40026": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"40031": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"40038": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"40092": {
+"diverges_at": null,
+"ruby_rejects_at": 25
+},
+"40095": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"40096": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"40126": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"40130": {
+"diverges_at": null,
+"ruby_rejects_at": 145
+},
+"40143": {
+"diverges_at": null,
+"ruby_rejects_at": 110
+},
+"40161": {
+"diverges_at": null,
+"ruby_rejects_at": 117
+},
+"40169": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"40175": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"40182": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"40204": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"40225": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"40231": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"40285": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"40294": {
+"diverges_at": null,
+"ruby_rejects_at": 109
+},
+"40305": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"40316": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"40327": {
+"diverges_at": null,
+"ruby_rejects_at": 97
+},
+"40333": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"40357": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"40367": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"40463": {
+"diverges_at": null,
+"ruby_rejects_at": 135
+},
+"40466": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"40649": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"40658": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"40668": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"40693": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"40708": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"40728": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"40743": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"40745": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"40756": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"40778": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"40792": {
+"diverges_at": null,
+"ruby_rejects_at": 104
+},
+"40796": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"40802": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"40836": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"40845": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"40881": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"40884": {
+"diverges_at": null,
+"ruby_rejects_at": 168
+},
+"40920": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"40922": {
+"diverges_at": null,
+"ruby_rejects_at": 27
+},
+"40942": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"40960": {
+"diverges_at": null,
+"ruby_rejects_at": 27
+},
+"40962": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"40983": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"40993": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"41027": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"41052": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"41088": {
+"diverges_at": null,
+"ruby_rejects_at": 27
+},
+"41098": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"41101": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"41118": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"41122": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"41141": {
+"diverges_at": null,
+"ruby_rejects_at": 23
+},
+"41158": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"41225": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"41258": {
+"diverges_at": null,
+"ruby_rejects_at": 29
+},
+"41304": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"41337": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"41340": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"41364": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"41506": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"41520": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"41521": {
+"diverges_at": null,
+"ruby_rejects_at": 120
+},
+"41541": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"41562": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"41564": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"41566": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"41582": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"41590": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"41599": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"41609": {
+"diverges_at": null,
+"ruby_rejects_at": 103
+},
+"41620": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"41622": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"41633": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"41653": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"41676": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"41702": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"41731": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"41744": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"41745": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"41758": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"41785": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"41793": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"41826": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"41831": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"41837": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"41840": {
+"diverges_at": null,
+"ruby_rejects_at": 175
+},
+"41867": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"41878": {
+"diverges_at": null,
+"ruby_rejects_at": 96
+},
+"41892": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"41925": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"41935": {
+"diverges_at": null,
+"ruby_rejects_at": 110
+},
+"41948": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"42006": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"42009": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"42070": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"42097": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"42104": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"42119": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"42131": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"42134": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"42140": {
+"diverges_at": null,
+"ruby_rejects_at": 96
+},
+"42141": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"42171": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"42192": {
+"diverges_at": null,
+"ruby_rejects_at": 173
+},
+"42198": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"42207": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"42212": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"42215": {
+"diverges_at": null,
+"ruby_rejects_at": 123
+},
+"42243": {
+"diverges_at": null,
+"ruby_rejects_at": 131
+},
+"42249": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"42297": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"42375": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"42380": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"42385": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"42387": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"42398": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"42417": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"42440": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"42448": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"42458": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"42463": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"42482": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"42491": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"42495": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"42535": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"42539": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"42540": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"42557": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"42725": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"42730": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"42740": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"42752": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"42753": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"42760": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"42766": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"42771": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"42780": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"42827": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"42848": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"42870": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"42887": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"42889": {
+"diverges_at": null,
+"ruby_rejects_at": 106
+},
+"42901": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"42946": {
+"diverges_at": null,
+"ruby_rejects_at": 111
+},
+"42963": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"42988": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"43014": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"43016": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"43018": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"43028": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"43095": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"43137": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"43160": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"43182": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"43183": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"43202": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"43207": {
+"diverges_at": null,
+"ruby_rejects_at": 120
+},
+"43222": {
+"diverges_at": null,
+"ruby_rejects_at": 129
+},
+"43224": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"43238": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"43245": {
+"diverges_at": null,
+"ruby_rejects_at": 116
+},
+"43264": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"43268": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"43286": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"43294": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"43352": {
+"diverges_at": null,
+"ruby_rejects_at": 26
+},
+"43365": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"43370": {
+"diverges_at": null,
+"ruby_rejects_at": 110
+},
+"43375": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"43390": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"43528": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"43549": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"43552": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"43571": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"43630": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"43671": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"43712": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"43733": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"43747": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"43816": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"43851": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"43869": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"43882": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"43884": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"43888": {
+"diverges_at": null,
+"ruby_rejects_at": 22
+},
+"43922": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"43940": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"43941": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"43953": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"43962": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"43969": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"43982": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"43996": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"43998": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"44022": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"44031": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"44082": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"44093": {
+"diverges_at": null,
+"ruby_rejects_at": 96
+},
+"44099": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"44102": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"44188": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"44191": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"44225": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"44229": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"44236": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"44254": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"44257": {
+"diverges_at": null,
+"ruby_rejects_at": 24
+},
+"44267": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"44275": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"44278": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"44279": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"44283": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"44304": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"44311": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"44321": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"44326": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"44334": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"44336": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"44369": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"44386": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"44442": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"44443": {
+"diverges_at": null,
+"ruby_rejects_at": 25
+},
+"44444": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"44450": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"44451": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"44475": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"44489": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"44499": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"44503": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"44524": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"44532": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"44555": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"44565": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"44567": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"44580": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"44600": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"44605": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"44610": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"44618": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"44633": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"44704": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"44756": {
+"diverges_at": null,
+"ruby_rejects_at": 124
+},
+"44772": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"44824": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"44848": {
+"diverges_at": null,
+"ruby_rejects_at": 27
+},
+"44878": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"44884": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"44892": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"44898": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"44910": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"44914": {
+"diverges_at": null,
+"ruby_rejects_at": 116
+},
+"44955": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"44956": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"44979": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"44997": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"45011": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"45012": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"45043": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"45062": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"45328": {
+"diverges_at": null,
+"ruby_rejects_at": 114
+},
+"45361": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"45378": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"45383": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"45412": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"45416": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"45419": {
+"diverges_at": null,
+"ruby_rejects_at": 104
+},
+"45441": {
+"diverges_at": null,
+"ruby_rejects_at": 25
+},
+"45468": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"45476": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"45478": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"45554": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"45556": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"45567": {
+"diverges_at": null,
+"ruby_rejects_at": 133
+},
+"45592": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"45593": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"45606": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"45607": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"45642": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"45658": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"45677": {
+"diverges_at": null,
+"ruby_rejects_at": 127
+},
+"45690": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"45695": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"45697": {
+"diverges_at": null,
+"ruby_rejects_at": 26
+},
+"45733": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"45760": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"45769": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"45788": {
+"diverges_at": null,
+"ruby_rejects_at": 134
+},
+"45832": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"45833": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"45845": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"45850": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"45866": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"45901": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"45923": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"45928": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"45937": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"45947": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"45957": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"45980": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"45987": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"46001": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"46002": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"46043": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"46047": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"46050": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"46052": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"46086": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"46115": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"46127": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"46133": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"46160": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"46164": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"46172": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"46177": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"46190": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"46225": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"46228": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"46229": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"46254": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"46269": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"46286": {
+"diverges_at": null,
+"ruby_rejects_at": 97
+},
+"46422": {
+"diverges_at": null,
+"ruby_rejects_at": 97
+},
+"46472": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"46498": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"46507": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"46514": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"46518": {
+"diverges_at": null,
+"ruby_rejects_at": 141
+},
+"46534": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"46544": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"46561": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"46566": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"46570": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"46587": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"46598": {
+"diverges_at": null,
+"ruby_rejects_at": 112
+},
+"46650": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"46692": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"46708": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"46711": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"46738": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"46741": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"46754": {
+"diverges_at": null,
+"ruby_rejects_at": 29
+},
+"46808": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"46828": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"46840": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"46851": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"46862": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"46874": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"46938": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"46944": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"47002": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"47004": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"47016": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"47026": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"47068": {
+"diverges_at": null,
+"ruby_rejects_at": 97
+},
+"47069": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"47102": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"47109": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"47112": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"47115": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"47146": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"47149": {
+"diverges_at": null,
+"ruby_rejects_at": 134
+},
+"47165": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"47175": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"47189": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"47204": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"47244": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"47255": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"47261": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"47279": {
+"diverges_at": null,
+"ruby_rejects_at": 157
+},
+"47319": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"47322": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"47326": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"47350": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"47390": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"47392": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"47429": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"47431": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"47454": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"47458": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"47492": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"47495": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"47517": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"47524": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"47537": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"47538": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"47548": {
+"diverges_at": null,
+"ruby_rejects_at": 115
+},
+"47550": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"47582": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"47590": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"47612": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"47623": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"47627": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"47628": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"47642": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"47653": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"47677": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"47706": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"47720": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"47724": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"47756": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"47786": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"47796": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"47806": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"47811": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"47821": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"47837": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"47838": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"47848": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"47869": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"47879": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"48011": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"48054": {
+"diverges_at": null,
+"ruby_rejects_at": 125
+},
+"48058": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"48074": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"48096": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"48107": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"48128": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"48138": {
+"diverges_at": null,
+"ruby_rejects_at": 171
+},
+"48156": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"48161": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"48162": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"48168": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"48187": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"48196": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"48202": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"48220": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"48225": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"48251": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"48252": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"48282": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"48283": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"48298": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"48321": {
+"diverges_at": null,
+"ruby_rejects_at": 175
+},
+"48323": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"48334": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"48381": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"48393": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"48416": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"48466": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"48470": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"48482": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"48513": {
+"diverges_at": null,
+"ruby_rejects_at": 114
+},
+"48523": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"48543": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"48548": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"48571": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"48605": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"48612": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"48618": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"48622": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"48646": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"48668": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"48706": {
+"diverges_at": null,
+"ruby_rejects_at": 133
+},
+"48708": {
+"diverges_at": null,
+"ruby_rejects_at": 120
+},
+"48711": {
+"diverges_at": null,
+"ruby_rejects_at": 129
+},
+"48715": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"48737": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"48742": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"48773": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"48783": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"48826": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"48827": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"48855": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"48906": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"48920": {
+"diverges_at": null,
+"ruby_rejects_at": 114
+},
+"48938": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"48939": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"48979": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"49041": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"49042": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"49046": {
+"diverges_at": null,
+"ruby_rejects_at": 139
+},
+"49131": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"49172": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"49173": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"49176": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"49192": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"49194": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"49203": {
+"diverges_at": null,
+"ruby_rejects_at": 116
+},
+"49228": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"49247": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"49248": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"49254": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"49276": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"49277": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"49283": {
+"diverges_at": null,
+"ruby_rejects_at": 116
+},
+"49324": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"49331": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"49367": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"49402": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"49409": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"49415": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"49432": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"49454": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"49464": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"49513": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"49567": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"49573": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"49592": {
+"diverges_at": null,
+"ruby_rejects_at": 145
+},
+"49608": {
+"diverges_at": null,
+"ruby_rejects_at": 132
+},
+"49629": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"49630": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"49636": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"49639": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"49683": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"49685": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"49756": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"49792": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"49799": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"49831": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"49883": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"49884": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"49925": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"49945": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"49966": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"49990": {
+"diverges_at": null,
+"ruby_rejects_at": 127
+},
+"50009": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"50017": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"50046": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"50047": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"50067": {
+"diverges_at": null,
+"ruby_rejects_at": 113
+},
+"50074": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"50091": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"50094": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"50147": {
+"diverges_at": null,
+"ruby_rejects_at": 136
+},
+"50150": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"50184": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"50196": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"50216": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"50217": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"50243": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"50245": {
+"diverges_at": null,
+"ruby_rejects_at": 26
+},
+"50251": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"50254": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"50261": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"50262": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"50296": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"50362": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"50366": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"50392": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"50403": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"50444": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"50454": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"50478": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"50550": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"50559": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"50564": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"50573": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"50590": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"50648": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"50667": {
+"diverges_at": null,
+"ruby_rejects_at": 125
+},
+"50683": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 420,
+"2": 420,
+"3": 420,
+"4": 420,
+"5": 420
+}
+},
+"50687": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"50693": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"50711": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"50740": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"50775": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"50778": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"50807": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"50812": {
+"diverges_at": null,
+"ruby_rejects_at": 136
+},
+"50827": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"50833": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"50840": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"50845": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"50869": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"50871": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"50872": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"50874": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"50875": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"50888": {
+"diverges_at": null,
+"ruby_rejects_at": 130
+},
+"50892": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"50906": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"50908": {
+"diverges_at": null,
+"ruby_rejects_at": 165
+},
+"50930": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"50945": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"50963": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"51015": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"51016": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"51053": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"51069": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"51077": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"51083": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"51108": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"51118": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"51135": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"51158": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"51159": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"51162": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"51183": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"51253": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"51269": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"51270": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"51281": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"51300": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"51334": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"51354": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"51399": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"51406": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"51432": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"51449": {
+"diverges_at": null,
+"ruby_rejects_at": 123
+},
+"51455": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"51480": {
+"diverges_at": null,
+"ruby_rejects_at": 115
+},
+"51515": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"51530": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"51536": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"51543": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"51561": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"51566": {
+"diverges_at": null,
+"ruby_rejects_at": 103
+},
+"51573": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"51580": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"51616": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"51680": {
+"diverges_at": null,
+"ruby_rejects_at": 121
+},
+"51685": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"51695": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"51699": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"51723": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"51782": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"51813": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"51831": {
+"diverges_at": null,
+"ruby_rejects_at": 20
+},
+"51860": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"51877": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"51885": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"51889": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"51898": {
+"diverges_at": null,
+"ruby_rejects_at": 104
+},
+"51937": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"51951": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"52027": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"52050": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"52058": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"52304": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"52341": {
+"diverges_at": null,
+"ruby_rejects_at": 96
+},
+"52345": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"52348": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"52377": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"52412": {
+"diverges_at": null,
+"ruby_rejects_at": 123
+},
+"52428": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"52429": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"52485": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"52486": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"52534": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"52535": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"52552": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"52588": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"52607": {
+"diverges_at": null,
+"ruby_rejects_at": 117
+},
+"52609": {
+"diverges_at": null,
+"ruby_rejects_at": 113
+},
+"52637": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"52646": {
+"diverges_at": null,
+"ruby_rejects_at": 125
+},
+"52669": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"52690": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"52692": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"52762": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"52776": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"52779": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"52783": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"52830": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"52843": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"52862": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"52870": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"52899": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"52900": {
+"diverges_at": null,
+"ruby_rejects_at": 104
+},
+"52962": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"52994": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"53002": {
+"diverges_at": null,
+"ruby_rejects_at": 131
+},
+"53007": {
+"diverges_at": null,
+"ruby_rejects_at": 109
+},
+"53119": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"53120": {
+"diverges_at": null,
+"ruby_rejects_at": 111
+},
+"53124": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"53125": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"53144": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"53147": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"53174": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"53192": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"53218": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"53236": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"53285": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"53288": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"53322": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"53332": {
+"diverges_at": null,
+"ruby_rejects_at": 128
+},
+"53359": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"53360": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"53426": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 350,
+"2": 350,
+"3": 350,
+"4": 350,
+"5": 350,
+"6": 350
+}
+},
+"53431": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"53455": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"53467": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"53533": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"53538": {
+"diverges_at": null,
+"ruby_rejects_at": 123
+},
+"53570": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"53591": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"53612": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"53629": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"53656": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"53694": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"53701": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"53738": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"53761": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"53793": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"53800": {
+"diverges_at": null,
+"ruby_rejects_at": 97
+},
+"53801": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"53864": {
+"diverges_at": null,
+"ruby_rejects_at": 104
+},
+"53870": {
+"diverges_at": null,
+"ruby_rejects_at": 25
+},
+"53881": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"53894": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"53923": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"53924": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"53951": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"53963": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"53977": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"53993": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"53995": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"53996": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"54020": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"54021": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"54023": {
+"diverges_at": null,
+"ruby_rejects_at": 117
+},
+"54116": {
+"diverges_at": null,
+"ruby_rejects_at": 187
+},
+"54157": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"54211": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"54222": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"54242": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"54280": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"54288": {
+"diverges_at": null,
+"ruby_rejects_at": 110
+},
+"54304": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"54344": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"54350": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"54374": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"54417": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"54418": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"54436": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"54449": {
+"diverges_at": null,
+"ruby_rejects_at": 128
+},
+"54532": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"54600": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"54621": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"54661": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"54670": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"54736": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"54737": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"54755": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"54756": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"54787": {
+"diverges_at": null,
+"ruby_rejects_at": 29
+},
+"54792": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"54800": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"54821": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"54825": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"54826": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"54832": {
+"diverges_at": null,
+"ruby_rejects_at": 125
+},
+"54833": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"54843": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"54854": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"54882": {
+"diverges_at": null,
+"ruby_rejects_at": 96
+},
+"54893": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"54895": {
+"diverges_at": null,
+"ruby_rejects_at": 155
+},
+"54923": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"54931": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"54936": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"54942": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"54960": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"55008": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"55017": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"55036": {
+"diverges_at": null,
+"ruby_rejects_at": 120
+},
+"55053": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"55063": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"55073": {
+"diverges_at": null,
+"ruby_rejects_at": 144
+},
+"55077": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"55080": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"55111": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"55126": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"55148": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"55157": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"55174": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"55199": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"55227": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"55258": {
+"diverges_at": null,
+"ruby_rejects_at": 173
+},
+"55275": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"55285": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"55305": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"55308": {
+"diverges_at": null,
+"ruby_rejects_at": 122
+},
+"55319": {
+"diverges_at": null,
+"ruby_rejects_at": 132
+},
+"55325": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"55330": {
+"diverges_at": null,
+"ruby_rejects_at": 23
+},
+"55347": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"55351": {
+"diverges_at": null,
+"ruby_rejects_at": 200
+},
+"55357": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"55376": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"55380": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"55393": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"55397": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"55401": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"55402": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"55495": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"55497": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"55519": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"55527": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"55529": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"55542": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"55573": {
+"diverges_at": null,
+"ruby_rejects_at": 24
+},
+"55575": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"55577": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"55579": {
+"diverges_at": null,
+"ruby_rejects_at": 19
+},
+"55580": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"55597": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"55600": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"55604": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"55620": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"55644": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"55668": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"55687": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"55700": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"55726": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"55729": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"55731": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"55733": {
+"diverges_at": null,
+"ruby_rejects_at": 123
+},
+"55737": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"55785": {
+"diverges_at": null,
+"ruby_rejects_at": 118
+},
+"55791": {
+"diverges_at": null,
+"ruby_rejects_at": 118
+},
+"55810": {
+"diverges_at": null,
+"ruby_rejects_at": 120
+},
+"55812": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"55815": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"55840": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"55850": {
+"diverges_at": null,
+"ruby_rejects_at": 111
+},
+"55861": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"55862": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"55871": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"55875": {
+"diverges_at": null,
+"ruby_rejects_at": 134
+},
+"55908": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"55912": {
+"diverges_at": null,
+"ruby_rejects_at": 26
+},
+"55942": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"55958": {
+"diverges_at": null,
+"ruby_rejects_at": 203
+},
+"56008": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"56023": {
+"diverges_at": null,
+"ruby_rejects_at": 26
+},
+"56026": {
+"diverges_at": null,
+"ruby_rejects_at": 109
+},
+"56029": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"56039": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"56069": {
+"diverges_at": null,
+"ruby_rejects_at": 113
+},
+"56079": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"56080": {
+"diverges_at": null,
+"ruby_rejects_at": 147
+},
+"56105": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"56106": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"56126": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"56148": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"56184": {
+"diverges_at": null,
+"ruby_rejects_at": 126
+},
+"56194": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"56207": {
+"diverges_at": null,
+"ruby_rejects_at": 114
+},
+"56271": {
+"diverges_at": null,
+"ruby_rejects_at": 109
+},
+"56274": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"56278": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"56370": {
+"diverges_at": null,
+"ruby_rejects_at": 115
+},
+"56412": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"56433": {
+"diverges_at": null,
+"ruby_rejects_at": 113
+},
+"56437": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"56470": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"56481": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"56486": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"56495": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"56520": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"56522": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"56528": {
+"diverges_at": null,
+"ruby_rejects_at": 115
+},
+"56572": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"56588": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"56615": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"56627": {
+"diverges_at": null,
+"ruby_rejects_at": 131
+},
+"56653": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"56658": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"56659": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"56675": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"56683": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"56702": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"56749": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"56766": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"56822": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"56849": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"56877": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"56878": {
+"diverges_at": null,
+"ruby_rejects_at": 106
+},
+"56881": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"56920": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"56926": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"56968": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"56976": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"57013": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"57057": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"57059": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"57074": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"57101": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"57106": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"57125": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"57136": {
+"diverges_at": null,
+"ruby_rejects_at": 27
+},
+"57176": {
+"diverges_at": null,
+"ruby_rejects_at": 97
+},
+"57178": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"57194": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"57219": {
+"diverges_at": null,
+"ruby_rejects_at": 137
+},
+"57220": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"57230": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"57238": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"57239": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"57272": {
+"diverges_at": null,
+"ruby_rejects_at": 149
+},
+"57280": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"57293": {
+"diverges_at": null,
+"ruby_rejects_at": 120
+},
+"57304": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"57309": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"57336": {
+"diverges_at": null,
+"ruby_rejects_at": 103
+},
+"57342": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"57368": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"57397": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"57408": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"57419": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"57447": {
+"diverges_at": null,
+"ruby_rejects_at": 133
+},
+"57474": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"57475": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"57489": {
+"diverges_at": null,
+"ruby_rejects_at": 23
+},
+"57501": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"57505": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"57511": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"57518": {
+"diverges_at": null,
+"ruby_rejects_at": 23
+},
+"57558": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"57564": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"57570": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"57571": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"57614": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"57618": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"57638": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"57646": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"57687": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"57699": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"57719": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"57728": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"57729": {
+"diverges_at": null,
+"ruby_rejects_at": 128
+},
+"57776": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"57783": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"57790": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"57795": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"57888": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"57963": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"58040": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"58047": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"58076": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"58110": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"58122": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"58130": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"58151": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"58161": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"58164": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"58184": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"58195": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"58207": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"58210": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"58223": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"58230": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"58238": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"58268": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"58308": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"58312": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"58351": {
+"diverges_at": null,
+"ruby_rejects_at": 124
+},
+"58372": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"58385": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"58390": {
+"diverges_at": null,
+"ruby_rejects_at": 96
+},
+"58406": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"58440": {
+"diverges_at": null,
+"ruby_rejects_at": 128
+},
+"58476": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"58477": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"58486": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"58488": {
+"diverges_at": null,
+"ruby_rejects_at": 129
+},
+"58505": {
+"diverges_at": null,
+"ruby_rejects_at": 111
+},
+"58509": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"58510": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"58543": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"58588": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"58590": {
+"end_reason": "manually_ended",
+"finished": true,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"58592": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"58673": {
+"diverges_at": null,
+"ruby_rejects_at": 120
+},
+"58681": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"58703": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"58705": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"58713": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"58718": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"58742": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"58759": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"58796": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"58807": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"58816": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"58820": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"58826": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"58851": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"58865": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"58882": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"58892": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"58901": {
+"diverges_at": null,
+"ruby_rejects_at": 120
+},
+"58943": {
+"diverges_at": null,
+"ruby_rejects_at": 116
+},
+"58950": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"58989": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"58992": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"58994": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"58999": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"59003": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"59022": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"59053": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"59228": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"59235": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"59414": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"59438": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"59541": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"59584": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"59637": {
+"diverges_at": null,
+"ruby_rejects_at": 22
+},
+"59695": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"59697": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"59706": {
+"diverges_at": null,
+"ruby_rejects_at": 168
+},
+"59713": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"59725": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"59740": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"59755": {
+"diverges_at": null,
+"ruby_rejects_at": 112
+},
+"59805": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"59876": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"59899": {
+"diverges_at": null,
+"ruby_rejects_at": 275
+},
+"59911": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"59941": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"60033": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"60056": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"60071": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"60074": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"60107": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"60116": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"60119": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"60158": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"60189": {
+"diverges_at": null,
+"ruby_rejects_at": 112
+},
+"60199": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"60229": {
+"diverges_at": null,
+"ruby_rejects_at": 142
+},
+"60231": {
+"diverges_at": null,
+"ruby_rejects_at": 110
+},
+"60292": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"60324": {
+"diverges_at": null,
+"ruby_rejects_at": 123
+},
+"60340": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"60342": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"60346": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"60374": {
+"diverges_at": null,
+"ruby_rejects_at": 132
+},
+"60386": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"60450": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"60451": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"60464": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"60479": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"60482": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"60499": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"60532": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"60548": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"60549": {
+"diverges_at": null,
+"ruby_rejects_at": 117
+},
+"60569": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"60574": {
+"diverges_at": null,
+"ruby_rejects_at": 176
+},
+"60583": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"60593": {
+"diverges_at": null,
+"ruby_rejects_at": 112
+},
+"60615": {
+"diverges_at": null,
+"ruby_rejects_at": 140
+},
+"60624": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"60638": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"60640": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"60645": {
+"diverges_at": null,
+"ruby_rejects_at": 112
+},
+"60649": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"60659": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"60665": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"60682": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"60707": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"60708": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"60711": {
+"diverges_at": null,
+"ruby_rejects_at": 133
+},
+"60715": {
+"diverges_at": null,
+"ruby_rejects_at": 126
+},
+"60717": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"60728": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"60730": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"60733": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"60770": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"60780": {
+"diverges_at": null,
+"ruby_rejects_at": 172
+},
+"60803": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"60820": {
+"diverges_at": null,
+"ruby_rejects_at": 117
+},
+"60823": {
+"diverges_at": null,
+"ruby_rejects_at": 149
+},
+"60825": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"60899": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"60902": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"60907": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"60960": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"61004": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"61052": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"61074": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"61096": {
+"diverges_at": null,
+"ruby_rejects_at": 104
+},
+"61107": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"61141": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"61158": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"61172": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"61182": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"61224": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"61255": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"61264": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"61272": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"61323": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"61334": {
+"diverges_at": null,
+"ruby_rejects_at": 111
+},
+"61348": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"61351": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"61353": {
+"diverges_at": null,
+"ruby_rejects_at": 115
+},
+"61370": {
+"diverges_at": null,
+"ruby_rejects_at": 130
+},
+"61372": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"61404": {
+"diverges_at": null,
+"ruby_rejects_at": 104
+},
+"61494": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"61502": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"61549": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"61574": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"61660": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"61700": {
+"diverges_at": null,
+"ruby_rejects_at": 131
+},
+"61752": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"61762": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"61764": {
+"diverges_at": null,
+"ruby_rejects_at": 19
+},
+"61773": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"61783": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"61792": {
+"diverges_at": null,
+"ruby_rejects_at": 136
+},
+"61793": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"61822": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"61824": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"61828": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"61853": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"61863": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"61891": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"61903": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"61917": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"61920": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"61933": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"61946": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"61950": {
+"diverges_at": null,
+"ruby_rejects_at": 118
+},
+"61955": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"61959": {
+"diverges_at": null,
+"ruby_rejects_at": 119
+},
+"61978": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"61983": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"61984": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"62029": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"62048": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"62051": {
+"diverges_at": null,
+"ruby_rejects_at": 143
+},
+"62053": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"62062": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"62070": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"62097": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"62106": {
+"diverges_at": null,
+"ruby_rejects_at": 149
+},
+"62111": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"62186": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"62187": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"62194": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"62200": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"62208": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"62212": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"62263": {
+"diverges_at": null,
+"ruby_rejects_at": 23
+},
+"62271": {
+"diverges_at": null,
+"ruby_rejects_at": 109
+},
+"62298": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"62300": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"62328": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"62341": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"62374": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"62411": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"62414": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"62484": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"62489": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"62531": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"62548": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"62560": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"62590": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"62604": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"62607": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"62620": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"62634": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"62647": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"62650": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"62695": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"62698": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"62701": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"62702": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"62712": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"62725": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"62759": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"62760": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"62762": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"62769": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"62776": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"62787": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"62797": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"62808": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"62829": {
+"diverges_at": null,
+"ruby_rejects_at": 129
+},
+"62830": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"62843": {
+"diverges_at": null,
+"ruby_rejects_at": 97
+},
+"62863": {
+"diverges_at": null,
+"ruby_rejects_at": 141
+},
+"62868": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"62876": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"62881": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"62891": {
+"diverges_at": null,
+"ruby_rejects_at": 24
+},
+"62903": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"62912": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"62914": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"62921": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"62957": {
+"diverges_at": null,
+"ruby_rejects_at": 113
+},
+"62959": {
+"diverges_at": null,
+"ruby_rejects_at": 106
+},
+"62999": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"63017": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"63022": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"63027": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"63051": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"63052": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"63056": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"63097": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"63104": {
+"diverges_at": null,
+"ruby_rejects_at": 115
+},
+"63139": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"63146": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"63149": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"63177": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"63178": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"63227": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"63234": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"63237": {
+"diverges_at": null,
+"ruby_rejects_at": 129
+},
+"63243": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"63254": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"63276": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"63316": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"63334": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"63350": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"63427": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"63448": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"63469": {
+"diverges_at": null,
+"ruby_rejects_at": 127
+},
+"63470": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"63478": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"63486": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"63489": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"63514": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"63543": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"63563": {
+"diverges_at": null,
+"ruby_rejects_at": 192
+},
+"63570": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"63602": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"63603": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"63613": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"63615": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"63622": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"63631": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"63655": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"63667": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"63683": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"63691": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"63711": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"63730": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"63736": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"63740": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"63742": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"63765": {
+"diverges_at": null,
+"ruby_rejects_at": 156
+},
+"63813": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"63816": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"63819": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"63843": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"63877": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"63878": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"63919": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"63936": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"63949": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"63955": {
+"diverges_at": null,
+"ruby_rejects_at": 116
+},
+"63960": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"63961": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"64009": {
+"diverges_at": null,
+"ruby_rejects_at": 122
+},
+"64014": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"64021": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"64028": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"64046": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"64069": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"64107": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"64111": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"64133": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"64179": {
+"diverges_at": null,
+"ruby_rejects_at": 122
+},
+"64184": {
+"diverges_at": null,
+"ruby_rejects_at": 125
+},
+"64197": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"64220": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"64221": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"64280": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"64298": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"64314": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"64354": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"64380": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"64394": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"64403": {
+"diverges_at": null,
+"ruby_rejects_at": 104
+},
+"64410": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"64413": {
+"diverges_at": null,
+"ruby_rejects_at": 106
+},
+"64416": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"64424": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"64441": {
+"diverges_at": null,
+"ruby_rejects_at": 116
+},
+"64506": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"64509": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"64510": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"64614": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"64687": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"64694": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"64696": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"64700": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"64705": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"64720": {
+"diverges_at": null,
+"ruby_rejects_at": 122
+},
+"64726": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"64749": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"64750": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"64771": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"64773": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"64801": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"64802": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"64826": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"64835": {
+"diverges_at": null,
+"ruby_rejects_at": 118
+},
+"64845": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"64846": {
+"diverges_at": null,
+"ruby_rejects_at": 138
+},
+"64850": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"64865": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"64922": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"65012": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"65019": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"65022": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"65074": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"65089": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"65103": {
+"diverges_at": null,
+"ruby_rejects_at": 111
+},
+"65126": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"65169": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"65182": {
+"diverges_at": null,
+"ruby_rejects_at": 104
+},
+"65183": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"65209": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"65222": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"65227": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"65261": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"65269": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"65272": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"65335": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"65340": {
+"diverges_at": null,
+"ruby_rejects_at": 112
+},
+"65366": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"65376": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"65406": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"65416": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"65440": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"65447": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"65475": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"65487": {
+"diverges_at": null,
+"ruby_rejects_at": 24
+},
+"65496": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"65510": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"65513": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"65518": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"65519": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"65529": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"65562": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"65564": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"65603": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"65607": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"65651": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"65659": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"65660": {
+"diverges_at": null,
+"ruby_rejects_at": 97
+},
+"65674": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"65677": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"65684": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"65814": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"65868": {
+"diverges_at": null,
+"ruby_rejects_at": 110
+},
+"65873": {
+"diverges_at": null,
+"ruby_rejects_at": 125
+},
+"65883": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"65913": {
+"diverges_at": null,
+"ruby_rejects_at": 129
+},
+"65916": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"65917": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"65972": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"65984": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"65998": {
+"diverges_at": null,
+"ruby_rejects_at": 116
+},
+"66003": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"66013": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"66018": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"66033": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"66047": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"66055": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"66068": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"66102": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"66148": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"66151": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"66152": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"66167": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"66179": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"66186": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"66200": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"66218": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"66235": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"66243": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"66246": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"66254": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"66276": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"66288": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"66293": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"66312": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"66329": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"66348": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"66349": {
+"diverges_at": null,
+"ruby_rejects_at": 29
+},
+"66353": {
+"diverges_at": null,
+"ruby_rejects_at": 21
+},
+"66376": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"66379": {
+"diverges_at": null,
+"ruby_rejects_at": 146
+},
+"66383": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"66386": {
+"diverges_at": null,
+"ruby_rejects_at": 29
+},
+"66389": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"66435": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"66441": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"66442": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"66443": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"66454": {
+"diverges_at": null,
+"ruby_rejects_at": 120
+},
+"66500": {
+"diverges_at": null,
+"ruby_rejects_at": 130
+},
+"66503": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"66514": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"66515": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"66516": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"66552": {
+"diverges_at": null,
+"ruby_rejects_at": 103
+},
+"66555": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"66589": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"66626": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"66641": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"66659": {
+"diverges_at": null,
+"ruby_rejects_at": 112
+},
+"66660": {
+"diverges_at": null,
+"ruby_rejects_at": 131
+},
+"66664": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"66680": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"66687": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"66688": {
+"diverges_at": null,
+"ruby_rejects_at": 27
+},
+"66690": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"66698": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"66711": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"66725": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"66740": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"66757": {
+"diverges_at": null,
+"ruby_rejects_at": 133
+},
+"66766": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"66793": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"66795": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"66813": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"66819": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"66821": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"66822": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"66829": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"66838": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"66845": {
+"diverges_at": null,
+"ruby_rejects_at": 187
+},
+"66850": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"66855": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"66857": {
+"diverges_at": null,
+"ruby_rejects_at": 142
+},
+"66864": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"66877": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"66895": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"66916": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"66920": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"66935": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"66961": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"66975": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"66991": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"67003": {
+"diverges_at": null,
+"ruby_rejects_at": 26
+},
+"67016": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"67087": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"67089": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"67120": {
+"diverges_at": null,
+"ruby_rejects_at": 156
+},
+"67123": {
+"diverges_at": null,
+"ruby_rejects_at": 155
+},
+"67136": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"67166": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"67179": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"67202": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"67207": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"67212": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"67225": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"67248": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"67267": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"67268": {
+"diverges_at": null,
+"ruby_rejects_at": 107
+},
+"67290": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"67302": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"67321": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"67344": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"67345": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"67381": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"67397": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"67401": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"67405": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"67407": {
+"diverges_at": null,
+"ruby_rejects_at": 111
+},
+"67449": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"67450": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"67461": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"67482": {
+"end_reason": "manually_ended",
+"finished": true,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"67502": {
+"diverges_at": null,
+"ruby_rejects_at": 122
+},
+"67503": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"67512": {
+"end_reason": "manually_ended",
+"finished": true,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"67516": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"67524": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"67532": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"67543": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"67581": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"67587": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"67596": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"67618": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"67637": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"67638": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"67644": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"67669": {
+"diverges_at": null,
+"ruby_rejects_at": 128
+},
+"67670": {
+"diverges_at": null,
+"ruby_rejects_at": 147
+},
+"67673": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"67674": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"67701": {
+"diverges_at": null,
+"ruby_rejects_at": 96
+},
+"67715": {
+"diverges_at": null,
+"ruby_rejects_at": 117
+},
+"67738": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"67741": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"67792": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"67807": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"67813": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"67819": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"67822": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"67827": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"67854": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"67858": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"67879": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"67888": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"67897": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"67934": {
+"diverges_at": null,
+"ruby_rejects_at": 131
+},
+"67955": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"68000": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"68003": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"68008": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"68009": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"68031": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"68048": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"68051": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"68065": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"68070": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"68075": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"68082": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"68087": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"68104": {
+"diverges_at": null,
+"ruby_rejects_at": 110
+},
+"68108": {
+"diverges_at": null,
+"ruby_rejects_at": 126
+},
+"68130": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"68134": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"68138": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"68144": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"68156": {
+"diverges_at": null,
+"ruby_rejects_at": 172
+},
+"68175": {
+"diverges_at": null,
+"ruby_rejects_at": 127
+},
+"68186": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"68195": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"68197": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"68198": {
+"diverges_at": null,
+"ruby_rejects_at": 176
+},
+"68200": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"68241": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"68244": {
+"diverges_at": null,
+"ruby_rejects_at": 117
+},
+"68288": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"68305": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"68307": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"68339": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"68373": {
+"diverges_at": null,
+"ruby_rejects_at": 22
+},
+"68395": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"68399": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"68404": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"68405": {
+"diverges_at": null,
+"ruby_rejects_at": 135
+},
+"68446": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"68485": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"68489": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"68508": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"68529": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"68530": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"68536": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"68546": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"68583": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"68585": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"68596": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"68615": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"68631": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"68636": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"68637": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"68667": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"68700": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"68718": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"68720": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"68734": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"68792": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"68793": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"68799": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"68801": {
+"diverges_at": null,
+"ruby_rejects_at": 104
+},
+"68822": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"68847": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"68868": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"68880": {
+"diverges_at": null,
+"ruby_rejects_at": 25
+},
+"68899": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"68901": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"68922": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"68940": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"69041": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"69054": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"69059": {
+"diverges_at": null,
+"ruby_rejects_at": 165
+},
+"69069": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"69070": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"69079": {
+"diverges_at": null,
+"ruby_rejects_at": 115
+},
+"69128": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"69140": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"69156": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"69175": {
+"diverges_at": null,
+"ruby_rejects_at": 128
+},
+"69181": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"69200": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"69229": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"69246": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"69251": {
+"diverges_at": null,
+"ruby_rejects_at": 106
+},
+"69253": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"69283": {
+"diverges_at": null,
+"ruby_rejects_at": 111
+},
+"69292": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"69293": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"69311": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"69321": {
+"diverges_at": null,
+"ruby_rejects_at": 124
+},
+"69325": {
+"diverges_at": null,
+"ruby_rejects_at": 96
+},
+"69386": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"69403": {
+"diverges_at": null,
+"ruby_rejects_at": 152
+},
+"69435": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"69451": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"69480": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"69502": {
+"diverges_at": null,
+"ruby_rejects_at": 23
+},
+"69509": {
+"diverges_at": null,
+"ruby_rejects_at": 118
+},
+"69516": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"69541": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"69546": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"69569": {
+"diverges_at": null,
+"ruby_rejects_at": 151
+},
+"69588": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"69598": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"69606": {
+"diverges_at": null,
+"ruby_rejects_at": 96
+},
+"69639": {
+"diverges_at": null,
+"ruby_rejects_at": 103
+},
+"69643": {
+"diverges_at": null,
+"ruby_rejects_at": 123
+},
+"69662": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"69664": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"69698": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"69708": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"69717": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"69719": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"69765": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"69778": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"69801": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"69823": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"69851": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"69943": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"69955": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"69964": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"69974": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"70174": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"70188": {
+"diverges_at": null,
+"ruby_rejects_at": 143
+},
+"70200": {
+"diverges_at": null,
+"ruby_rejects_at": 15
+},
+"70218": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"70219": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"70248": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"70260": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"70284": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"70286": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"70288": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"70303": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"70332": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"70341": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"70359": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"70366": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"70379": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"70403": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"70413": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"70437": {
+"diverges_at": null,
+"ruby_rejects_at": 127
+},
+"70450": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"70453": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"70463": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"70474": {
+"diverges_at": null,
+"ruby_rejects_at": 144
+},
+"70483": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"70486": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"70491": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"70506": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"70550": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"70562": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"70564": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"70593": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"70595": {
+"diverges_at": null,
+"ruby_rejects_at": 110
+},
+"70600": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"70750": {
+"diverges_at": null,
+"ruby_rejects_at": 112
+},
+"70754": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"70758": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"70768": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"70791": {
+"diverges_at": null,
+"ruby_rejects_at": 122
+},
+"70815": {
+"diverges_at": null,
+"ruby_rejects_at": 118
+},
+"70827": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"70850": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"70865": {
+"diverges_at": null,
+"ruby_rejects_at": 104
+},
+"70873": {
+"diverges_at": null,
+"ruby_rejects_at": 17
+},
+"70879": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"70884": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"70885": {
+"diverges_at": null,
+"ruby_rejects_at": 25
+},
+"70905": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"70940": {
+"diverges_at": null,
+"ruby_rejects_at": 97
+},
+"70976": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"70990": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"71035": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"71042": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"71043": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"71095": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"71136": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"71137": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"71174": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"71193": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"71217": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"71249": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"71254": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"71264": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"71287": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"71301": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"71308": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"71413": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"71419": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"71439": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"71440": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"71465": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"71485": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"71527": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"71534": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"71548": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"71549": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"71559": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"71560": {
+"diverges_at": null,
+"ruby_rejects_at": 17
+},
+"71562": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"71589": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"71604": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"71635": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"71636": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"71643": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"71657": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"71660": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"71666": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"71674": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"71690": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"71695": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"71723": {
+"end_reason": "manually_ended",
+"finished": true,
+"scores_by_seat": {
+"1": 600,
+"2": 700,
+"3": 665
+}
+},
+"71724": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"71735": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"71741": {
+"diverges_at": null,
+"ruby_rejects_at": 123
+},
+"71757": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"71973": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"71975": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"71982": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"71990": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"72000": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"72001": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"72043": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"72081": {
+"diverges_at": null,
+"ruby_rejects_at": 134
+},
+"72119": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"72120": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"72142": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"72149": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"72163": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"72179": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"72180": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"72255": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"72266": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"72289": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"72290": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"72305": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"72332": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"72340": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"72394": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"72401": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"72411": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"72469": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"72479": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"72486": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"72502": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"72513": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"72520": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"72528": {
+"diverges_at": null,
+"ruby_rejects_at": 151
+},
+"72579": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"72588": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"72599": {
+"diverges_at": null,
+"ruby_rejects_at": 25
+},
+"72602": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"72614": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"72615": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"72631": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"72699": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"72702": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"72712": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"72714": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"72715": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"72737": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"72748": {
+"diverges_at": null,
+"ruby_rejects_at": 120
+},
+"72787": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"72804": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"72805": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"72821": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"72839": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"72951": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"72952": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"73024": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"73082": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"73083": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"73095": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"73128": {
+"diverges_at": null,
+"ruby_rejects_at": 109
+},
+"73187": {
+"diverges_at": null,
+"ruby_rejects_at": 116
+},
+"73189": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"73200": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"73215": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"73224": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"73258": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"73295": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"73351": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"73359": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"73397": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"73495": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"73537": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"73560": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"73564": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"73571": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"73643": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"73725": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"73785": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"73788": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"73850": {
+"diverges_at": null,
+"ruby_rejects_at": 112
+},
+"73881": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"73888": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"73916": {
+"diverges_at": null,
+"ruby_rejects_at": 21
+},
+"73952": {
+"diverges_at": null,
+"ruby_rejects_at": 126
+},
+"73960": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"73974": {
+"diverges_at": null,
+"ruby_rejects_at": 139
+},
+"73992": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"73993": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"74009": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"74016": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"74017": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"74026": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"74034": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"74182": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"74184": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"74187": {
+"diverges_at": null,
+"ruby_rejects_at": 110
+},
+"74227": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"74234": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"74235": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"74342": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"74367": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"74368": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"74403": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"74407": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"74444": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"74445": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"74447": {
+"diverges_at": null,
+"ruby_rejects_at": 132
+},
+"74472": {
+"diverges_at": null,
+"ruby_rejects_at": 146
+},
+"74482": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"74499": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"74516": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"74583": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"74584": {
+"diverges_at": null,
+"ruby_rejects_at": 29
+},
+"74587": {
+"diverges_at": null,
+"ruby_rejects_at": 168
+},
+"74605": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"74661": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"74684": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"74703": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"74818": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"74823": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"74831": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"74832": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"74838": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"74850": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"74866": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"74907": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"74928": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"74941": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"74950": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"75019": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"75041": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"75042": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"75071": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"75119": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"75132": {
+"diverges_at": null,
+"ruby_rejects_at": 29
+},
+"75155": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"75163": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"75164": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"75188": {
+"diverges_at": null,
+"ruby_rejects_at": 145
+},
+"75198": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"75252": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"75253": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"75287": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"75292": {
+"diverges_at": null,
+"ruby_rejects_at": 159
+},
+"75300": {
+"diverges_at": null,
+"ruby_rejects_at": 125
+},
+"75326": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"75336": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"75384": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"75385": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"75416": {
+"diverges_at": null,
+"ruby_rejects_at": 116
+},
+"75422": {
+"diverges_at": null,
+"ruby_rejects_at": 132
+},
+"75455": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"75465": {
+"diverges_at": null,
+"ruby_rejects_at": 153
+},
+"75482": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"75508": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"75521": {
+"diverges_at": null,
+"ruby_rejects_at": 115
+},
+"75532": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"75606": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"75644": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"75654": {
+"diverges_at": null,
+"ruby_rejects_at": 163
+},
+"75658": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"75718": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"75743": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"75759": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"75761": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"75811": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"75823": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"76055": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"76091": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"76095": {
+"diverges_at": null,
+"ruby_rejects_at": 112
+},
+"76123": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"76139": {
+"diverges_at": null,
+"ruby_rejects_at": 106
+},
+"76173": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"76240": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"76254": {
+"diverges_at": null,
+"ruby_rejects_at": 27
+},
+"76292": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"76295": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"76324": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"76339": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"76341": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"76353": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"76409": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"76446": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"76451": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"76531": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"76551": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"76574": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"76575": {
+"diverges_at": null,
+"ruby_rejects_at": 108
+},
+"76603": {
+"diverges_at": null,
+"ruby_rejects_at": 33
+},
+"76639": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"76742": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"76745": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"76774": {
+"diverges_at": null,
+"ruby_rejects_at": 125
+},
+"76792": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"76805": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"76811": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"76832": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"76858": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"76881": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"76889": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"76891": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"76924": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"76933": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"76951": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"76961": {
+"diverges_at": null,
+"ruby_rejects_at": 18
+},
+"76971": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"77091": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"77109": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"77118": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"77197": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"77223": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"77237": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"77270": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"77306": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"77322": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"77338": {
+"diverges_at": null,
+"ruby_rejects_at": 49
+},
+"77428": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"77482": {
+"diverges_at": null,
+"ruby_rejects_at": 119
+},
+"77517": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"77645": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"77668": {
+"diverges_at": null,
+"ruby_rejects_at": 130
+},
+"77674": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"77699": {
+"diverges_at": null,
+"ruby_rejects_at": 26
+},
+"77734": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"77736": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"77737": {
+"diverges_at": null,
+"ruby_rejects_at": 27
+},
+"77784": {
+"diverges_at": null,
+"ruby_rejects_at": 109
+},
+"77809": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"77823": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"77857": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"77879": {
+"diverges_at": null,
+"ruby_rejects_at": 133
+},
+"77907": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"77917": {
+"diverges_at": null,
+"ruby_rejects_at": 53
+},
+"77951": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"77980": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"78000": {
+"diverges_at": null,
+"ruby_rejects_at": 21
+},
+"78061": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"78065": {
+"diverges_at": null,
+"ruby_rejects_at": 157
+},
+"78086": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"78092": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"78100": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"78138": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"78148": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"78173": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"78174": {
+"diverges_at": null,
+"ruby_rejects_at": 29
+},
+"78196": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"78248": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"78268": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"78350": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"78354": {
+"diverges_at": null,
+"ruby_rejects_at": 117
+},
+"78379": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"78467": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"78480": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"78481": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"78649": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"78696": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"78755": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"78758": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"78799": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"78800": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"78824": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"78886": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"78966": {
+"diverges_at": null,
+"ruby_rejects_at": 117
+},
+"79010": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"79011": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"79017": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"79026": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"79061": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"79072": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"79116": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"79145": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"79148": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"79170": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"79196": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"79233": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"79234": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"79253": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"79282": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"79306": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"79357": {
+"diverges_at": null,
+"ruby_rejects_at": 88
+},
+"79390": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"79396": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"79412": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"79413": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"79426": {
+"diverges_at": null,
+"ruby_rejects_at": 80
+},
+"79455": {
+"diverges_at": null,
+"ruby_rejects_at": 126
+},
+"79499": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"79582": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"79599": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"79608": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"79628": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"79646": {
+"diverges_at": null,
+"ruby_rejects_at": 130
+},
+"79691": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"79709": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"79723": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"79724": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"79756": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"79811": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"79831": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"79905": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"79935": {
+"diverges_at": null,
+"ruby_rejects_at": 112
+},
+"79956": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"79982": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"79988": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"80212": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"80289": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"80315": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"80329": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"80359": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"80390": {
+"diverges_at": null,
+"ruby_rejects_at": 140
+},
+"80406": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"80444": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"80453": {
+"diverges_at": null,
+"ruby_rejects_at": 133
+},
+"80516": {
+"diverges_at": null,
+"ruby_rejects_at": 102
+},
+"80517": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"80565": {
+"diverges_at": null,
+"ruby_rejects_at": 123
+},
+"80567": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"80608": {
+"diverges_at": null,
+"ruby_rejects_at": 128
+},
+"80627": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"80652": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"80727": {
+"diverges_at": null,
+"ruby_rejects_at": 93
+},
+"80729": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"80761": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"80774": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"80775": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"80826": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"80954": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"81049": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"81060": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"81121": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"81137": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"81142": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"81167": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"81190": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"81226": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"81239": {
+"diverges_at": null,
+"ruby_rejects_at": 148
+},
+"81244": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"81269": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"81310": {
+"diverges_at": null,
+"ruby_rejects_at": 114
+},
+"81384": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"81385": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"81386": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"81412": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"81442": {
+"diverges_at": null,
+"ruby_rejects_at": 103
+},
+"81456": {
+"diverges_at": null,
+"ruby_rejects_at": 96
+},
+"81466": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"81475": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"81496": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"81498": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"81499": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"81506": {
+"diverges_at": null,
+"ruby_rejects_at": 110
+},
+"81529": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"81598": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"81621": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"81655": {
+"diverges_at": null,
+"ruby_rejects_at": 100
+},
+"81663": {
+"diverges_at": null,
+"ruby_rejects_at": 195
+},
+"81690": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"81718": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"81719": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"81763": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"81770": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"81772": {
+"diverges_at": null,
+"ruby_rejects_at": 26
+},
+"81793": {
+"diverges_at": null,
+"ruby_rejects_at": 84
+},
+"81798": {
+"diverges_at": null,
+"ruby_rejects_at": 129
+},
+"81816": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"81828": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"81854": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"81878": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"81882": {
+"diverges_at": null,
+"ruby_rejects_at": 96
+},
+"81928": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"81989": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"82003": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"82059": {
+"diverges_at": null,
+"ruby_rejects_at": 113
+},
+"82062": {
+"diverges_at": null,
+"ruby_rejects_at": 134
+},
+"82147": {
+"diverges_at": null,
+"ruby_rejects_at": 62
+},
+"82171": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"82249": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"82287": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"82311": {
+"diverges_at": null,
+"ruby_rejects_at": 71
+},
+"82324": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"82344": {
+"diverges_at": null,
+"ruby_rejects_at": 105
+},
+"82359": {
+"diverges_at": null,
+"ruby_rejects_at": 68
+},
+"82372": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"82449": {
+"diverges_at": null,
+"ruby_rejects_at": 127
+},
+"82466": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"82497": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"82500": {
+"diverges_at": null,
+"ruby_rejects_at": 153
+},
+"82540": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"82541": {
+"diverges_at": null,
+"ruby_rejects_at": 106
+},
+"82705": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"82735": {
+"diverges_at": null,
+"ruby_rejects_at": 21
+},
+"82752": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"82753": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"82754": {
+"diverges_at": null,
+"ruby_rejects_at": 99
+},
+"82765": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"82790": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"82806": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"82838": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"82857": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"82858": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"82930": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"82940": {
+"diverges_at": null,
+"ruby_rejects_at": 118
+},
+"82996": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"83020": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"83046": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"83050": {
+"diverges_at": null,
+"ruby_rejects_at": 37
+},
+"83059": {
+"diverges_at": null,
+"ruby_rejects_at": 109
+},
+"83061": {
+"diverges_at": null,
+"ruby_rejects_at": 170
+},
+"83067": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"83068": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"83094": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"83095": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"83111": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"83131": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"83140": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"83236": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"83316": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"83330": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"83331": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"83339": {
+"diverges_at": null,
+"ruby_rejects_at": 44
+},
+"83418": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"83449": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"83455": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"83461": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 700,
+"2": 700,
+"3": 700
+}
+},
+"83479": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"83623": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"83634": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"83639": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"83659": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"83747": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"83839": {
+"diverges_at": null,
+"ruby_rejects_at": 59
+},
+"83856": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"83859": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"83873": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"83878": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"84075": {
+"diverges_at": null,
+"ruby_rejects_at": 72
+},
+"84143": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"84148": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"84167": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"84173": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"84179": {
+"diverges_at": null,
+"ruby_rejects_at": 193
+},
+"84239": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"84249": {
+"diverges_at": null,
+"ruby_rejects_at": 29
+},
+"84252": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"84375": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"84421": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"84478": {
+"diverges_at": null,
+"ruby_rejects_at": 60
+},
+"84566": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"84675": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"84689": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"84725": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"84749": {
+"diverges_at": null,
+"ruby_rejects_at": 98
+},
+"84753": {
+"diverges_at": null,
+"ruby_rejects_at": 120
+},
+"84773": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"84844": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"84903": {
+"diverges_at": null,
+"ruby_rejects_at": 139
+},
+"84952": {
+"diverges_at": null,
+"ruby_rejects_at": 85
+},
+"84971": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"84991": {
+"diverges_at": null,
+"ruby_rejects_at": 55
+},
+"85029": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"85039": {
+"diverges_at": null,
+"ruby_rejects_at": 64
+},
+"85149": {
+"diverges_at": null,
+"ruby_rejects_at": 104
+},
+"85152": {
+"diverges_at": null,
+"ruby_rejects_at": 57
+},
+"85204": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"85220": {
+"diverges_at": null,
+"ruby_rejects_at": 20
+},
+"85229": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"85239": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"85308": {
+"diverges_at": null,
+"ruby_rejects_at": 164
+},
+"85312": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"85342": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"85375": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"85376": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"85416": {
+"diverges_at": null,
+"ruby_rejects_at": 31
+},
+"85432": {
+"diverges_at": null,
+"ruby_rejects_at": 24
+},
+"85497": {
+"diverges_at": null,
+"ruby_rejects_at": 38
+},
+"85521": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"85553": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"85568": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"85571": {
+"diverges_at": null,
+"ruby_rejects_at": 136
+},
+"85595": {
+"end_reason": "",
+"finished": false,
+"scores_by_seat": {
+"1": 525,
+"2": 525,
+"3": 525,
+"4": 525
+}
+},
+"85609": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"85617": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"85750": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"85775": {
+"diverges_at": null,
+"ruby_rejects_at": 34
+},
+"85829": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"85839": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"85844": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"85877": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"85969": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"86008": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"86069": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"86152": {
+"diverges_at": null,
+"ruby_rejects_at": 76
+},
+"86183": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"86204": {
+"diverges_at": null,
+"ruby_rejects_at": 32
+},
+"86267": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"86299": {
+"diverges_at": null,
+"ruby_rejects_at": 35
+},
+"86401": {
+"diverges_at": null,
+"ruby_rejects_at": 96
+},
+"86419": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"86436": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"86471": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"86485": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"86531": {
+"diverges_at": null,
+"ruby_rejects_at": 83
+},
+"86577": {
+"diverges_at": null,
+"ruby_rejects_at": 39
+},
+"86586": {
+"diverges_at": null,
+"ruby_rejects_at": 150
+},
+"86588": {
+"diverges_at": null,
+"ruby_rejects_at": 70
+},
+"86647": {
+"diverges_at": null,
+"ruby_rejects_at": 89
+},
+"86657": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"86669": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"86715": {
+"diverges_at": null,
+"ruby_rejects_at": 92
+},
+"86996": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"87017": {
+"diverges_at": null,
+"ruby_rejects_at": 52
+},
+"87053": {
+"diverges_at": null,
+"ruby_rejects_at": 48
+},
+"87070": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"87078": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"87125": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"87158": {
+"diverges_at": null,
+"ruby_rejects_at": 87
+},
+"87184": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"87230": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"87231": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"87286": {
+"diverges_at": null,
+"ruby_rejects_at": 50
+},
+"87323": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"87339": {
+"diverges_at": null,
+"ruby_rejects_at": 73
+},
+"87364": {
+"diverges_at": null,
+"ruby_rejects_at": 90
+},
+"87378": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"87379": {
+"diverges_at": null,
+"ruby_rejects_at": 75
+},
+"87415": {
+"diverges_at": null,
+"ruby_rejects_at": 97
+},
+"87426": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"87453": {
+"diverges_at": null,
+"ruby_rejects_at": 66
+},
+"87514": {
+"diverges_at": null,
+"ruby_rejects_at": 42
+},
+"87560": {
+"diverges_at": null,
+"ruby_rejects_at": 28
+},
+"87594": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"87681": {
+"diverges_at": null,
+"ruby_rejects_at": 69
+},
+"87724": {
+"diverges_at": null,
+"ruby_rejects_at": 30
+},
+"87728": {
+"diverges_at": null,
+"ruby_rejects_at": 21
+},
+"87760": {
+"diverges_at": null,
+"ruby_rejects_at": 81
+},
+"87789": {
+"diverges_at": null,
+"ruby_rejects_at": 46
+},
+"87816": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"87840": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"87925": {
+"diverges_at": null,
+"ruby_rejects_at": 95
+},
+"87928": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"87951": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"88024": {
+"diverges_at": null,
+"ruby_rejects_at": 25
+},
+"88033": {
+"diverges_at": null,
+"ruby_rejects_at": 82
+},
+"88041": {
+"diverges_at": null,
+"ruby_rejects_at": 21
+},
+"88052": {
+"diverges_at": null,
+"ruby_rejects_at": 67
+},
+"88080": {
+"diverges_at": null,
+"ruby_rejects_at": 43
+},
+"88087": {
+"diverges_at": null,
+"ruby_rejects_at": 86
+},
+"88098": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"88136": {
+"diverges_at": null,
+"ruby_rejects_at": 36
+},
+"88157": {
+"diverges_at": null,
+"ruby_rejects_at": 58
+},
+"88197": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+},
+"88231": {
+"diverges_at": null,
+"ruby_rejects_at": 94
+},
+"88242": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"88282": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"88309": {
+"diverges_at": null,
+"ruby_rejects_at": 91
+},
+"88320": {
+"diverges_at": null,
+"ruby_rejects_at": 40
+},
+"88334": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"88383": {
+"diverges_at": null,
+"ruby_rejects_at": 65
+},
+"88395": {
+"diverges_at": null,
+"ruby_rejects_at": 61
+},
+"88401": {
+"diverges_at": null,
+"ruby_rejects_at": 77
+},
+"88467": {
+"diverges_at": null,
+"ruby_rejects_at": 41
+},
+"88498": {
+"diverges_at": null,
+"ruby_rejects_at": 47
+},
+"88523": {
+"diverges_at": null,
+"ruby_rejects_at": 63
+},
+"88668": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"88692": {
+"diverges_at": null,
+"ruby_rejects_at": 101
+},
+"88736": {
+"diverges_at": null,
+"ruby_rejects_at": 79
+},
+"88757": {
+"diverges_at": null,
+"ruby_rejects_at": 51
+},
+"88871": {
+"diverges_at": null,
+"ruby_rejects_at": 74
+},
+"88917": {
+"diverges_at": null,
+"ruby_rejects_at": 78
+},
+"89008": {
+"diverges_at": null,
+"ruby_rejects_at": 45
+},
+"89154": {
+"diverges_at": null,
+"ruby_rejects_at": 56
+},
+"89184": {
+"diverges_at": null,
+"ruby_rejects_at": 54
+}
+},
+"ruby_head": "46a592e40494368390c9a731978a577ac4ecb1e0"
+}

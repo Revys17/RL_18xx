@@ -223,6 +223,34 @@ pub enum Action {
         entity_id: String,
         choice: String,
     },
+    /// A company ability's named choice (Ruby `Action::ChooseAbility`;
+    /// 1822: P16 tax haven buys, P17 card moves, P18/P5 token swaps).
+    ChooseAbility {
+        entity_id: String,
+        choice: String,
+    },
+    /// A corporation acquires a private from its owner (Ruby
+    /// `Action::AcquireCompany`; 1822's AcquireCompany step).
+    AcquireCompany {
+        entity_id: String,
+        company_sym: String,
+    },
+    /// A token placed on a hex by type (Ruby `Action::HexToken`; 1822
+    /// destination tokens).
+    HexToken {
+        entity_id: String,
+        hex_id: String,
+        token_type: Option<String>,
+    },
+    /// Pay off the whole player loan (Ruby `Action::PayoffPlayerDebt`).
+    PayoffPlayerDebt {
+        entity_id: String,
+    },
+    /// Pay part of a player loan (Ruby `Action::PayoffPlayerDebtPartial`).
+    PayoffPlayerDebtPartial {
+        entity_id: String,
+        amount: i32,
+    },
 }
 
 impl Action {
@@ -247,6 +275,11 @@ impl Action {
             Action::Convert { entity_id } => entity_id,
             Action::RemoveToken { entity_id, .. } => entity_id,
             Action::Choose { entity_id, .. } => entity_id,
+            Action::ChooseAbility { entity_id, .. } => entity_id,
+            Action::AcquireCompany { entity_id, .. } => entity_id,
+            Action::HexToken { entity_id, .. } => entity_id,
+            Action::PayoffPlayerDebt { entity_id } => entity_id,
+            Action::PayoffPlayerDebtPartial { entity_id, .. } => entity_id,
         }
     }
 
@@ -271,6 +304,11 @@ impl Action {
             Action::Convert { .. } => "convert",
             Action::RemoveToken { .. } => "remove_token",
             Action::Choose { .. } => "choose",
+            Action::ChooseAbility { .. } => "choose_ability",
+            Action::AcquireCompany { .. } => "acquire_company",
+            Action::HexToken { .. } => "hex_token",
+            Action::PayoffPlayerDebt { .. } => "payoff_player_debt",
+            Action::PayoffPlayerDebtPartial { .. } => "payoff_player_debt_partial",
         }
     }
 
@@ -461,6 +499,36 @@ impl Action {
                 Ok(Action::Choose { entity_id, choice })
             }
 
+            "choose_ability" => {
+                let choice = extract_string(dict, "choice")?;
+                Ok(Action::ChooseAbility { entity_id, choice })
+            }
+
+            "acquire_company" => {
+                let company_sym = extract_string(dict, "company")?;
+                Ok(Action::AcquireCompany {
+                    entity_id,
+                    company_sym,
+                })
+            }
+
+            "hex_token" => {
+                let hex_id = extract_string(dict, "hex")?;
+                let token_type = extract_optional_string(dict, "token_type")?;
+                Ok(Action::HexToken {
+                    entity_id,
+                    hex_id,
+                    token_type,
+                })
+            }
+
+            "payoff_player_debt" => Ok(Action::PayoffPlayerDebt { entity_id }),
+
+            "payoff_player_debt_partial" => {
+                let amount = extract_i32(dict, "amount")?;
+                Ok(Action::PayoffPlayerDebtPartial { entity_id, amount })
+            }
+
             "remove_token" => {
                 let (hex_id, city_index) = parse_city_ref(&extract_string(dict, "city")?);
                 let slot = extract_optional_i32(dict, "slot")?.unwrap_or(0) as u8;
@@ -594,8 +662,21 @@ impl Action {
                 map.insert("city_index".to_string(), city_index.to_string());
                 map.insert("slot".to_string(), slot.to_string());
             }
-            Action::Choose { choice, .. } => {
+            Action::Choose { choice, .. } | Action::ChooseAbility { choice, .. } => {
                 map.insert("choice".to_string(), choice.clone());
+            }
+            Action::AcquireCompany { company_sym, .. } => {
+                map.insert("company".to_string(), company_sym.clone());
+            }
+            Action::HexToken { hex_id, token_type, .. } => {
+                map.insert("hex".to_string(), hex_id.clone());
+                if let Some(t) = token_type {
+                    map.insert("token_type".to_string(), t.clone());
+                }
+            }
+            Action::PayoffPlayerDebt { .. } => {}
+            Action::PayoffPlayerDebtPartial { amount, .. } => {
+                map.insert("amount".to_string(), amount.to_string());
             }
         }
 

@@ -1,3 +1,4 @@
+pub mod g1822;
 pub mod g1830;
 pub mod g1867;
 #[cfg(test)]
@@ -233,6 +234,16 @@ pub trait GameTitle: Sync {
     fn train_buy_from_other_players(&self) -> bool {
         false
     }
+
+    /// Legal-move generator POLICY, not a rule: which purchases across
+    /// players the generator (self-play) offers. Replay and
+    /// `process_action` follow the title's rules whatever this says. The
+    /// default forbids them all (the project's choice: seller consent and
+    /// negotiated prices are not modelled). Only the 1822 generator reads
+    /// it today, so 1830/1867 are unaffected.
+    fn generator_cross_player(&self) -> CrossPlayerPolicy {
+        CrossPlayerPolicy::RESTRICTED
+    }
     /// Whether the president may fund an emergency train buy from hand
     /// (1830's EMR). False for loans-only EMR titles (1867: no share
     /// selling, no president cash — loans are the emergency money).
@@ -336,6 +347,15 @@ pub trait GameTitle: Sync {
         true
     }
 
+    /// Whether the title is 1822 or one of its `G1822::Game` subclasses.
+    /// Such games are driven end to end by `crate::g1822` (a Ruby-faithful
+    /// step machine) instead of the shared 1830/1867 round code; every
+    /// 1822-specific branch in shared files keys off `BaseGame::g1822`,
+    /// which is `Some` exactly for these titles. Default false.
+    fn is_g1822_family(&self) -> bool {
+        false
+    }
+
     /// Hex order for the flat action layout.
     fn action_hex_order(&self) -> Vec<&'static str> {
         self.hex_definitions().iter().map(|h| h.coord).collect()
@@ -344,6 +364,28 @@ pub trait GameTitle: Sync {
     fn action_tile_order(&self) -> Vec<&'static str> {
         self.tile_counts().iter().map(|(id, _)| *id).collect()
     }
+}
+
+/// Which purchases between DIFFERENT players' holdings the legal-move
+/// generator offers (see `GameTitle::generator_cross_player`). "Other
+/// player" = the seller (a corporation's president, a minor's or a
+/// company's owning player) is not the buying corporation's president;
+/// a seller or buyer without a president counts as another player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CrossPlayerPolicy {
+    /// Buy a train from a corporation (or minor) another player presides.
+    pub trains: bool,
+    /// Acquire a private company another player owns.
+    pub companies: bool,
+    /// Acquire / merge a minor another player owns (bank minors: always).
+    pub minors: bool,
+}
+
+impl CrossPlayerPolicy {
+    /// Nothing across players (the default policy).
+    pub const RESTRICTED: Self = Self { trains: false, companies: false, minors: false };
+    /// Everything the rules allow (Ruby-faithful; replay checks, audits).
+    pub const RULES: Self = Self { trains: true, companies: true, minors: true };
 }
 
 /// One slot of a title's per-OR-turn tile-lay allowance (one Ruby
@@ -381,6 +423,12 @@ pub enum MarketMovement {
     /// Single-row market (1867): prices only move along the row; there is
     /// no vertical movement and no edge fallback.
     OneDimensional,
+    /// 2-D grid whose `up` falls back to DOWN-RIGHT (r+1, c+1) when no cell
+    /// sits above (G1822::StockMarket#up — the compressed upper market);
+    /// otherwise TwoDimensional. Ruby's base movement moves `down` without
+    /// an existence check and `move` ignores a missing target cell; the
+    /// helpers here stay put instead, which is the same outcome.
+    TwoDimensionalUpDownRight,
 }
 
 /// 1830: Railways & Robber Barons.
@@ -470,13 +518,13 @@ impl GameTitle for G1830 {
 pub fn all_titles() -> &'static [&'static dyn GameTitle] {
     #[cfg(test)]
     {
-        static TITLES: [&'static dyn GameTitle; 3] =
-            [&G1830, &g1867::G1867, &test_title::Test5Share];
+        static TITLES: [&'static dyn GameTitle; 4] =
+            [&G1830, &g1867::G1867, &g1822::G1822, &test_title::Test5Share];
         &TITLES
     }
     #[cfg(not(test))]
     {
-        static TITLES: [&'static dyn GameTitle; 2] = [&G1830, &g1867::G1867];
+        static TITLES: [&'static dyn GameTitle; 3] = [&G1830, &g1867::G1867, &g1822::G1822];
         &TITLES
     }
 }
@@ -804,6 +852,9 @@ pub enum MarketZone {
     Orange,
     /// Multiple-buy zone (1830 brown).
     Brown,
+    /// Game-end cell (1822 `e`, Ruby `:endgame`): reaching it latches the
+    /// stock-market game-end trigger.
+    EndGame,
 }
 
 impl MarketZone {
@@ -819,6 +870,7 @@ impl MarketZone {
             MarketZone::Yellow => "no_cert_limit",
             MarketZone::Orange => "unlimited",
             MarketZone::Brown => "multiple_buy",
+            MarketZone::EndGame => "endgame",
         }
     }
 }

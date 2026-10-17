@@ -14,6 +14,7 @@ pub mod decode;
 pub mod encoder;
 pub mod entities;
 pub mod factored;
+pub mod g1822;
 pub mod game;
 pub mod graph;
 pub mod map;
