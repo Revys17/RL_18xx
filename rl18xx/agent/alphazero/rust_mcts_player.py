@@ -248,6 +248,13 @@ class RustMCTSPlayer:
         )
         if bool(getattr(self.config, "mcts_mean_q", False)):
             self._rust_player.set_q_config(True, float(getattr(self.config, "fpu_reduction", 0.0)))
+        if int(getattr(self.config, "gumbel_k", 0)) > 0:
+            self._rust_player.set_gumbel_config(
+                int(self.config.gumbel_k),
+                float(self.config.gumbel_c_visit),
+                float(self.config.gumbel_c_scale),
+                float(self.config.gumbel_noise_scale),
+            )
         self.result = np.zeros(len(game_state.players))
         self.result_string: Optional[str] = None
         self.searches_pi: list = []
@@ -338,6 +345,10 @@ class RustMCTSPlayer:
             parallel_readouts = min(
                 self.config.parallel_readouts, self.config.num_readouts
             )
+        # A Gumbel search backs up exactly its budget: no batch past it.
+        gumbel = self._gumbel_search_running()
+        if gumbel:
+            parallel_readouts = min(parallel_readouts, int(self._rust_player.gumbel_remaining()))
 
         # Phase 1 PlayoutTrace decision for this move (mirrors
         # MCTSPlayer.tree_search). Budgeted across all tree_search() calls
@@ -365,6 +376,8 @@ class RustMCTSPlayer:
         pending: set = set()
         duplicates: list[int] = []  # (dedupe) re-selected leaves: virtual loss only
         while len(leaves) < parallel_readouts and failsafe < max_attempts:
+            if gumbel and self._rust_player.gumbel_remaining() == 0:
+                break
             failsafe += 1
             # Trace this leaf? Only if tracing is on for this move AND we
             # still have budget AND we have a fresh, non-empty descent path
@@ -409,6 +422,8 @@ class RustMCTSPlayer:
             self._rust_player.add_virtual_loss(idx)
             if dedupe:
                 if idx in pending:
+                    if gumbel:
+                        self._rust_player.gumbel_mark_duplicate(idx)
                     duplicates.append(idx)
                     continue
                 pending.add(idx)
@@ -448,7 +463,10 @@ class RustMCTSPlayer:
 
         backup_start = time.time()
         for idx in duplicates:
-            self._rust_player.revert_virtual_loss(idx)
+            if gumbel:
+                self._rust_player.revert_duplicate_virtual_loss(idx)
+            else:
+                self._rust_player.revert_virtual_loss(idx)
         for i, (idx, probs, value) in enumerate(zip(leaves, move_probs, values)):
             self._rust_player.revert_virtual_loss(idx)
             probs_np = _temper_priors(
@@ -526,10 +544,43 @@ class RustMCTSPlayer:
         readouts = (
             override_readouts if override_readouts is not None else self.adaptive_readouts()
         )
+        if self.gumbel_enabled:
+            tree = self._rust_player
+            if not tree.is_expanded(tree.root_idx):
+                self.tree_search(parallel_readouts=1)  # the root's own evaluation
+            tree.begin_gumbel_search(int(readouts))
+            while tree.gumbel_remaining() > 0:
+                self.tree_search()
+            return self.pick_move()
         target = self._rust_player.n_at_root() + readouts
         while self._rust_player.n_at_root() < target:
             self.tree_search()
         return self.pick_move()
+
+    @property
+    def gumbel_enabled(self) -> bool:
+        """Whether this player's search uses Gumbel root selection (``gumbel_k``)."""
+        return bool(self._rust_player.gumbel_enabled)
+
+    def _gumbel_search_running(self) -> bool:
+        """A Gumbel search was begun at the current root (and not yet played)."""
+        return self.gumbel_enabled and bool(self._rust_player.gumbel_search_active)
+
+    def start_search(self, readouts: Optional[int] = None, key=None):
+        """This move's search as a :class:`lockstep.TreeSearch` (``suggest_move``'s,
+        run by a ``LockstepSearcher`` with other trees), or None when the root has
+        a single legal move with no open price (``suggest_move`` plays it without
+        searching). ``key`` names the network that evaluates its leaves."""
+        from rl18xx.agent.alphazero.lockstep import TreeSearch
+
+        legal = self._rust_player.legal_action_indices_at_root()
+        if len(legal) == 1:
+            if not self._rust_player.root_move_has_open_price(int(legal[0])):
+                return None
+            # The one move's price comes from the root's price head: evaluate
+            # the root (as the eval's _expand_root does), but don't search.
+            readouts = 0
+        return TreeSearch(self, readouts if readouts is not None else self.adaptive_readouts(), key=key)
 
     def pick_move(self) -> int:
         """Pick a move from root visit counts — parity with Python
@@ -537,6 +588,9 @@ class RustMCTSPlayer:
         engine moves, visit-count-proportional sampling (temperature=1)
         before it."""
         legal = self._rust_player.legal_action_indices_at_root()
+        if len(legal) > 1 and self._gumbel_search_running():
+            # The Gumbel root's move is already a sample (its noise); no softpick.
+            return int(self._rust_player.gumbel_action())
         if self.decisions >= self.config.softpick_move_cutoff:
             return int(self._rust_player.pick_best_action())
         if len(legal) == 1:
@@ -565,7 +619,11 @@ class RustMCTSPlayer:
         # Snapshot the search-policy vector before advancing the root. The
         # training target is the full visit distribution at every move;
         # ``softpick_move_cutoff`` only governs how ``pick_move`` chooses.
-        pi = np.asarray(self._rust_player.pi_at_root(1.0), dtype=np.float32)
+        if self._gumbel_search_running():
+            # Gumbel: the improved policy softmax(logits + sigma(completed q)).
+            pi = np.asarray(self._rust_player.gumbel_policy_target(), dtype=np.float32)
+        else:
+            pi = np.asarray(self._rust_player.pi_at_root(1.0), dtype=np.float32)
         self.searches_pi.append(pi)
 
         # Native price range for the chosen slot (replaces the Python
@@ -672,8 +730,8 @@ class RustMCTSPlayer:
     def inject_noise(self):
         """Inject Dirichlet noise on the root prior (mirrors MCTSNode.inject_noise)."""
         w = float(getattr(self.config, "dirichlet_noise_weight", 0.0) or 0.0)
-        if w <= 0.0:
-            return
+        if w <= 0.0 or int(getattr(self.config, "gumbel_k", 0)) > 0:
+            return  # Gumbel noise replaces Dirichlet noise at the root
         concentration = float(
             getattr(self.config, "dirichlet_noise_concentration", 10.0)
         )

@@ -17,8 +17,10 @@ pub mod factored;
 pub mod g1822;
 pub mod game;
 pub mod graph;
+pub mod gumbel;
 pub mod map;
 pub mod mcts;
+pub mod mcts_lockstep;
 pub mod price_pmf;
 pub mod revenue;
 pub mod rounds;
@@ -59,6 +61,11 @@ fn engine_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Rust MCTS (Phase 4a scaffold)
     m.add_class::<mcts::RustMCTSPlayer>()?;
+    m.add_function(wrap_pyfunction!(mcts_lockstep::mcts_collect_leaves, m)?)?;
+    m.add_function(wrap_pyfunction!(mcts_lockstep::mcts_apply_results, m)?)?;
+    m.add_function(wrap_pyfunction!(mcts_lockstep::mcts_discard_pending, m)?)?;
+    m.add_function(wrap_pyfunction!(mcts_lockstep::encode_games, m)?)?;
+    m.add_function(wrap_pyfunction!(mcts_lockstep::mcts_terminal_value, m)?)?;
     m.add_function(wrap_pyfunction!(action_index::action_offsets_py, m)?)?;
     m.add_function(wrap_pyfunction!(action_index::policy_size_py, m)?)?;
     m.add_function(wrap_pyfunction!(action_index::policy_size_for_py, m)?)?;

@@ -15,6 +15,7 @@
 //! grandchildren under one slot. See Python's ``MCTSNode`` for the reference.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use numpy::PyReadonlyArray1;
 use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyValueError};
@@ -42,8 +43,9 @@ const C_PUCT_INIT: f32 = 1.25;
 #[derive(Debug, Clone, Default)]
 pub struct PriceComponents {
     pub price_logits: Vec<f32>,
-    /// Map (action_type, entity_key_parts) → slot index.
-    pub slot_index: HashMap<(String, Vec<String>), usize>,
+    /// Map (action_type, entity_key_parts) → slot index. Shared: it is the
+    /// model's fixed slot layout, the same for every leaf of a batch.
+    pub slot_index: Arc<HashMap<(String, Vec<String>), usize>>,
     pub num_slots: usize,
 }
 
@@ -100,6 +102,9 @@ pub struct RustMCTSNode {
     /// Per price-bearing slot: the cells PW will still materialize, in order
     /// (``price_pmf::proposal_order``), built on the slot's first widening.
     pub price_proposals: HashMap<u32, Vec<usize>>,
+    /// The value the network gave this node when it was expanded (absolute
+    /// seat order) -- the Gumbel root's ``v_mix`` starts from it.
+    pub raw_value: [f32; VALUE_SIZE],
 }
 
 impl RustMCTSNode {
@@ -241,6 +246,20 @@ pub struct RustMCTSPlayer {
     /// ``fpu_reduction * sqrt(visited prior mass)`` (first-play urgency).
     pub mean_q: bool,
     pub fpu_reduction: f32,
+
+    /// The tree's random source (price proposals, Dirichlet noise, Gumbel
+    /// noise): from OS entropy, or ``seed()`` for reproducible tests.
+    pub rng: rand::rngs::StdRng,
+    /// Lockstep batches (``mcts_lockstep``): leaves selected by
+    /// ``mcts_collect_leaves`` and waiting for ``mcts_apply_results``, with the
+    /// rotation each was encoded under; and (``dedupe``) re-selected leaves that
+    /// only carry a virtual loss.
+    pub pending: Vec<(usize, usize)>,
+    pub pending_dups: Vec<usize>,
+    /// Gumbel root selection (``gumbel``): off when ``None``.
+    pub gumbel: Option<crate::gumbel::GumbelConfig>,
+    /// The Gumbel search running at the current root, if any.
+    pub gumbel_search: Option<crate::gumbel::GumbelSearch>,
 }
 
 impl RustMCTSPlayer {
@@ -322,6 +341,7 @@ impl RustMCTSPlayer {
             is_price_grandchild: false,
             price_components: None,
             price_proposals: HashMap::new(),
+            raw_value: [0.0; VALUE_SIZE],
         })
     }
 
@@ -384,6 +404,11 @@ impl RustMCTSPlayer {
             max_game_length: 1000,
             mean_q: false,
             fpu_reduction: 0.0,
+            rng: rand::rngs::StdRng::from_entropy(),
+            pending: Vec::new(),
+            pending_dups: Vec::new(),
+            gumbel: None,
+            gumbel_search: None,
         };
         let root = player.build_node(cloned_inner, None, None)?;
         player.num_players = root.num_players;
@@ -474,6 +499,13 @@ impl RustMCTSPlayer {
         self.arena[self.root_idx].legal_action_indices.len()
     }
 
+    /// Whether root move ``action_index`` leaves its price open (a progressive-
+    /// widening slot): playing it takes a price from the root's price head even
+    /// when it is the only legal move.
+    fn root_move_has_open_price(&self, action_index: u32) -> bool {
+        Self::is_pw_slot(&self.arena[self.root_idx], action_index)
+    }
+
     /// Legal action indices at the root (for parity diagnostics).
     fn legal_action_indices_at_root(&self) -> Vec<u32> {
         self.arena[self.root_idx].legal_action_indices.clone()
@@ -558,7 +590,12 @@ impl RustMCTSPlayer {
             if self.arena[current].legal_action_indices.is_empty() {
                 return Ok((current, action_path, pw_path, forced_lens));
             }
-            let best_idx = self.argmax_action_score(current);
+            // A Gumbel search picks the root's move by sequential halving;
+            // every other node (and the root without one) by PUCT.
+            let best_idx = match self.gumbel_root_choice(current) {
+                Some(i) => i,
+                None => self.argmax_action_score(current),
+            };
             let best_move = self.arena[current].legal_action_indices[best_idx];
 
             // PW dispatch: price-bearing slots with a non-degenerate range
@@ -925,60 +962,10 @@ impl RustMCTSPlayer {
         for i in 0..VALUE_SIZE {
             v[i] = value[i];
         }
-
-        let up_to = self.root_idx;
-        let mut current = arena_idx;
-        let mut current_value = v;
-        loop {
-            // Update this node's N/W.
-            if current == self.root_idx {
-                self.root_n += 1.0;
-                for i in 0..VALUE_SIZE {
-                    self.root_w[i] += current_value[i];
-                }
-                return Ok(());
-            }
-            let parent = match self.arena[current].parent {
-                Some(p) => p,
-                None => return Ok(()),
-            };
-            let pidx = self.arena[current].parent_compressed_idx;
-            if self.arena[current].is_price_grandchild {
-                let fmove = self.arena[current].fmove.unwrap();
-                let sp = self.arena[current].sampled_price.unwrap();
-                if let Some(map) = self.arena[parent].price_child_n.get_mut(&fmove) {
-                    if let Some(n) = map.get_mut(&sp) {
-                        *n += 1.0;
-                    }
-                }
-                if let Some(map) = self.arena[parent].price_child_w.get_mut(&fmove) {
-                    if let Some(w) = map.get_mut(&sp) {
-                        for i in 0..VALUE_SIZE {
-                            w[i] += current_value[i];
-                        }
-                    }
-                }
-                // Mirror into categorical compressed N/W.
-                self.arena[parent].child_n[pidx] += 1.0;
-                for i in 0..VALUE_SIZE {
-                    self.arena[parent].child_w[pidx][i] += current_value[i];
-                }
-            } else {
-                self.arena[parent].child_n[pidx] += 1.0;
-                for i in 0..VALUE_SIZE {
-                    self.arena[parent].child_w[pidx][i] += current_value[i];
-                }
-            }
-            if current == up_to {
-                return Ok(());
-            }
-            // Apply backup discount.
-            for i in 0..VALUE_SIZE {
-                current_value[i] *= self.backup_discount;
-            }
-            current = parent;
-        }
+        self.backup(arena_idx, v);
+        Ok(())
     }
+
 
     /// Incorporate priors + value at the leaf (Python's `incorporate_results`).
     ///
@@ -1020,41 +1007,20 @@ impl RustMCTSPlayer {
         }
 
         // Decode price_components (if present) into the Rust struct.
+        let mut decoded = None;
         if let Some(pc_obj) = price_components.as_ref() {
             let bound = pc_obj.bind(py);
             // Allow ``None`` to mean "no price components".
             if !bound.is_none() {
-                let decoded = decode_price_components(py, bound)?;
-                self.arena[arena_idx].price_components = Some(decoded);
+                decoded = Some(decode_price_components(py, bound)?);
             }
         }
-
-        if self.arena[arena_idx].is_expanded {
-            // Re-visited node — just back up the value again.
-            self.backup_value(arena_idx, value_arr.to_vec())?;
-            return Ok(());
-        }
-        self.arena[arena_idx].is_expanded = true;
-
-        // Extract legal-prior compressed array, normalize.
-        let legal: Vec<u32> = self.arena[arena_idx].legal_action_indices.clone();
-        let mut legal_probs: Vec<f32> = legal
+        let legal_probs: Vec<f32> = self.arena[arena_idx]
+            .legal_action_indices
             .iter()
             .map(|&i| probs_slice[i as usize])
             .collect();
-        let s: f32 = legal_probs.iter().sum();
-        if s > 0.0 {
-            for p in legal_probs.iter_mut() {
-                *p /= s;
-            }
-        }
-        self.arena[arena_idx].original_prior = legal_probs.clone();
-        self.arena[arena_idx].child_prior = legal_probs;
-        // child_w stays zeroed (standard AlphaZero).
-        let n = self.arena[arena_idx].legal_action_indices.len();
-        self.arena[arena_idx].child_w = vec![[0.0; VALUE_SIZE]; n];
-
-        self.backup_value(arena_idx, value_arr.to_vec())?;
+        self.incorporate(arena_idx, legal_probs, value_arr, decoded);
         Ok(())
     }
 
@@ -1181,8 +1147,18 @@ impl RustMCTSPlayer {
         // Also clear the price-grandchild flag — it should not mirror into
         // a (now-gone) parent slot during subsequent backups.
         self.arena[self.root_idx].is_price_grandchild = false;
+        // A search belongs to its root.
+        self.gumbel_search = None;
+        self.pending.clear();
+        self.pending_dups.clear();
         self.compact_to_root();
         Ok(())
+    }
+
+    /// Reseed the tree's random source (price proposals, Dirichlet and
+    /// Gumbel noise) for reproducible runs; trees start from OS entropy.
+    pub fn seed(&mut self, seed: u64) {
+        self.rng = rand::rngs::StdRng::seed_from_u64(seed);
     }
 
     /// Compute a policy-size-length visit-count policy at the root with
@@ -1266,6 +1242,7 @@ impl RustMCTSPlayer {
 
     /// Inject Dirichlet noise on the root's prior.
     pub fn inject_noise(&mut self, noise_weight: f32, concentration: f32) -> PyResult<()> {
+        let rng = &mut self.rng;
         let root = &mut self.arena[self.root_idx];
         let num_legal = root.legal_action_indices.len();
         if num_legal == 0 || noise_weight <= 0.0 {
@@ -1275,11 +1252,10 @@ impl RustMCTSPlayer {
         let noise: Vec<f64> = if num_legal == 1 {
             vec![1.0]
         } else {
-            let mut rng = rand::rngs::StdRng::from_entropy();
             let dist = Dirichlet::new_with_size(alpha, num_legal).map_err(|e| {
                 PyRuntimeError::new_err(format!("Dirichlet::new failed: {}", e))
             })?;
-            dist.sample(&mut rng)
+            dist.sample(rng)
         };
         let w = noise_weight as f64;
         for i in 0..num_legal {
@@ -1304,6 +1280,100 @@ impl RustMCTSPlayer {
 }
 
 impl RustMCTSPlayer {
+    /// Back a per-player value vector up from ``arena_idx`` to the root. For
+    /// price grandchildren, both the per-price N/W and the categorical
+    /// compressed N/W are updated (the latter so categorical-level PUCT
+    /// integrates over all grandchildren).
+    pub(crate) fn backup(&mut self, arena_idx: usize, value: [f32; VALUE_SIZE]) {
+        let up_to = self.root_idx;
+        let mut current = arena_idx;
+        let mut current_value = value;
+        loop {
+            // Update this node's N/W.
+            if current == self.root_idx {
+                self.root_n += 1.0;
+                for i in 0..VALUE_SIZE {
+                    self.root_w[i] += current_value[i];
+                }
+                return;
+            }
+            let parent = match self.arena[current].parent {
+                Some(p) => p,
+                None => return,
+            };
+            let pidx = self.arena[current].parent_compressed_idx;
+            if self.arena[current].is_price_grandchild {
+                let fmove = self.arena[current].fmove.unwrap();
+                let sp = self.arena[current].sampled_price.unwrap();
+                if let Some(map) = self.arena[parent].price_child_n.get_mut(&fmove) {
+                    if let Some(n) = map.get_mut(&sp) {
+                        *n += 1.0;
+                    }
+                }
+                if let Some(map) = self.arena[parent].price_child_w.get_mut(&fmove) {
+                    if let Some(w) = map.get_mut(&sp) {
+                        for i in 0..VALUE_SIZE {
+                            w[i] += current_value[i];
+                        }
+                    }
+                }
+                // Mirror into categorical compressed N/W.
+                self.arena[parent].child_n[pidx] += 1.0;
+                for i in 0..VALUE_SIZE {
+                    self.arena[parent].child_w[pidx][i] += current_value[i];
+                }
+            } else {
+                self.arena[parent].child_n[pidx] += 1.0;
+                for i in 0..VALUE_SIZE {
+                    self.arena[parent].child_w[pidx][i] += current_value[i];
+                }
+            }
+            if current == up_to {
+                return;
+            }
+            // Apply backup discount.
+            for i in 0..VALUE_SIZE {
+                current_value[i] *= self.backup_discount;
+            }
+            current = parent;
+        }
+    }
+
+    /// Python's ``incorporate_results`` on a leaf: ``legal_probs`` are the
+    /// network's priors of the leaf's legal moves (in ``legal_action_indices``
+    /// order, renormalized here), ``value`` the leaf's value in absolute seat
+    /// order. A node already expanded (a re-visit) only backs the value up.
+    pub(crate) fn incorporate(
+        &mut self,
+        arena_idx: usize,
+        mut legal_probs: Vec<f32>,
+        value: [f32; VALUE_SIZE],
+        price_components: Option<PriceComponents>,
+    ) {
+        if price_components.is_some() {
+            self.arena[arena_idx].price_components = price_components;
+        }
+        if self.arena[arena_idx].is_expanded {
+            // Re-visited node — just back up the value again.
+            self.backup(arena_idx, value);
+            return;
+        }
+        self.arena[arena_idx].is_expanded = true;
+        let s: f32 = legal_probs.iter().sum();
+        if s > 0.0 {
+            for p in legal_probs.iter_mut() {
+                *p /= s;
+            }
+        }
+        let node = &mut self.arena[arena_idx];
+        node.original_prior = legal_probs.clone();
+        node.child_prior = legal_probs;
+        // child_w stays zeroed (standard AlphaZero).
+        node.child_w = vec![[0.0; VALUE_SIZE]; node.legal_action_indices.len()];
+        node.raw_value = value;
+        self.backup(arena_idx, value);
+    }
+
     /// Drop every arena node outside the current root's subtree and renumber
     /// the survivors, root first (root_idx becomes 0). Without this the arena
     /// keeps every node created during the game — each holding a full game
@@ -1383,7 +1453,7 @@ impl RustMCTSPlayer {
         price_range: (i64, i64),
     ) -> Option<i64> {
         let (cells, probs) = self.slot_cells(arena_idx, action_index, action_type, price_range)?;
-        let mut rng = rand::thread_rng();
+        let rng = &mut self.rng;
         let eps = self.price_explore_eps as f64;
         let taken: std::collections::HashSet<usize> = self.arena[arena_idx]
             .price_children
@@ -1393,11 +1463,11 @@ impl RustMCTSPlayer {
         let order = self.arena[arena_idx]
             .price_proposals
             .entry(action_index)
-            .or_insert_with(|| proposal_order(&probs, eps, &mut rng));
+            .or_insert_with(|| proposal_order(&probs, eps, rng));
         while !order.is_empty() {
             let cell = order.remove(0);
             if !taken.contains(&cell) {
-                return Some(cells.sample_price(cell, &mut rng));
+                return Some(cells.sample_price(cell, rng));
             }
         }
         None
@@ -1408,7 +1478,7 @@ impl RustMCTSPlayer {
     /// Used for forced-chain prices and fully-expanded slots — mirrors
     /// Python ``_sample_price_for_slot``.
     fn sample_price_from_head(
-        &self,
+        &mut self,
         arena_idx: usize,
         action_index: u32,
         action_type: &str,
@@ -1424,7 +1494,7 @@ impl RustMCTSPlayer {
         };
         let eps = self.price_explore_eps as f64;
         let live = (0..NUM_CELLS).filter(|&c| cells.nonempty(c)).count() as f64;
-        let mut rng = rand::thread_rng();
+        let rng = &mut self.rng;
         let mut u = rng.gen::<f64>();
         let mut chosen = None;
         for c in (0..NUM_CELLS).filter(|&c| cells.nonempty(c)) {
@@ -1435,7 +1505,7 @@ impl RustMCTSPlayer {
             }
             u -= mass;
         }
-        chosen.map_or(p_min, |c| cells.sample_price(c, &mut rng))
+        chosen.map_or(p_min, |c| cells.sample_price(c, rng))
     }
 
     /// A node's own visit count — Python ``MCTSNode.N``. The root reads its
@@ -1650,6 +1720,20 @@ fn decode_price_components(py: Python<'_>, dict: &Bound<'_, PyAny>) -> PyResult<
         )));
     }
 
+    let slot_index = decode_slot_index(&slot_index_obj)?;
+
+    Ok(PriceComponents {
+        price_logits,
+        slot_index: Arc::new(slot_index),
+        num_slots,
+    })
+}
+
+/// Decode the price head's ``slot_index`` dict: ``(action_type, (entity key
+/// parts...)) -> slot row``.
+pub(crate) fn decode_slot_index(
+    slot_index_obj: &Bound<'_, PyAny>,
+) -> PyResult<HashMap<(String, Vec<String>), usize>> {
     // Decode slot_index: dict of (action_type_str, tuple_of_strs) -> int.
     // The Python side passes tuples-of-strings (e.g. ("SV",) or
     // ("B&O", "4")). We convert to Vec<String> for hashing.
@@ -1683,10 +1767,5 @@ fn decode_price_components(py: Python<'_>, dict: &Bound<'_, PyAny>) -> PyResult<
         let slot: usize = value.extract()?;
         slot_index.insert((action_type, parts), slot);
     }
-
-    Ok(PriceComponents {
-        price_logits,
-        slot_index,
-        num_slots,
-    })
+    Ok(slot_index)
 }

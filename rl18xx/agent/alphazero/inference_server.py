@@ -781,8 +781,24 @@ class InferenceClient:
         )
         return rid, packed, len(encoded_game_states)
 
-    def receive(self, pending):
-        """Wait for the reply to a :meth:`send` and unpack it like ``run_many_encoded``."""
+    def send_packed(self, packed: PackedStates):
+        """Submit states already stacked into a :class:`PackedStates` (the
+        lockstep search's natively encoded leaves); answer with
+        :meth:`receive_raw`."""
+        if len(packed) == 0:
+            raise ValueError("Received no game states to run.")
+        rid = self._next_request_id
+        self._next_request_id += 1
+        self.request_q.put(InferenceRequest(request_id=rid, worker_id=self.worker_id, encoded_states=packed))
+        return rid, packed, len(packed)
+
+    def receive_raw(self, pending) -> InferenceReply:
+        """The server's reply to a send as it arrived: with legal indices,
+        ``probs`` holds each state's legal priors back to back (no dense
+        policy vectors are built)."""
+        return self._wait_reply(pending)
+
+    def _wait_reply(self, pending) -> InferenceReply:
         rid, packed, num_states = pending
         # The reply queue is per-worker; anything else on it is a stale reply
         # to an earlier timed-out request.
@@ -803,7 +819,12 @@ class InferenceClient:
             LOGGER.debug(
                 f"InferenceClient(worker={self.worker_id}): discarding stale reply for request {reply.request_id}"
             )
+        return reply
 
+    def receive(self, pending):
+        """Wait for the reply to a :meth:`send` and unpack it like ``run_many_encoded``."""
+        reply = self._wait_reply(pending)
+        packed = pending[1]
         if reply.legal_lengths is not None:
             # Scatter the legal priors back into dense policy vectors.
             from rl18xx.agent.alphazero.mcts import POLICY_SIZE

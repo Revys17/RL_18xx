@@ -474,6 +474,20 @@ class SelfPlayHyperparams:
     # loss) is evaluated and backed up once, as minigo does; False backs up
     # each copy, so a batch's duplicates count as visits carrying one value.
     dedupe_leaves: bool = False
+    # Rust MCTS: Gumbel root selection (Danihelka et al. 2022; engine-rs/src/gumbel.rs).
+    # gumbel_k > 0 keeps the top gumbel_k root moves by Gumbel noise + logits,
+    # spends the readouts on them by sequential halving (exactly num_readouts
+    # simulations), plays argmax(g + logits + sigma(q)) among the most visited
+    # and records softmax(logits + sigma(completed q)) as the search's policy
+    # target (``searches_pi``) instead of the visit distribution; below the
+    # root the PUCT settings above apply. sigma(q) = (gumbel_c_visit +
+    # max_b N(b)) * gumbel_c_scale * q, q the mover's 0-1 win share;
+    # gumbel_noise_scale 0 makes the root deterministic (top-k by prior).
+    # Replaces softpick sampling and Dirichlet noise at the root.
+    gumbel_k: int = 0
+    gumbel_c_visit: float = 50.0
+    gumbel_c_scale: float = 1.0
+    gumbel_noise_scale: float = 1.0
     c_puct_by_round: dict = field(default_factory=_default_c_puct_by_round)
     dirichlet_noise_alpha: float = 0.03
     dirichlet_noise_weight: float = 0.25

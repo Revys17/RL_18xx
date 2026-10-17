@@ -114,6 +114,29 @@ def _rust_encode(game: RustGameAdapter) -> tuple:
     return (gs_tensor, nf_tensor, _cached_edge_index, _cached_edge_attrs, round_type_idx, 0, rotation, len(player_ids))
 
 
+def _native_encode(game) -> tuple:
+    """``_rust_encode``'s 8-tuple computed in Rust (``BaseGame.encode_canonical_py``):
+    no adapter, no Python canonicalization. ``game`` is a ``RustGameAdapter`` or
+    an ``engine_rs.BaseGame``. Bit-for-bit equal to ``_rust_encode``
+    (tests/agent/alphazero/test_native_encode.py)."""
+    global _cached_edge_index, _cached_edge_attrs
+
+    rust_game = getattr(game, "_game", game)
+    if _cached_edge_index is None:
+        _rust_encode(game if isinstance(game, RustGameAdapter) else RustGameAdapter(rust_game))
+    gs, nf, round_type, rotation, num_players = rust_game.encode_canonical_py()
+    return (
+        torch.from_numpy(gs).unsqueeze(0),
+        torch.from_numpy(nf),
+        _cached_edge_index,
+        _cached_edge_attrs,
+        round_type,
+        0,
+        rotation,
+        num_players,
+    )
+
+
 def unrotate_value(value: np.ndarray, rotation: int, num_players: int) -> np.ndarray:
     """Canonical-frame value vector → absolute seat order.
 

@@ -637,6 +637,153 @@ impl BaseGame {
 }
 
 // ---------------------------------------------------------------------------
+// Canonical (mover-first) encoding: the network's input, natively
+// ---------------------------------------------------------------------------
+
+/// One position as the network takes it -- what Python's
+/// ``mcts._rust_encode`` builds from a ``RustGameAdapter`` (game-state vector
+/// rotated so the player to move is seat 0, hex features, round type, the
+/// rotation, the player count), computed without the adapter.
+pub struct CanonicalEncoding {
+    pub game_state: Vec<f32>,
+    pub node_features: Vec<f32>,
+    /// ``encoder.ROUND_TYPE_MAP`` of the round's Python class name.
+    pub round_type: i64,
+    /// The mover's index among the players sorted by id (0 when nobody is to
+    /// move, e.g. a finished game -- ``_rust_encode`` raises there).
+    pub rotation: usize,
+    pub num_players: usize,
+}
+
+/// The player-indexed spans of the flat game-state vector that canonicalization
+/// rotates: ``(start, len)`` runs of one entry per player, and the
+/// ``player_shares`` block of ``num_players`` rows of ``num_corporations``.
+/// Mirrors ``Encoder_1830Graph.get_player_rotation_plan``.
+struct RotationPlan {
+    simple: Vec<(usize, usize)>,
+    /// (start, stride): ``num_players`` blocks of ``stride`` floats.
+    block: (usize, usize),
+}
+
+fn rotation_plan(spec: &EncoderSpec, np: usize) -> RotationPlan {
+    let (nc, npv, nt, ntile) =
+        (spec.num_corporations(), spec.num_privates(), spec.num_train_types(), spec.num_tile_ids());
+    let mut simple = Vec::new();
+    let mut off = 0usize;
+    // active_entity (only its player part rotates), active_president
+    simple.push((off, np));
+    off += np + nc;
+    simple.push((off, np));
+    off += np;
+    off += 1 + 1; // round_type, game_phase
+    simple.push((off, np)); // priority_deal_player
+    off += np;
+    off += 1; // bank_cash
+    simple.push((off, np)); // player_certs_remaining
+    off += np;
+    simple.push((off, np)); // player_cash
+    off += np;
+    let block = (off, nc); // player_shares
+    off += np * nc;
+    for p in 0..npv {
+        simple.push((off + p * (np + nc), np)); // private_ownership
+    }
+    off += npv * (np + nc);
+    off += npv + nc + nc + nc * nt + nc + 2 * nc + 2 * nc + 4 * nc + nt + nt + ntile;
+    for p in 0..npv {
+        simple.push((off + p * np, np)); // auction_bids
+    }
+    off += npv * np;
+    off += npv + npv + npv + 2 + 1 + npv; // min bid, available, face value, OR structure, train limit, closed
+    simple.push((off, np)); // player_turn_order
+    off += np;
+    simple.push((off, np)); // player_committed_cash
+    off += np;
+    debug_assert_eq!(off, spec.encoding_size(np));
+    RotationPlan { simple, block }
+}
+
+/// ``Encoder_1830Graph.canonicalize_perspective``: rotate the player-indexed
+/// sections so seat ``rotation`` becomes seat 0 (``np.roll(x, -rotation)``).
+fn canonicalize(state: &[f32], spec: &EncoderSpec, np: usize, rotation: usize) -> Vec<f32> {
+    if rotation == 0 || np == 0 {
+        return state.to_vec();
+    }
+    let plan = rotation_plan(spec, np);
+    let mut out = state.to_vec();
+    for &(start, len) in &plan.simple {
+        for i in 0..len {
+            out[start + i] = state[start + (i + rotation) % len];
+        }
+    }
+    let (start, stride) = plan.block;
+    for i in 0..np {
+        let src = (i + rotation) % np;
+        out[start + i * stride..start + (i + 1) * stride]
+            .copy_from_slice(&state[start + src * stride..start + (src + 1) * stride]);
+    }
+    out
+}
+
+impl BaseGame {
+    /// The mover's index among the players sorted by id: the rotation the
+    /// encoder canonicalizes by and the seat whose value the search reads.
+    pub fn mover_index(&self) -> Option<usize> {
+        let mut ids: Vec<u32> = self.players.iter().map(|p| p.id).collect();
+        ids.sort_unstable();
+        let mover = self.acting_player_id_pub()?;
+        ids.iter().position(|&id| id == mover)
+    }
+
+    /// The network's input for this position (see [`CanonicalEncoding`]).
+    pub fn encode_canonical(&self) -> CanonicalEncoding {
+        let spec = spec_for(&self.title);
+        let np = self.players.len();
+        let rotation = self.mover_index().unwrap_or(0);
+        let (state, node_features) = self.encode_state();
+        // ``round.__class__.__name__`` through the adapter's round proxy:
+        // Stock / Operating / WaterfallAuction, anything else unmapped (0).
+        let round_type = match self.round_state.round_type.as_str() {
+            "Operating" => 1,
+            "Auction" => 2,
+            _ => 0,
+        };
+        CanonicalEncoding {
+            game_state: canonicalize(&state, spec, np, rotation),
+            node_features,
+            round_type,
+            rotation,
+            num_players: np,
+        }
+    }
+}
+
+#[pyo3::pymethods]
+impl BaseGame {
+    /// The network's input for this position, natively: ``(game_state (D,),
+    /// node_features (num_hexes, features), round_type, rotation,
+    /// num_players)`` as float32 numpy arrays and ints -- what
+    /// ``mcts._rust_encode`` builds through a ``RustGameAdapter``
+    /// (``mcts._native_encode`` wraps it into the same tuple).
+    fn encode_canonical_py<'py>(
+        &self,
+        py: pyo3::Python<'py>,
+    ) -> pyo3::PyResult<(
+        pyo3::Bound<'py, numpy::PyArray1<f32>>,
+        pyo3::Bound<'py, numpy::PyArray2<f32>>,
+        i64,
+        usize,
+        usize,
+    )> {
+        use numpy::{PyArray1, PyArrayMethods};
+        let spec = spec_for(&self.title);
+        let enc = self.encode_canonical();
+        let nf = PyArray1::from_vec(py, enc.node_features).reshape([spec.num_hexes(), spec.num_node_features()])?;
+        Ok((PyArray1::from_vec(py, enc.game_state), nf, enc.round_type, enc.rotation, enc.num_players))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Frozen-1830 oracle
 // ---------------------------------------------------------------------------
 
