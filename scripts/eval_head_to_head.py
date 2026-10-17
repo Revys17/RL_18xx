@@ -2,7 +2,8 @@
 
 Plays 4-player 1830 games (Rust engine + Rust MCTS) in which two checkpoints
 each hold two seats, cycling through all six 2-2 seat arrangements so seat
-order and priority deal even out. Each checkpoint gets its own inference
+order and priority deal even out (``--a-seats 1``: side A holds one seat
+against three, in all four arrangements; equal strength then scores 0.25). Each checkpoint gets its own inference
 server; every worker holds a client for each server, and a seat searches
 with its own checkpoint's tree (rebuilt from the current position whenever
 the other checkpoint moved in between, kept across its own consecutive moves).
@@ -41,6 +42,10 @@ round: it replaces SelfPlayConfig's per-round c_puct_by_round table) and
   with ``mix=<w>`` the heuristic gets weight w and the network 1 - w
 - ``min=<n>``: readouts at positions with <= 5 legal moves (self-play's
   ``min_readouts``; default: the player's own budget)
+- ``sample=<t>``: no search -- the policy plays a move sampled from
+  softmax(logits / t) over the legal moves, its price drawn from the price
+  head, as ``eval_policy_only.py`` plays (``@`` and the other options are
+  ignored); ``sample=0.5`` is how policy-gradient checkpoints are evaluated
 - ``ptemp=<t>``: priors softmax(logits / t) (SelfPlayConfig.prior_temperature;
   a policy-gradient learner's policy is softmax(logits / learner_temperature))
 - ``dedupe``: a leaf picked twice in one batch is backed up once
@@ -78,12 +83,19 @@ sys.path.insert(0, str(REPO_ROOT))
 LOGGER = logging.getLogger("eval_head_to_head")
 CHECKPOINT_DIR = REPO_ROOT / "model_checkpoints"
 NUM_PLAYERS = 4
+
+
+def arrangements(a_seats: int = 2) -> list:
+    """Every way to give side A ``a_seats`` of the four seats (side B the rest)."""
+    return [
+        tuple("A" if seat in chosen else "B" for seat in range(NUM_PLAYERS))
+        for chosen in itertools.combinations(range(NUM_PLAYERS), a_seats)
+    ]
+
+
 # Every way to give each of two checkpoints two of the four seats.
-ARRANGEMENTS = [
-    tuple("A" if seat in pair else "B" for seat in range(NUM_PLAYERS))
-    for pair in itertools.combinations(range(NUM_PLAYERS), 2)
-]
-# Game ids of match m are m * MATCH_STRIDE + g. A multiple of the six
+ARRANGEMENTS = arrangements(2)
+# Game ids of match m are m * MATCH_STRIDE + g. A multiple of the six (and four)
 # arrangements, so every start is played in all six in every match (with
 # 1_000_000, matches after the first split some starts 2/4); the start comes
 # from g alone, so all matches of one run play the same starts.
@@ -137,6 +149,9 @@ def parse_player(spec: str, default_readouts: int) -> tuple:
             overrides["prior_temperature"] = float(value)
         elif key == "dedupe":
             overrides["dedupe_leaves"] = True
+        elif key == "sample":
+            overrides = {"policy_temperature": float(value) if value else 1.0}
+            break
         else:
             raise SystemExit(f"Unknown player option {option!r} in {spec!r}")
     paths = "+".join(str(resolve_checkpoint(part)) for part in checkpoint.split("+"))
@@ -177,6 +192,58 @@ def _expand_root(player):
     leaf.incorporate_results(probs, value, leaf, price_components=price_components)
 
 
+class PolicyPlayer:
+    """A ``sample=<t>`` player: no search. Each move is sampled from softmax(logits
+    / t) over the legal moves and its price drawn from the price head, as
+    ``eval_policy_only.py`` plays; forced moves are played without the network."""
+
+    def __init__(self, client, temperature: float):
+        self.client = client
+        self.temperature = temperature
+        self.rng = np.random.default_rng(np.random.randint(2**31))
+        self.game = None
+        self.price_row = None
+        self.decisions = 0
+
+    def initialize_game(self, game):
+        self.game = game
+
+    def legal(self) -> list:
+        return [int(i) for i in self.game._game.factored_legal_indices()]
+
+    def suggest_move(self) -> int:
+        from rl18xx.agent.alphazero.mcts import _rust_encode
+        from rl18xx.agent.alphazero.policy_selfplay import has_price_choice
+
+        legal = self.legal()
+        self.price_row = None
+        if len(legal) == 1 and not has_price_choice(self.game._game, legal[0]):
+            return legal[0]
+        probs, _, _ = self.client.run_many_encoded([_rust_encode(self.game)], legal_indices=[legal])
+        price = self.client.last_price_components
+        self.price_row = np.asarray(price["price_logits"])[0] if price is not None else None
+        p = np.asarray(probs[0])[legal].astype(np.float64)
+        if self.temperature != 1.0:
+            p = np.power(np.clip(p, 1e-12, None), 1.0 / self.temperature)
+        p = p / p.sum() if p.sum() > 0 else np.full(len(legal), 1.0 / len(legal))
+        return legal[int(self.rng.choice(len(legal), p=p))]
+
+    def play_move(self, move: int) -> None:
+        from rl18xx.agent.alphazero import policy_gradient as pg
+
+        price, _, _ = pg.choose_price(self.game, move, self.price_row, self.rng, 0.0)
+        self.game._game.apply_action_index(int(move), price)
+
+    def get_game_state(self):
+        return self.game
+
+
+def _legal_at_root(player) -> list:
+    if isinstance(player, PolicyPlayer):
+        return player.legal()
+    return player._rust_player.legal_action_indices_at_root()
+
+
 def play_game(game_idx: int, seat_names: tuple, settings: dict) -> dict:
     """Play one game with ``seat_names[i]`` (a player spec) searching for seat ``i``."""
     from engine_rs import BaseGame as RustBaseGame
@@ -197,7 +264,8 @@ def play_game(game_idx: int, seat_names: tuple, settings: dict) -> dict:
         # all six seat arrangements of a start play from the same position.
         from rl18xx.agent.alphazero.start_positions import apply_actions, new_game, sample_start_position
 
-        start_rng = random.Random(f"{settings['seed']}:{(game_idx % MATCH_STRIDE) // len(ARRANGEMENTS)}")
+        n_arrangements = len(settings.get("arrangements", ARRANGEMENTS))
+        start_rng = random.Random(f"{settings['seed']}:{(game_idx % MATCH_STRIDE) // n_arrangements}")
         start_position = sample_start_position(
             NUM_PLAYERS, settings["start_positions"], settings["random_start_fraction"], rng=start_rng
         )
@@ -212,6 +280,9 @@ def play_game(game_idx: int, seat_names: tuple, settings: dict) -> dict:
     players = {}
     for name in sorted(set(seat_names)):
         spec = settings["players"][name]
+        if "policy_temperature" in spec["overrides"]:
+            players[name] = PolicyPlayer(_CLIENTS[spec["server"]], spec["overrides"]["policy_temperature"])
+            continue
         config = SelfPlayConfig(
             network=None,
             use_inference_server=True,
@@ -251,8 +322,9 @@ def play_game(game_idx: int, seat_names: tuple, settings: dict) -> dict:
         if last_mover != name:
             player.initialize_game(game.pickle_clone())
             player.decisions = decision_count  # the softpick cutoff counts the game's decisions
-            _expand_root(player)
-        if len(player._rust_player.legal_action_indices_at_root()) > 1:
+            if not isinstance(player, PolicyPlayer):
+                _expand_root(player)
+        if len(_legal_at_root(player)) > 1:
             decision_count += 1
             decisions["auction" if "Auction" in round_name else round_name.lower()] += 1
         move = player.suggest_move()
@@ -294,6 +366,7 @@ def summarize(match_label: str, names: dict, results: list) -> dict:
         for s, side in enumerate(r["seats"]):
             seat_scores[(side, s)].append(r["win_share"][s])
     n = len(side_scores)
+    a_seat_count = results[0]["seats"].count("A") if results else 2
     mean = float(np.mean(side_scores)) if n else float("nan")
     se = float(np.std(side_scores, ddof=1) / math.sqrt(n)) if n > 1 else float("nan")
     terminations = Counter(r["termination"] for r in results)
@@ -304,6 +377,7 @@ def summarize(match_label: str, names: dict, results: list) -> dict:
         "games": n,
         "A_score": mean,
         "A_score_se": se,
+        "A_score_equal": a_seat_count / NUM_PLAYERS,
         "A_worth_share": float(np.mean(side_worth)) if n else float("nan"),
         "by_arrangement": {k: round(float(np.mean(v)), 3) for k, v in sorted(by_arrangement.items())},
         "seat_win_rate": {f"{side}{s}": round(float(np.mean(v)), 3) for (side, s), v in sorted(seat_scores.items())},
@@ -333,6 +407,10 @@ def main():
         help="Start games at the first Stock Round from this start-position file, as self-play does",
     )
     parser.add_argument("--random-start-fraction", type=float, default=0.2)
+    parser.add_argument(
+        "--a-seats", type=int, default=2, choices=(1, 2, 3),
+        help="Seats side A holds (2: 2v2 in six arrangements; 1 / 3: 1v3 / 3v1 in four); equal strength scores a_seats/4",
+    )
     parser.add_argument("--out", type=Path, default=None, help="Output directory (default logs/eval/<timestamp>)")
     args = parser.parse_args()
 
@@ -348,7 +426,8 @@ def main():
             path, overrides = parse_player(spec, args.readouts)
             players[spec] = {"server": str(path), "overrides": overrides}
     paths = sorted({p["server"] for p in players.values()})
-    games_per_match = math.ceil(args.games / len(ARRANGEMENTS)) * len(ARRANGEMENTS)
+    seatings = arrangements(args.a_seats)
+    games_per_match = math.ceil(args.games / len(seatings)) * len(seatings)
     settings = {
         "readouts": args.readouts,
         "softpick": args.softpick,
@@ -358,6 +437,7 @@ def main():
         "players": players,
         "start_positions": args.start_positions,
         "random_start_fraction": args.random_start_fraction,
+        "arrangements": seatings,
     }
     (out_dir / "settings.json").write_text(
         json.dumps({**settings, "matches": args.match, "games_per_match": games_per_match}, indent=2)
@@ -381,7 +461,7 @@ def main():
     jobs = []
     for match_index, (a, b) in enumerate(args.match):
         for g in range(games_per_match):
-            arrangement = ARRANGEMENTS[g % len(ARRANGEMENTS)]
+            arrangement = seatings[g % len(seatings)]
             seat_names = tuple(a if side == "A" else b for side in arrangement)
             jobs.append((match_index, arrangement, match_index * MATCH_STRIDE + g, seat_names))
 
