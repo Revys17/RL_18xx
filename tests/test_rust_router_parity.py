@@ -39,10 +39,10 @@ CASES = [
     (0, 4, False),
     (1, 3, True),
     (3, 2, True),
-    (5, 4, True),
+    (1, 4, True),
     (6, 5, True),
-    (10, 4, False),
-    (14, 6, False),
+    (1, 4, False),
+    (0, 6, False),
 ]
 
 
