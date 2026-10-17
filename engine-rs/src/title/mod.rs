@@ -137,6 +137,13 @@ pub trait GameTitle: Sync {
     fn multiple_buy_only_from_market(&self, _optional_rules: &[String]) -> bool {
         false
     }
+    /// Ruby `TILE_RESERVATION_BLOCKS_OTHERS == :always` (base `:never`): a
+    /// LAID tile's tile-level reservation (a home hex with several cities and
+    /// no city given -- 1830 ERIE on E11) blocks every other corporation from
+    /// tokening it. Preprinted tiles keep `:never` (slot counting).
+    fn laid_tile_reservations_block_others(&self) -> bool {
+        false
+    }
     fn hex_definitions(&self) -> Vec<HexDef>;
     /// The label printed on a NON-preprinted map hex (Ruby map DSL
     /// `label=` on a white hex — 1867's `city=revenue:0;label=Y` on E17,
@@ -489,6 +496,10 @@ impl GameTitle for G1830 {
     }
     fn multiple_buy_only_from_market(&self, optional_rules: &[String]) -> bool {
         g1830::multiple_buy_only_from_market(optional_rules)
+    }
+    /// G1830 `TILE_RESERVATION_BLOCKS_OTHERS = :always`.
+    fn laid_tile_reservations_block_others(&self) -> bool {
+        true
     }
     fn phases(&self) -> Vec<PhaseDef> {
         g1830::phases()

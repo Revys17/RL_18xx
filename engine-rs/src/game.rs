@@ -1828,8 +1828,10 @@ impl BaseGame {
     /// `should_end_now` resolves the latched triggers' timing when a round
     /// finishes.
     pub(crate) fn check_game_end(&mut self) {
-        // GAME_END_CHECK `bank:` (1830 full_or, 1867 current_or).
-        if self.bank.cash <= 0 && !self.bank_broken {
+        // GAME_END_CHECK `bank:` (1830 full_or, 1867 current_or). Ruby
+        // Bank#check_cash breaks the bank when a payment would take it BELOW
+        // zero; paying out its last dollar exactly leaves it unbroken.
+        if self.bank.cash < 0 && !self.bank_broken {
             self.bank_broken = true;
             self.latch_game_end();
         }
@@ -2163,11 +2165,23 @@ impl BaseGame {
                 if token_at_home {
                     continue;
                 }
-                // In Python, E11 (ERIE's home) uses tile-level reservation
-                // (reservation_blocks="always" at tile level). All other
+                // E11 (ERIE's home: two cities, none given) holds a TILE-level
+                // reservation (Ruby Tile#add_reservation! with no city). On
+                // the preprinted tile it only keeps a slot open (Ruby
+                // `:never`, slot counting); once a tile is laid there it
+                // blocks every other corporation (1830 `:always`). All other
                 // homes use city-level reservations.
                 if cd.home_hex == "E11" {
-                    reservations.push((cd.home_hex.to_string(), usize::MAX, sym));
+                    let laid = self
+                        .hex_idx
+                        .get(cd.home_hex)
+                        .is_some_and(|&hi| !self.hexes[hi].tile.id.starts_with("preprinted_"));
+                    let marker = if laid && self.title_def().laid_tile_reservations_block_others() {
+                        crate::map::TILE_RESERVATION_BLOCKING
+                    } else {
+                        crate::map::TILE_RESERVATION
+                    };
+                    reservations.push((cd.home_hex.to_string(), marker, sym));
                 } else {
                     reservations.push((cd.home_hex.to_string(), cd.home_city_index as usize, sym));
                 }
@@ -3003,6 +3017,13 @@ impl BaseGame {
     #[getter]
     fn title(&self) -> String {
         self.title.clone()
+    }
+
+    /// Ruby `@turn`: the game-level turn (1 through the first stock round
+    /// and operating-round set, +1 per later stock round).
+    #[getter]
+    fn turn(&self) -> u32 {
+        self.turn
     }
 
     #[getter]
@@ -4378,7 +4399,7 @@ impl BaseGame {
     }
 
     /// Get cities where a corporation can place tokens: list of (hex_id, city_index).
-    fn tokenable_cities_for(&mut self, corp_sym: &str) -> Vec<(String, usize)> {
+    pub(crate) fn tokenable_cities_for(&mut self, corp_sym: &str) -> Vec<(String, usize)> {
         let token_positions = self.corp_token_positions(corp_sym);
         let reservations = self.home_reservations();
         let graph = self.graph_cache.get_or_compute(
@@ -4726,6 +4747,38 @@ mod tests {
             .filter(|t| t.name == "6")
             .map(|t| t.id.clone())
             .collect()
+    }
+
+    /// Ruby Tile#token_blocked_by_reservation? (same cases in
+    /// tests/test_ruby_rule_fixes.py): ERIE's tile-level E11 reservation only
+    /// keeps a slot open on the preprinted tile (`:never`) and blocks every
+    /// other corporation once a tile is laid there (1830 `:always`).
+    #[test]
+    fn erie_reservation_blocks_others_on_a_laid_e11() {
+        let mut game = new_4p_game();
+        let erie = |g: &BaseGame| {
+            g.home_reservations()
+                .into_iter()
+                .find(|(h, _, s)| h == "E11" && s == "ERIE")
+                .map(|(_, c, _)| c)
+        };
+        assert_eq!(erie(&game), Some(crate::map::TILE_RESERVATION));
+        let hi = game.hex_idx["E11"];
+        game.hexes[hi].tile.id = "59-0".to_string();
+        assert_eq!(erie(&game), Some(crate::map::TILE_RESERVATION_BLOCKING));
+    }
+
+    /// Ruby Bank#check_cash: paying out the bank's last dollar exactly does
+    /// not break it; going below zero does.
+    #[test]
+    fn bank_breaks_only_below_zero() {
+        let mut game = new_4p_game();
+        game.bank.cash = 0;
+        game.check_game_end();
+        assert!(!game.bank_broken);
+        game.bank.cash = -1;
+        game.check_game_end();
+        assert!(game.bank_broken);
     }
 
     #[test]

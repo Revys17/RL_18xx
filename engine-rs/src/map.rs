@@ -104,6 +104,14 @@ impl GraphCache {
     }
 }
 
+/// `city_index` of a tile-level reservation in a reservations list (a home
+/// hex with several cities and no city given): it keeps one slot open.
+pub const TILE_RESERVATION: usize = usize::MAX;
+/// A tile-level reservation on a LAID tile of a title whose laid tiles block
+/// (Ruby `TILE_RESERVATION_BLOCKS_OTHERS = :always`): no other corporation
+/// may token the tile.
+pub const TILE_RESERVATION_BLOCKING: usize = usize::MAX - 1;
+
 // ---------------------------------------------------------------------------
 // Core graph computation
 // ---------------------------------------------------------------------------
@@ -255,24 +263,27 @@ fn compute_corp_graph(
                         .any(|t| t.as_ref().is_some_and(|tok| tok.corporation_id == corp_sym))
                 });
                 if !corp_already_in_hex {
-                    // Reservation blocking, matching Python
-                    // ``Tile.token_blocked_by_reservation``:
+                    // Reservation blocking, matching Ruby/Python
+                    // ``Tile#token_blocked_by_reservation?``:
                     //
-                    //   * Tile-level reservations (city_index=usize::MAX) on a
-                    //     single-city tile use "always" blocking — block all
-                    //     other corps from tokening the tile.
-                    //   * Tile-level reservations on a multi-city tile (the OO
-                    //     tiles like ERIE's E11 / H18 home) just need ONE slot
+                    //   * A blocking tile-level reservation (a laid tile in a
+                    //     `:always` title, TILE_RESERVATION_BLOCKING) blocks
+                    //     all other corps from tokening the tile; so does one
+                    //     on a single-city tile.
+                    //   * A tile-level reservation on a preprinted multi-city
+                    //     tile (ERIE's E11, `:never`) just needs ONE slot
                     //     somewhere on the tile to remain open; other corps may
-                    //     token any other slot. Fall through to slot-counting
-                    //     across the whole tile.
+                    //     token any other slot: slot-counting across the tile.
                     //   * City-level reservations: slot-level blocking on the
                     //     specific city.
+                    let tile_level_blocking = reservations.iter().any(|(rh, rc, rsym)| {
+                        rh == &node.hex_id && *rc == TILE_RESERVATION_BLOCKING && rsym != corp_sym
+                    });
                     let tile_level_other = reservations.iter().any(|(rh, rc, rsym)| {
-                        rh == &node.hex_id && *rc == usize::MAX && rsym != corp_sym
+                        rh == &node.hex_id && *rc == TILE_RESERVATION && rsym != corp_sym
                     });
                     let num_cities = hexes[hi].tile.cities.len();
-                    let blocked = if tile_level_other && num_cities <= 1 {
+                    let blocked = if tile_level_blocking || (tile_level_other && num_cities <= 1) {
                         true
                     } else if tile_level_other {
                         // Multi-city tile with tile-level reservation: total
@@ -291,7 +302,7 @@ fn compute_corp_graph(
                         let other_tile_reservations = reservations
                             .iter()
                             .filter(|(rh, rc, rsym)| {
-                                rh == &node.hex_id && *rc == usize::MAX && rsym != corp_sym
+                                rh == &node.hex_id && *rc == TILE_RESERVATION && rsym != corp_sym
                             })
                             .count();
                         // Also account for other corps' city-level reservations
@@ -299,7 +310,7 @@ fn compute_corp_graph(
                         let other_city_reservations = reservations
                             .iter()
                             .filter(|(rh, rc, rsym)| {
-                                rh == &node.hex_id && *rc != usize::MAX && rsym != corp_sym
+                                rh == &node.hex_id && *rc < TILE_RESERVATION_BLOCKING && rsym != corp_sym
                             })
                             .count();
                         total_slots

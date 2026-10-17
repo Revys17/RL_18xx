@@ -3085,21 +3085,13 @@ class Tile(TileConfig):
         if not self.reservations:
             return False
 
-        # The ``always`` and ``single_slot_cities`` block modes mean "a
-        # tile-level reservation blocks all other corps from tokening the
-        # tile". For multi-city tiles (notably the OO tiles like E11 /
-        # H18), the reservation just needs ONE slot kept open across the
-        # whole tile — other corps may token the remaining city. Fall
-        # through to the slot-counting branch in that case. This matches
-        # the Ruby engine where ERIE's home OO reservation isn't tied to
-        # either of the two cities on its starting tile: other corps are
-        # free to token a slot as long as one stays open for ERIE.
-        if len(self.cities) <= 1 and (
-            self.reservation_blocks == "always"
-            or (
-                self.reservation_blocks == "single_slot_cities"
-                and any(city.slots == 1 for city in self.cities)
-            )
+        # Ruby Tile#token_blocked_by_reservation?. A preprinted tile keeps the
+        # default ``never`` (Ruby init_hexes passes no reservation_blocks), so
+        # on ERIE's preprinted E11 other corps may token as long as a slot
+        # stays open for ERIE; a laid tile takes TILE_RESERVATION_BLOCKS_OTHERS
+        # (1830 ``always``), and then the reservation blocks everyone else.
+        if self.reservation_blocks == "always" or (
+            self.reservation_blocks == "single_slot_cities" and any(city.slots == 1 for city in self.cities)
         ):
             return corporation not in self.reservations
         else:

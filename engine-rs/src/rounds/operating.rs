@@ -902,6 +902,21 @@ impl BaseGame {
             .get(resolved_hex_id.as_str())
             .ok_or_else(|| GameError::new(format!("Unknown hex: {}", resolved_hex_id)))?;
 
+        // Ruby Step::Token#process_place_token / City#place_token: the city
+        // must be one the corporation can token -- connected, a free slot,
+        // not held back by another corporation's reservation, not already in
+        // the hex: the enumeration's tokenable cities.
+        if !self
+            .tokenable_cities_for(&corp_sym)
+            .iter()
+            .any(|(h, c)| *h == resolved_hex_id && *c == city_index as usize)
+        {
+            return Err(GameError::new(format!(
+                "{} cannot place a token on {} city {}",
+                corp_sym, resolved_hex_id, city_index
+            )));
+        }
+
         // Resolve the slot the SAME way Python's `City.get_slot` does (skipping
         // slots reserved for OTHER corps, honoring this corp's own reservation).
         // Computed before the mutable city borrow below so the borrows don't

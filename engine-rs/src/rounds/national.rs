@@ -816,7 +816,9 @@ mod tests {
         s.finished = true;
         game.round = crate::rounds::Round::Operating(s);
         assert!(!game.should_end_now());
-        game.bank.cash = 0;
+        // Ruby Bank#check_cash breaks the bank on a payment it can't cover
+        // (cash going below zero; exactly 0 is not broken).
+        game.bank.cash = -1;
         game.check_game_end();
         assert!(game.bank_broken && game.game_end_triggered);
         assert!(game.should_end_now(), "OR 1 of 2 already ends the game");

@@ -81,6 +81,9 @@ impl GameTitle for Test5Share {
     fn multiple_buy_only_from_market(&self, optional_rules: &[String]) -> bool {
         g1830::multiple_buy_only_from_market(optional_rules)
     }
+    fn laid_tile_reservations_block_others(&self) -> bool {
+        true
+    }
     fn hex_definitions(&self) -> Vec<HexDef> {
         g1830::hex_definitions()
     }
