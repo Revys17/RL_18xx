@@ -189,7 +189,7 @@ class ServerDouble:
 
 def position_prefixes(count: int, seed: int) -> list:
     """Action prefixes of human positions: random cuts of the mid-game file's
-    games between their first stock round and their last cut."""
+    games between their first stock round and their last cut (that replay)."""
     from rl18xx.agent.alphazero.start_positions import load_midgame_positions
 
     games = load_midgame_positions(MIDGAME)[4]
@@ -197,7 +197,9 @@ def position_prefixes(count: int, seed: int) -> list:
     prefixes = []
     while len(prefixes) < count:
         _, actions, cuts = rng.choice(games)
-        prefixes.append(actions[: rng.randint(min(cuts.values()) - 30, max(cuts.values()))])
+        prefix = actions[: rng.randint(min(cuts.values()) - 30, max(cuts.values()))]
+        if build_position(prefix) is not None:
+            prefixes.append(prefix)
     return prefixes
 
 
@@ -205,7 +207,10 @@ def build_position(prefix):
     """The position after ``prefix``, moved on past forced moves to a decision."""
     from rl18xx.agent.alphazero.start_positions import apply_actions, new_game
 
-    game = apply_actions(new_game(4), prefix)
+    try:
+        game = apply_actions(new_game(4), prefix)
+    except RuntimeError:
+        return None  # the engine rejects one of its actions (the file predates a rules change)
     rust = game._game
     while not rust.finished and len(rust.factored_legal_indices()) == 1:
         index = int(rust.factored_legal_indices()[0])
@@ -310,8 +315,6 @@ def report(label: str, evals: int, wall: float, forward: float, extra: dict) -> 
 
 
 def bench_inproc(args) -> list:
-    from rl18xx.agent.alphazero.lockstep import ModelEvaluator
-
     prefixes = position_prefixes(args.positions, args.seed)
     positions = [build_position(p) for p in prefixes]
     positions = [g for g in positions if not g._game.finished]
@@ -319,9 +322,12 @@ def bench_inproc(args) -> list:
     for repeat in range(args.repeats):
         net = TimedNet(load_network(args.model, args.torch_threads)) if repeat == 0 or args.model == "stub" else net
         net.seconds = net.states = net.calls = 0
-        t = run_single_tree(positions, ServerDouble(net), args.readouts, args.default_search)
-        results.append(report("single_tree", net.states, t.pop("wall"), net.seconds, dict(calls=net.calls, **t)))
-        for concurrency in args.concurrency:
+        if 1 in args.concurrency:
+            t = run_single_tree(positions, ServerDouble(net), args.readouts, args.default_search)
+            results.append(report("single_tree", net.states, t.pop("wall"), net.seconds, dict(calls=net.calls, **t)))
+        for concurrency in [c for c in args.concurrency if c > 1]:
+            from rl18xx.agent.alphazero.lockstep import ModelEvaluator
+
             net.seconds = net.states = net.calls = 0
             evaluator = ModelEvaluator(net)
             t = run_lockstep(positions, evaluator, args.readouts, args.default_search, concurrency)
@@ -352,7 +358,8 @@ def _worker_init(request_q, reply_qs, ticket_q):
 def _worker_task(prefixes, readouts, default_search, concurrency, start_at, deadline) -> dict:
     """Build this worker's positions, wait for the common start, search them
     (cycling) until the deadline."""
-    from rl18xx.agent.alphazero.lockstep import ClientEvaluator
+    import rl18xx.agent.alphazero.rust_mcts_player  # noqa: F401  (imports outside the measured window)
+    import rl18xx.agent.alphazero.self_play  # noqa: F401
 
     positions = [g for g in (build_position(p) for p in prefixes) if not g._game.finished]
     late = time.time() - start_at
@@ -360,6 +367,8 @@ def _worker_task(prefixes, readouts, default_search, concurrency, start_at, dead
     if concurrency <= 1:
         t = run_single_tree(positions, _CLIENT, readouts, default_search, deadline=deadline)
     else:
+        from rl18xx.agent.alphazero.lockstep import ClientEvaluator
+
         t = run_lockstep(positions, ClientEvaluator(_CLIENT), readouts, default_search, concurrency, deadline=deadline)
     t["late"] = max(0.0, late)
     return t
@@ -377,7 +386,7 @@ def bench_server(args) -> list:
     os.environ["BENCH_SERVER_THREADS"] = str(args.torch_threads)
     prefixes = position_prefixes(args.positions, args.seed)
     results = []
-    for concurrency in [1] + list(args.concurrency):
+    for concurrency in args.concurrency:
         server = start_inference_server(
             num_workers=args.workers, model_factory=model_factory, checkpoint_path=args.model,
             batch_size=args.batch_size, batch_timeout_ms=2.0, autocast_device=None,
@@ -413,6 +422,7 @@ def bench_server(args) -> list:
                 evals_per_s=round(evals / args.duration, 1), server_busy_share=round(busy / args.duration, 3),
                 batches=batches, avg_batch=round(evals / max(batches, 1), 1),
                 worker_late_max=round(max(o["late"] for o in outs), 2),
+                searches=sum(int(o.get("searches", 0)) for o in outs),
             )
             print(json.dumps(out), flush=True)
             results.append(out)
@@ -427,7 +437,10 @@ def main():
     parser.add_argument("--mode", choices=("inproc", "server"), default="inproc")
     parser.add_argument("--positions", type=int, default=48)
     parser.add_argument("--readouts", type=int, default=64)
-    parser.add_argument("--concurrency", type=int, nargs="+", default=[16], help="Trees per lockstep worker")
+    parser.add_argument(
+        "--concurrency", type=int, nargs="+", default=[1, 16],
+        help="1: the one-tree path (suggest_move); N > 1: lockstep with N trees per worker",
+    )
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--torch-threads", type=int, default=8)

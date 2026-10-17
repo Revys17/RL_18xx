@@ -81,8 +81,23 @@ def main():
             s = time.perf_counter()
             tree.incorporate_results(idx, dense, value, None)
             t["incorporate (dense probs)"] += time.perf_counter() - s
+            # What an expansion is made of: cloning the parent's game, the
+            # legal-move enumeration (twice per expansion: forced-move check +
+            # the node's own), and freeing a node's game later.
+            s = time.perf_counter()
+            clone = rust_game.pickle_clone()
+            t["  part: clone a game"] += time.perf_counter() - s
+            s = time.perf_counter()
+            clone.factored_legal_indices()
+            t["  part: legal-move enumeration"] += time.perf_counter() - s
+            s = time.perf_counter()
+            del clone
+            t["  part: free a game"] += time.perf_counter() - s
             counts["leaves"] += 1
         del encoded
+        s = time.perf_counter()
+        del tree
+        t["free the finished tree (per leaf)"] += time.perf_counter() - s
     n = counts["leaves"]
     out = {k: round(1e6 * v / n, 1) for k, v in t.items()}
     out["leaves"] = n

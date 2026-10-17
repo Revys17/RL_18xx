@@ -308,9 +308,9 @@ pub fn mcts_apply_results<'py>(
     }
     // Price rows: slots * cells floats per leaf, one shared slot layout.
     let price = match (&price_logits, &slot_index) {
-        (Some(logits), Some(index)) if !index.is_none() => {
+        (Some(logits), Some(index)) if !index.is_none() && rows > 0 => {
             let flat = logits.as_slice()?;
-            if rows == 0 || flat.len() % rows != 0 || (flat.len() / rows) % NUM_CELLS != 0 {
+            if flat.len() % rows != 0 || (flat.len() / rows) % NUM_CELLS != 0 {
                 return Err(PyValueError::new_err(format!(
                     "price_logits: {} floats for {rows} leaves of {NUM_CELLS}-cell slots",
                     flat.len()

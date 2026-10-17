@@ -112,6 +112,12 @@ def test_policy_requests_get_the_networks_outputs():
         np.testing.assert_array_equal(r.priors, probs[r.legal])
         np.testing.assert_array_equal(r.value, value)
         np.testing.assert_array_equal(r.price_row, price)
+    # A round of requests alone (no leaves for that network's trees).
+    alone = [PolicyRequest(g, [int(i) for i in g.factored_legal_indices()]) for g in games]
+    finished = make_player(net, games[0], seed=0, **DEFAULT)
+    searcher.round([finished.start_search()], [])
+    searcher.round([], alone)
+    assert all(r.done for r in alone)
 
 
 @pytest.mark.parametrize("use_score_values", [True, False])
@@ -142,3 +148,39 @@ def test_lockstep_matches_alone_near_the_end(config):
     assert searcher.stats.terminal_backups > 0
     for a, b in zip(alone, players):
         _assert_same_tree(a, b)
+
+
+def test_tree_keeps_the_whole_action_log():
+    """Tree nodes log only the actions since the root (cloning full logs was most
+    of an expansion's cost late in a game); the games the tree hands out carry
+    the whole log, which replays to the same position."""
+    from rl18xx.agent.alphazero.mcts import _native_encode
+
+    net = HashNet()
+    game = random_positions(4, 6, steps=200, every=20)[-1]
+    start_log = list(game.raw_actions)
+    player = make_player(net, game, seed=1, **VALUE_DRIVEN)
+    searcher = LockstepSearcher({None: ModelEvaluator(net)})
+    played = []
+    for _ in range(6):
+        search = player.start_search()
+        if search is not None:
+            searcher.run([search])
+            move = player._rust_player.pick_best_action()
+        else:
+            move = int(player._rust_player.legal_action_indices_at_root()[0])
+        player.play_move(move)
+        played.append(player.played_actions[-1])
+        played.extend(player.forced_action_dicts[-1])
+    state = player.get_game_state()
+    log = list(state._game.raw_actions)  # the adapter numbers them (``id``)
+    assert start_log and len(log) >= len(start_log) + 6
+    assert log == start_log + played
+    assert player._rust_player.root_move_number() == len(log)
+    replay = engine_rs.BaseGame({i + 1: f"Player {i + 1}" for i in range(4)})
+    replay.set_auction_unlock(True)
+    for action in log:
+        replay.process_action(dict(action))
+    expected, got = _native_encode(replay), _native_encode(state._game)
+    assert np.array_equal(expected[0].numpy(), got[0].numpy())
+    assert np.array_equal(expected[1].numpy(), got[1].numpy())

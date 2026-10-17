@@ -99,11 +99,14 @@ class ModelEvaluator:
                 probs, _, values = self.network.run_many_encoded(states, legal_indices=legal)
             else:
                 probs, _, values = self.network.run_many_encoded(states)
-            if isinstance(probs, torch.Tensor):
-                lengths = torch.tensor([len(ix) for ix in legal])
-                rows = torch.repeat_interleave(torch.arange(len(legal)), lengths).to(probs.device)
-                cols = torch.from_numpy(np.concatenate(legal).astype(np.int64)).to(probs.device)
-                priors = probs[rows, cols].float().cpu().numpy()
+            lengths = np.fromiter((len(ix) for ix in legal), dtype=np.int64, count=len(legal))
+            rows = np.repeat(np.arange(len(legal)), lengths)
+            cols = np.concatenate(legal).astype(np.int64)
+            if isinstance(probs, torch.Tensor) and probs.device.type != "cpu":
+                index = (torch.from_numpy(rows).to(probs.device), torch.from_numpy(cols).to(probs.device))
+                priors = probs[index].float().cpu().numpy()
+            elif isinstance(probs, torch.Tensor):
+                priors = probs.numpy()[rows, cols]
             else:
                 probs = np.asarray(probs, dtype=np.float32)
                 priors = np.concatenate([probs[i, ix] for i, ix in enumerate(legal)]).astype(np.float32)
@@ -332,8 +335,8 @@ class LockstepSearcher:
                     result.priors[:n_priors],
                     result.values[:n_leaves],
                     [s.prior_temperature for s in group],
-                    None if price is None else np.ascontiguousarray(price[:n_leaves]),
-                    result.slot_index if price is not None else None,
+                    None if price is None or not n_leaves else np.ascontiguousarray(price[:n_leaves]),
+                    result.slot_index if price is not None and n_leaves else None,
                 )
                 entry[1] = None  # applied
                 offset = n_priors

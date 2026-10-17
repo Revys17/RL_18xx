@@ -260,6 +260,12 @@ pub struct RustMCTSPlayer {
     pub gumbel: Option<crate::gumbel::GumbelConfig>,
     /// The Gumbel search running at the current root, if any.
     pub gumbel_search: Option<crate::gumbel::GumbelSearch>,
+    /// The game's action log up to the root. A node's game logs only the
+    /// actions since the root: cloning (and freeing) every node's full log
+    /// -- serde JSON per action, ~0.3 us per action -- cost more than the
+    /// rest of an expansion late in a game. Games handed to Python get the
+    /// whole log back (``full_game``).
+    pub root_log: Vec<serde_json::Value>,
 }
 
 impl RustMCTSPlayer {
@@ -384,8 +390,9 @@ impl RustMCTSPlayer {
         // Python-side game keeps its state.
         let cloned = base_obj.call_method0("pickle_clone")?;
         let borrowed: PyRef<BaseGame> = cloned.extract()?;
-        let cloned_inner: BaseGame = borrowed.clone_for_search();
+        let mut cloned_inner: BaseGame = borrowed.clone_for_search();
         drop(borrowed);
+        let root_log = std::mem::take(&mut cloned_inner.action_log);
 
         let mut player = RustMCTSPlayer {
             arena: Vec::new(),
@@ -409,6 +416,7 @@ impl RustMCTSPlayer {
             pending_dups: Vec::new(),
             gumbel: None,
             gumbel_search: None,
+            root_log,
         };
         let root = player.build_node(cloned_inner, None, None)?;
         player.num_players = root.num_players;
@@ -455,7 +463,7 @@ impl RustMCTSPlayer {
     /// the Python wrapper for softpick / temperature cutoffs so both players
     /// key off the same counter (which includes forced-chain actions).
     pub fn root_move_number(&self) -> usize {
-        self.arena[self.root_idx].game.action_log.len()
+        self.root_log.len() + self.arena[self.root_idx].game.action_log.len()
     }
 
     /// Number of players in the root game.
@@ -799,7 +807,7 @@ impl RustMCTSPlayer {
         // max_game_length)`` — move_number is the action-log length.
         let mut forced_chain: Vec<u32> = Vec::new();
         loop {
-            if new_game.is_finished_pub() || new_game.action_log.len() >= self.max_game_length {
+            if new_game.is_finished_pub() || self.root_log.len() + new_game.action_log.len() >= self.max_game_length {
                 break;
             }
             // Enumerate factored choices, dedupe to flat indices.
@@ -1033,8 +1041,7 @@ impl RustMCTSPlayer {
         }
         // Clone the Rust game so the Python side gets a fresh handle (the
         // arena retains ownership).
-        let g = self.arena[arena_idx].game.clone_for_search();
-        Ok(Py::new(py, g)?.into_any())
+        Ok(Py::new(py, self.full_game(arena_idx))?.into_any())
     }
 
     /// Diagnostic: depth of `arena_idx`.
@@ -1152,6 +1159,17 @@ impl RustMCTSPlayer {
         self.pending.clear();
         self.pending_dups.clear();
         self.compact_to_root();
+        // The new root's own log entries (its move and forced chain) join the
+        // root log; every node below it shares them as a prefix.
+        let root = self.root_idx;
+        let k = self.arena[root].game.action_log.len();
+        let moved: Vec<serde_json::Value> = self.arena[root].game.action_log.drain(..).collect();
+        self.root_log.extend(moved);
+        for (i, node) in self.arena.iter_mut().enumerate() {
+            if i != root {
+                node.game.action_log.drain(..k.min(node.game.action_log.len()));
+            }
+        }
         Ok(())
     }
 
@@ -1274,12 +1292,23 @@ impl RustMCTSPlayer {
     /// Return the root's BaseGame as a Python object (a fresh clone — the
     /// arena retains its own copy). Mirrors ``get_game_for_idx(root_idx)``.
     fn root_game_object(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let g = self.arena[self.root_idx].game.clone_for_search();
+        let g = self.full_game(self.root_idx);
         Ok(Py::new(py, g)?.into_any())
     }
 }
 
 impl RustMCTSPlayer {
+    /// A clone of node ``arena_idx``'s game with its whole action log (the
+    /// root log plus the node's own entries), for Python.
+    pub(crate) fn full_game(&self, arena_idx: usize) -> BaseGame {
+        let mut game = self.arena[arena_idx].game.clone_for_search();
+        let mut log = Vec::with_capacity(self.root_log.len() + game.action_log.len());
+        log.extend(self.root_log.iter().cloned());
+        log.append(&mut game.action_log);
+        game.action_log = log;
+        game
+    }
+
     /// Back a per-player value vector up from ``arena_idx`` to the root. For
     /// price grandchildren, both the per-price N/W and the categorical
     /// compressed N/W are updated (the latter so categorical-level PUCT

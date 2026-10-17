@@ -711,6 +711,8 @@ def main():
             LOGGER.info(f"[{done_count}/{len(jobs)} games, {elapsed / 60:.1f} min] " + "; ".join(lines))
 
     lockstep = args.games_per_task > 1
+    if lockstep and any("leaf_value_heuristic" in p["overrides"] for p in players.values()):
+        raise SystemExit("value=networth players need --games-per-task 1 (lockstep search has no leaf heuristic)")
     job_q = result_q = None
     if lockstep:
         import multiprocessing as mp
