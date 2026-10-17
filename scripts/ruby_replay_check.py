@@ -26,10 +26,17 @@ Known, accounted-for differences (see ruby_replay_dump.rb):
   * G19's two cities are numbered the other way round in our engines
     (SWAPPED_PREPRINTED_CITIES); city references are translated for Ruby.
 
+The docker rig is scripts/ruby_diff.py's (CPUSET, ensure_gems), but not its
+Ruby driver: ruby_dump.rb replays RECORDED games through Ruby's own filtered
+actions, while games our engine generated need Ruby to insert those implicit
+passes, keyed by our engine's acting entity / step / round, before each action
+(ruby_replay_dump.rb), and a finer per-action state (share holders, privates,
+the map).
+
 Setup (once; read-only use of the clone, never contact 18xx.games):
     git clone --depth 1 https://github.com/tobymao/18xx.git logs/ruby/18xx
     docker image inspect ruby:3.2-slim   # `docker pull ruby:3.2-slim` if missing
-    (the require_all gem goes into --gems; see scripts/g1867_ruby_diff.py)
+    (the require_all gem is installed into --gems on first use)
 
 Usage:
     # games saved by eval_policy_only / policy-gradient (skips auction_unlock games)
@@ -59,6 +66,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+
+from scripts.ruby_diff import CPUSET, ensure_gems  # noqa: E402
 
 RULE = "multiple_brown_from_ipo"
 
@@ -476,7 +485,7 @@ def main() -> int:
     ap.add_argument("--work", default="logs/ruby_replay", help="cache dir (random games, Ruby dumps)")
     ap.add_argument("--ruby-repo", default="logs/ruby/18xx")
     ap.add_argument("--gems", default="logs/ruby/gems")
-    ap.add_argument("--cpuset", default="24-31,56-63", help="docker --cpuset-cpus")
+    ap.add_argument("--cpuset", default=CPUSET, help="docker --cpuset-cpus")
     ap.add_argument("--jobs", type=int, default=16, help="parallel Ruby containers")
     ap.add_argument("--refresh", action="store_true", help="re-run cached Ruby dumps")
     ap.add_argument("--out", help="write per-game results + grouped causes as JSON")
@@ -503,6 +512,7 @@ def main() -> int:
     ruby_repo, gems = Path(args.ruby_repo), Path(args.gems).resolve()
     if not (ruby_repo / "lib" / "engine.rb").exists():
         ap.error(f"no tobymao/18xx clone at {ruby_repo} (see the module docstring)")
+    ensure_gems(gems)
 
     jobs = [(p, work, ruby_repo, gems, args.cpuset, args.refresh) for p in kept]
     with ProcessPoolExecutor(max_workers=args.jobs) as ex:
