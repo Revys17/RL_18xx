@@ -143,6 +143,7 @@ training_examples/
 model_checkpoints/
 model_checkpoints_value/
 model_checkpoints_pg/
+model_checkpoints_search/
 runs/
 self_play_games_status/
 human_games/
