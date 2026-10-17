@@ -29,6 +29,7 @@ thread.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -50,6 +51,14 @@ PRICE_OPTIONS = 3
 RECENT_MOVES = 5
 DEFAULT_READOUTS = 200
 MAX_READOUTS = 5000
+# Search settings, from 240-game head-to-heads with gen4 and its critic (2026-10-16/17):
+# value-driven PUCT (mean Q, unvisited moves at the parent's value, c_puct_init 0.15 in
+# every round), each distinct leaf backed up once, 8 leaves per batch, and priors at the
+# policy's training temperature. @200 it beat gen4's own policy 0.933 (2v2) and won 0.787
+# alone against three copies (1v3, even = 0.25); the old defaults @200 scored 0.229 against it.
+SEARCH_OVERRIDES = dict(
+    mcts_mean_q=True, fpu_reduction=0.0, c_puct_init=0.15, c_puct_by_round={}, dedupe_leaves=True, parallel_readouts=8
+)
 # A played move the policy gave less than this is "surprising"; at least
 # EXPECTED (or its top choice) "expected"; in between "plausible".
 SURPRISING = 0.05
@@ -85,6 +94,10 @@ class AdvisorModels:
     auction_policy: object
     value: object
     labels: dict = field(default_factory=dict)  # "policy" / "auction_policy" / "value" -> checkpoint label
+    # The temperature each policy was trained at (a policy-gradient learner *is*
+    # softmax(logits / learner_temperature)); the search's priors use it.
+    policy_temperature: float = 1.0
+    auction_policy_temperature: float = 1.0
 
     @classmethod
     def load(cls, policy, auction_policy, value, device) -> "AdvisorModels":
@@ -107,16 +120,34 @@ class AdvisorModels:
                 "auction_policy": checkpoint_label(auction_policy),
                 "value": checkpoint_label(value),
             },
+            policy_temperature=training_temperature(policy),
+            auction_policy_temperature=training_temperature(auction_policy),
         )
+
+
+def training_temperature(path) -> float:
+    """The ``learner_temperature`` of the policy-gradient run a ``learner/<n>.pth``
+    checkpoint comes from (its ``config.json``), else 1 (a supervised checkpoint)."""
+    path = Path(path)
+    config = path.parent.parent / "config.json"
+    if path.parent.name != "learner" or not config.is_file():
+        return 1.0
+    try:
+        return float(json.loads(config.read_text()).get("learner_temperature", 1.0))
+    except (ValueError, OSError):
+        return 1.0
 
 
 class _RoundPolicy:
     """The policy for each position of a batch: the auction policy for auction
     positions, the policy for the rest (what the search reads its priors from)."""
 
-    def __init__(self, policy, auction_policy):
+    def __init__(self, policy, auction_policy, policy_temperature: float = 1.0, auction_policy_temperature: float = 1.0):
         self.policy = policy
         self.auction_policy = auction_policy
+        # Priors are each policy's softmax(logits / its training temperature): p ** (1 / t)
+        # here, and the search renormalizes over the legal moves.
+        self.temperatures = {id(policy): policy_temperature, id(auction_policy): auction_policy_temperature}
         self.last_price_components = None
 
     @property
@@ -142,6 +173,9 @@ class _RoundPolicy:
         components = None
         for model, rows in groups.values():
             p, lp, v = model.run_many_encoded([encoded_game_states[i] for i in rows])
+            temperature = self.temperatures.get(id(model), 1.0)
+            if temperature != 1.0:
+                p = torch.pow(torch.clamp(p, min=0.0), 1.0 / temperature)
             pc = getattr(model, "last_price_components", None)
             for j, i in enumerate(rows):
                 probs[i], values[i] = p[j], v[j]
@@ -565,7 +599,15 @@ class Advisor:
         from rl18xx.rust_adapter import RustGameAdapter
 
         network = _Locked(
-            PolicyValueComposite(_RoundPolicy(self.models.policy, self.models.auction_policy), self.models.value),
+            PolicyValueComposite(
+                _RoundPolicy(
+                    self.models.policy,
+                    self.models.auction_policy,
+                    self.models.policy_temperature,
+                    self.models.auction_policy_temperature,
+                ),
+                self.models.value,
+            ),
             self._lock,
         )
         num_players = len(game.players)
@@ -578,6 +620,7 @@ class Advisor:
             noresign_holdout_rate=0.0,
             player_count_distribution={num_players: 1.0},
             auction_unlock=False,
+            **SEARCH_OVERRIDES,
         )
         player = RustMCTSPlayer(config)
         player.initialize_game(game)
