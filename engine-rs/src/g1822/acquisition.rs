@@ -42,10 +42,15 @@ impl BaseGame {
     }
 
     pub(crate) fn g1822_process_acquire_company(&mut self, c: &str, company: &str) -> Result<(), GameError> {
-        if !self.g1822_purchasable_companies(c).iter().any(|x| x == company) {
-            return err(format!("{c} cannot acquire {company}"));
+        // Ruby Step::AcquireCompany#process_acquire_company does not check
+        // the company is purchasable (the UI only offers those): records
+        // that re-acquire a company the corporation already owns replay
+        // in Ruby (241523 @347 re-acquires P2), so replay accepts any open
+        // company. The legal-move generator offers purchasable ones only.
+        let Some(i) = self.co_idx(company) else { return err(format!("Unknown company {company}")) };
+        if self.co_closed(company) {
+            return err(format!("{company} is closed"));
         }
-        let i = self.co_idx(company).unwrap();
         self.companies[i].owner = EntityId::corporation(c);
         self.rndm().acquired_companies.push(company.to_string());
         self.g1822_company_bought(company, c);
@@ -280,7 +285,7 @@ impl BaseGame {
         v
     }
 
-    fn g1822_potentially_mergeable(&self, c: &str) -> Vec<String> {
+    pub(crate) fn g1822_potentially_mergeable(&self, c: &str) -> Vec<String> {
         let mut out: Vec<String> = self
             .corporations
             .iter()

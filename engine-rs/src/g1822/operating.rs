@@ -469,10 +469,14 @@ impl BaseGame {
     // =====================================================================
 
     fn g1822_route_actions(&self, ent: &Ent) -> Vec<&'static str> {
-        if !self.is_operator(ent) {
+        // G1822 Route#actions drops the base `entity == current_entity`
+        // check: any operator with runnable trains may submit run_routes
+        // while the Route step is active (248432 @1074: minor 10's empty
+        // run_routes ends minor 27's Route step).
+        let Ent::Corp(c) = ent else { return vec![] };
+        if self.corp_idx.get(c).map_or(true, |&i| self.corporations[i].closed) {
             return vec![];
         }
-        let Ent::Corp(c) = ent else { return vec![] };
         let trains = self.g1822_route_trains(c);
         if trains.is_empty() || !self.g1822_can_run_route(c) {
             return vec![];
@@ -512,7 +516,7 @@ impl BaseGame {
         self.g1822_graph(c).route_available
     }
 
-    fn g1822_pullman_choices(&self, c: &str) -> Vec<String> {
+    pub(crate) fn g1822_pullman_choices(&self, c: &str) -> Vec<String> {
         self.g1822_route_trains(c)
             .into_iter()
             .filter(|t| !super::LOCAL_TRAINS.contains(&t.name.as_str()) && t.name != super::E_TRAIN)

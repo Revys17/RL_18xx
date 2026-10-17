@@ -421,7 +421,7 @@ impl BaseGame {
         n
     }
 
-    fn g1822_num_certs_with_bids(&self, pid: u32) -> i32 {
+    pub(crate) fn g1822_num_certs_with_bids(&self, pid: u32) -> i32 {
         self.g1822_num_certs(pid) + self.g1822_winning_bids(pid).len() as i32
     }
 
@@ -573,7 +573,7 @@ impl BaseGame {
     }
 
     /// `available_par_cash(entity, corporation, share_price:)`.
-    fn g1822_available_par_cash(&self, pid: u32, sym: &str, share_price: Option<i32>) -> i32 {
+    pub(crate) fn g1822_available_par_cash(&self, pid: u32, sym: &str, share_price: Option<i32>) -> i32 {
         let mut available = self.g1822_available_cash(&EntityId::player(pid));
         if let Some(conc) = self.g().par_via_exchange.get(sym) {
             if !self.co_closed(conc) {
@@ -812,13 +812,13 @@ impl BaseGame {
             Action::PayoffPlayerDebt { .. } => {
                 let Ent::Player(pid) = ent else { return err("payoff by a non-player") };
                 self.g1822_payoff_player_loan(*pid, None);
-                self.rndm().last_to_act = Some(*pid);
+                self.g1822_track_action(*pid, CurAct::Payoff);
                 Ok(())
             }
             Action::PayoffPlayerDebtPartial { amount, .. } => {
                 let Ent::Player(pid) = ent else { return err("payoff by a non-player") };
                 self.g1822_payoff_player_loan(*pid, Some(*amount));
-                self.rndm().last_to_act = Some(*pid);
+                self.g1822_track_action(*pid, CurAct::Payoff);
                 Ok(())
             }
             _ => err(format!("BuySellParShares cannot process {}", action.action_type())),

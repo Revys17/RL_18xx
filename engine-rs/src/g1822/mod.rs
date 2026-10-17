@@ -197,6 +197,9 @@ pub enum CurAct {
     Par,
     SellShares,
     Choose,
+    /// payoff_player_debt(_partial): Ruby appends these too, so a player
+    /// who pays debt then passes is NOT passed (227938).
+    Payoff,
 }
 
 /// One standing bid (Ruby Action::Bid kept in `@bids[company]`).
