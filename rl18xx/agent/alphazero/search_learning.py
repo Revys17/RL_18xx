@@ -98,6 +98,11 @@ class SearchLearningConfig:
     # On gen4 the raw visits put 12-19% of the target on moves its policy gives
     # under 1% (FPU exploration), KL(target || policy) 1.6-2.4; pruned 0.2-0.35.
     visit_target: str = "pruned"
+    # Sharpen the target: target ** (1 / t) renormalized; 0 is one-hot on the move the
+    # search played. The 2026-10-17 pilot (t = 1, pruned visits @200) flattened gen4: its
+    # targets carried more entropy than the sharp policy (0.19 vs 0.14 at the start), the
+    # policy followed (0.14 -> 0.45 by update 100) and played worse (0.28 2v2 vs gen4).
+    target_temperature: float = 1.0
     p_full: float = 0.25
     n_full: int = 200
     c_puct_init: float = 0.15
@@ -148,6 +153,19 @@ class SearchLearningConfig:
     anchor_every: int = 50
     max_updates: int = 1000
     snapshot_every: int = 10
+
+
+def sharpen_target(target: np.ndarray, legal: np.ndarray, move: int, temperature: float) -> np.ndarray:
+    """``target`` over ``legal`` normalized and sharpened to ``target ** (1 / temperature)``;
+    temperature 0 (or an all-zero target) puts everything on ``move``, the move played."""
+    target = np.asarray(target, dtype=np.float64)
+    if temperature <= 0 or target.sum() <= 0:
+        out = np.zeros(len(legal), dtype=np.float64)
+        out[int(np.flatnonzero(legal == move)[0])] = 1.0
+        return out
+    if temperature != 1.0:
+        target = np.power(target / target.max(), 1.0 / temperature)
+    return target / target.sum()
 
 
 def run_temperature(path) -> float:
@@ -518,8 +536,7 @@ class Generator:
                 target = visits
                 if s.get("visit_target", "pruned") == "pruned":
                     target = np.asarray(tree.pruned_child_n_at_root(), dtype=np.float64)[legal]
-            total = target.sum()
-            target = target / total if total > 0 else np.full(len(legal), 1.0 / len(legal))
+            target = sharpen_target(target, legal, move, float(s.get("target_temperature", 1.0)))
             price, price_target = self._searched_price(tree, rs, move)
             # The tree is done with: the move goes straight onto the game (the
             # most-visited price, as advance_root would commit).
@@ -833,6 +850,7 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "gumbel_noise_scale": cfg.gumbel_noise_scale,
         "full_move_temperature": cfg.full_move_temperature,
         "visit_target": cfg.visit_target,
+        "target_temperature": cfg.target_temperature,
         "games_per_worker": cfg.games_per_worker,
         "max_decisions": cfg.max_decisions,
         "price_eps": 0.0,

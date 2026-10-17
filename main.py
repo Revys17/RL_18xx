@@ -220,6 +220,7 @@ def cmd_search_learning(args):
         learner_temperature=args.learner_temperature,
         target=args.target,
         visit_target=args.visit_target,
+        target_temperature=args.target_temperature,
         p_full=args.p_full,
         n_full=args.n_full,
         c_puct_init=args.c_puct,
@@ -610,6 +611,8 @@ def build_parser():
                    help="Policy target: the search's visit distribution, or the Gumbel root's completed-Q policy")
     p.add_argument("--visit-target", choices=("pruned", "raw"), default=_SL.visit_target,
                    help="--target visits: KataGo's policy-target pruning of exploration visits, or the raw visits")
+    p.add_argument("--target-temperature", type=float, default=_SL.target_temperature,
+                   help="Sharpen the search target to target ** (1 / t); 0: one-hot on the move the search played")
     p.add_argument("--p-full", type=float, default=_SL.p_full, help="Share of decisions searched (and trained on)")
     p.add_argument("--n-full", type=int, default=_SL.n_full, help="Readouts of a searched decision")
     p.add_argument("--c-puct", type=float, default=_SL.c_puct_init, help="c_puct_init in every round")

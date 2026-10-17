@@ -376,3 +376,18 @@ def test_a_tiny_cpu_run_trains_saves_reloads_and_resumes(tmp_path, start_file, m
     assert history[2]["kl_coef"] in (state["kl_coef"], state["kl_coef"] * 1.5, max(state["kl_coef"] / 1.5, 0.005))
     assert json.loads((run_dir / "state.json").read_text())["snapshot_update"] == 3
     assert (run_dir / "learner" / "3.pth").exists()
+
+
+def test_sharpen_target_one_hot_and_power():
+    from rl18xx.agent.alphazero.search_learning import sharpen_target
+
+    legal = np.array([7, 3, 9])
+    target = np.array([0.5, 0.3, 0.2])
+    one_hot = sharpen_target(target, legal, move=3, temperature=0.0)
+    assert one_hot.tolist() == [0.0, 1.0, 0.0]
+    np.testing.assert_allclose(sharpen_target(target, legal, 7, 1.0), target)
+    sharp = sharpen_target(target, legal, 7, 0.5)
+    np.testing.assert_allclose(sharp, target**2 / (target**2).sum())
+    assert sharp[0] > target[0]
+    # An empty target falls back to the move played.
+    assert sharpen_target(np.zeros(3), legal, 9, 1.0).tolist() == [0.0, 0.0, 1.0]
