@@ -1,14 +1,15 @@
 # Per-action state dump of a recorded 18xx.games game in the REAL Ruby
-# engine (tobymao/18xx), for Rust-vs-Ruby divergence hunting
-# (scripts/g1867_ruby_diff.py drives it inside the ruby:3.2-slim image).
+# engine (tobymao/18xx), for Rust-vs-Ruby divergence hunting — any title
+# (scripts/ruby_diff.py drives it inside the ruby:3.2-slim image).
 #
-# usage: ruby g1867_ruby_dump.rb <game.json> <out.jsonl>
+# usage: ruby ruby_dump.rb <game.json> <out.jsonl>
 #
 # One JSON line per processed FILE action id (Ruby's own undo/redo
 # filtering, messages skipped), via Game#process_to_action — so lines are
 # keyed by the ids in the file, never by a renumbered index. The last line
 # is {"final": true, ...} with Ruby's result and game_end_reason; a line
 # {"id": N, "exception": ...} marks where Ruby itself rejects the record.
+# Players are keyed by SEAT (1-based recorded order) — no names.
 require 'json'
 $LOAD_PATH.unshift('/18xx/lib')
 require 'engine'
@@ -22,32 +23,44 @@ seat = {}
 data['players'].each_with_index { |p, i| seat[p['id']] = i + 1 }
 
 g = Engine::Game.load(data, at_action: 0)
+title = data['title'].to_s
 
-def snap(g, id, seat)
+def snap(g, id, seat, title)
   step = g.round.active_step rescue nil
   ent = (step&.current_entity rescue nil) || (g.current_entity rescue nil)
   corps = {}
   g.corporations.each do |c|
-    corps[c.name] = {
+    row = {
       'p' => c.share_price&.price,
       'cash' => c.cash,
-      'loans' => c.loans.size,
       'fl' => c.floated?,
       'tr' => c.trains.map(&:name),
     }
+    row['loans'] = c.loans.size if c.respond_to?(:loans)
+    corps[c.name] = row
   end
-  {
+  row = {
     'id' => id,
     'round' => g.round.class.name.split('::').last,
     'step' => step&.class&.name&.split('::')&.last,
-    'ent' => ent&.name,
+    'ent' => (if ent.respond_to?(:player?) && ent.player? && seat[ent.id] then "Player #{seat[ent.id]}" elsif ent.respond_to?(:company?) && ent.company? then ent.id else ent&.name end),
     'phase' => g.phase.name,
     'corps' => corps,
-    # keyed by SEAT (1-based recorded order) — no player names
     'pcash' => g.players.to_h { |p| [seat[p.id] || p.id, p.cash] },
     'finished' => g.finished,
     'bank' => g.bank.cash,
   }
+  if title.start_with?('1822')
+    row['debt'] = g.players.to_h { |p| [seat[p.id] || p.id, p.debt] }
+    row['order'] = g.players.map { |p| seat[p.id] }
+    row['depot'] = g.depot.upcoming.first(3).map(&:id)
+    row['companies'] = g.companies.reject(&:closed?).select(&:owner).to_h do |c|
+      o = c.owner
+      oname = o.player? ? "player:#{seat[o.id]}" : (o.respond_to?(:corporation?) && o.corporation? ? "corp:#{o.id}" : o.name)
+      [c.id, oname]
+    end
+  end
+  row
 end
 
 ids.each do |id|
@@ -56,7 +69,7 @@ ids.each do |id|
     out.puts({ 'id' => id, 'exception' => g.exception.to_s[0, 300] }.to_json)
     break
   end
-  out.puts snap(g, id, seat).to_json
+  out.puts snap(g, id, seat, title).to_json
 end
 result = (g.result rescue {}) || {}
 out.puts({ 'final' => true, 'finished' => g.finished,
