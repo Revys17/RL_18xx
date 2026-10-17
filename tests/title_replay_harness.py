@@ -32,7 +32,6 @@ from pathlib import Path
 import engine_rs
 
 
-
 class TitleUnsupported(Exception):
     pass
 
@@ -79,7 +78,7 @@ def game_seed(game: dict) -> int:
     return int(m.group(0)) if m else 0
 
 
-def ruby_filtered_actions(actions: list[dict]) -> list[dict]:
+def ruby_filtered_actions(actions: list[dict], mark_auto: bool = False) -> list[dict]:
     """The action stream Ruby's ``Game.load`` processes, flattened.
 
     A port of ``Engine::Game::Base.filtered_actions`` (undo / redo; a
@@ -90,7 +89,8 @@ def ruby_filtered_actions(actions: list[dict]) -> list[dict]:
     and are dropped AFTER their auto_actions are hoisted — the server
     records the auto-actions a chat message or a programmed pass triggered
     on that very action (59414 @30: a message carries the programmed pass
-    of the player whose turn it was). ``pretraining.filter_actions``, the
+    of the player whose turn it was). ``mark_auto`` tags the hoisted
+    auto-actions with ``_auto: True``. ``pretraining.filter_actions``, the
     1830 cleaning filter, drops messages with their auto_actions and stays
     as it is for the 1830 corpus.
     """
@@ -109,9 +109,7 @@ def ruby_filtered_actions(actions: list[dict]) -> list[dict]:
                         raise ValueError(f"undo target {target} not found")
                     undo_to = idx + 1
             else:
-                undo_to = next(
-                    (i for i in range(index - 1, -1, -1) if kept[i] and kept[i]["type"] != "message"), 0
-                )
+                undo_to = next((i for i in range(index - 1, -1, -1) if kept[i] and kept[i]["type"] != "message"), 0)
             cleared = []
             for i in range(undo_to, index):
                 a = kept[i]
@@ -141,15 +139,16 @@ def ruby_filtered_actions(actions: list[dict]) -> list[dict]:
             at = au.get("type", "")
             if at in ("message", "end_game", "log") or at.startswith("program_"):
                 continue
-            out.append(dict(au))
+            entry = dict(au)
+            if mark_auto:
+                entry["_auto"] = True
+            out.append(entry)
     for i, a in enumerate(out):
         a["id"] = i + 1
     return out
 
 
-def replay_game(
-    game: dict, max_actions: int | None = None, on_action=None
-) -> ReplayReport:
+def replay_game(game: dict, max_actions: int | None = None, on_action=None) -> ReplayReport:
     """Replay one recorded 18xx.games/fixture game dict through the Rust
     engine. Raises TitleUnsupported / ReplayError; returns a ReplayReport.
 
@@ -170,9 +169,7 @@ def replay_game(
 
     optional_rules = list((game.get("settings") or {}).get("optional_rules") or [])
     try:
-        rust = engine_rs.BaseGame.new_titled(
-            title, players, optional_rules or None, game_seed(game)
-        )
+        rust = engine_rs.BaseGame.new_titled(title, players, optional_rules or None, game_seed(game))
     except ValueError as exc:
         raise ReplayError(f"construction rejected: {exc}", 0, None) from exc
 
@@ -207,9 +204,7 @@ def replay_game(
         try:
             rust.process_action(action)
         except BaseException as exc:  # incl. pyo3 PanicException
-            raise ReplayError(
-                f"action {i} ({action.get('type')}) rejected: {exc}", i, action, fid
-            ) from exc
+            raise ReplayError(f"action {i} ({action.get('type')}) rejected: {exc}", i, action, fid) from exc
         # Server-generated auto actions (programmed passes, 1867's
         # BuyCompanyPreloan auto-pass for loan-free corps, ...) are embedded
         # in their parent action and processed right after it — exactly how
@@ -223,8 +218,7 @@ def replay_game(
                 mapped = player_mapping.get(auto.get("entity"))
                 if mapped is None:
                     raise ReplayError(
-                        f"action {i} auto[{j}]: unknown player entity"
-                        f" {auto.get('entity')!r}",
+                        f"action {i} auto[{j}]: unknown player entity" f" {auto.get('entity')!r}",
                         i,
                         auto,
                     )
@@ -241,9 +235,7 @@ def replay_game(
                 ) from exc
         applied += 1
 
-    result = {
-        id_to_name[pid]: cash for pid, cash in rust.result().items() if pid in id_to_name
-    }
+    result = {id_to_name[pid]: cash for pid, cash in rust.result().items() if pid in id_to_name}
     return ReplayReport(
         game_id=str(game.get("id", "?")),
         title=title,
@@ -261,10 +253,7 @@ def check_fixture(path: Path) -> ReplayReport:
     # Fixture results key players by ID; the report keys by seat NAME
     # (identical for the hs_* fixtures, distinct for 21268).
     id_to_name = {str(p["id"]): p["name"] for p in game.get("players", [])}
-    recorded = {
-        id_to_name.get(str(key), str(key)): int(score)
-        for key, score in (game.get("result") or {}).items()
-    }
+    recorded = {id_to_name.get(str(key), str(key)): int(score) for key, score in (game.get("result") or {}).items()}
     if recorded and report.result != recorded:
         raise AssertionError(
             f"fixture {path.name}: final scores diverge\n"
