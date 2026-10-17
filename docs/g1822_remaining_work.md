@@ -132,7 +132,7 @@ gaps):
   highest bid (`can_bid_company?` excludes it), re-acquiring a company
   the corporation already owns (`process_acquire_company` does not check).
 
-## Cross-player purchases (user to confirm for 1822)
+## Cross-player purchases (confirmed by the user, 2026-10-17)
 
 The project disallows, in self-play, buying trains from corporations run
 by OTHER players and buying companies from other players (1830's
@@ -155,9 +155,12 @@ president. Cases, and what the switch does with each:
 4. Minor another player owns, acquired by a major (MinorAcquisition
    `merge`; the minor's owner is paid in cash and/or the major's shares,
    chosen by the acquirer; the minor's trains, cash and companies move
-   with it) — excluded (`minors`). **Ambiguous**: the 1822 analogue of
-   buying a company from another player, but also a core mechanic —
-   please confirm.
+   with it) — excluded (`minors`). **Confirmed (user, 2026-10-17): a major
+   may acquire only its own president's minors.** The real rules allow
+   another player's minor when both players agree; agreement between
+   players is deliberately not modelled (it would need a proposal /
+   accept step by another seat, which self-play bots could learn to
+   collude through).
 5. Bid-box minors bought from the bank (phase `can_acquire_minor_bidbox`)
    — never excluded (the bank sells).
 6. Companies owned by a corporation — 1822 has no corporation-to-
