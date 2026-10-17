@@ -3947,11 +3947,12 @@ impl BaseGame {
                 continue;
             }
 
-            // Multiple buy check (Python `can_buy_multiple`): after buying, can
-            // only buy more of the same corp, if it's in the "multiple_buy"
-            // zone and no par was done this turn — from the market pool, or
-            // the IPO too when the rules allow it (checked per source below;
-            // see `stock_can_buy_multiple` for why `bought_from_ipo` isn't).
+            // Multiple buy check (Ruby/Python `can_buy_multiple?`): after
+            // buying, can only buy more of the same corp, if it's in the
+            // "multiple_buy" zone and no par was done this turn — from the
+            // market pool, and only if the turn bought nothing from the IPO,
+            // unless the rules allow multiple IPO buys (then the IPO too,
+            // checked per source below).
             if stock_state.bought_this_turn && !self.stock_can_buy_multiple(stock_state, corp, true) {
                 continue;
             }

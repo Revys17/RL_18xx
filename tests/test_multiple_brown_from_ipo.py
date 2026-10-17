@@ -3,8 +3,11 @@ in both engines and through the human-game import.
 
 A stock turn may buy several shares of a corporation whose price is in the
 brown ("multiple_buy") zone -- under the base rules only from the market pool,
-with the rule from the IPO as well. The Python engine is the oracle; the Rust
-engine pins the same cases on rigged states in its own tests
+and nothing more once the turn bought from the IPO (Ruby ``can_buy_multiple?``:
+``return false if @round.bought_from_ipo``); with the rule from the IPO as well.
+Plus the stock-turn "has actions" check (who is auto-skipped) at the cert limit
+and for IPO-only affordable shares. The Rust engine pins the same cases on the
+same rigged states in its own tests
 (``rounds::stock::multiple_brown_from_ipo_tests``), and the fixture -- an
 anonymized 4-player game truncated right after a turn that bought brown shares
 from the IPO twice (see its ``description``) -- checks both engines in
@@ -38,9 +41,10 @@ from tests.validate_rust_engine import compare_state  # noqa: E402
 FIXTURE = Path(__file__).parent / "fixtures" / "1830" / "multiple_brown_from_ipo.json"
 RULE = "multiple_brown_from_ipo"
 PLAYERS = {i: f"Player {i}" for i in range(1, 5)}
-# 1830 market cells: the $67 par, $27 brown ("multiple_buy") and $39 orange
-# ("unlimited": ownership-exempt, but one buy per turn).
-PAR, BROWN, ORANGE = (5, 6), (6, 1), (3, 0)
+# 1830 market cells: the $67 par, $27 brown ("multiple_buy"), $39 orange
+# ("unlimited": ownership-exempt, but one buy per turn), $60 yellow
+# ("no_cert_limit") and the $100 par cell (a plain price).
+PAR, BROWN, ORANGE, YELLOW, AT_100 = (5, 6), (6, 1), (3, 0), (0, 0), (0, 6)
 
 
 def _nynh_game(rules, cell=BROWN):
@@ -84,13 +88,23 @@ def _buy(game, source):
     )
 
 
+def _refused(game, source, match=None):
+    """The buy is refused. Tried on a clone: like Ruby, the Python step records
+    a buy (``players_bought``, ``bought_from_ipo``) before validating it, so a
+    rejected action leaves the game unusable."""
+    with pytest.raises(Exception, match=match):
+        _buy(game.pickle_clone(), source)
+    return True
+
+
 def _player_1_percent(game):
     return game.player_by_id(1).percent_of(game.corporation_by_id("NYNH"))
 
 
-def _mark_bought(game, corp_sym=None, par=False):
-    """Make the current turn look like it already bought ``corp_sym`` (or parred)
-    without moving a certificate -- a turn that stays open after its buy."""
+def _mark_bought(game, corp_sym=None, par=False, from_ipo=False):
+    """Make the current turn look like it already bought ``corp_sym`` (from the
+    IPO with ``from_ipo``), or parred, without moving a certificate -- a turn
+    that stays open after its buy."""
     from rl18xx.game.engine.actions import BuyShares, Par
 
     step = game.round.active_step()
@@ -99,6 +113,13 @@ def _mark_bought(game, corp_sym=None, par=False):
     else:
         action = BuyShares(game.current_entity, game.share_by_id(f"{corp_sym}_8"))
     step.round.current_actions.append(action)
+    game.round.bought_from_ipo = from_ipo
+
+
+def _has_actions(game, player_id=1):
+    """Whether the player's stock turn has anything to do (Ruby/Python
+    ``actions(entity)`` non-empty) -- the engines auto-skip it otherwise."""
+    return bool(game.round.active_step().actions(game.player_by_id(player_id)))
 
 
 def test_rule_is_in_both_engines_and_the_importer():
@@ -116,20 +137,40 @@ def test_rule_is_in_both_engines_and_the_importer():
 def test_base_rules_rebuy_brown_shares_from_the_pool_only():
     game = _nynh_game([])
     assert _sources(game) == ["ipo", "market"]
-    _buy(game, "ipo")
+    _buy(game, "market")
     assert game.current_entity.id == 1, "a brown-zone buy keeps the turn open"
-    assert _sources(game) == ["market"]
-    with pytest.raises(Exception, match="Cannot buy a share of NYNH"):
-        _buy(game, "ipo")
-    # The market path is unchanged -- including after an IPO buy: the Python
-    # port's IPO is the bank, so ``round.bought_from_ipo`` (set only for a
-    # corporation-owned bundle) never fires.
     assert game.round.bought_from_ipo is False
+    assert _sources(game) == ["market"]
+    assert _refused(game, "ipo", match="Cannot buy a share of NYNH")
     _buy(game, "market")
-    _buy(game, "market")
-    assert _player_1_percent(game) == 30
+    assert _player_1_percent(game) == 20
     # Pool empty, IPO closed to re-buys, no sales in SR1: the turn passes on.
     assert game.current_entity.id == 2
+
+
+def test_base_rules_buy_nothing_more_after_an_ipo_buy():
+    """Ruby ``can_buy_multiple?`` (``return false if @round.bought_from_ipo``):
+    under the base rules a turn that bought from the IPO buys nothing more --
+    not even brown shares from the pool. The port's IPO is the bank, so the
+    flag is raised for a bank-owned (IPO) bundle as for Ruby's
+    corporation-owned one. The rule lifts it."""
+    game = _nynh_game([])
+    _buy(game, "ipo")
+    assert game.current_entity.id == 2, "nothing left to buy, no sales in SR1: the turn passes on"
+
+    # A turn that stays open after its IPO buy still can't buy.
+    game = _nynh_game([])
+    _mark_bought(game, "NYNH", from_ipo=True)
+    assert _sources(game) == []
+    for source in ("ipo", "market"):
+        assert _refused(game, source)
+
+    game = _nynh_game([RULE])
+    _buy(game, "ipo")
+    assert game.round.bought_from_ipo is True
+    assert _sources(game) == ["ipo", "market"]
+    _buy(game, "market")
+    assert _player_1_percent(game) == 20
 
 
 def test_rule_rebuys_brown_shares_from_the_ipo_too():
@@ -167,8 +208,7 @@ def test_non_brown_zones_stay_one_buy_per_turn(rules, cell):
     _mark_bought(game, "NYNH")
     assert _sources(game) == []
     for source in ("ipo", "market"):
-        with pytest.raises(Exception):
-            _buy(game, source)
+        assert _refused(game, source)
 
 
 @pytest.mark.parametrize("par", [True, False], ids=["after_par", "after_other_corp"])
@@ -177,8 +217,7 @@ def test_rule_keeps_the_par_and_same_corp_restrictions(par):
     _mark_bought(game, "B&O", par=par)
     assert _sources(game) == []
     for source in ("ipo", "market"):
-        with pytest.raises(Exception):
-            _buy(game, source)
+        assert _refused(game, source)
 
 
 @pytest.mark.parametrize("rules", [[], [RULE]], ids=["base", "rule"])
@@ -191,6 +230,32 @@ def test_cert_limit_does_not_end_a_brown_multi_buy(rules):
     assert game.current_entity.id == 1
     assert "market" in _sources(game)
     _buy(game, "market")
+
+
+@pytest.mark.parametrize(
+    "cell, has_actions",
+    [(BROWN, True), (ORANGE, True), (YELLOW, True), (PAR, False)],
+    ids=["brown", "orange", "yellow", "par"],
+)
+def test_cert_limit_skips_a_turn_only_without_exempt_buys(cell, has_actions):
+    """Ruby ``can_gain?``: yellow/orange/brown certs don't count for the cert
+    limit, so a player AT the limit can still buy them -- the turn is theirs
+    and must not be auto-skipped. A normal-zone corp is not buyable there, and
+    neither is a par."""
+    game = _nynh_game([], cell)
+    game.cert_limit = lambda *args, **kwargs: 0
+    assert _has_actions(game) == has_actions
+    assert bool(_sources(game)) == has_actions
+
+
+@pytest.mark.parametrize("cash, has_actions", [(80, True), (60, False)])
+def test_ipo_shares_count_at_par_for_the_turn(cash, has_actions):
+    """Ruby ``can_buy_any_from_ipo?`` prices IPO shares at par: a player who
+    can afford the $67 IPO share but not the $100 pool share has a buy."""
+    game = _nynh_game([], AT_100)
+    game.player_by_id(1).cash = cash
+    assert _has_actions(game) == has_actions
+    assert _sources(game) == (["ipo"] if has_actions else [])
 
 
 # ----- the recorded game: both engines, through the human-game import -----

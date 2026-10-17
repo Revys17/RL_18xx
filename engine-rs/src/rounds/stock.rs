@@ -803,24 +803,19 @@ impl BaseGame {
             .is_some_and(|sp| sp.types.iter().any(|t| EXEMPT_TYPES.contains(&t.as_str())))
     }
 
-    /// Mirror of Python `BuySellParShares.can_buy_multiple(entity, corporation,
-    /// owner)` (round.py:1703-1716): whether a stock turn that has already
-    /// bought may buy another share of `corp` — from the market pool
-    /// (`from_market`) or the IPO. The corp's price must be in a
-    /// "multiple_buy" zone, the turn must not have parred, and every earlier
-    /// buy of the turn must be of `corp`. Under the title's
+    /// Mirror of Ruby/Python `BuySellParShares#can_buy_multiple?(entity,
+    /// corporation, owner)` (step/buy_sell_par_shares.rb; round.py): whether a
+    /// stock turn that has already bought may buy another share of `corp` —
+    /// from the market pool (`from_market`) or the IPO. The corp's price must
+    /// be in a "multiple_buy" zone, the turn must not have parred, and every
+    /// earlier buy of the turn must be of `corp`. Under the title's
     /// `multiple_buy_only_from_market` (1830 unless the game uses
-    /// `multiple_brown_from_ipo`) the share must also come from the pool.
-    ///
-    /// Python's other only-from-market clause, `round.bought_from_ipo`, is
-    /// raised only for a corporation-owned bundle
-    /// (`bundle.owner.is_corporation()`), and Python's 1830 IPO certificates
-    /// belong to the bank (`corporation_opts` ipo_owner), so it never fires.
-    /// `StockState::bought_from_ipo` records every IPO buy and is therefore
-    /// NOT consulted here (it would forbid the market buy after an IPO buy
-    /// that Python allows).
+    /// `multiple_brown_from_ipo`) the share must also come from the pool, and
+    /// a turn that bought from the IPO (`bought_from_ipo`) buys nothing more.
     pub(crate) fn stock_can_buy_multiple(&self, state: &StockState, corp: &Corporation, from_market: bool) -> bool {
-        if !from_market && self.title_def().multiple_buy_only_from_market(&self.optional_rules) {
+        if self.title_def().multiple_buy_only_from_market(&self.optional_rules)
+            && (!from_market || state.bought_from_ipo)
+        {
             return false;
         }
         let buy_multiple = corp
@@ -1452,75 +1447,24 @@ impl BaseGame {
             }
         }
 
-        // Already bought — can only sell (checked above), buy_multiple, or pass.
-        // Whether another buy is possible is exactly the enumeration's
-        // buyable-share set (Python `can_buy_any` → `can_buy_shares` →
-        // `can_buy_multiple`): same corp, "multiple_buy" zone, no par this
-        // turn, pool shares — or IPO shares too when the game's rules allow
-        // multiple IPO buys (1830 `multiple_brown_from_ipo`). Its cert-limit
-        // test exempts the zone's certs, as Python's `can_gain` does.
-        if bought {
-            return !self.buyable_shares_for_factored(player_id).is_empty();
+        // Buy: Ruby/Python `can_buy_any?` (`can_buy_shares?` per IPO / market
+        // group) — exactly the enumeration's buyable-share set: each group at
+        // its own price (par for the IPO, the current price for the pool),
+        // `can_gain?`'s cert-limit test exempting yellow/orange/brown certs (a
+        // player at the cert limit who can still buy them is not skipped),
+        // and after a buy `can_buy_multiple?` (same corp, "multiple_buy" zone,
+        // no par, pool only and nothing more after an IPO buy — or the IPO
+        // too under 1830 `multiple_brown_from_ipo`).
+        if !self.buyable_shares_for_factored(player_id).is_empty() {
+            return true;
         }
-
-        // Already acted (sold) but hasn't bought — can still buy/par
-        // (In sell_buy_sell order, selling first doesn't prevent buying)
-
-        if at_cert_limit {
+        if bought {
             return false;
         }
 
-        let sold_corps = match &self.round {
-            crate::rounds::Round::Stock(s) => &s.players_sold,
-            _ => return false,
-        };
-
-        // Can buy?
-        let can_buy = self.corporations.iter().any(|corp| {
-            if corp.ipo_price.is_none() {
-                return false;
-            }
-            let corp_sym = &corp.sym;
-            let sold = sold_corps
-                .get(&player_id)
-                .and_then(|m| m.get(corp_sym.as_str()))
-                .is_some();
-            if sold {
-                return false;
-            }
-            // 60% limit — lifted in multiple_buy/unlimited zones
-            let in_unlimited_zone = corp.share_price.as_ref().map_or(false, |sp| {
-                sp.types
-                    .iter()
-                    .any(|t| t == "multiple_buy" || t == "unlimited")
-            });
-            if !in_unlimited_zone && corp.percent_owned_by(&player_eid) >= 60 {
-                return false;
-            }
-            let ipo_eid = EntityId::ipo(corp_sym);
-            let market_eid = EntityId::market();
-            let has_ipo = corp
-                .shares
-                .iter()
-                .any(|s| s.owner == ipo_eid && !s.president);
-            let has_market = corp
-                .shares
-                .iter()
-                .any(|s| s.owner == market_eid && !s.president);
-            if !has_ipo && !has_market {
-                return false;
-            }
-            // `always_market_price` (1867): treasury shares sell at the
-            // current price too.
-            let price = if has_market || corp.always_market_price {
-                corp.share_price.as_ref().map_or(0, |sp| sp.price)
-            } else {
-                corp.ipo_price.as_ref().map_or(0, |sp| sp.price)
-            };
-            player_cash >= price
-        });
-        if can_buy {
-            return true;
+        // Par / minor bid: the new cert counts for the limit.
+        if at_cert_limit {
+            return false;
         }
 
         // Can par? (parring buys the president's cert: its unit count × par)
@@ -1842,8 +1786,10 @@ mod g1867_par_tests {
 mod multiple_brown_from_ipo_tests {
     //! 1830's optional rule `multiple_brown_from_ipo` (Ruby/Python G1830
     //! `multiple_buy_only_from_market?`): a stock turn may buy several shares
-    //! of a brown-zone ("multiple_buy") corporation — from the market pool
-    //! only under the base rules, from the IPO as well under the rule.
+    //! of a brown-zone ("multiple_buy") corporation — under the base rules
+    //! from the market pool only, and nothing more once it bought from the
+    //! IPO; under the rule from the IPO as well. Plus the stock-turn
+    //! "has actions" check (auto-skip) agreeing with the enumeration.
     use crate::actions::{Action, GameError};
     use crate::entities::EntityId;
     use crate::game::BaseGame;
@@ -1851,11 +1797,14 @@ mod multiple_brown_from_ipo_tests {
     use std::collections::HashMap;
 
     const RULE: &str = "multiple_brown_from_ipo";
-    /// 1830 market cells: the $67 par, $27 brown ("multiple_buy") and $39
-    /// orange ("unlimited": ownership-exempt, but one buy per turn).
+    /// 1830 market cells: the $67 par, $27 brown ("multiple_buy"), $39
+    /// orange ("unlimited": ownership-exempt, but one buy per turn), $60
+    /// yellow ("no_cert_limit") and the $100 par cell (a plain price).
     const PAR: (u8, u8) = (5, 6);
     const BROWN: (u8, u8) = (6, 1);
     const ORANGE: (u8, u8) = (3, 0);
+    const YELLOW: (u8, u8) = (0, 0);
+    const AT_100: (u8, u8) = (0, 6);
 
     /// A 4-player 1830 game in its first stock round (no sales yet:
     /// SELL_AFTER = :first) with NYNH parred at $67 and parked on market
@@ -1928,35 +1877,65 @@ mod multiple_brown_from_ipo_tests {
         game.corporations[game.corp_idx["NYNH"]].percent_owned_by(&EntityId::player(1))
     }
 
-    /// Mark the current turn as having bought `corp` (or parred) without
-    /// moving a certificate — a turn that stays open after its buy (e.g.
-    /// one with shares to sell).
-    fn mark_bought(game: &mut BaseGame, corp: &str, parred: bool) {
+    /// Mark the current turn as having bought `corp` (from the IPO with
+    /// `from_ipo`), or parred, without moving a certificate — a turn that
+    /// stays open after its buy (e.g. one with shares to sell).
+    fn mark_bought(game: &mut BaseGame, corp: &str, parred: bool, from_ipo: bool) {
         if let Round::Stock(s) = &mut game.round {
             s.bought_this_turn = true;
             s.bought_corp_this_turn = (!parred).then(|| corp.to_string());
+            s.bought_from_ipo = from_ipo;
             s.parred_this_turn = parred;
             s.acted_this_turn = true;
         }
+    }
+
+    /// The buy handler's own verdict (behind the dispatch gate).
+    fn handler_buy(game: &mut BaseGame, source: &str) -> Result<(), GameError> {
+        let Round::Stock(state) = game.round.clone() else { unreachable!() };
+        game.stock_process_buy_shares(&state, "1", "NYNH", 10, source, &[])
     }
 
     #[test]
     fn base_rules_rebuy_brown_shares_from_the_pool_only() {
         let mut game = game_with_nynh_at(&[], BROWN);
         assert_eq!(nynh_sources(&mut game), ["ipo", "market"]);
-        buy(&mut game, "ipo").unwrap();
+        buy(&mut game, "market").unwrap();
         assert_eq!(current(&game), 1, "a brown-zone buy keeps the turn open");
         assert_eq!(nynh_sources(&mut game), ["market"]);
         let err = buy(&mut game, "ipo").unwrap_err();
         assert!(err.to_string().contains("must buy from market"), "{err}");
-        // The market path is unchanged — including after an IPO buy
-        // (Python's `bought_from_ipo` never fires: its IPO is the bank).
         buy(&mut game, "market").unwrap();
-        buy(&mut game, "market").unwrap();
-        assert_eq!(player_1_percent(&game), 30);
+        assert_eq!(player_1_percent(&game), 20);
         // Pool empty, IPO closed to re-buys, no sales in SR1: the turn
         // passes on by itself.
         assert_eq!(current(&game), 2);
+    }
+
+    /// Ruby `can_buy_multiple?` (`return false if @round.bought_from_ipo`):
+    /// under the base rules a turn that bought from the IPO buys nothing
+    /// more — not even brown shares from the pool. The rule lifts it.
+    #[test]
+    fn base_rules_buy_nothing_more_after_an_ipo_buy() {
+        let mut game = game_with_nynh_at(&[], BROWN);
+        buy(&mut game, "ipo").unwrap();
+        assert_eq!(current(&game), 2, "nothing left to buy, no sales in SR1: the turn passes on");
+
+        // A turn that stays open after its IPO buy still can't buy.
+        let mut game = game_with_nynh_at(&[], BROWN);
+        mark_bought(&mut game, "NYNH", false, true);
+        assert!(nynh_sources(&mut game).is_empty());
+        for source in ["ipo", "market"] {
+            assert!(buy(&mut game, source).is_err(), "{source}");
+            let err = handler_buy(&mut game, source).unwrap_err();
+            assert!(err.to_string().contains("Already bought"), "{err}");
+        }
+
+        let mut game = game_with_nynh_at(&[RULE], BROWN);
+        mark_bought(&mut game, "NYNH", false, true);
+        assert_eq!(nynh_sources(&mut game), ["ipo", "market"]);
+        buy(&mut game, "market").unwrap();
+        assert_eq!(player_1_percent(&game), 10);
     }
 
     #[test]
@@ -2000,16 +1979,13 @@ mod multiple_brown_from_ipo_tests {
                 assert_eq!(current(&game), 2, "rules {rules:?} cell {cell:?}: one buy ends the SR1 turn");
 
                 let mut game = game_with_nynh_at(rules, cell);
-                mark_bought(&mut game, "NYNH", false);
+                mark_bought(&mut game, "NYNH", false, false);
                 assert!(nynh_sources(&mut game).is_empty(), "rules {rules:?} cell {cell:?}");
                 for source in ["ipo", "market"] {
                     // The dispatch gate refuses it (no buy is legal), and so
                     // does the buy handler itself.
                     assert!(buy(&mut game, source).is_err());
-                    let Round::Stock(state) = game.round.clone() else { unreachable!() };
-                    let err = game
-                        .stock_process_buy_shares(&state, "1", "NYNH", 10, source, &[])
-                        .unwrap_err();
+                    let err = handler_buy(&mut game, source).unwrap_err();
                     assert!(err.to_string().contains("Already bought"), "{err}");
                 }
             }
@@ -2022,14 +1998,11 @@ mod multiple_brown_from_ipo_tests {
     fn rule_keeps_the_par_and_same_corp_restrictions() {
         for parred in [true, false] {
             let mut game = game_with_nynh_at(&[RULE], BROWN);
-            mark_bought(&mut game, "PRR", parred);
+            mark_bought(&mut game, "PRR", parred, false);
             assert!(nynh_sources(&mut game).is_empty(), "parred {parred}");
             for source in ["ipo", "market"] {
                 assert!(buy(&mut game, source).is_err(), "parred {parred} {source}");
-                let Round::Stock(state) = game.round.clone() else { unreachable!() };
-                let err = game
-                    .stock_process_buy_shares(&state, "1", "NYNH", 10, source, &[])
-                    .unwrap_err();
+                let err = handler_buy(&mut game, source).unwrap_err();
                 assert!(err.to_string().contains("Already bought"), "{err}");
             }
         }
@@ -2047,6 +2020,33 @@ mod multiple_brown_from_ipo_tests {
             assert_eq!(current(&game), 1, "rules {rules:?}");
             assert!(nynh_sources(&mut game).contains(&"market".to_string()));
             buy(&mut game, "market").unwrap();
+        }
+    }
+
+    /// Ruby `can_gain?`: yellow/orange/brown certs don't count for the cert
+    /// limit, so a player AT the limit can still buy them — the turn is
+    /// theirs (`actions` lists buy_shares) and must not be auto-skipped. A
+    /// normal-zone corp is not buyable there, and neither is a par.
+    #[test]
+    fn cert_limit_skips_a_turn_only_without_exempt_buys() {
+        for (cell, has_actions) in [(BROWN, true), (ORANGE, true), (YELLOW, true), (PAR, false)] {
+            let mut game = game_with_nynh_at(&[], cell);
+            game.cert_limit = 0;
+            assert_eq!(game.player_has_actions(1, false, false), has_actions, "cell {cell:?}");
+            assert_eq!(!nynh_sources(&mut game).is_empty(), has_actions, "cell {cell:?}");
+        }
+    }
+
+    /// Ruby `can_buy_any_from_ipo?` prices IPO shares at par: a player who
+    /// can afford the $67 IPO share but not the $100 pool share has a buy.
+    #[test]
+    fn ipo_shares_count_at_par_for_the_turn() {
+        for (cash, has_actions) in [(80, true), (60, false)] {
+            let mut game = game_with_nynh_at(&[], AT_100);
+            game.players[0].cash = cash;
+            assert_eq!(game.player_has_actions(1, false, false), has_actions, "cash {cash}");
+            let expected: &[&str] = if has_actions { &["ipo"] } else { &[] };
+            assert_eq!(nynh_sources(&mut game), expected, "cash {cash}");
         }
     }
 

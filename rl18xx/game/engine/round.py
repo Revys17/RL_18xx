@@ -1656,7 +1656,11 @@ class BuySellParShares(BaseStep, ShareBuying, Programmer):
     def process_buy_shares(self, action):
         self.round.players_bought.setdefault(action.entity, {}).setdefault(action.bundle.corporation, 0)
         self.round.players_bought[action.entity][action.bundle.corporation] += action.bundle.percent
-        if action.bundle.owner.is_corporation():
+        # Ruby: `bought_from_ipo = true if action.bundle.owner.corporation?` -- Ruby's IPO
+        # certificates belong to the corporation, this port's to the bank
+        # (`corporation_opts` ipo_owner), so an IPO bundle is recognized by its owner too.
+        bundle = action.bundle
+        if bundle.owner.is_corporation() or bundle.owner == bundle.corporation.ipo_owner:
             self.round.bought_from_ipo = True
         self.buy_shares(
             action.purchase_for or action.entity,

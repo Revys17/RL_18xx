@@ -1534,7 +1534,7 @@ class BaseGame:
             else:
                 return corporation.operated()
         elif self.SELL_AFTER == "round":
-            if self.round and self.round.stock():
+            if self.round and self.round.stock:
                 return (
                     corporation.share_holders[entity] - self.round.players_bought[entity][corporation]
                 ) >= bundle.percent
@@ -1629,7 +1629,7 @@ class BaseGame:
         return certs
 
     def sellable_turn(self):
-        return self.SELL_AFTER != "first" or (self.turn > 1 or not (self.round and self.round.stock()))
+        return self.SELL_AFTER != "first" or (self.turn > 1 or not (self.round and self.round.stock))
 
     @property
     def sell_movement(self):
