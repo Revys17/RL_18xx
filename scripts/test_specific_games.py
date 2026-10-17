@@ -26,7 +26,7 @@ sys.path.insert(0, str(REPO_ROOT))
 logging.disable(logging.CRITICAL)
 
 from engine_rs import BaseGame as RustGame
-from rl18xx.agent.alphazero.pretraining import get_game_object_for_game
+from rl18xx.agent.alphazero.pretraining import engine_optional_rules, get_game_object_for_game
 from rl18xx.game.gamemap import GameMap
 
 # Reuse the per-step comparator from the existing audit.
@@ -65,8 +65,9 @@ def test_one(game_id: str, raw_dir: Path) -> tuple[str, str]:
 
     try:
         gm = GameMap()
-        py_game = gm.game_by_title("1830")(names)
-        rust_game = RustGame(names)
+        rules = engine_optional_rules(cleaned_dict)
+        py_game = gm.game_by_title("1830")(names, optional_rules=rules)
+        rust_game = RustGame(names, optional_rules=rules)
     except Exception as e:
         return ("ENGINE_INIT_ERROR", str(e)[:200])
 

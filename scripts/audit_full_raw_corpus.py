@@ -39,6 +39,7 @@ from tqdm import tqdm
 
 from engine_rs import BaseGame as RustGame
 from rl18xx.agent.alphazero.pretraining import (
+    engine_optional_rules,
     filter_to_completed_games,
     get_game_object_for_game,
     load_games_from_json,
@@ -178,8 +179,9 @@ def audit_one_raw_game(raw_path: Path, game_cls) -> FullAuditResult:
     names = {p["id"]: p["name"] for p in cleaned_dict["players"]}
 
     try:
-        py_game = game_cls(names)
-        rust_game = RustGame(names)
+        rules = engine_optional_rules(cleaned_dict)
+        py_game = game_cls(names, optional_rules=rules)
+        rust_game = RustGame(names, optional_rules=rules)
     except Exception as e:
         return FullAuditResult(
             game_id=game_id,
@@ -440,8 +442,9 @@ def main() -> int:
         names = {p["id"]: p["name"] for p in cleaned_dict["players"]}
 
         try:
-            py_game = game_cls(names)
-            rust_game = RustGame(names)
+            rules = engine_optional_rules(cleaned_dict)
+            py_game = game_cls(names, optional_rules=rules)
+            rust_game = RustGame(names, optional_rules=rules)
         except Exception as e:
             results.append(
                 FullAuditResult(

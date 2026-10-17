@@ -37,7 +37,7 @@ logging.disable(logging.CRITICAL)
 from engine_rs import BaseGame as RustGame  # noqa: E402
 from rl18xx.rust_adapter import RustGameAdapter  # noqa: E402
 from tests.cleaning_diff import trace_clean  # noqa: E402
-from rl18xx.agent.alphazero.pretraining import _process_pass_leniently  # noqa: E402
+from rl18xx.agent.alphazero.pretraining import _process_pass_leniently, engine_optional_rules  # noqa: E402
 
 # A fixed, deterministic sample across the corpus (every ~400th game of the
 # sorted listing) so the differential sees a spread of eras/player counts.
@@ -75,10 +75,11 @@ def test_step_machinery_replays_human_games(path):
     if not applied:
         pytest.skip(f"no applied actions ({trace['outcome'].get('status')})")
 
-    # 2) Replay the identical stream on a fresh game, differencing the two
-    #    enumerations at every state.
+    # 2) Replay the identical stream on a fresh game (under the same optional
+    #    rules the cleaning used), differencing the two enumerations at every
+    #    state.
     players = {i + 1: f"Player {i + 1}" for i in range(num_players)}
-    adapter = RustGameAdapter(RustGame(players))
+    adapter = RustGameAdapter(RustGame(players, optional_rules=engine_optional_rules(game_json)))
     rust = adapter._game
 
     checked = 0

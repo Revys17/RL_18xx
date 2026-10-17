@@ -70,7 +70,8 @@ one line with the top move.
 ## What the panel shows
 
 - Status lines: backend unreachable, unsupported game (another title, or an
-  optional rule other than `optional_6_train`), untested player count (the
+  optional rule other than `optional_6_train` and `multiple_brown_from_ipo`),
+  untested player count (the
   model was trained on 4-player games), the engine not following a move.
 - Win chances: the value network's estimate per player, normalised to 100%.
 - Who is to move (a player, or a corporation and its president).

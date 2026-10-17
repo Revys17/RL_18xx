@@ -13,7 +13,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from rl18xx.game.gamemap import GameMap
 from engine_rs import BaseGame as RustGame
 from rl18xx.rust_adapter import RustGameAdapter
-from rl18xx.agent.alphazero.pretraining import filter_actions
+from rl18xx.agent.alphazero.pretraining import engine_optional_rules, filter_actions
 
 
 def main():
@@ -28,8 +28,9 @@ def main():
     pmap = {p["id"]: i + 1 for i, p in enumerate(raw["players"])}
 
     gm = GameMap()
-    py_game = gm.game_by_title("1830")(players)
-    rust_game = RustGameAdapter(RustGame(players))
+    rules = engine_optional_rules(raw)
+    py_game = gm.game_by_title("1830")(players, optional_rules=rules)
+    rust_game = RustGameAdapter(RustGame(players, optional_rules=rules))
 
     actions = filter_actions(raw["actions"])
 
