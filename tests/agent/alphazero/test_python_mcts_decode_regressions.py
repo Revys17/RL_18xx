@@ -19,7 +19,11 @@ Rust decode handled all of them), crashing gating and arena games:
 * ``emergency_sell`` — in an operating round the seller is the operating
   corp's president; the adapter looked up the corp as if it were a player.
 
-Each state is a Python-format action log that replays into both engines.
+Each state is a Python-format action log that replays into both engines. The
+d_trade_in, discarded_d_trade_in and emergency_sell logs were re-drawn from
+random walks on 2026-10-16: the originals bought brown shares from the pool
+after an IPO buy in the same turn, which Ruby (and now both engines) forbids
+under the base rules.
 """
 
 import json
@@ -43,9 +47,9 @@ STATES = json.loads(FIXTURE.read_text())
 EXPECTED = {
     "teleport_pass": {"type": "pass", "entity": "DH", "entity_type": "company"},
     "mh_exchange_pre_par": {"type": "buy_shares", "entity": "MH", "entity_type": "company", "shares": ["NYC_1"]},
-    "d_trade_in": {"type": "buy_train", "entity": "CPR", "train": "D-0", "price": 800, "exchange": "5-2"},
-    "discarded_d_trade_in": {"type": "buy_train", "entity": "B&M", "train": "D-0", "price": 800, "exchange": "6-0"},
-    "emergency_sell": {"type": "sell_shares", "entity": 1, "entity_type": "player", "shares": ["B&O_1"]},
+    "d_trade_in": {"type": "buy_train", "entity": "NYC", "train": "D-0", "price": 800, "exchange": "5-2"},
+    "discarded_d_trade_in": {"type": "buy_train", "entity": "NYC", "train": "D-0", "price": 800, "exchange": "6-1"},
+    "emergency_sell": {"type": "sell_shares", "entity": 3, "entity_type": "player", "shares": ["B&O_2"]},
 }
 
 
