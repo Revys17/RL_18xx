@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Reinforcement learning agent for the board game **1830**, using AlphaZero-style training. The rules are a Python port of the Ruby implementation from [tobymao/18xx](https://github.com/tobymao/18xx), with a **Rust reimplementation** (`engine-rs/`) used as a performance-accelerated drop-in for the training hot loop. Only 1830 is trained. The Rust engine also implements **1867** and **1822** (Rust only, validated against Ruby: `docs/g1867_remaining_work.md`, `docs/g1822_remaining_work.md`); their RL bridge is designed but on hold (`docs/rl_bridge_design.md`, `docs/multi_title_roadmap.md`). Every title targets 3-6 players.
+Reinforcement learning agent for the board game **1830**, using AlphaZero-style training. The rules are a Python port of the Ruby implementation from [tobymao/18xx](https://github.com/tobymao/18xx), with a **Rust reimplementation** (`engine-rs/`) used as a performance-accelerated drop-in for the training hot loop. Only 1830 is trained. The Rust engine also implements **1867** and the **1822 family: 1822, 1822PNW, 1822MX, 1822CA** (Rust only, each validated against Ruby HEAD: fixtures, corpus, router, legal-move completeness, fuzz games replayed in Ruby; `docs/g1867_remaining_work.md`, `docs/g1822_remaining_work.md`); their RL bridge is designed but on hold (`docs/rl_bridge_design.md`, `docs/multi_title_roadmap.md`). Every title targets 3-6 players.
 
 There are **two engines that must stay at parity**:
 - **Python engine** (`rl18xx/game/engine/`) — the reference/oracle. Readable, faithful to the Ruby source, used for correctness checks.
