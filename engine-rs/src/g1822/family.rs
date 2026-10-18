@@ -23,6 +23,7 @@ pub enum Variant {
     G1822,
     Pnw,
     Mx,
+    Ca,
 }
 
 /// PRIVATE_COMPANIES_ACQUISITION: (acquirer classes, phase).

@@ -373,7 +373,9 @@ impl BaseGame {
     /// Ruby `sell_shares_and_change_price` with SELL_MOVEMENT :down_share.
     pub(crate) fn g1822_sell_shares_and_change_price(&mut self, b: &Bundle) {
         let ci = self.ci(&b.corp);
-        if self.g1822_is_mx() {
+        if self.g1822_is_mx() || self.g1822_is_ca() {
+            // MX and CA sell_movement: :left_per_10_if_pres_else_left_one
+            // (2 players: :left_share_pres)
             return self.g1822_mx_sell_shares_and_change_price(b);
         }
         if self.g1822_is_pnw() {

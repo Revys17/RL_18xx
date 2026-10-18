@@ -142,6 +142,11 @@ pub struct Token {
     /// corporation in one city `remove_extra_tokens!` returns).
     #[serde(default)]
     pub serial: u32,
+    /// Ruby `Token#cheater` (truthy) as the map copy carries it: set by
+    /// `City#exchange_token(token, cheater:)`, cleared by `remove!`. Only
+    /// 1822CA reads it (its destination tokens are re-placed after a lay).
+    #[serde(default)]
+    pub cheater: bool,
 }
 
 #[pymethods]
@@ -155,6 +160,7 @@ impl Token {
             corporation_id,
             city_hex_id: String::new(),
             serial: 0,
+            cheater: false,
         }
     }
 }

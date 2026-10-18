@@ -396,7 +396,12 @@ impl BaseGame {
                 if !self.corp_idx.contains_key(corporation_sym.as_str()) {
                     return err(format!("Unknown minor {corporation_sym}"));
                 }
-                // process_merge's entity_connects? computes the major's graph.
+                // process_merge's entity_connects? computes the major's graph
+                // (1822CA: Ruby keeps it — a 'remove' token choice does not
+                // clear it, so the acquisition bonus lay sees it stale)
+                if self.g1822_is_ca() {
+                    self.g1822_ruby_graph_store(&c);
+                }
                 self.g1822_note_graph(&c);
                 let pay = self.g1822_pay_choices(&c, corporation_sym);
                 let tokens = if self.g1822_exchange_tokens(&c) > 0 {
@@ -430,6 +435,12 @@ impl BaseGame {
                         self.g1822_acquire_bank_minor(&c, &m, choice)?;
                     } else {
                         self.g1822_acquire_entity_minor(&c, &m, choice)?;
+                    }
+                    self.g1822_ca_after_acquire_minor(&c);
+                    // CA after_acquire_entity_minor: clear_graph_for(entity) on
+                    // 'exchange'
+                    if self.g1822_is_ca() && choice == "exchange" {
+                        self.g1822_ruby_graph_clear();
                     }
                     self.rndm().acquire_state = AcquireState::SelectMinor;
                     self.rndm().passed[i] = true;

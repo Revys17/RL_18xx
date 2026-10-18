@@ -405,6 +405,12 @@ impl BaseGame {
                 return v;
             }
         }
+        if self.g1822_is_ca() {
+            let base = to.name.split('-').next().unwrap_or(&to.name);
+            if let Some(v) = self.g1822_ca_upgrades_to(hi, base) {
+                return v;
+            }
+        }
         let hex = &self.hexes[hi];
         // Blue (sea / port) hexes: COLORS has no tile colour after blue
         // that a catalog tile carries (the engine stores blue as white).
@@ -439,7 +445,7 @@ impl BaseGame {
         let label_ok = match self.g1822_future_label(hi) {
             Some((label, color)) if color_name(to.color) == color => to.label.as_deref() == Some(label),
             _ => from.label == to.label,
-        };
+        } || self.g1822_ca_mountain_pass_label(hi, &to.name);
         if !label_ok {
             return false;
         }
@@ -552,6 +558,9 @@ impl BaseGame {
                 return true;
             }
         }
+        if !self.g1822_ca_rotation_allowed(to_def.name.split('-').next().unwrap_or(&to_def.name), rotation) {
+            return false;
+        }
         let hex = &self.hexes[hi];
         let to = TV::from_def(to_def, rotation);
         let from = TV::from_tile(&hex.tile);
@@ -605,7 +614,11 @@ impl BaseGame {
             return false;
         }
         // old_paths_maintained? (at this rotation)
-        if !(0..from.paths.len()).all(|i| (0..to.paths.len()).any(|j| path_le(&from, i, &to, j))) {
+        let maintained = match self.g1822_ca_old_paths_override(hi, &to.name) {
+            Some(v) => v,
+            None => (0..from.paths.len()).all(|i| (0..to.paths.len()).any(|j| path_le(&from, i, &to, j))),
+        };
+        if !maintained {
             return false;
         }
         let fresh = new_ct
@@ -717,6 +730,10 @@ impl BaseGame {
         if self.hexes[hi].tile.cities.is_empty() {
             return tiles;
         }
+        // 1822CA TILE_UPGRADES_MUST_USE_MAX_EXITS = [:unlabeled_cities]
+        if self.g1822_is_ca() && self.hexes[hi].tile.label.is_some() {
+            return tiles;
+        }
         let mut best: BTreeMap<u8, usize> = BTreeMap::new();
         for t in &tiles {
             let c = self.tile_catalog[t].color.index();
@@ -744,6 +761,10 @@ impl BaseGame {
         // 'New track must override old one'
         if !cities_towns_kept(&old, &new) {
             return false;
+        }
+        // 1822CA TRACK_RESTRICTION = :permissive
+        if self.g1822_is_ca() {
+            return true;
         }
         let graph = self.g1822_graph(operator);
         let mut used_new_track = old.paths.is_empty();

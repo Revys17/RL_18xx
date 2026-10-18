@@ -23,6 +23,10 @@
 //! `BaseGame::g1822.is_some()` — 1830/1867 never take them.
 
 pub mod acquisition;
+pub mod ca;
+pub mod ca_legal;
+pub mod ca_route;
+pub mod ca_tokens;
 pub mod family;
 pub mod graph;
 pub mod legal;
@@ -113,6 +117,11 @@ pub enum Step {
     CashOutNdem,
     /// 1822MX: G1822MX::Step::AuctionNdemTokens.
     AuctionNdemTokens,
+    /// 1822CA: G1822CA::Step::AssignSawmill (P13).
+    AssignSawmill,
+    /// 1822CA: G1822CA::Step::AcquisitionTrack (the bonus lay after a
+    /// minor acquisition).
+    AcquisitionTrack,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -289,6 +298,10 @@ pub struct RoundSt {
     /// 1822MX AuctionNdemTokens' state.
     #[serde(default)]
     pub ndem_auction: Option<mx::NdemAuction>,
+    /// 1822CA's step state (AssignSawmill, MinorAcquisition's
+    /// `acquiring_major`, Route's grain / pullman attachments).
+    #[serde(default)]
+    pub ca: ca::CaRound,
 }
 
 impl RoundSt {
@@ -349,6 +362,7 @@ impl RoundSt {
             ndem_layers: Vec::new(),
             ndem_layers_set: false,
             ndem_auction: None,
+            ca: ca::CaRound::default(),
         }
     }
 
@@ -496,6 +510,9 @@ pub struct G1822State {
     /// The last token serial handed out (`entities::Token::serial`).
     #[serde(default)]
     pub token_serial: u32,
+    /// 1822CA's game state (sawmill, `@destinated`, ...).
+    #[serde(default)]
+    pub ca: ca::CaState,
 }
 
 /// A memo Ruby fills lazily while it evaluates step actions (read-side
@@ -660,6 +677,7 @@ impl BaseGame {
         match self.variant() {
             family::Variant::Pnw => matches!(company, "P7" | "P8"),
             family::Variant::Mx => matches!(company, "P12" | "P13"),
+            family::Variant::Ca => matches!(company, "P29" | "P30"),
             _ => family::Family::is(self.fam().company_mtonr, company),
         }
     }
@@ -669,6 +687,8 @@ impl BaseGame {
         match self.variant() {
             family::Variant::Pnw => matches!(company, "P11" | "P12" | "P13"),
             family::Variant::Mx => matches!(company, "P9" | "P17" | "P18"),
+            // COMPANIES_EXTRA_TRACK_LAYS
+            family::Variant::Ca => matches!(company, "P14" | "P15" | "P16" | "P17" | "P18" | "P21"),
             _ => family::Family::is(self.fam().company_lsr, company),
         }
     }
@@ -824,8 +844,9 @@ impl BaseGame {
     }
 
     /// TAX_HAVEN_MULTIPLE / the tax_haven_multiple optional rule.
+    /// `company_tax_haven_can_own_multiple?` (1822CA: TAX_HAVEN_MULTIPLE).
     pub(crate) fn g1822_tax_haven_multiple(&self) -> bool {
-        self.optional_rules.iter().any(|r| r == "tax_haven_multiple")
+        self.g1822_is_ca() || self.optional_rules.iter().any(|r| r == "tax_haven_multiple")
     }
     pub(crate) fn bidbox_minors_refill(&mut self) {
         // 1822PNW init_empty_bidboxes!
@@ -1149,6 +1170,7 @@ impl BaseGame {
             ndem_shares: 0,
             owner_only: Vec::new(),
             token_serial: 0,
+            ca: ca::CaState::default(),
             round: RoundSt::new(RoundKind::Stock, 1, players, vec![Step::DiscardTrain, Step::BuySellParShares]),
         };
         self.g1822 = Some(Box::new(state));
@@ -1203,6 +1225,10 @@ impl BaseGame {
             // setup_game_specific → setup_ndem
             self.g1822_mx_setup_ndem();
         }
+        if fam.variant == family::Variant::Ca {
+            // setup_game_specific
+            self.g1822_ca_setup();
+        }
         // init_round = the first stock round (1822PNW's starting packet:
         // the packets, then straight into an operating round).
         if self.g1822_is_pnw() && self.g1822_pnw_starting_packet() {
@@ -1253,6 +1279,8 @@ impl BaseGame {
     }
 
     fn g1822_process_inner(&mut self, action: &Action) -> Result<(), GameError> {
+        // 1822CA preprocess_action: destination tokens off a laid hex
+        let ca_pending = if self.g1822_is_ca() { self.g1822_ca_preprocess_lay(action) } else { Vec::new() };
         let ent = self.g1822_entity(action.entity_id());
         let atype = action.action_type();
         let steps = self.rnd().steps.clone();
@@ -1291,6 +1319,10 @@ impl BaseGame {
         }
         self.g1822_skip_steps();
         self.g1822_after_process(action)?;
+        // 1822CA action_processed: the destination tokens go back down
+        if let (false, Action::LayTile { hex_id, .. }) = (ca_pending.is_empty(), action) {
+            self.g1822_ca_action_processed_lay(hex_id, ca_pending);
+        }
         // process_single_action: game_end_check, then the round loop.
         self.g1822_game_end_check();
         self.g1822_transition_loop()
@@ -1310,6 +1342,10 @@ impl BaseGame {
             self.bank_broken = true;
             let timing = if self.rnd().kind == RoundKind::Operating { "full_or" } else { "current_or" };
             self.gm().game_end_trigger = Some(("bank".to_string(), timing.to_string()));
+            // 1822CA game_end_set_final_turn!: one more OR in the set
+            if self.g1822_is_ca() && timing == "full_or" {
+                self.gm().operating_rounds += 1;
+            }
             return;
         }
         if self.g().stock_market_max_reached {
@@ -1419,6 +1455,8 @@ impl BaseGame {
             Step::SpecialToken => self.g1822_can_token_after_teleport(),
             // Engine::Step::Assign / SpecialChoose: never block
             Step::Assign => false,
+            // AssignSawmill#blocks?: while the sawmill waits for its choice
+            Step::AssignSawmill => self.rnd().ca.sawmill_state == ca::SawmillState::Assigned,
             Step::SpecialChoose if self.g1822_is_pnw() || self.g1822_is_mx() => false,
             _ => true,
         }

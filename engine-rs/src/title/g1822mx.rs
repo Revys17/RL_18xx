@@ -316,6 +316,8 @@ fn lay(count: Option<i32>) -> Ab {
         discount: 0,
         terrain: None,
         track_only: false,
+        count_per_or: None,
+        count_this_or: 0,
     }
 }
 

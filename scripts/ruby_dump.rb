@@ -13,6 +13,7 @@
 require 'json'
 $LOAD_PATH.unshift('/18xx/lib')
 require 'engine'
+require_relative 'ruby_shims'
 
 data = JSON.parse(File.read(ARGV[0]))
 out = File.open(ARGV[1], 'w')

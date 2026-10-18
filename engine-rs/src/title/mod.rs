@@ -1,4 +1,6 @@
 pub mod g1822;
+pub mod g1822ca;
+pub mod g1822ca_data;
 pub mod g1822mx;
 pub mod g1822mx_data;
 pub mod g1822pnw;
@@ -559,20 +561,27 @@ impl GameTitle for G1830 {
 pub fn all_titles() -> &'static [&'static dyn GameTitle] {
     #[cfg(test)]
     {
-        static TITLES: [&'static dyn GameTitle; 6] = [
+        static TITLES: [&'static dyn GameTitle; 7] = [
             &G1830,
             &g1867::G1867,
             &g1822::G1822,
             &g1822pnw::G1822Pnw,
             &g1822mx::G1822Mx,
+            &g1822ca::G1822Ca,
             &test_title::Test5Share,
         ];
         &TITLES
     }
     #[cfg(not(test))]
     {
-        static TITLES: [&'static dyn GameTitle; 5] =
-            [&G1830, &g1867::G1867, &g1822::G1822, &g1822pnw::G1822Pnw, &g1822mx::G1822Mx];
+        static TITLES: [&'static dyn GameTitle; 6] = [
+            &G1830,
+            &g1867::G1867,
+            &g1822::G1822,
+            &g1822pnw::G1822Pnw,
+            &g1822mx::G1822Mx,
+            &g1822ca::G1822Ca,
+        ];
         &TITLES
     }
 }
@@ -595,11 +604,19 @@ pub fn resolve(name: &str) -> &'static dyn GameTitle {
 // ---------------------------------------------------------------------------
 
 /// Parses a hex coordinate like "H12" into (row_letter_index, number).
-/// Letter part → x: A=0..K=10.  Number part → y (raw number).
+/// Letter part → x as Ruby `Hex::LETTERS` / `NEGATIVE_LETTERS` index it:
+/// A=0..Z=25, AA=26..AZ=51, a=-1..z=-26 (1822CA's map spans "a6" to
+/// "AP8"). Number part → y (raw number).
 pub fn parse_coord(coord: &str) -> (i32, i32) {
-    let bytes = coord.as_bytes();
-    let letter = (bytes[0] - b'A') as i32;
-    let number: i32 = coord[1..].parse().expect("invalid hex coordinate number");
+    let letters: String = coord.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    let number: i32 = coord[letters.len()..].parse().expect("invalid hex coordinate number");
+    let b = letters.as_bytes();
+    let letter = match b {
+        [c] if c.is_ascii_uppercase() => (c - b'A') as i32,
+        [c] if c.is_ascii_lowercase() => -((c - b'a') as i32 + 1),
+        [b'A', c] if c.is_ascii_uppercase() => 26 + (c - b'A') as i32,
+        _ => panic!("invalid hex coordinate letters in {coord}"),
+    };
     (letter, number)
 }
 
@@ -646,8 +663,17 @@ const HEX_DELTAS_FLAT: [(i32, i32); 6] = [
     (1, 1),   // 5
 ];
 
-/// Format (letter_index, number) back to a coordinate string like "H12".
+/// Format (letter_index, number) back to a coordinate string like "H12"
+/// (the inverse of [`parse_coord`]).
 fn format_coord(letter: i32, number: i32) -> String {
+    if letter < 0 {
+        let ch = (b'a' + (-letter - 1) as u8) as char;
+        return format!("{}{}", ch, number);
+    }
+    if letter >= 26 {
+        let ch = (b'A' + (letter - 26) as u8) as char;
+        return format!("A{}{}", ch, number);
+    }
     let ch = (b'A' + letter as u8) as char;
     format!("{}{}", ch, number)
 }
@@ -671,7 +697,8 @@ pub fn compute_adjacency(coords: &[&str], layout: HexLayout) -> HashMap<String, 
         for (dir, (dl, dn)) in deltas.iter().enumerate() {
             let nl = letter + dl;
             let nn = number + dn;
-            if nl >= 0 {
+            // (negative letters: 1822CA's a6 / a8; no other map has them)
+            if (-26..52).contains(&nl) {
                 let neighbor = format_coord(nl, nn);
                 if coord_set.contains(&neighbor) {
                     neighbors.insert(dir as u8, neighbor);

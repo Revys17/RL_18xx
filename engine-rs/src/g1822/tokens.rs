@@ -63,7 +63,7 @@ impl BaseGame {
 
     /// City#place_token's `remove_reservation!` (the slot becomes nil) and
     /// `tile.reservations.delete`.
-    fn g1822_consume_reservation(&mut self, hex: &str, city: usize, corp: &str) {
+    pub(crate) fn g1822_consume_reservation(&mut self, hex: &str, city: usize, corp: &str) {
         let st = self.gm();
         if let Some(v) = st.city_reservations.get_mut(&res_key(hex, city)) {
             if let Some(pos) = v.iter().position(|r| r.as_deref() == Some(corp)) {
@@ -98,12 +98,9 @@ impl BaseGame {
             .count()
     }
 
+    /// City#tokened_by? (slot and extra tokens).
     pub(crate) fn g1822_city_tokened_by(&self, hi: usize, ci: usize, corp: &str) -> bool {
-        self.hexes[hi].tile.cities[ci]
-            .tokens
-            .iter()
-            .flatten()
-            .any(|t| t.corporation_id == corp)
+        self.hexes[hi].tile.cities[ci].tokened_by(corp)
     }
 
     /// City#tokenable?(corporation, free:, tokens: tokens_by_type, …).
@@ -177,6 +174,7 @@ impl BaseGame {
         let mut tok = self.corporations[cix].tokens[token_idx].clone();
         tok.used = true;
         tok.city_hex_id = hex_id.clone();
+        tok.cheater = cheater;
         self.corporations[cix].tokens[token_idx].used = true;
         self.corporations[cix].tokens[token_idx].city_hex_id = hex_id.clone();
         let city = &mut self.hexes[hi].tile.cities[ci];
@@ -308,6 +306,11 @@ impl BaseGame {
     /// place_destination_token: first city, free, unchecked, cheater.
     fn g1822_place_destination(&mut self, corp: &str, hex: &str, tidx: usize) -> Result<(), GameError> {
         let hi = *self.hex_idx.get(hex).ok_or_else(|| GameError::new("unknown hex"))?;
+        if self.g1822_is_ca() {
+            // CA destination_city / @destinated
+            let ci = self.g1822_ca_destination_cities(corp, hi).first().copied().unwrap_or(0);
+            return self.g1822_ca_place_destination(corp, hi, ci, tidx);
+        }
         self.g1822_put_token(corp, tidx, hi, 0, true)?;
         self.g1822_ruby_graph_clear();
         self.gm().destination_ability.retain(|c| c != corp);
@@ -401,7 +404,7 @@ impl BaseGame {
     /// Whether map tokens carry their corporation token's identity (the
     /// variants whose rules see which token object sits where: 1822MX).
     pub(crate) fn g1822_token_identity(&self) -> bool {
-        self.g1822_is_mx()
+        self.g1822_is_mx() || self.g1822_is_ca()
     }
 
     /// G1822#remove_extra_tokens! with token identity: of a corporation's
@@ -509,6 +512,7 @@ impl BaseGame {
         if ci >= self.hexes[hi].tile.cities.len() {
             return err("Invalid city");
         }
+        self.g1822_ca_pending_token_check(&p.corp, hi, ci)?;
         if self.g1822_city_tokened_by(hi, ci, &p.corp) {
             return err(format!("{} cant have 2 tokens in the same city", p.corp));
         }
@@ -570,6 +574,13 @@ impl BaseGame {
     pub(crate) fn g1822_resolve_hex(&self, hex_id: &str) -> Result<String, GameError> {
         if let Some(inst) = hex_id.strip_prefix("__tile:") {
             let base = inst.split('-').next().unwrap_or(inst);
+            // 1822CA tile names shadow hex ids (W7, M5, O7): a laid tile
+            // instance wins (Ruby's city_by_id finds the tile's city)
+            if self.g1822_is_ca() {
+                if let Some(h) = self.hexes.iter().find(|h| h.tile.id == inst) {
+                    return Ok(h.id.clone());
+                }
+            }
             // Preprinted: "<HEX>-0" → hex; laid tile instance "57-3".
             if self.hex_idx.contains_key(base) {
                 return Ok(base.to_string());
@@ -678,6 +689,11 @@ impl BaseGame {
         if !usable.is_empty() || self.g1822_lcdr_token_usable(c) {
             return true;
         }
+        // 1822CA: P10's token ability (abilities(corp, :token) includes the
+        // owned company's)
+        if self.g1822_ca_p10_owner().as_deref() == Some(c) {
+            return true;
+        }
         let min_price = available[0].price;
         let mut prices = vec![min_price];
         for (_, _, p) in usable {
@@ -711,7 +727,9 @@ impl BaseGame {
                 // Tokener#check_connected computes the corporation's graph.
                 self.g1822_note_graph(c);
                 let check = hex != self.fam().london_hex;
-                if check && !self.g1822_city_tokenable(c, hi, ci, price <= 0, false) {
+                // 1822CA Token#place_token: MULTIPLE_TOKENS_ON_SAME_HEX_ALLOWED
+                let same_hex = self.g1822_is_ca();
+                if check && !self.g1822_city_tokenable(c, hi, ci, price <= 0, same_hex) {
                     return err(format!("{c} cannot lay token on {hex}"));
                 }
                 self.g1822_put_token(c, tidx, hi, ci, false)?;
@@ -721,6 +739,8 @@ impl BaseGame {
                 }
                 self.rndm().tokened = true;
                 self.rndm().passed[i] = true;
+                // CA Token#process_place_token: after_place_token
+                self.g1822_ca_after_place_token(hi);
                 Ok(())
             }
             Action::ChooseAbility { choice, .. } => {
@@ -748,6 +768,10 @@ impl BaseGame {
     /// while the active step can place tokens.
     pub(crate) fn g1822_special_token_actions(&self, ent: &Ent) -> Vec<&'static str> {
         let Ent::Company(co) = ent else { return vec![] };
+        if self.g1822_is_ca() {
+            // CA SpecialToken#actions: P10 only
+            return self.g1822_ca_special_token_actions(co);
+        }
         if co != self.fam().company_lcdr || self.co_closed(co) {
             return vec![];
         }
@@ -779,6 +803,10 @@ impl BaseGame {
 
     pub(crate) fn g1822_special_token_process(&mut self, ent: &Ent, action: &Action) -> Result<(), GameError> {
         let Ent::Company(co) = ent else { return err("special token by a non-company") };
+        if self.g1822_is_ca() {
+            let co = co.clone();
+            return self.g1822_ca_special_token_process(&co, action);
+        }
         let owner = self
             .co_owner(co)
             .corp_sym()

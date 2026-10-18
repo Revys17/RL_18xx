@@ -187,7 +187,11 @@ impl BaseGame {
         for sym in corps {
             if self.g1822_sold_out(&sym) {
                 // PNW / MX sold_out_stock_movement: move_right
-                let dir = if self.g1822_is_pnw() || mx { super::shares::Dir::Right } else { super::shares::Dir::Up };
+                let dir = if self.g1822_is_pnw() || mx || self.g1822_is_ca() {
+                    super::shares::Dir::Right
+                } else {
+                    super::shares::Dir::Up
+                };
                 self.g1822_move_price(&sym, dir);
             }
         }

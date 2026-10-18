@@ -272,6 +272,37 @@ impl BaseGame {
         (a, b)
     }
 
+    /// Debug: a hex's tile, its cities' tokens (corp, type, cheater, serial)
+    /// and extra tokens, the city and tile reservations (JSON).
+    fn g1822_hex_debug(&self, hex: &str) -> String {
+        let Some(&hi) = self.hex_idx.get(hex) else { return String::new() };
+        let h = &self.hexes[hi];
+        let tok = |t: &crate::entities::Token| {
+            serde_json::json!([t.corporation_id, t.token_type, t.cheater, t.serial])
+        };
+        let cities: Vec<serde_json::Value> = h
+            .tile
+            .cities
+            .iter()
+            .enumerate()
+            .map(|(ci, c)| {
+                serde_json::json!({
+                    "slots": c.slots,
+                    "tokens": c.tokens.iter().map(|t| t.as_ref().map(tok)).collect::<Vec<_>>(),
+                    "extra": c.extra_tokens.iter().map(tok).collect::<Vec<_>>(),
+                    "res": self.g1822_city_res(hex, ci),
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "tile": h.tile.id,
+            "rotation": h.tile.rotation,
+            "cities": cities,
+            "tile_res": self.g().tile_reservations.get(hex).cloned().unwrap_or_default(),
+        })
+        .to_string()
+    }
+
     /// Debug: (upgrades_to, legal rotations) of a catalog tile on a hex for
     /// a corporation's own lay.
     fn g1822_rotations_debug(&self, corp: &str, hex: &str, tile: &str) -> (bool, Vec<u8>, Vec<u8>) {

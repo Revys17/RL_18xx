@@ -95,6 +95,32 @@ impl BaseGame {
             v.push(Step::CashOutNdem);
             v.push(Step::AuctionNdemTokens);
         }
+        if self.g1822_is_ca() {
+            // G1822CA: AssignSawmill after AcquireCompany, a PendingToken
+            // after Track (QMOO's home), AcquisitionTrack after
+            // MinorAcquisition
+            v = vec![
+                Step::DiscardTrain,
+                Step::PendingToken,
+                Step::FirstTurnHousekeeping,
+                Step::AcquireCompany,
+                Step::AssignSawmill,
+                Step::SpecialChoose,
+                Step::SpecialTrack,
+                Step::SpecialToken,
+                Step::Track,
+                Step::PendingToken,
+                Step::DestinationToken,
+                Step::Token,
+                Step::Route,
+                Step::Dividend,
+                Step::BuyTrain,
+                Step::MinorAcquisition,
+                Step::AcquisitionTrack,
+                Step::PendingToken,
+                Step::IssueShares,
+            ];
+        }
         v
     }
 
@@ -116,6 +142,12 @@ impl BaseGame {
             let ci = self.ci(s);
             for t in &mut self.corporations[ci].trains {
                 t.operated = false;
+            }
+        }
+        // reset_ability_count_this_or! (1822CA's count_per_or privates)
+        for v in self.gm().abilities.values_mut() {
+            for a in v.iter_mut() {
+                a.count_this_or = 0;
             }
         }
         if self.g1822_any_to_act() {
@@ -146,6 +178,9 @@ impl BaseGame {
         r.last_share_sold_price = None;
         r.corporations_sold.clear();
         r.num_laid_portage = 0;
+        if self.g1822_is_ca() {
+            self.g1822_ca_route_setup();
+        }
         // MX Track#setup / AuctionNdemTokens#setup for the NdeM's turn
         if self.g1822_is_mx() && self.g1822_operator().as_deref() == Some(super::mx::NDEM) {
             self.g1822_mx_track_setup();
@@ -348,11 +383,23 @@ impl BaseGame {
             Step::SpecialTrack => self.g1822_special_track_actions(ent),
             Step::SpecialToken => self.g1822_special_token_actions(ent),
             Step::Track => self.g1822_track_actions(ent),
+            Step::AssignSawmill => self.g1822_ca_sawmill_actions(ent),
+            Step::AcquisitionTrack => self.g1822_ca_acquisition_track_actions(ent),
             Step::DestinationToken => {
                 if !self.is_operator(ent) {
                     return vec![];
                 }
                 let Ent::Corp(c) = ent else { return vec![] };
+                if self.g1822_is_ca() {
+                    // CA DestinationToken#actions
+                    if self.g1822_ca_destinated(c) {
+                        return vec![];
+                    }
+                    if self.is_major(c) && self.g1822_unplaced_destination_token(c).is_some() {
+                        return vec!["hex_token", "place_token", "pass"];
+                    }
+                    return vec![];
+                }
                 if self.is_major(c) && self.g1822_unplaced_destination_token(c).is_some() {
                     vec!["hex_token", "pass"]
                 } else {
@@ -475,7 +522,22 @@ impl BaseGame {
             },
             Step::SpecialTrack => self.g1822_special_track_process(i, ent, action),
             Step::SpecialToken => self.g1822_special_token_process(ent, action),
-            Step::Track => self.g1822_track_process(i, ent, action),
+            Step::Track | Step::AcquisitionTrack => self.g1822_track_process(i, ent, action),
+            Step::AssignSawmill => self.g1822_ca_sawmill_process(i, ent, action),
+            Step::DestinationToken if self.g1822_is_ca() => match action {
+                Action::HexToken { .. } | Action::PlaceToken { .. } => {
+                    let Ent::Corp(c) = ent else { return err("destination token by a non-corporation") };
+                    let c = c.clone();
+                    self.g1822_ca_process_destination(&c, action)?;
+                    self.rndm().passed[i] = true;
+                    Ok(())
+                }
+                Action::Pass { .. } => {
+                    self.rndm().passed[i] = true;
+                    Ok(())
+                }
+                _ => err("DestinationToken cannot process this action"),
+            },
             Step::DestinationToken => match action {
                 Action::HexToken { hex_id, .. } => {
                     let Ent::Corp(c) = ent else { return err("hex_token by a non-corporation") };
@@ -582,7 +644,12 @@ impl BaseGame {
             return vec![];
         }
         let mut a = vec!["run_routes"];
-        if self.g1822_choosing_pullman(c) {
+        let choosing = if self.g1822_is_ca() {
+            self.g1822_ca_choosing(c).is_some()
+        } else {
+            self.g1822_choosing_pullman(c)
+        };
+        if choosing {
             a.push("choose");
         }
         a
@@ -591,10 +658,13 @@ impl BaseGame {
     /// `route_trains`: runnable trains minus the pullman.
     pub(crate) fn g1822_route_trains(&self, c: &str) -> Vec<crate::entities::Train> {
         let ci = self.ci(c);
+        let ca = self.g1822_is_ca();
         self.corporations[ci]
             .trains
             .iter()
             .filter(|t| t.name != self.fam().extra_train_pullman && !t.operated)
+            // 1822CA route_trains: never the grain train
+            .filter(|t| !(ca && Self::g1822_ca_grain_train(t)))
             .cloned()
             .collect()
     }
@@ -641,6 +711,10 @@ impl BaseGame {
     fn g1822_route_process(&mut self, i: usize, ent: &Ent, action: &Action) -> Result<(), GameError> {
         let Ent::Corp(c) = ent else { return err("route by a non-corporation") };
         match action {
+            Action::Choose { choice, .. } if self.g1822_is_ca() => {
+                let c = c.clone();
+                self.g1822_ca_route_choose(&c, choice)
+            }
             Action::Choose { choice, .. } => {
                 // pullman_train_choices(entity)[action.choice.to_i]: Ruby's
                 // String#to_i (a non-number is 0, a negative counts from
@@ -710,6 +784,9 @@ impl BaseGame {
                 }
                 self.rndm().pullman_train = None;
                 self.rndm().pullman_original = None;
+                if self.g1822_is_ca() {
+                    self.g1822_ca_detach_grain();
+                }
                 Ok(())
             }
             _ => err("Route cannot process this action"),
@@ -893,9 +970,20 @@ impl BaseGame {
             .iter()
             .filter(|p| !self.co_closed(p) && self.co_owner(p) == owner)
             .count();
+        if self.g1822_is_ca() && !self.rnd().routes.is_empty() {
+            // CA mail_contract_bonus: G1822's (large) bonuses + the small ones
+            let large = if contracts == 0 { Vec::new() } else { self.g1822_large_mail_bonuses(c, contracts) };
+            return self.g1822_ca_mail_subsidy(c, large);
+        }
         if contracts == 0 || self.rnd().routes.is_empty() {
             return 0;
         }
+        self.g1822_large_mail_bonuses(c, contracts).into_iter().sum()
+    }
+
+    /// G1822 `mail_contract_bonus`'s subsidies: per route half the base
+    /// value of its first and last stops, best first, one per contract.
+    fn g1822_large_mail_bonuses(&self, c: &str, contracts: usize) -> Vec<i32> {
         let mut subsidies: Vec<i32> = Vec::new();
         for r in &self.rnd().routes {
             let ci = self.ci(c);
@@ -914,7 +1002,7 @@ impl BaseGame {
             subsidies.push((first + last) / 2);
         }
         subsidies.sort_by(|a, b| b.cmp(a));
-        subsidies.into_iter().take(contracts).sum()
+        subsidies.into_iter().take(contracts).collect()
     }
 
     // =====================================================================
@@ -999,8 +1087,8 @@ impl BaseGame {
                     return err("can only issue own shares");
                 }
                 let b = self.g1822_action_bundle_pub(c, *percent, share_indices)?;
-                if self.g1822_is_pnw() || self.g1822_is_mx() {
-                    // PNW / MX: sell, then one step left per certificate
+                if self.g1822_is_pnw() || self.g1822_is_mx() || self.g1822_is_ca() {
+                    // PNW / MX / CA: sell, then one step left per certificate
                     self.g1822_pool_sell_shares(&b, true);
                     for _ in 0..b.shares.len() {
                         self.g1822_move_price(c, super::shares::Dir::Left);

@@ -125,6 +125,11 @@ pub fn g1822_generator_status(step: Step, action_type: &str) -> GenStatus {
         // token auction
         (Step::SpecialChoose, "choose_ability") => Generated,
         (Step::CashOutNdem, "pass") => Generated,
+        // 1822CA (ca_legal): the sawmill, the acquisition bonus lay, ICR's
+        // city choice, P10's Winnipeg token
+        (Step::AssignSawmill, "assign" | "choose") => Generated,
+        (Step::AcquisitionTrack, "lay_tile" | "pass") => Generated,
+        (Step::DestinationToken, "place_token") => Generated,
         (Step::AuctionNdemTokens, "remove_token" | "bid" | "merge" | "pass") => Generated,
         _ => ReplayOnly("not offered by this step"),
     }
@@ -622,6 +627,15 @@ impl BaseGame {
             // companies act in parallel, see gen_parallel_companies)
             Step::Merge => out.extend(self.gen_pnw_merge(ent)),
             Step::Assign => {}
+            // 1822CA (ca_legal): the sawmill's choice once assigned (the
+            // assignment itself is a parallel company move)
+            Step::AssignSawmill => out.extend(self.gen_ca_sawmill_choices()),
+            Step::AcquisitionTrack => {
+                if let Ent::Corp(c) = ent {
+                    out.extend(self.gen_corp_lays(c));
+                    out.push(pass());
+                }
+            }
             Step::DiscardTrain => {
                 if let Ent::Corp(c) = ent {
                     out.extend(self.gen_discards(c));
@@ -698,6 +712,11 @@ impl BaseGame {
                     out.extend(self.gen_company_choices(c, "track"));
                 }
             }
+            Step::DestinationToken if self.g1822_is_ca() => {
+                if let Ent::Corp(c) = ent {
+                    out.extend(self.gen_ca_destination(c));
+                }
+            }
             Step::DestinationToken => {
                 if let Ent::Corp(c) = ent {
                     if self.g1822_destination_connected(c) {
@@ -726,7 +745,9 @@ impl BaseGame {
             }
             Step::Route => {
                 if let Ent::Corp(c) = ent {
-                    if has("choose") {
+                    if has("choose") && self.g1822_is_ca() {
+                        out.extend(self.gen_ca_route_choices(c));
+                    } else if has("choose") {
                         out.extend(self.gen_pullman_choices(c));
                     }
                     if has("run_routes") {
@@ -780,7 +801,11 @@ impl BaseGame {
         let co = &self.corporations[self.ci(c)];
         let perm = co.trains.iter().filter(|t| self.fam().extra_train_permanents.contains(&t.name.as_str())).count();
         let pull = co.trains.iter().filter(|t| t.name == self.fam().extra_train_pullman).count();
-        let eligible: Vec<&crate::entities::Train> = if perm > 1 {
+        let grain = co.trains.iter().filter(|t| self.g1822_is_ca() && Self::g1822_ca_grain_train(t)).count();
+        let eligible: Vec<&crate::entities::Train> = if grain > 1 {
+            // 1822CA DiscardTrain#trains: the grain trains first
+            co.trains.iter().filter(|t| Self::g1822_ca_grain_train(t)).collect()
+        } else if perm > 1 {
             co.trains.iter().filter(|t| self.fam().extra_train_permanents.contains(&t.name.as_str())).collect()
         } else if pull > 1 {
             co.trains.iter().filter(|t| t.name == self.fam().extra_train_pullman).collect()
@@ -809,7 +834,9 @@ impl BaseGame {
         // — only minor 14's own home token skips Tokener#check_connected;
         // a major's London token after acquiring bid-box minor 14 must go
         // to a city it connects to.
-        let graph = (p.corp != self.fam().minor_14_id).then(|| self.g1822_graph(&p.corp));
+        // (1822CA pending_home_tokeners: QMOO too, once Quebec has a tile)
+        let home_tokener = p.corp == self.fam().minor_14_id || (self.g1822_is_ca() && p.corp == "QMOO");
+        let graph = (!home_tokener).then(|| self.g1822_graph(&p.corp));
         let mut out = Vec::new();
         for hex in &p.hexes {
             let Some(&hi) = self.hex_idx.get(hex) else { continue };
@@ -861,6 +888,7 @@ impl BaseGame {
             let mut lay = false;
             let mut tok = false;
             let mut assign = false;
+            let mut ca_assign = false;
             let mut special_choose = false;
             for (i, s) in steps.iter().enumerate().take(bi + 1) {
                 if !self.g1822_step_active(i) {
@@ -871,12 +899,16 @@ impl BaseGame {
                     Step::SpecialTrack if acts.contains(&"lay_tile") => lay = true,
                     Step::SpecialToken if acts.contains(&"place_token") => tok = true,
                     Step::Assign if acts.contains(&"assign") => assign = true,
+                    Step::AssignSawmill if acts.contains(&"assign") => ca_assign = true,
                     Step::SpecialChoose if acts.contains(&"choose_ability") => special_choose = true,
                     _ => {}
                 }
             }
             if assign {
                 out.extend(self.gen_pnw_assigns(&co));
+            }
+            if ca_assign {
+                out.extend(self.gen_ca_assigns(&co));
             }
             if special_choose {
                 out.extend(self.gen_mx_special_choose(&co));
@@ -885,7 +917,11 @@ impl BaseGame {
                 out.extend(self.gen_company_lays(&co, false));
             }
             if tok {
-                out.extend(self.gen_special_tokens(&co));
+                if self.g1822_is_ca() {
+                    out.extend(self.gen_ca_special_tokens(&co));
+                } else {
+                    out.extend(self.gen_special_tokens(&co));
+                }
             }
         }
         out
@@ -1026,6 +1062,13 @@ impl BaseGame {
             || Family::is(self.fam().cardiff_hex, &hex.id)
         {
             return true; // laying on track-less ground always uses new track
+        }
+        if self.g1822_is_ca() {
+            // TRACK_RESTRICTION :permissive: only 'New track must override'
+            let new_tv = super::tile_rules::TV::from_def(def, rotation);
+            let old_tv = super::tile_rules::TV::from_tile(&hex.tile);
+            let _ = (m, connected_nodes, connected_edges);
+            return super::tile_rules::cities_towns_kept(&old_tv, &new_tv);
         }
         // Fast path: the operator already reaches a city of this hex whose
         // revenue the new tile changes. Old paths are kept and reachability
@@ -1175,7 +1218,12 @@ impl BaseGame {
                     None => continue,
                 }
             };
-            if ab.kind != AbKind::Teleport && !Family::is(f.company_hsbc, co) {
+            // 1822CA SpecialTrack#available_hex (sawmill hex, big cities)
+            let ca_hex = self.g1822_ca_special_hex(&entities, hi);
+            if ca_hex == Some(true) {
+                continue;
+            }
+            if ab.kind != AbKind::Teleport && !Family::is(f.company_hsbc, co) && ca_hex.is_none() {
                 // available_hex: the operator's lay slot, unless P12 adds one.
                 let white = hex.tile.color == crate::tiles::TileColor::White;
                 match tile_lay {
@@ -1535,7 +1583,8 @@ impl BaseGame {
         let ci = self.ci(c);
         let Some(sp) = self.corporations[ci].share_price.clone() else { return 0 };
         let (mut r, mut col) = (sp.row, sp.column);
-        let pnw = self.g1822_is_pnw() || self.g1822_is_mx();
+        // (CA keeps G1822's [:down] * n, which a one-row market moves left)
+        let pnw = self.g1822_is_pnw() || self.g1822_is_mx() || self.g1822_is_ca();
         for _ in 0..n {
             // PNW / MX reduced_bundle_price_for_market_drop: [:left] * n
             let (nr, nc) = if pnw { self.stock_market.move_left(r, col) } else { self.stock_market.move_down(r, col) };

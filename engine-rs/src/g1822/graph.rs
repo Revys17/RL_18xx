@@ -103,14 +103,26 @@ pub(crate) fn lane_specs(attrs: &str) -> Vec<LaneSpec> {
     }
 }
 
-/// Ruby `Path#lane_match?`.
-fn lane_match(l0: (u8, u8), l1: (u8, u8)) -> bool {
-    l1.0 == l0.0 && l1.1 == l0.0 - l0.1 - 1
+/// Ruby `Path#lane_match?` (equal widths; `sizes` adds
+/// `lane_match_different_sizes?`: the narrower side, centred by
+/// (wide − narrow) / 2, against the wider one inverted — 1822CA's 2-lane
+/// paths meeting 1-lane track. 1822PNW keeps equal widths only).
+fn lane_match(l0: (u8, u8), l1: (u8, u8), sizes: bool) -> bool {
+    if l1.0 == l0.0 {
+        return l1.1 == l0.0 - l0.1 - 1;
+    }
+    if !sizes {
+        return false;
+    }
+    let (a, b) = if l0 <= l1 { (l0, l1) } else { (l1, l0) };
+    let delta = (b.0 - a.0) / 2;
+    a.1 + delta == b.0 - b.1 - 1
 }
 
 impl<'a> Ctx<'a> {
     fn new(game: &'a BaseGame, corp: &'a str, neighbors: &'a HashMap<usize, BTreeMap<u8, usize>>) -> Ctx<'a> {
-        let lanes = game.g1822_is_pnw().then(|| game.g1822_lane_table());
+        // (1822CA too: its A / B tiles and AC23 / Y29 have `lanes:2`)
+        let lanes = (game.g1822_is_pnw() || game.g1822_is_ca()).then(|| game.g1822_lane_table());
         Ctx { game, corp, neighbors, lanes }
     }
     fn base(p: PathRef) -> PathRef {
@@ -212,7 +224,7 @@ impl<'a> Ctx<'a> {
             return false;
         }
         let city = &self.game.hexes[n.hex].tile.cities[n.index];
-        if city.tokens.iter().flatten().any(|t| t.corporation_id == self.corp) {
+        if city.tokened_by(self.corp) {
             return false;
         }
         if city.tokens.iter().any(|t| t.is_none()) {
@@ -349,7 +361,7 @@ fn path_walk(
         let np_edge = (e + 3) % 6;
         let conv = converging || ctx.converging_exit(p.0, e);
         for np in ctx.hex_paths_at(nb, np_edge) {
-            if ctx.lanes.is_some() && !lane_match(lane, ctx.exit_lane(np, np_edge)) {
+            if ctx.lanes.is_some() && !lane_match(lane, ctx.exit_lane(np, np_edge), ctx.game.g1822_is_ca()) {
                 continue;
             }
             path_walk(ctx, np, Some(np_edge), None, w, conv, origin, visited_nodes, origin_converging_path, found);
@@ -373,7 +385,7 @@ impl BaseGame {
         let mut out = Vec::new();
         for (hi, hex) in self.hexes.iter().enumerate() {
             for (ci, city) in hex.tile.cities.iter().enumerate() {
-                if city.tokens.iter().flatten().any(|t| t.corporation_id == corp && !(pnw && t.token_type == "coal")) {
+                if city.all_tokens().any(|t| t.corporation_id == corp && !(pnw && t.token_type == "coal")) {
                     out.push(Node { hex: hi, kind: NodeKind::City, index: ci });
                 }
             }
@@ -385,7 +397,7 @@ impl BaseGame {
     /// cache when Rust mirrored the compute that filled it (see
     /// `G1822State::ruby_graphs`), else a fresh compute.
     pub(crate) fn g1822_graph(&self, corp: &str) -> CorpGraph {
-        if self.g1822_is_pnw() {
+        if self.g1822_is_pnw() || self.g1822_is_ca() {
             if let Some(g) = self.g().ruby_graphs.get(corp) {
                 return g;
             }
@@ -396,7 +408,7 @@ impl BaseGame {
     /// A full Ruby Graph#compute whose result Ruby keeps until its next
     /// Graph#clear (1822PNW only).
     pub(crate) fn g1822_ruby_graph_store(&self, corp: &str) {
-        if self.g1822_is_pnw() && !self.g().ruby_graphs.contains(corp) {
+        if (self.g1822_is_pnw() || self.g1822_is_ca()) && !self.g().ruby_graphs.contains(corp) {
             let g = self.g1822_graph_fresh(corp);
             self.g().ruby_graphs.insert(corp, g);
         }
@@ -404,7 +416,7 @@ impl BaseGame {
 
     /// Ruby Graph#clear / clear_graph_for_entity (1822PNW's cache).
     pub(crate) fn g1822_ruby_graph_clear(&self) {
-        if self.g1822_is_pnw() {
+        if self.g1822_is_pnw() || self.g1822_is_ca() {
             self.g().ruby_graphs.clear();
         }
     }

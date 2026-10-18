@@ -35,6 +35,12 @@ pub struct Ab {
     /// usable while the Track step blocks, by its owner as operator.
     #[serde(default)]
     pub track_only: bool,
+    /// Ruby `count_per_or` (1822CA's P14-P18): at most this many uses per
+    /// OR; `count_this_or` counts them and resets at each OR's start.
+    #[serde(default)]
+    pub count_per_or: Option<i32>,
+    #[serde(default)]
+    pub count_this_or: i32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -64,6 +70,8 @@ impl Ab {
             discount: 0,
             terrain: None,
             track_only: false,
+            count_per_or: None,
+            count_this_or: 0,
         }
     }
     fn discount(d: i32, terrain: Option<&str>, hexes: &[&str]) -> Ab {
@@ -220,10 +228,16 @@ impl BaseGame {
             }
         }
         let track_time = self.g1822_track_is_blocking_step() && self.g1822_operator().as_deref() == Some(owner.as_str());
+        // 1822CA: Game#ability_usable_this_or? (count_per_or) and CA
+        // Tracker#abilities (no consume_tile_lay ability once a tile is laid)
+        let ca = self.g1822_is_ca();
+        let laid = ca && self.rnd().num_laid_track > 0;
         self.g1822_abilities(company)
             .into_iter()
             .enumerate()
             .find(|(_, a)| match a.kind {
+                AbKind::TileLay if ca && a.count_per_or.map_or(false, |n| a.count_this_or >= n) => false,
+                AbKind::TileLay if laid && a.consume_tile_lay => false,
                 AbKind::TileLay if a.track_only && !track_time => false,
                 AbKind::TileLay => a.count.map_or(true, |c| c > 0),
                 AbKind::Teleport => !a.used,
@@ -240,6 +254,10 @@ impl BaseGame {
 
     pub(crate) fn g1822_special_track_actions(&self, ent: &Ent) -> Vec<&'static str> {
         let Ent::Company(co) = ent else { return vec![] };
+        // CA SpecialTrack#actions: not during the acquisition bonus lay
+        if self.g1822_ca_acquisition_track_live() {
+            return vec![];
+        }
         if self.rnd().special_track_company.as_deref() == Some(co.as_str()) {
             return vec!["lay_tile", "pass"];
         }
@@ -253,8 +271,22 @@ impl BaseGame {
     /// G1822 tile_lays(entity) → the allowance slot for the current lay.
     pub(crate) fn g1822_tile_lay(&self, operator: &str, hsbc: bool) -> Option<(bool, bool, bool)> {
         // (lay, upgrade, cannot_reuse_same_hex)
-        let n = self.rnd().num_laid_track;
+        let mut n = self.rnd().num_laid_track;
         let upgraded = self.rnd().upgraded_track;
+        if self.g1822_is_ca() {
+            // AcquisitionTrack#tile_lay_index: 0 whatever was laid
+            if self.g1822_ca_acquisition_track_live() {
+                n = 0;
+            }
+            // CA MAJOR_TILE_LAYS: cannot_reuse_same_hex on both lays
+            if self.phase_num() >= 3 && self.is_major(operator) {
+                return match n {
+                    0 => Some((true, true, true)),
+                    1 => Some((!upgraded, false, true)),
+                    _ => None,
+                };
+            }
+        }
         if hsbc {
             return match n {
                 0 => Some((true, true, false)),
@@ -401,6 +433,15 @@ impl BaseGame {
                         self.rndm().passed[i] = true;
                     }
                 }
+                if self.g1822_is_ca() {
+                    // G1822 Track#process_lay_tile: after_lay_tile after the
+                    // pass! check
+                    self.g1822_ca_after_lay_tile(hi);
+                    if self.rnd().steps[i] == super::Step::AcquisitionTrack {
+                        // AcquisitionTrack#process_lay_tile: pass!
+                        self.rndm().passed[i] = true;
+                    }
+                }
                 if mx {
                     // MX: the new tile carries no builder cubes
                     self.g1822_pnw_drop_cubes(hex_id.as_str());
@@ -422,6 +463,11 @@ impl BaseGame {
                     Ent::Corp(c) if self.g1822_is_mx() => {
                         let c = c.clone();
                         self.g1822_mx_track_pass_any(i, &c);
+                    }
+                    Ent::Corp(c) if self.g1822_is_ca() => {
+                        let c = c.clone();
+                        self.rndm().passed[i] = true;
+                        self.g1822_ca_track_pass(&c);
                     }
                     _ => self.rndm().passed[i] = true,
                 }
@@ -817,7 +863,7 @@ impl BaseGame {
     }
 
     /// Ruby Hex#lay: city map, reservations then tokens move to the new tile.
-    fn g1822_hex_lay(&mut self, hi: usize, def: &crate::tiles::TileDef, rotation: u8, instance: &str) -> Result<(), GameError> {
+    pub(crate) fn g1822_hex_lay(&mut self, hi: usize, def: &crate::tiles::TileDef, rotation: u8, instance: &str) -> Result<(), GameError> {
         let hex_id = self.hexes[hi].id.clone();
         let old = self.hexes[hi].tile.clone();
         let mut new_tile = BaseGame::tile_from_def(def, rotation);
@@ -883,7 +929,9 @@ impl BaseGame {
                 while city.tokens.len() <= slot {
                     city.tokens.push(None);
                 }
-                city.tokens[slot] = Some(t.clone());
+                let mut t = t.clone();
+                t.cheater = cheater;
+                city.tokens[slot] = Some(t);
             }
         } else if n_old > 1 {
             let mut per_new: Vec<Vec<(crate::entities::Token, bool)>> = vec![Vec::new(); n_new];
@@ -908,7 +956,7 @@ impl BaseGame {
                     toks.sort_by_key(|(_, ch)| *ch);
                 }
                 let reserved = new_res[nc].len();
-                for (index, (t, _)) in toks.into_iter().enumerate() {
+                for (index, (mut t, _)) in toks.into_iter().enumerate() {
                     let res = new_res[nc].clone();
                     let city = &mut self.hexes[hi].tile.cities[nc];
                     let cheater = reserved + index >= city.slots as usize;
@@ -916,7 +964,18 @@ impl BaseGame {
                     while city.tokens.len() <= slot {
                         city.tokens.push(None);
                     }
+                    t.cheater = cheater;
                     city.tokens[slot] = Some(t);
+                }
+            }
+        }
+        // extra tokens (1822CA's P10) follow their city (exchange_token(…,
+        // extra_slot: true))
+        for (oi, m) in map.iter().enumerate() {
+            if let Some(nc) = m {
+                let ex = old.cities[oi].extra_tokens.clone();
+                if !ex.is_empty() {
+                    self.hexes[hi].tile.cities[*nc].extra_tokens.extend(ex);
                 }
             }
         }
@@ -1002,6 +1061,15 @@ impl BaseGame {
                 );
                 let mut users: Vec<(String, usize)> = vec![(co.clone(), ab_idx)];
                 for c in &combo {
+                    if self.g1822_is_ca() {
+                        // `e.all_abilities.find { |a| a.type == :tile_lay }`:
+                        // the partner's ability whatever the step's filters
+                        // (CA drops consume_tile_lay ones once a tile is laid)
+                        if let Some(i) = self.g1822_abilities(c).iter().position(|a| a.kind == AbKind::TileLay) {
+                            users.push((c.clone(), i));
+                        }
+                        continue;
+                    }
                     if let Some((i, _)) = self.g1822_track_ability(c) {
                         users.push((c.clone(), i));
                     }
@@ -1025,6 +1093,11 @@ impl BaseGame {
                     if this.closed_when_used_up && count_left <= 0 {
                         self.close_company(&c);
                     }
+                    // 1822CA SpecialTrack#handle_extra_tile_lay_company: not
+                    // for P21 (the 3-tile grant need not be consecutive)
+                    if self.g1822_is_ca() && Family::is(self.fam().company_lsr, &c) {
+                        continue;
+                    }
                     if this.must_lay_together {
                         if self.rnd().num_laid_track == 1 && !this.consume_tile_lay {
                             self.rndm().num_laid_track += 1;
@@ -1038,6 +1111,16 @@ impl BaseGame {
                 if self.g1822_is_mx() {
                     // MX SpecialTrack#process_lay_tile after super
                     self.g1822_pnw_drop_cubes(hex_id.as_str());
+                }
+                if self.g1822_is_ca() {
+                    // (after_lay_tile's CA part: after the abilities are used —
+                    // the same result as Ruby's order, see ca.rs)
+                    self.g1822_ca_after_lay_tile(hi);
+                    // CA SpecialTrack#process_lay_tile: the consuming privates
+                    // use the whole track step
+                    if super::ca::COMPANIES_CONSUME_TILE_LAY.contains(&co.as_str()) {
+                        self.rndm().num_laid_track += 1;
+                    }
                 }
                 if self.g1822_is_pnw() {
                     // PNW SpecialTrack#process_lay_tile after super
@@ -1082,6 +1165,9 @@ impl BaseGame {
             return Ok(());
         }
         a.used = true;
+        if a.count_per_or.is_some() {
+            a.count_this_or += 1;
+        }
         if let Some(c) = a.count.as_mut() {
             *c -= 1;
         }

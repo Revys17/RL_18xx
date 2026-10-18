@@ -15,6 +15,10 @@ pub struct City {
     pub slots: u8,
     #[pyo3(get)]
     pub tokens: Vec<Option<Token>>,
+    /// Ruby `City#extra_tokens`: tokens outside the slots (1822CA's P10
+    /// Winnipeg token, `extra_slot: true`). Empty for every other title.
+    #[serde(default)]
+    pub extra_tokens: Vec<Token>,
 }
 
 #[pymethods]
@@ -26,7 +30,20 @@ impl City {
             revenue,
             slots,
             tokens,
+            extra_tokens: Vec::new(),
         }
+    }
+}
+
+impl City {
+    /// Ruby `City#tokened_by?(corporation)`: slot and extra tokens.
+    pub fn tokened_by(&self, corp: &str) -> bool {
+        self.tokens.iter().flatten().any(|t| t.corporation_id == corp) || self.extra_tokens.iter().any(|t| t.corporation_id == corp)
+    }
+
+    /// The slot tokens and the extra tokens (`@tokens + @extra_tokens`).
+    pub fn all_tokens(&self) -> impl Iterator<Item = &Token> {
+        self.tokens.iter().flatten().chain(self.extra_tokens.iter())
     }
 }
 

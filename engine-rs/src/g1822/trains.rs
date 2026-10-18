@@ -43,8 +43,15 @@ impl BaseGame {
         let co = &self.corporations[self.ci(c)];
         let attached = self.rnd().pullman_train.as_deref();
         let original = self.rnd().pullman_original.as_ref().map(|(n, _)| n.as_str());
+        // (1822CA: the grain-attached train likewise, "<name>G")
+        let grain = self.rnd().ca.grain_train.as_deref();
+        let grain_orig = self.rnd().ca.grain_original.as_deref();
         let name_of = |t: &Train| -> String {
             match (attached, original) {
+                (Some(id), Some(orig)) if t.id == id => return orig.to_string(),
+                _ => {}
+            }
+            match (grain, grain_orig) {
                 (Some(id), Some(orig)) if t.id == id => orig.to_string(),
                 _ => t.name.clone(),
             }
@@ -56,7 +63,9 @@ impl BaseGame {
             .filter(|t| self.fam().extra_train_permanents.contains(&name_of(t).as_str()))
             .count();
         let pullman = co.trains.iter().filter(|t| name_of(t) == self.fam().extra_train_pullman).count();
-        normal > self.g1822_train_limit(c) || perm > 1 || pullman > 1
+        // 1822CA crowded_corp?: two grain trains
+        let grain = self.g1822_is_ca() && co.trains.iter().filter(|t| Self::g1822_ca_grain_train(t)).count() > 1;
+        normal > self.g1822_train_limit(c) || perm > 1 || pullman > 1 || grain
     }
 
     /// G1822 `crowded_corps` (all corporations, in @corporations order).
@@ -577,7 +586,9 @@ impl BaseGame {
         // MX remove_discarded_train?: the NdeM's trains leave the game too
         let removed = self.fam().extra_train_permanents.contains(&t.name.as_str())
             || t.name == self.fam().extra_train_pullman
-            || self.g1822_mx_is_ndem(c);
+            || self.g1822_mx_is_ndem(c)
+            // 1822CA remove_discarded_train?: the grain train too
+            || (self.g1822_is_ca() && Self::g1822_ca_grain_train(&t));
         if !removed {
             // remove_variants! + reclaim_train → the discard pile.
             t.owner = EntityId::none();
@@ -697,6 +708,7 @@ impl BaseGame {
                 }
             }
             "close_ndem" => self.g1822_mx_event_close_ndem(),
+            "open_detroit_duluth" => self.g1822_ca_event_open_detroit_duluth(),
             other => panic!("1822: unknown train event {other}"),
         }
     }
