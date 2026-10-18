@@ -42,6 +42,11 @@ use super::graph::{Node, NodeKind};
 const MAX_STOPS_UNBOUNDED: usize = 32;
 /// Routes kept per train kind for the combination search.
 const TOP_K: usize = 4000;
+/// 1822CA: its attached long trains hold many more routes above a
+/// threshold.
+const TOP_K_CA: usize = 16000;
+/// 1822CA: search nodes one combination search may visit.
+const COMBO_BUDGET_CA: u64 = 150_000_000;
 /// Walk steps per routing call (dense fuzz maps can hold millions of
 /// routes; the best ones are found early from the token cities).
 const DFS_STEP_BUDGET: u64 = 3_000_000;
@@ -1028,6 +1033,9 @@ impl BaseGame {
     /// passes no blocking node; every tour ending on a token city with two
     /// or more of them is a candidate (priced as Kind::E later).
     fn g1822_e_tours(&self, ctx: &Ctx, connected: &HashSet<Node>) -> Vec<Walked> {
+        if self.g1822_is_ca() {
+            return self.g1822_ca_e_tours(ctx, connected);
+        }
         let mut toks: Vec<Node> = connected.iter().copied().filter(|n| ctx.tokened_normal_or_dest(*n)).collect();
         toks.sort();
         // France: a tour may end there from the English Channel city
@@ -1100,6 +1108,92 @@ impl BaseGame {
             // (check_terminals!: terminal paths only first or last)
             if !terminal {
                 self.g1822_e_extend(ctx, toks, france, tour, used, out, budget);
+            }
+            for s in hop.iter().rev() {
+                tour.stops.pop();
+                tour.segs.pop();
+                for k in &s.track {
+                    used.remove(k);
+                }
+            }
+        }
+    }
+
+    /// 1822CA's E tours: the same token-to-token tours, searched best-first
+    /// (the next token by revenue) with a bound — the tour's paying cities
+    /// plus every token city not yet on it — against the best tour found,
+    /// and a larger budget (CA's late maps hold a dozen token cities across
+    /// the continent).
+    fn g1822_ca_e_tours(&self, ctx: &Ctx, connected: &HashSet<Node>) -> Vec<Walked> {
+        let mut toks: Vec<Node> = connected.iter().copied().filter(|n| ctx.tokened_normal_or_dest(*n)).collect();
+        toks.sort_by_key(|n| (std::cmp::Reverse(ctx.stop_revenue(*n)), *n));
+        let mut out: Vec<Walked> = Vec::new();
+        let mut budget = 400_000usize;
+        let mut best = 0i32;
+        for &t0 in &toks {
+            let mut tour = Walked { stops: vec![t0], segs: Vec::new(), mill: 0, lumber: 0 };
+            let mut used: HashSet<(usize, u8)> = HashSet::new();
+            self.g1822_ca_e_extend(ctx, &toks, &mut tour, &mut used, &mut out, &mut budget, &mut best);
+        }
+        out
+    }
+
+    /// Twice the revenue of the tour's token cities (an E-train's pay).
+    fn g1822_ca_e_value(&self, ctx: &Ctx, stops: &[Node]) -> i32 {
+        stops
+            .iter()
+            .filter(|n| n.kind == NodeKind::City && ctx.tokened_normal_or_dest(**n))
+            .map(|n| 2 * ctx.stop_revenue(*n).max(0))
+            .sum()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn g1822_ca_e_extend(
+        &self,
+        ctx: &Ctx,
+        toks: &[Node],
+        tour: &mut Walked,
+        used: &mut HashSet<(usize, u8)>,
+        out: &mut Vec<Walked>,
+        budget: &mut usize,
+        best: &mut i32,
+    ) {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        let value = self.g1822_ca_e_value(ctx, &tour.stops);
+        let rest: i32 = toks.iter().filter(|t| !tour.stops.contains(t)).map(|t| 2 * ctx.stop_revenue(*t).max(0)).sum();
+        // (the destination bonus and the sawmill can add on top: keep a
+        // margin of the biggest city's double revenue + 160)
+        let margin = toks.iter().map(|t| 2 * ctx.stop_revenue(*t).max(0)).max().unwrap_or(0) + 160;
+        if value + rest + margin <= *best {
+            return;
+        }
+        let last = *tour.stops.last().unwrap();
+        for &t in toks {
+            if tour.stops.contains(&t) {
+                continue;
+            }
+            let Some(hop) = self.g1822_shortest_hop(ctx, last, t, tour, used) else { continue };
+            for s in &hop {
+                for k in &s.track {
+                    used.insert(*k);
+                }
+                tour.stops.push(s.to);
+                tour.segs.push(s.clone());
+            }
+            let first = tour.stops[0];
+            if self.g1822_hexes_ok(&tour.stops) {
+                let v = self.g1822_ca_e_value(ctx, &tour.stops);
+                *best = (*best).max(v);
+                if first <= t || v >= *best {
+                    out.push(tour.clone());
+                }
+            }
+            let terminal = hop.last().map_or(false, |s| s.terminal_last);
+            if !terminal {
+                self.g1822_ca_e_extend(ctx, toks, tour, used, out, budget, best);
             }
             for s in hop.iter().rev() {
                 tour.stops.pop();
@@ -1578,9 +1672,13 @@ impl Search<'_> {
 const WALK_STEP_BUDGET: u64 = 4_000_000;
 /// Routes kept per kind in the scouting pass.
 const SCOUT_K: usize = 64;
+/// 1822CA's scouting depth.
+const SCOUT_K_CA: usize = 512;
 /// E-trains walk only this far: their routes come from the token-to-token
 /// tours (`g1822_e_tours`); the walk adds the short ones.
 const E_WALK_STEP_BUDGET: u64 = 300_000;
+/// 1822CA's E walks (its E routes cross the continent).
+const E_WALK_STEP_BUDGET_CA: u64 = 3_000_000;
 
 /// `G1822_ROUTER_DEBUG=1`: per-call phase timings on stderr.
 fn router_debug() -> bool {
@@ -2105,7 +2203,15 @@ impl<'r> KWalk<'r> {
             routes: Vec::new(),
             seen: HashSet::new(),
             steps: 0,
-            limit: if kind == Kind::E { E_WALK_STEP_BUDGET } else { WALK_STEP_BUDGET },
+            limit: if kind == Kind::E {
+                if g.g1822_is_ca() {
+                    E_WALK_STEP_BUDGET_CA
+                } else {
+                    E_WALK_STEP_BUDGET
+                }
+            } else {
+                WALK_STEP_BUDGET
+            },
             exhausted: false,
             stops: Vec::new(),
             segs: Vec::new(),
@@ -2198,9 +2304,23 @@ impl<'r> KWalk<'r> {
 
     fn upper(&self, u: usize) -> i32 {
         let (x, m, l) = self.pnw_now();
+        // (1822CA: a start node costing more than the train's distance —
+        // Q19 / Y27's visit_cost 99 — leads nowhere)
+        if self.cost > self.d && !matches!(self.kind, Kind::E | Kind::Local { .. }) {
+            return i32::MIN / 2;
+        }
         match self.kind {
             Kind::Numeric(_) | Kind::Pullman(_) => {
-                self.rev + x + self.bonus + m + l + self.ub[(self.d - self.cost) as usize][u] + self.bonus_pot() + self.mill_pot()
+                self.rev
+                    + x
+                    + self.bonus
+                    + m
+                    + l
+                    + self.ub[(self.d - self.cost) as usize][u]
+                    + self.bonus_pot()
+                    + self.mill_pot()
+                    + self.ca_caps.0
+                    + self.ca_caps.1
             }
             Kind::CaPullman(_) | Kind::CaGrain { .. } => {
                 self.rev
@@ -2579,9 +2699,10 @@ impl BaseGame {
                     // several homes) only that city has a single-city run
                     if self.g1822_is_mx() || self.g1822_is_ca() {
                         let n = rg.nodes[t];
-                        let first = (0..self.hexes[n.hex].tile.cities.len()).find(|&ci| {
-                            self.hexes[n.hex].tile.cities[ci].tokens.iter().flatten().any(|x| x.corporation_id == c)
-                        });
+                        // (city_tokened_by?: 1822CA's P10 token sits in an
+                        // extra slot)
+                        let first = (0..self.hexes[n.hex].tile.cities.len())
+                            .find(|&ci| self.hexes[n.hex].tile.cities[ci].tokened_by(c));
                         if first != Some(n.index) {
                             continue;
                         }
@@ -2630,7 +2751,9 @@ impl BaseGame {
         let mut full: Vec<bool> = Vec::new();
         let mut best_single: Vec<i32> = Vec::new();
         for &k in &distinct {
-            let (l, r, f, up) = walk(k, 1, SCOUT_K);
+            // (1822CA: a deeper scouting list — its long attached trains'
+            // best routes mostly share track, so 64 give a weak bound)
+            let (l, r, f, up) = walk(k, 1, if self.g1822_is_ca() { SCOUT_K_CA } else { SCOUT_K });
             lists.push((l, r));
             full.push(f);
             best_single.push(up);
@@ -2646,32 +2769,58 @@ impl BaseGame {
         }
 
         // -- full pass for kinds whose scouting list was cut ----------------
-        if full.iter().any(|&f| f) && kinds.len() > 1 {
+        // (1822CA: repeated while the combination improves and a list was
+        // cut — a better LB raises the thresholds; the other titles take
+        // one pass)
+        let ca = self.g1822_is_ca();
+        let mut cut = full.clone();
+        let mut passes = 0;
+        loop {
+            if !(cut.iter().any(|&f| f) && kinds.len() > 1) {
+                break;
+            }
+            let before = if ca { lists.clone() } else { Vec::new() };
             let total_up: i32 = kinds.iter().map(|k| best_single[ki(k)]).sum();
             let mut changed = false;
+            let mut cut_now = vec![false; distinct.len()];
             for (di, &k) in distinct.iter().enumerate() {
-                if !full[di] {
+                if !cut[di] {
                     continue;
                 }
                 // LB − Σ the other trains' best (one train of this kind
                 // taken out: the loosest of this kind's trains)
                 let thr = lb - (total_up - best_single[di]);
-                let (l, r, f, _) = walk(k, thr.max(1), TOP_K);
+                let (l, r, f, _) = walk(k, thr.max(1), if ca { TOP_K_CA } else { TOP_K });
                 if f {
                     stats::OVERFLOW.fetch_add(1, Relaxed);
                 }
+                cut_now[di] = f;
                 lists[di] = (l, r);
                 changed = true;
             }
+            let mut improved = false;
             if changed {
                 let t0 = std::time::Instant::now();
                 let (p2, t2) = self.g1822_combine(&ctx, &kinds, &distinct, &lists, &half);
                 if router_debug() {
                     eprintln!("  full combine: {} in {:?}", t2, t0.elapsed());
                 }
-                pick = p2;
-                lb = t2;
+                // (1822CA: keep the previous run when a pass does worse —
+                // a budget-limited E walk can lose the tour the scouting
+                // pass found; the other titles keep their output)
+                if t2 >= lb || !ca {
+                    improved = t2 > lb;
+                    pick = p2;
+                    lb = t2;
+                } else {
+                    lists = before;
+                }
             }
+            passes += 1;
+            if !ca || passes >= 3 || !improved {
+                break;
+            }
+            cut = cut_now;
         }
 
         // -- output -----------------------------------------------------
@@ -2717,6 +2866,34 @@ impl BaseGame {
     /// into its kind's list, total) — branch-and-bound over one route (or
     /// none) per train, on dense track counters (see [`Combo`]).
     fn g1822_combine(
+        &self,
+        ctx_lanes: &Ctx,
+        kinds: &[Kind],
+        distinct: &[Kind],
+        lists: &[(KindList, Vec<Walked>)],
+        half: &[bool],
+    ) -> (Vec<Option<usize>>, i32) {
+        // 1822CA: search the E-trains last — they share no track with the
+        // other trains, so at the last level the first E route that fits is
+        // the best and the bound stops the scan (the picks map back).
+        if self.g1822_is_ca() && kinds.iter().any(|k| *k == Kind::E) && kinds.iter().any(|k| *k != Kind::E) {
+            let mut perm: Vec<usize> = (0..kinds.len()).collect();
+            perm.sort_by_key(|&i| kinds[i] == Kind::E);
+            if perm.iter().enumerate().any(|(a, &b)| a != b) {
+                let kp: Vec<Kind> = perm.iter().map(|&i| kinds[i]).collect();
+                let hp: Vec<bool> = perm.iter().map(|&i| half[i]).collect();
+                let (pp, total) = self.g1822_combine_ordered(ctx_lanes, &kp, distinct, lists, &hp);
+                let mut pick = vec![None; kinds.len()];
+                for (a, &b) in perm.iter().enumerate() {
+                    pick[b] = pp[a];
+                }
+                return (pick, total);
+            }
+        }
+        self.g1822_combine_ordered(ctx_lanes, kinds, distinct, lists, half)
+    }
+
+    fn g1822_combine_ordered(
         &self,
         ctx_lanes: &Ctx,
         kinds: &[Kind],
@@ -2808,6 +2985,8 @@ impl BaseGame {
             best: 0,
             best_pick: vec![None; nt],
             half: half.to_vec(),
+            steps: 0,
+            budget: if self.g1822_is_ca() { COMBO_BUDGET_CA } else { u64::MAX },
         };
         c.search(0, 0, [0; 3], (0, 0));
         (c.best_pick, c.best)
@@ -2857,6 +3036,10 @@ struct Combo<'s> {
     best_pick: Vec<Option<usize>>,
     /// 1822MX's 3/2P: the train earns half its run (bonus included).
     half: Vec<bool>,
+    /// Search nodes visited and the cap (1822CA: its big lists can make
+    /// the exact search slow; the best found so far stands).
+    steps: u64,
+    budget: u64,
 }
 
 /// 1822MX `(revenue / 2).round(-1)` (Integer#round: half up).
@@ -2902,6 +3085,10 @@ impl Combo<'_> {
     /// bonus's holder as (its raw bonus, what it adds) — the raw bonus for
     /// a normal route, half(run + bonus) − half(run) for a 3/2P.
     fn search(&mut self, t: usize, revenue: i32, bonus: [i32; 3], hold: (i32, i32)) {
+        self.steps += 1;
+        if self.steps > self.budget {
+            return;
+        }
         let value = revenue + hold.1 + bonus[1] + bonus[2];
         if value > self.best {
             self.best = value;
@@ -2923,6 +3110,10 @@ impl Combo<'_> {
             // bonus): max(x, y, z) ≤ y + max(x, z) per channel
             if revenue + value + rr + open <= self.best {
                 break;
+            }
+            self.steps += 1;
+            if self.steps > self.budget {
+                return;
             }
             let r = &dense[ki][ri];
             let nb = bmax(bonus, [b, r.mill, r.lumber]);

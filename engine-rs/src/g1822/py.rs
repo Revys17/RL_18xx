@@ -228,6 +228,23 @@ impl BaseGame {
         self.g1822_router_explain(corp, &routes)
     }
 
+    /// Debug: price recorded routes the way a revenue-less record is
+    /// priced (per route, bonuses on their routes; Err text on a rejection).
+    fn g1822_price_routes_json(&self, corp: &str, routes_json: &str) -> Vec<i32> {
+        let v: Vec<serde_json::Value> = serde_json::from_str(routes_json).unwrap_or_default();
+        let routes: Vec<crate::actions::RouteData> = v
+            .iter()
+            .map(|r| crate::actions::RouteData {
+                train_name: r["train"].as_str().unwrap_or("").to_string(),
+                hexes: serde_json::from_value(r["hexes"].clone()).unwrap_or_default(),
+                revenue: None,
+                connections: serde_json::from_value(r["connections"].clone()).unwrap_or_default(),
+                nodes: serde_json::from_value(r["nodes"].clone()).unwrap_or_default(),
+            })
+            .collect();
+        self.g1822_price_recorded_routes(corp, &routes).unwrap_or_default()
+    }
+
     /// Debug: the router's chains out of a node ("<hex>-<index>").
     fn g1822_router_segs_json(&self, corp: &str, node: &str) -> Vec<String> {
         self.g1822_router_segs_debug(corp, node)

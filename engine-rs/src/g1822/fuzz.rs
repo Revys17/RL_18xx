@@ -283,3 +283,29 @@ fn mx_random_walks_3_to_5_players() {
     eprintln!("1822MX fuzz: {total_moves} moves, {finished}/12 games finished");
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
 }
+
+/// 1822CA (3-6 players), both purchase policies.
+#[test]
+fn ca_random_walks_3_to_6_players() {
+    let mut failures = Vec::new();
+    let mut finished = 0;
+    let mut total_moves = 0;
+    for players in 3..=6usize {
+        for k in 1..=4u64 {
+            let seed = k * 7919 + players as u64;
+            let policy = if k <= 2 { CrossPlayerPolicy::RESTRICTED } else { CrossPlayerPolicy::RULES };
+            match std::panic::catch_unwind(|| walk_titled("1822CA", players, seed, &[], policy, 3000)) {
+                Ok(rep) => {
+                    total_moves += rep.moves;
+                    finished += rep.finished as usize;
+                    if let Some(e) = rep.error {
+                        failures.push(e);
+                    }
+                }
+                Err(p) => failures.push(format!("panic ({players}p seed {seed}): {}", panic_text(&p))),
+            }
+        }
+    }
+    eprintln!("1822CA fuzz: {total_moves} moves, {finished}/16 games finished");
+    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+}

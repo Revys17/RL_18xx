@@ -28,7 +28,7 @@ but no effort goes into 2p/7p-only rules.*
 | Corpus completeness (`scripts/g1822_completeness.py`) | see numbers below |
 | **1822PNW** (3-5p): title, replay, router, generator | done — see "1822PNW" below (17/17 Ruby fixtures, 589/597 corpus + 8 Ruby-rejects-same, zero per-action divergence, router 0 shortfalls, fuzz + Ruby replay clean) |
 | **1822MX** (2-5p): title, replay, router, generator | done — see "1822MX" below (6/6 Ruby fixtures, 363/363 corpus, zero per-action divergence incl. city token slots, router 0 shortfalls, completeness 99.995%, fuzz + Ruby replay clean) |
-| 1822CA | not started (187 games, 7 Ruby fixtures) |
+| **1822CA** (2-7p, 3-6 for training): title, replay, router, generator | done — see "1822CA" below (7/7 Ruby fixtures, 178/187 corpus + 9 Ruby-rejects-same, zero per-action divergence incl. city token slots, router 1 shortfall, completeness 99.985%, fuzz + Ruby replay clean) |
 
 ### Validation numbers (2026-10-16)
 
@@ -229,8 +229,9 @@ president. Cases, and what the switch does with each:
 2. RL bridge: action layout and encoder for 1822 (the action families
    above), behind `alphazero_bridge_ready()` (false today). See
    `docs/rl_bridge_design.md`.
-3. Variants: 1822PNW and 1822MX done (see their sections); 1822CA next, the
-   same way — `scripts/g1822_title_data.{rb,py}` generates the data module
+3. Variants: 1822PNW, 1822MX and 1822CA done (see their sections); the
+   1822CA scenarios (ERS / WRS) and 1822Africa / 1822MRS / 1822NRS would go
+   the same way — `scripts/g1822_title_data.{rb,py}` generates the data module
    from Ruby, a `Family` row + `Variant` arm, the variant's steps in
    `g1822/<variant>.rs`, its generator in `g1822/<variant>_legal.rs`, and
    the same validation (fixtures, audit, Ruby diff, router check, fuzz,
@@ -533,6 +534,139 @@ The title uses the family default (`RESTRICTED`). MX adds:
 * `G1822::Step::Choose#auto_actions` (an inconsequential double-cash choice
   is passed automatically) is not mirrored by the generator, which offers
   `choose` / `pass` (both legal).
+
+## 1822CA (2026-10-18)
+
+The Railways of Canada, 2-7 players as Ruby (3-6 for training; the 2p and
+7p games replay, nothing 2p/7p-specific was validated beyond that): a
+`GameTitle` of the 1822 family (`title/g1822ca.rs`, data
+`title/g1822ca_data.rs` generated from `lib/engine/game/g_1822_ca/`, a flat
+map with "AA".."AP" and lowercase "a6"/"a8" coordinates — `parse_coord`
+now reads Ruby's LETTERS / NEGATIVE_LETTERS), the family table's
+`Variant::Ca` row, its rules in `g1822/ca.rs` (constants, tiles, sawmill,
+acquisition lay, DD), `g1822/ca_tokens.rs` (QMOO, destinations, P10),
+`g1822/ca_route.rs` (pullman / grain attachments, small mail) and
+`g1822/ca_legal.rs` (generator). The CA scenarios (1822CA ERS / WRS: 41 /
+25 scraped games) are separate titles and not done. Ruby's `G1822CA`
+overrides, and what the engine does for each:
+
+* **Map and tiles.** The five big cities (Toronto AC21, Ottawa AE15,
+  Montreal AF12, Quebec AH8, Winnipeg N16 — several cities each, one route
+  group each) with CA's rotation table (`legal_tile_rotation?`) and
+  BIG_CITY_ILLEGAL_TILE_UPGRADES; mixed-slot cities keep their slots
+  (Tracker `city_sizes_maintained`); the white AG13 (a city and a town)
+  takes 5 / 6 / 57 (its town goes); the mountain passes E11 / F16 take
+  7 / 8 / 9 despite their labels; TRACK_RESTRICTION :permissive (only "New
+  track must override old one"); max exits for unlabeled cities only;
+  MAJOR_TILE_LAYS with cannot_reuse_same_hex on both lays; lanes: the A /
+  B tiles, AC23 and Y29 have `lanes:2` paths (Ruby `Path.make_lanes` as for
+  PNW, plus `lane_match_different_sizes?`: a 2-lane path meets 1-lane track
+  on one lane only).
+* **Detroit-Duluth.** A blocker corporation `DD` fills Q19 and Y27 (their
+  cities also have `visit_cost:99`) until the first 3-train
+  (`open_detroit_duluth`: tokens destroyed, the DD tiles laid without the
+  supply).
+* **QMOO's home** (`update_home`): its reservation follows Quebec's cities
+  (a city when exactly one has room, else the hex → a pending token), a
+  yellow lay over its placed home token takes it back up; the extra
+  PendingToken step after Track places it. ICR's destination (any Quebec
+  city it connects to: `place_token`) and the exit-specific destinations
+  (GNWR / NTR at Winnipeg, GT at Montreal: `destination_exits`) pick the
+  city; `@destinated` keeps DestinationToken quiet afterwards. Destination
+  tokens are cheaters; a lay on a destination hex picks them up first and
+  puts them back after (`preprocess_action` / `action_processed`: map
+  tokens now carry Ruby's `Token#cheater`, read by CA only).
+* **Companies.** P14-P18 free big-city upgrades (extra track, `count_per_or`
+  1 — reset at each OR — and gone once the city is gray), P19 / P20 pass
+  tiles and P29 / P30 remove-town (consume the whole lay; never on the
+  sawmill hex), P12 advanced tile lay (+ P29 / P30 combos), P21 three free
+  tiles in any order (closes on the Track pass once used), CA Tracker: no
+  consume-tile-lay private after a lay; P10 Winnipeg token (an exchange
+  token into an extra slot, `City#extra_tokens`, any time in its owner's
+  turn — its ability also opens the Token step); P13 sawmill
+  (AssignSawmill: assign, then open +$20 for all / closed +$10 for the
+  owner; best single run, ×2 for an E-train or a destination run through
+  it); P22 / P23 mail, P24 / P25 small mail (phase subsidy, interleaved
+  with the large ones as `mail_contract_bonus`); P26 / P27 grain trains;
+  P11 tax haven holding several shares (TAX_HAVEN_MULTIPLE).
+* **Routes.** The Route step's choices: attach the pullman (CA: "<name>+<2d>",
+  d cities / offboards, towns up to 2d plus the cities' unused share, every
+  stop pays) and then the grain train ("<name>G": up to 12 grain-elevator
+  stops besides the train's own; no single-city local run), "None" skipping
+  either; `grain_and_port_bonus` (majors; $10 per elevator + $10 per port
+  side, or $20 per port side for the grain-attached train; never the
+  pullman one nor E); a second grain train is discarded first; grain trains
+  never run.
+* **MinorAcquisition → AcquisitionTrack**: the acquiring major's bonus lay
+  (slot 0's lay/upgrade whatever it laid before). Ruby keeps the major's
+  graph from `entity_connects?` when the token choice is 'remove' (no
+  clear): the bonus lay sees it stale — emulated (the PNW graph memo, CA
+  `process_merge` only); Ruby HEAD rejects one corpus game there (263806),
+  as Rust does.
+* Stock: the one-row market's sell movement (president: left per 10%,
+  others one; 2 players: left per share for the president only), sold out
+  → right, issuing → left per share; the bank break adds one OR to the set
+  (`game_end_set_final_turn!`).
+
+### Validation numbers (2026-10-18)
+
+* **Ruby fixtures**: all 7 of `public/fixtures/1822CA` (vendored
+  anonymized; one 7-player) replay with the recorded scores
+  (`tests/test_g1822ca_fixture_replay.py`) and zero per-action divergence
+  from Ruby HEAD, city token slots included.
+* **Corpus** (187-game 2026-10 scrape, 2-7p): 178 outcome match, 9
+  rejected at a file action Ruby HEAD also rejects (8 minors passing a
+  Route step they must run — old rules — and 263806's stale-graph lay
+  above); Ruby per-action diff of all 187: zero state divergence (token
+  slots included) up to those points.
+* **Router check** (20,945 recorded runs): engine = human in 18,628
+  (88.9%), above in 2,313 (11.0%; Ruby HEAD validates and prices every one
+  at the engine's total), below in 4: Ruby HEAD rejects 2 of those human
+  runs (a plain 7 and a plain 5 run with 18 / 15 stops after an undone
+  pullman choice), 1 real shortfall (257158 @1556: a grain-attached 7, a
+  pullman 5 and an LP — 1,020 vs 1,030; the compatible pullman route is
+  not among the 16,000 best kept). 27 ms per call on average, up to ~15 s
+  in the densest late positions (see known issues). CA router settings:
+  scouting depth 512, TOP_K 16,000, repeated full passes while the
+  combination improves, E-trains searched last in the combination (they
+  share no track with the rest), a 150M-step combination budget, E walks
+  3M steps and branch-and-bound E tours (the other titles are unchanged).
+* **Completeness** (all 175,886 human decisions except `run_routes`,
+  rules' move set): 175,860 match exactly one generated move (99.985%),
+  none matches two; 13 (0.007%: 6 private acquisitions, 4 train buys, 3
+  minor acquisitions) are excluded by the cross-player policy. The 26
+  misses are replay-only or rejected: 16 out-of-order discards, 1
+  re-acquisition of an owned company, 9 at the Ruby HEAD rejections above.
+* **Fuzz**: in-crate `g1822::fuzz::ca_random_walks_3_to_6_players` (16
+  walks, both policies); wire walks: 20 under the title's policy (seeds
+  1-5) and 20 under the rules' (seeds 6-10), 3-6p, 47,026 moves — 39
+  finished, 1 at a Ruby dead end (an emergency sale whose presidency change
+  is ranked against the tax haven: Ruby raises). They cover P10 (32
+  tokens), the sawmill (35), P12-P21 / P29-P30 lays, 290 "None" route
+  choices and the attachments, minor acquisitions with every token choice.
+  RUBY_REPLAY_PLACEHOLDER
+  `scripts/ruby_shims.rb`: CA's `check_distance(route, visits, train =
+  nil)` ends in a bare `super` into G1822's two-argument method, which MRI
+  rejects (ArgumentError) on every route Ruby validates; the site runs Opal,
+  which ignores the extra argument — the rig mirrors Opal (human records
+  carry their revenue, so Ruby never validates them).
+
+### Cross-player cases (CA)
+
+The title uses the family default (`RESTRICTED`); CA adds no acquisition
+of its own (P10, P13 and the big-city privates are the owner's abilities;
+the acquisition bonus lay follows a minor acquisition the policy already
+filtered).
+
+### CA known issues
+
+* Router: one shortfall (above) and slow late positions — a CA pullman's
+  bound lets every town count (towns are only bounded by 3d stops), so
+  pullman / grain walks on the densest maps run long (up to ~15 s for one
+  call). Not bridge-ready anyway.
+* Kept for Ruby parity: Ruby's `remove_extra_tokens!` / Hex#lay quirks as
+  MX (token identity on), and the stale graph after a 'remove' acquisition.
+* The scenarios 1822CA ERS / WRS are not implemented.
 
 ## Rigs and gates
 

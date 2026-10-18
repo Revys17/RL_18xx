@@ -1665,6 +1665,15 @@ impl BaseGame {
                             o.insert("tokener".into(), json!(c));
                         }
                     }
+                    // 1822CA DestinationToken#process_place_token takes
+                    // `action.token`: Ruby's PlaceToken picks the token by
+                    // token_type (nil → a normal one), so name the
+                    // destination token
+                    if self.g1822_is_ca()
+                        && self.g1822_active_step().map_or(false, |i| self.rnd().steps[i] == Step::DestinationToken)
+                    {
+                        o.insert("token_type".into(), json!("destination"));
+                    }
                 }
             }
             Action::RunRoutes { routes, extra_revenue, .. } => {
