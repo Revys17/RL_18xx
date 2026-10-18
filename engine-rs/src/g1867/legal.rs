@@ -125,6 +125,8 @@ pub mod stats {
     pub static REJECTED: AtomicU64 = AtomicU64::new(0);
     /// States where the cross-player policy left no move (rules' set used).
     pub static CROSS_FALLBACK: AtomicU64 = AtomicU64::new(0);
+    /// Merge-step adds the policy dropped (a minor of another owner).
+    pub static CROSS_DROPPED_MERGES: AtomicU64 = AtomicU64::new(0);
     /// Time (ns) in step_offers / candidate generation / validation, and
     /// in the Track generator's tile search vs its lay checks.
     pub static OFFERS_NS: AtomicU64 = AtomicU64::new(0);
@@ -152,7 +154,7 @@ impl BaseGame {
 
     /// Every legal move under the title's cross-player policy
     /// (`GameTitle::generator_cross_player`, default: no purchases from
-    /// another player's holdings).
+    /// another player's holdings, no mergers with another player's minors).
     pub fn g1867_legal_moves(&mut self) -> Vec<Move> {
         let policy = self.title_def().generator_cross_player();
         self.g1867_legal_moves_with(policy)
@@ -169,6 +171,8 @@ impl BaseGame {
         let cands = self.g1867_candidates();
         let (kept, dropped): (Vec<Move>, Vec<Move>) =
             cands.into_iter().partition(|m| !self.g1867_cross_player_excluded(m, policy));
+        let merges = dropped.iter().filter(|m| matches!(m.action, Action::Merge { .. })).count();
+        stats::add(&stats::CROSS_DROPPED_MERGES, merges as u64);
         let mut out = self.g1867_validate(kept);
         if out.is_empty() && !dropped.is_empty() {
             stats::add(&stats::CROSS_FALLBACK, 1);
@@ -214,16 +218,26 @@ impl BaseGame {
 
     /// Whether `policy` excludes `m`: a purchase whose seller is not the
     /// buying corporation's president (a train from a corporation another
-    /// player presides; a private another player owns). Bank sellers (the
-    /// depot) are never excluded; a missing president counts as another
-    /// player. 1867 has no minor acquisitions outside the merger round,
-    /// whose minors are not bought from anyone (see the docs' open
-    /// questions).
+    /// player presides; a private another player owns), or (`!policy.
+    /// minors`) a Merge-step add of a minor another player owns — so every
+    /// merger self-play makes is of ONE player's minors (the user's ruling
+    /// of 2026-10-18: ~99% of human mergers are). Bank sellers (the depot)
+    /// are never excluded; a missing president or owner counts as another
+    /// player. Naming the merged major (an unfloated major, owned by
+    /// nobody) and conversions are never excluded.
     pub(crate) fn g1867_cross_player_excluded(&self, m: &Move, policy: CrossPlayerPolicy) -> bool {
         let pres = |c: &str| self.corp_idx.get(c).and_then(|&i| self.corporations[i].president_id());
         let other = |buyer: &str, seller: Option<u32>| {
             let b = pres(buyer);
             b.is_none() || seller != b
+        };
+        // A minor's owning player (Some(None): a minor without one).
+        let minor_owner = |c: &str| {
+            self.corp_idx
+                .get(c)
+                .map(|&i| &self.corporations[i])
+                .filter(|c| c.corp_type == CorpType::Minor)
+                .map(|c| c.owner_id.player_id())
         };
         match &m.action {
             Action::BuyTrain { entity_id, from, .. } if !policy.trains && from != "depot" => {
@@ -233,6 +247,15 @@ impl BaseGame {
                 let seller = self.company_idx.get(company_sym.as_str()).and_then(|&i| self.companies[i].owner.player_id());
                 other(entity_id, seller)
             }
+            // The acting minor is the merge's initiator (the round's current
+            // entity); each add must be of a minor its owner also owns.
+            Action::Merge { entity_id, corporation_sym } if !policy.minors => match minor_owner(corporation_sym) {
+                Some(target) => {
+                    let initiator = minor_owner(entity_id).flatten();
+                    initiator.is_none() || target != initiator
+                }
+                None => false,
+            },
             _ => false,
         }
     }
@@ -276,7 +299,11 @@ impl BaseGame {
     /// (finish now, or after further adds) names a major successfully; a
     /// `convert` only if some unfloated major can take the conversion
     /// (Ruby offers `convert` whenever the price is in range, even with
-    /// every major started).
+    /// every major started). The search walks the rules' adds whatever the
+    /// cross-player policy; under the single-owner merge policy that is
+    /// still exact: a set of one player's minors always has an owner with
+    /// two of them (Ruby's presidency check passes), so only naming the
+    /// major can fail, and that does not depend on the set.
     fn g67_merge_can_finish(&mut self, depth: usize) -> bool {
         let Round::Merger(s) = &self.round else { return true };
         let s = s.clone();
@@ -1268,5 +1295,160 @@ impl BaseGame {
     /// Apply a move (the in-crate path; Python sends the wire dict).
     pub fn g1867_apply_move(&mut self, m: &Move) -> Result<(), GameError> {
         self.process_action_internal(&m.action)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rounds::MergerState;
+
+    /// Float minor `sym` for player `owner` at market column `col` (8 =
+    /// $80, below the convert range) with its token in `hex`'s city 0.
+    fn rig_minor(g: &mut BaseGame, sym: &str, owner: u32, col: u8, hex: &str) {
+        let ci = g.corp_idx[sym];
+        let sp = g.stock_market.share_price_at(0, col).unwrap();
+        g.corporations[ci].share_price = Some(sp.clone());
+        g.corporations[ci].ipo_price = Some(sp);
+        g.update_market_cell(sym, 0, col, 0, col);
+        g.corporations[ci].floated = true;
+        g.corporations[ci].ever_operated = true;
+        for i in 0..g.corporations[ci].shares.len() {
+            g.corporations[ci].set_share_owner(i, EntityId::player(owner));
+        }
+        g.corporations[ci].owner_id = EntityId::player(owner);
+        let ti = g.corporations[ci].next_token_index().unwrap();
+        g.corporations[ci].tokens[ti].used = true;
+        g.corporations[ci].tokens[ti].city_hex_id = hex.to_string();
+        let tok = g.corporations[ci].tokens[ti].clone();
+        let hi = g.hex_idx[hex];
+        let city = &mut g.hexes[hi].tile.cities[0];
+        let slot = city.tokens.iter().position(|t| t.is_none()).unwrap();
+        city.tokens[slot] = Some(tok);
+    }
+
+    /// A merger round with `order` to act: BBG and BO (player 1's) and CS
+    /// (player 2's) share the 3-slot city of a gray X8 laid on I15, so
+    /// each reaches the other two (Ruby `mergeable_candidates`).
+    fn rig_merger(order: &[&str]) -> BaseGame {
+        let mut g = super::super::fuzz::new_game(4);
+        let hi = g.hex_idx["I15"];
+        g.hexes[hi].tile = BaseGame::tile_from_def(&g.tile_catalog["X8"], 0);
+        rig_minor(&mut g, "BBG", 1, 8, "I15");
+        rig_minor(&mut g, "BO", 1, 8, "I15");
+        rig_minor(&mut g, "CS", 2, 8, "I15");
+        g.clear_graph_cache();
+        g.round = Round::Merger(MergerState::new(1, 2, order.iter().map(|s| s.to_string()).collect()));
+        g.update_round_state();
+        g
+    }
+
+    fn merge_targets(moves: &[Move]) -> Vec<String> {
+        moves
+            .iter()
+            .filter_map(|m| match &m.action {
+                Action::Merge { corporation_sym, .. } => Some(corporation_sym.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn types(moves: &[Move]) -> Vec<&'static str> {
+        moves.iter().map(|m| m.action.action_type()).collect()
+    }
+
+    /// Apply the generated move whose action prints as `want`.
+    fn apply(g: &mut BaseGame, policy: CrossPlayerPolicy, want: &Action) {
+        let key = format!("{want:?}");
+        let moves = g.g1867_legal_moves_with(policy);
+        let Some(m) = moves.iter().find(|m| format!("{:?}", m.action) == key) else {
+            panic!("{key} not generated; got {:?}", moves.iter().map(|m| format!("{:?}", m.action)).collect::<Vec<_>>())
+        };
+        g.g1867_apply_move(m).unwrap();
+    }
+
+    fn merge(entity: &str, target: &str) -> Action {
+        Action::Merge { entity_id: entity.into(), corporation_sym: target.into() }
+    }
+
+    /// The title's policy (RESTRICTED) offers a merge only with a minor the
+    /// initiator's owner also owns; the rules' set (Ruby) offers any
+    /// connected minor whatever its owner.
+    #[test]
+    fn restricted_policy_merges_only_one_players_minors() {
+        let mut g = rig_merger(&["BBG", "BO", "CS"]);
+        let rules = merge_targets(&g.g1867_legal_moves_with(CrossPlayerPolicy::RULES));
+        assert_eq!(rules, vec!["BO", "CS"], "Ruby: every connected minor");
+        let dropped = stats::get(&stats::CROSS_DROPPED_MERGES);
+        let restricted = g.g1867_legal_moves_with(CrossPlayerPolicy::RESTRICTED);
+        assert_eq!(merge_targets(&restricted), vec!["BO"], "player 2's CS is not offered");
+        assert!(types(&restricted).contains(&"pass"));
+        assert!(stats::get(&stats::CROSS_DROPPED_MERGES) > dropped, "the dropped merge is counted");
+        assert_eq!(merge_targets(&g.g1867_legal_moves()), vec!["BO"], "the title's policy is RESTRICTED");
+
+        // Player 2's CS initiating: both connected minors are player 1's.
+        // Nothing to merge with; the pass remains, so the policy needs no
+        // fallback to the rules' set.
+        let mut g = rig_merger(&["CS", "BBG", "BO"]);
+        assert_eq!(merge_targets(&g.g1867_legal_moves_with(CrossPlayerPolicy::RULES)), vec!["BBG", "BO"]);
+        assert_eq!(types(&g.g1867_legal_moves_with(CrossPlayerPolicy::RESTRICTED)), vec!["pass"]);
+    }
+
+    /// A merger of one player's minors under the title's policy, through
+    /// naming the major and the post-merger dealing to the next minor's
+    /// turn: the owner gets the 20% presidency (Ruby's 10% + swap), no
+    /// other player is involved until rule 9.2 D's one-share round, and
+    /// every state on the way has generated moves that apply.
+    #[test]
+    fn single_owner_merge_runs_through_the_post_merger_steps() {
+        let p = CrossPlayerPolicy::RESTRICTED;
+        let mut g = rig_merger(&["BBG", "BO", "CS"]);
+        apply(&mut g, p, &merge("BBG", "BO"));
+        // CS is still a rules candidate (no automatic finish), but only the
+        // "Done Adding Corporations" pass is offered.
+        assert_eq!(types(&g.g1867_legal_moves_with(p)), vec!["pass"]);
+        assert_eq!(merge_targets(&g.g1867_legal_moves_with(CrossPlayerPolicy::RULES)), vec!["CS"]);
+        apply(&mut g, p, &Action::Pass { entity_id: "BBG".into() });
+        // Naming the major: every unfloated major.
+        let targets = merge_targets(&g.g1867_legal_moves_with(p));
+        assert!(targets.contains(&"CNR".to_string()) && targets.len() == 8, "{targets:?}");
+        apply(&mut g, p, &merge("BBG", "CNR"));
+
+        let ci = g.corp_idx["CNR"];
+        let me = EntityId::player(1);
+        assert!(g.corporations[g.corp_idx["BBG"]].closed && g.corporations[g.corp_idx["BO"]].closed);
+        assert_eq!(g.corporations[ci].president_id(), Some(1));
+        assert_eq!(g.corporations[ci].owner_id, me);
+        assert_eq!(g.corporations[ci].percent_owned_by(&me), 20, "two minors: 10% + the swap to the 20% cert");
+        assert!((2..=4).all(|pid| g.corporations[ci].percent_owned_by(&EntityId::player(pid)) == 0));
+        // $80 + $80 = 160 snaps down to the $150 par_2 cell.
+        assert_eq!(g.corporations[ci].share_price.as_ref().map(|sp| sp.price), Some(150));
+        let Round::Merger(s) = &g.round else { panic!("merger round") };
+        assert_eq!(s.converted.as_deref(), Some("CNR"));
+        assert_eq!(s.share_dealing_players, vec![1]);
+        assert_eq!(s.share_dealing_multiple, vec![1]);
+
+        // Drive the follow-up steps with the first generated move (buys
+        // sort before passes) until CS's Merge turn.
+        let mut dealt = std::collections::HashSet::new();
+        for _ in 0..100 {
+            let Round::Merger(s) = &g.round else { panic!("left the merger round early") };
+            if s.converted.is_none() && s.current_entity_sym() == Some("CS") {
+                break;
+            }
+            let moves = g.g1867_legal_moves_with(p);
+            assert!(!moves.is_empty(), "stuck: {}", g.g1867_debug_state());
+            if moves[0].step == StepKind::PostMergerShares {
+                dealt.insert(moves[0].action.entity_id().to_string());
+            }
+            g.g1867_apply_move(&moves[0]).unwrap();
+        }
+        let Round::Merger(s) = &g.round else { panic!("merger round") };
+        assert_eq!(s.current_entity_sym(), Some("CS"), "{}", g.g1867_debug_state());
+        assert!(s.converted.is_none());
+        assert_eq!(g.corporations[ci].president_id(), Some(1), "one-share buys never overtake the owner");
+        assert!(dealt.len() > 1, "rule 9.2 D opened the dealing to the other players: {dealt:?}");
+        // CS (player 2's) has no minor of its owner to merge with.
+        assert!(merge_targets(&g.g1867_legal_moves_with(p)).is_empty());
     }
 }

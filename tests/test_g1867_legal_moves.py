@@ -9,6 +9,7 @@ completeness is ``scripts/g1867_completeness.py``.
 
 import json
 import random
+from collections import Counter
 
 import pytest
 
@@ -67,16 +68,17 @@ def test_construction_player_counts():
 
 
 def test_cross_player_policy():
-    """The title's policy (no purchases across players) only removes train /
-    private purchases from the rules' move set, and a walk under the rules'
-    set meets some."""
+    """The title's policy (nothing across players) only removes train /
+    private purchases and merges with another player's minor from the rules'
+    move set, and a walk under the rules' set meets all three (seed 23: the
+    first excluded merge at move ~225)."""
     with pytest.raises(ValueError):
         engine_rs.BaseGame.new_titled("1867", {i + 1: f"P{i + 1}" for i in range(3)}, None, 5).g1867_legal_moves_json(
             "bogus"
         )
-    g = engine_rs.BaseGame.new_titled("1867", {i + 1: f"Player {i + 1}" for i in range(4)}, None, 21)
-    rng = random.Random(21)
-    excluded = 0
+    g = engine_rs.BaseGame.new_titled("1867", {i + 1: f"Player {i + 1}" for i in range(4)}, None, 23)
+    rng = random.Random(23)
+    excluded = Counter()
     key = lambda m: json.dumps(m, sort_keys=True)  # noqa: E731
     for n in range(900):
         if g.finished:
@@ -86,7 +88,12 @@ def test_cross_player_policy():
         rules_keys = {key(m) for m in rules}
         assert all(key(m) in rules_keys for m in title)
         dropped = [m for m in rules if key(m) not in {key(t) for t in title}]
-        assert all(m["wire"]["type"] in ("buy_train", "buy_company") for m in dropped), dropped
-        excluded += len(dropped)
+        assert all(m["wire"]["type"] in ("buy_train", "buy_company", "merge") for m in dropped), dropped
+        owner = {c.sym: c.owner_id_str for c in g.corporations}
+        for m in dropped:
+            if m["wire"]["type"] == "merge":  # a merge add of a minor the initiator's owner doesn't own
+                w = m["wire"]
+                assert owner[w["corporation"]] != owner[w["entity"]], w
+        excluded.update(m["wire"]["type"] for m in dropped)
         g.process_action({**pick(rules, rng), "id": n + 1})
-    assert excluded > 0, "the walk met no cross-player purchase"
+    assert set(excluded) == {"buy_train", "buy_company", "merge"}, excluded
