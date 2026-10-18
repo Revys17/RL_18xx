@@ -172,8 +172,9 @@ def parse_player(spec: str, default_readouts: int) -> tuple:
             break
         else:
             raise SystemExit(f"Unknown player option {option!r} in {spec!r}")
+    checkpoint, hash_, value_head = checkpoint.partition("#")  # "<policy>+<value>#blend=<w>"
     paths = "+".join(str(resolve_checkpoint(part)) for part in checkpoint.split("+"))
-    return paths, overrides
+    return paths + (hash_ + value_head if hash_ else ""), overrides
 
 
 def model_factory(checkpoint_path):

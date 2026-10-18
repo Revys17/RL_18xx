@@ -1810,6 +1810,14 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         _, _, score_pred, _ = self._forward_encoded_batch(encoded_game_states, value_only=True)
         return score_pred
 
+    def run_values_and_scores_encoded(self, encoded_game_states: list) -> tuple:
+        """``(per-seat win probabilities, score head output)``, both in the canonical
+        frame, from one value-only forward (``composite_model`` ``#blend=<w>``)."""
+        if len(encoded_game_states) == 0:
+            raise ValueError("Received no game states to run.")
+        _, win_loss_logits, score_pred, _ = self._forward_encoded_batch(encoded_game_states, value_only=True)
+        return F.softmax(win_loss_logits, dim=-1), score_pred
+
     @staticmethod
     def _infer_num_players_from_state_size(size: int) -> int:
         """Reverse the encoder layout to recover the player count from a flat state size.

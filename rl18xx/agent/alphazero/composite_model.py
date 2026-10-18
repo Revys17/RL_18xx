@@ -17,9 +17,16 @@ class PolicyValueComposite:
         self.policy_model = policy_model
         self.value_model = value_model
         # "win": per-seat win probabilities; "score": the score head's per-seat output
-        # (a policy-gradient exploiter's critic regresses its shaped reward there).
-        if value_head not in ("win", "score"):
-            raise ValueError(f"value head {value_head!r}: 'win' or 'score'")
+        # (a policy-gradient exploiter's critic regresses its shaped reward there);
+        # "blend=<w>": (1 - w) * win + w * score -- KataGo-style, the critic's predicted
+        # outcome (gen4's: placement points 1 / 0.5 / 0.2 / 0) mixed into the win estimate.
+        self.blend = None
+        if value_head.startswith("blend="):
+            self.blend = float(value_head.split("=", 1)[1])
+            if not 0.0 <= self.blend <= 1.0:
+                raise ValueError(f"blend weight {self.blend} outside [0, 1]")
+        elif value_head not in ("win", "score"):
+            raise ValueError(f"value head {value_head!r}: 'win', 'score' or 'blend=<w>'")
         self.value_head = value_head
         self.last_price_components = None
 
@@ -44,6 +51,9 @@ class PolicyValueComposite:
         self.last_price_components = getattr(self.policy_model, "last_price_components", None)
         if self.value_head == "score":
             return probs, log_probs, self.value_model.run_scores_encoded(encoded_game_states)
+        if self.blend is not None:
+            win, score = self.value_model.run_values_and_scores_encoded(encoded_game_states)
+            return probs, log_probs, (1.0 - self.blend) * win + self.blend * score
         # A value-only forward skips the value network's policy head (most of its cost).
         run_values = getattr(self.value_model, "run_values_encoded", None)
         if run_values is not None:
@@ -59,7 +69,7 @@ class PolicyValueComposite:
 
 def load_policy_value(checkpoint_paths: str):
     """``"<policy.pth>+<value.pth>"`` -> a :class:`PolicyValueComposite` (``...#score``:
-    values from the value network's score head); a single path -> that
+    values from the value network's score head; ``#blend=<w>``: win and score mixed); a single path -> that
     checkpoint's model. Module-level so it pickles into the inference server process."""
     from rl18xx.agent.alphazero.checkpointer import _load_model_from_session_checkpoint
 
