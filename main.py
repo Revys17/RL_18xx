@@ -236,6 +236,11 @@ def cmd_search_learning(args):
         gumbel_noise_scale=args.gumbel_noise_scale,
         full_move_temperature=args.full_move_temperature,
         value_head=args.value_head,
+        reuse_tree=args.reuse_tree,
+        reuse_max_root_visits=args.reuse_max_root_visits,
+        dedupe_maps=args.dedupe_maps,
+        server_pipeline=args.server_pipeline,
+        server_replicas=args.server_replicas,
         workers=args.workers,
         games_per_worker=args.games_per_worker,
         task_seconds=args.task_seconds,
@@ -634,6 +639,20 @@ def build_parser():
     )
     p.add_argument("--value-head", choices=("win", "score"), default=_SL.value_head,
                    help="The critic head the search reads its leaf values from")
+    p.add_argument(
+        "--reuse-tree", choices=("off", "total", "additional"), default=_SL.reuse_tree,
+        help="Keep each game's tree across decisions: 'total' counts the inherited root visits toward the "
+        "budget (same visits per decision, fewer evaluations), 'additional' searches the budget on top of them",
+    )
+    p.add_argument("--reuse-max-root-visits", type=int, default=None,
+                   help="--reuse-tree additional: rebuild a tree whose root passed this many visits (default 2 * n_full)")
+    p.add_argument("--dedupe-maps", action="store_true",
+                   help="Send each distinct hex map of a request once; the map encoder runs once per map")
+    p.add_argument("--server-pipeline", action="store_true",
+                   help="The inference server receives the next batch on a thread while the current one runs "
+                   "(measured slower than --server-replicas 2: GIL contention)")
+    p.add_argument("--server-replicas", type=int, default=_SL.server_replicas,
+                   help="Inference server processes (one forward runs while another receives and replies)")
     p.add_argument("--workers", type=int, default=_SL.workers)
     p.add_argument("--games-per-worker", type=int, default=_SL.games_per_worker, help="Games each worker plays at once")
     p.add_argument("--task-seconds", type=float, default=_SL.task_seconds, help="A worker reports its finished games this often")

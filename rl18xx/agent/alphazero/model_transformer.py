@@ -308,6 +308,75 @@ def _pad_state_to_max_players(state: Tensor, num_players: int, max_players: int 
     return out
 
 
+@functools.lru_cache(maxsize=None)
+def _pad_columns(num_players: int, max_players: int = MAX_PLAYERS) -> np.ndarray:
+    """``_pad_state_to_max_players`` as one scatter: column ``j`` of a
+    ``num_players``-layout state goes to column ``_pad_columns(...)[j]`` of the
+    max-player layout (every other column zero). Derived by running the
+    reference on the column numbers, so the two agree by construction."""
+    src_total = _layout_for(num_players)[2]
+    marked = torch.arange(1, src_total + 1, dtype=torch.float64).unsqueeze(0)
+    padded = _pad_state_to_max_players(marked, num_players, max_players)[0].numpy()
+    dst = np.full(src_total, -1, dtype=np.int64)
+    for col, value in enumerate(padded):
+        if value > 0:
+            dst[int(value) - 1] = col
+    if (dst < 0).any():
+        raise ValueError(f"_pad_columns: {int((dst < 0).sum())} columns of the {num_players}-player layout are dropped")
+    return dst
+
+
+def pad_states_numpy(game_states: np.ndarray, num_players: int, max_players: int = MAX_PLAYERS) -> np.ndarray:
+    """``_pad_state_to_max_players`` on a (B, D_n) float32 numpy array (same values)."""
+    if num_players == max_players:
+        return game_states
+    out = np.zeros((game_states.shape[0], _layout_for(max_players)[2]), dtype=np.float32)
+    out[:, _pad_columns(num_players, max_players)] = game_states
+    return out
+
+
+def packed_arrays(parts: list, max_players: int = MAX_PLAYERS) -> dict:
+    """The CPU half of ``AlphaZeroTransformerModel.packed_inputs`` (no model or
+    device needed, so the inference server can build it while the previous batch
+    runs): ``parts`` -- ``(game_states (n, D), node_features (m, N, F), extras
+    (n, >= 4), map_index (n,) or None)`` numpy arrays -- as contiguous arrays for
+    the whole batch, each state padded to ``max_players``' layout.
+
+    numpy, single-threaded: torch's CPU ops run on its intra-op thread pool,
+    which on a loaded machine cost 100x their work (a 12 MB ``torch.cat`` took
+    ~190 ms with 24 threads at load 80, 0.5 ms with 2)."""
+    dense = all(p[3] is None for p in parts)
+    states, nodes, round_types, num_players, map_index = [], [], [], [], []
+    maps = 0
+    for game_states, node_features, extras, part_index in parts:
+        extras = np.asarray(extras)
+        n = int(extras.shape[0])
+        counts = np.unique(extras[:, 3])
+        if len(counts) != 1:
+            raise ValueError("packed_inputs: one player count per part")
+        states.append(pad_states_numpy(np.asarray(game_states, dtype=np.float32), int(counts[0]), max_players))
+        nodes.append(np.asarray(node_features, dtype=np.float32))
+        round_types.append(extras[:, 0])
+        num_players.append(extras[:, 3])
+        if not dense:
+            index = np.arange(n) if part_index is None else np.asarray(part_index, dtype=np.int64)
+            map_index.append(index + maps)
+        maps += int(node_features.shape[0])
+
+    def joined(arrays: list, dtype) -> np.ndarray:
+        array = arrays[0] if len(arrays) == 1 else np.concatenate(arrays)
+        return np.ascontiguousarray(array, dtype=dtype)
+
+    return {
+        "max_players": max_players,
+        "game_states": joined(states, np.float32),
+        "node_features": joined(nodes, np.float32),
+        "round_types": joined(round_types, np.int64),
+        "num_players": joined(num_players, np.int64),
+        "map_index": None if dense else joined(map_index, np.int64),
+    }
+
+
 def _build_port_feature_mask(num_node_features: int = 50) -> Tensor:
     """Build (num_node_features, 6) mask mapping node features to port track indicators.
 
@@ -1786,6 +1855,10 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         hi = lo + int(self.policy_head.num_lay_tile)
         if isinstance(legal, Tensor):
             return legal[:, lo:hi].any(dim=1).cpu()
+        if hasattr(legal, "flat") and hasattr(legal, "lengths"):  # inference_server.LegalIndices
+            hit = (legal.flat >= lo) & (legal.flat < hi)
+            rows = legal.row_ids()[hit]
+            return torch.from_numpy(np.bincount(rows, minlength=len(legal.lengths)) > 0)
         flags = [bool(((np.asarray(ix) >= lo) & (np.asarray(ix) < hi)).any()) for ix in legal]
         return torch.tensor(flags, dtype=torch.bool)
 
@@ -1818,6 +1891,71 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         _, win_loss_logits, score_pred, _ = self._forward_encoded_batch(encoded_game_states, value_only=True)
         return F.softmax(win_loss_logits, dim=-1), score_pred
 
+    # --- Stacked inputs (the inference server's fast path) --------------------
+
+    def packed_inputs(self, parts) -> dict:
+        """Device inputs for ``run_packed`` from already-stacked states, as the
+        inference server receives them (``PackedStates``): ``parts`` is a list of
+        ``(game_states (n, D), node_features (m, N, F), extras (n, >= 4), map_index
+        (n,) or None)`` numpy arrays, concatenated in order (each part one player
+        count; ``extras`` rows ``(round type, active, rotation, num_players)``), or
+        ``packed_arrays`` of them.
+
+        The tensors are the ones ``_forward_encoded_batch`` builds from the same
+        states' encoded tuples -- each state padded to the max-player layout, the
+        same round types and player counts -- without its per-state Python loop,
+        and built once for every network that reads them (a policy + critic
+        composite). Without map indices (every part's ``map_index`` None),
+        ``node_features`` is one row per state, as there; with them, each part's
+        distinct maps once and a (B,) ``map_index`` (see ``forward``)."""
+        arrays = parts if isinstance(parts, dict) else packed_arrays(parts, self._max_players)
+        if arrays["max_players"] != self._max_players:
+            raise ValueError(f"packed_inputs: arrays laid out for {arrays['max_players']} players, not {self._max_players}")
+
+        def device(array) -> Tensor:
+            return torch.from_numpy(array).to(self.device, non_blocking=True)
+
+        return {
+            key: None if arrays[key] is None else device(arrays[key])
+            for key in ("game_states", "node_features", "round_types", "num_players", "map_index")
+        }
+
+    def forward_packed(self, inputs: dict, value_only: bool = False, lay_tile_rows: Optional[Tensor] = None):
+        """``forward`` on ``packed_inputs``."""
+        return self.forward(
+            inputs["game_states"],
+            inputs["node_features"],
+            inputs["round_types"],
+            None,
+            inputs["num_players"],
+            value_only=value_only,
+            lay_tile_rows=lay_tile_rows,
+            map_index=inputs["map_index"],
+        )
+
+    def run_packed(self, inputs: dict, legal_indices: Optional[list] = None, head: str = "policy"):
+        """``run_many_encoded`` on ``packed_inputs``: ``head`` "policy" gives
+        ``(probs, log_probs, values)`` (log_probs None with ``legal_indices``, as
+        there); "win" / "score" only the win probabilities / score-head output
+        (``run_values_encoded`` / ``run_scores_encoded``, no policy or price head);
+        "win+score" both from one value-only forward (``run_values_and_scores_encoded``)."""
+        if head == "win+score":
+            _, win_loss_logits, score_pred, _ = self.forward_packed(inputs, value_only=True)
+            return F.softmax(win_loss_logits, dim=-1), score_pred
+        if head == "win":
+            _, win_loss_logits, _, _ = self.forward_packed(inputs, value_only=True)
+            return F.softmax(win_loss_logits, dim=-1)
+        if head == "score":
+            _, _, score_pred, _ = self.forward_packed(inputs, value_only=True)
+            return score_pred
+        if head != "policy":
+            raise ValueError(f"run_packed: head {head!r} is not policy, win, score or win+score")
+        hints = self._policy_row_hints(legal_indices) if legal_indices is not None else {}
+        policy_logits, win_loss_logits, _, _ = self.forward_packed(inputs, **hints)
+        probabilities = F.softmax(policy_logits, dim=1)
+        log_probs = None if legal_indices is not None else F.log_softmax(policy_logits, dim=1)
+        return probabilities, log_probs, F.softmax(win_loss_logits, dim=-1)
+
     @staticmethod
     def _infer_num_players_from_state_size(size: int) -> int:
         """Reverse the encoder layout to recover the player count from a flat state size.
@@ -1842,6 +1980,7 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         num_players: Optional[Tensor] = None,
         value_only: bool = False,
         lay_tile_rows: Optional[Tensor] = None,
+        map_index: Optional[Tensor] = None,
     ) -> Tuple[Optional[Tensor], Tensor, Tensor, Tensor]:
         """
         Forward pass of the Transformer model.
@@ -1864,6 +2003,12 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
             value_only: skip the policy and price heads (about two thirds of
                 the compute); ``policy_logits`` is then None and
                 ``last_policy_components`` / ``last_price_components`` are cleared.
+            map_index: optional (B,) long tensor: ``node_features`` is then
+                (M, N, F), each distinct hex map once, and state ``b``'s map is
+                row ``map_index[b]``. The map encoder (whose only input is the
+                map) runs once per map instead of once per state; the outputs
+                are those of ``node_features[map_index]`` (within float
+                rounding: the map encoder's matmuls see M rows instead of B).
 
         Returns:
             ``(policy_logits, win_loss_logits, score_pred, aux_action_count_pred)``.
@@ -1927,6 +2072,11 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
             )
         else:
             node_embeds, map_pool = self.hex_transformer(node_features)
+        if map_index is not None:
+            # ``node_features`` held each distinct map once: the map encoder ran
+            # once per map; every state takes its map's embeddings.
+            node_embeds = node_embeds.index_select(0, map_index)
+            map_pool = map_pool.index_select(0, map_index)
 
         # 3. Cross-Modal Fusion. Pass the entity padding mask so the
         # cross-attention pool ignores padded player slots when collapsing

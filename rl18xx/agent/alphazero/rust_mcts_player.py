@@ -552,7 +552,11 @@ class RustMCTSPlayer:
             while tree.gumbel_remaining() > 0:
                 self.tree_search()
             return self.pick_move()
-        target = self._rust_player.n_at_root() + readouts
+        if getattr(self.config, "readout_budget", "additional") == "total":
+            # Count a kept subtree's root visits (a fresh, expanded root has 1).
+            target = max(self._rust_player.n_at_root(), 1 + readouts)
+        else:
+            target = self._rust_player.n_at_root() + readouts
         while self._rust_player.n_at_root() < target:
             self.tree_search()
         return self.pick_move()
@@ -580,7 +584,12 @@ class RustMCTSPlayer:
             # The one move's price comes from the root's price head: evaluate
             # the root (as the eval's _expand_root does), but don't search.
             readouts = 0
-        return TreeSearch(self, readouts if readouts is not None else self.adaptive_readouts(), key=key)
+        return TreeSearch(
+            self,
+            readouts if readouts is not None else self.adaptive_readouts(),
+            key=key,
+            budget=getattr(self.config, "readout_budget", "additional"),
+        )
 
     def pick_move(self) -> int:
         """Pick a move from root visit counts — parity with Python
