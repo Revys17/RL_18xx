@@ -108,8 +108,9 @@ class SearchLearningConfig:
     # The policy is softmax(logits / T); None: the starting checkpoint's run's
     # learner_temperature (1 for a supervised checkpoint).
     learner_temperature: Optional[float] = None
-    # Targets and search
-    target: str = "visits"
+    # Targets and search. Gumbel (the default since 2026-10-18): against PUCT at the
+    # same budget it scored 0.738 at 16 readouts, 0.596 at 32, 0.492 at 64, 0.525 at 200.
+    target: str = "gumbel"
     # visits: KataGo's policy-target pruning (keep only the visits a move's PUCT
     # score needed against the most-visited move's; "raw": the whole distribution).
     # On gen4 the raw visits put 12-19% of the target on moves its policy gives
@@ -215,6 +216,10 @@ class SearchLearningConfig:
     # seat's), the outcome alone where fewer than n remain; w = value_bootstrap_weight.
     value_nstep: int = 0
     value_bootstrap_weight: float = 0.5
+    # Or the lambda-return over the game's searches instead of the n-step value (TD(lambda),
+    # gamma 1): G_i = (1 - lambda) * v_{i+1} + lambda * G_{i+1}, the outcome after the last
+    # search; the target is then (1 - w) * outcome + w * G_i. None: off.
+    value_lambda: Optional[float] = None
     # Auxiliary outcome targets (0: none): per seat the final net-worth share and cash
     # share (MSE), and which corporations floated (BCE), on the network that learns the
     # value (training-only heads: ``AlphaZeroTransformerModel.add_aux_heads``).
@@ -308,6 +313,35 @@ def nstep_win_target(outcome, search_values: list, index: int, n: int, weight: f
     if later.sum() <= 0:
         return outcome.astype(np.float32)
     return ((1.0 - weight) * outcome + weight * later / later.sum()).astype(np.float32)
+
+
+def _as_distribution(value, like: np.ndarray) -> Optional[np.ndarray]:
+    v = np.clip(np.asarray(value, dtype=np.float64)[: len(like)], 0.0, None)
+    return v / v.sum() if v.sum() > 0 else None
+
+
+def lambda_returns(outcome, search_values: list, lam: float) -> list:
+    """TD(lambda) returns (gamma 1, no intermediate rewards) over a game's searches:
+    ``G_i = (1 - lam) * v_{i+1} + lam * G_{i+1}``, ``G_last`` = the outcome, each
+    root value ``v`` normalized over the seats (lam 1: the outcome; 0: the next
+    search's value)."""
+    outcome = np.asarray(outcome, dtype=np.float64)
+    returns = [None] * len(search_values)
+    following = outcome
+    for i in range(len(search_values) - 1, -1, -1):
+        returns[i] = following
+        v = _as_distribution(search_values[i], outcome)
+        following = following if v is None else (1.0 - lam) * v + lam * following
+    return returns
+
+
+def lambda_win_target(outcome, returns: list, index: int, weight: float) -> np.ndarray:
+    """``(1 - weight) * outcome + weight * returns[index]`` (the outcome for a row
+    that is not a search)."""
+    outcome = np.asarray(outcome, dtype=np.float64)
+    if index < 0 or index >= len(returns) or weight <= 0:
+        return outcome.astype(np.float32)
+    return ((1.0 - weight) * outcome + weight * returns[index]).astype(np.float32)
 
 
 def root_value_ce(rows: list, win: np.ndarray) -> tuple:
@@ -929,10 +963,17 @@ class Generator:
             g.rows[int(i)].critic = True
         aux_seat, aux_global = aux_outcomes(g.game, fractions)
         nstep, weight = int(s.get("value_nstep", 0)), float(s.get("value_bootstrap_weight", 0.5))
+        lam = s.get("value_lambda")
+        returns = lambda_returns(share_of_winners(fractions), g.search_values, float(lam)) if lam is not None else None
         for row in g.rows:
             row.fractions = fractions
             row.score_target = score
-            row.win_target = nstep_win_target(share_of_winners(fractions), g.search_values, row.search_index, nstep, weight)
+            if returns is not None:
+                row.win_target = lambda_win_target(share_of_winners(fractions), returns, row.search_index, weight)
+            else:
+                row.win_target = nstep_win_target(
+                    share_of_winners(fractions), g.search_values, row.search_index, nstep, weight
+                )
             row.aux_seat, row.aux_global = aux_seat, aux_global
         self.counts["games"] += 1
         return {
@@ -1252,6 +1293,7 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "opponent_servers": [],
         "value_nstep": cfg.value_nstep,
         "value_bootstrap_weight": cfg.value_bootstrap_weight,
+        "value_lambda": cfg.value_lambda,
         "reuse_tree": cfg.reuse_tree,
         "reuse_max_root_visits": cfg.reuse_max_root_visits or 2 * cfg.n_full,
         "dedupe_maps": cfg.dedupe_maps,
@@ -1272,6 +1314,8 @@ def _validate(cfg: SearchLearningConfig) -> None:
         parse_value_head(cfg.value_head)
     except ValueError as e:
         raise SystemExit(f"--value-head: {e}") from None
+    if cfg.value_lambda is not None and (cfg.value_nstep > 0 or not 0.0 <= cfg.value_lambda <= 1.0):
+        raise SystemExit("--value-lambda must be in [0, 1] and excludes --value-nstep")
     if cfg.value_nstep < 0 or not 0.0 <= cfg.value_bootstrap_weight <= 1.0:
         raise SystemExit("--value-nstep must be >= 0 and --value-bootstrap-weight in [0, 1]")
     if not 0.0 <= cfg.surprise_weight <= 1.0 or cfg.surprise_cap < 1.0:

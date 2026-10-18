@@ -278,6 +278,7 @@ def cmd_search_learning(args):
         value_stop_grad=args.value_stop_grad,
         value_nstep=args.value_nstep,
         value_bootstrap_weight=args.value_bootstrap_weight,
+        value_lambda=args.value_lambda,
         aux_loss_weight=args.aux_loss_weight,
         surprise_weight=args.surprise_weight,
         surprise_cap=args.surprise_cap,
@@ -626,7 +627,8 @@ def build_parser():
         help="The policy is softmax(logits / T), trained and searched so (default: the --policy run's learner_temperature)",
     )
     p.add_argument("--target", choices=("visits", "gumbel"), default=_SL.target,
-                   help="Policy target: the search's visit distribution, or the Gumbel root's completed-Q policy")
+                   help="Policy target and root selection: the Gumbel root's completed-Q policy (default; every "
+                   "search, full and fast, uses the Gumbel root), or the PUCT search's visit distribution")
     p.add_argument("--visit-target", choices=("pruned", "raw"), default=_SL.visit_target,
                    help="--target visits: KataGo's policy-target pruning of exploration visits, or the raw visits")
     p.add_argument("--target-temperature", type=float, default=_SL.target_temperature,
@@ -708,7 +710,9 @@ def build_parser():
                    help="Win-head target: 0 the outcome; n > 0 mixes in the search's root value n searched decisions "
                    "later (MuZero's n-step target; the outcome where the game ends sooner)")
     p.add_argument("--value-bootstrap-weight", type=float, default=_SL.value_bootstrap_weight,
-                   help="--value-nstep: the later root value's weight in the target (the outcome's is 1 - w)")
+                   help="--value-nstep / --value-lambda: the bootstrap's weight in the target (the outcome's is 1 - w)")
+    p.add_argument("--value-lambda", type=float, default=_SL.value_lambda,
+                   help="Bootstrap from the lambda-return over the game's later search values instead (TD(lambda))")
     p.add_argument("--aux-loss-weight", type=float, default=_SL.aux_loss_weight,
                    help="Auxiliary outcome heads (final net-worth and cash shares, corporations floated); 0 = off")
     p.add_argument("--surprise-weight", type=float, default=_SL.surprise_weight,

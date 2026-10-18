@@ -52,6 +52,7 @@ class Position:
     placement: np.ndarray  # placement points, absolute seat order
     stage: int  # 0 / 1 / 2: the action's third of the game
     game: str  # "<collection>/<game idx>"
+    legal: Optional[np.ndarray] = None  # int32 policy indices (the trunk fine-tune's policy anchor)
 
 
 def collection_games(directory) -> list:
@@ -87,7 +88,8 @@ def game_positions(game_id: str, actions: list, record: dict, select, points=(1.
     for i, action in enumerate(actions):
         if not g.finished and select(i, n, rs):
             state, nodes, _, rotation, _ = rs.encode_canonical_py()
-            out.append(Position(state, nodes, int(rotation), win, placement, min(2, 3 * i // max(n, 1)), game_id))
+            legal = np.asarray(rs.factored_legal_indices(), dtype=np.int32)
+            out.append(Position(state, nodes, int(rotation), win, placement, min(2, 3 * i // max(n, 1)), game_id, legal))
         rs.process_action(action)
     return out
 
@@ -98,16 +100,15 @@ def heldout_selector(i: int, n: int, rs) -> bool:
 
 
 def sampled_selector(k: int, n_actions: int, rng: np.random.Generator):
-    """About ``k`` decisions with a choice, uniformly over the game's actions."""
+    """``k`` decisions with a choice, uniformly over the game's actions: 2k candidate
+    actions are drawn, those with a choice kept, and :func:`collect` thins them to k
+    at random (keeping the first k in game order would skew toward the opening)."""
     chosen = set(rng.choice(n_actions, size=min(n_actions, 2 * k), replace=False).tolist()) if n_actions else set()
-    kept = []
 
     def select(i, n, rs):
-        if i in chosen and len(kept) < k and len(rs.factored_legal_indices()) > 1:
-            kept.append(i)
-            return True
-        return False
+        return i in chosen and len(rs.factored_legal_indices()) > 1
 
+    select.keep, select.rng = k, rng
     return select
 
 
@@ -234,8 +235,11 @@ def fit_heads(learner, train: Extracted, val: Extracted, critic_name: str, cfg: 
 
     tw, ts = targets(train)
     vw, vs = targets(val)
-    xt = torch.from_numpy(train.seat_input)
-    xv = torch.from_numpy(val.seat_input)
+    # On the GPU the features fit (~0.9 GB for 165k positions in fp16): gathering
+    # batches there instead of on the host is ~20x faster.
+    xt = torch.from_numpy(train.seat_input).to(device)
+    xv = torch.from_numpy(val.seat_input).to(device)
+    tw, ts, vw, vs = (t.to(device) for t in (tw, ts, vw, vs))
 
     def evaluate():
         win_head.eval(), score_head.eval()
@@ -262,7 +266,7 @@ def fit_heads(learner, train: Extracted, val: Extracted, critic_name: str, cfg: 
         win_head.train(), score_head.train()
         order = rng.permutation(len(xt))
         for b in range(0, len(order), cfg.batch_size):
-            idx = torch.from_numpy(order[b : b + cfg.batch_size])
+            idx = torch.from_numpy(order[b : b + cfg.batch_size]).to(device)
             ce, mse, _, _ = head_losses(
                 win_head, score_head, xt[idx].float().to(device), tw[idx].to(device), ts[idx].to(device)
             )
@@ -282,6 +286,170 @@ def fit_heads(learner, train: Extracted, val: Extracted, critic_name: str, cfg: 
     win_head.load_state_dict(best_state[0])
     score_head.load_state_dict(best_state[1])
     return {"win_head": win_head.cpu().eval(), "score_head": score_head.cpu().eval(), "history": history}
+
+
+# ---------------------------------------------------------------------------
+# Trunk fine-tune (policy anchored)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FinetuneConfig:
+    """The whole network on the value targets, with KL(original || tuned) over each
+    position's legal moves at ``temperature`` (and over every price slot's cells)
+    keeping the policy where it was."""
+
+    outcome_weight: float = 0.25
+    score_weight: float = 1.0
+    policy_kl_weight: float = 1.0
+    trunk_lr: float = 1e-5
+    head_lr: float = 1e-4
+    batch_size: int = 256
+    epochs: int = 2
+    eval_every: int = 200
+    temperature: float = 0.5
+    seed: int = 0
+
+
+def _batch_tensors(positions: list, idx, device) -> tuple:
+    import torch
+
+    from rl18xx.agent.alphazero.mcts import POLICY_SIZE
+    from rl18xx.agent.alphazero.policy_gradient import _lay_tile_range
+
+    chunk = [positions[int(i)] for i in idx]
+    gs = torch.from_numpy(np.stack([p.game_state for p in chunk])).float().to(device)
+    nodes = torch.from_numpy(np.stack([p.node_features for p in chunk])).float().to(device)
+    legal = torch.zeros(len(chunk), POLICY_SIZE, dtype=torch.bool)
+    for b, p in enumerate(chunk):
+        legal[b, torch.from_numpy(p.legal.astype(np.int64))] = True
+    lo, hi = _lay_tile_range()
+    tiles = legal[:, lo:hi].any(dim=1)
+    return gs, nodes, legal.to(device), tiles
+
+
+def policy_drift(original, tuned, positions: list, temperature: float, device=None, batch_size: int = 256) -> dict:
+    """KL(original || tuned) over the legal moves at ``temperature`` (mean per
+    position) and how often the two policies' top moves agree."""
+    import torch
+
+    from rl18xx.agent.alphazero.policy_gradient import _masked_log_softmax
+
+    kl, agree = [], []
+    with torch.no_grad():
+        for b in range(0, len(positions), batch_size):
+            idx = range(b, min(b + batch_size, len(positions)))
+            gs, nodes, legal, tiles = _batch_tensors(positions, idx, device)
+            lp0 = _masked_log_softmax(original(gs, nodes, lay_tile_rows=tiles)[0] / temperature, legal)
+            lp1 = _masked_log_softmax(tuned(gs, nodes, lay_tile_rows=tiles)[0] / temperature, legal)
+            p0 = lp0.exp() * legal
+            kl.append((p0 * (lp0 - lp1).masked_fill(~legal, 0.0)).sum(dim=1).cpu().numpy())
+            agree.append(
+                (lp0.masked_fill(~legal, -1e30).argmax(1) == lp1.masked_fill(~legal, -1e30).argmax(1)).float().cpu().numpy()
+            )
+    kl, agree = np.concatenate(kl), np.concatenate(agree)
+    return {"policy_kl": float(kl.mean()), "policy_kl_p99": float(np.quantile(kl, 0.99)), "top1_agreement": float(agree.mean())}
+
+
+def model_predictions(model, positions: list, device=None, batch_size: int = 256) -> dict:
+    """A whole network's win probabilities and score output (canonical, 4 seats)."""
+    import torch
+    import torch.nn.functional as F
+
+    win, score = [], []
+    with torch.no_grad():
+        for b in range(0, len(positions), batch_size):
+            chunk = positions[b : b + batch_size]
+            gs = torch.from_numpy(np.stack([p.game_state for p in chunk])).float().to(device)
+            nodes = torch.from_numpy(np.stack([p.node_features for p in chunk])).float().to(device)
+            _, w, s, _ = model(gs, nodes, value_only=True)
+            win.append(F.softmax(w.float(), dim=-1)[:, :NUM_PLAYERS].cpu().numpy())
+            score.append(s.float()[:, :NUM_PLAYERS].cpu().numpy())
+    return {"win": np.concatenate(win), "score": np.concatenate(score)}
+
+
+def finetune(learner, positions: list, data: Extracted, val_positions: list, val: Extracted, critic_name: str,
+             cfg: FinetuneConfig, device=None, win_head=None, score_head=None) -> dict:
+    """Fine-tune a copy of ``learner`` -- trunk and value heads, starting from
+    ``win_head`` / ``score_head`` if given (a heads-only fit) -- toward ``(1 - a) *
+    critic + a * outcome`` on ``positions`` (``data`` holds their targets in the same
+    order), with ``policy_kl_weight`` * KL(learner || tuned) on the policy at T and on
+    the price head; the best validation outcome CE wins. Returns ``{"model",
+    "history"}``."""
+    import torch
+
+    from rl18xx.agent.alphazero.policy_gradient import _masked_log_softmax
+
+    torch.manual_seed(cfg.seed)
+    original = learner.eval()
+    tuned = copy.deepcopy(learner)
+    if win_head is not None:
+        tuned.win_loss_head.load_state_dict(win_head.state_dict())
+    if score_head is not None:
+        tuned.score_head.load_state_dict(score_head.state_dict())
+    tuned.to(device).eval()  # eval: no dropout, the policy trained is the one played
+    heads = {id(p) for h in (tuned.win_loss_head, tuned.score_head) for p in h.parameters()}
+    groups = [
+        {"params": [p for p in tuned.parameters() if id(p) not in heads], "lr": cfg.trunk_lr},
+        {"params": [p for p in tuned.parameters() if id(p) in heads], "lr": cfg.head_lr},
+    ]
+    opt = torch.optim.AdamW(groups, weight_decay=0.0)
+    a = cfg.outcome_weight
+    crit = data.predictions[critic_name]
+    target_win = torch.from_numpy((1 - a) * crit["win"] + a * data.win).float()
+    target_score = torch.from_numpy((1 - a) * crit["score"] + a * data.placement).float()
+    T = cfg.temperature
+
+    def evaluate(step):
+        pred = model_predictions(tuned, val_positions, device)
+        report = stage_report(val, pred)
+        drift = policy_drift(original, tuned, val_positions[:4096], T, device)
+        return {"step": step, "outcome_ce": report["win_ce"], "winner_hit": report["winner_hit"], **drift}
+
+    history = [evaluate(0)]
+    best = (history[0]["outcome_ce"], copy.deepcopy(tuned.state_dict()), 0)
+    rng = np.random.default_rng(cfg.seed)
+    step = 0
+    for _ in range(cfg.epochs):
+        order = rng.permutation(len(positions))
+        for b in range(0, len(order), cfg.batch_size):
+            idx = order[b : b + cfg.batch_size]
+            gs, nodes, legal, tiles = _batch_tensors(positions, idx, device)
+            with torch.no_grad():
+                logits0, _, _, _ = original(gs, nodes, lay_tile_rows=tiles)
+                price0 = original.last_price_components["price_logits"]
+            logits, win_logits, score, _ = tuned(gs, nodes, lay_tile_rows=tiles)
+            price = tuned.last_price_components["price_logits"]
+            tw, ts = target_win[idx].to(device), target_score[idx].to(device)
+            ce = -(tw * torch.log_softmax(win_logits.float()[:, :NUM_PLAYERS], dim=1)).sum(1).mean()
+            mse = ((score.float()[:, :NUM_PLAYERS] - ts) ** 2).mean()
+            lp0 = _masked_log_softmax(logits0 / T, legal)
+            lp1 = _masked_log_softmax(logits / T, legal)
+            kl = ((lp0.exp() * legal) * (lp0 - lp1).masked_fill(~legal, 0.0)).sum(1).mean()
+            c0, c1 = torch.log_softmax(price0.float(), -1), torch.log_softmax(price.float(), -1)
+            price_kl = (c0.exp() * (c0 - c1)).sum(-1).mean()
+            loss = ce + cfg.score_weight * mse + cfg.policy_kl_weight * (kl + price_kl)
+            if not torch.isfinite(loss):
+                raise RuntimeError("value fine-tune diverged (non-finite loss)")
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            for group in opt.param_groups:
+                torch.nn.utils.clip_grad_norm_(group["params"], max_norm=1.0)
+            opt.step()
+            step += 1
+            if step % cfg.eval_every == 0:
+                history.append(evaluate(step))
+                LOGGER.info(
+                    f"fine-tune step {step}: {history[-1]} (train ce {float(ce.detach()):.4f}, kl {float(kl.detach()):.5f})"
+                )
+                if history[-1]["outcome_ce"] < best[0]:
+                    best = (history[-1]["outcome_ce"], copy.deepcopy(tuned.state_dict()), step)
+    if step % cfg.eval_every:
+        history.append(evaluate(step))
+        if history[-1]["outcome_ce"] < best[0]:
+            best = (history[-1]["outcome_ce"], copy.deepcopy(tuned.state_dict()), step)
+    tuned.load_state_dict(best[1])
+    return {"model": tuned.eval(), "history": history, "best_step": best[2]}
 
 
 def head_predictions(win_head, score_head, data: Extracted, device=None) -> dict:
@@ -330,13 +498,21 @@ def write_refit_checkpoint(learner_path, win_head, score_head, out_path, provena
     """The learner at ``learner_path`` with these value heads, saved at ``out_path``
     (``<run>/learner/<n>.pth``) with ``<run>/config.json`` carrying the source run's
     ``learner_temperature`` (so search learning reads T from it) and ``provenance``."""
-    from rl18xx.agent.alphazero.policy_gradient import _load, _save
-    from rl18xx.agent.alphazero.search_learning import run_temperature
+    from rl18xx.agent.alphazero.policy_gradient import _load
 
-    out_path = Path(out_path)
     model = _load(learner_path)
     model.win_loss_head.load_state_dict({k: v.to(next(model.parameters()).device) for k, v in win_head.state_dict().items()})
     model.score_head.load_state_dict({k: v.to(next(model.parameters()).device) for k, v in score_head.state_dict().items()})
+    return write_model_checkpoint(model, learner_path, out_path, provenance)
+
+
+def write_model_checkpoint(model, learner_path, out_path, provenance: dict) -> Path:
+    """``model`` saved at ``out_path`` with ``<run>/config.json`` carrying
+    ``learner_path``'s run's ``learner_temperature`` and ``provenance``."""
+    from rl18xx.agent.alphazero.policy_gradient import _save
+    from rl18xx.agent.alphazero.search_learning import run_temperature
+
+    out_path = Path(out_path)
     _save(model, out_path)
     config = {"learner_temperature": run_temperature(learner_path), "source": str(learner_path), **provenance}
     if out_path.parent.name == "learner":
@@ -354,9 +530,16 @@ def collect(directories: Iterable, select_factory, exclude: Iterable = ()) -> li
             continue
         games = collection_games(directory)
         for game_id, actions, record in games:
+            select = select_factory(game_id, len(actions))
             try:
-                out.extend(game_positions(game_id, actions, record, select_factory(game_id, len(actions))))
+                positions = game_positions(game_id, actions, record, select)
             except Exception as e:  # a game recorded before an engine change
                 LOGGER.warning(f"{game_id}: skipped ({e!r})")
+                continue
+            keep = getattr(select, "keep", None)
+            if keep is not None and len(positions) > keep:
+                picked = np.sort(select.rng.choice(len(positions), size=keep, replace=False))
+                positions = [positions[int(i)] for i in picked]
+            out.extend(positions)
         LOGGER.info(f"{directory}: {len(games)} games, {len(out)} positions so far")
     return out

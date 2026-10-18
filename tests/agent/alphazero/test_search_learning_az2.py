@@ -81,6 +81,39 @@ def test_nstep_target_mixes_the_outcome_with_the_root_value_n_searches_later():
     assert float(sl.nstep_win_target(outcome, values, 0, 1, 0.3).sum()) == pytest.approx(1.0)
 
 
+def test_lambda_returns_over_a_games_searches():
+    z = np.array([1.0, 0.0, 0.0, 0.0])
+    v = [np.array([0.1, 0.2, 0.3, 0.4]), np.array([0.4, 0.2, 0.2, 0.2]), np.array([0.0, 0.0, 2.0, 2.0])]
+    lam = 0.6
+    g2 = z
+    g1 = (1 - lam) * v[2] / 4.0 + lam * g2
+    g0 = (1 - lam) * v[1] + lam * g1
+    returns = sl.lambda_returns(z, v, lam)
+    for got, want in zip(returns, (g0, g1, g2)):
+        np.testing.assert_allclose(got, want, atol=1e-9)
+    np.testing.assert_allclose(sl.lambda_returns(z, v, 1.0)[0], z)  # lambda 1: the outcome
+    np.testing.assert_allclose(sl.lambda_returns(z, v, 0.0)[0], v[1])  # lambda 0: the next search's value
+    np.testing.assert_allclose(sl.lambda_win_target(z, returns, 0, 0.5), 0.5 * z + 0.5 * g0, atol=1e-6)
+    np.testing.assert_allclose(sl.lambda_win_target(z, returns, -1, 0.5), z)
+
+
+def test_generated_rows_take_lambda_targets(start_file):
+    v_abs = np.array([0.55, 0.25, 0.15, 0.05], dtype=np.float32)
+    settings = _settings(start_file, p_full=1.0, n_full=6, games_per_worker=2, max_decisions=20)
+    settings.update(value_lambda=0.5, value_bootstrap_weight=1.0)
+    games = [g for g in _generator(settings, AbsoluteValueNet(v_abs)).run(6.0)["games"] if g["rows"]]
+    assert games
+    for g in games:
+        rows = g["rows"]
+        z = sl.share_of_winners(rows[0].fractions)
+        expected = sl.lambda_returns(z, [r.root_value for r in rows], 0.5)
+        for r, want in zip(rows, expected):
+            np.testing.assert_allclose(r.win_target, want, atol=1e-5)
+        # Every root value is v_abs: G_i = v_abs + 0.5 ** (searches after i) * (z - v_abs).
+        k = len(rows) - 1 - rows[0].search_index
+        np.testing.assert_allclose(rows[0].win_target, v_abs + 0.5**k * (z - v_abs), atol=1e-5)
+
+
 def test_rows_carry_the_searchs_root_value_in_absolute_seat_order_and_nstep_targets(start_file):
     v_abs = np.array([0.55, 0.25, 0.15, 0.05], dtype=np.float32)
     settings = _settings(start_file, p_full=1.0, n_full=6, games_per_worker=2, max_decisions=20)
@@ -322,6 +355,20 @@ def test_a_shared_value_model_blends_its_own_heads_from_one_forward(tmp_path):
     assert torch.allclose(v1, 0.75 * torch.softmax(win, dim=-1) + 0.25 * score, atol=1e-6)
     assert torch.allclose(v2, score, atol=1e-6)
     assert blended.last_price_components is not None
+    # The inference server's packed fast path gives the same replies.
+    parts = [(
+        np.concatenate([s[0].numpy().reshape(1, -1) for s in states]),
+        np.stack([s[1].numpy() for s in states]),
+        np.array([[int(s[4]), 0, int(s[6]), int(s[7])] for s in states]),
+        None,
+    )]
+    assert blended.supports_packed
+    with torch.no_grad():
+        legal = [np.arange(10, dtype=np.int64)] * len(states)
+        pp, _, vp = blended.run_packed(blended.packed_inputs(parts), legal_indices=legal)
+        p_ref, _, v_ref = blended.run_many_encoded(states, legal_indices=legal)
+    assert torch.allclose(vp, v1, atol=1e-5) and torch.allclose(vp, v_ref, atol=1e-5)
+    assert torch.allclose(pp[:, :10], p_ref[:, :10], atol=1e-5)
     with pytest.raises(ValueError):
         load_policy_value(f"{path}#blend=1.5")
 
@@ -450,9 +497,33 @@ def test_value_refit_fits_heads_to_the_critic_and_keeps_the_policy(tmp_path):
         a = learner.to(CPU)(gs, nodes)
         b = refit.to(CPU)(gs, nodes)
     assert torch.equal(a[0], b[0])  # the policy is untouched
-    np.testing.assert_allclose(torch.softmax(b[1], -1)[:, :4].numpy(), pred["win"][:6], atol=1e-5)
+    # (the fit read fp16 features)
+    np.testing.assert_allclose(torch.softmax(b[1], -1)[:, :4].numpy(), pred["win"][:6], atol=5e-4)
     report = vr.stage_report(data, pred)
     assert report["n"] == len(positions) and 0 <= report["winner_hit"] <= 1
+
+
+def test_value_finetune_keeps_the_policy_when_the_trunk_is_frozen_and_reports_drift():
+    learner, critic = _tiny_model(0).eval(), _random_value_heads(_tiny_model(1), 7).eval()
+    games = random_positions(4, 6, steps=300, every=3)
+    positions = []
+    for i, g in enumerate(games):
+        state, nodes, _, rotation, _ = g.encode_canonical_py()
+        win = np.eye(4, dtype=np.float32)[i % 4]
+        legal = np.asarray(g.factored_legal_indices(), dtype=np.int32)
+        positions.append(vr.Position(state, nodes, int(rotation), win, win, i * 3 // len(games), f"y/{i // 6}", legal))
+    data = vr.extract(positions, learner, {"critic": critic}, CPU, batch_size=32)
+    frozen = vr.FinetuneConfig(trunk_lr=0.0, head_lr=3e-3, batch_size=16, epochs=6, eval_every=5, outcome_weight=1.0)
+    out = vr.finetune(learner, positions, data, positions, data, "critic", frozen, CPU)
+    drift = vr.policy_drift(learner, out["model"], positions, 0.5, CPU)
+    assert drift["policy_kl"] < 1e-9 and drift["top1_agreement"] == 1.0  # only the value heads moved
+    assert out["best_step"] > 0 and out["history"][-1]["outcome_ce"] != out["history"][0]["outcome_ce"]
+    moving = vr.FinetuneConfig(trunk_lr=1e-3, head_lr=3e-3, batch_size=16, epochs=2, eval_every=4, policy_kl_weight=0.0)
+    out = vr.finetune(learner, positions, data, positions, data, "critic", moving, CPU)
+    assert {"policy_kl", "top1_agreement", "outcome_ce"} <= set(out["history"][-1])
+    assert vr.policy_drift(learner, out["model"], positions, 0.5, CPU)["policy_kl"] >= 0.0
+    pred = vr.model_predictions(out["model"], positions[:5], CPU)
+    assert pred["win"].shape == (5, 4) and np.allclose(pred["win"].sum(1), 1.0, atol=1e-5)
 
 
 def test_stage_report_scores_ce_and_winner_hit_by_stage():
@@ -484,7 +555,7 @@ def _save_shared_start(tmp_path):
     return source / "learner" / "100.pth"
 
 
-def test_a_tiny_cpu_az2_run_shared_gumbel_nstep_surprise_aux_resumes(tmp_path, start_file, monkeypatch):
+def test_a_tiny_cpu_az2_run_shared_gumbel_nstep_surprise_aux_speedups_resumes(tmp_path, start_file, monkeypatch):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
     policy = _save_shared_start(tmp_path)
     cfg = sl.SearchLearningConfig(
@@ -495,6 +566,7 @@ def test_a_tiny_cpu_az2_run_shared_gumbel_nstep_surprise_aux_resumes(tmp_path, s
         steps_per_update=2, minibatch=8, microbatch=4, max_updates=2, snapshot_every=1, anchor_every=1,
         kl_target=0.05, critic_positions_per_game=0, value_nstep=3, value_bootstrap_weight=0.5,
         surprise_weight=0.5, aux_loss_weight=0.1, lr=1e-4, critic_lr=3e-4,
+        reuse_tree="total", dedupe_maps=True, server_replicas=2,  # the pilot's speed options
     )
     run_dir = sl.run(cfg)
     history = [json.loads(line) for line in (run_dir / "history.jsonl").read_text().splitlines()]
@@ -503,6 +575,7 @@ def test_a_tiny_cpu_az2_run_shared_gumbel_nstep_surprise_aux_resumes(tmp_path, s
         for key in ("ce", "critic_ce", "critic_outcome_ce", "surprise_ess", "aux_mse", "aux_bce", "search_value_ce"):
             assert math.isfinite(h[key]), key
         assert h["critic_rows_trained"] > 0 and 0 < h["surprise_ess"] <= 1.0 + 1e-6
+        assert "reused_search_share" in h and h["map_rows_per_state"] <= 1.0
     assert not (run_dir / "critic").exists()
     for update in (0, 1, 2):
         assert (run_dir / "learner" / f"{update}.pth").exists()
