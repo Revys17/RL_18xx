@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use super::{
     CorpType,
-    AbilityDef, AbilityWhen, Capitalization, CompanyDef, CorporationDef, HexDef, HexType,
+    AbilityDef, AbilityWhen, BorderDef, Capitalization, CompanyDef, CorporationDef, HexDef, HexType,
     MarketCell, MarketZone, OwnerType, PhaseDef, ShareSource, TrainDef,
 };
 use crate::steps::{FinishedRound, RoundStart, RoundTransition, StepDesc, StepKind};
@@ -1049,7 +1049,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
                 slots: 1,
             },
             terrain_cost: 0,
-            borders: &[],
+            borders: &[BorderDef { edge: 5, cost: None, impassable: true }],
         },
         HexDef {
             coord: "E19",
@@ -1110,7 +1110,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
             coord: "E7",
             hex_type: Town { revenue: 0 },
             terrain_cost: 0,
-            borders: &[],
+            borders: &[BorderDef { edge: 5, cost: None, impassable: true }],
         },
         HexDef {
             coord: "B20",
@@ -1401,7 +1401,7 @@ pub fn hex_definitions() -> Vec<HexDef> {
             coord: "C17",
             hex_type: Blank,
             terrain_cost: 120,
-            borders: &[],
+            borders: &[BorderDef { edge: 2, cost: None, impassable: true }],
         },
         // --- Water (cost=80) ---
         HexDef {
@@ -1433,25 +1433,25 @@ pub fn hex_definitions() -> Vec<HexDef> {
             coord: "F8",
             hex_type: Blank,
             terrain_cost: 0,
-            borders: &[],
+            borders: &[BorderDef { edge: 2, cost: None, impassable: true }],
         },
         HexDef {
             coord: "C11",
             hex_type: Blank,
             terrain_cost: 0,
-            borders: &[],
+            borders: &[BorderDef { edge: 5, cost: None, impassable: true }],
         },
         HexDef {
             coord: "C13",
             hex_type: Blank,
             terrain_cost: 0,
-            borders: &[],
+            borders: &[BorderDef { edge: 0, cost: None, impassable: true }],
         },
         HexDef {
             coord: "D12",
             hex_type: Blank,
             terrain_cost: 0,
-            borders: &[],
+            borders: &[BorderDef { edge: 2, cost: None, impassable: true }, BorderDef { edge: 3, cost: None, impassable: true }],
         },
     ]
 }

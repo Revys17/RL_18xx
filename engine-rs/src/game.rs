@@ -276,6 +276,11 @@ pub struct BaseGame {
     /// 1867's $80 waters): hex -> [(edge, cost)]. Static, Arc-shared; empty
     /// for 1830.
     pub(crate) border_costs: Arc<HashMap<String, Vec<(u8, i32)>>>,
+    /// Impassable hex edges (Ruby `border=...,type:impassable`; see
+    /// `title::title_walls`): hex -> sorted edges. Static, Arc-shared.
+    /// Read by `passable_exits_for` (tile-lay rotations) and the lay
+    /// frontier — Ruby drops these edges from `hex.neighbors`.
+    pub(crate) walls: Arc<HashMap<String, Vec<u8>>>,
     /// Borders whose crossing cost has been paid, as (hex, edge) — Ruby
     /// `remove_border_calculate_cost!` deletes a paid border from BOTH
     /// tiles, so it is charged once.
@@ -552,6 +557,7 @@ impl BaseGame {
             auction_unlock_discounts: self.auction_unlock_discounts,
             optional_rules: self.optional_rules.clone(),
             border_costs: Arc::clone(&self.border_costs),
+            walls: Arc::clone(&self.walls),
             paid_borders: self.paid_borders.clone(),
             pending_force_next_entity: self.pending_force_next_entity,
             g1822: self.g1822.clone(),
@@ -2504,6 +2510,12 @@ pub(crate) fn build_hex_from_def(title: &dyn GameTitle, def: &HexDef) -> Hex {
             "red" => TileColor::Red,
             "gray" => TileColor::Gray,
             "yellow" => TileColor::Yellow,
+            // 1867's lake ports (E19/H16; 1830 has no blue hexes). Ruby's
+            // IMPASSABLE_HEX_COLORS treat blue like red and gray — never
+            // upgraded, impassable unless targeting — so they take the red
+            // color (`TileColor` has no blue; the color is not otherwise
+            // read for these offboards).
+            "blue" => TileColor::Red,
             _ => TileColor::White,
         };
         let tile_def = tiles::parse_preprinted_tile(def.coord, dsl, color);
@@ -2878,6 +2890,7 @@ impl BaseGame {
             auction_unlock_discounts: 0,
             optional_rules,
             border_costs: Arc::new(border_costs),
+            walls: Arc::new(crate::title::title_walls(title)),
             paid_borders: Vec::new(),
             pending_force_next_entity: false,
             g1822: None,

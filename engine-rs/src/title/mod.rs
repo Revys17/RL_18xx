@@ -659,6 +659,52 @@ pub fn compute_adjacency(coords: &[&str], layout: HexLayout) -> HashMap<String, 
     adjacency
 }
 
+/// The hex edges track may never cross, per hex: Ruby's impassable borders
+/// (`border=edge:N,type:impassable`), from the title's `HexDef.borders`
+/// (`impassable: true`) and from the preprinted-hex DSL. Ruby
+/// `Game::Base#connect_hexes` drops exactly these from `hex.neighbors`
+/// (`border.type == :impassable`); a border with no type (1830's I1/J2/A9/
+/// A11, 1867's D2/C3/E1/A17/A19 — drawn between hexes of one offboard
+/// group) or a cost-only border (1867's $80 waters) is NOT a wall. Edges
+/// are sorted, deduplicated; hexes without walls are absent.
+pub fn title_walls(title: &dyn GameTitle) -> HashMap<String, Vec<u8>> {
+    let mut out: HashMap<String, Vec<u8>> = HashMap::new();
+    for d in title.hex_definitions() {
+        let mut edges: Vec<u8> = d.borders.iter().filter(|b| b.impassable).map(|b| b.edge).collect();
+        if let Some((dsl, _)) = title.preprinted_hex_dsl(d.coord) {
+            edges.extend(dsl_impassable_edges(dsl));
+        }
+        edges.sort_unstable();
+        edges.dedup();
+        if !edges.is_empty() {
+            out.insert(d.coord.to_string(), edges);
+        }
+    }
+    out
+}
+
+/// The `border=edge:N,type:impassable` edges of a hex DSL string.
+pub fn dsl_impassable_edges(dsl: &str) -> Vec<u8> {
+    dsl.split(';')
+        .filter_map(|part| {
+            let rest = part.trim().strip_prefix("border=")?;
+            let (mut edge, mut impassable) = (None, false);
+            for kv in rest.split(',') {
+                match kv.split_once(':') {
+                    Some(("edge", v)) => edge = v.trim().parse::<u8>().ok(),
+                    Some(("type", v)) => impassable = v.trim() == "impassable",
+                    _ => {}
+                }
+            }
+            if impassable {
+                edge
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Title-agnostic definition structs — the shape every title's data module
 // fills in (moved here from g1830.rs so future titles share them).
@@ -902,8 +948,9 @@ pub struct HexDef {
     pub hex_type: HexType,
     pub terrain_cost: i32,
     /// Per-edge specialities (impassable borders, edge-crossing costs).
-    /// Empty for hexes without them (all of 1830's blocks are ability- or
-    /// geometry-derived; 1867 has impassable river edges + $80 waters).
+    /// Empty for hexes without them (1830: the seven impassable edges of
+    /// E7/F8/C11/C13/D12/B16/C17; 1867: impassable river edges + $80
+    /// waters). Walls are read through [`title_walls`].
     pub borders: &'static [BorderDef],
 }
 

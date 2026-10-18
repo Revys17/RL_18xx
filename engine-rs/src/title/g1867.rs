@@ -1338,6 +1338,14 @@ pub fn hex_definitions() -> Vec<HexDef> {
             impassable: true,
         }
     }
+    /// A border with no type (a drawn line; crossing is unrestricted).
+    const fn plain(edge: u8) -> BorderDef {
+        BorderDef {
+            edge,
+            cost: None,
+            impassable: false,
+        }
+    }
     const fn water80(edge: u8) -> BorderDef {
         BorderDef {
             edge,
@@ -1346,6 +1354,8 @@ pub fn hex_definitions() -> Vec<HexDef> {
         }
     }
     // Named border sets (const items so the slices are 'static).
+    const PLAIN_0: &[BorderDef] = &[plain(0)];
+    const PLAIN_3: &[BorderDef] = &[plain(3)];
     const WALL_0: &[BorderDef] = &[wall(0)];
     const WALL_2: &[BorderDef] = &[wall(2)];
     const WALL_3: &[BorderDef] = &[wall(3)];
@@ -1453,8 +1463,11 @@ pub fn hex_definitions() -> Vec<HexDef> {
         HexDef { coord: "P8", hex_type: Offboard { yellow_revenue: 30, brown_revenue: 40 }, terrain_cost: 0, borders: NO_BORDERS },
         // A17+A19 are ONE grouped offboard (groups:Detroit, A17 hide:1) —
         // the native router stops at one of them at most.
-        HexDef { coord: "A17", hex_type: Offboard { yellow_revenue: 30, brown_revenue: 50 }, terrain_cost: 0, borders: WALL_0 },
-        HexDef { coord: "A19", hex_type: Offboard { yellow_revenue: 30, brown_revenue: 50 }, terrain_cost: 0, borders: WALL_3 },
+        // Their shared `border=edge:0` / `border=edge:3` has NO type: drawn
+        // between the two halves of the group, not a wall (Ruby
+        // connect_hexes only drops `type: :impassable` borders).
+        HexDef { coord: "A17", hex_type: Offboard { yellow_revenue: 30, brown_revenue: 50 }, terrain_cost: 0, borders: PLAIN_0 },
+        HexDef { coord: "A19", hex_type: Offboard { yellow_revenue: 30, brown_revenue: 50 }, terrain_cost: 0, borders: PLAIN_3 },
         // --- Blue hexes (lake ports, flat revenue 10 at all phases) ---
         HexDef { coord: "E19", hex_type: Offboard { yellow_revenue: 10, brown_revenue: 10 }, terrain_cost: 0, borders: WALL_2 },
         HexDef { coord: "H16", hex_type: Offboard { yellow_revenue: 10, brown_revenue: 10 }, terrain_cost: 0, borders: WALL_3 },
