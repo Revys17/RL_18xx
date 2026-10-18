@@ -2373,6 +2373,13 @@ impl BaseGame {
     /// Stops when a corp has a blocking step (waiting for player action) or
     /// all corps have been processed (round finished).
     pub(crate) fn start_operating(&mut self) {
+        // A turn parked at Done while the 1867 trainless queue drains (see
+        // or_advance_to_next_corp) is not set up again.
+        if !self.trainless_major.is_empty()
+            && matches!(&self.round, crate::rounds::Round::Operating(s) if s.step == OperatingStep::Done)
+        {
+            return;
+        }
         // If no corps to operate, mark the round as finished immediately
         if let crate::rounds::Round::Operating(ref s) = self.round {
             if s.operating_order.is_empty() {

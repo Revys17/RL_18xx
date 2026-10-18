@@ -70,7 +70,7 @@ impl BaseGame {
     /// Ruby ViaBid `max_bid(player, corporation)`: the player's cash, or 0
     /// when the minor's cert would not fit (`can_gain?` — the cert limit;
     /// a 100% minor always passes the holding check).
-    fn stock_bid_max(&self, player_id: u32) -> i32 {
+    pub(crate) fn stock_bid_max(&self, player_id: u32) -> i32 {
         if self.num_certs_internal(player_id) >= self.cert_limit as u32 {
             return 0;
         }

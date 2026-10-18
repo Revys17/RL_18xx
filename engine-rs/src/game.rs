@@ -1316,7 +1316,8 @@ impl BaseGame {
                 // rusted yet; Ruby fires events before rusting too).
                 "minors_nationalized" => {
                     self.note_ruby_force_next_entity(base_name, &phase_defs, &train_defs);
-                    self.event_minors_nationalized();
+                    let export_force = self.ruby_export_force_target(base_name, &phase_defs, &train_defs);
+                    self.event_minors_nationalized(export_force);
                 }
                 other => unimplemented!("train event {other}"),
             }
@@ -1415,6 +1416,53 @@ impl BaseGame {
         if !in_live_or {
             return;
         }
+        if self
+            .ruby_first_crowded_after(base_name, phase_defs, train_defs)
+            .is_some_and(|(_, t)| t == crate::title::CorpType::Minor)
+        {
+            self.pending_force_next_entity = true;
+        }
+    }
+
+    /// The OR-END export variant of [`Self::note_ruby_force_next_entity`]
+    /// (G1867 or_round_finished → Depot#export! → the first 8's
+    /// minors_nationalized, on the FINISHED operating round): when the
+    /// minor that Ruby's DiscardTrain step names as the round's current
+    /// entity closes, `force_next_entity!` runs `@steps.each(&:pass!)` and
+    /// G1867 BuyTrain#pass! nationalizes the round's last operator if the
+    /// export's rust left it trainless (probed on a fuzz game: "NTR is
+    /// nationalized" right after BBG closes, before "-- Stock Round --").
+    /// Returns the minor and this train's rusting names.
+    fn ruby_export_force_target(
+        &self,
+        base_name: &str,
+        phase_defs: &[crate::title::PhaseDef],
+        train_defs: &[crate::title::TrainDef],
+    ) -> Option<(String, Vec<String>)> {
+        if !matches!(&self.round, Round::Operating(s) if s.finished) {
+            return None;
+        }
+        let (sym, t) = self.ruby_first_crowded_after(base_name, phase_defs, train_defs)?;
+        if t != crate::title::CorpType::Minor {
+            return None;
+        }
+        let rusting = train_defs
+            .iter()
+            .filter(|td| td.rusts_on == Some(base_name))
+            .map(|td| td.name.to_string())
+            .collect();
+        Some((sym, rusting))
+    }
+
+    /// The first corporation (definition order) over the train limits of
+    /// the phase `base_name` triggers, with this train's rust applied —
+    /// Ruby `crowded_corps.first` as the purchase's events see it.
+    fn ruby_first_crowded_after(
+        &self,
+        base_name: &str,
+        phase_defs: &[crate::title::PhaseDef],
+        train_defs: &[crate::title::TrainDef],
+    ) -> Option<(String, crate::title::CorpType)> {
         let target = phase_defs.iter().find(|p| p.on == Some(base_name));
         let (major_limit, minor_limit) = match target {
             Some(p) => (p.train_limit as usize, p.minor_train_limit.unwrap_or(0) as usize),
@@ -1425,17 +1473,17 @@ impl BaseGame {
             .filter(|td| td.rusts_on == Some(base_name))
             .map(|td| td.name)
             .collect();
-        let first_crowded = self.corporations.iter().find(|c| {
-            if !c.floated || c.closed || c.corp_type == crate::title::CorpType::National {
-                return false;
-            }
-            let n = c.trains.iter().filter(|t| !rusting.contains(&t.name.as_str())).count();
-            let limit = if c.corp_type == crate::title::CorpType::Minor { minor_limit } else { major_limit };
-            n > limit
-        });
-        if first_crowded.is_some_and(|c| c.corp_type == crate::title::CorpType::Minor) {
-            self.pending_force_next_entity = true;
-        }
+        self.corporations
+            .iter()
+            .find(|c| {
+                if !c.floated || c.closed || c.corp_type == crate::title::CorpType::National {
+                    return false;
+                }
+                let n = c.trains.iter().filter(|t| !rusting.contains(&t.name.as_str())).count();
+                let limit = if c.corp_type == crate::title::CorpType::Minor { minor_limit } else { major_limit };
+                n > limit
+            })
+            .map(|c| (c.sym.clone(), c.corp_type))
     }
 
     /// Remove all trains of a given name from corporations.
@@ -2085,6 +2133,19 @@ impl BaseGame {
     /// — Ruby `Operating#skip_entity?` skips closed round entities). The
     /// plain `advance_to_next_corp` only steps the index.
     pub(crate) fn or_advance_to_next_corp(&mut self) {
+        // 1867: while trainless majors owe their MajorTrainless choice the
+        // round is frozen on the CURRENT operator (Ruby Operating#
+        // after_process returns while a step is active and the operator's
+        // owner is a player): its turn is over — park it at Done — but the
+        // next operator (or the round's end) waits until the queue drains;
+        // the drain resume in process_action_internal advances then. Never
+        // taken by 1830 (no trainless queue).
+        if !self.trainless_major.is_empty() {
+            if let Round::Operating(ref mut s) = self.round {
+                s.step = crate::rounds::OperatingStep::Done;
+            }
+            return;
+        }
         let dead: Vec<String> = self
             .corporations
             .iter()

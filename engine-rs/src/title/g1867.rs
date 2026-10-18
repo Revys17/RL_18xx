@@ -1327,6 +1327,28 @@ const PLAIN_WHITE_HEXES: &[&str] = &[
     "N6", "O11",
 ];
 
+/// The map.rb HEXES entries that list SEVERAL coordinates under one DSL
+/// string. Ruby builds each preprinted tile with `index:` = the hex's
+/// position in its list, so its tile id (and its cities' ids, e.g.
+/// "C17-4-0") is "<hex>-<index>"; a hex listed alone is "<hex>-0". Only
+/// the wire form of city references reads this.
+pub const PREPRINTED_GROUPS: &[&[&str]] = &[
+    PLAIN_WHITE_HEXES,
+    &["N10", "M11"],
+    &["D8", "F8", "E13", "E15", "C17", "I15", "N12"],
+    &["E17", "D16", "O7"],
+    &["C15", "B18", "H10", "M13"],
+];
+
+/// Ruby's preprinted tile id of `hex` ("<hex>-<index in its HEXES list>").
+pub fn preprinted_tile_id(hex: &str) -> String {
+    let index = PREPRINTED_GROUPS
+        .iter()
+        .find_map(|g| g.iter().position(|h| *h == hex))
+        .unwrap_or(0);
+    format!("{hex}-{index}")
+}
+
 pub fn hex_definitions() -> Vec<HexDef> {
     use HexType::*;
 

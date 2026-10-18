@@ -118,7 +118,7 @@ impl BaseGame {
 
     /// The first treasury (IPO-owned) non-president share of `target` that
     /// `pid` can afford and gain — None when no buy is possible.
-    fn merger_buyable_share(&self, target: &str, pid: u32) -> Option<usize> {
+    pub(crate) fn merger_buyable_share(&self, target: &str, pid: u32) -> Option<usize> {
         let &ci = self.corp_idx.get(target)?;
         let corp = &self.corporations[ci];
         let price = corp.share_price.as_ref()?.price;
@@ -182,16 +182,16 @@ impl BaseGame {
 
         // Ruby Merger#after_process: when no step has anything left, clear
         // the dealing state and move to the next minor.
-        self.merger_after_process(&mut s);
+        self.merger_after_process(&mut s)?;
 
         self.round = Round::Merger(s);
         self.update_round_state();
         Ok(())
     }
 
-    fn merger_after_process(&self, s: &mut MergerState) {
-        if self.merger_active_step(s) {
-            return;
+    fn merger_after_process(&self, s: &mut MergerState) -> Result<(), GameError> {
+        if self.merger_active_step(s)? {
+            return Ok(());
         }
         s.converted = None;
         s.merge_type_convert = false;
@@ -199,31 +199,32 @@ impl BaseGame {
         s.share_dealing_multiple.clear();
         s.passed_players.clear();
         self.merger_next_entity(s);
+        Ok(())
     }
 
     /// Ruby `round.active_step` over the merger step list: does any step
     /// still have actions? Mirrors PostMergerShares#active_entities, which
     /// lazily runs `check_merge` (the C→D dealing-phase flip) when the
     /// eligible list empties.
-    fn merger_active_step(&self, s: &mut MergerState) -> bool {
+    fn merger_active_step(&self, s: &mut MergerState) -> Result<bool, GameError> {
         if s.corporations_removing_tokens.is_some() {
-            return true;
+            return Ok(true);
         }
         if s.converted.is_some() {
             if !self.merger_eligible_players(s).is_empty() {
-                return true;
+                return Ok(true);
             }
-            self.merger_check_merge(s);
+            self.merger_check_merge(s)?;
             if !self.merger_eligible_players(s).is_empty() {
-                return true;
+                return Ok(true);
             }
         }
         if !self.merger_crowded_corps().is_empty() {
-            return true;
+            return Ok(true);
         }
         // The Merge step itself (inactive once passed or once a
         // convert/merge completed — `converted` is still set here).
-        s.converted.is_none() && !s.merge_passed && s.entity_index < s.entities.len()
+        Ok(s.converted.is_none() && !s.merge_passed && s.entity_index < s.entities.len())
     }
 
     fn merger_next_entity(&self, s: &mut MergerState) {
@@ -1053,7 +1054,7 @@ impl BaseGame {
                 s.passed_players.push(pid);
             }
         }
-        self.merger_check_merge(s);
+        self.merger_check_merge(s)?;
         Ok(())
     }
 
@@ -1064,7 +1065,7 @@ impl BaseGame {
         if !s.passed_players.contains(&pid) {
             s.passed_players.push(pid);
         }
-        self.merger_check_merge(s);
+        self.merger_check_merge(s)?;
         // Ruby: don't re-offer the phase-D rotation to the player whose
         // pass ended phase C.
         if self.merger_eligible_players(s).first() == Some(&pid) {
@@ -1077,12 +1078,12 @@ impl BaseGame {
     /// either flag the broken merge (president cert unsold) or flip a
     /// merge's dealing from phase C (owners, multiple buys) to phase D
     /// (everyone, one buy).
-    fn merger_check_merge(&self, s: &mut MergerState) {
+    fn merger_check_merge(&self, s: &mut MergerState) -> Result<(), GameError> {
         if !self.merger_eligible_players(s).is_empty() {
-            return;
+            return Ok(());
         }
         let Some(target) = s.converted.as_deref() else {
-            return;
+            return Ok(());
         };
         let corp_idx = self.corp_idx[target];
         let ipo = EntityId::ipo(target);
@@ -1092,9 +1093,13 @@ impl BaseGame {
             .map_or(false, |sh| sh.president && sh.owner == ipo);
         if president_in_treasury {
             // Ruby logs "Merge failed ... please undo" and stalls for a
-            // manual undo — unreachable in valid records (the president
-            // check in finish_merge_to_major guards it).
-            unimplemented!("1867 merge failed: no player took the 20% presidency (undo-only state)");
+            // manual undo (PostMergerShares @broken_merge) — never in a
+            // valid record. The action that would lead there is rejected
+            // instead (a GameError, not a panic: the legal-move generator
+            // validates candidates by applying them, so it never offers it).
+            return Err(GameError::new(
+                "Merge failed: no player took the 20% presidency (Ruby: 'Merge failed ... please undo')",
+            ));
         }
         if !s.merge_type_convert && !s.share_dealing_multiple.is_empty() {
             // Rule 9.2 D — everyone may buy one share, in order from the
@@ -1106,6 +1111,7 @@ impl BaseGame {
                 .unwrap_or_default();
             s.share_dealing_multiple.clear();
         }
+        Ok(())
     }
 
     fn players_rotated_from(&self, first: u32) -> Vec<u32> {
