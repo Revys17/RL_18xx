@@ -220,3 +220,39 @@ GPU the network sets the rate: at ~11-15k evaluations/s (a composite costs
   its mistakes more readily at low exploration).
 - Placement vs win reward for the value targets (the policy-gradient A/B
   favored placement).
+
+## What the pilots and az1 taught us, and az2 (agreed with the user 2026-10-18)
+
+**Pilots (2026-10-17, 100 updates each, the critic frozen or trained on mostly-policy games):**
+every one made the policy worse when it plays alone (pruned visits: 0.481 / 0.475 / 0.278 at
+updates 20 / 50 / 100, policy-only 2v2 vs gen4@0.5; one-hot targets 0.395 at 20; gen4 at T=1
+0.407; checkpoint 10 flat). At the positions where a pilot's top move changed, the new move was
+no better than the old one in policy-only rollouts (-0.019 / -0.009 / +0.001 +- 0.016), while
+the search's own changes win +0.09..+0.17: the policy did not absorb the search's improvements,
+it got flatter. Missing: the critic learning from search-played games (75% of the pilots' moves
+were raw-policy moves), and gen4 is sharper than the search's visits (86-95% top-move agreement).
+
+**az1 (the full loop: every move searched, the critic trained on the outcomes):** stable where
+the pilots weren't (KL to gen4 at its 0.02 limit, entropy ~0.15, top-move agreement 0.87 ->
+0.92), even with gen4 at updates 25 / 50 (system @64 0.487 / 0.504, policy-only 0.497), its
+critic slowly better on held-out search games (win CE 0.909 -> 0.892 by update 50, mid and late
+game). Limited by throughput (~600-770 games/h) and by one outcome per 700-decision game.
+
+**az2, in order (each an option, judged against az1 by system strength per GPU-hour):**
+1. One shared network: policy + value heads on one trunk (AlphaZero / KataGo / MuZero), about
+   1.33x throughput (no separate critic forward). gen4's own value head was never trained during
+   policy gradient: fit it to the critic's predictions and to outcomes first, then switch.
+2. Better value targets: n-step bootstrapped / lambda-return targets from the search's root
+   values later in the game (MuZero; KataGo's short-term value heads) instead of only the final
+   outcome; the score / net-worth head blended into the search's utility (KataGo; tested at play
+   time first: `#blend=<w>`); more auxiliary targets (each player's final net worth, cash,
+   floated corporations); every searched position per game for the value (not 32: rows are used
+   once, so AlphaGo's one-position-per-game anti-memorization doesn't apply).
+3. Policy surprise weighting (KataGo): oversample rows where the search target disagrees with
+   the policy -- the 8-14% that carry the signal.
+4. Gumbel root + completed-Q targets at small budgets (16-64 readouts) if learning per GPU-hour
+   holds up -- the route to thousands of games per hour.
+5. Reanalyze (MuZero): re-search replay-buffer positions with the latest network for fresh
+   targets without new games, if game generation still dominates the cost.
+Not taken from MuZero: the learned dynamics model (we have the exact engine). Pure performance
+work first (tree reuse in the lockstep generator, compiled forward, server pipelining).
