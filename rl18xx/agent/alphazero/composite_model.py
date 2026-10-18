@@ -52,6 +52,21 @@ class PolicyValueComposite:
             _, _, values = self.value_model.run_many_encoded(encoded_game_states, *args, **kwargs)
         return probs, log_probs, values
 
+    @property
+    def supports_packed(self) -> bool:
+        return all(hasattr(m, "run_packed") for m in (self.policy_model, self.value_model))
+
+    def packed_inputs(self, parts: list) -> dict:
+        """One set of device inputs for both networks (``AlphaZeroTransformerModel.packed_inputs``)."""
+        return self.policy_model.packed_inputs(parts)
+
+    def run_packed(self, inputs: dict, legal_indices=None):
+        """``run_many_encoded`` on ``packed_inputs``: the policy network's forward
+        and the value network's value-only forward read the same device tensors."""
+        probs, log_probs, _ = self.policy_model.run_packed(inputs, legal_indices)
+        self.last_price_components = getattr(self.policy_model, "last_price_components", None)
+        return probs, log_probs, self.value_model.run_packed(inputs, head=self.value_head)
+
     def run_encoded(self, encoded_game_state):
         probs, log_probs, values = self.run_many_encoded([encoded_game_state])
         return probs[0], log_probs[0] if log_probs is not None else None, values[0]

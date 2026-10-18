@@ -42,7 +42,7 @@ import numpy as np
 import torch
 
 import engine_rs
-from rl18xx.agent.alphazero.inference_server import InferenceClient, PackedStates, _accepts_legal_indices
+from rl18xx.agent.alphazero.inference_server import InferenceClient, PackedStates, run_packed_states
 
 
 # ----------------------------------------------------------------------------- evaluators
@@ -91,14 +91,10 @@ class ModelEvaluator:
         self.states = 0
 
     def send(self, packed: PackedStates) -> EvalResult:
-        states = packed.unpack()
         legal = packed.legal_indices
         start = time.perf_counter()
         with torch.no_grad():
-            if _accepts_legal_indices(self.network):
-                probs, _, values = self.network.run_many_encoded(states, legal_indices=legal)
-            else:
-                probs, _, values = self.network.run_many_encoded(states)
+            probs, _, values = run_packed_states(self.network, [packed])
             lengths = np.fromiter((len(ix) for ix in legal), dtype=np.int64, count=len(legal))
             rows = np.repeat(np.arange(len(legal)), lengths)
             cols = np.concatenate(legal).astype(np.int64)
@@ -116,7 +112,7 @@ class ModelEvaluator:
             if isinstance(logits, torch.Tensor):
                 logits = logits.detach().float().cpu().numpy()
         self.forward_seconds += time.perf_counter() - start
-        self.states += len(states)
+        self.states += len(packed)
         return EvalResult(
             priors=np.ascontiguousarray(priors, dtype=np.float32),
             values=np.ascontiguousarray(values, dtype=np.float32),
@@ -147,7 +143,21 @@ def pack(batch: dict, legal: list) -> PackedStates:
         node_features=batch["node_features"],
         extras=extras,
         legal_indices=legal,
+        map_index=batch.get("map_index"),
     )
+
+
+def _concat_batches(a: dict, b: dict) -> dict:
+    """Two stacked batches (``mcts_collect_leaves`` / ``encode_games`` layout) as
+    one, rows of ``a`` first. Map-indexed batches (``dedupe_maps``) keep their
+    maps; ``b``'s map indices shift past ``a``'s maps."""
+    out = {key: np.concatenate([a[key], b[key]]) for key in ("game_states", "node_features", "round_types", "rotations")}
+    out["num_players"] = a["num_players"]
+    if "map_index" in a or "map_index" in b:
+        ia = a["map_index"] if "map_index" in a else np.arange(len(a["game_states"]))
+        ib = b["map_index"] if "map_index" in b else np.arange(len(b["game_states"]))
+        out["map_index"] = np.concatenate([ia, ib + len(a["node_features"])])
+    return out
 
 
 def split_legal(flat: np.ndarray, lengths: np.ndarray) -> list:
@@ -157,20 +167,35 @@ def split_legal(flat: np.ndarray, lengths: np.ndarray) -> list:
 # ----------------------------------------------------------------------------- work items
 
 
+BUDGETS = ("additional", "total")
+
+
 class TreeSearch:
     """One search to run on a ``RustMCTSPlayer`` (the Python wrapper) -- what
     its ``suggest_move`` does, driven by a :class:`LockstepSearcher`. Make it
     with ``player.start_search``; when ``done``, ``player.pick_move()`` gives
-    the move."""
+    the move.
 
-    def __init__(self, player, readouts: int, key: Hashable = None):
+    ``budget`` -- how ``readouts`` counts on a tree that already has visits at
+    its root (a subtree kept from the previous move): "additional" (as
+    ``suggest_move``) searches ``readouts`` more, "total" until the root has
+    the visits a fresh search would end with (its expansion + ``readouts``),
+    the inherited ones included -- none at all if it already has them. On a
+    fresh tree the two are the same search. A Gumbel root's sequential halving
+    always spends ``readouts`` of its own (``gumbel.rs``: inherited visits
+    count for q, not toward the schedule)."""
+
+    def __init__(self, player, readouts: int, key: Hashable = None, budget: str = "additional"):
         config = player.config
         if config.leaf_value_heuristic is not None:
             raise NotImplementedError("lockstep search does not support leaf_value_heuristic (use suggest_move)")
+        if budget not in BUDGETS:
+            raise ValueError(f"budget must be one of {BUDGETS}, got {budget!r}")
         self.player = player
         self.tree = player._rust_player
         self.readouts = int(readouts)
         self.key = key
+        self.budget = budget
         self.gumbel = bool(self.tree.gumbel_enabled)
         self.max_leaves = int(min(config.parallel_readouts, config.num_readouts))
         self.dedupe = bool(config.dedupe_leaves)
@@ -178,6 +203,8 @@ class TreeSearch:
         self.prior_temperature = float(config.prior_temperature)
         self.num_players = int(self.tree.num_players)
         self.target: Optional[float] = None
+        # Root visits the search started from (a kept subtree's; 0 for a fresh root).
+        self.inherited = float(self.tree.n_at_root()) if self.tree.is_expanded(self.tree.root_idx) else 0.0
         self.done = False
         self.update()
 
@@ -187,6 +214,9 @@ class TreeSearch:
         if self.gumbel:
             self.tree.begin_gumbel_search(self.readouts)
             self.target = 0.0
+        elif self.budget == "total":
+            # A fresh root has 1 visit (its expansion) here: 1 + readouts, as "additional".
+            self.target = max(float(self.tree.n_at_root()), 1.0 + self.readouts)
         else:
             self.target = float(self.tree.n_at_root()) + self.readouts
 
@@ -242,6 +272,7 @@ class RoundStats:
     leaves: int = 0
     policy_states: int = 0
     terminal_backups: int = 0
+    maps: int = 0  # node-feature rows sent (= states sent, unless dedupe_maps)
     collect_seconds: float = 0.0
     wait_seconds: float = 0.0
     apply_seconds: float = 0.0
@@ -252,9 +283,14 @@ class LockstepSearcher:
     one or more networks. ``evaluators`` maps a work item's ``key`` to an
     evaluator (``evaluator_for(client_or_network)``)."""
 
-    def __init__(self, evaluators: dict):
+    def __init__(self, evaluators: dict, dedupe_maps: bool = False):
         self.evaluators = {k: evaluator_for(v) for k, v in evaluators.items()}
         self.stats = RoundStats()
+        # Send each distinct hex map of a request once (``PackedStates.map_index``):
+        # a request's leaves mostly share their trees' maps. The network's map
+        # encoder then runs once per map -- the same outputs within float
+        # rounding (its matmuls see fewer rows), so off by default.
+        self.dedupe_maps = bool(dedupe_maps)
 
     def run(self, searches: list, requests: list = ()) -> None:
         """Run every search to completion (and evaluate every request)."""
@@ -289,23 +325,17 @@ class LockstepSearcher:
                     [s.leaves_wanted() for s in group],
                     [s.dedupe for s in group],
                     [s.use_score_values for s in group],
+                    self.dedupe_maps,
                 )
                 in_flight.append([key, group, trees, batch, reqs, None])
                 stats.terminal_backups += int(batch["terminal"].sum())
                 legal = split_legal(batch["legal"], batch["legal_lengths"])
                 n_leaves = len(legal)
+                stats.maps += len(batch["node_features"])
                 if reqs:
-                    extra = engine_rs.encode_games([r.game for r in reqs])
-                    if n_leaves:
-                        batch = {
-                            "game_states": np.concatenate([batch["game_states"], extra["game_states"]]),
-                            "node_features": np.concatenate([batch["node_features"], extra["node_features"]]),
-                            "round_types": np.concatenate([batch["round_types"], extra["round_types"]]),
-                            "rotations": np.concatenate([batch["rotations"], extra["rotations"]]),
-                            "num_players": batch["num_players"],
-                        }
-                    else:
-                        batch = extra
+                    extra = engine_rs.encode_games([r.game for r in reqs], self.dedupe_maps)
+                    stats.maps += len(extra["node_features"])
+                    batch = _concat_batches(batch, extra) if n_leaves else extra
                     legal = legal + [np.asarray(r.legal, dtype=np.int32) for r in reqs]
                 if not legal:
                     continue  # only terminal leaves this round
