@@ -2,10 +2,11 @@
 the way tests/fixtures/1822 is: player ids renumbered 1..N in seat order
 (names "Player N"), `user` / `created_at` dropped, message and `log` texts
 blanked (a consent log can name a site account even when the fixture's player
-names are already anonymized; the action stays, an undo can target it), only
-the keys the replay tools read kept.
+names are already anonymized; the action stays, an undo can target it), so are
+program_disable `reason` texts (they quote account names), only the keys the
+replay tools read kept.
 
-    python scripts/vendor_ruby_fixture.py logs/ruby/18xx/spec/fixtures/1822PNW tests/fixtures/1822PNW
+    python scripts/vendor_ruby_fixture.py logs/ruby/18xx/public/fixtures/1822PNW tests/fixtures/1822PNW
 """
 
 from __future__ import annotations
@@ -27,6 +28,10 @@ def vendor(src: Path, dst: Path) -> None:
             a["entity"] = seat[a["entity"]]
         if a.get("type") in ("message", "log"):
             a["message"] = ""
+        if "reason" in a:
+            # program_disable reasons quote site accounts ("<name> bought on
+            # corporation X and is unsecure")
+            a["reason"] = ""
         if "auto_actions" in a:
             a["auto_actions"] = [fix(x) for x in a["auto_actions"]]
         return a
