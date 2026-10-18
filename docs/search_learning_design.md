@@ -336,3 +336,69 @@ game). Limited by throughput (~600-770 games/h) and by one outcome per 700-decis
    targets without new games, if game generation still dominates the cost.
 Not taken from MuZero: the learned dynamics model (we have the exact engine). Pure performance
 work first (tree reuse in the lockstep generator, compiled forward, server pipelining).
+
+## az2's training side: built (2026-10-18; items 1-3, all options, off by default)
+
+| option (`main.py search-learning`) | default | what |
+|---|---|---|
+| `--shared` | off | one network: the server loads the learner alone and the search reads its own value heads (no critic forward); the value loss joins the policy loss on the same forward; the value heads train at `--critic-lr` in their own optimizer group, each group clipped on its own |
+| `--value-loss-weight` / `--score-loss-weight` | 1 / 1 | `--shared`: the win CE's and score MSE's weight in the learner's loss (the trunk's share of the value signal) |
+| `--value-stop-grad` | off | `--shared`: value heads on detached trunk features (the trunk learns only the policy) |
+| `--value-head win\|score\|blend=<w>` | win | the search's value; `blend=<w>` = (1-w) win + w score, on the shared network too (`composite_model.SharedValueModel`, one forward, the server's packed fast path) |
+| `--value-nstep n` | 0 (outcome) | win target (1-w) outcome + w * the root value n searches later (MuZero n-step, gamma 1) |
+| `--value-lambda l` | off | or the TD(lambda) return over the game's later root values (G_i = (1-l) v_{i+1} + l G_{i+1}, the outcome after the last) |
+| `--value-bootstrap-weight w` | 0.5 | the bootstrap's share of the win target (with n-step or lambda) |
+| `--aux-loss-weight` | 0 | training-only heads (`ModelTransformerConfig.aux_seat_targets` / `aux_global_targets`, never run by `forward`): final net-worth share + cash share per seat (MSE), corporations floated (BCE) |
+| `--critic-positions-per-game 0` | 32 | every searched row trains the value, once (verified by a test) |
+| `--surprise-weight a` / `--surprise-cap` | 0 / 8 | KataGo's policy surprise weights on the target CE: (1-a) + a s / mean(s), s = KL(target \|\| policy) at T (the microbatch), capped, mean 1 |
+| `--target gumbel` | **now the default** | every search (full and fast) uses the Gumbel root |
+
+Every search records its root value (mean backed-up value per seat, absolute order; read before
+a kept tree advances). History adds `critic_outcome_ce` (the value on fresh rows vs the outcome,
+comparable to az1's `critic_ce` whatever the target), `search_value_ce` (root values vs outcomes),
+`aux_*`, `surprise_*`, `value_grad_norm`.
+
+**Why n-step / lambda on the main head, not KataGo's short-term value heads.** The point is a
+lower-variance target for the value the search reads (one outcome per ~750 decisions); KataGo's
+short-term heads are auxiliary -- the head the search reads still learns the outcome -- and would
+need new served heads. Bootstrapping biases toward the current value net, hence the mix with the
+outcome (`--value-bootstrap-weight`) and lambda close to 1 (0.97: a horizon of ~33 searches, ~8
+decisions per seat).
+
+**Value-head refit (`scripts/refit_value_heads.py`).** gen4's own heads on held-out search games
+(az1_u50_sys64, 7,670 positions: every 25th action after the 20th) and the refits, fit on 3,840
+other gen4-search games (48 positions each, 10% held out by game for the choices) toward 0.75 *
+critic + 0.25 * outcome:
+
+| value | win CE | winner | CE early / mid / late |
+|---|---|---|---|
+| gen4's critic | 0.909 | 0.597 | 1.290 / 0.981 / 0.402 |
+| gen4's own heads (stale) | 1.198 | 0.504 | 1.337 / 1.347 / 0.881 |
+| heads only (trunk frozen: the policy unchanged) | 0.951 | 0.564 | 1.288 / 1.004 / 0.514 |
+| + fine-tune (4 epochs, trunk lr 5e-5, KL anchor 1) | **0.936** | 0.574 | 1.280 / 0.981 / 0.501 |
+
+The fine-tune keeps the policy: KL(gen4 \|\| tuned) 0.0026 at T 0.5 on the held-out positions
+(p99 0.057), top move unchanged at 99.3%. The late game is the gap left (the critic's own trunk
+sees it better); the shared training continues from there. (A first fit kept the first k of 2k
+sampled positions in game order -- mostly openings -- and scored 0.992 / late 0.63.)
+
+**Real rows, GPU smoke test** (refit learner, `--shared`, Gumbel 64/16, reuse total, 12 workers x
+8 games, 6 updates of 1,024 rows): surprise weights' effective sample size 0.31 of the rows, the top
+10% of rows carry 47% of the weight, the 8.5% whose target's top move is not the policy's carry
+37% (4.4x their share), 2% capped; target entropy 0.15-0.16, top-1 agreement 0.91-0.92,
+search_kl 0.39-0.51; fresh-row value CE vs outcome 0.84-1.24 (whole games, 6-11 games per update).
+
+**Generation, back to back** (`scripts/bench_search_generation.py`, 10 workers x 32 games, 150 s,
+dedupe + reuse total + 2 replicas, GPU shared with az1):
+
+| network, search | decisions/s | evaluations / decision |
+|---|---|---|
+| gen4 + critic, Gumbel 200/48 | 106.8 | 86.6 |
+| shared, Gumbel 200/48 | 125.9 (1.18x) | 86.5 |
+| shared, PUCT 200/48 | 390.5 | 22.7 |
+| shared, Gumbel 64/16 | 267.0 | 28.0 |
+
+A Gumbel root spends its whole budget every search (inherited visits inform q, not the
+schedule), so `--reuse-tree total` saves nothing with Gumbel: at az1's budget it is ~3x the
+evaluations of PUCT with reuse. A Gumbel budget that counts inherited visits would be a tree
+change; small budgets (Gumbel's strength) are the cheap route.

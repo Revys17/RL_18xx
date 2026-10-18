@@ -8,7 +8,9 @@ the workers' peak RSS.
 A config is ``+``-joined options (``base`` or ``unpacked``: the server path before 2026-10-18;
 ``fast``: the packed fast path, the default now):
 ``unpacked`` (the server's per-state path), ``dedupe`` (``--dedupe-maps``),
-``total`` / ``additional`` (``--reuse-tree``), ``rep<N>`` (``--server-replicas``).
+``total`` / ``additional`` (``--reuse-tree``), ``rep<N>`` (``--server-replicas``), ``gumbel``
+(``--target gumbel``). ``--model`` is a server spec: ``<policy>+<critic>`` (default, gen4)
+or a single checkpoint (``--shared``: the learner's own value heads, one forward).
 Search settings as az1_20261017 (visits target, pruned, n_full 200, n_fast 48,
 p_full 0.25, c_puct 0.05, 32 games per worker, mid-game 0.3, auction 0.15).
 
@@ -61,7 +63,7 @@ def run_config(args, config: str) -> dict:
     reuse = "total" if "total" in flags else "additional" if "additional" in flags else "off"
     cfg = sl.SearchLearningConfig(
         policy_checkpoint="", value_checkpoint="", learner_temperature=0.5, prior_temperature=0.5,
-        target="visits", visit_target="pruned", p_full=0.25, n_full=200, n_fast=48, c_puct_init=0.05,
+        target="gumbel" if "gumbel" in flags else "visits", visit_target="pruned", p_full=0.25, n_full=args.n_full, n_fast=args.n_fast, c_puct_init=0.05,
         workers=args.workers, games_per_worker=args.games_per_worker, task_seconds=args.task_seconds,
         start_positions="human_games/start_positions_1830_4p_v2.jsonl",
         midgame_positions="human_games/midgame_positions_1830_4p_v2.jsonl",
@@ -123,6 +125,8 @@ def main():
     parser.add_argument("--configs", nargs="+", default=["base", "dedupe+total+rep2"])
     parser.add_argument("--model", default=GEN4)
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--n-full", type=int, default=200, help="Readouts of a recorded search (az1: 200)")
+    parser.add_argument("--n-fast", type=int, default=48, help="Readouts of the other searches (az1: 48)")
     parser.add_argument("--games-per-worker", type=int, default=32)
     parser.add_argument("--seconds", type=float, default=150)
     parser.add_argument("--task-seconds", type=float, default=30)

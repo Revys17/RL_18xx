@@ -193,6 +193,12 @@ class ModelTransformerConfig:
     # Heads
     value_head_layers: int = 3
     aux_loss_weight: float = 0.01
+    # Training-only auxiliary outcome heads (search learning's --aux-loss-weight):
+    # ``aux_seat_targets`` outputs per seat on [player token, trunk] as the value
+    # heads read, ``aux_global_targets`` logits on the trunk. ``forward`` never runs
+    # them (inference is unchanged); 0 builds none, as in every older checkpoint.
+    aux_seat_targets: int = 0
+    aux_global_targets: int = 0
 
     model_checkpoint_file: Optional[str] = None
     timestamp: Optional[str] = None
