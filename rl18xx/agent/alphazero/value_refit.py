@@ -89,7 +89,9 @@ def game_positions(game_id: str, actions: list, record: dict, select, points=(1.
         if not g.finished and select(i, n, rs):
             state, nodes, _, rotation, _ = rs.encode_canonical_py()
             legal = np.asarray(rs.factored_legal_indices(), dtype=np.int32)
-            out.append(Position(state, nodes, int(rotation), win, placement, min(2, 3 * i // max(n, 1)), game_id, legal))
+            out.append(
+                Position(state, nodes, int(rotation), win, placement, min(2, 3 * i // max(n, 1)), game_id, legal)
+            )
         rs.process_action(action)
     return out
 
@@ -138,7 +140,9 @@ def _canonical(values: np.ndarray, rotation: int) -> np.ndarray:
     return np.roll(values, -int(rotation))
 
 
-def extract(positions: list, learner=None, sources: Optional[dict] = None, device=None, batch_size: int = 256) -> Extracted:
+def extract(
+    positions: list, learner=None, sources: Optional[dict] = None, device=None, batch_size: int = 256
+) -> Extracted:
     """Run ``learner`` (keeping its value heads' input) and every model in ``sources``
     (name -> model; their win probabilities and score output) over ``positions``."""
     import torch
@@ -247,15 +251,21 @@ def fit_heads(learner, train: Extracted, val: Extracted, critic_name: str, cfg: 
         with torch.no_grad():
             for b in range(0, len(xv), 4096):
                 x = xv[b : b + 4096].float().to(device)
-                ce, mse, logits, _ = head_losses(win_head, score_head, x, vw[b : b + 4096].to(device), vs[b : b + 4096].to(device))
+                ce, mse, logits, _ = head_losses(
+                    win_head, score_head, x, vw[b : b + 4096].to(device), vs[b : b + 4096].to(device)
+                )
                 k = len(x)
                 ce_sum += float(ce) * k
                 mse_sum += float(mse) * k
                 ow = torch.from_numpy(val.win[b : b + 4096]).to(device)
                 out_ce += float(-(ow * torch.log_softmax(logits, dim=1)).sum(dim=1).sum())
                 total += k
-        return {"loss": (ce_sum + cfg.score_weight * mse_sum) / total, "ce": ce_sum / total,
-                "mse": mse_sum / total, "outcome_ce": out_ce / total}
+        return {
+            "loss": (ce_sum + cfg.score_weight * mse_sum) / total,
+            "ce": ce_sum / total,
+            "mse": mse_sum / total,
+            "outcome_ce": out_ce / total,
+        }
 
     best, best_state, history, bad = None, None, [], 0
     rng = np.random.default_rng(cfg.seed)
@@ -345,10 +355,17 @@ def policy_drift(original, tuned, positions: list, temperature: float, device=No
             p0 = lp0.exp() * legal
             kl.append((p0 * (lp0 - lp1).masked_fill(~legal, 0.0)).sum(dim=1).cpu().numpy())
             agree.append(
-                (lp0.masked_fill(~legal, -1e30).argmax(1) == lp1.masked_fill(~legal, -1e30).argmax(1)).float().cpu().numpy()
+                (lp0.masked_fill(~legal, -1e30).argmax(1) == lp1.masked_fill(~legal, -1e30).argmax(1))
+                .float()
+                .cpu()
+                .numpy()
             )
     kl, agree = np.concatenate(kl), np.concatenate(agree)
-    return {"policy_kl": float(kl.mean()), "policy_kl_p99": float(np.quantile(kl, 0.99)), "top1_agreement": float(agree.mean())}
+    return {
+        "policy_kl": float(kl.mean()),
+        "policy_kl_p99": float(np.quantile(kl, 0.99)),
+        "top1_agreement": float(agree.mean()),
+    }
 
 
 def model_predictions(model, positions: list, device=None, batch_size: int = 256) -> dict:
@@ -368,8 +385,18 @@ def model_predictions(model, positions: list, device=None, batch_size: int = 256
     return {"win": np.concatenate(win), "score": np.concatenate(score)}
 
 
-def finetune(learner, positions: list, data: Extracted, val_positions: list, val: Extracted, critic_name: str,
-             cfg: FinetuneConfig, device=None, win_head=None, score_head=None) -> dict:
+def finetune(
+    learner,
+    positions: list,
+    data: Extracted,
+    val_positions: list,
+    val: Extracted,
+    critic_name: str,
+    cfg: FinetuneConfig,
+    device=None,
+    win_head=None,
+    score_head=None,
+) -> dict:
     """Fine-tune a copy of ``learner`` -- trunk and value heads, starting from
     ``win_head`` / ``score_head`` if given (a heads-only fit) -- toward ``(1 - a) *
     critic + a * outcome`` on ``positions`` (``data`` holds their targets in the same
@@ -477,7 +504,12 @@ def stage_report(data: Extracted, prediction: dict) -> dict:
     ce = -(data.win * np.log(p)).sum(axis=1)
     hit = (np.take_along_axis(data.win, p.argmax(axis=1)[:, None], axis=1)[:, 0] > 0).astype(np.float64)
     mse = ((prediction["score"] - data.placement) ** 2).mean(axis=1)
-    out = {"n": int(len(ce)), "win_ce": float(ce.mean()), "winner_hit": float(hit.mean()), "score_mse": float(mse.mean())}
+    out = {
+        "n": int(len(ce)),
+        "win_ce": float(ce.mean()),
+        "winner_hit": float(hit.mean()),
+        "score_mse": float(mse.mean()),
+    }
     for s, name in enumerate(STAGES):
         m = data.stage == s
         out[f"win_ce_{name}"] = float(ce[m].mean()) if m.any() else float("nan")
@@ -501,8 +533,12 @@ def write_refit_checkpoint(learner_path, win_head, score_head, out_path, provena
     from rl18xx.agent.alphazero.policy_gradient import _load
 
     model = _load(learner_path)
-    model.win_loss_head.load_state_dict({k: v.to(next(model.parameters()).device) for k, v in win_head.state_dict().items()})
-    model.score_head.load_state_dict({k: v.to(next(model.parameters()).device) for k, v in score_head.state_dict().items()})
+    model.win_loss_head.load_state_dict(
+        {k: v.to(next(model.parameters()).device) for k, v in win_head.state_dict().items()}
+    )
+    model.score_head.load_state_dict(
+        {k: v.to(next(model.parameters()).device) for k, v in score_head.state_dict().items()}
+    )
     return write_model_checkpoint(model, learner_path, out_path, provenance)
 
 

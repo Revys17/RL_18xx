@@ -1040,7 +1040,9 @@ class Generator:
                         continue
                     self._step_game(slot, g)
         after = vars(self.searcher.stats)
-        stats = {k: after[k] - stats_before.get(k, 0) for k in ("rounds", "requests", "leaves", "policy_states", "maps")}
+        stats = {
+            k: after[k] - stats_before.get(k, 0) for k in ("rounds", "requests", "leaves", "policy_states", "maps")
+        }
         stats.update(self.counts)
         stats["seconds"] = time.time() - started
         stats["games_in_progress"] = len(self.games)
@@ -1115,8 +1117,12 @@ def _value_terms(net, seat_input, win_logits, score_pred, batch, cfg) -> tuple:
     v = value_losses(win_logits, score_pred, batch["win_target"], score_target, batch["outcome_win"])
     win_weight = cfg.value_loss_weight if cfg.shared else 1.0
     loss = win_weight * v["ce"] + cfg.score_loss_weight * v["mse"]
-    stats = {"critic_ce": v["ce"], "critic_outcome_ce": v["outcome_ce"], "critic_mse": v["mse"],
-             "critic_winner_hit": v["winner_hit"]}
+    stats = {
+        "critic_ce": v["ce"],
+        "critic_outcome_ce": v["outcome_ce"],
+        "critic_mse": v["mse"],
+        "critic_winner_hit": v["winner_hit"],
+    }
     if cfg.aux_loss_weight > 0 and batch["aux_seat"] is not None and seat_input is not None:
         aux = aux_losses(net, seat_input, batch["aux_seat"], batch["aux_global"])
         loss = loss + cfg.aux_loss_weight * aux["total"]
@@ -1169,8 +1175,16 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, window: ReplayWind
                     hook.remove()
             price = learner.last_price_components["price_logits"]
             losses = search_losses(
-                logits, price, anchor_logits, anchor_price, batch, temperature, kl_coef, cfg.price_loss_weight,
-                cfg.surprise_weight, cfg.surprise_cap,
+                logits,
+                price,
+                anchor_logits,
+                anchor_price,
+                batch,
+                temperature,
+                kl_coef,
+                cfg.price_loss_weight,
+                cfg.surprise_weight,
+                cfg.surprise_cap,
             )
             if not torch.isfinite(losses["total"]):
                 values = {k: float(v) for k, v in losses.items()}
@@ -1346,11 +1360,16 @@ def learner_param_groups(learner, cfg: SearchLearningConfig) -> list:
     if not cfg.shared:
         return [{"params": list(learner.parameters()), "lr": cfg.lr}]
     heads = [learner.win_loss_head, learner.score_head]
-    heads += [h for h in (getattr(learner, "aux_seat_head", None), getattr(learner, "aux_global_head", None)) if h is not None]
+    heads += [
+        h for h in (getattr(learner, "aux_seat_head", None), getattr(learner, "aux_global_head", None)) if h is not None
+    ]
     value_ids = {id(p) for h in heads for p in h.parameters()}
     value = [p for p in learner.parameters() if id(p) in value_ids]
     rest = [p for p in learner.parameters() if id(p) not in value_ids]
-    return [{"params": rest, "lr": cfg.lr, "name": "trunk_policy"}, {"params": value, "lr": cfg.critic_lr, "name": "value_heads"}]
+    return [
+        {"params": rest, "lr": cfg.lr, "name": "trunk_policy"},
+        {"params": value, "lr": cfg.critic_lr, "name": "value_heads"},
+    ]
 
 
 def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
@@ -1374,9 +1393,19 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
         # (the same outputs) can change.
         overrides = {
             k: getattr(cfg, k)
-            for k in ("max_updates", "microbatch", "workers", "games_per_worker", "task_seconds",
-                      "midgame_positions", "midgame_fraction", "auction_fraction", "dedupe_maps", "server_pipeline",
-                      "server_replicas")
+            for k in (
+                "max_updates",
+                "microbatch",
+                "workers",
+                "games_per_worker",
+                "task_seconds",
+                "midgame_positions",
+                "midgame_fraction",
+                "auction_fraction",
+                "dedupe_maps",
+                "server_pipeline",
+                "server_replicas",
+            )
         }
         cfg = SearchLearningConfig(**{**state["config"], **overrides})
         update = int(state["snapshot_update"])
@@ -1518,7 +1547,10 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                         kl_coef = max(kl_coef / 1.5, cfg.kl_coef_min)
                 if update % cfg.snapshot_every == 0:
                     torch.save(
-                        {"learner": learner_opt.state_dict(), "critic": critic_opt.state_dict() if critic_opt else None},
+                        {
+                            "learner": learner_opt.state_dict(),
+                            "critic": critic_opt.state_dict() if critic_opt else None,
+                        },
                         run_dir / "optimizer.pth",
                     )
                     (run_dir / "state.json").write_text(
@@ -1548,7 +1580,8 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                     "searched_rows_per_hour": gen["rows"] / elapsed * 3600,
                     "decisions_per_second": (
                         gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"]
-                    ) / elapsed,
+                    )
+                    / elapsed,
                     "evaluations_per_second": (gen["leaves"] + gen["policy_states"]) / elapsed,
                     "searched_share": (
                         gen["searched_decisions"]
@@ -1559,15 +1592,14 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                     "mean_decisions": gen["game_decisions"] / max(gen["games"], 1),
                     # The search's root values on the new games' rows vs their outcomes (win CE).
                     "search_value_ce": gen["root_value_ce_sum"] / max(gen["root_value_rows"], 1),
-                    "evaluations_per_decision": (gen["leaves"] + gen["policy_states"]) / max(
-                        gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"], 1
-                    ),
+                    "evaluations_per_decision": (gen["leaves"] + gen["policy_states"])
+                    / max(gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"], 1),
                     # Tree reuse: searches that started on a kept subtree, and the share of
                     # the searches' final root visits they inherited.
                     "reused_search_share": gen["reused_searches"] / max(gen["searches"], 1),
                     "inherited_visit_share": gen["inherited_visits"] / max(gen["final_visits"], 1),
                     "reuse_dropped": {
-                        k[len("reuse_dropped_"):]: gen[k] for k in list(gen) if k.startswith("reuse_dropped_")
+                        k[len("reuse_dropped_") :]: gen[k] for k in list(gen) if k.startswith("reuse_dropped_")
                     },
                     # Map dedupe: node-feature rows sent per state.
                     "map_rows_per_state": gen["maps"] / max(gen["leaves"] + gen["policy_states"], 1),

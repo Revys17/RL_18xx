@@ -76,8 +76,12 @@ def main():
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--max-epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=256, help="Positions per feature forward")
-    p.add_argument("--finetune-epochs", type=int, default=0,
-                   help="Then fine-tune the trunk too (policy anchored by KL) for this many epochs (0: heads only)")
+    p.add_argument(
+        "--finetune-epochs",
+        type=int,
+        default=0,
+        help="Then fine-tune the trunk too (policy anchored by KL) for this many epochs (0: heads only)",
+    )
     p.add_argument("--finetune-positions-per-game", type=int, default=24)
     p.add_argument("--policy-kl-weight", type=float, default=1.0, help="Fine-tune: weight of KL(original || tuned)")
     p.add_argument("--trunk-lr", type=float, default=1e-5)
@@ -127,10 +131,13 @@ def main():
             fit = vr.fit_heads(learner, train, val, "critic", cfg, device)
             val_pred = vr.head_predictions(fit["win_head"], fit["score_head"], val, device)
             val_report = vr.stage_report(val, val_pred)
-            fits.append({"init": init, "outcome_weight": a, "fit": fit, "val": val_report,
-                         "epochs": len(fit["history"]) - 1})
-            logging.info(f"init {init} a {a}: val outcome CE {val_report['win_ce']:.4f} "
-                         f"winner {val_report['winner_hit']:.3f} ({len(fit['history']) - 1} epochs)")
+            fits.append(
+                {"init": init, "outcome_weight": a, "fit": fit, "val": val_report, "epochs": len(fit["history"]) - 1}
+            )
+            logging.info(
+                f"init {init} a {a}: val outcome CE {val_report['win_ce']:.4f} "
+                f"winner {val_report['winner_hit']:.3f} ({len(fit['history']) - 1} epochs)"
+            )
     best = min(fits, key=lambda f: f["val"]["win_ce"])
     chosen = f"refit {best['init']} a={best['outcome_weight']:g}"
 
@@ -161,13 +168,29 @@ def main():
         ft_positions = [positions[i] for i in picked]
         val_positions = [positions[i] for i in np.flatnonzero(val_mask)]
         fcfg = vr.FinetuneConfig(
-            outcome_weight=best["outcome_weight"], policy_kl_weight=args.policy_kl_weight, trunk_lr=args.trunk_lr,
-            head_lr=args.head_lr, batch_size=args.finetune_batch_size, epochs=args.finetune_epochs,
-            eval_every=args.eval_every, temperature=run_temperature(args.policy), seed=args.seed,
+            outcome_weight=best["outcome_weight"],
+            policy_kl_weight=args.policy_kl_weight,
+            trunk_lr=args.trunk_lr,
+            head_lr=args.head_lr,
+            batch_size=args.finetune_batch_size,
+            epochs=args.finetune_epochs,
+            eval_every=args.eval_every,
+            temperature=run_temperature(args.policy),
+            seed=args.seed,
         )
         logging.info(f"fine-tune on {len(ft_positions)} positions: {fcfg}")
-        ft = vr.finetune(learner, ft_positions, ft_data, val_positions, val, "critic", fcfg, device,
-                         best["fit"]["win_head"].to(device), best["fit"]["score_head"].to(device))
+        ft = vr.finetune(
+            learner,
+            ft_positions,
+            ft_data,
+            val_positions,
+            val,
+            "critic",
+            fcfg,
+            device,
+            best["fit"]["win_head"].to(device),
+            best["fit"]["score_head"].to(device),
+        )
         tuned, finetune_history = ft["model"], ft["history"]
         name = f"fine-tuned a={best['outcome_weight']:g}"
         val_reports[name] = vr.stage_report(val, vr.model_predictions(tuned, val_positions, device))
@@ -183,9 +206,11 @@ def main():
     for name, r in reports.items():
         print(vr.format_report(name, r))
     if drift:
-        print(f"\nFine-tuned policy vs the original on the held-out positions (T {fcfg.temperature:g}): "
-              f"KL {drift['policy_kl']:.5f} (p99 {drift['policy_kl_p99']:.4f}), "
-              f"top-1 agreement {drift['top1_agreement']:.4f}")
+        print(
+            f"\nFine-tuned policy vs the original on the held-out positions (T {fcfg.temperature:g}): "
+            f"KL {drift['policy_kl']:.5f} (p99 {drift['policy_kl_p99']:.4f}), "
+            f"top-1 agreement {drift['top1_agreement']:.4f}"
+        )
     print(f"\nChosen on validation: {chosen}")
 
     provenance = {
@@ -199,25 +224,45 @@ def main():
             "train_positions": len(train.games),
             "heldout_report": reports,
             "chosen": chosen,
-            "finetune": None if tuned is None else {
-                "epochs": args.finetune_epochs, "policy_kl_weight": args.policy_kl_weight, "trunk_lr": args.trunk_lr,
-                "head_lr": args.head_lr, "heldout_policy_drift": drift,
-            },
+            "finetune": (
+                None
+                if tuned is None
+                else {
+                    "epochs": args.finetune_epochs,
+                    "policy_kl_weight": args.policy_kl_weight,
+                    "trunk_lr": args.trunk_lr,
+                    "head_lr": args.head_lr,
+                    "heldout_policy_drift": drift,
+                }
+            ),
         }
     }
     if tuned is not None and chosen.startswith("fine-tuned"):
         out = vr.write_model_checkpoint(tuned, args.policy, args.out, provenance)
         if args.out_heads:
             heads_only = {**provenance, "refit": {**provenance["refit"], "chosen": "heads only"}}
-            vr.write_refit_checkpoint(args.policy, best["fit"]["win_head"], best["fit"]["score_head"], args.out_heads,
-                                      heads_only)
+            vr.write_refit_checkpoint(
+                args.policy, best["fit"]["win_head"], best["fit"]["score_head"], args.out_heads, heads_only
+            )
     else:
-        out = vr.write_refit_checkpoint(args.policy, best["fit"]["win_head"], best["fit"]["score_head"], args.out, provenance)
+        out = vr.write_refit_checkpoint(
+            args.policy, best["fit"]["win_head"], best["fit"]["score_head"], args.out, provenance
+        )
     report_path = Path(args.report) if args.report else Path(args.out).with_suffix(".refit.json")
     histories = {f"{f['init']} a={f['outcome_weight']:g}": f["fit"]["history"] for f in fits}
-    report_path.write_text(json.dumps({"heldout": reports, "validation": val_reports, "chosen": chosen,
-                                       "policy_drift": drift, "finetune_history": finetune_history,
-                                       "histories": histories}, indent=2))
+    report_path.write_text(
+        json.dumps(
+            {
+                "heldout": reports,
+                "validation": val_reports,
+                "chosen": chosen,
+                "policy_drift": drift,
+                "finetune_history": finetune_history,
+                "histories": histories,
+            },
+            indent=2,
+        )
+    )
     print(f"saved {out}; report {report_path} ({time.time() - started:.0f}s)")
 
 

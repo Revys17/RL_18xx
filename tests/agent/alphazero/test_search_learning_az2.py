@@ -70,7 +70,12 @@ def _random_value_heads(model, seed):
 
 def test_nstep_target_mixes_the_outcome_with_the_root_value_n_searches_later():
     outcome = np.array([0.0, 1.0, 0.0, 0.0])
-    values = [np.full(4, 0.25), np.array([0.1, 0.6, 0.2, 0.1]), np.array([0.2, 0.2, 0.2, 0.4]), np.array([0, 1, 0.5, 0.5])]
+    values = [
+        np.full(4, 0.25),
+        np.array([0.1, 0.6, 0.2, 0.1]),
+        np.array([0.2, 0.2, 0.2, 0.4]),
+        np.array([0, 1, 0.5, 0.5]),
+    ]
     t = sl.nstep_win_target(outcome, values, 0, 2, 0.5)
     np.testing.assert_allclose(t, 0.5 * outcome + 0.5 * values[2], atol=1e-6)
     t = sl.nstep_win_target(outcome, values, 1, 2, 0.5)  # values[3] normalized: 0 / 0.5 / 0.25 / 0.25
@@ -238,8 +243,16 @@ def _rows(start_file, n=24, **overrides):
 
 def _cfg(**overrides):
     cfg = sl.SearchLearningConfig(
-        policy_checkpoint="p", value_checkpoint="", learner_temperature=0.5, steps_per_update=1, minibatch=24,
-        microbatch=8, kl_coef=0.0, shared=True, lr=1e-3, critic_lr=1e-3,
+        policy_checkpoint="p",
+        value_checkpoint="",
+        learner_temperature=0.5,
+        steps_per_update=1,
+        minibatch=24,
+        microbatch=8,
+        kl_coef=0.0,
+        shared=True,
+        lr=1e-3,
+        critic_lr=1e-3,
     )
     for k, v in overrides.items():
         setattr(cfg, k, v)
@@ -251,8 +264,11 @@ def test_learner_param_groups_put_the_value_heads_at_critic_lr():
     model.add_aux_heads(sl.AUX_SEAT_TARGETS, sl.AUX_GLOBAL_TARGETS)
     groups = sl.learner_param_groups(model, _cfg(lr=1e-5, critic_lr=3e-5))
     assert [g["lr"] for g in groups] == [1e-5, 3e-5]
-    heads = {id(p) for h in (model.win_loss_head, model.score_head, model.aux_seat_head, model.aux_global_head)
-             for p in h.parameters()}
+    heads = {
+        id(p)
+        for h in (model.win_loss_head, model.score_head, model.aux_seat_head, model.aux_global_head)
+        for p in h.parameters()
+    }
     assert {id(p) for p in groups[1]["params"]} == heads
     assert len(groups[0]["params"]) + len(groups[1]["params"]) == len(list(model.parameters()))
     assert len(sl.learner_param_groups(model, _cfg(shared=False))) == 1
@@ -306,8 +322,13 @@ def test_the_value_loss_reaches_the_trunk_unless_stop_grad(start_file):
     stopped = _one_shared_step(rows, stop_grad=True, value_weight=1.0)
 
     def trunk_step(m):
-        return torch.cat([(p.detach() - q.detach()).flatten() for (n, p), q in zip(m.named_parameters(), start.parameters())
-                          if n.startswith("res_blocks")])
+        return torch.cat(
+            [
+                (p.detach() - q.detach()).flatten()
+                for (n, p), q in zip(m.named_parameters(), start.parameters())
+                if n.startswith("res_blocks")
+            ]
+        )
 
     def heads(m):
         return torch.cat([p.detach().flatten() for p in m.win_loss_head.parameters()])
@@ -333,7 +354,9 @@ def test_a_shared_value_model_blends_its_own_heads_from_one_forward(tmp_path):
     _save(model, path)
     states = [_rust_encode(RustGameAdapter(g)) for g in random_positions(4, 2, steps=200, every=23)[:5]]
     plain = load_policy_value(str(path))
-    assert not isinstance(plain, SharedValueModel) and not isinstance(load_policy_value(f"{path}#win"), SharedValueModel)
+    assert not isinstance(plain, SharedValueModel) and not isinstance(
+        load_policy_value(f"{path}#win"), SharedValueModel
+    )
     blended = load_policy_value(f"{path}#blend=0.25")
     scored = load_policy_value(f"{path}#score")
     assert isinstance(blended, SharedValueModel) and isinstance(scored, SharedValueModel)
@@ -356,12 +379,14 @@ def test_a_shared_value_model_blends_its_own_heads_from_one_forward(tmp_path):
     assert torch.allclose(v2, score, atol=1e-6)
     assert blended.last_price_components is not None
     # The inference server's packed fast path gives the same replies.
-    parts = [(
-        np.concatenate([s[0].numpy().reshape(1, -1) for s in states]),
-        np.stack([s[1].numpy() for s in states]),
-        np.array([[int(s[4]), 0, int(s[6]), int(s[7])] for s in states]),
-        None,
-    )]
+    parts = [
+        (
+            np.concatenate([s[0].numpy().reshape(1, -1) for s in states]),
+            np.stack([s[1].numpy() for s in states]),
+            np.array([[int(s[4]), 0, int(s[6]), int(s[7])] for s in states]),
+            None,
+        )
+    ]
     assert blended.supports_packed
     with torch.no_grad():
         legal = [np.arange(10, dtype=np.int64)] * len(states)
@@ -401,7 +426,9 @@ def test_aux_heads_are_training_only_and_survive_a_checkpoint(tmp_path):
     _save(model, tmp_path / "learner" / "1.pth")
     loaded = _load(tmp_path / "learner" / "1.pth")
     assert loaded.config.aux_seat_targets == 2 and loaded.config.aux_global_targets == 8
-    assert torch.equal(loaded.aux_seat_head[-1].weight, model.aux_seat_head[-1].weight.to(loaded.aux_seat_head[-1].weight.device))
+    assert torch.equal(
+        loaded.aux_seat_head[-1].weight, model.aux_seat_head[-1].weight.to(loaded.aux_seat_head[-1].weight.device)
+    )
     store, hook = loaded.capture_value_input()
     with torch.no_grad():
         loaded._forward_encoded_batch(states, value_only=True)
@@ -446,8 +473,15 @@ def test_rows_get_aux_targets_and_the_batch_rotates_them(start_file):
 
 @pytest.mark.parametrize("n_full", [8, 16])
 def test_gumbel_targets_at_small_budgets_with_fast_searches(start_file, n_full):
-    settings = _settings(start_file, target="gumbel", n_full=n_full, p_full=0.25, parallel_readouts=4,
-                         games_per_worker=3, max_decisions=40)
+    settings = _settings(
+        start_file,
+        target="gumbel",
+        n_full=n_full,
+        p_full=0.25,
+        parallel_readouts=4,
+        games_per_worker=3,
+        max_decisions=40,
+    )
     settings["n_fast"] = 4
     gen = _generator(settings, HashNet())
     out = gen.run(6.0)
@@ -474,7 +508,9 @@ def test_value_refit_fits_heads_to_the_critic_and_keeps_the_policy(tmp_path):
     for i, g in enumerate(games):
         state, nodes, _, rotation, _ = g.encode_canonical_py()
         win = np.eye(4, dtype=np.float32)[i % 4]
-        positions.append(vr.Position(state, nodes, int(rotation), win, win * 1.0, min(2, i * 3 // len(games)), f"x/{i // 8}"))
+        positions.append(
+            vr.Position(state, nodes, int(rotation), win, win * 1.0, min(2, i * 3 // len(games)), f"x/{i // 8}")
+        )
     data = vr.extract(positions, learner, {"critic": critic}, CPU, batch_size=32)
     assert data.seat_input.shape == (len(positions), 4, learner.config.d_entity + learner.config.d_trunk)
     np.testing.assert_allclose(data.win[0], np.roll(positions[0].win, -positions[0].rotation))
@@ -482,13 +518,24 @@ def test_value_refit_fits_heads_to_the_critic_and_keeps_the_policy(tmp_path):
     fit = vr.fit_heads(learner, data, data, "critic", cfg, CPU)
     assert fit["history"][-1]["ce"] < fit["history"][0]["ce"] - 0.05
     pred = vr.head_predictions(fit["win_head"], fit["score_head"], data, CPU)
-    kl_before = (data.predictions["critic"]["win"] * np.log(data.predictions["critic"]["win"] / data.predictions["learner"]["win"])).sum(1).mean()
-    kl_after = (data.predictions["critic"]["win"] * np.log(data.predictions["critic"]["win"] / pred["win"])).sum(1).mean()
+    kl_before = (
+        (
+            data.predictions["critic"]["win"]
+            * np.log(data.predictions["critic"]["win"] / data.predictions["learner"]["win"])
+        )
+        .sum(1)
+        .mean()
+    )
+    kl_after = (
+        (data.predictions["critic"]["win"] * np.log(data.predictions["critic"]["win"] / pred["win"])).sum(1).mean()
+    )
     assert kl_after < 0.5 * kl_before
     source = tmp_path / "src" / "learner" / "9.pth"
     _save(learner, source)
     (tmp_path / "src" / "config.json").write_text(json.dumps({"learner_temperature": 0.5}))
-    out = vr.write_refit_checkpoint(source, fit["win_head"], fit["score_head"], tmp_path / "out" / "learner" / "9.pth", {"x": 1})
+    out = vr.write_refit_checkpoint(
+        source, fit["win_head"], fit["score_head"], tmp_path / "out" / "learner" / "9.pth", {"x": 1}
+    )
     assert json.loads((tmp_path / "out" / "config.json").read_text())["learner_temperature"] == 0.5
     refit = _load(out).eval()
     gs = torch.from_numpy(np.stack([p.game_state for p in positions[:6]])).float()
@@ -534,7 +581,10 @@ def test_stage_report_scores_ce_and_winner_hit_by_stage():
         stage=np.array([0, 1, 2]),
         games=["a", "a", "b"],
     )
-    pred = {"win": np.array([[0.7, 0.1, 0.1, 0.1], [0.7, 0.1, 0.1, 0.1], [0.1, 0.1, 0.4, 0.4]]), "score": np.zeros((3, 4))}
+    pred = {
+        "win": np.array([[0.7, 0.1, 0.1, 0.1], [0.7, 0.1, 0.1, 0.1], [0.1, 0.1, 0.4, 0.4]]),
+        "score": np.zeros((3, 4)),
+    }
     r = vr.stage_report(data, pred)
     assert r["win_ce_early"] == pytest.approx(-math.log(0.7))
     assert r["win_ce_mid"] == pytest.approx(-math.log(0.1))
@@ -559,14 +609,44 @@ def test_a_tiny_cpu_az2_run_shared_gumbel_nstep_surprise_aux_speedups_resumes(tm
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
     policy = _save_shared_start(tmp_path)
     cfg = sl.SearchLearningConfig(
-        policy_checkpoint=str(policy), value_checkpoint="", out_dir=str(tmp_path / "runs"), run_name="az2",
-        shared=True, value_head="blend=0.3", target="gumbel", n_full=8, n_fast=4, p_full=0.5, parallel_readouts=4,
-        workers=2, games_per_worker=2, task_seconds=2.0, max_decisions=16, start_positions=start_file,
-        random_start_fraction=1.0, inference_batch_size=64, window_rows=400, rows_per_update=10, min_window_rows=10,
-        steps_per_update=2, minibatch=8, microbatch=4, max_updates=2, snapshot_every=1, anchor_every=1,
-        kl_target=0.05, critic_positions_per_game=0, value_nstep=3, value_bootstrap_weight=0.5,
-        surprise_weight=0.5, aux_loss_weight=0.1, lr=1e-4, critic_lr=3e-4,
-        reuse_tree="total", dedupe_maps=True, server_replicas=2,  # the pilot's speed options
+        policy_checkpoint=str(policy),
+        value_checkpoint="",
+        out_dir=str(tmp_path / "runs"),
+        run_name="az2",
+        shared=True,
+        value_head="blend=0.3",
+        target="gumbel",
+        n_full=8,
+        n_fast=4,
+        p_full=0.5,
+        parallel_readouts=4,
+        workers=2,
+        games_per_worker=2,
+        task_seconds=2.0,
+        max_decisions=16,
+        start_positions=start_file,
+        random_start_fraction=1.0,
+        inference_batch_size=64,
+        window_rows=400,
+        rows_per_update=10,
+        min_window_rows=10,
+        steps_per_update=2,
+        minibatch=8,
+        microbatch=4,
+        max_updates=2,
+        snapshot_every=1,
+        anchor_every=1,
+        kl_target=0.05,
+        critic_positions_per_game=0,
+        value_nstep=3,
+        value_bootstrap_weight=0.5,
+        surprise_weight=0.5,
+        aux_loss_weight=0.1,
+        lr=1e-4,
+        critic_lr=3e-4,
+        reuse_tree="total",
+        dedupe_maps=True,
+        server_replicas=2,  # the pilot's speed options
     )
     run_dir = sl.run(cfg)
     history = [json.loads(line) for line in (run_dir / "history.jsonl").read_text().splitlines()]
