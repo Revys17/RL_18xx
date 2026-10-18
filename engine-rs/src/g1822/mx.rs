@@ -134,7 +134,7 @@ impl BaseGame {
             .min()
             .map(|i| self.g().company_order[i].clone());
         if let Some(company) = first {
-            self.g1822_mx_replace_minor_with_ndem(&company);
+            let _ = self.g1822_mx_replace_minor_with_ndem(&company);
         }
         self.setup_bidboxes();
         let sp = self
@@ -154,7 +154,7 @@ impl BaseGame {
     /// stacks (deleted, not closed), its home reservation goes, an NdeM
     /// token takes the city unless the NdeM is already there, and a new 10%
     /// NdeM share enters the pool.
-    pub(crate) fn g1822_mx_replace_minor_with_ndem(&mut self, company: &str) {
+    pub(crate) fn g1822_mx_replace_minor_with_ndem(&mut self, company: &str) -> Result<(), GameError> {
         self.delete_company(company);
         let minor = Self::minor_of_company(company);
         let cd = self.title_def().corporations().into_iter().find(|d| d.sym == minor);
@@ -173,10 +173,13 @@ impl BaseGame {
                         }
                     }
                     if !self.g1822_city_tokened_by(hi, c, NDEM) {
-                        if let Some(t) = self.g1822_find_token(NDEM, "normal") {
-                            let _ = self.g1822_put_token(NDEM, t, hi, c, false);
-                            self.g1822_ruby_graph_clear();
-                        }
+                        // `ndem.find_token_by_type` is nil once its ten
+                        // tokens are out: place_token crashes (nil.place)
+                        let Some(t) = self.g1822_find_token(NDEM, "normal") else {
+                            return err("the NdeM has no token left for the minor's home (Ruby raises)");
+                        };
+                        self.g1822_put_token(NDEM, t, hi, c, false)?;
+                        self.g1822_ruby_graph_clear();
                     }
                 }
             }
@@ -194,6 +197,7 @@ impl BaseGame {
         });
         self.corporations[ci].set_share_owner(index, EntityId::market());
         self.gm().ndem_shares += 1;
+        Ok(())
     }
 
     /// MX `send_train_to_ndem(train)`: free to the NdeM (an L in phase 2
@@ -268,18 +272,19 @@ impl BaseGame {
     /// MX `remove_minor_and_first_train(company)`: while the NdeM is open
     /// the next train goes to it and it takes the minor's place; afterwards
     /// the minor just closes (its company deleted, not closed).
-    pub(crate) fn g1822_mx_remove_minor_and_first_train(&mut self, company: &str) {
+    pub(crate) fn g1822_mx_remove_minor_and_first_train(&mut self, company: &str) -> Result<(), GameError> {
         if self.g().ndem_state == NdemState::Open {
             if !self.depot.trains.is_empty() {
                 let t = self.depot.trains.remove(0);
                 self.g1822_mx_send_train_to_ndem(t);
             }
-            self.g1822_mx_replace_minor_with_ndem(company);
+            self.g1822_mx_replace_minor_with_ndem(company)?;
         } else {
             let minor = Self::minor_of_company(company);
             self.g1822_close_corporation(&minor);
             self.delete_company(company);
         }
+        Ok(())
     }
 
     // =====================================================================
@@ -602,8 +607,9 @@ impl BaseGame {
     /// MX `upgrades_to?`: blue upgrades to blue; a cube company's only
     /// "tile" is the cube. None: fall through.
     pub(crate) fn g1822_mx_upgrades_to(&self, hi: usize, to_base: &str, selected: Option<&str>) -> Option<bool> {
-        if self.g1822_tile_color_name(hi) == "blue" && self.g1822_def_color_name(to_base) == "blue" {
-            return Some(true);
+        // blue upgrades to blue only (COLORS has nothing after blue)
+        if self.g1822_tile_color_name(hi) == "blue" {
+            return Some(self.g1822_def_color_name(to_base) == "blue");
         }
         if selected.map_or(false, Self::g1822_mx_cube_company) && to_base != "BC" {
             return Some(false);

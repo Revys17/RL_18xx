@@ -421,6 +421,8 @@ pub static FAMILY: Family = Family {
     destination: data::destination,
     exchange_tokens: data::exchange_tokens,
     london_hex: "M38",
+    // (the router's group hex was LONDON_HEX before the field existed)
+    route_group_hexes: &["M38"],
     english_channel_hex: "",
     france_hex: "",
     cardiff_hex: "F35",
@@ -435,6 +437,7 @@ pub static FAMILY: Family = Family {
     hex_dsl,
     hex_dsl_all: data::HEX_DSL,
     tile_dsl,
+    hex_index: crate::g1822::family::hex_index_zero,
     must_sell_in_blocks: true,
     game_end_lock_first_trigger: false,
 };

@@ -168,7 +168,7 @@ impl BaseGame {
         }
         if let Some(m) = remove_minor {
             if mx {
-                self.g1822_mx_remove_minor_and_first_train(&m);
+                self.g1822_mx_remove_minor_and_first_train(&m)?;
             } else {
                 self.g1822_remove_minor_and_first_train(&m);
             }

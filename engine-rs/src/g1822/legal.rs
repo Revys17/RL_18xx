@@ -1687,7 +1687,7 @@ impl BaseGame {
     pub(crate) fn g1822_wire_tile_id(&self, hi: usize) -> String {
         let t = &self.hexes[hi].tile;
         if t.id.starts_with("preprinted_") || !t.id.contains('-') {
-            format!("{}-0", self.hexes[hi].id)
+            format!("{}-{}", self.hexes[hi].id, (self.fam().hex_index)(&self.hexes[hi].id))
         } else {
             t.id.clone()
         }

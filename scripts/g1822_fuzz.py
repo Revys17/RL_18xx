@@ -72,6 +72,11 @@ def walk(
         try:
             g.process_action(dict(wire))
         except BaseException as exc:  # noqa: BLE001
+            if "(Ruby raises)" in str(exc):
+                # the move is one Ruby accepts, but what follows crashes Ruby
+                # too (a ranged move's price: only its low end is validated)
+                dead_end = True
+                break
             error = f"move {n}: generated move rejected: {json.dumps(wire)[:300]}: {exc}"
             break
         actions.append(wire)
@@ -134,12 +139,18 @@ def main() -> int:
     for players in args.players:
         for seed in parse_seeds(args.seeds):
             variants = {"base": [[]], "plus": [["plus_expansion"]], "both": [[], ["plus_expansion"]]}[args.rules]
-            if args.title != "1822":
+            if args.title == "1822MX":
+                # MX's own option (3-5 players)
+                variants = {"base": [[]], "plus": [["higher_cert_limit"]], "both": [[], ["higher_cert_limit"]]}[
+                    args.rules
+                ]
+            elif args.title != "1822":
                 variants = [[]]  # (the plus expansion is 1822's own)
             for rules in variants:
                 rep = walk(players, seed, rules, args.moves, policy, args.title)
                 prefix = "" if args.title == "1822" else f"{args.title}_"
-                name = f"{prefix}fuzz_{players}p_s{seed}{'_plus' if rules else ''}"
+                suffix = "" if not rules else "_plus" if rules == ["plus_expansion"] else "_" + "_".join(rules)
+                name = f"{prefix}fuzz_{players}p_s{seed}{suffix}"
                 if out:
                     (out / f"{name}.json").write_text(json.dumps(rep["game"]))
                 status = (

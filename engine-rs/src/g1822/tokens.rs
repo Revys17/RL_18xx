@@ -169,6 +169,11 @@ impl BaseGame {
             .ok_or_else(|| GameError::new(format!("{corp} cannot lay token - no token slots available")))?;
         let hex_id = self.hexes[hi].id.clone();
         let cix = self.ci(corp);
+        if self.g1822_token_identity() && self.corporations[cix].tokens[token_idx].serial == 0 {
+            self.gm().token_serial += 1;
+            let s = self.g().token_serial;
+            self.corporations[cix].tokens[token_idx].serial = s;
+        }
         let mut tok = self.corporations[cix].tokens[token_idx].clone();
         tok.used = true;
         tok.city_hex_id = hex_id.clone();
@@ -198,11 +203,15 @@ impl BaseGame {
         })?;
         let tok = city.tokens[pos].take()?;
         if let Some(&cix) = self.corp_idx.get(corp) {
-            if let Some(ct) = self.corporations[cix]
-                .tokens
-                .iter_mut()
-                .find(|t| t.used && t.city_hex_id == hex_id && t.token_type == tok.token_type)
-            {
+            // (a stamped token is that very token; else the first used one
+            // of its type on the hex)
+            if let Some(ct) = self.corporations[cix].tokens.iter_mut().find(|t| {
+                if tok.serial != 0 {
+                    t.serial == tok.serial
+                } else {
+                    t.used && t.city_hex_id == hex_id && t.token_type == tok.token_type
+                }
+            }) {
                 ct.used = false;
                 ct.city_hex_id.clear();
             }
@@ -328,6 +337,9 @@ impl BaseGame {
     /// city keeps one (destination tokens are never the ones removed;
     /// the home token is kept — removal pops the LAST by corp token order).
     pub(crate) fn g1822_remove_extra_tokens(&mut self, hi: usize) {
+        if self.g1822_token_identity() {
+            return self.g1822_remove_extra_tokens_by_identity(hi);
+        }
         let n = self.hexes[hi].tile.cities.len();
         for ci in 0..n {
             let city = &self.hexes[hi].tile.cities[ci];
@@ -376,6 +388,64 @@ impl BaseGame {
                     self.corporations[cix].tokens[idx].used = false;
                     self.corporations[cix].tokens[idx].city_hex_id.clear();
                     self.corporations[cix].tokens[idx].price = self.fam().token_price;
+                    removed_any = true;
+                }
+            }
+            if removed_any {
+                self.g1822_remove_cheater_slot(hi, ci);
+            }
+        }
+        self.clear_graph_cache();
+    }
+
+    /// Whether map tokens carry their corporation token's identity (the
+    /// variants whose rules see which token object sits where: 1822MX).
+    pub(crate) fn g1822_token_identity(&self) -> bool {
+        self.g1822_is_mx()
+    }
+
+    /// G1822#remove_extra_tokens! with token identity: of a corporation's
+    /// non-destination tokens in one city, the ones latest in its token list
+    /// (`sort_by corp.tokens.index`, popped) return to its charter at £100.
+    fn g1822_remove_extra_tokens_by_identity(&mut self, hi: usize) {
+        let n = self.hexes[hi].tile.cities.len();
+        for ci in 0..n {
+            let city = &self.hexes[hi].tile.cities[ci];
+            // corp → (its non-destination tokens here: (slot, corp index), total)
+            let mut per_corp: Vec<(String, Vec<(usize, usize)>, usize)> = Vec::new();
+            for (slot, t) in city.tokens.iter().enumerate() {
+                let Some(t) = t else { continue };
+                let corp_idx = self.corp_idx.get(&t.corporation_id).and_then(|&cix| {
+                    self.corporations[cix].tokens.iter().position(|ct| t.serial != 0 && ct.serial == t.serial)
+                });
+                let e = match per_corp.iter_mut().position(|(c, _, _)| *c == t.corporation_id) {
+                    Some(i) => &mut per_corp[i],
+                    None => {
+                        per_corp.push((t.corporation_id.clone(), Vec::new(), 0));
+                        per_corp.last_mut().unwrap()
+                    }
+                };
+                e.2 += 1;
+                if t.token_type != "destination" {
+                    e.1.push((slot, corp_idx.unwrap_or(usize::MAX)));
+                }
+            }
+            let mut removed_any = false;
+            for (corp, mut toks, total) in per_corp {
+                if total <= 1 {
+                    continue;
+                }
+                toks.sort_by_key(|&(_, k)| k);
+                for _ in 0..(total - 1) {
+                    let Some((slot, k)) = toks.pop() else { break };
+                    self.hexes[hi].tile.cities[ci].tokens[slot] = None;
+                    let cix = self.ci(&corp);
+                    let price = self.fam().token_price;
+                    if let Some(ct) = self.corporations[cix].tokens.get_mut(k) {
+                        ct.used = false;
+                        ct.city_hex_id.clear();
+                        ct.price = price;
+                    }
                     removed_any = true;
                 }
             }

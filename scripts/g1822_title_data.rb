@@ -48,7 +48,9 @@ end
 hexes = []
 klass::HEXES.each do |color, defs|
   defs.each do |coords, dsl|
-    Array(coords).each { |c| hexes << { 'coord' => c, 'color' => color.to_s, 'code' => dsl } }
+    # index: the coord's place in its group (init_hexes' preprinted tile id
+    # is "<coord>-<index>")
+    Array(coords).each_with_index { |c, i| hexes << { 'coord' => c, 'color' => color.to_s, 'code' => dsl, 'index' => i } }
   end
 end
 

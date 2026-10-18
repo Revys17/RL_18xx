@@ -27,7 +27,8 @@ but no effort goes into 2p/7p-only rules.*
 | Fuzz: in-crate random walks (`cargo test g1822::fuzz`), Python wire walks + Ruby HEAD replay | clean (numbers below) |
 | Corpus completeness (`scripts/g1822_completeness.py`) | see numbers below |
 | **1822PNW** (3-5p): title, replay, router, generator | done — see "1822PNW" below (17/17 Ruby fixtures, 589/597 corpus + 8 Ruby-rejects-same, zero per-action divergence, router 0 shortfalls, fuzz + Ruby replay clean) |
-| 1822MX, 1822CA | not started (MX: 363 scraped games, 6 Ruby fixtures, 12 overridden steps incl. the NdeM auction / cash-out; CA: 187 games) |
+| **1822MX** (2-5p): title, replay, router, generator | done — see "1822MX" below (6/6 Ruby fixtures, 363/363 corpus, zero per-action divergence incl. city token slots, router 0 shortfalls, completeness 99.995%, fuzz + Ruby replay clean) |
+| 1822CA | not started (187 games, 7 Ruby fixtures) |
 
 ### Validation numbers (2026-10-16)
 
@@ -228,7 +229,7 @@ president. Cases, and what the switch does with each:
 2. RL bridge: action layout and encoder for 1822 (the action families
    above), behind `alphazero_bridge_ready()` (false today). See
    `docs/rl_bridge_design.md`.
-3. Variants: 1822PNW done (see "1822PNW"); 1822MX and 1822CA next, the
+3. Variants: 1822PNW and 1822MX done (see their sections); 1822CA next, the
    same way — `scripts/g1822_title_data.{rb,py}` generates the data module
    from Ruby, a `Family` row + `Variant` arm, the variant's steps in
    `g1822/<variant>.rs`, its generator in `g1822/<variant>_legal.rs`, and
@@ -414,6 +415,125 @@ The title uses the family default (`RESTRICTED`). PNW adds:
   caps (a_lane / b_lane widths are read for PNW only); its corpus never
   needs more.
 
+## 1822MX (2026-10-18)
+
+The Railways of Mexico, 2-5 players (3-5 for training): a `GameTitle` of
+the 1822 family (`title/g1822mx.rs`, data `title/g1822mx_data.rs`
+generated from `lib/engine/game/g_1822_mx/`), the family table's
+`Variant::Mx` row, its rules in `g1822/mx.rs` (replay) and
+`g1822/mx_legal.rs` (generator). Ruby's `G1822MX` overrides, and what the
+engine does for each:
+
+* **The NdeM** (Ferrocarriles Nacionales de Mexico, `NDEM`): a major with
+  no president (owned by the pool), floated at setup at par 100 with its
+  shares in the pool, outside the cert limit, never sold out, its sales
+  moving nothing (`setup_ndem`, MX SharePool / BSPS / `sell_shares_and_
+  change_price`). It takes over the home of the earliest of M14/M15/M17 in
+  the shuffled stack and of every first-bid-box minor nobody bids on while
+  it is open (`replace_minor_with_ndem`: the company is deleted, the
+  reservation goes, a token unless it already has one in that city, a new
+  pool share), receives the unbid minors' L trains (`send_train_to_ndem`:
+  an L flips to a 2 in phase 2, its oldest trains rust over the limit),
+  operates last, its shareholders lay its track in turn (MX Track:
+  `@ndem_tile_layers`), never tokens, pays out automatically (its own
+  price rule: right once per full share price earned). The first 7-train
+  privatizes it (`close_ndem`): it moves to operate next, runs once more,
+  `CashOutNdem` sells every player's NdeM shares to the pool and
+  `AuctionNdemTokens` auctions its tokens — the chooser (priority order)
+  picks one (`remove_token`) or passes, players bid in 10s up to their
+  richest exchange-token major's cash (`bid` with no company), the winner
+  names the buying major (`merge`); then `close!` (its tokens stay on the
+  map). `BaseGame.g1822_acting_player()` names the deciding player for
+  the NdeM's moves (tile layer / chooser / bidder / winner, else its first
+  shareholder in priority).
+* C1 (FCM's concession, a £200 minimum: `discount -100`, now emitted by
+  the data generator) brings minor 18, floated on purchase (par 50, $100,
+  its company stays the player's without being a certificate:
+  `G1822State::owner_only`); M18 sits last in the minor stack.
+* Companies: P7 double cash (G1822's double-cash code — MX overrides every
+  reader of `COMPANY_DOUBLE_CASH` with the same code for P7), P8 advanced
+  tile lay, P9 extra tile lay (or a cube), P10/P11 three builder cubes
+  (when: track), P12/P13 remove town, P14/P15 mail, P16 stock drop (−$10 a
+  round, `close_p16` through SpecialChoose — it never blocks — or when
+  unpaid, moving its owner left), P17/P18 port tiles (blue spikes; blue
+  upgrades to blue only; turned to the spike's first path), train
+  privates P1-P6 incl. P3's 3/2P (half revenue after its bonuses, rounded
+  to 10).
+* Map: builder cubes are block icons on the hex's current tile (mountain
+  2, hill 1, river 1; 80/40/20 off) and every lay strips them from the
+  new tile; Mexico City (N23) holds several homes (`multiple_tokens_
+  allowed_on_home_hex?`) and is one route group; M22 must connect to
+  Mexico City while nobody holds C2 or presides MC; preprinted green
+  hexes (N25) are green; `track:thin` ferries are never walked; the
+  neighbour map is Ruby's setup-time `connect_hexes`.
+* Ruby quirks reproduced: minor 14's $20 home token is placed free
+  (City#place_token spends nothing); a `["local", hex]` run is rebuilt on
+  the hex's FIRST tokened city (two local runs in two cities of one hex
+  are illegal); `remove_extra_tokens!` returns the token latest in the
+  corporation's token list (map tokens now carry their corporation
+  token's identity, `Token::serial`, MX only) and Hex#lay does not sort
+  cheaters (Ruby's `transform_values` sort is a no-op); the tokens up for
+  auction are those at the NdeM's turn start, following their city through
+  upgrades; Ruby crashes (nil.place) when the NdeM must take an 11th home
+  with all ten tokens out, and on `close!` when the NdeM holds cash (a
+  train bought from it) — the engine raises "(Ruby raises)" there too.
+* Preprinted tile ids are "<coord>-<index in its HEXES group>" (Ruby
+  init_hexes); the wire city ids use them (`Family::hex_index`, generated;
+  1822 / PNW keep index 0 as validated).
+
+### Validation numbers (2026-10-18)
+
+* **Ruby fixtures**: all 6 of `public/fixtures/1822MX` (vendored
+  anonymized) replay with the recorded scores
+  (`tests/test_g1822mx_fixture_replay.py`) and zero per-action divergence
+  from Ruby HEAD, city token slots included (`ruby_diff.py --tokens`).
+* **Corpus** (363-game 2026-10 scrape, 2-5p, 51 with higher_cert_limit):
+  363/363 outcome match; Ruby per-action diff of all 363: zero state
+  divergence, city token slots included.
+* **Router check** (34,769 recorded runs): engine = human in 32,292
+  (92.9%), above in 2,462 (7.1%; Ruby HEAD validates and prices every one
+  at the engine's total), below in 15 — none a shortfall: Ruby HEAD
+  rejects all 15 human runs (13 run two local trains in two cities of one
+  hex, see above). 0.8 ms per call.
+* **Completeness** (all 269,099 human decisions except `run_routes`,
+  against the rules' move set): 269,085 match exactly one generated move
+  (99.9948%), none matches two; 14 (0.005%: 2 private acquisitions, 6 train
+  buys, 6 minor acquisitions) are legal but excluded by the cross-player
+  policy. The 14 misses are replay-only: 12 out-of-order discards and 2
+  re-acquisitions of an owned company. NdeM auction decisions (778
+  remove_token, its bids, merges) all match.
+* **Fuzz**: in-crate `g1822::fuzz::mx_random_walks_3_to_5_players` (12
+  walks, both policies, higher_cert_limit on even seeds); wire walks: 30
+  under the title's policy (seeds 1-5) and 30 under the rules' (seeds
+  6-10), 3-5p × base / higher_cert_limit, 42,579 moves — 26 finished, the
+  rest at the Ruby dead ends above (the NdeM's 11th home, its cash at
+  close!, a ranged payoff that ends the round into the 11th home); 25
+  reach the NdeM auction. Ruby HEAD replays all 60 with zero divergence
+  (token slots included) and zero rejections. Bugs the walks found, fixed:
+  wire city ids of preprinted hexes, a port tile upgraded to a city tile,
+  the 3/2P priced in full, two local runs in one hex, remove_extra_tokens'
+  choice of token.
+
+### Cross-player cases (MX)
+
+The title uses the family default (`RESTRICTED`). MX adds:
+
+1. The NdeM has no president: a train bought from it is "from another
+   player" (excluded). Under the rules' set such a purchase gives the NdeM
+   cash, and Ruby's `close!` then raises at its privatization.
+2. The NdeM token auction sells the state's tokens to a major the winner
+   presides — not a purchase from a player.
+3. Minor 18 comes with C1 (bank) — unaffected.
+
+### MX known issues
+
+* The NdeM running out of tokens and the NdeM holding cash at close are
+  Ruby dead ends the engine mirrors (see above); real games come close
+  (2 of 363 used all ten tokens).
+* `G1822::Step::Choose#auto_actions` (an inconsequential double-cash choice
+  is passed automatically) is not mirrored by the generator, which offers
+  `choose` / `pass` (both legal).
+
 ## Rigs and gates
 
 ```bash
@@ -433,7 +553,9 @@ CUDA_VISIBLE_DEVICES="" uv run python scripts/ruby_diff.py --title 1822 --refres
 # completeness and router check (memory: cap each worker, e.g. ulimit -v 12000000)
 CUDA_VISIBLE_DEVICES="" uv run python scripts/g1822_completeness.py --jobs 8 --json /tmp/c.json
 CUDA_VISIBLE_DEVICES="" uv run python scripts/g1822_router_check.py --jobs 6 --ruby --json /tmp/r.json
-# 1822PNW: the same scripts with --title 1822PNW (ruby_diff takes directories too)
+# --tokens: also compare every city's tokens slot by slot (fresh --work dir)
+CUDA_VISIBLE_DEVICES="" uv run python scripts/ruby_diff.py --title 1822MX --tokens --work /tmp/rd tests/fixtures/1822MX
+# 1822PNW / 1822MX: the same scripts with --title (ruby_diff takes directories too)
 CUDA_VISIBLE_DEVICES="" uv run python scripts/ruby_diff.py --title 1822PNW tests/fixtures/1822PNW
 CUDA_VISIBLE_DEVICES="" uv run python scripts/g1822_fuzz.py --title 1822PNW --players 3 4 5 --seeds 1-10 --out /tmp/fzp
 CUDA_VISIBLE_DEVICES="" uv run python scripts/ruby_diff.py --title 1822PNW --refresh --work /tmp/rd /tmp/fzp

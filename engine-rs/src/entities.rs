@@ -136,6 +136,12 @@ pub struct Token {
     /// ID of the city this token is placed in (empty if unplaced).
     #[pyo3(get)]
     pub city_hex_id: String,
+    /// A per-game identity shared by the corporation's token and its copy
+    /// on the map (0 = none). Only the 1822 variants that need Ruby's
+    /// token-object identity stamp it (1822MX: which of two tokens of one
+    /// corporation in one city `remove_extra_tokens!` returns).
+    #[serde(default)]
+    pub serial: u32,
 }
 
 #[pymethods]
@@ -148,6 +154,7 @@ impl Token {
             token_type: "normal".to_string(),
             corporation_id,
             city_hex_id: String::new(),
+            serial: 0,
         }
     }
 }

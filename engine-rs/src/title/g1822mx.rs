@@ -472,6 +472,7 @@ pub static FAMILY: Family = Family {
     destination: data::destination,
     exchange_tokens: data::exchange_tokens,
     london_hex: "M38",
+    route_group_hexes: &["N23"],
     english_channel_hex: "",
     france_hex: "",
     cardiff_hex: "F35",
@@ -486,6 +487,7 @@ pub static FAMILY: Family = Family {
     hex_dsl,
     hex_dsl_all: data::HEX_DSL,
     tile_dsl,
+    hex_index: data::hex_index,
     must_sell_in_blocks: true,
     game_end_lock_first_trigger: true,
 };

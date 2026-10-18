@@ -1282,6 +1282,7 @@ pub static FAMILY: crate::g1822::family::Family = crate::g1822::family::Family {
     destination,
     exchange_tokens,
     london_hex: LONDON_HEX,
+    route_group_hexes: &[LONDON_HEX],
     english_channel_hex: ENGLISH_CHANNEL_HEX,
     france_hex: FRANCE_HEX,
     cardiff_hex: CARDIFF_HEX,
@@ -1296,6 +1297,7 @@ pub static FAMILY: crate::g1822::family::Family = crate::g1822::family::Family {
     hex_dsl,
     hex_dsl_all: HEX_DSL,
     tile_dsl,
+    hex_index: crate::g1822::family::hex_index_zero,
     must_sell_in_blocks: false,
     game_end_lock_first_trigger: true,
 };

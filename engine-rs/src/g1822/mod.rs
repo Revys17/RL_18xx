@@ -493,6 +493,9 @@ pub struct G1822State {
     /// are no certificate and no value.
     #[serde(default)]
     pub owner_only: Vec<String>,
+    /// The last token serial handed out (`entities::Token::serial`).
+    #[serde(default)]
+    pub token_serial: u32,
 }
 
 /// A memo Ruby fills lazily while it evaluates step actions (read-side
@@ -1145,6 +1148,7 @@ impl BaseGame {
             ndem_state: mx::NdemState::Open,
             ndem_shares: 0,
             owner_only: Vec::new(),
+            token_serial: 0,
             round: RoundSt::new(RoundKind::Stock, 1, players, vec![Step::DiscardTrain, Step::BuySellParShares]),
         };
         self.g1822 = Some(Box::new(state));

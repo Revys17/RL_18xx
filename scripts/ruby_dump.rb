@@ -54,6 +54,15 @@ def snap(g, id, seat, title)
     row['debt'] = g.players.to_h { |p| [seat[p.id] || p.id, p.debt] }
     row['order'] = g.players.map { |p| seat[p.id] }
     row['depot'] = g.depot.upcoming.first(3).map(&:id)
+    # city tokens by slot, for the hexes that hold any (ruby_diff --tokens)
+    if ENV['DUMP_TOKENS']
+      tok = {}
+      g.hexes.each do |h|
+        cities = h.tile.cities.map { |c| c.tokens.map { |t| t&.corporation&.id } }
+        tok[h.id] = cities unless cities.flatten.compact.empty?
+      end
+      row['tokens'] = tok
+    end
     row['companies'] = g.companies.reject(&:closed?).select(&:owner).to_h do |c|
       o = c.owner
       oname = o.player? ? "player:#{seat[o.id]}" : (o.respond_to?(:corporation?) && o.corporation? ? "corp:#{o.id}" : o.name)

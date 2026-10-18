@@ -77,7 +77,8 @@ def _key(g, a: dict):
             0 if tile == "BC" else int(a.get("rotation") or 0),
             tuple(sorted(a.get("combo_entities") or [])),
         )
-    if t == "place_token":
+    if t in ("place_token", "remove_token"):
+        # (1822MX's NdeM token auction names the token by its city)
         city = a.get("city")
         return tuple(g.g1822_city_ref(city)) if city else (a.get("hex"),)
     if t == "hex_token":

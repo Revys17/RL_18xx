@@ -255,3 +255,31 @@ fn pnw_random_walks_3_to_5_players() {
     eprintln!("1822PNW fuzz: {total_moves} moves, {finished}/12 games finished");
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
 }
+
+/// 1822MX (3-5 players; even seeds with higher_cert_limit): the same walks,
+/// both purchase policies.
+#[test]
+fn mx_random_walks_3_to_5_players() {
+    let mut failures = Vec::new();
+    let mut finished = 0;
+    let mut total_moves = 0;
+    for players in 3..=5usize {
+        for k in 1..=4u64 {
+            let seed = k * 7919 + players as u64;
+            let rules: &[&str] = if k % 2 == 0 { &["higher_cert_limit"] } else { &[] };
+            let policy = if k <= 2 { CrossPlayerPolicy::RESTRICTED } else { CrossPlayerPolicy::RULES };
+            match std::panic::catch_unwind(|| walk_titled("1822MX", players, seed, rules, policy, 3000)) {
+                Ok(rep) => {
+                    total_moves += rep.moves;
+                    finished += rep.finished as usize;
+                    if let Some(e) = rep.error {
+                        failures.push(e);
+                    }
+                }
+                Err(p) => failures.push(format!("panic ({players}p seed {seed}): {}", panic_text(&p))),
+            }
+        }
+    }
+    eprintln!("1822MX fuzz: {total_moves} moves, {finished}/12 games finished");
+    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+}

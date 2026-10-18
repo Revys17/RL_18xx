@@ -116,6 +116,26 @@ impl BaseGame {
         self.g1822_action_types()
     }
 
+    /// The player who decides the current move (Ruby `active_players` /
+    /// `acting_for_entity`): a player entity itself, a corporation's
+    /// president, a company's owner's president; 1822MX's presidentless
+    /// NdeM: its current tile layer / the auction's chooser, bidder or
+    /// winner / else its first shareholder in priority (the priority player
+    /// if none). None when nobody acts.
+    fn g1822_acting_player(&self) -> Option<u32> {
+        self.g1822.as_ref()?;
+        let bi = self.g1822_active_step()?;
+        match self.g1822_step_current_entity(bi)? {
+            Ent::Player(p) => Some(p),
+            Ent::Corp(c) if self.g1822_mx_is_ndem(&c) => self.g1822_mx_ndem_acting_player(),
+            Ent::Corp(c) => self.g1822_corp_president(&c),
+            Ent::Company(co) => match self.co_owner(&co).corp_sym() {
+                Some(c) => self.g1822_corp_president(c),
+                None => self.co_owner(&co).player_id(),
+            },
+        }
+    }
+
     /// Player value (Ruby player_value) by player id.
     fn g1822_player_values(&self) -> Vec<(u32, i32)> {
         self.players.iter().map(|p| (p.id, self.g1822_player_value(p.id))).collect()
@@ -344,7 +364,10 @@ impl BaseGame {
             (AcquireCompany, &["acquire_company", "pass", "choose"]),
             (Assign, &["assign"]),
             (Merge, &["merge", "choose", "pass"]),
-            (SpecialChoose, &["choose"]),
+            // (1822MX: P16's close_p16, the NdeM's cash-out and auction)
+            (SpecialChoose, &["choose", "choose_ability"]),
+            (CashOutNdem, &["pass"]),
+            (AuctionNdemTokens, &["remove_token", "bid", "merge", "pass"]),
             (SpecialTrack, &["lay_tile", "pass"]),
             (SpecialToken, &["place_token", "pass"]),
             (Track, &["lay_tile", "pass", "choose_ability"]),

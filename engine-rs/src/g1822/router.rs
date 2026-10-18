@@ -128,7 +128,8 @@ struct Ctx<'a> {
     /// `a_lane` / `b_lane` (Route#check_overlap keys track by lane).
     lanes: HashMap<(usize, usize, u8), u8>,
     seg_cache: std::cell::RefCell<HashMap<Node, Vec<Seg>>>,
-    london: Option<usize>,
+    /// The route-group hexes (`groups:London`, ...): one city per group.
+    groups: Vec<usize>,
 }
 
 fn path_lanes_from_dsl(dsl: &str) -> Vec<u8> {
@@ -205,8 +206,13 @@ impl<'a> Ctx<'a> {
             neighbors: g.g1822_neighbors(),
             lanes,
             seg_cache: std::cell::RefCell::new(HashMap::new()),
-            london: g.hex_idx.get(g.fam().london_hex).copied(),
+            groups: g.fam().route_group_hexes.iter().filter_map(|h| g.hex_idx.get(*h).copied()).collect(),
         }
+    }
+
+    /// Whether `hex` is a route-group hex.
+    fn is_group(&self, hex: usize) -> bool {
+        self.groups.contains(&hex)
     }
 
     fn pd(&self, p: PathRef) -> &crate::tiles::PathDef {
@@ -499,12 +505,14 @@ impl BaseGame {
         let mut bonus = Vec::new();
         let pnw = self.g1822_pnw_router_info(c);
         let mut side: Vec<(i32, i32)> = Vec::new();
+        let mut halved: Vec<bool> = Vec::new();
         for r in routes {
             let t = self.corporations[ci]
                 .trains
                 .iter()
                 .find(|t| t.id == r.train_name)
                 .ok_or_else(|| crate::actions::GameError::new(format!("unknown train {}", r.train_name)))?;
+            halved.push(t.name.starts_with("3/2P"));
             let single = r.connections.len() == 1 && r.connections[0].first().map(String::as_str) == Some("local");
             let stops: Vec<Node> = r.nodes.iter().filter_map(|s| self.g1822_node_from_signature(s)).collect();
             let kind = Self::g1822_train_kind(t);
@@ -544,6 +552,12 @@ impl BaseGame {
         if let Some((i, &b)) = bonus.iter().enumerate().max_by_key(|(i, b)| (**b, *i)) {
             if b > 0 {
                 base[i] += b;
+            }
+        }
+        // 1822MX revenue_for: a 3/2P earns half (bonus included)
+        for (i, h) in halved.into_iter().enumerate() {
+            if h {
+                base[i] = half_revenue(base[i]);
             }
         }
         Ok(base)
@@ -840,7 +854,7 @@ impl BaseGame {
             }
             // groups:London (every London city; Hex#lay carries the group
             // to upgraded cities): one stop per group.
-            if ctx.london == Some(seg.to.hex)
+            if ctx.is_group(seg.to.hex)
                 && seg.to.kind == NodeKind::City
                 && cur.stops.iter().any(|n| n.hex == seg.to.hex && n.kind == NodeKind::City)
             {
@@ -978,7 +992,8 @@ impl BaseGame {
         let mut prev: HashMap<Node, (Node, Seg)> = HashMap::new();
         let mut q: VecDeque<Node> = VecDeque::new();
         q.push_back(from);
-        let london_used = tour.stops.iter().any(|n| ctx.london == Some(n.hex) && n.kind == NodeKind::City);
+        let groups_used: Vec<usize> =
+            tour.stops.iter().filter(|n| ctx.is_group(n.hex) && n.kind == NodeKind::City).map(|n| n.hex).collect();
         while let Some(n) = q.pop_front() {
             if n == to {
                 break;
@@ -1000,7 +1015,7 @@ impl BaseGame {
                 if seg.terminal_first && !(n == from && tour.segs.is_empty()) {
                     continue;
                 }
-                if london_used && ctx.london == Some(m.hex) && m.kind == NodeKind::City {
+                if m.kind == NodeKind::City && groups_used.contains(&m.hex) {
                     continue;
                 }
                 prev.insert(m, (n, seg));
@@ -1073,8 +1088,10 @@ impl BaseGame {
     ) -> Option<(i32, i32)> {
         let _ = single;
         // "Cannot use group London more than once"
-        if stops.iter().filter(|n| ctx.london == Some(n.hex) && n.kind == NodeKind::City).count() > 1 {
-            return None;
+        for &gh in &ctx.groups {
+            if stops.iter().filter(|n| n.hex == gh && n.kind == NodeKind::City).count() > 1 {
+                return None;
+            }
         }
         let fam = self.fam();
         // english_channel_visit: 0 unless both hexes are set
@@ -1652,7 +1669,7 @@ impl RG {
             pass: nodes.iter().map(|&x| !ctx.blocks(x)).collect(),
             tok,
             tok_nd: nodes.iter().map(|&x| ctx.tokened_normal_or_dest(x)).collect(),
-            london: nodes.iter().map(|x| ctx.london == Some(x.hex) && x.kind == NodeKind::City).collect(),
+            london: nodes.iter().map(|x| ctx.is_group(x.hex) && x.kind == NodeKind::City).collect(),
             channel: nodes
                 .iter()
                 .map(|x| {
@@ -2068,7 +2085,6 @@ impl<'r> KWalk<'r> {
         if self.upper(u) < self.eff_thr() {
             return;
         }
-        let london_used = self.stops.iter().any(|&x| rg.london[x]);
         for &si in &rg.out[u] {
             if self.exhausted {
                 return;
@@ -2078,7 +2094,8 @@ impl<'r> KWalk<'r> {
             if self.visited[v] || (s.tfirst && !self.segs.is_empty()) {
                 continue;
             }
-            if london_used && rg.london[v] {
+            // one city per route group (the group's hex)
+            if rg.london[v] && self.stops.iter().any(|&x| rg.london[x] && rg.nodes[x].hex == rg.nodes[v].hex) {
                 continue;
             }
             match self.kind {
@@ -2288,6 +2305,19 @@ impl BaseGame {
             }
             if matches!(k, Kind::Local { .. }) {
                 for &t in &tokens {
+                    // Route#connection_data rebuilds a ["local", hex] run on
+                    // the hex's FIRST node the corporation tokened: in a
+                    // multi-city hex (1822MX: the NdeM's and Mexico City's
+                    // several homes) only that city has a single-city run
+                    if self.g1822_is_mx() {
+                        let n = rg.nodes[t];
+                        let first = (0..self.hexes[n.hex].tile.cities.len()).find(|&ci| {
+                            self.hexes[n.hex].tile.cities[ci].tokens.iter().flatten().any(|x| x.corporation_id == c)
+                        });
+                        if first != Some(n.index) {
+                            continue;
+                        }
+                    }
                     let st = vec![rg.nodes[t]];
                     if let Some((r, b)) =
                         self.g1822_price_route(&ctx, &st, true, k, rg.major, w.home_node(), w.dest_node())

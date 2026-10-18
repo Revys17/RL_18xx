@@ -139,7 +139,9 @@ def main(src: str, dst: str) -> None:
     # a P+'s 99/99 is 99), as title::g1822 keeps it.
     def dist(t):
         if isinstance(t, list):
-            return max(int(x["pay"]) for x in t if "city" in x["nodes"])
+            # (1822CA's grain train counts grain elevators, no cities)
+            cities = [x for x in t if "city" in x["nodes"]] or t
+            return max(int(x["pay"]) for x in cities)
         return int(t)
 
     w("pub fn trains() -> Vec<TrainDef> {")
@@ -254,6 +256,18 @@ def main(src: str, dst: str) -> None:
         w(f"    ({rs(h['coord'])}, {rs(h['code'])}, {rs(h['color'])}),")
     w("];")
     w("")
+    if any(h.get("index") for h in d["hexes"]):
+        w("/// The preprinted tile's index in its map.rb HEXES group (Ruby's")
+        w("/// preprinted tile id is \"<coord>-<index>\").")
+        w("pub fn hex_index(coord: &str) -> u8 {")
+        w("    match coord {")
+        for h in d["hexes"]:
+            if h.get("index"):
+                w(f"        {rs(h['coord'])} => {h['index']},")
+        w("        _ => 0,")
+        w("    }")
+        w("}")
+        w("")
     w("/// map.rb LOCATION_NAMES.")
     w("pub const LOCATION_NAMES: &[(&str, &str)] = &[")
     for k, v in d["location_names"].items():

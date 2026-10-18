@@ -110,6 +110,10 @@ pub struct Family {
 
     // -- map ----------------------------------------------------------------
     pub london_hex: &'static str,
+    /// The hexes whose cities form a route group each (`groups:London`,
+    /// `groups:MexicoCity`, 1822CA's big cities: a route may use one city
+    /// of a group; the groups follow the cities through upgrades).
+    pub route_group_hexes: &'static [&'static str],
     pub english_channel_hex: &'static str,
     pub france_hex: &'static str,
     pub cardiff_hex: &'static str,
@@ -126,6 +130,11 @@ pub struct Family {
     pub hex_dsl: fn(&str) -> Option<(&'static str, &'static str)>,
     pub hex_dsl_all: &'static [(&'static str, &'static str, &'static str)],
     pub tile_dsl: fn(&str) -> Option<(&'static str, &'static str)>,
+    /// The preprinted tile's index in its map.rb HEXES group (Ruby's
+    /// preprinted tile id "<coord>-<index>", which wire city ids name).
+    /// 1822 / 1822PNW: 0 everywhere (their generators' wire ids as
+    /// validated).
+    pub hex_index: fn(&str) -> u8,
 
     // -- game end -----------------------------------------------------------
     pub game_end_lock_first_trigger: bool,
@@ -134,6 +143,11 @@ pub struct Family {
     /// MUST_SELL_IN_BLOCKS: one sale per corporation per turn (stock round)
     /// / per train purchase (emergency sales).
     pub must_sell_in_blocks: bool,
+}
+
+/// `hex_index` for the titles whose wire ids use index 0.
+pub fn hex_index_zero(_coord: &str) -> u8 {
+    0
 }
 
 impl Family {

@@ -61,11 +61,16 @@ def ensure_gems(gems: Path) -> None:
     )
 
 
+# --tokens: also compare each city's tokens slot by slot (1822 family)
+TOKENS = False
+
+
 def ruby_dump(game_path: Path, out: Path, ruby_repo: Path, gems: Path) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     script_dir = Path(__file__).resolve().parent
+    extra_env = ["-e", "DUMP_TOKENS=1"] if TOKENS else []
     subprocess.run(
-        ["docker", "run", "--rm", "--cpuset-cpus", CPUSET, "-e", "ENGINE_LOG_LEVEL=3",
+        ["docker", "run", "--rm", "--cpuset-cpus", CPUSET, "-e", "ENGINE_LOG_LEVEL=3", *extra_env,
          "-v", f"{gems}:/usr/local/bundle",
          "-v", f"{ruby_repo.resolve()}:/18xx:ro",
          "-v", f"{game_path.resolve().parent}:/games:ro",
@@ -128,6 +133,13 @@ def rust_dump(game: dict) -> list[dict]:
                 "finished": snap["finished"],
                 "bank": snap["bank"],
             }
+            if TOKENS:
+                tok = {}
+                for h in rust.hexes:
+                    cities = [[t.corporation_id if t else None for t in c.tokens] for c in h.tile.cities]
+                    if any(x for c in cities for x in c):
+                        tok[h.id] = cities
+                row["tokens"] = tok
         else:
             rt, _, step, _ = rust.debug_state()
             row = {
@@ -208,6 +220,10 @@ def diffs(a: dict, b: dict, title: str) -> list[str]:
             out.append(f"order rs={a.get('order')} rb={b.get('order')}")
         if a.get("depot") != b.get("depot"):
             out.append(f"depot rs={a.get('depot')} rb={b.get('depot')}")
+        if "tokens" in a and "tokens" in b and a["tokens"] != b["tokens"]:
+            ta, tb = a["tokens"], b["tokens"]
+            d = {h: (ta.get(h), tb.get(h)) for h in set(ta) | set(tb) if ta.get(h) != tb.get(h)}
+            out.append(f"tokens {d}")
         if a.get("companies") != b.get("companies"):
             ka, kb = a.get("companies", {}), b.get("companies", {})
             d = {k: (ka.get(k), kb.get(k)) for k in set(ka) | set(kb) if ka.get(k) != kb.get(k)}
@@ -233,9 +249,13 @@ def main() -> int:
     ap.add_argument("--refresh", action="store_true", help="re-run cached Ruby dumps")
     ap.add_argument("--jobs", type=int, default=6, help="parallel Ruby containers")
     ap.add_argument("--verbose", action="store_true", help="print the first 8 differing rows")
+    ap.add_argument("--tokens", action="store_true", help="also compare city tokens slot by slot (1822 family; "
+                    "use a fresh --work dir or --refresh: cached dumps lack them)")
     ap.add_argument("--results-json", help="merge Ruby-HEAD outcomes into this JSON: final scores by seat for "
                     "full replays, the rejecting file action for records Ruby HEAD rejects")
     args = ap.parse_args()
+    global TOKENS
+    TOKENS = args.tokens
 
     corpus = Path(args.corpus_dir or f"human_games/{args.title}")
     paths: list[Path] = []

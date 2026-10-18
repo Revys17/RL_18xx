@@ -901,7 +901,12 @@ impl BaseGame {
                 }
             }
             for (nc, mut toks) in per_new.into_iter().enumerate() {
-                toks.sort_by_key(|(_, ch)| *ch);
+                // (Ruby's sort of the cheaters to the end is a no-op —
+                // `transform_values` builds a new hash nobody reads; the
+                // variants with token identity follow that)
+                if !self.g1822_token_identity() {
+                    toks.sort_by_key(|(_, ch)| *ch);
+                }
                 let reserved = new_res[nc].len();
                 for (index, (t, _)) in toks.into_iter().enumerate() {
                     let res = new_res[nc].clone();
