@@ -226,3 +226,28 @@ def test_a_version_change_drops_the_kept_trees(start_file):
     newer = dict(settings, version=4)
     stats = gen.run(4.0, newer)["stats"]
     assert stats.get("reuse_dropped_version", 0) > 0
+
+
+def test_a_tiny_cpu_run_with_the_speed_options(tmp_path, start_file, monkeypatch):
+    """Search learning end to end with tree reuse, map dedupe and two server
+    replicas (reloaded after every update)."""
+    import json
+
+    from .test_search_learning import _save_checkpoints
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+    policy, value = _save_checkpoints(tmp_path)
+    cfg = sl.SearchLearningConfig(
+        policy_checkpoint=str(policy), value_checkpoint=str(value), out_dir=str(tmp_path / "runs"), run_name="fast",
+        p_full=0.5, n_full=4, n_fast=2, parallel_readouts=2, workers=2, games_per_worker=2, task_seconds=2.0,
+        max_decisions=16, start_positions=start_file, random_start_fraction=1.0, inference_batch_size=64,
+        window_rows=400, rows_per_update=10, min_window_rows=10, steps_per_update=2, minibatch=8, microbatch=4,
+        max_updates=2, snapshot_every=1, anchor_every=0, kl_target=0.05, critic_positions_per_game=4,
+        reuse_tree="total", dedupe_maps=True, server_replicas=2,
+    )
+    run_dir = sl.run(cfg)
+    history = [json.loads(line) for line in (run_dir / "history.jsonl").read_text().splitlines()]
+    assert [h["update"] for h in history] == [1, 2]
+    assert all(h["rows_trained"] == 16 for h in history)
+    assert any(h["reused_search_share"] > 0 for h in history)
+    assert all(0 < h["map_rows_per_state"] <= 1 for h in history)

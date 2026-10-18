@@ -5,7 +5,8 @@ back on one machine. Reports decisions/s, network evaluations/s, evaluations per
 decision, searched rows/h, games/h (finished games), the tree-reuse shares and
 the workers' peak RSS.
 
-A config is ``+``-joined options (``base`` = the defaults before 2026-10-18):
+A config is ``+``-joined options (``base`` or ``unpacked``: the server path before 2026-10-18;
+``fast``: the packed fast path, the default now):
 ``unpacked`` (the server's per-state path), ``dedupe`` (``--dedupe-maps``),
 ``total`` / ``additional`` (``--reuse-tree``), ``rep<N>`` (``--server-replicas``).
 Search settings as az1_20261017 (visits target, pruned, n_full 200, n_fast 48,
@@ -69,7 +70,7 @@ def run_config(args, config: str) -> dict:
     )
     handle = start_inference_server(
         num_workers=args.workers, model_factory=load_server_model, checkpoint_path=args.model,
-        batch_size=cfg.inference_batch_size, autocast_device=None, fast_path="unpacked" not in flags,
+        batch_size=cfg.inference_batch_size, autocast_device=None, fast_path=not flags & {"unpacked", "base"},
         replicas=replicas,
     )
     queues = {"learner": (handle.request_q, handle.reply_qs, handle.ticket_q)}
