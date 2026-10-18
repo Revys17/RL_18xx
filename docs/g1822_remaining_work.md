@@ -619,18 +619,19 @@ overrides, and what the engine does for each:
   Route step they must run — old rules — and 263806's stale-graph lay
   above); Ruby per-action diff of all 187: zero state divergence (token
   slots included) up to those points.
-* **Router check** (20,945 recorded runs): engine = human in 18,628
+* **Router check** (20,945 recorded runs): engine = human in 18,629
   (88.9%), above in 2,313 (11.0%; Ruby HEAD validates and prices every one
-  at the engine's total), below in 4: Ruby HEAD rejects 2 of those human
+  at the engine's total), below in 3: Ruby HEAD rejects 2 of those human
   runs (a plain 7 and a plain 5 run with 18 / 15 stops after an undone
   pullman choice), 1 real shortfall (257158 @1556: a grain-attached 7, a
   pullman 5 and an LP — 1,020 vs 1,030; the compatible pullman route is
-  not among the 16,000 best kept). 27 ms per call on average, up to ~15 s
+  not among the 16,000 best kept). 30 ms per call on average, up to ~20 s
   in the densest late positions (see known issues). CA router settings:
   scouting depth 512, TOP_K 16,000, repeated full passes while the
-  combination improves, E-trains searched last in the combination (they
-  share no track with the rest), a 150M-step combination budget, E walks
-  3M steps and branch-and-bound E tours (the other titles are unchanged).
+  combination improves (the better of the passes kept), E-trains searched
+  last in the combination (they share no track with the rest), a
+  150M-step combination budget, E walks 3M steps and branch-and-bound E
+  tours (the other titles are unchanged).
 * **Completeness** (all 175,886 human decisions except `run_routes`,
   rules' move set): 175,860 match exactly one generated move (99.985%),
   none matches two; 13 (0.007%: 6 private acquisitions, 4 train buys, 3
@@ -638,13 +639,20 @@ overrides, and what the engine does for each:
   misses are replay-only or rejected: 16 out-of-order discards, 1
   re-acquisition of an owned company, 9 at the Ruby HEAD rejections above.
 * **Fuzz**: in-crate `g1822::fuzz::ca_random_walks_3_to_6_players` (16
-  walks, both policies); wire walks: 20 under the title's policy (seeds
-  1-5) and 20 under the rules' (seeds 6-10), 3-6p, 47,026 moves — 39
-  finished, 1 at a Ruby dead end (an emergency sale whose presidency change
-  is ranked against the tax haven: Ruby raises). They cover P10 (32
-  tokens), the sawmill (35), P12-P21 / P29-P30 lays, 290 "None" route
-  choices and the attachments, minor acquisitions with every token choice.
-  RUBY_REPLAY_PLACEHOLDER
+  walks, both policies: 16,746 moves, all finished); wire walks: 20 under
+  the title's policy (seeds 1-5) and 20 under the rules' (seeds 6-10),
+  3-6p, 47,323 moves — 39 finished, 1 at a Ruby dead end (an emergency
+  sale whose presidency change is ranked against the tax haven: Ruby
+  raises). They cover P10 (32 tokens), the sawmill (35), P12-P21 / P29-P30
+  lays, 284 "None" route choices and the attachments, 58 destination
+  tokens (ICR's city choice in 3 games), minor acquisitions with every
+  token choice. Ruby HEAD replays all 40 with zero divergence (token slots
+  included) and zero rejections; one (4p s10) Ruby could not finish: from
+  file action 1509 its DestinationToken pass check (`nodes_connected?`, a
+  path walk) ran over 15 minutes on that dense random map — compared up
+  to there. The first Ruby replay found the one generator bug: a
+  destination `place_token` wire without `token_type` (Ruby's PlaceToken
+  then takes a normal token).
   `scripts/ruby_shims.rb`: CA's `check_distance(route, visits, train =
   nil)` ends in a bare `super` into G1822's two-argument method, which MRI
   rejects (ArgumentError) on every route Ruby validates; the site runs Opal,
@@ -662,11 +670,17 @@ filtered).
 
 * Router: one shortfall (above) and slow late positions — a CA pullman's
   bound lets every town count (towns are only bounded by 3d stops), so
-  pullman / grain walks on the densest maps run long (up to ~15 s for one
+  pullman / grain walks on the densest maps run long (up to ~20 s for one
   call). Not bridge-ready anyway.
 * Kept for Ruby parity: Ruby's `remove_extra_tokens!` / Hex#lay quirks as
   MX (token identity on), and the stale graph after a 'remove' acquisition.
 * The scenarios 1822CA ERS / WRS are not implemented.
+* A destination `place_token` always places the destination token (Ruby
+  takes `action.token`, by `token_type` — a record without it would put a
+  normal token there; the site and the generator always name it).
+* `lane_match_different_sizes?` is on for CA only; 1822PNW (validated as
+  it is) still treats a 2-lane / 1-lane crossing as unconnected — kept for
+  byte-identity, worth a probe if PNW ever shows a lane divergence.
 
 ## Rigs and gates
 
@@ -693,6 +707,9 @@ CUDA_VISIBLE_DEVICES="" uv run python scripts/ruby_diff.py --title 1822MX --toke
 CUDA_VISIBLE_DEVICES="" uv run python scripts/ruby_diff.py --title 1822PNW tests/fixtures/1822PNW
 CUDA_VISIBLE_DEVICES="" uv run python scripts/g1822_fuzz.py --title 1822PNW --players 3 4 5 --seeds 1-10 --out /tmp/fzp
 CUDA_VISIBLE_DEVICES="" uv run python scripts/ruby_diff.py --title 1822PNW --refresh --work /tmp/rd /tmp/fzp
+# 1822CA: likewise (3-6 players; the rig loads scripts/ruby_shims.rb — MRI vs Opal on check_distance)
+CUDA_VISIBLE_DEVICES="" uv run python scripts/g1822_fuzz.py --title 1822CA --players 3 4 5 6 --seeds 1-5 --out /tmp/fzc [--policy rules]
+CUDA_VISIBLE_DEVICES="" uv run python scripts/ruby_diff.py --title 1822CA --tokens --refresh --work /tmp/rdc /tmp/fzc
 # per-commit gates: see docs/g1867_remaining_work.md (cargo test, pytest,
 # parity_runner --random 0:100, tests/g1867_corpus_audit.py --limit 300).
 ```
