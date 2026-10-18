@@ -269,8 +269,9 @@ pub trait GameTitle: Sync {
     /// players the generator (self-play) offers. Replay and
     /// `process_action` follow the title's rules whatever this says. The
     /// default forbids them all (the project's choice: seller consent and
-    /// negotiated prices are not modelled). Only the 1822 generator reads
-    /// it today, so 1830/1867 are unaffected.
+    /// negotiated prices are not modelled; 1867: mergers only of one
+    /// player's minors). The 1822 and 1867 generators read it; 1830 has
+    /// no such generator.
     fn generator_cross_player(&self) -> CrossPlayerPolicy {
         CrossPlayerPolicy::RESTRICTED
     }
@@ -413,7 +414,9 @@ pub struct CrossPlayerPolicy {
     pub trains: bool,
     /// Acquire a private company another player owns.
     pub companies: bool,
-    /// Acquire / merge a minor another player owns (bank minors: always).
+    /// Acquire / merge a minor another player owns (bank minors: always;
+    /// 1867: a merger round add of a minor the initiator's owner does not
+    /// own).
     pub minors: bool,
 }
 

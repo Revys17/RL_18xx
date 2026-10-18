@@ -918,4 +918,115 @@ mod tests {
         let gtr = &game.corporations[game.corp_idx["GTR"]];
         assert!(gtr.floated && gtr.share_price.is_some());
     }
+
+    /// The user's rulebook ruling (2026-10-18): a nationalized company's
+    /// assets go onto the National's charter, so its trains are never for
+    /// sale afterwards, and a major restarted after nationalization is a
+    /// totally fresh corporation. Here GTR is nationalized by the interest
+    /// default (LoanOperations at max loans) while it still owns trains,
+    /// cash, loans, tokens and a private — the case where Ruby's
+    /// `reset_corporation` leaves the OLD object owning the trains and
+    /// `Depot#other_trains` keeps offering them (documented defect, not
+    /// emulated).
+    #[test]
+    fn nationalized_majors_trains_leave_play_and_its_restart_is_fresh() {
+        use crate::g1867::legal::Move;
+        use crate::title::CrossPlayerPolicy;
+        let mut game = new_4p_game();
+        rig_floated(&mut game, "GTR", 14, "J12");
+        rig_floated(&mut game, "CPR", 12, "M9");
+        let cpr = game.corp_idx["CPR"];
+        for i in 0..game.corporations[cpr].shares.len() {
+            game.corporations[cpr].set_share_owner(i, EntityId::player(2));
+        }
+        let gtr = game.corp_idx["GTR"];
+        let gtr_eid = EntityId::corporation("GTR");
+        let mut old_trains = Vec::new();
+        for _ in 0..2 {
+            let mut t = game.depot.trains.remove(0);
+            t.owner = gtr_eid.clone();
+            old_trains.push(t.id.clone());
+            game.corporations[gtr].trains.push(t);
+        }
+        game.corporations[gtr].cash = 10;
+        game.corporations[gtr].loans = game.corp_max_loans(gtr);
+        let csl = game.company_idx["C&SL"];
+        game.companies[csl].owner = gtr_eid.clone();
+        game.corporations[cpr].cash = 1000;
+
+        // CPR at its BuyTrain step.
+        let mut s = crate::rounds::OperatingState::new(1, 2, vec!["CPR".to_string()]);
+        s.step = crate::rounds::OperatingStep::BuyTrain;
+        game.round = crate::rounds::Round::Operating(s);
+        game.update_round_state();
+        let from_gtr = |moves: &[Move]| {
+            moves
+                .iter()
+                .filter(|m| match &m.action {
+                    Action::BuyTrain { from, train_name, .. } => from == "GTR" || old_trains.contains(train_name),
+                    _ => false,
+                })
+                .count()
+        };
+        let depot_buys = |moves: &[Move]| {
+            moves.iter().filter(|m| matches!(&m.action, Action::BuyTrain { from, .. } if from == "depot")).count()
+        };
+        // Control: GTR's trains are on offer while GTR runs (the rules' set:
+        // another player presides GTR).
+        let rules = game.g1867_legal_moves_with(CrossPlayerPolicy::RULES);
+        assert!(from_gtr(&rules) > 0 && depot_buys(&rules) > 0);
+
+        let loans = game.corporations[gtr].loans;
+        assert_eq!(game.loan_operations_auto(gtr, loans), None, "interest unpaid at max loans: nationalized");
+
+        // (a) The old trains are out of play: owned by no corporation, not
+        // in the depot or its discard pile, never offered.
+        assert!(game.corporations.iter().all(|c| c.trains.iter().all(|t| !old_trains.contains(&t.id))));
+        assert!(game.depot.trains.iter().chain(&game.depot.discarded).all(|t| !old_trains.contains(&t.id)));
+        let rules = game.g1867_legal_moves_with(CrossPlayerPolicy::RULES);
+        assert_eq!(from_gtr(&rules), 0);
+        assert!(depot_buys(&rules) > 0, "CPR's BuyTrain step is still live");
+        assert_eq!(from_gtr(&game.g1867_legal_moves()), 0);
+
+        // (b) GTR is its unstarted self: nothing from before.
+        let fresh = |game: &BaseGame| {
+            let c = &game.corporations[game.corp_idx["GTR"]];
+            assert!(c.trains.is_empty() && c.loans == 0, "trains {:?} loans {}", c.trains, c.loans);
+            assert!(c.tokens.len() == 3 && c.tokens.iter().all(|t| !t.used && t.city_hex_id.is_empty()));
+            assert!(game.companies.iter().all(|co| co.owner != gtr_eid || co.closed));
+            assert!(game.hexes.iter().all(|h| h
+                .tile
+                .cities
+                .iter()
+                .all(|ct| ct.tokens.iter().flatten().all(|t| t.corporation_id != "GTR"))));
+        };
+        fresh(&game);
+        let c = &game.corporations[gtr];
+        assert!(!c.floated && !c.closed && !c.ever_operated && c.cash == 0);
+        assert!(c.share_price.is_none() && c.shares.iter().all(|sh| sh.owner.is_none()));
+        assert!(game.companies[csl].closed, "its private closed");
+
+        // Restarted in a later stock round (majors IPO from phase 4): the
+        // par is GTR's only money and it brings nothing else along.
+        set_phase(&mut game, "4");
+        enter_stock_round(&mut game);
+        let moves = game.g1867_legal_moves();
+        let Some(par) = moves
+            .iter()
+            .find(|m| matches!(&m.action, Action::Par { corporation_sym, .. } if corporation_sym == "GTR"))
+            .cloned()
+        else {
+            panic!(
+                "GTR can be restarted: {} {:?} cash {:?}",
+                game.g1867_debug_state(),
+                moves.iter().map(|m| format!("{:?}", m.action)).collect::<Vec<_>>(),
+                game.players.iter().map(|p| p.cash).collect::<Vec<_>>()
+            )
+        };
+        let Action::Par { share_price, .. } = par.action else { unreachable!() };
+        game.g1867_apply_move(&par).unwrap();
+        let c = &game.corporations[gtr];
+        assert_eq!(c.cash, share_price * c.president_share_units(), "only the president's par money");
+        fresh(&game);
+    }
 }

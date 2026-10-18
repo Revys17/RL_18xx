@@ -11,7 +11,8 @@ parameter (bid, company price, price for another corporation's train) by
 range membership. ``run_routes`` is not matched here (routes are the router
 check's business). Matching uses the rules' move set (policy "rules"); an
 exact match the title's cross-player policy excludes (a train / private
-bought from another player) is reported as "policy". Reports exact /
+bought from another player, a merger round add of another player's minor)
+is reported as "policy". Reports exact /
 missing / ambiguous / policy by action family with example game ids and
 file action ids (no player data).
 
@@ -40,7 +41,7 @@ from tests.title_replay_harness import game_seed, ruby_filtered_actions  # noqa:
 
 SKIP = {"run_routes"}
 # Action types the cross-player policy (GameTitle::generator_cross_player) can exclude.
-POLICY_TYPES = {"buy_train", "buy_company"}
+POLICY_TYPES = {"buy_train", "buy_company", "merge"}
 
 
 def _in_range(value, rng) -> bool:

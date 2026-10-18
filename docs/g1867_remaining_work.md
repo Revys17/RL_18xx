@@ -114,9 +114,12 @@ drive 1867 through `BaseGame::g1867_legal_moves()` (Python:
   the same decision or that lie beyond its replay horizon (4 home tokens in
   Montreal/Toronto — Ruby HEAD's `home_token_locations` there equals ours,
   e.g. 21494@776 Ruby offers M9/E13/D2 only; 23812@607, 25757@651; 24437@899
-  and @929). Cross-player policy: the title's policy would exclude 2 human
-  decisions in the scrape (company purchases from another player) and 2 in
-  the old sample (trains from another player's corporation).
+  and @929). Cross-player policy: the title's policy would exclude 7 human
+  decisions in the scrape (2 company purchases from another player, 5
+  merger adds of another player's minor) and 11 in the old sample (2 trains
+  from another player's corporation, 9 merger adds); the rules' numbers
+  above are unchanged by the single-owner merger policy (re-run
+  2026-10-18).
 * **Fuzz, in-crate**: 3-6 players x restricted + rules policies, every
   generated move applies, no panic, no stuck state (`cargo test
   g1867::fuzz`; `perf_walk` is the profiling target). ~2 ms per decision
@@ -130,7 +133,12 @@ drive 1867 through `BaseGame::g1867_legal_moves()` (Python:
   a train of a nationalized major at $1; the engine had dropped it).
   Earlier rounds found every bug listed under "Engine fixes"; with the
   driver taking the dead-end choices (`--allow-ruby-dead-ends`) 21 of 140
-  games run into Ruby's stale-operator dead end.
+  games run into Ruby's stale-operator dead end. After the single-owner
+  merger policy (40 walks, 3-6 players x seeds 1-10, title's policy): all
+  finished, no generator error; completed mergers 111 -> 70, of which
+  across owners 88 -> 0 (random play merges whatever is connected),
+  conversions 94 -> 136. (Not re-checked in Ruby HEAD: the policy only
+  removes moves from the rules' set, which the earlier rounds checked.)
 * **Determinism**: the move list of a state is sorted (Debug order of step
   and action), so a seeded walk is reproducible across processes (the
   sort changed the walks: 12 fresh ones, 3-6 players x seeds 1-3, all
@@ -184,20 +192,38 @@ drive 1867 through `BaseGame::g1867_legal_moves()` (Python:
 ### Cross-player purchases (`GameTitle::generator_cross_player`)
 
 Default `RESTRICTED` (no title override): the generator drops (1) a train
-bought from a corporation (major or minor) another player presides, and
-(2) a private bought from another player (1867 companies are bought for
-$1..face; the seller is paid). "Other player" = the seller is not the
-buying corporation's president; a corporation without a president counts
-as another player. `policy="rules"` gives Ruby's set (completeness, fuzz).
-If the policy would leave no move, the rules' set is returned (counter
-`legal::stats::CROSS_FALLBACK`). Not affected: depot trains, treasury and
-pool shares, the post-merger dealing (treasury shares). Open questions
-for the user (left as Ruby has them):
+bought from a corporation (major or minor) another player presides, (2) a
+private bought from another player (1867 companies are bought for
+$1..face; the seller is paid), and (3) a Merge-step add of a minor another
+player owns (`CrossPlayerPolicy::minors`). "Other player" = the seller is
+not the buying corporation's president (for a merge: the added minor's
+owner is not the initiating minor's owner); a corporation without a
+president or owner counts as another player. `policy="rules"` gives
+Ruby's set (completeness, fuzz). If the policy would leave no move, the
+rules' set is returned (counter `legal::stats::CROSS_FALLBACK`; dropped
+merge adds: `CROSS_DROPPED_MERGES`). Not affected: depot trains, treasury
+and pool shares, the post-merger dealing (treasury shares), naming the
+merged major, conversions. Decisions (the user, 2026-10-18):
 
-* **Mergers of other players' minors** (Merge step): a minor may merge with
-  any connected minor, whatever its owner; each owner gets a 10% share of
-  the new major (no cash changes hands). Treated as NOT a purchase — offered.
-  Should self-play only merge minors of one player?
+* **Mergers: only of one player's minors** (decided). Ruby lets a minor
+  merge with any connected minor, whatever its owner (each owner gets a 10%
+  share; no cash changes hands). Under `RESTRICTED` the generator offers an
+  add only of a minor the initiator's owner also owns, so every self-play
+  merger is one player's minors. The user: "only allow mergers of minors
+  collectively owned by 1 player. 99% of the time that's how it goes down
+  so it saves us a lot of modeling effort without losing much of the game
+  space." The data: 2026-10 scrape (316 in-scope games) 815 of 820
+  completed mergers (99.4%) are one player's, 5 of 889 human add decisions
+  would be excluded; 2020-22 corpus (727 in-scope games, counted up to any
+  rejection) 2,032 of 2,055 (98.9%), 25 of 2,323 adds. Random play merged
+  across owners far more (fuzz, below). Nothing downstream assumes several
+  owners: with one owner the first minor gives 10%, the second the swap to
+  the 20% presidency, each further one 10%; Ruby's "no player can become
+  president" check always passes (the owner has two of the minors); the
+  dealing is the owner's (9.2 C) and then one share each for everyone
+  (9.2 D), which can never overtake the owner. The "Done Adding" pass is
+  always offered, so the policy never needs the fallback in the Merge
+  step (unit tests in `g1867/legal.rs`).
 * **Conversion targets**: the converting minor's owner picks any unstarted
   major — no other player involved.
 * **Nationalization payouts** (MajorTrainless / interest default) move cash
@@ -228,13 +254,24 @@ Replay-neutral: the 300-game sample (206/60/3/4/27), the 2026-10 scrape
 
 ### Ruby HEAD dead ends and defects the engine goes past (documented, not emulated)
 
-* **Orphan trains** (a decision for the user): a major nationalized while
-  it still owns trains (interest it cannot pay, LoanOperations) is reset by
-  `reset_corporation`, which leaves the OLD object owning its trains — and
-  `Depot#other_trains` keeps offering them to every other corporation (the
-  price goes to the phantom, out of play). The engine drops a reset major's
-  trains. The fuzzer flags the point (`rl18xx.ruby_orphan_trains_at`).
-  Emulating it would mean trains for sale by nobody.
+* **Orphan trains** (decided by the user, 2026-10-18, from the rulebook:
+  the engine's behaviour stands): a major nationalized while it still owns
+  trains (interest it cannot pay, LoanOperations) is reset by
+  `reset_corporation`, which in Ruby leaves the OLD object owning its
+  trains — and `Depot#other_trains` keeps offering them to every other
+  corporation (the price goes to the phantom, out of play). The rulebook:
+  a nationalized company's assets (money, trains, privates) go onto the
+  National Railway's charter, so its trains are never for sale afterwards,
+  and a major restarted after nationalization is a totally fresh
+  corporation. The engine drops a reset major's trains and rebuilds it
+  from its definition (`rounds/national.rs::reset_corporation`); pinned by
+  `nationalized_majors_trains_leave_play_and_its_restart_is_fresh` (the
+  interest default with trains, cash, loans, tokens and a private: the
+  trains are owned by nobody and offered to no one, the restarted major's
+  only money is its new par). Its cash goes to the bank as in Ruby HEAD
+  (`nationalization_transfer_assets`), not to a National treasury. The
+  fuzzer flags the point (`rl18xx.ruby_orphan_trains_at`) because Ruby HEAD
+  replays such games differently from there on.
 
 * **Stale operator after a MajorTrainless nationalization** with other
   majors still queued: Ruby does not force the next entity, and
@@ -292,8 +329,8 @@ Replay-neutral: the 300-game sample (206/60/3/4/27), the 2026-10 scrape
    merge / convert / remove_token / MajorTrainless `choose`), encoder spec,
    native decode, MCTS wiring, VALUE_SIZE/POLICY_SIZE plumbing, RlSpec and
    the layout fingerprint (contract items 2 and 6). Constraint: the 1830
-   layout is FROZEN (checkpoint-compatible). Before that: decide the open
-   cross-player questions above.
+   layout is FROZEN (checkpoint-compatible). The cross-player questions are
+   decided (mergers of one player's minors only; orphan trains leave play).
 2. **Generator speed for self-play**: ~2 ms per decision in the fuzz
    (tile lays dominate: one Ruby graph walk per upgrade candidate; offers
    recompute the Track gate). Fine for fuzzing; an MCTS hot loop would want
@@ -418,8 +455,8 @@ Replay-neutral: the 300-game sample (206/60/3/4/27), the 2026-10 scrape
 cd engine-rs && PYO3_PYTHON=$PWD/../.venv/bin/python \
   LD_LIBRARY_PATH=$(../.venv/bin/python -c 'import sysconfig;print(sysconfig.get_config_var("LIBDIR"))') \
   RUSTFLAGS="-L $(../.venv/bin/python -c 'import sysconfig;print(sysconfig.get_config_var("LIBDIR"))')" \
-  cargo test --release --no-default-features          # 209 passed / 2 ignored on 2026-10-18
-CUDA_VISIBLE_DEVICES="" uv run pytest tests/          # 1161 passed / 1 skipped on 2026-10-18
+  cargo test --release --no-default-features          # 214 passed / 2 ignored on 2026-10-18 (single-owner mergers)
+CUDA_VISIBLE_DEVICES="" uv run pytest tests/          # 1190 passed / 3 skipped on 2026-10-18 (no ulimit -v: LMDB maps big)
 CUDA_VISIBLE_DEVICES="" uv run python tests/parity_runner.py --random 0:100
 CUDA_VISIBLE_DEVICES="" uv run python tests/g1867_corpus_audit.py --limit 300 --json /tmp/audit.json
 #   → diff game-by-game vs the previous audit JSON; rejections may only
