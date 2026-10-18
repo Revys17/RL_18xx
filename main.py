@@ -212,9 +212,13 @@ def cmd_search_learning(args):
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     resuming = args.resume and not (args.policy or args.value)  # a resumed run keeps its checkpoints
+    if not resuming and not args.shared and not args.value:
+        raise SystemExit("--value (the critic) is needed unless --shared (the learner's own value heads)")
     config = SearchLearningConfig(
         policy_checkpoint="" if resuming else str(_resolve_checkpoint(args.policy, args.model_dir)),
-        value_checkpoint="" if resuming else str(_resolve_checkpoint(args.value, args.value_model_dir)),
+        value_checkpoint=(
+            "" if resuming or (args.shared and not args.value) else str(_resolve_checkpoint(args.value, args.value_model_dir))
+        ),
         out_dir=args.out_dir,
         run_name=args.run_name,
         learner_temperature=args.learner_temperature,
@@ -264,6 +268,14 @@ def cmd_search_learning(args):
         anchor_every=args.anchor_every,
         max_updates=args.max_updates,
         snapshot_every=args.snapshot_every,
+        shared=args.shared,
+        value_loss_weight=args.value_loss_weight,
+        value_stop_grad=args.value_stop_grad,
+        value_nstep=args.value_nstep,
+        value_bootstrap_weight=args.value_bootstrap_weight,
+        aux_loss_weight=args.aux_loss_weight,
+        surprise_weight=args.surprise_weight,
+        surprise_cap=args.surprise_cap,
     )
     print(run(config, resume=args.resume))
 
@@ -632,8 +644,9 @@ def build_parser():
         "--full-move-temperature", type=float, default=_SL.full_move_temperature,
         help="--target visits: 0 plays the most-visited move, t > 0 samples it with weight N ** (1 / t)",
     )
-    p.add_argument("--value-head", choices=("win", "score"), default=_SL.value_head,
-                   help="The critic head the search reads its leaf values from")
+    p.add_argument("--value-head", type=str, default=_SL.value_head,
+                   help="The value head the search reads its leaf values from: win, score or blend=<w> "
+                   "((1 - w) * win + w * score, KataGo's score utility); the critic's, or the learner's with --shared")
     p.add_argument("--workers", type=int, default=_SL.workers)
     p.add_argument("--games-per-worker", type=int, default=_SL.games_per_worker, help="Games each worker plays at once")
     p.add_argument("--task-seconds", type=float, default=_SL.task_seconds, help="A worker reports its finished games this often")
@@ -665,6 +678,23 @@ def build_parser():
                    help="Move the KL anchor to the learner every N updates (0: the starting policy)")
     p.add_argument("--max-updates", type=int, default=_SL.max_updates)
     p.add_argument("--snapshot-every", type=int, default=_SL.snapshot_every)
+    p.add_argument("--shared", action="store_true",
+                   help="One network: the search reads the learner's own value heads (no --value critic) and the "
+                   "value loss trains the learner's trunk with the policy; its value heads train at --critic-lr")
+    p.add_argument("--value-loss-weight", type=float, default=_SL.value_loss_weight,
+                   help="--shared: the win CE's weight in the learner's loss (the trunk's share of the value signal)")
+    p.add_argument("--value-stop-grad", action="store_true",
+                   help="--shared: the value heads train on detached trunk features (no value gradient in the trunk)")
+    p.add_argument("--value-nstep", type=int, default=_SL.value_nstep,
+                   help="Win-head target: 0 the outcome; n > 0 mixes in the search's root value n searched decisions "
+                   "later (MuZero's n-step target; the outcome where the game ends sooner)")
+    p.add_argument("--value-bootstrap-weight", type=float, default=_SL.value_bootstrap_weight,
+                   help="--value-nstep: the later root value's weight in the target (the outcome's is 1 - w)")
+    p.add_argument("--aux-loss-weight", type=float, default=_SL.aux_loss_weight,
+                   help="Auxiliary outcome heads (final net-worth and cash shares, corporations floated); 0 = off")
+    p.add_argument("--surprise-weight", type=float, default=_SL.surprise_weight,
+                   help="KataGo's policy surprise weighting: a row's target CE weighs (1 - a) + a * KL / mean KL; 0 = off")
+    p.add_argument("--surprise-cap", type=float, default=_SL.surprise_cap, help="Largest surprise weight")
 
     # convert (encode games to LMDB for pretraining)
     p = sub.add_parser("convert", help="Convert cleaned game JSONs to LMDB training data")

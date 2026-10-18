@@ -53,6 +53,23 @@ search's value network) toward the games' outcomes:
   ``minibatch`` rows: a row is trained on ``steps_per_update * minibatch /
   rows_per_update`` times on average (``reuse`` in the history).
 
+az2's options (docs/search_learning_design.md, "az2"; all off by default):
+
+- ``shared``: one network. The search reads the learner's own value heads (the
+  server loads the learner alone; ``value_head`` ``score`` / ``blend=<w>`` via
+  ``composite_model.SharedValueModel``), and the value loss joins the policy loss
+  on the same forward (``value_loss_weight``, ``score_loss_weight``), the value
+  heads at ``critic_lr``, the trunk at ``lr``; ``value_stop_grad`` keeps the
+  value gradient out of the trunk. Start from a learner whose heads were refit
+  to its critic (``scripts/refit_value_heads.py``).
+- ``value_nstep`` / ``value_bootstrap_weight``: every search records its root
+  value (per seat, absolute order); a row's win-head target mixes the outcome
+  with the root value ``value_nstep`` searches later (MuZero's n-step target).
+- ``aux_loss_weight``: auxiliary outcome heads (final net-worth / cash shares,
+  corporations floated) on the network that learns the value.
+- ``surprise_weight`` / ``surprise_cap``: KataGo's policy surprise weighting.
+- ``critic_positions_per_game`` 0 trains the value on every searched row (once).
+
 A run directory as ``policy_gradient``'s: ``<out_dir>/<run>/{learner,critic}/
 <update>.pth`` (every ``snapshot_every``-th kept), ``config.json``,
 ``state.json`` + ``optimizer.pth`` at snapshots (``--resume``), one JSON line
@@ -157,6 +174,36 @@ class SearchLearningConfig:
     anchor_every: int = 50
     max_updates: int = 1000
     snapshot_every: int = 10
+    # -- az2 (docs/search_learning_design.md, "az2"), each off by default --
+    # One network (AlphaZero / KataGo / MuZero): the search's leaf values come from the
+    # learner's own value heads (``value_head`` of the learner; no critic, no second
+    # forward) and the value loss trains the learner -- its trunk alongside the policy
+    # loss (``value_loss_weight`` on the win CE, ``score_loss_weight`` on the score
+    # MSE), its value heads at ``critic_lr``. ``value_stop_grad`` keeps the value
+    # gradient out of the trunk (the heads then learn on the policy's features).
+    shared: bool = False
+    value_loss_weight: float = 1.0
+    value_stop_grad: bool = False
+    # Value targets. 0: the win head learns the game's outcome. n > 0 (MuZero's n-step
+    # target, gamma 1, no intermediate rewards): (1 - w) * outcome + w * the search's
+    # root value n searched decisions later in the game (full and fast searches, every
+    # seat's), the outcome alone where fewer than n remain; w = value_bootstrap_weight.
+    value_nstep: int = 0
+    value_bootstrap_weight: float = 0.5
+    # Auxiliary outcome targets (0: none): per seat the final net-worth share and cash
+    # share (MSE), and which corporations floated (BCE), on the network that learns the
+    # value (training-only heads: ``AlphaZeroTransformerModel.add_aux_heads``).
+    aux_loss_weight: float = 0.0
+    # KataGo's policy surprise weighting: a row's target CE weighs
+    # (1 - a) + a * s / mean(s), s = KL(target || policy) at T (the policy being trained,
+    # the microbatch's mean), capped at ``surprise_cap`` and renormalized to mean 1;
+    # a = surprise_weight (KataGo's 0.5), 0 = off. The price and anchor terms are unweighted.
+    surprise_weight: float = 0.0
+    surprise_cap: float = 8.0
+
+
+AUX_SEAT_TARGETS = 2  # final net-worth share, final cash share
+AUX_GLOBAL_TARGETS = 8  # floated, per corporation (the engine's order)
 
 
 def sharpen_target(target: np.ndarray, legal: np.ndarray, move: int, temperature: float) -> np.ndarray:
@@ -208,6 +255,66 @@ class SearchRow:
     fractions: Optional[np.ndarray] = None  # net-worth shares at the game's end
     score_target: Optional[np.ndarray] = None  # placement points (None: the score head learns the shares)
     critic: bool = False  # still to be trained on by the critic
+    # The search's root value per seat (player-id order) at decision time, and this
+    # decision's place among the game's searches (full and fast).
+    root_value: Optional[np.ndarray] = None
+    search_index: int = -1
+    win_target: Optional[np.ndarray] = None  # the win head's target (player-id order); None: the outcome
+    aux_seat: Optional[np.ndarray] = None  # (players, AUX_SEAT_TARGETS) at the game's end, player-id order
+    aux_global: Optional[np.ndarray] = None  # (AUX_GLOBAL_TARGETS,) corporations floated at the end
+
+
+def root_value(tree) -> np.ndarray:
+    """The search's value of the root per seat (absolute order): the mean of every
+    value backed up through it (``root_q_vector`` is minigo's W / (1 + N))."""
+    n = float(tree.n_at_root())
+    q = np.asarray(tree.root_q_vector(), dtype=np.float64)
+    return (q * (1.0 + n) / max(n, 1.0)).astype(np.float32)
+
+
+def nstep_win_target(outcome, search_values: list, index: int, n: int, weight: float) -> np.ndarray:
+    """``(1 - weight) * outcome + weight * search_values[index + n]`` (normalized to a
+    distribution over the seats), or the outcome when ``n`` is 0, the row is not a
+    search (index < 0) or the game has fewer than ``n`` searches after it."""
+    outcome = np.asarray(outcome, dtype=np.float64)
+    if n <= 0 or weight <= 0 or index < 0 or index + n >= len(search_values):
+        return outcome.astype(np.float32)
+    later = np.clip(np.asarray(search_values[index + n], dtype=np.float64)[: len(outcome)], 0.0, None)
+    if later.sum() <= 0:
+        return outcome.astype(np.float32)
+    return ((1.0 - weight) * outcome + weight * later / later.sum()).astype(np.float32)
+
+
+def root_value_ce(rows: list, win: np.ndarray) -> tuple:
+    """``(sum, count)`` over ``rows`` of the win CE of each row's search root value
+    (normalized over the seats) against the game's win share ``win``."""
+    total, count = 0.0, 0
+    for row in rows:
+        v = row.root_value
+        if v is None or float(np.sum(v)) <= 0:
+            continue
+        p = np.clip(np.asarray(v, dtype=np.float64)[: len(win)] / float(np.sum(v[: len(win)])), 1e-9, 1.0)
+        total += float(-(np.asarray(win, dtype=np.float64) * np.log(p)).sum())
+        count += 1
+    return total, count
+
+
+def aux_outcomes(game, fractions: np.ndarray) -> tuple:
+    """``(per seat [net-worth share, cash share], floated per corporation)`` at the
+    end of ``game`` (a RustGameAdapter), player-id order; the cash share is a seat's
+    cash over the players' total (clipped) net worth."""
+    from rl18xx.agent.alphazero.self_play import _compute_net_worth
+
+    rs = game._game
+    net_worth = _compute_net_worth(game)
+    total = sum(max(float(v), 0.0) for v in net_worth.values())
+    cash = {int(p.id): float(p.cash) for p in rs.players}
+    cash_share = np.array([cash.get(int(pid), 0.0) / total if total > 0 else 0.0 for pid in sorted(net_worth)])
+    seat = np.stack([np.asarray(fractions, dtype=np.float64), cash_share], axis=1).astype(np.float32)
+    floated = np.zeros(AUX_GLOBAL_TARGETS, dtype=np.float32)
+    for i, corp in enumerate(list(rs.corporations)[:AUX_GLOBAL_TARGETS]):
+        floated[i] = float(bool(corp.floated))
+    return seat, floated
 
 
 def price_cell_target(price_targets: list) -> Optional[tuple]:
@@ -267,11 +374,21 @@ def search_batch(rows: list, device) -> dict:
     def frame(values: list) -> torch.Tensor:
         return torch.stack([torch.roll(torch.as_tensor(v), shifts=-int(r.rotation), dims=0) for v, r in values]).float()
 
-    fractions = score_target = None
+    fractions = score_target = win_target = outcome_win = aux_seat = aux_global = None
     if critic_rows:
         fractions = frame([(rows[b].fractions, rows[b]) for b in critic_rows]).to(device)
         if rows[critic_rows[0]].score_target is not None:
             score_target = frame([(rows[b].score_target, rows[b]) for b in critic_rows]).to(device)
+        outcome_win = frame([(share_of_winners(rows[b].fractions), rows[b]) for b in critic_rows]).to(device)
+        win_target = frame(
+            [
+                (rows[b].win_target if rows[b].win_target is not None else share_of_winners(rows[b].fractions), rows[b])
+                for b in critic_rows
+            ]
+        ).to(device)
+        if all(rows[b].aux_seat is not None for b in critic_rows):
+            aux_seat = frame([(rows[b].aux_seat, rows[b]) for b in critic_rows]).to(device)
+            aux_global = torch.from_numpy(np.stack([rows[b].aux_global for b in critic_rows])).float().to(device)
     return {
         "game_state": game_state.to(device, non_blocking=True),
         "nodes": nodes.to(device, non_blocking=True),
@@ -297,7 +414,54 @@ def search_batch(rows: list, device) -> dict:
         "critic_rows": torch.tensor(critic_rows, dtype=torch.long, device=device),
         "fractions": fractions,
         "score_target": score_target,
+        "win_target": win_target,
+        "outcome_win": outcome_win,
+        "aux_seat": aux_seat,
+        "aux_global": aux_global,
     }
+
+
+def share_of_winners(fractions) -> np.ndarray:
+    """The win share of net-worth shares: the leaders split 1 (``train._derive_dual_value_targets``)."""
+    f = np.asarray(fractions, dtype=np.float64)
+    winners = f >= f.max() - 1e-6
+    return (winners / winners.sum()).astype(np.float32)
+
+
+def value_losses(win_logits, score_pred, win_target, score_target, outcome_win=None) -> dict:
+    """The value network's losses on the value rows (mover's frame): ``ce`` the win
+    head's cross-entropy to ``win_target`` (the outcome's win share, or an n-step
+    mix), ``mse`` the score head's to ``score_target``, ``outcome_ce`` / ``winner_hit``
+    against the outcome (``outcome_win``; default ``win_target``) -- comparable across
+    value targets. Means over the rows, the targets padded to the heads' seats as
+    ``policy_gradient.critic_losses`` pads them (with the outcome as ``win_target``
+    the two agree exactly)."""
+    import torch
+    import torch.nn.functional as F
+
+    outcome = win_target if outcome_win is None else outcome_win
+    pad = win_logits.shape[1] - win_target.shape[1]
+    if pad:
+        win_target, score_target, outcome = (F.pad(t, (0, pad)) for t in (win_target, score_target, outcome))
+    log_v = torch.log_softmax(win_logits.float(), dim=1)
+    ce = -(win_target * log_v).sum(dim=1).mean()
+    mse = F.mse_loss(score_pred.float(), score_target)
+    outcome_ce = -(outcome * log_v).sum(dim=1).mean()
+    hit = outcome.gather(1, log_v.argmax(dim=1, keepdim=True)).mean()
+    return {"ce": ce, "mse": mse, "outcome_ce": outcome_ce.detach(), "winner_hit": hit.detach()}
+
+
+def aux_losses(model, seat_input, aux_seat, aux_global) -> dict:
+    """MSE of the per-seat auxiliary head to ``aux_seat`` (B, players, K) and the
+    floated head's BCE to ``aux_global``, from the value heads' input ``seat_input``
+    (the value rows, (B, P, F))."""
+    import torch.nn.functional as F
+
+    seat_pred, global_logits = model.aux_outputs(seat_input)
+    players = aux_seat.shape[1]
+    mse = F.mse_loss(seat_pred.float()[:, :players], aux_seat)
+    bce = F.binary_cross_entropy_with_logits(global_logits.float(), aux_global)
+    return {"total": mse + bce, "mse": mse.detach(), "bce": bce.detach()}
 
 
 def search_losses(
@@ -309,6 +473,8 @@ def search_losses(
     temperature: float,
     kl_coef: float,
     price_weight: float = 1.0,
+    surprise_weight: float = 0.0,
+    surprise_cap: float = 8.0,
 ) -> dict:
     """Per-row sums of the search-target losses for a batch.
 
@@ -319,7 +485,12 @@ def search_losses(
     tempered, as in ``policy_gradient``). ``kl``: KL(learner || anchor) at T over
     the legal moves, plus the price cells at the price rows. ``total`` = sum of
     ``ce`` + ``price_weight`` * ``price_ce`` + ``kl_coef`` * ``kl`` over the rows
-    (divide by the step's rows: microbatches then add up to the step's mean)."""
+    (divide by the step's rows: microbatches then add up to the step's mean).
+
+    With ``surprise_weight`` a > 0 (KataGo's policy surprise weighting) each row's
+    ``ce`` in ``total`` weighs w = (1 - a) + a * s / mean(s), s its KL(target ||
+    policy) (no gradient through w), capped at ``surprise_cap`` and rescaled to mean
+    1 over the batch; ``surprise_*`` sums describe the weights."""
     import torch
 
     from rl18xx.agent.alphazero.policy_gradient import _masked_log_softmax
@@ -345,18 +516,54 @@ def search_losses(
         cell_kl = (cell_log_p.exp() * masks * (cell_log_p - anchor_cell_log_p)).sum(dim=1)
         kl = kl.index_add(0, prow, cell_kl)
         price_kl = cell_kl.sum()
-    total = ce.sum() + price_weight * price_ce + kl_coef * kl.sum()
-    return {
-        "total": total,
-        "ce": ce.sum().detach(),
-        "search_kl": (ce - batch["target_entropy"]).sum().detach(),
-        "target_entropy": batch["target_entropy"].sum().detach(),
-        "kl_anchor": kl.sum().detach(),
-        "entropy": entropy.sum().detach(),
-        "top1_agreement": top1.sum().detach(),
-        "price_ce": price_ce.detach(),
-        "price_kl_anchor": price_kl.detach(),
-    }
+    surprise = (ce - batch["target_entropy"]).detach()
+    out = {}
+    if surprise_weight > 0:
+        weights, capped = surprise_weights(surprise, surprise_weight, surprise_cap)
+        policy_term = (weights * ce).sum()
+        disagree = top1 == 0
+        top = max(1, int(round(0.1 * n)))
+        out.update(
+            surprise_weight_sq=(weights**2).sum(),
+            surprise_weight_max=weights.max(),
+            surprise_capped=capped,
+            surprise_top10_weight=weights.topk(top).values.sum(),
+            surprise_disagree_weight=weights[disagree].sum(),
+            surprise_disagree_rows=disagree.float().sum(),
+        )
+    else:
+        policy_term = ce.sum()
+    total = policy_term + price_weight * price_ce + kl_coef * kl.sum()
+    out.update(
+        {
+            "total": total,
+            "ce": ce.sum().detach(),
+            "search_kl": surprise.sum(),
+            "target_entropy": batch["target_entropy"].sum().detach(),
+            "kl_anchor": kl.sum().detach(),
+            "entropy": entropy.sum().detach(),
+            "top1_agreement": top1.sum().detach(),
+            "price_ce": price_ce.detach(),
+            "price_kl_anchor": price_kl.detach(),
+        }
+    )
+    return {k: (v if k == "total" else v.detach()) for k, v in out.items()}
+
+
+def surprise_weights(surprise, a: float, cap: float) -> tuple:
+    """``(weights, rows capped)``: KataGo's policy surprise weights (1 - a) + a * s /
+    mean(s) for the rows' surprises ``s`` = KL(target || policy) (clamped at 0),
+    capped at ``cap``, then rescaled to mean 1 (the step's size is unchanged)."""
+    import torch
+
+    s = surprise.detach().float().clamp_min(0.0)
+    mean = s.mean()
+    if float(mean) <= 1e-12:
+        return torch.ones_like(s), s.new_zeros(())
+    raw = (1.0 - a) + a * s / mean
+    capped = (raw > cap).float().sum()
+    w = raw.clamp(max=cap)
+    return w * (len(w) / w.sum()), capped
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +590,7 @@ class _Game:
     termination: Optional[str] = None
     price_row: Optional[np.ndarray] = None  # policy_selfplay._advance reads it
     rows: list = field(default_factory=list)
+    search_values: list = field(default_factory=list)  # every search's root value, in order
     need: Any = None
     pending: Any = None
 
@@ -544,6 +752,7 @@ class Generator:
                 if s.get("visit_target", "pruned") == "pruned":
                     target = np.asarray(tree.pruned_child_n_at_root(), dtype=np.float64)[legal]
             price, price_target = self._searched_price(tree, rs, move)
+            g.search_values.append(root_value(tree))  # the n-step value targets' bootstrap
             # The tree is done with: the move goes straight onto the game (the
             # most-visited price, as advance_root would commit).
             rs.apply_action_index(move, price)
@@ -562,6 +771,8 @@ class Generator:
                     target=target.astype(np.float32),
                     price=price_target,
                     version=int(s.get("version", 0)),
+                    root_value=g.search_values[-1],
+                    search_index=len(g.search_values) - 1,
                 )
             )
             g.searched += 1
@@ -622,9 +833,13 @@ class Generator:
         chosen = range(len(g.rows)) if k <= 0 or k >= len(g.rows) else self.rng.choice(len(g.rows), k, replace=False)
         for i in chosen:
             g.rows[int(i)].critic = True
+        aux_seat, aux_global = aux_outcomes(g.game, fractions)
+        nstep, weight = int(s.get("value_nstep", 0)), float(s.get("value_bootstrap_weight", 0.5))
         for row in g.rows:
             row.fractions = fractions
             row.score_target = score
+            row.win_target = nstep_win_target(share_of_winners(fractions), g.search_values, row.search_index, nstep, weight)
+            row.aux_seat, row.aux_global = aux_seat, aux_global
         self.counts["games"] += 1
         return {
             "uid": g.uid,
@@ -635,6 +850,8 @@ class Generator:
             "seat_servers": list(g.seat_servers),
             "win_share": win_share.tolist(),
             "rows": g.rows,
+            # How well the search's root values called this game (win CE), on its rows.
+            "root_value_ce": root_value_ce(g.rows, share_of_winners(fractions)),
         }
 
     # -- the loop ----------------------------------------------------------------
@@ -754,18 +971,39 @@ class ReplayWindow:
         return [self.rows[i] for i in idx]
 
 
+def _value_terms(net, seat_input, win_logits, score_pred, batch, cfg) -> tuple:
+    """``(loss, stats)`` of the value network on a microbatch's value rows: the win CE
+    (``value_loss_weight`` with a shared network) + ``score_loss_weight`` * score MSE +
+    ``aux_loss_weight`` * the auxiliary heads' losses (when the batch has their targets)."""
+    score_target = batch["score_target"] if batch["score_target"] is not None else batch["fractions"]
+    v = value_losses(win_logits, score_pred, batch["win_target"], score_target, batch["outcome_win"])
+    win_weight = cfg.value_loss_weight if cfg.shared else 1.0
+    loss = win_weight * v["ce"] + cfg.score_loss_weight * v["mse"]
+    stats = {"critic_ce": v["ce"], "critic_outcome_ce": v["outcome_ce"], "critic_mse": v["mse"],
+             "critic_winner_hit": v["winner_hit"]}
+    if cfg.aux_loss_weight > 0 and batch["aux_seat"] is not None and seat_input is not None:
+        aux = aux_losses(net, seat_input, batch["aux_seat"], batch["aux_global"])
+        loss = loss + cfg.aux_loss_weight * aux["total"]
+        stats.update(aux_mse=aux["mse"], aux_bce=aux["bce"])
+    return loss, stats
+
+
 def _update(learner, critic, anchor, learner_opt, critic_opt, window: ReplayWindow, cfg, kl_coef, device, rng) -> dict:
     """``cfg.steps_per_update`` optimizer steps on minibatches from the window:
-    the policy toward the search targets (KL to the anchor), the critic on the
-    sampled rows still flagged for it (each once). Eval mode, as in
-    ``policy_gradient._update`` (dropout would make the trained policy a
-    different one from the playing one)."""
+    the policy toward the search targets (KL to the anchor), the value network on
+    the sampled rows still flagged for it (each once) -- the critic, or with
+    ``critic`` None (``cfg.shared``) the learner's own value heads from the same
+    forward as its policy. Eval mode, as in ``policy_gradient._update`` (dropout
+    would make the trained policy a different one from the playing one)."""
     import torch
 
-    from rl18xx.agent.alphazero.policy_gradient import critic_losses
-
+    shared = critic is None
+    value_net = learner if shared else critic
+    aux = cfg.aux_loss_weight > 0
     learner.eval()
-    critic.eval()
+    if not shared:
+        critic.eval()
+    learner.value_stop_grad = bool(shared and cfg.value_stop_grad)
     temperature = float(cfg.learner_temperature)
     sums, rows_seen, price_rows, critic_rows, steps, ages = Counter(), 0, 0, 0, 0, []
     micro = min(cfg.microbatch, cfg.minibatch)
@@ -774,7 +1012,8 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, window: ReplayWind
         if not rows:
             break
         learner_opt.zero_grad(set_to_none=True)
-        critic_opt.zero_grad(set_to_none=True)
+        if critic_opt is not None:
+            critic_opt.zero_grad(set_to_none=True)
         step_critic = [r for r in rows if r.critic and r.fractions is not None]
         n_step = len(rows)
         n_price = sum(1 for r in rows if r.price is not None)
@@ -782,57 +1021,99 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, window: ReplayWind
             chunk = rows[start : start + micro]
             batch = search_batch(chunk, device)
             tiles = batch["lay_tile_rows"]
+            idx = batch["critic_rows"]
             with torch.no_grad():
                 anchor_logits, _, _, _ = anchor(batch["game_state"], batch["nodes"], lay_tile_rows=tiles)
                 anchor_price = anchor.last_price_components["price_logits"]
-            logits, _, _, _ = learner(batch["game_state"], batch["nodes"], lay_tile_rows=tiles)
+            store, hook = learner.capture_value_input() if shared and aux else ({}, None)
+            try:
+                logits, win_logits, score_pred, _ = learner(batch["game_state"], batch["nodes"], lay_tile_rows=tiles)
+            finally:
+                if hook is not None:
+                    hook.remove()
             price = learner.last_price_components["price_logits"]
             losses = search_losses(
-                logits, price, anchor_logits, anchor_price, batch, temperature, kl_coef, cfg.price_loss_weight
+                logits, price, anchor_logits, anchor_price, batch, temperature, kl_coef, cfg.price_loss_weight,
+                cfg.surprise_weight, cfg.surprise_cap,
             )
             if not torch.isfinite(losses["total"]):
                 values = {k: float(v) for k, v in losses.items()}
                 raise RuntimeError(f"search learning diverged: non-finite loss ({values})")
-            (losses["total"] / n_step).backward()
+            loss = losses["total"] / n_step
             for key, value in losses.items():
-                if key != "total":
+                if key == "surprise_weight_max":
+                    sums[key] = max(sums[key], float(value))
+                elif key != "total":
                     sums[key] += float(value)
-            if batch["critic_rows"].numel():
-                idx = batch["critic_rows"]
-                _, win_logits, score_pred, _ = critic(batch["game_state"][idx], batch["nodes"][idx], value_only=True)
-                c = critic_losses(win_logits, score_pred, batch["fractions"], batch["score_target"])
+            if idx.numel():
                 share = idx.numel() / len(step_critic)
-                loss = (c["ce"] + cfg.score_loss_weight * c["mse"]) * share
-                if not torch.isfinite(loss):
-                    raise RuntimeError("search learning: the critic diverged (non-finite loss)")
-                loss.backward()
+                if shared:
+                    seat_input = store["seat_input"][idx] if aux else None
+                    value_loss, vstats = _value_terms(learner, seat_input, win_logits[idx], score_pred[idx], batch, cfg)
+                    loss = loss + value_loss * share
+                else:
+                    store, hook = critic.capture_value_input() if aux else ({}, None)
+                    try:
+                        _, c_win, c_score, _ = critic(batch["game_state"][idx], batch["nodes"][idx], value_only=True)
+                    finally:
+                        if hook is not None:
+                            hook.remove()
+                    value_loss, vstats = _value_terms(critic, store.get("seat_input"), c_win, c_score, batch, cfg)
+                    value_loss = value_loss * share
+                    if not torch.isfinite(value_loss):
+                        raise RuntimeError("search learning: the critic diverged (non-finite loss)")
+                    value_loss.backward()
+                if not torch.isfinite(value_loss):
+                    raise RuntimeError("search learning: the value loss is not finite")
                 k = idx.numel()
-                sums["critic_ce"] += float(c["ce"].detach()) * k
-                sums["critic_mse"] += float(c["mse"].detach()) * k
-                sums["critic_winner_hit"] += float(c["winner_hit"]) * k
-        norm = torch.nn.utils.clip_grad_norm_(learner.parameters(), max_norm=1.0)
-        if not torch.isfinite(norm):
+                for key, value in vstats.items():
+                    sums[key] += float(value.detach()) * k
+            loss.backward()
+        # Each optimizer group is clipped on its own: with a shared network the value
+        # heads' gradient (at critic_lr) must not shrink the trunk and policy's step.
+        norms = [torch.nn.utils.clip_grad_norm_(group["params"], max_norm=1.0) for group in learner_opt.param_groups]
+        norm = norms[0]
+        if not all(torch.isfinite(n) for n in norms):
             raise RuntimeError("search learning diverged: non-finite gradient norm")
         learner_opt.step()
+        if len(norms) > 1:
+            sums["value_grad_norm"] += float(norms[1])
         if step_critic:
-            cnorm = torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=1.0)
-            if not torch.isfinite(cnorm):
-                raise RuntimeError("search learning: the critic diverged (non-finite gradient norm)")
-            critic_opt.step()
+            if not shared:
+                cnorm = torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=1.0)
+                if not torch.isfinite(cnorm):
+                    raise RuntimeError("search learning: the critic diverged (non-finite gradient norm)")
+                critic_opt.step()
             for r in step_critic:
-                r.critic = False  # each position trains the critic once
+                r.critic = False  # each position trains the value once
         sums["grad_norm"] += float(norm)
         rows_seen += n_step
         price_rows += n_price
         critic_rows += len(step_critic)
         ages.extend(r.version for r in rows)
         steps += 1
+    learner.value_stop_grad = False
     per_row = ("ce", "search_kl", "target_entropy", "kl_anchor", "entropy", "top1_agreement")
     stats = {key: sums[key] / max(rows_seen, 1) for key in per_row}
     stats.update({key: sums[key] / max(price_rows, 1) for key in ("price_ce", "price_kl_anchor")})
-    stats.update({key: sums[key] / max(critic_rows, 1) for key in ("critic_ce", "critic_mse", "critic_winner_hit")})
+    value_keys = ["critic_ce", "critic_outcome_ce", "critic_mse", "critic_winner_hit"]
+    value_keys += ["aux_mse", "aux_bce"] if aux else []
+    stats.update({key: sums[key] / max(critic_rows, 1) for key in value_keys})
+    if cfg.surprise_weight > 0:
+        n, w_sq = max(rows_seen, 1), sums["surprise_weight_sq"]
+        disagree = sums["surprise_disagree_rows"]
+        stats.update(
+            # (sum w)^2 / (n sum w^2) with mean-1 weights: the share of the rows' worth of signal.
+            surprise_ess=n / w_sq if w_sq > 0 else float("nan"),
+            surprise_weight_max=sums["surprise_weight_max"],
+            surprise_capped_share=sums["surprise_capped"] / n,
+            surprise_top10_weight_share=sums["surprise_top10_weight"] / n,
+            surprise_disagree_row_share=disagree / n,
+            surprise_disagree_weight_share=sums["surprise_disagree_weight"] / n,
+        )
     stats.update(
         grad_norm=sums["grad_norm"] / max(steps, 1),
+        **({"value_grad_norm": sums["value_grad_norm"] / max(steps, 1)} if shared else {}),
         optimizer_steps=steps,
         rows_trained=rows_seen,
         price_rows_trained=price_rows,
@@ -874,10 +1155,13 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "critic_positions_per_game": cfg.critic_positions_per_game,
         "reward": cfg.reward,
         "opponent_servers": [],
+        "value_nstep": cfg.value_nstep,
+        "value_bootstrap_weight": cfg.value_bootstrap_weight,
     }
 
 
 def _validate(cfg: SearchLearningConfig) -> None:
+    from rl18xx.agent.alphazero.composite_model import parse_value_head
     from rl18xx.agent.alphazero.policy_gradient import parse_reward
 
     if cfg.target not in TARGETS:
@@ -886,13 +1170,43 @@ def _validate(cfg: SearchLearningConfig) -> None:
         raise SystemExit(f"--visit-target must be pruned or raw, got {cfg.visit_target!r}")
     if not 0.0 <= cfg.p_full <= 1.0:
         raise SystemExit("--p-full must be in [0, 1]")
-    if cfg.value_head not in ("win", "score"):
-        raise SystemExit("--value-head must be win or score")
+    try:
+        parse_value_head(cfg.value_head)
+    except ValueError as e:
+        raise SystemExit(f"--value-head: {e}") from None
+    if cfg.value_nstep < 0 or not 0.0 <= cfg.value_bootstrap_weight <= 1.0:
+        raise SystemExit("--value-nstep must be >= 0 and --value-bootstrap-weight in [0, 1]")
+    if not 0.0 <= cfg.surprise_weight <= 1.0 or cfg.surprise_cap < 1.0:
+        raise SystemExit("--surprise-weight must be in [0, 1] and --surprise-cap >= 1")
+    if cfg.value_stop_grad and not cfg.shared:
+        raise SystemExit("--value-stop-grad needs --shared (the critic has no policy to protect)")
     kind, _ = parse_reward(cfg.reward)
     if kind not in ("win", "placement"):
         raise SystemExit("--reward must be win or placement (the critic's score-head target)")
     if cfg.anchor_every and cfg.anchor_every % cfg.snapshot_every:
         raise SystemExit("--anchor-every must be a multiple of --snapshot-every (the anchor's checkpoint is kept)")
+
+
+def server_spec(cfg: SearchLearningConfig, learner_path, critic_path=None) -> str:
+    """The generation server's checkpoint spec: ``<learner>+<critic>`` (the critic's
+    ``value_head``), or with ``cfg.shared`` the learner alone (its own heads)."""
+    suffix = "" if cfg.value_head == "win" else f"#{cfg.value_head}"
+    if cfg.shared:
+        return f"{learner_path}{suffix}"
+    return f"{learner_path}+{critic_path}{suffix}"
+
+
+def learner_param_groups(learner, cfg: SearchLearningConfig) -> list:
+    """The learner's optimizer groups: with ``cfg.shared`` its value heads (and
+    auxiliary heads) at ``critic_lr``, the rest at ``lr``; otherwise all at ``lr``."""
+    if not cfg.shared:
+        return [{"params": list(learner.parameters()), "lr": cfg.lr}]
+    heads = [learner.win_loss_head, learner.score_head]
+    heads += [h for h in (getattr(learner, "aux_seat_head", None), getattr(learner, "aux_global_head", None)) if h is not None]
+    value_ids = {id(p) for h in heads for p in h.parameters()}
+    value = [p for p in learner.parameters() if id(p) in value_ids]
+    rest = [p for p in learner.parameters() if id(p) not in value_ids]
+    return [{"params": rest, "lr": cfg.lr, "name": "trunk_policy"}, {"params": value, "lr": cfg.critic_lr, "name": "value_heads"}]
 
 
 def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
@@ -924,7 +1238,7 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
         anchor_update = int(state.get("anchor_update", 0))
         totals.update(state.get("totals", {}))
         learner_path = run_dir / "learner" / f"{update}.pth"
-        critic_path = run_dir / "critic" / f"{update}.pth"
+        critic_path = None if cfg.shared else run_dir / "critic" / f"{update}.pth"
     else:
         if cfg.learner_temperature is None:
             cfg.learner_temperature = run_temperature(cfg.policy_checkpoint)
@@ -937,35 +1251,40 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
             raise SystemExit(f"{run_dir} exists; pass --resume to continue it")
         run_dir.mkdir(parents=True)
         update, kl_coef, anchor_update = 0, cfg.kl_coef, 0
-        learner_path, critic_path = Path(cfg.policy_checkpoint), Path(cfg.value_checkpoint)
+        learner_path = Path(cfg.policy_checkpoint)
+        critic_path = None if cfg.shared else Path(cfg.value_checkpoint)
     _validate(cfg)
     (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
     LOGGER.info(f"Search-learning run {run_dir} from update {update}: {asdict(cfg)}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     anchor_path = run_dir / "learner" / f"{anchor_update}.pth" if anchor_update else Path(cfg.policy_checkpoint)
-    learner, critic, anchor = _load(learner_path), _load(critic_path), _load(anchor_path)
+    learner, anchor = _load(learner_path), _load(anchor_path)
+    critic = _load(critic_path) if critic_path is not None else None
     anchor.eval()
     for param in anchor.parameters():
         param.requires_grad_(False)
-    learner_opt = torch.optim.AdamW(learner.parameters(), lr=cfg.lr, weight_decay=0.0)
-    critic_opt = torch.optim.AdamW(critic.parameters(), lr=cfg.critic_lr, weight_decay=0.0)
+    if cfg.aux_loss_weight > 0:  # training-only heads on the network that learns the value
+        (critic if critic is not None else learner).add_aux_heads(AUX_SEAT_TARGETS, AUX_GLOBAL_TARGETS)
+    learner_opt = torch.optim.AdamW(learner_param_groups(learner, cfg), weight_decay=0.0)
+    critic_opt = torch.optim.AdamW(critic.parameters(), lr=cfg.critic_lr, weight_decay=0.0) if critic else None
     if resume and (run_dir / "optimizer.pth").exists():
         opt_state = torch.load(run_dir / "optimizer.pth", map_location="cpu")
         learner_opt.load_state_dict(opt_state["learner"])
-        critic_opt.load_state_dict(opt_state["critic"])
+        if critic_opt is not None:
+            critic_opt.load_state_dict(opt_state["critic"])
 
     current_learner = run_dir / "learner" / f"{update}.pth"
-    current_critic = run_dir / "critic" / f"{update}.pth"
+    current_critic = None if cfg.shared else run_dir / "critic" / f"{update}.pth"
     if not current_learner.exists():
         _save(learner, current_learner)
-        _save(critic, current_critic)
+        if critic is not None:
+            _save(critic, current_critic)
     writer = SummaryWriter(str(Path("runs") / "alphazero_runs" / run_dir.name))
     history = (run_dir / "history.jsonl").open("a")
-    value_suffix = "#score" if cfg.value_head == "score" else ""
 
     def spec(policy, value) -> str:
-        return f"{policy}+{value}{value_suffix}"
+        return server_spec(cfg, policy, value)
 
     handles = {
         "learner": start_inference_server(
@@ -1009,6 +1328,9 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                             window.add(row)
                         new_rows += len(record["rows"])
                         gen["rows"] += len(record["rows"])
+                        ce_sum, ce_rows = record.get("root_value_ce", (0.0, 0))
+                        gen["root_value_ce_sum"] += ce_sum
+                        gen["root_value_rows"] += ce_rows
                     futures.add(executor.submit(generate, worker_settings(cfg, update), cfg.task_seconds))
                 if new_rows < cfg.rows_per_update or len(window) < cfg.min_window_rows:
                     continue
@@ -1026,16 +1348,17 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                 stats["row_age_mean"] = (update - 1) - stats.pop("row_version_mean")
                 new_rows = 0
 
-                previous = (current_learner, current_critic)
+                previous = (current_learner,) if critic is None else (current_learner, current_critic)
                 current_learner = run_dir / "learner" / f"{update}.pth"
-                current_critic = run_dir / "critic" / f"{update}.pth"
                 _save(learner, current_learner)
-                _save(critic, current_critic)
+                if critic is not None:
+                    current_critic = run_dir / "critic" / f"{update}.pth"
+                    _save(critic, current_critic)
                 reply = handles["learner"].reload(spec(current_learner, current_critic))
                 if not (isinstance(reply, dict) and reply.get("ok")):
                     raise RuntimeError(f"the inference server could not load update {update}: {reply}")
                 if cfg.anchor_every and update % cfg.anchor_every == 0:
-                    anchor.load_state_dict(learner.state_dict())
+                    anchor.load_state_dict(learner.state_dict(), strict=False)  # not the aux heads
                     anchor_update = update
                 for path in previous:
                     if int(path.stem) % cfg.snapshot_every != 0 and path.parent.parent == run_dir and path.exists():
@@ -1047,7 +1370,7 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                         kl_coef = max(kl_coef / 1.5, cfg.kl_coef_min)
                 if update % cfg.snapshot_every == 0:
                     torch.save(
-                        {"learner": learner_opt.state_dict(), "critic": critic_opt.state_dict()},
+                        {"learner": learner_opt.state_dict(), "critic": critic_opt.state_dict() if critic_opt else None},
                         run_dir / "optimizer.pth",
                     )
                     (run_dir / "state.json").write_text(
@@ -1086,6 +1409,8 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                     "fast_search_share": gen["fast_search_decisions"]
                     / max(gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"], 1),
                     "mean_decisions": gen["game_decisions"] / max(gen["games"], 1),
+                    # The search's root values on the new games' rows vs their outcomes (win CE).
+                    "search_value_ce": gen["root_value_ce_sum"] / max(gen["root_value_rows"], 1),
                     "skipped_starts": gen["skipped_starts"],
                     "dropped_games": gen["dropped_games"],
                     "terminations": dict(terminations),

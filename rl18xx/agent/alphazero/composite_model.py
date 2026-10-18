@@ -20,13 +20,7 @@ class PolicyValueComposite:
         # (a policy-gradient exploiter's critic regresses its shaped reward there);
         # "blend=<w>": (1 - w) * win + w * score -- KataGo-style, the critic's predicted
         # outcome (gen4's: placement points 1 / 0.5 / 0.2 / 0) mixed into the win estimate.
-        self.blend = None
-        if value_head.startswith("blend="):
-            self.blend = float(value_head.split("=", 1)[1])
-            if not 0.0 <= self.blend <= 1.0:
-                raise ValueError(f"blend weight {self.blend} outside [0, 1]")
-        elif value_head not in ("win", "score"):
-            raise ValueError(f"value head {value_head!r}: 'win', 'score' or 'blend=<w>'")
+        _, self.blend = parse_value_head(value_head)
         self.value_head = value_head
         self.last_price_components = None
 
@@ -67,10 +61,84 @@ class PolicyValueComposite:
         return probs[0], log_probs[0] if log_probs is not None else None, values[0]
 
 
+def parse_value_head(value_head: str):
+    """``(kind, blend weight or None)`` of a value-head spec: ``win``, ``score`` or ``blend=<w>``."""
+    if value_head.startswith("blend="):
+        blend = float(value_head.split("=", 1)[1])
+        if not 0.0 <= blend <= 1.0:
+            raise ValueError(f"blend weight {blend} outside [0, 1]")
+        return "blend", blend
+    if value_head not in ("win", "score"):
+        raise ValueError(f"value head {value_head!r}: 'win', 'score' or 'blend=<w>'")
+    return value_head, None
+
+
+class SharedValueModel:
+    """One network (AlphaZero's shared trunk) whose search value is read from its own
+    heads as ``value_head`` says -- ``score`` or ``blend=<w>`` ((1 - w) * win + w *
+    score) -- from the same forward as its policy (a plain checkpoint already gives
+    its win head). Quacks like a model where the search and the inference server use
+    one, as :class:`PolicyValueComposite` does."""
+
+    def __init__(self, model, value_head: str):
+        self.kind, self.blend = parse_value_head(value_head)
+        self.model = model
+        self.value_head = value_head
+        self.last_price_components = None
+
+    @property
+    def device(self):
+        return self.model.device
+
+    def eval(self):
+        self.model.eval()
+        return self
+
+    def encoder_type(self):
+        return self.model.encoder_type()
+
+    def get_name(self):
+        return f"{self.model.get_name()}#{self.value_head}"
+
+    def _values(self, win_loss_logits, score_pred):
+        import torch.nn.functional as F
+
+        win = F.softmax(win_loss_logits, dim=-1)
+        if self.kind == "win":
+            return win
+        if self.kind == "score":
+            return score_pred
+        return (1.0 - self.blend) * win + self.blend * score_pred
+
+    def run_many_encoded(self, encoded_game_states, legal_indices=None):
+        """``(probabilities, log_probs, values)`` as ``AlphaZeroModel.run_many_encoded``,
+        the values from this wrapper's heads."""
+        import torch.nn.functional as F
+
+        if len(encoded_game_states) == 0:
+            raise ValueError("Received no game states to run.")
+        m = self.model
+        hints = m._policy_row_hints(legal_indices) if legal_indices is not None else {}
+        policy_logits, win_loss_logits, score_pred, _ = m._forward_encoded_batch(encoded_game_states, **hints)
+        self.last_price_components = getattr(m, "last_price_components", None)
+        probs = F.softmax(policy_logits, dim=1)
+        log_probs = None if legal_indices is not None else F.log_softmax(policy_logits, dim=1)
+        return probs, log_probs, self._values(win_loss_logits, score_pred)
+
+    def run_encoded(self, encoded_game_state):
+        probs, log_probs, values = self.run_many_encoded([encoded_game_state])
+        return probs[0], log_probs[0] if log_probs is not None else None, values[0]
+
+    def run_values_encoded(self, encoded_game_states):
+        _, win_loss_logits, score_pred, _ = self.model._forward_encoded_batch(encoded_game_states, value_only=True)
+        return self._values(win_loss_logits, score_pred)
+
+
 def load_policy_value(checkpoint_paths: str):
     """``"<policy.pth>+<value.pth>"`` -> a :class:`PolicyValueComposite` (``...#score``:
     values from the value network's score head; ``#blend=<w>``: win and score mixed); a single path -> that
-    checkpoint's model. Module-level so it pickles into the inference server process."""
+    checkpoint's model (``<path>#score`` / ``#blend=<w>``: a :class:`SharedValueModel`, the
+    search value from its own heads). Module-level so it pickles into the inference server process."""
     from rl18xx.agent.alphazero.checkpointer import _load_model_from_session_checkpoint
 
     def load(path):
@@ -81,8 +149,10 @@ def load_policy_value(checkpoint_paths: str):
 
     paths, _, value_head = str(checkpoint_paths).partition("#")
     parts = paths.split("+")
-    if len(parts) == 1 and not value_head:
+    if len(parts) == 1 and value_head in ("", "win"):
         return load(parts[0])
+    if len(parts) == 1:
+        return SharedValueModel(load(parts[0]), value_head).eval()
     if len(parts) != 2:
         raise ValueError(f"expected '<policy>+<value>[#score]', got {checkpoint_paths!r}")
     return PolicyValueComposite(load(parts[0]), load(parts[1]), value_head or "win").eval()

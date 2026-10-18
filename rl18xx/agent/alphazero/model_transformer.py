@@ -1619,6 +1619,7 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         #                    Auxiliary signal for the trunk; not used by MCTS.
         self.win_loss_head = self._build_value_head_mlp()
         self.score_head = self._build_value_head_mlp()
+        self._build_aux_heads()
         # When set, the value/score heads train on detached features, so value
         # gradients can't reshape the shared layers. Supervised pretraining on
         # a few thousand games uses it to keep the trunk from memorizing game
@@ -1637,11 +1638,11 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         else:
             self._initialize_weights()
 
-    def _build_value_head_mlp(self) -> nn.Sequential:
+    def _build_value_head_mlp(self, outputs: int = 1) -> nn.Sequential:
         """Build the per-seat MLP shared by the win-loss and score heads.
 
         Input is ``[player token, trunk]`` for one seat; output is that seat's
-        scalar (logit or score).
+        scalar (logit or score), or ``outputs`` of them.
         """
         c = self.config
         head_hidden = c.d_trunk // 2
@@ -1651,8 +1652,58 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
             out_dim = head_hidden
             layers.extend([nn.Linear(in_dim, out_dim), nn.LayerNorm(out_dim), nn.GELU()])
             in_dim = out_dim
-        layers.append(nn.Linear(in_dim, 1))
+        layers.append(nn.Linear(in_dim, outputs))
         return nn.Sequential(*layers)
+
+    def _build_aux_heads(self) -> None:
+        """The training-only auxiliary heads ``config.aux_seat_targets`` /
+        ``aux_global_targets`` ask for (None when 0). ``forward`` doesn't run them:
+        a trainer applies them to the value heads' input (:meth:`aux_outputs`)."""
+        c = self.config
+        self.aux_seat_head = self._build_value_head_mlp(c.aux_seat_targets) if c.aux_seat_targets else None
+        self.aux_global_head = (
+            nn.Sequential(nn.Linear(c.d_trunk, c.d_trunk // 2), nn.GELU(), nn.Linear(c.d_trunk // 2, c.aux_global_targets))
+            if c.aux_global_targets
+            else None
+        )
+
+    def add_aux_heads(self, seat_targets: int, global_targets: int) -> None:
+        """Give a loaded model fresh auxiliary heads (Kaiming, zero output layer);
+        recorded in its config, so its checkpoints rebuild and reload them."""
+        c = self.config
+        if (c.aux_seat_targets, c.aux_global_targets) == (seat_targets, global_targets):
+            return
+        c.aux_seat_targets, c.aux_global_targets = int(seat_targets), int(global_targets)
+        self._build_aux_heads()
+        for head in (self.aux_seat_head, self.aux_global_head):
+            if head is None:
+                continue
+            for m in head.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="leaky_relu")
+                    nn.init.constant_(m.bias, 0)
+            nn.init.zeros_(head[-1].weight)
+            head.to(next(self.win_loss_head.parameters()).device)
+
+    def aux_outputs(self, seat_input: Tensor) -> tuple:
+        """``(per-seat aux outputs (B, P, K) or None, global aux logits (B, G) or None)``
+        from the value heads' input ``[player tokens, trunk]`` (B, P, d_entity + d_trunk),
+        as captured by :meth:`capture_value_input`."""
+        seat = self.aux_seat_head(seat_input) if self.aux_seat_head is not None else None
+        trunk = seat_input[:, 0, self.config.d_entity :]
+        glob = self.aux_global_head(trunk) if self.aux_global_head is not None else None
+        return seat, glob
+
+    def capture_value_input(self) -> tuple:
+        """``(store, handle)``: a forward hook on the win-loss head that keeps its
+        input (the per-seat ``[player token, trunk]``, detached if ``value_stop_grad``)
+        in ``store["seat_input"]``; ``handle.remove()`` when done."""
+        store: dict = {}
+
+        def hook(_module, args, _output):
+            store["seat_input"] = args[0]
+
+        return store, self.win_loss_head.register_forward_hook(hook)
 
     def _initialize_weights(self):
         """Kaiming init for GELU layers. FiLM layers keep their identity init."""
@@ -1668,7 +1719,9 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         # start at their priors (equal odds, equal shares, uniform over price
         # cells). The trunk isn't normalized, so Kaiming output layers start
         # with logits of std ~4 (a confident random winner).
-        for final in (self.win_loss_head[-1], self.score_head[-1], self.price_head.out[-1]):
+        finals = [self.win_loss_head[-1], self.score_head[-1], self.price_head.out[-1]]
+        finals += [head[-1] for head in (self.aux_seat_head, self.aux_global_head) if head is not None]
+        for final in finals:
             nn.init.zeros_(final.weight)
             nn.init.zeros_(final.bias)
 
