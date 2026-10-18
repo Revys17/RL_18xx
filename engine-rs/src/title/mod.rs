@@ -244,6 +244,15 @@ pub trait GameTitle: Sync {
 
     // -- train-market rules --
 
+    /// Whether a train may be bought as a trade-in (`exchange`) in phase
+    /// `phase` (Ruby BuyTrain#discountable_trains_allowed?). 1867: phase 8
+    /// only, so never with the first 8-train. Ruby enforces it in the UI
+    /// and in the step's activity, not in process_buy_train; the engine's
+    /// handler rejects it too. Default: always (1830's D-train trade-in).
+    fn trade_in_allowed(&self, _phase: &str) -> bool {
+        true
+    }
+
     /// Whether a corp may buy trains from corps with a DIFFERENT president
     /// (Ruby `ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS`; 1830 false, 1867 true).
     fn train_buy_from_other_players(&self) -> bool {

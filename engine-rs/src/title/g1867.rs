@@ -268,6 +268,11 @@ impl GameTitle for G1867 {
     ) -> Option<Result<i32, crate::actions::GameError>> {
         Some(recorded_route_revenue(game, corp_sym, route))
     }
+    /// G1867 BuyTrain#discountable_trains_allowed?: phase 8 (the
+    /// `train_trade_allowed` event itself is a no-op in Ruby).
+    fn trade_in_allowed(&self, phase: &str) -> bool {
+        phase == "8"
+    }
     /// Two lays per OR turn: the second never an upgrade after an upgrade,
     /// costs $20, and must target a fresh hex (game.rb:330-333 TILE_LAYS).
     fn tile_lays(&self) -> &'static [super::TileLayDef] {

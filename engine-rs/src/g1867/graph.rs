@@ -243,12 +243,82 @@ fn path_walk(
     }
 }
 
+/// Ruby `Path#walk` with its default arguments (no corporation; converging
+/// true, so `visited` is the DFS stack; edge counters keyed per hex side):
+/// whether some walked path other than `start` touches a node — the block
+/// G1867 `unconnected_hexes` passes (`next if path == current; break true
+/// if current.node?`). Never passes THROUGH nodes (Path#walk only follows
+/// edges and junctions).
+fn path_walk_reaches_node(ctx: &Ctx, p: PathRef, skip: Option<u8>, jskip: Option<usize>, w: &mut Walk, start: PathRef) -> bool {
+    let pk = p.0 * MAXP + p.1;
+    if w.visited_paths[pk] {
+        return false;
+    }
+    let junction = ctx.path_junction(p);
+    if junction && w.counter_junctions[p.0] > 1 {
+        return false;
+    }
+    let exits = ctx.path_exits(p);
+    if exits.iter().flatten().map(|&e| w.counter_edges[p.0 * 6 + e as usize]).sum::<i32>() > 0 {
+        return false;
+    }
+    w.visited_paths[pk] = true;
+    if junction {
+        w.counter_junctions[p.0] += 1;
+    }
+    if p != start && ctx.path_nodes(p).iter().any(|n| n.is_some()) {
+        return true; // `break true` — the walk's state is discarded
+    }
+    if junction && jskip != Some(p.0) {
+        let n_paths = ctx.tile(p.0).paths.len();
+        for j in 0..n_paths {
+            if ctx.path_junction((p.0, j)) && path_walk_reaches_node(ctx, (p.0, j), None, Some(p.0), w, start) {
+                return true;
+            }
+        }
+    }
+    for e in exits.into_iter().flatten() {
+        if Some(e) == skip {
+            continue;
+        }
+        let Some(&nb) = ctx.neighbors.get(&p.0).and_then(|m| m.get(&e)) else { continue };
+        w.counter_edges[p.0 * 6 + e as usize] += 1;
+        let np_edge = (e + 3) % 6;
+        let n_paths = ctx.tile(nb).paths.len();
+        for q in 0..n_paths {
+            if ctx.path_has_exit((nb, q), np_edge) && path_walk_reaches_node(ctx, (nb, q), Some(np_edge), None, w, start) {
+                return true;
+            }
+        }
+        w.counter_edges[p.0 * 6 + e as usize] -= 1;
+    }
+    w.visited_paths[pk] = false;
+    if junction {
+        w.counter_junctions[p.0] -= 1;
+    }
+    false
+}
+
 impl BaseGame {
-    /// The token cities of `corp` (Ruby `city_tokened_by?`).
-    pub(crate) fn g1867_token_nodes(&self, corp: &str) -> Vec<Node> {
-        self.g1867_token_nodes_with(corp, None)
+    /// Negation of a hex's membership in G1867 `unconnected_hexes`: some
+    /// city path's Ruby `path.walk` reaches a path touching a node.
+    pub(crate) fn g1867_city_track_reaches_node(&self, hi: usize) -> bool {
+        let neighbors = self.g1867_neighbors();
+        let ctx = Ctx { game: self, corp: "", neighbors, over: None };
+        let n = self.hexes.len();
+        let tile = &self.hexes[hi].tile;
+        (0..tile.paths.len()).any(|p| {
+            let pd = &tile.paths[p];
+            if !matches!(pd.a, PathEndpoint::City(_)) && !matches!(pd.b, PathEndpoint::City(_)) {
+                return false;
+            }
+            let mut w = Walk { visited_paths: vec![false; n * MAXP], counter_edges: vec![0; n * 6], counter_junctions: vec![0; n] };
+            path_walk_reaches_node(&ctx, (hi, p), None, None, &mut w, (hi, p))
+        })
     }
 
+    /// The token cities of `corp` (Ruby `city_tokened_by?`), with hex
+    /// `over.0`'s tile replaced by `over.1`.
     fn g1867_token_nodes_with(&self, corp: &str, over: Option<(usize, &Tile)>) -> Vec<Node> {
         let mut out = Vec::new();
         for (hi, hex) in self.hexes.iter().enumerate() {

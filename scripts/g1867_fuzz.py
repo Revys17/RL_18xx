@@ -46,7 +46,7 @@ def pick(moves: list[dict], rng: random.Random) -> dict:
     return wire
 
 
-def walk(players: int, seed: int, max_moves: int, policy: str | None = None) -> dict:
+def walk(players: int, seed: int, max_moves: int, policy: str | None = None, avoid_dead_ends: bool = True) -> dict:
     ids = {i + 1: f"Player {i + 1}" for i in range(players)}
     g = engine_rs.BaseGame.new_titled("1867", ids, None, seed)
     rng = random.Random(seed * 1_000_003 + players)
@@ -54,6 +54,9 @@ def walk(players: int, seed: int, max_moves: int, policy: str | None = None) -> 
     types: Counter = Counter()
     gen_time: Counter = Counter()
     gen_max: Counter = Counter()
+    dead_end_at = None
+    orphan_at = None
+    avoided = 0
     error = None
     for n in range(max_moves):
         if g.finished:
@@ -73,14 +76,47 @@ def walk(players: int, seed: int, max_moves: int, policy: str | None = None) -> 
             error = f"move {n}: no legal moves (offers {g.g1867_step_offers()})"
             break
         wire = pick(moves, rng)
+        if avoid_dead_ends and wire["type"] == "bid" and "company" in wire:
+            # Ruby HEAD crashes (SingleItemAuction's recursive dutch fallback
+            # fakes a $0 bid by a nil bidder) when a lot comes up that no
+            # player can bid on until its price reaches $0: keep $5 back
+            # once every other player is below $5.
+            cash = {p.id: p.cash for p in g.players}
+            me = int(wire["entity"])
+            others = [c for pid, c in cash.items() if pid != me]
+            lo = min(m["range"][0] for m in moves if m["wire"]["type"] == "bid" and m["range"])
+            if others and max(others) < 5 and wire["price"] > cash[me] - 5:
+                if lo <= cash[me] - 5:
+                    wire["price"] = lo + (cash[me] - 5 - lo) // 5 * 5
+                else:
+                    alt = [m["wire"] for m in moves if m["wire"]["type"] == "pass"]
+                    if alt:
+                        wire = dict(alt[0])
+                avoided += 1
+        if avoid_dead_ends and wire["type"] == "choose" and g.g1867_ruby_dead_end_choice(str(wire["entity"])):
+            # Keep the game replayable in Ruby HEAD: decline instead.
+            alt = [m["wire"] for m in moves if m["wire"]["type"] == "pass"]
+            if alt:
+                wire = dict(alt[0])
+                avoided += 1
         wire["id"] = len(actions) + 1
         types[wire["type"]] += 1
+        if dead_end_at is None and wire["type"] == "choose" and g.g1867_ruby_dead_end_choice(str(wire["entity"])):
+            dead_end_at = wire["id"]
+        with_trains = {c.sym for c in g.corporations if c.floated and c.trains and c.total_shares >= 10}
         try:
             g.process_action(dict(wire))
         except BaseException as exc:  # noqa: BLE001
             error = f"move {n}: generated move rejected: {json.dumps(wire)[:300]}: {exc}"
             break
         actions.append(wire)
+        if orphan_at is None and any(c.sym in with_trains and not c.floated for c in g.corporations):
+            # A corporation that still owned trains left play (a major
+            # nationalized over unpaid interest is reset): Ruby's
+            # reset_corporation leaves the OLD object owning those trains,
+            # and Depot#other_trains keeps offering them to every other
+            # corporation; the engine drops them (documented defect).
+            orphan_at = wire["id"]
     result = {str(pid): v for pid, v in g.result().items()}
     # Routes go to Ruby WITHOUT revenue: Ruby then validates and prices
     # every route itself (a preset revenue skips Route#revenue's checks),
@@ -98,6 +134,10 @@ def walk(players: int, seed: int, max_moves: int, policy: str | None = None) -> 
             "players": [{"id": pid, "name": name} for pid, name in ids.items()],
             "result": result,
             "actions": recorded,
+            # The first action after which Ruby HEAD cannot go on (see
+            # g1867_ruby_dead_end_choice); scripts/g1867_fuzz_ruby_check.py
+            # expects Ruby's rejection there or later.
+            "rl18xx": {"ruby_dead_end_at": dead_end_at, "ruby_orphan_trains_at": orphan_at},
         },
         "error": error,
         "finished": bool(g.finished),
@@ -105,6 +145,7 @@ def walk(players: int, seed: int, max_moves: int, policy: str | None = None) -> 
         "types": types,
         "gen_time": gen_time,
         "gen_max": gen_max,
+        "avoided": avoided,
     }
 
 
@@ -132,6 +173,12 @@ def main() -> int:
         help="cross-player purchase policy: the title's (default), the rules' (all Ruby allows), or none",
     )
     ap.add_argument("--timing", action="store_true", help="print generator time by step kind per walk")
+    ap.add_argument(
+        "--allow-ruby-dead-ends",
+        action="store_true",
+        help="also pick the MajorTrainless choices after which Ruby HEAD cannot go on "
+        "(by default the driver passes instead, so Ruby can replay the whole game)",
+    )
     args = ap.parse_args()
     policy = None if args.policy == "title" else args.policy
     out = Path(args.out) if args.out else None
@@ -142,19 +189,25 @@ def main() -> int:
     for players in args.players:
         for seed in parse_seeds(args.seeds):
             t0 = time.perf_counter()
-            rep = walk(players, seed, args.moves, policy)
+            rep = walk(players, seed, args.moves, policy, not args.allow_ruby_dead_ends)
             dt = time.perf_counter() - t0
             name = f"fuzz_{players}p_s{seed}{'_' + args.policy if args.policy != 'title' else ''}"
             if out:
                 (out / f"{name}.json").write_text(json.dumps(rep["game"]))
             status = "ERROR " + rep["error"] if rep["error"] else "finished" if rep["finished"] else "cut"
+            if rep["game"]["rl18xx"]["ruby_orphan_trains_at"]:
+                status += f" (Ruby keeps orphan trains from action {rep['game']['rl18xx']['ruby_orphan_trains_at']})"
+            if rep["game"]["rl18xx"]["ruby_dead_end_at"]:
+                status += f" (Ruby dead end from action {rep['game']['rl18xx']['ruby_dead_end_at']})"
             print(f"{name}: {rep['moves']} moves in {dt:.1f}s, {status}", flush=True)
             failures += bool(rep["error"])
             total_types.update(rep["types"])
             if args.timing:
                 slow = sorted(rep["gen_time"].items(), key=lambda kv: -kv[1])[:4]
-                print("    generator time by step: " + ", ".join(
-                    f"{k} {v:.1f}s (max {rep['gen_max'][k]:.2f}s)" for k, v in slow))
+                print(
+                    "    generator time by step: "
+                    + ", ".join(f"{k} {v:.1f}s (max {rep['gen_max'][k]:.2f}s)" for k, v in slow)
+                )
     print(f"{failures} failing walks; action types {dict(total_types)}")
     return 1 if failures else 0
 

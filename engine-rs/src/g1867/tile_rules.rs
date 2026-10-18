@@ -477,18 +477,12 @@ impl BaseGame {
             })
             .collect()
     }
-
-    /// `check_track_restrictions!` (:semi_restrictive, no town removal),
-    /// evaluated AFTER the lay: `self` holds the laid tile on `hi`, `old` is
-    /// the tile it replaced, `connected_paths` the corporation's walked
-    /// paths on `hi` after the lay (Ruby clears the graph first).
-    pub(crate) fn g1867_track_restrictions_ok(&self, hi: usize, old: &Tile, connected_paths: &[usize]) -> bool {
-        g1867_track_restrictions_ok_for(old, &self.hexes[hi].tile, connected_paths)
-    }
 }
 
-/// `check_track_restrictions!` for `new` replacing `old` (see
-/// [`BaseGame::g1867_track_restrictions_ok`]).
+/// `check_track_restrictions!` (:semi_restrictive, no town removal) for
+/// `new` replacing `old`, evaluated AFTER the lay: `connected_paths` are the
+/// corporation's walked paths on the hex with `new` laid (Ruby clears the
+/// graph first).
 pub(crate) fn g1867_track_restrictions_ok_for(old: &Tile, new: &Tile, connected_paths: &[usize]) -> bool {
     {
         let new = TV::from_tile(new);

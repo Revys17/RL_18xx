@@ -169,11 +169,14 @@ impl BaseGame {
         let cands = self.g1867_candidates();
         let (kept, dropped): (Vec<Move>, Vec<Move>) =
             cands.into_iter().partition(|m| !self.g1867_cross_player_excluded(m, policy));
-        let out = self.g1867_validate(kept);
+        let mut out = self.g1867_validate(kept);
         if out.is_empty() && !dropped.is_empty() {
             stats::add(&stats::CROSS_FALLBACK, 1);
-            return self.g1867_validate(dropped);
+            out = self.g1867_validate(dropped);
         }
+        // A deterministic order (some candidate sources iterate hash sets):
+        // the same state always lists the same moves in the same order.
+        out.sort_by_cached_key(|m| format!("{:?}|{:?}", m.step, m.action));
         out
     }
 
@@ -634,44 +637,6 @@ impl BaseGame {
         tile.cities[city].tokens.get(slot).map_or(false, |t| t.is_none())
     }
 
-    /// Ruby `unconnected_hexes` negated: some path of a city on the hex
-    /// walks (along plain track) to a path that touches a node.
-    fn g1867_city_track_reaches_node(&self, hi: usize) -> bool {
-        use crate::tiles::PathEndpoint as E;
-        let tile = &self.hexes[hi].tile;
-        let city_paths: Vec<usize> = (0..tile.paths.len())
-            .filter(|&p| matches!(tile.paths[p].a, E::City(_)) || matches!(tile.paths[p].b, E::City(_)))
-            .collect();
-        for start in city_paths {
-            let mut seen: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
-            let mut stack = vec![(hi, start)];
-            seen.insert((hi, start));
-            while let Some((h, p)) = stack.pop() {
-                let path = &self.hexes[h].tile.paths[p];
-                if (h, p) != (hi, start)
-                    && [&path.a, &path.b].iter().any(|e| matches!(e, E::City(_) | E::Town(_) | E::Offboard(_)))
-                {
-                    return true;
-                }
-                for e in [&path.a, &path.b] {
-                    let E::Edge(edge) = e else { continue };
-                    let Some(nid) = self.hex_adjacency.get(&self.hexes[h].id).and_then(|m| m.get(edge)) else { continue };
-                    if self.walls.get(&self.hexes[h].id).map_or(false, |w| w.contains(edge)) {
-                        continue;
-                    }
-                    let Some(&nh) = self.hex_idx.get(nid.as_str()) else { continue };
-                    let inv = (edge + 3) % 6;
-                    for (q, qp) in self.hexes[nh].tile.paths.iter().enumerate() {
-                        if (qp.a == E::Edge(inv) || qp.b == E::Edge(inv)) && seen.insert((nh, q)) {
-                            stack.push((nh, q));
-                        }
-                    }
-                }
-            }
-        }
-        false
-    }
-
     // -- operating round ----------------------------------------------------
 
     fn g67_gen_discards(&self, c: &str) -> Vec<Move> {
@@ -842,12 +807,21 @@ impl BaseGame {
         }
         // Trade-ins (phase 8 only).
         if self.g1867_trade_in_allowed() {
-            let owned = self.corporations[ci].trains.clone();
+            // One trade-in per owned train NAME (two 5s trade in alike).
+            let mut owned: Vec<crate::entities::Train> = Vec::new();
+            for t in &self.corporations[ci].trains {
+                if !owned.iter().any(|o| o.name == t.name) {
+                    owned.push(t.clone());
+                }
+            }
             for dt in depot.iter().chain(discarded.iter()) {
                 for ot in &owned {
                     let Some(&(_, disc)) = dt.discount.iter().find(|(n, _)| *n == ot.name) else { continue };
                     let price = dt.price - disc;
-                    if price > cash {
+                    // A 5+5E traded for a 2+2 "costs" $600 - $750: Ruby's
+                    // discountable_trains_for lists it, then Spender#spend
+                    // raises on the negative amount — never offered.
+                    if price > cash || price <= 0 {
                         continue;
                     }
                     out.push(Move::plain(
@@ -898,7 +872,7 @@ impl BaseGame {
 
     /// Ruby G1867 BuyTrain#discountable_trains_allowed?: phase 8.
     pub(crate) fn g1867_trade_in_allowed(&self) -> bool {
-        self.phase.name == "8"
+        self.title_def().trade_in_allowed(&self.phase.name)
     }
 
     // -- track ----------------------------------------------------------------
@@ -1141,11 +1115,10 @@ impl BaseGame {
     /// keeps two tokens in different hexes).
     fn g67_gen_remove_tokens(&self, c: &str) -> Vec<Move> {
         let mut out = Vec::new();
-        for (hi, hex) in self.hexes.iter().enumerate() {
+        for hex in &self.hexes {
             for (city, ct) in hex.tile.cities.iter().enumerate() {
                 for (slot, t) in ct.tokens.iter().enumerate() {
                     if t.as_ref().map_or(false, |t| t.corporation_id == c) {
-                        let _ = hi;
                         out.push(Move::plain(
                             StepKind::ReduceTokens,
                             Action::RemoveToken {

@@ -1266,8 +1266,8 @@ impl BaseGame {
                 "majors_can_ipo" => {}
                 // Consumed as a flag by the stock-round minor-founding gate.
                 "minors_cannot_start" => {}
-                // Trade-in usability is phase-8-gated where the discounts
-                // are consumed — TODO(1867-trains): enforce in BuyTrain.
+                // A no-op in Ruby too: trade-ins are gated by phase
+                // (GameTitle::trade_in_allowed — 1867 phase 8) in BuyTrain.
                 "train_trade_allowed" => {}
                 // Privates are nationalized: owners paid FACE VALUE by the
                 // bank, and the companies pass to the CN — they stay OPEN
@@ -3026,6 +3026,14 @@ impl BaseGame {
             names.insert(id, name);
         }
         let t = crate::title::resolve(title);
+        // 1867 seats 2-6 (Ruby CERT_LIMIT / STARTING_CASH keys); other
+        // counts used to panic in the title's starting_cash.
+        if t.name() == "1867" && !(2..=6).contains(&player_ids.len()) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "1867: unsupported player count {}",
+                player_ids.len()
+            )));
+        }
         if t.is_g1822_family() {
             let n = player_ids.len() as u8;
             if !(crate::title::g1822::MIN_PLAYERS..=crate::title::g1822::MAX_PLAYERS).contains(&n) {

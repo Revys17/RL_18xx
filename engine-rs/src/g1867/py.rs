@@ -90,6 +90,19 @@ impl BaseGame {
             .collect()
     }
 
+    /// Whether processing `choice` (a MajorTrainless `choose` by `corp`)
+    /// now walks Ruby HEAD into its stale-operator dead end: the corp is
+    /// the operating round's current operator and other trainless majors
+    /// are still queued, so Ruby's nationalize! does not force the next
+    /// entity and the round keeps the pre-reset object as operator (no
+    /// action by id matches it again). The engine ends the turn instead.
+    pub(crate) fn g1867_ruby_dead_end_choice(&self, corp: &str) -> bool {
+        let crate::rounds::Round::Operating(s) = &self.round else { return false };
+        s.current_corp_sym() == Some(corp)
+            && self.trainless_major.iter().any(|m| m == corp)
+            && self.trainless_major.len() > 1
+    }
+
     /// The owner of a share certificate by Ruby id ("CNR_3"):
     /// "player:<id>", "market", "ipo:<corp>" (treasury) or "corp:<sym>".
     pub(crate) fn g1867_share_owner(&self, cert: &str) -> String {
@@ -101,12 +114,15 @@ impl BaseGame {
         }
     }
 
-    /// A train id's (name, owner): owner "depot" (upcoming or discarded)
-    /// or the holding corporation's sym ("" if unknown).
+    /// A train id's (name, owner): owner "depot" (upcoming), "discard"
+    /// (the bank pool) or the holding corporation's sym ("" if unknown).
     pub(crate) fn g1867_train_info(&self, train: &str) -> (String, String) {
         let name = train.rsplit_once('-').map_or(train, |(n, _)| n).to_string();
-        if self.depot.trains.iter().chain(self.depot.discarded.iter()).any(|t| t.id == train) {
+        if self.depot.trains.iter().any(|t| t.id == train) {
             return (name, "depot".into());
+        }
+        if self.depot.discarded.iter().any(|t| t.id == train) {
+            return (name, "discard".into());
         }
         for c in &self.corporations {
             if c.trains.iter().any(|t| t.id == train) {

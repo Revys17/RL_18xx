@@ -158,6 +158,27 @@ mod tests {
         run(&[3, 4, 5, 6], 1..=2, 4000, CrossPlayerPolicy::RESTRICTED);
     }
 
+    /// T6: `check_phase_advance` panics (`unimplemented!`) on an unknown
+    /// train event; every event in 1867's train data is one it handles,
+    /// so self-play can never reach it.
+    #[test]
+    fn every_1867_train_event_is_handled() {
+        const HANDLED: &[&str] = &[
+            "green_minors_available",
+            "majors_can_ipo",
+            "minors_cannot_start",
+            "train_trade_allowed",
+            "nationalize_companies",
+            "trainless_nationalization",
+            "minors_nationalized",
+        ];
+        for td in crate::title::g1867::trains() {
+            for e in td.events {
+                assert!(HANDLED.contains(e), "{} event {e} has no handler", td.name);
+            }
+        }
+    }
+
     /// Profiling target: `perf record <test binary> perf_walk --ignored`.
     #[test]
     #[ignore]
