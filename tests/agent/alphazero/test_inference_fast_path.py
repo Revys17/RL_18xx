@@ -148,8 +148,10 @@ def test_map_dedupe_gives_the_same_network_outputs(models, packs):
         )
         assert np.array_equal(deduped[-1].dense_node_features(), p.node_features)
     a, b = _packed(model, packs), _packed(model, deduped)
+    # The map encoder's matmuls see fewer rows, so float32 rounding differs with the BLAS
+    # blocking (the thread count): up to ~1.6e-6 seen under the full suite's default threads.
     for x, y in zip(a[:3], b[:3]):
-        torch.testing.assert_close(x, y, rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(x, y, rtol=1e-4, atol=1e-5)
 
 
 def test_lockstep_with_map_dedupe_ends_with_the_same_trees():
