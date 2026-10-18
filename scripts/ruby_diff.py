@@ -29,7 +29,7 @@ Usage:
 Mind the id pitfall: Ruby dumps are keyed by FILE action ids; the Rust side
 tags every filtered action with its originating file id (auto_actions
 inherit the parent's) — never compare by the renumbered filtered index.
-Docker runs pinned (--cpuset-cpus 24-31,56-63).
+Docker runs pinned (--cpuset-cpus 24-31,56-63, or $RUBY_DOCKER_CPUSET).
 """
 
 from __future__ import annotations
@@ -45,7 +45,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-CPUSET = "24-31,56-63"
+# Override with RUBY_DOCKER_CPUSET (e.g. "40-63") to keep the containers off
+# cores another job owns.
+CPUSET = os.environ.get("RUBY_DOCKER_CPUSET", "24-31,56-63")
 
 
 def ensure_gems(gems: Path) -> None:
