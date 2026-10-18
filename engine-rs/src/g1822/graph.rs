@@ -526,7 +526,7 @@ impl BaseGame {
     /// impassable colour (gray/red/blue) that don't target the hex, minus
     /// edges behind the hex's OWN impassable borders (asymmetric, as Ruby).
     pub(crate) fn g1822_neighbors(&self) -> HashMap<usize, BTreeMap<u8, usize>> {
-        if self.g1822_is_pnw() {
+        if self.g1822_is_pnw() || self.g1822_is_mx() {
             return self.g1822_pnw_neighbors();
         }
         let mut out: HashMap<usize, BTreeMap<u8, usize>> = HashMap::new();
@@ -563,7 +563,7 @@ impl BaseGame {
     }
 
     pub(crate) fn g1822_hex_is_blue(&self, coord: &str) -> bool {
-        if self.g1822_is_pnw() {
+        if self.g1822_is_pnw() || self.g1822_is_mx() {
             return self.hex_idx.get(coord).map_or(false, |&hi| self.g1822_tile_color_name(hi) == "blue");
         }
         (self.fam().hex_dsl)(coord).map_or(false, |(_, c)| c == "blue")
@@ -579,7 +579,7 @@ impl BaseGame {
     /// Whether path `pi` of hex `hi` is `track:thin` (1822PNW's D9 / E8
     /// ferry lines; preprinted only).
     pub(crate) fn g1822_path_thin(&self, hi: usize, pi: usize) -> bool {
-        if !self.g1822_is_pnw() {
+        if !(self.g1822_is_pnw() || self.g1822_is_mx()) {
             return false;
         }
         let hex = &self.hexes[hi];

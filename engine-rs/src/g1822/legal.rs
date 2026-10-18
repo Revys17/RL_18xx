@@ -121,6 +121,11 @@ pub fn g1822_generator_status(step: Step, action_type: &str) -> GenStatus {
         (Step::BuyTrain, "buy_train" | "sell_shares" | "pass") => Generated,
         (Step::MinorAcquisition, "merge" | "choose" | "pass") => Generated,
         (Step::IssueShares, "buy_shares" | "sell_shares" | "pass" | "choose_ability") => Generated,
+        // 1822MX (mx_legal): P16's close_p16, the NdeM's cash-out and its
+        // token auction
+        (Step::SpecialChoose, "choose_ability") => Generated,
+        (Step::CashOutNdem, "pass") => Generated,
+        (Step::AuctionNdemTokens, "remove_token" | "bid" | "merge" | "pass") => Generated,
         _ => ReplayOnly("not offered by this step"),
     }
 }
@@ -437,9 +442,11 @@ impl BaseGame {
             if c.ipo_price.is_some() {
                 sources.push(EntityId::ipo(&c.sym));
             }
+            // 1822MX: the NdeM's first (pool) certificate is a plain 10%
+            let ndem = self.g1822_mx_is_ndem(&c.sym);
             for src in sources {
                 for i in self.offered_certs(&c.sym, &src) {
-                    if c.shares[i].president {
+                    if c.shares[i].president && !ndem {
                         continue;
                     }
                     let b = Bundle {
@@ -761,6 +768,9 @@ impl BaseGame {
                     out.extend(self.gen_company_choices(c, "issue"));
                 }
             }
+            // 1822MX (mx_legal): the NdeM's cash-out and token auction
+            Step::CashOutNdem => out.push(pass()),
+            Step::AuctionNdemTokens => out.extend(self.gen_mx_auction(ent)),
             Step::BuySellParShares | Step::Choose => {}
         }
         out
@@ -851,6 +861,7 @@ impl BaseGame {
             let mut lay = false;
             let mut tok = false;
             let mut assign = false;
+            let mut special_choose = false;
             for (i, s) in steps.iter().enumerate().take(bi + 1) {
                 if !self.g1822_step_active(i) {
                     continue;
@@ -860,11 +871,15 @@ impl BaseGame {
                     Step::SpecialTrack if acts.contains(&"lay_tile") => lay = true,
                     Step::SpecialToken if acts.contains(&"place_token") => tok = true,
                     Step::Assign if acts.contains(&"assign") => assign = true,
+                    Step::SpecialChoose if acts.contains(&"choose_ability") => special_choose = true,
                     _ => {}
                 }
             }
             if assign {
                 out.extend(self.gen_pnw_assigns(&co));
+            }
+            if special_choose {
+                out.extend(self.gen_mx_special_choose(&co));
             }
             if lay {
                 out.extend(self.gen_company_lays(&co, false));
@@ -902,6 +917,9 @@ impl BaseGame {
     fn gen_corp_lays_inner(&mut self, c: &str) -> Vec<Move> {
         if self.g1822_is_pnw() {
             return self.gen_pnw_corp_lays(c);
+        }
+        if self.g1822_is_mx() {
+            return self.gen_mx_corp_lays(c);
         }
         let graph = self.g1822_graph(c);
         let nbrs = self.g1822_neighbors();
@@ -1069,6 +1087,14 @@ impl BaseGame {
             }
             let mut v = self.gen_company_lays_1822(co);
             v.extend(self.pnw_company_extras(co));
+            return v;
+        }
+        if self.g1822_is_mx() {
+            if let Some(v) = self.gen_mx_company_lays(co) {
+                return v;
+            }
+            let mut v = self.gen_company_lays_1822(co);
+            v.extend(self.mx_company_extras(co));
             return v;
         }
         self.gen_company_lays_1822(co)
@@ -1509,9 +1535,9 @@ impl BaseGame {
         let ci = self.ci(c);
         let Some(sp) = self.corporations[ci].share_price.clone() else { return 0 };
         let (mut r, mut col) = (sp.row, sp.column);
-        let pnw = self.g1822_is_pnw();
+        let pnw = self.g1822_is_pnw() || self.g1822_is_mx();
         for _ in 0..n {
-            // PNW reduced_bundle_price_for_market_drop: [:left] * n
+            // PNW / MX reduced_bundle_price_for_market_drop: [:left] * n
             let (nr, nc) = if pnw { self.stock_market.move_left(r, col) } else { self.stock_market.move_down(r, col) };
             r = nr;
             col = nc;
@@ -1538,8 +1564,18 @@ impl BaseGame {
         o.insert("entity_type".into(), json!(ent_type));
         match a {
             Action::Bid { company_sym, price, .. } => {
-                o.insert("company".into(), json!(company_sym));
+                // (1822MX's NdeM token bids name no company)
+                if !company_sym.is_empty() {
+                    o.insert("company".into(), json!(company_sym));
+                }
                 o.insert("price".into(), json!(price));
+            }
+            Action::RemoveToken { hex_id, city_index, slot, .. } => {
+                if let Some(&hi) = self.hex_idx.get(hex_id.as_str()) {
+                    let tid = self.g1822_wire_tile_id(hi);
+                    o.insert("city".into(), json!(format!("{tid}-{city_index}")));
+                }
+                o.insert("slot".into(), json!(slot));
             }
             Action::Par { corporation_sym, share_price, .. } => {
                 o.insert("corporation".into(), json!(corporation_sym));
@@ -1735,8 +1771,14 @@ impl BaseGame {
                 .collect();
         }
         let graph = self.g1822_graph(c);
+        // 1822MX entity_connects?: or both reach a port
+        let mx_port = self.g1822_is_mx() && self.g1822_mx_connected_to_port(c);
         let mut out = Vec::new();
         for m in self.g1822_potentially_mergeable(c) {
+            if mx_port && self.g1822_mx_connected_to_port(&m) {
+                out.push(m);
+                continue;
+            }
             let floated = self.corporations[self.ci(&m)].floated;
             let connected = if !floated && m == self.fam().minor_14_id {
                 let Some(&hi) = self.hex_idx.get(self.fam().minor_14_home_hex) else { continue };

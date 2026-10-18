@@ -81,7 +81,11 @@ def main(src: str, dst: str) -> None:
     w("    };")
     w("    vec![")
     for co in d["companies"]:
-        w(f"        co({rs(co['sym'])}, {rs(co['name'])}, {co['value']}, {co['revenue']}),")
+        line = f"co({rs(co['sym'])}, {rs(co['name'])}, {co['value']}, {co['revenue']})"
+        if co.get("discount"):
+            # Company#min_bid = value - discount (1822MX's C1: a $200 minimum)
+            line = f"CompanyDef {{ discount: {co['discount']}, ..{line} }}"
+        w(f"        {line},")
     w("    ]")
     w("}")
     w("")

@@ -427,7 +427,7 @@ impl<'a> Ctx<'a> {
         match n.kind {
             NodeKind::City => {
                 let c = &hex.tile.cities[n.index];
-                if hex.tile.id.starts_with("preprinted_") || self.g.g1822_is_pnw() {
+                if hex.tile.id.starts_with("preprinted_") || self.g.g1822_is_pnw() || self.g.g1822_is_mx() {
                     self.g.g1822_tiered_city_revenue(n.hex).unwrap_or(c.revenue)
                 } else {
                     c.revenue
@@ -2336,7 +2336,10 @@ impl BaseGame {
         }
         let ki = |k: &Kind| distinct.iter().position(|d| d == k).unwrap();
         let t0 = std::time::Instant::now();
-        let (mut pick, mut lb) = self.g1822_combine(&ctx, &kinds, &distinct, &lists);
+        // 1822MX revenue_for: a 3/2P train earns half (after bonuses,
+        // rounded to 10)
+        let half: Vec<bool> = trains.iter().map(|t| t.name.starts_with("3/2P")).collect();
+        let (mut pick, mut lb) = self.g1822_combine(&ctx, &kinds, &distinct, &lists, &half);
         if router_debug() {
             eprintln!("  scout combine: lb {} in {:?}; best single {:?}", lb, t0.elapsed(), best_single);
         }
@@ -2361,7 +2364,7 @@ impl BaseGame {
             }
             if changed {
                 let t0 = std::time::Instant::now();
-                let (p2, t2) = self.g1822_combine(&ctx, &kinds, &distinct, &lists);
+                let (p2, t2) = self.g1822_combine(&ctx, &kinds, &distinct, &lists, &half);
                 if router_debug() {
                     eprintln!("  full combine: {} in {:?}", t2, t0.elapsed());
                 }
@@ -2393,6 +2396,19 @@ impl BaseGame {
                 *rv += b;
             }
         }
+        // 3/2P: halved after its bonus
+        let mut oi = 0;
+        for (ti, p) in pick.iter().enumerate() {
+            if p.is_none() {
+                continue;
+            }
+            if half[ti] {
+                if let Some(rv) = out[oi].revenue.as_mut() {
+                    *rv = half_revenue(*rv);
+                }
+            }
+            oi += 1;
+        }
         (out, lb)
     }
 
@@ -2405,6 +2421,7 @@ impl BaseGame {
         kinds: &[Kind],
         distinct: &[Kind],
         lists: &[(KindList, Vec<Walked>)],
+        half: &[bool],
     ) -> (Vec<Option<usize>>, i32) {
         let merthyr_hex = self.hex_idx.get(self.fam().merthyr_tydfil_pontypool_hex).copied();
         let mut track_id: HashMap<(usize, u8), u32> = HashMap::new();
@@ -2450,7 +2467,16 @@ impl BaseGame {
         }
         let kind_of: Vec<usize> = kinds.iter().map(|k| distinct.iter().position(|d| d == k).unwrap()).collect();
         let nt = kinds.len();
-        let max_rev: Vec<i32> = (0..nt).map(|t| lists[kind_of[t]].0.iter().map(|e| e.1).max().unwrap_or(0)).collect();
+        let max_rev: Vec<i32> = (0..nt)
+            .map(|t| {
+                let m = lists[kind_of[t]].0.iter().map(|e| e.1).max().unwrap_or(0);
+                if half[t] {
+                    half_revenue(m)
+                } else {
+                    m
+                }
+            })
+            .collect();
         let max_bonus: Vec<i32> = (0..nt).map(|t| lists[kind_of[t]].0.iter().map(|e| e.2).max().unwrap_or(0)).collect();
         let max_side = |f: fn(&CRoute) -> i32| -> Vec<i32> {
             (0..nt).map(|t| dense[kind_of[t]].iter().map(f).max().unwrap_or(0)).collect()
@@ -2480,8 +2506,9 @@ impl BaseGame {
             pick: vec![None; nt],
             best: 0,
             best_pick: vec![None; nt],
+            half: half.to_vec(),
         };
-        c.search(0, 0, [0; 3]);
+        c.search(0, 0, [0; 3], (0, 0));
         (c.best_pick, c.best)
     }
 }
@@ -2527,6 +2554,14 @@ struct Combo<'s> {
     pick: Vec<Option<usize>>,
     best: i32,
     best_pick: Vec<Option<usize>>,
+    /// 1822MX's 3/2P: the train earns half its run (bonus included).
+    half: Vec<bool>,
+}
+
+/// 1822MX `(revenue / 2).round(-1)` (Integer#round: half up).
+pub(crate) fn half_revenue(r: i32) -> i32 {
+    let h = r.div_euclid(2);
+    (h + 5).div_euclid(10) * 10
 }
 
 impl Combo<'_> {
@@ -2562,9 +2597,13 @@ impl Combo<'_> {
         }
     }
 
-    fn search(&mut self, t: usize, revenue: i32, bonus: [i32; 3]) {
-        if revenue + bsum(bonus) > self.best {
-            self.best = revenue + bsum(bonus);
+    /// `bonus`: per-channel maxima (bounds); `hold`: the destination
+    /// bonus's holder as (its raw bonus, what it adds) — the raw bonus for
+    /// a normal route, half(run + bonus) − half(run) for a 3/2P.
+    fn search(&mut self, t: usize, revenue: i32, bonus: [i32; 3], hold: (i32, i32)) {
+        let value = revenue + hold.1 + bonus[1] + bonus[2];
+        if value > self.best {
+            self.best = value;
             self.best_pick.clone_from(&self.pick);
         }
         if t == self.kind_of.len() {
@@ -2597,12 +2636,20 @@ impl Combo<'_> {
             self.merthyr[1] |= r.merthyr.1;
             self.apply(t, r, true);
             self.pick[t] = Some(pi);
-            self.search(t + 1, revenue + rev, nb);
+            let (gain, nh) = if self.half[t] {
+                let h = half_revenue(rev);
+                let nh = if b > 0 && b >= hold.0 { (b, half_revenue(rev + b) - h) } else { hold };
+                (h, nh)
+            } else {
+                let nh = if b > 0 && b >= hold.0 { (b, b) } else { hold };
+                (rev, nh)
+            };
+            self.search(t + 1, revenue + gain, nb, nh);
             self.pick[t] = None;
             self.apply(t, r, false);
             self.merthyr = saved;
         }
         // this train runs nothing
-        self.search(t + 1, revenue, bonus);
+        self.search(t + 1, revenue, bonus, hold);
     }
 }

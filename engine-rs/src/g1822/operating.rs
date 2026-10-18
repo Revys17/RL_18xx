@@ -41,7 +41,12 @@ impl BaseGame {
         self.g1822_sort_operating(&mut floated);
         let (minors, majors): (Vec<String>, Vec<String>) =
             floated.into_iter().partition(|s| self.is_minor(s));
-        minors.into_iter().chain(majors).collect()
+        let order: Vec<String> = minors.into_iter().chain(majors).collect();
+        if self.g1822_is_mx() {
+            // MX operating_order: the NdeM's place depends on its state
+            return self.g1822_mx_operating_order(order);
+        }
+        order
     }
 
     /// Corporation#<=> (sort_order_key).
@@ -84,6 +89,11 @@ impl BaseGame {
         if self.g1822_is_pnw() {
             // G1822PNW: Assign after AcquireCompany
             v.insert(4, Step::Assign);
+        }
+        if self.g1822_is_mx() {
+            // G1822MX: the NdeM's privatization steps close the list
+            v.push(Step::CashOutNdem);
+            v.push(Step::AuctionNdemTokens);
         }
         v
     }
@@ -136,6 +146,11 @@ impl BaseGame {
         r.last_share_sold_price = None;
         r.corporations_sold.clear();
         r.num_laid_portage = 0;
+        // MX Track#setup / AuctionNdemTokens#setup for the NdeM's turn
+        if self.g1822_is_mx() && self.g1822_operator().as_deref() == Some(super::mx::NDEM) {
+            self.g1822_mx_track_setup();
+            self.g1822_mx_auction_setup();
+        }
     }
 
     /// Operating#start_operating.
@@ -238,6 +253,10 @@ impl BaseGame {
             let owner = self.co_owner(&c);
             self.g1822_bank_pay(&owner, rev);
         }
+        if self.g1822_is_mx() {
+            // MX payout_companies: P16's £10 (or its closing)
+            self.g1822_mx_p16_payment();
+        }
         if self.g1822_is_pnw() {
             // PNW payout_companies: count the regionals' payouts
             for r in super::pnw::REGIONALS {
@@ -309,6 +328,12 @@ impl BaseGame {
             }
             // Engine::Step::SpecialChoose (PNW): no :choose_ability companies
             Step::SpecialChoose if self.g1822_is_pnw() => vec![],
+            // G1822MX::Step::SpecialChoose: P16's close_p16 while its owner
+            // operates (`owning_corp_or_turn`)
+            Step::SpecialChoose if self.g1822_is_mx() => match ent {
+                Ent::Company(co) if co == "P16" && self.g1822_mx_p16_usable() => vec!["choose_ability"],
+                _ => vec![],
+            },
             Step::SpecialChoose => {
                 if !self.is_operator(ent) {
                     return vec![];
@@ -341,7 +366,8 @@ impl BaseGame {
                     return vec![];
                 }
                 let Ent::Corp(c) = ent else { return vec![] };
-                if !self.is_major(c) || self.g1822_routes_revenue() == 0 {
+                // MX Dividend#actions: nothing for the NdeM (it pays out by itself)
+                if !self.is_major(c) || self.g1822_routes_revenue() == 0 || self.g1822_mx_is_ndem(c) {
                     return vec![];
                 }
                 let mut a = vec!["dividend"];
@@ -356,6 +382,14 @@ impl BaseGame {
             Step::BuyTrain => self.g1822_buy_train_actions(ent),
             Step::MinorAcquisition => self.g1822_minor_acquisition_actions(ent),
             Step::IssueShares => self.g1822_issue_shares_actions(ent),
+            Step::CashOutNdem => {
+                if self.g1822_mx_cash_out_active() {
+                    vec!["pass"]
+                } else {
+                    vec![]
+                }
+            }
+            Step::AuctionNdemTokens => self.g1822_mx_auction_actions(ent),
             _ => vec![],
         }
     }
@@ -419,6 +453,16 @@ impl BaseGame {
                 }
                 _ => err("AcquireCompany cannot process this action"),
             },
+            Step::SpecialChoose if self.g1822_is_mx() => match action {
+                Action::ChooseAbility { choice, .. } => {
+                    // MX process_choose_ability: `return unless close_p16`
+                    if choice == "close_p16" {
+                        self.g1822_mx_close_p16();
+                    }
+                    Ok(())
+                }
+                _ => err("SpecialChoose cannot process this action"),
+            },
             Step::SpecialChoose => match action {
                 Action::Choose { choice, .. } => {
                     let Ent::Corp(c) = ent else { return err("choose by a non-corporation") };
@@ -467,6 +511,14 @@ impl BaseGame {
             Step::BuyTrain => self.g1822_buy_train_process(i, ent, action),
             Step::MinorAcquisition => self.g1822_minor_acquisition_process(i, ent, action),
             Step::IssueShares => self.g1822_issue_shares_process(i, ent, action),
+            Step::CashOutNdem => match action {
+                Action::Pass { .. } => {
+                    self.g1822_mx_cash_out();
+                    Ok(())
+                }
+                _ => err("CashOutNdem cannot process this action"),
+            },
+            Step::AuctionNdemTokens => self.g1822_mx_auction_process(action),
             _ => err(format!("{step:?} cannot process actions")),
         }
     }
@@ -480,8 +532,15 @@ impl BaseGame {
                     return;
                 };
                 // G1822 Dividend#skip!: majors → base skip! (withhold dummy);
-                // minors → half if revenue positive else withhold.
-                let kind = if self.is_major(&c) {
+                // minors → half if revenue positive else withhold; MX: the
+                // NdeM pays out whatever it earned.
+                let kind = if self.g1822_mx_is_ndem(&c) {
+                    if self.g1822_routes_revenue() > 0 {
+                        "payout"
+                    } else {
+                        "withhold"
+                    }
+                } else if self.is_major(&c) {
                     "withhold"
                 } else if self.g1822_routes_revenue() > 0 {
                     "half"
@@ -494,6 +553,9 @@ impl BaseGame {
             }
             Step::MinorAcquisition => {
                 self.rndm().passed[i] = true;
+            }
+            Step::Track if self.g1822_is_mx() && self.g1822_operator().as_deref() == Some(super::mx::NDEM) => {
+                self.g1822_mx_track_pass(i);
             }
             _ => self.rndm().passed[i] = true,
         }
@@ -797,6 +859,9 @@ impl BaseGame {
 
     /// G1822 `share_price_change` + base `change_share_price`.
     fn g1822_dividend_price_change(&mut self, c: &str, revenue: i32) {
+        if self.g1822_mx_is_ndem(c) {
+            return self.g1822_mx_ndem_price_change(revenue);
+        }
         let ci = self.ci(c);
         let Some(sp) = self.corporations[ci].share_price.clone() else { return };
         if revenue <= 0 {
@@ -934,8 +999,8 @@ impl BaseGame {
                     return err("can only issue own shares");
                 }
                 let b = self.g1822_action_bundle_pub(c, *percent, share_indices)?;
-                if self.g1822_is_pnw() {
-                    // PNW: sell, then one step left per certificate
+                if self.g1822_is_pnw() || self.g1822_is_mx() {
+                    // PNW / MX: sell, then one step left per certificate
                     self.g1822_pool_sell_shares(&b, true);
                     for _ in 0..b.shares.len() {
                         self.g1822_move_price(c, super::shares::Dir::Left);

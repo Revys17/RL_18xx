@@ -22,6 +22,7 @@ use super::track::Ab;
 pub enum Variant {
     G1822,
     Pnw,
+    Mx,
 }
 
 /// PRIVATE_COMPANIES_ACQUISITION: (acquirer classes, phase).

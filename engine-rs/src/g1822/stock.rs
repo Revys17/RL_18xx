@@ -155,13 +155,23 @@ impl BaseGame {
                 self.g1822_float_minor(&bid, &company)?;
             }
         }
+        let mx = self.g1822_is_mx();
         if remove_l_count > 0
             && self.depot.trains.first().map_or(false, |t| t.name == "L")
         {
-            self.g1822_remove_l_trains(remove_l_count);
+            if mx {
+                // MX: the L trains go to the NdeM
+                self.g1822_mx_remove_l_trains(remove_l_count);
+            } else {
+                self.g1822_remove_l_trains(remove_l_count);
+            }
         }
         if let Some(m) = remove_minor {
-            self.g1822_remove_minor_and_first_train(&m);
+            if mx {
+                self.g1822_mx_remove_minor_and_first_train(&m);
+            } else {
+                self.g1822_remove_minor_and_first_train(&m);
+            }
         }
         self.bidbox_minors_refill();
         self.g1822_add_interest_player_loans();
@@ -176,8 +186,8 @@ impl BaseGame {
         self.g1822_sort_operating(&mut corps);
         for sym in corps {
             if self.g1822_sold_out(&sym) {
-                // PNW sold_out_stock_movement: move_right
-                let dir = if self.g1822_is_pnw() { super::shares::Dir::Right } else { super::shares::Dir::Up };
+                // PNW / MX sold_out_stock_movement: move_right
+                let dir = if self.g1822_is_pnw() || mx { super::shares::Dir::Right } else { super::shares::Dir::Up };
                 self.g1822_move_price(&sym, dir);
             }
         }
@@ -187,7 +197,8 @@ impl BaseGame {
     /// Base `sold_out?` (player share holders incl. the tax haven hold
     /// 100%) restricted to majors.
     fn g1822_sold_out(&self, sym: &str) -> bool {
-        if !self.is_major(sym) {
+        // MX sold_out?: never the NdeM
+        if !self.is_major(sym) || self.g1822_mx_is_ndem(sym) {
             return false;
         }
         let total: u32 = self
@@ -205,6 +216,10 @@ impl BaseGame {
         self.gm().bank_owned.retain(|c| c != company);
         if bid.price > 0 {
             self.player_spend(bid.player, bid.price)?;
+        }
+        if self.g1822_is_mx() {
+            // MX Round::Stock#buy_company: C1 brings minor 18
+            self.g1822_mx_after_buy_company(bid.player, company);
         }
         Ok(())
     }
@@ -417,12 +432,17 @@ impl BaseGame {
                         .first()
                         .map_or(false, |t| t == "multiple_buy" || t == "unlimited" || t == "no_cert_limit")
                 });
-            if !counts {
+            if !counts || !self.g1822_mx_counts_for_limit(&c.sym) {
                 continue;
             }
             n += c.shares.iter().filter(|s| s.owner == eid).count() as i32;
         }
-        let companies = self.companies.iter().filter(|c| !c.closed && c.owner == eid).count() as i32;
+        let owner_only = &self.g().owner_only;
+        let companies = self
+            .companies
+            .iter()
+            .filter(|c| !c.closed && c.owner == eid && !owner_only.contains(&c.sym))
+            .count() as i32;
         n += companies;
         if self.companies.iter().any(|c| !c.closed && c.owner == eid && c.sym == self.fam().company_osth) {
             n -= 1;
@@ -442,6 +462,9 @@ impl BaseGame {
     }
 
     fn g1822_corp_counts_for_limit(&self, sym: &str) -> bool {
+        if !self.g1822_mx_counts_for_limit(sym) {
+            return false;
+        }
         let c = &self.corporations[self.ci(sym)];
         c.share_price.as_ref().map_or(true, |sp| {
             !sp.types
@@ -653,7 +676,8 @@ impl BaseGame {
             && !(self.fam().must_sell_in_blocks && sold_now())
             && !self.g1822_bought()
             && self.g1822_fit_in_bank(b)
-            && self.g1822_can_dump(owner, b)
+            // MX BSPS#can_sell?: no can_dump? check for the NdeM
+            && (self.g1822_mx_is_ndem(&b.corp) || self.g1822_can_dump(owner, b))
     }
 
     fn g1822_can_sell_any(&self, pid: u32) -> bool {
@@ -943,6 +967,19 @@ impl BaseGame {
         let b = self.g1822_action_bundle(sym, percent, idx)?;
         if !self.g1822_can_buy(pid, &b, None) {
             return err(format!("Cannot buy a share of {sym}"));
+        }
+        if self.g1822_mx_is_ndem(sym) {
+            // MX BSPS#process_buy_shares for the NdeM: counts as something
+            // sold, no players_bought entry, no presidency
+            self.gm().nothing_sold_in_sr = false;
+            let from_treasury = self.corporations[self.ci(sym)].shares[b.shares[0]].owner.is_ipo();
+            if from_treasury {
+                self.rndm().bought_from_ipo = true;
+            }
+            self.g1822_pool_buy_shares(&EntityId::player(pid), &b, None, false, false)?;
+            self.g1822_track_action(pid, CurAct::BuyShares);
+            self.g1822_bsps_pass();
+            return Ok(());
         }
         let from_treasury = {
             let c = &self.corporations[self.ci(sym)];

@@ -270,10 +270,16 @@ impl BaseGame {
         let Some(tidx) = self.g1822_find_token(corp, "normal") else { return };
         // City#tokenable?(corporation, tokens: token) — not free.
         let price = self.corporations[cix].tokens[tidx].price;
-        if self.g1822_city_tokenable(corp, hi, ci, false, false) {
+        // multiple_tokens_allowed_on_home_hex? (1822MX: Mexico City's homes)
+        let same_hex_allowed = self.g1822_is_mx();
+        if self.g1822_city_tokenable(corp, hi, ci, false, same_hex_allowed) {
             // City#place_token spends nothing (1822 never reaches a priced
             // home token here: minor 14's London token is a pending one)
-            if self.g1822_put_token(corp, tidx, hi, ci, false).is_ok() && price > 0 && !self.g1822_is_pnw() {
+            // (1822MX's minor 14 has a £20 home token: placed free)
+            if self.g1822_put_token(corp, tidx, hi, ci, false).is_ok()
+                && price > 0
+                && self.variant() == super::family::Variant::G1822
+            {
                 let _ = self.corp_spend(corp, price);
             }
         } else if self.g1822_is_pnw() {
@@ -585,6 +591,10 @@ impl BaseGame {
 
     /// G1822 Token#can_place_token? (+ Tokener's).
     fn g1822_can_place_token(&self, c: &str) -> bool {
+        // MX Token#can_place_token?: never the NdeM
+        if self.g1822_mx_is_ndem(c) {
+            return false;
+        }
         let cix = self.ci(c);
         let available: Vec<&Token> = self.corporations[cix]
             .tokens

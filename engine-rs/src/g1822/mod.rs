@@ -28,6 +28,8 @@ pub mod graph;
 pub mod legal;
 #[cfg(test)]
 mod fuzz;
+pub mod mx;
+pub mod mx_legal;
 pub mod operating;
 pub mod pnw;
 pub mod pnw_legal;
@@ -107,6 +109,10 @@ pub enum Step {
     Assign,
     /// 1822PNW: the Merger round's G1822PNW::Step::Merge.
     Merge,
+    /// 1822MX: G1822MX::Step::CashOutNdem.
+    CashOutNdem,
+    /// 1822MX: G1822MX::Step::AuctionNdemTokens.
+    AuctionNdemTokens,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -274,6 +280,15 @@ pub struct RoundSt {
     pub converting_major: Option<String>,
     #[serde(default)]
     pub convert_par: i32,
+    /// 1822MX Track: the NdeM's remaining tile layers (`@ndem_tile_layers`,
+    /// players in priority order; set at the NdeM's turn).
+    #[serde(default)]
+    pub ndem_layers: Vec<u32>,
+    #[serde(default)]
+    pub ndem_layers_set: bool,
+    /// 1822MX AuctionNdemTokens' state.
+    #[serde(default)]
+    pub ndem_auction: Option<mx::NdemAuction>,
 }
 
 impl RoundSt {
@@ -331,6 +346,9 @@ impl RoundSt {
             p20_minor: None,
             converting_major: None,
             convert_par: 0,
+            ndem_layers: Vec::new(),
+            ndem_layers_set: false,
+            ndem_auction: None,
         }
     }
 
@@ -462,6 +480,19 @@ pub struct G1822State {
     pub home_override: BTreeMap<String, String>,
     #[serde(default)]
     pub destination_override: BTreeMap<String, String>,
+
+    // -- 1822MX (defaults for the other titles) ----------------------------
+    /// `@ndem_state`.
+    #[serde(default)]
+    pub ndem_state: mx::NdemState,
+    /// `@number_ndem_shares` (the next NdeM share's index).
+    #[serde(default)]
+    pub ndem_shares: u32,
+    /// Companies whose `owner` Ruby set without adding them to the owner's
+    /// `companies` (MX's M18 after C1's purchase): the owner shows, but they
+    /// are no certificate and no value.
+    #[serde(default)]
+    pub owner_only: Vec<String>,
 }
 
 /// A memo Ruby fills lazily while it evaluates step actions (read-side
@@ -598,6 +629,7 @@ impl BaseGame {
     pub(crate) fn g1822_can_upgrade_one_phase_ahead(&self, company: &str) -> bool {
         match self.variant() {
             family::Variant::Pnw => false,
+            family::Variant::Mx => company == "P8",
             _ => family::Family::is(self.fam().company_ber, company),
         }
     }
@@ -605,13 +637,14 @@ impl BaseGame {
     pub(crate) fn g1822_can_only_lay_plain_or_towns(&self, company: &str) -> bool {
         match self.variant() {
             family::Variant::Pnw => false,
+            family::Variant::Mx => company == "P8",
             _ => family::Family::is(self.fam().company_ber, company),
         }
     }
     /// `must_be_on_terrain?(entity)` (G1822: COMPANY_EGR).
     pub(crate) fn g1822_must_be_on_terrain(&self, company: &str) -> bool {
         match self.variant() {
-            family::Variant::Pnw => false,
+            family::Variant::Pnw | family::Variant::Mx => false,
             _ => family::Family::is(self.fam().company_egr, company),
         }
     }
@@ -623,6 +656,7 @@ impl BaseGame {
     pub(crate) fn g1822_must_remove_town(&self, company: &str) -> bool {
         match self.variant() {
             family::Variant::Pnw => matches!(company, "P7" | "P8"),
+            family::Variant::Mx => matches!(company, "P12" | "P13"),
             _ => family::Family::is(self.fam().company_mtonr, company),
         }
     }
@@ -631,6 +665,7 @@ impl BaseGame {
     pub(crate) fn g1822_company_ability_extra_track(&self, company: &str) -> bool {
         match self.variant() {
             family::Variant::Pnw => matches!(company, "P11" | "P12" | "P13"),
+            family::Variant::Mx => matches!(company, "P9" | "P17" | "P18"),
             _ => family::Family::is(self.fam().company_lsr, company),
         }
     }
@@ -945,6 +980,9 @@ impl BaseGame {
         let company_order: Vec<String> = if fam.variant == family::Variant::Pnw {
             // PNW's own setup_companies
             self.g1822_pnw_order_companies(&shuffled, &mut rng)
+        } else if fam.variant == family::Variant::Mx {
+            // MX's own setup_companies
+            Self::g1822_mx_order_companies(&shuffled)
         } else {
         let by_prefix = |p: char| -> Vec<String> {
             shuffled.iter().filter(|s| s.starts_with(p)).cloned().collect()
@@ -1104,6 +1142,9 @@ impl BaseGame {
             opened_neighbors: Vec::new(),
             home_override: BTreeMap::new(),
             destination_override: BTreeMap::new(),
+            ndem_state: mx::NdemState::Open,
+            ndem_shares: 0,
+            owner_only: Vec::new(),
             round: RoundSt::new(RoundKind::Stock, 1, players, vec![Step::DiscardTrain, Step::BuySellParShares]),
         };
         self.g1822 = Some(Box::new(state));
@@ -1148,6 +1189,16 @@ impl BaseGame {
             }
         }
         self.gm().borders = borders;
+        if fam.variant == family::Variant::Mx {
+            // MX game_cert_limit: CERT_LIMIT_INCREASED under higher_cert_limit
+            if self.optional_rules.iter().any(|r| r == "higher_cert_limit") {
+                if let Some(l) = crate::title::g1822mx::cert_limit_increased(self.players.len() as u8) {
+                    self.cert_limit = l;
+                }
+            }
+            // setup_game_specific → setup_ndem
+            self.g1822_mx_setup_ndem();
+        }
         // init_round = the first stock round (1822PNW's starting packet:
         // the packets, then straight into an operating round).
         if self.g1822_is_pnw() && self.g1822_pnw_starting_packet() {
@@ -1345,6 +1396,13 @@ impl BaseGame {
         match r.steps[i] {
             Step::DiscardTrain => !self.g1822_crowded_corps().is_empty(),
             Step::PendingToken => !r.pending_tokens.is_empty(),
+            // 1822MX: active while the closing NdeM operates
+            Step::CashOutNdem => self.g1822_mx_cash_out_active(),
+            Step::AuctionNdemTokens => self.g1822_mx_auction_active(),
+            // MX Track#active? for the NdeM: super && (layers left || !acted)
+            Step::Track if self.g1822_is_mx() && self.g1822_operator().as_deref() == Some(mx::NDEM) => {
+                !r.passed[i] && (!r.ndem_layers.is_empty() || !r.acted[i])
+            }
             _ => !r.passed[i],
         }
     }
@@ -1357,7 +1415,7 @@ impl BaseGame {
             Step::SpecialToken => self.g1822_can_token_after_teleport(),
             // Engine::Step::Assign / SpecialChoose: never block
             Step::Assign => false,
-            Step::SpecialChoose if self.g1822_is_pnw() => false,
+            Step::SpecialChoose if self.g1822_is_pnw() || self.g1822_is_mx() => false,
             _ => true,
         }
     }
@@ -1612,7 +1670,7 @@ impl BaseGame {
             }
         }
         for co in &self.companies {
-            if !co.closed && co.owner == eid {
+            if !co.closed && co.owner == eid && !self.g().owner_only.contains(&co.sym) {
                 v += co.value;
             }
         }
@@ -1702,7 +1760,7 @@ impl BaseGame {
     /// hex's DSL, or (1822PNW's port tiles) a laid tile's own DSL.
     pub(crate) fn g1822_tiered_city_revenue(&self, hi: usize) -> Option<i32> {
         let hex = &self.hexes[hi];
-        if !self.g1822_is_pnw() || hex.tile.id.starts_with("preprinted_") {
+        if !(self.g1822_is_pnw() || self.g1822_is_mx()) || hex.tile.id.starts_with("preprinted_") {
             return data_tiered_city_revenue(self.fam(), &hex.id, &self.phase.tiles);
         }
         let base = hex.tile.name.split('-').next().unwrap_or(&hex.tile.name);

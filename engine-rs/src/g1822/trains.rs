@@ -110,9 +110,10 @@ impl BaseGame {
         out
     }
 
-    /// Ruby `train.buyable`: the company-issued 2P/LP/P+ are not.
+    /// Ruby `train.buyable`: the company-issued 2P/LP/P+ (and 1822MX's
+    /// 3/2P) are not.
     pub(crate) fn g1822_train_buyable(t: &Train) -> bool {
-        !(t.name == "2P" || t.name == "LP" || t.name == "P+" || t.name.ends_with('+'))
+        !(t.name == "2P" || t.name == "LP" || t.name == "P+" || t.name == "3/2P" || t.name.ends_with('+'))
     }
 
     /// A depot card's variants (name, price): the card's own list, but a
@@ -191,6 +192,10 @@ impl BaseGame {
 
     /// G1822 `must_buy_train?`: no non-extra trains and a depot train.
     pub(crate) fn g1822_must_buy_train(&self, c: &str) -> bool {
+        // MX must_buy_train?: never the NdeM
+        if self.g1822_mx_is_ndem(c) {
+            return false;
+        }
         let co = &self.corporations[self.ci(c)];
         co.trains.iter().all(|t| self.g1822_is_extra_train(&t.name)) && !self.g1822_depot_trains().is_empty()
     }
@@ -569,7 +574,10 @@ impl BaseGame {
             .position(|t| t.id == train_id)
             .ok_or_else(|| GameError::new(format!("{c} does not own {train_id}")))?;
         let mut t = self.corporations[ci].trains.remove(pos);
-        let removed = self.fam().extra_train_permanents.contains(&t.name.as_str()) || t.name == self.fam().extra_train_pullman;
+        // MX remove_discarded_train?: the NdeM's trains leave the game too
+        let removed = self.fam().extra_train_permanents.contains(&t.name.as_str())
+            || t.name == self.fam().extra_train_pullman
+            || self.g1822_mx_is_ndem(c);
         if !removed {
             // remove_variants! + reclaim_train → the discard pile.
             t.owner = EntityId::none();
@@ -688,6 +696,7 @@ impl BaseGame {
                     self.close_company(c);
                 }
             }
+            "close_ndem" => self.g1822_mx_event_close_ndem(),
             other => panic!("1822: unknown train event {other}"),
         }
     }

@@ -18,6 +18,10 @@ impl BaseGame {
     /// G1822 `purchasable_companies(entity)`: player-owned, open, not the
     /// entity's, acquirable by its class in this phase.
     pub(crate) fn g1822_purchasable_companies(&self, c: &str) -> Vec<String> {
+        // MX purchasable_companies: none for the NdeM
+        if self.g1822_mx_is_ndem(c) {
+            return Vec::new();
+        }
         let ctype = self.corporations[self.ci(c)].corp_type;
         let phase = self.phase_num();
         self.g()
@@ -67,6 +71,11 @@ impl BaseGame {
                 self.corporations[ci].trains.push(t);
             }
             self.close_company(company);
+        }
+        if f.variant == super::family::Variant::Mx {
+            // MX company_bought (P1-P6 flipped above)
+            self.g1822_mx_company_bought(company);
+            return;
         }
         if f.variant == super::family::Variant::Pnw {
             // PNW company_bought: only the cube company, P14 and P9 stop
@@ -124,6 +133,14 @@ impl BaseGame {
         if self.g1822_is_pnw() {
             // PNW company_choices: P21 (Credit Mobilier) only
             return if co == "P21" { self.g1822_pnw_p21_choices(time) } else { vec![] };
+        }
+        if self.g1822_is_mx() {
+            // MX company_choices: P7 (double cash) only
+            let owner = self.co_owner(co);
+            if co != "P7" || self.g().double_cash_choice.is_some() || !owner.is_player() || time != "choose" {
+                return vec![];
+            }
+            return vec!["double".to_string()];
         }
         let owner = self.co_owner(co);
         let f = self.fam();
@@ -570,8 +587,13 @@ impl BaseGame {
             }
             _ => {}
         }
+        // (Ruby's acquire_entity_minor leaves the proxy company alone: it
+        // left @companies at the float — except MX's M18, which stays the
+        // player's)
         let company = format!("M{m}");
-        self.delete_company(&company);
+        if !self.g().owner_only.contains(&company) {
+            self.delete_company(&company);
+        }
         self.g1822_close_corporation(m);
         Ok(())
     }

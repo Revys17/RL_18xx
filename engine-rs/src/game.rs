@@ -2581,6 +2581,10 @@ pub(crate) fn build_hex_from_def(title: &dyn GameTitle, def: &HexDef) -> Hex {
             // tiles on blue hexes.
             "blue" if title.is_g1822_family() => TileColor::White,
             "blue" => TileColor::Red,
+            // 1822MX's preprinted green hexes (N25, C16, E22); no other
+            // title has a preprinted green or brown hex
+            "green" if title.is_g1822_family() => TileColor::Green,
+            "brown" if title.is_g1822_family() => TileColor::Brown,
             _ => TileColor::White,
         };
         let tile_def = tiles::parse_preprinted_tile(def.coord, dsl, color);

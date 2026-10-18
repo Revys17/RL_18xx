@@ -365,6 +365,9 @@ pub(crate) enum RotRule {
     PnwBoomtown,
     /// 1822PNW P19 coal mine: some exit's neighbour is connected.
     PnwCoal,
+    /// 1822MX P17 / P18 port tiles: the exits of the blue hex's first path
+    /// (`hex.tile.paths[0].exits == tile.exits`).
+    MxPort,
 }
 
 impl BaseGame {
@@ -393,6 +396,12 @@ impl BaseGame {
         if self.g1822_is_pnw() {
             let base = to.name.split('-').next().unwrap_or(&to.name);
             if let Some(v) = self.g1822_pnw_upgrades_to(hi, base, selected) {
+                return v;
+            }
+        }
+        if self.g1822_is_mx() {
+            let base = to.name.split('-').next().unwrap_or(&to.name);
+            if let Some(v) = self.g1822_mx_upgrades_to(hi, base, selected) {
                 return v;
             }
         }
@@ -468,6 +477,11 @@ impl BaseGame {
     /// rights owners, or any surviving rights owner → legal; none → the
     /// stubs must be kept (legal_if_stubbed?).
     fn g1822_game_legal_rotation(&self, operator: &str, hi: usize, to: &TV) -> bool {
+        // MX legal_tile_rotation?: M22 must connect to Mexico City while
+        // nobody holds C2 / presides MC
+        if self.g1822_is_mx() && self.g1822_mx_must_connect_mc(hi) && !self.g1822_mx_connects_mc(to).unwrap_or(false) {
+            return false;
+        }
         let hex = &self.hexes[hi];
         if !hex.tile.id.starts_with("preprinted_") {
             return true;
@@ -527,14 +541,14 @@ impl BaseGame {
         connected: &[u8],
         neighbors: &HashMap<usize, BTreeMap<u8, usize>>,
     ) -> bool {
-        if self.g1822_is_pnw() && rule == RotRule::Normal {
+        if (self.g1822_is_pnw() || self.g1822_is_mx()) && rule == RotRule::Normal {
             let hex = &self.hexes[hi];
             let base = to_def.name.split('-').next().unwrap_or(&to_def.name);
             let cur = hex.tile.name.split('-').next().unwrap_or(&hex.tile.name);
             if !hex.tile.id.starts_with("preprinted_") && cur == base && hex.tile.rotation == rotation {
                 return true;
             }
-            if base == "BC" || Self::g1822_pnw_city_and_town_tile(&hex.id, base) {
+            if base == "BC" || (self.g1822_is_pnw() && Self::g1822_pnw_city_and_town_tile(&hex.id, base)) {
                 return true;
             }
         }
@@ -548,6 +562,14 @@ impl BaseGame {
                 return self.g1822_pnw_special_rotation(rule, operator, hi, &to.exits());
             }
             RotRule::LcdrChannel => return rotation == 0,
+            RotRule::MxPort => {
+                let first: Vec<u8> = from
+                    .paths
+                    .first()
+                    .map(|p| [&p.a, &p.b].iter().filter_map(|e| e.edge_num()).collect())
+                    .unwrap_or_default();
+                return first == to.exits();
+            }
             RotRule::RemoveTown => {
                 if !self.g1822_game_legal_rotation(operator, hi, &to) {
                     return false;

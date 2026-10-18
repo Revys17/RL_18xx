@@ -328,6 +328,10 @@ impl BaseGame {
             return vec![];
         }
         let Ent::Corp(c) = ent else { return vec![] };
+        // MX Track#actions: the NdeM lays only through its shareholders
+        if self.g1822_mx_is_ndem(c) && self.g1822_operator().as_deref() == Some(c.as_str()) && self.rnd().ndem_layers.is_empty() {
+            return vec![];
+        }
         if Some(c) != self.g1822_operator().as_ref() || !self.g1822_can_lay_tile(c) {
             return vec![];
         }
@@ -340,6 +344,24 @@ impl BaseGame {
                 let Ent::Corp(c) = ent else { return err("lay_tile by a non-corporation") };
                 let c = c.clone();
                 let pnw = self.g1822_is_pnw();
+                let mx = self.g1822_is_mx();
+                if mx && tile_id == "BC-0" {
+                    // MX Track#process_lay_tile: a builder cube uses the lay
+                    let lay = self.g1822_tile_lay(&c, false).map_or(false, |t| t.0);
+                    if !lay {
+                        return err("Cannot lay a builder cube now");
+                    }
+                    if !self.hex_idx.contains_key(hex_id.as_str()) {
+                        return err(format!("Unknown hex {hex_id}"));
+                    }
+                    self.g1822_pnw_place_cube(hex_id);
+                    self.rndm().num_laid_track += 1;
+                    self.rndm().laid_hexes.push(hex_id.clone());
+                    if !self.g1822_can_lay_tile(&c) {
+                        self.g1822_mx_track_pass_any(i, &c);
+                    }
+                    return Ok(());
+                }
                 if pnw {
                     if self.rnd().num_laid_portage > 0 {
                         return err("Cannot place a tile or cube now");
@@ -373,7 +395,15 @@ impl BaseGame {
                 self.g1822_lay_tile_action(&c, &c, &[], hex_id, tile_id, *rotation, false)?;
                 self.g1822_note_graph(&c);
                 if !self.g1822_can_lay_tile(&c) {
-                    self.rndm().passed[i] = true;
+                    if mx {
+                        self.g1822_mx_track_pass_any(i, &c);
+                    } else {
+                        self.rndm().passed[i] = true;
+                    }
+                }
+                if mx {
+                    // MX: the new tile carries no builder cubes
+                    self.g1822_pnw_drop_cubes(hex_id.as_str());
                 }
                 if pnw {
                     self.g1822_pnw_drop_cubes(hex_id.as_str());
@@ -388,7 +418,13 @@ impl BaseGame {
                 self.g1822_company_made_choice(co, choice, "track")
             }
             Action::Pass { .. } => {
-                self.rndm().passed[i] = true;
+                match ent {
+                    Ent::Corp(c) if self.g1822_is_mx() => {
+                        let c = c.clone();
+                        self.g1822_mx_track_pass_any(i, &c);
+                    }
+                    _ => self.rndm().passed[i] = true,
+                }
                 Ok(())
             }
             _ => err("Track cannot process this action"),
@@ -490,6 +526,8 @@ impl BaseGame {
             let f = self.fam();
             let rule = if Family::is(f.company_lcdr, entity) && hex_id == f.english_channel_hex {
                 RotRule::LcdrChannel
+            } else if is_company && self.g1822_is_mx() && Self::g1822_mx_port_company(entity) {
+                RotRule::MxPort
             } else if pnw && is_company && self.g1822_pnw_rot_rule(entity).is_some() {
                 self.g1822_pnw_rot_rule(entity).unwrap()
             } else if entities.iter().any(|e| self.g1822_must_remove_town(e)) {
@@ -646,6 +684,15 @@ impl BaseGame {
     /// G1822 `upgrade_cost`: the hex's terrain upgrades minus the
     /// operator's matching tile_discount abilities (exact terrain match).
     fn g1822_upgrade_cost(&self, hi: usize, operator: &str) -> i32 {
+        let base = self.g1822_upgrade_cost_g1822(hi, operator);
+        if self.g1822_is_mx() {
+            // MX upgrade_cost: the builder cubes on the hex
+            return base - self.g1822_mx_cube_discount(hi);
+        }
+        base
+    }
+
+    fn g1822_upgrade_cost_g1822(&self, hi: usize, operator: &str) -> i32 {
         let hex_id = &self.hexes[hi].id;
         let discounts: Vec<Ab> = self
             .companies_of(&EntityId::corporation(operator))
@@ -793,6 +840,14 @@ impl BaseGame {
                 self.gm().home_city.insert(c, (hex_id.clone(), *nc));
             }
         }
+        // 1822MX: the NdeM tokens up for auction follow their city
+        if let Some(a) = self.gm().round.ndem_auction.as_mut() {
+            for t in a.available.iter_mut().filter(|t| t.hex == hex_id) {
+                if let Some(Some(nc)) = map.get(t.city) {
+                    t.city = *nc;
+                }
+            }
+        }
         // reservations: new_city.reservations.concat(old's); old cleared.
         let mut new_res: Vec<Vec<Option<String>>> = vec![Vec::new(); n_new];
         for (oi, m) in map.iter().enumerate() {
@@ -875,6 +930,11 @@ impl BaseGame {
             Action::LayTile { hex_id, tile_id, rotation, .. } => {
                 if self.g1822_is_pnw() {
                     if let Some(r) = self.g1822_pnw_special_lay(&co, hex_id, tile_id, *rotation) {
+                        return r;
+                    }
+                }
+                if self.g1822_is_mx() {
+                    if let Some(r) = self.g1822_mx_special_cube(&co, hex_id, tile_id) {
                         return r;
                     }
                 }
@@ -969,6 +1029,10 @@ impl BaseGame {
                     } else {
                         self.rndm().special_track_company = None;
                     }
+                }
+                if self.g1822_is_mx() {
+                    // MX SpecialTrack#process_lay_tile after super
+                    self.g1822_pnw_drop_cubes(hex_id.as_str());
                 }
                 if self.g1822_is_pnw() {
                     // PNW SpecialTrack#process_lay_tile after super

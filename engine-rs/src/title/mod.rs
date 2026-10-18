@@ -1,4 +1,6 @@
 pub mod g1822;
+pub mod g1822mx;
+pub mod g1822mx_data;
 pub mod g1822pnw;
 pub mod g1822pnw_data;
 pub mod g1830;
@@ -557,13 +559,20 @@ impl GameTitle for G1830 {
 pub fn all_titles() -> &'static [&'static dyn GameTitle] {
     #[cfg(test)]
     {
-        static TITLES: [&'static dyn GameTitle; 5] =
-            [&G1830, &g1867::G1867, &g1822::G1822, &g1822pnw::G1822Pnw, &test_title::Test5Share];
+        static TITLES: [&'static dyn GameTitle; 6] = [
+            &G1830,
+            &g1867::G1867,
+            &g1822::G1822,
+            &g1822pnw::G1822Pnw,
+            &g1822mx::G1822Mx,
+            &test_title::Test5Share,
+        ];
         &TITLES
     }
     #[cfg(not(test))]
     {
-        static TITLES: [&'static dyn GameTitle; 4] = [&G1830, &g1867::G1867, &g1822::G1822, &g1822pnw::G1822Pnw];
+        static TITLES: [&'static dyn GameTitle; 5] =
+            [&G1830, &g1867::G1867, &g1822::G1822, &g1822pnw::G1822Pnw, &g1822mx::G1822Mx];
         &TITLES
     }
 }

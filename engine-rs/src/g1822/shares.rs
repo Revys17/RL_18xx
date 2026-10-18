@@ -166,6 +166,10 @@ impl BaseGame {
 
     /// SharePool#fit_in_bank?: pool percent + bundle ≤ 50.
     pub(crate) fn g1822_fit_in_bank(&self, b: &Bundle) -> bool {
+        // G1822MX::SharePool#fit_in_bank?: the NdeM always fits
+        if self.g1822_mx_is_ndem(&b.corp) {
+            return true;
+        }
         let c = &self.corporations[self.ci(&b.corp)];
         b.percent as u32 + c.percent_owned_by(&EntityId::market()) as u32
             <= self.title_def().market_pool_limit() as u32
@@ -369,6 +373,9 @@ impl BaseGame {
     /// Ruby `sell_shares_and_change_price` with SELL_MOVEMENT :down_share.
     pub(crate) fn g1822_sell_shares_and_change_price(&mut self, b: &Bundle) {
         let ci = self.ci(&b.corp);
+        if self.g1822_is_mx() {
+            return self.g1822_mx_sell_shares_and_change_price(b);
+        }
         if self.g1822_is_pnw() {
             // SELL_MOVEMENT :left_per_10_if_pres_else_left_one
             let owner = self.corporations[ci].shares[b.shares[0]].owner.clone();

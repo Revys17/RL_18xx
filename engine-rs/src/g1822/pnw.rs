@@ -343,8 +343,30 @@ impl BaseGame {
     /// tiles, plus the edges a lay on a blue/gray/red hex opened since).
     pub(crate) fn g1822_pnw_neighbors(&self) -> std::collections::HashMap<usize, std::collections::BTreeMap<u8, usize>> {
         use std::collections::{BTreeMap, HashMap};
-        static STATIC: std::sync::OnceLock<HashMap<usize, BTreeMap<u8, usize>>> = std::sync::OnceLock::new();
-        let base = STATIC.get_or_init(|| {
+        use std::sync::{Arc, Mutex, OnceLock};
+        type Nbrs = HashMap<usize, BTreeMap<u8, usize>>;
+        // one map per title (1822PNW and 1822MX share this code)
+        static STATIC: OnceLock<Mutex<HashMap<&'static str, Arc<Nbrs>>>> = OnceLock::new();
+        let key = self.title_def().name();
+        let cached = STATIC.get_or_init(Default::default).lock().ok().and_then(|m| m.get(key).cloned());
+        let base: Arc<Nbrs> = cached.unwrap_or_else(|| {
+            let built = Arc::new(self.g1822_static_neighbors());
+            if let Ok(mut m) = STATIC.get_or_init(Default::default).lock() {
+                m.insert(key, built.clone());
+            }
+            built
+        });
+        let mut m: Nbrs = (*base).clone();
+        for &(h, d, n) in &self.g().opened_neighbors {
+            m.entry(h).or_default().insert(d, n);
+        }
+        m
+    }
+
+    /// Ruby `connect_hexes` (once, at setup) over the preprinted map.
+    fn g1822_static_neighbors(&self) -> std::collections::HashMap<usize, std::collections::BTreeMap<u8, usize>> {
+        use std::collections::{BTreeMap, HashMap};
+        let base = {
             let f = self.fam();
             let exits_of = |coord: &str| -> (Vec<u8>, Vec<u8>, &'static str) {
                 let Some((dsl, color)) = (f.hex_dsl)(coord) else { return (vec![], vec![], "white") };
@@ -391,12 +413,8 @@ impl BaseGame {
                 out.insert(hi, m);
             }
             out
-        });
-        let mut m = base.clone();
-        for &(h, d, n) in &self.g().opened_neighbors {
-            m.entry(h).or_default().insert(d, n);
-        }
-        m
+        };
+        base
     }
 
     /// Tracker#lay_tile on an impassable-coloured old tile: the new tile's

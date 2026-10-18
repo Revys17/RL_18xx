@@ -353,7 +353,15 @@ impl Action {
                         price,
                     });
                 }
-                let company_sym = extract_string(dict, "company")?;
+                // 1822MX's NdeM token auction: a corporation (the NdeM)
+                // bids with no target; the company is "" then.
+                let company_sym = match extract_optional_string(dict, "company")? {
+                    Some(c) => c,
+                    None if extract_optional_string(dict, "entity_type")?.as_deref() == Some("corporation") => {
+                        String::new()
+                    }
+                    None => extract_string(dict, "company")?,
+                };
                 Ok(Action::Bid {
                     entity_id,
                     company_sym,
