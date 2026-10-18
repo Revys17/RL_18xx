@@ -725,7 +725,7 @@ def build_parser():
     )
 
     # advisor
-    from rl18xx.agent.advisor import DEFAULT_AUCTION_POLICY, DEFAULT_POLICY, DEFAULT_VALUE
+    from rl18xx.agent.advisor import DEFAULT_AUCTION_POLICY, DEFAULT_POLICY, DEFAULT_SEARCH_VALUE, DEFAULT_VALUE
 
     p = sub.add_parser(
         "advisor",
@@ -744,6 +744,10 @@ def build_parser():
         help="Policy checkpoint for the private auction (policy-gradient runs never trained on it)",
     )
     p.add_argument("--value", type=str, default=DEFAULT_VALUE, help="Value checkpoint for win estimates")
+    p.add_argument(
+        "--search-value", type=str, default=DEFAULT_SEARCH_VALUE,
+        help="Value checkpoint the 'think harder' search uses (gen4's critic searches better than value_v2)",
+    )
     p.add_argument("--device", type=str, default=None, help="cuda / cpu (default: cuda if available)")
     p.add_argument("--cpu-threads", type=int, default=4, help="Torch threads when on CPU (default: 4)")
     p.add_argument(

@@ -52,12 +52,12 @@ RECENT_MOVES = 5
 DEFAULT_READOUTS = 200
 MAX_READOUTS = 5000
 # Search settings, from 240-game head-to-heads with gen4 and its critic (2026-10-16/17):
-# value-driven PUCT (mean Q, unvisited moves at the parent's value, c_puct_init 0.15 in
-# every round), each distinct leaf backed up once, 8 leaves per batch, and priors at the
-# policy's training temperature. @200 it beat gen4's own policy 0.933 (2v2) and won 0.787
-# alone against three copies (1v3, even = 0.25); the old defaults @200 scored 0.229 against it.
+# value-driven PUCT (mean Q, unvisited moves at the parent's value, no first-play reduction),
+# each distinct leaf backed up once, 8 leaves per batch, and priors at the policy's training
+# temperature. With c_puct_init 0.15 @200 it beat gen4's own policy 0.933 (2v2) and won 0.787
+# alone against three copies (1v3, even = 0.25); 0.05 then beat 0.15 (0.600) and 0.02 (0.562).
 SEARCH_OVERRIDES = dict(
-    mcts_mean_q=True, fpu_reduction=0.0, c_puct_init=0.15, c_puct_by_round={}, dedupe_leaves=True, parallel_readouts=8
+    mcts_mean_q=True, fpu_reduction=0.0, c_puct_init=0.05, c_puct_by_round={}, dedupe_leaves=True, parallel_readouts=8
 )
 # A played move the policy gave less than this is "surprising"; at least
 # EXPECTED (or its top choice) "expected"; in between "plausible".
@@ -98,9 +98,11 @@ class AdvisorModels:
     # softmax(logits / learner_temperature)); the search's priors use it.
     policy_temperature: float = 1.0
     auction_policy_temperature: float = 1.0
+    # The search's leaf value (None: ``value``, which also gives the win estimates).
+    search_value: object = None
 
     @classmethod
-    def load(cls, policy, auction_policy, value, device) -> "AdvisorModels":
+    def load(cls, policy, auction_policy, value, device, search_value=None) -> "AdvisorModels":
         """Load the three checkpoints (a path given twice is loaded once)."""
         loaded: dict = {}
 
@@ -119,7 +121,9 @@ class AdvisorModels:
                 "policy": checkpoint_label(policy),
                 "auction_policy": checkpoint_label(auction_policy),
                 "value": checkpoint_label(value),
+                "search_value": checkpoint_label(search_value or value),
             },
+            search_value=get(search_value) if search_value else None,
             policy_temperature=training_temperature(policy),
             auction_policy_temperature=training_temperature(auction_policy),
         )
@@ -606,7 +610,7 @@ class Advisor:
                     self.models.policy_temperature,
                     self.models.auction_policy_temperature,
                 ),
-                self.models.value,
+                self.models.search_value or self.models.value,
             ),
             self._lock,
         )
