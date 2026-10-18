@@ -212,6 +212,86 @@ GPU the network sets the rate: at ~11-15k evaluations/s (a composite costs
 ~1.33 forwards) about 630-850 decisions/s at n_full 64 (~150-210 rows/s) and
 210-290 at n_full 200 (~55-70 rows/s); 16 workers already supply more.
 
+## Speed (2026-10-18, GPU shared with az1 -- relative numbers, back to back)
+
+az1_20261017 ran at ~770 games/h, ~13.1k network evaluations/s, its server
+spending 74% in the forward, 17% receiving requests. Four changes, each an
+option or proven to give the same results:
+
+**Where the forward goes** (`logs/perf/staged*.py`-style stage timing, CUDA
+events, gen4 + its critic in TF32 as served, requests recorded from the
+generator; GPU ms per batch):
+
+| stage | B = 64 | B = 256 | B = 600 | B = 668, maps deduped (262) |
+|---|---|---|---|---|
+| hex map transformer, 4 attention layers (policy / critic) | 0.7 / 0.7 | 5.4 / 5.3 | 21.0 / 20.8 | 6.5 / 5.6 |
+| hex input, structural bias, out-LN + pool (each net) | 0.1 | 0.3 | 1.0-3.5 | 0.4 |
+| economic-entity transformer (each) | 0.2-0.7 | 0.2 | 0.4 | 0.4 (+ launch lag) |
+| cross-modal fusion (each) | 0.1 | 0.2 | 0.4 | 0.4 |
+| FiLM blocks x6 (each) | 0.1 | 0.2 | 0.2 | 0.2 |
+| policy head: hex + tile / rotation grid / place token / rest | 0.2 | 0.5 | 0.5 / 0.5 / 0.4 / 0.2 | same |
+| price head, value + score heads, softmax | < 0.1 each | | 0.1 each | |
+| reply gather + device-to-host | 12 (sync on launches) | 6.5 | 4.4 | 4.0 |
+| total GPU | 15 (launch-bound) | 21 | 55 | 24 |
+
+The hex map transformer is ~77% of a 600-state forward. Inside it (kernel
+table): the attention core over 93 hexes with a per-state additive bias --
+fp32 batched matmuls (magma), the bias add, the scale, the softmax, layout
+copies -- is ~14 of 23 ms, memory-bound; the TF32 GEMMs ~4 ms. Small batches
+are launch-bound (~1,600 kernels per composite forward).
+
+1. **Packed server fast path** (default; `InferenceServer.fast_path`): lockstep
+   requests go to the model as stacked arrays (`packed_arrays` /
+   `packed_inputs` / `run_packed`, one set of device inputs for both networks)
+   instead of 600 per-state tuples stacked twice; numpy, not torch, on the CPU
+   (torch's thread pool cost 100x on the loaded machine: a 12 MB `torch.cat`
+   190 ms with 24 threads). Bit for bit the old replies (27k positions: max
+   |diff| 0). Server-only replay (`scripts/bench_inference_server.py`): 1.1-1.5x.
+2. **Each distinct hex map once** (`--dedupe-maps`): the map encoder's only input
+   is the map, and a request's leaves mostly share their trees' maps (6% distinct
+   in SR1 / auction requests, 39% in SR2-6 + ORs, ~21-35% in generation).
+   Rust dedupes while encoding (`map_index`), the server runs the map encoder on
+   the distinct maps and gathers. GPU per batch 81 -> 27 ms (mid-game), 62 -> 6
+   (early); outputs within 3e-4 of the plain batch's (TF32's own noise vs fp32:
+   1e-2), every argmax equal; bit for bit on the mid-game capture.
+3. **Server replicas** (`--server-replicas N`): a collector thread that receives
+   the next batch during the forward measured *slower* (GIL contention: 20.4k vs
+   24.2k states/s), so the overlap is between processes: N servers, each with its
+   workers' requests. fast + dedupe: 24.2k -> 39.4k states/s with 2, 3 a further
+   1.26x (server-only replay, 8 clients).
+4. **Tree reuse** (`--reuse-tree total`): each game keeps its tree, advanced along
+   every move played (`advance_root_to` with the played price, `root_log_matches`
+   to confirm the position), and a search stops at 1 + n root visits counting the
+   inherited ones (KataGo's maxVisits; `additional` = eval_head_to_head's count,
+   n more on top). gen4, az1 settings: 98.9% of searches start on a kept subtree,
+   86.7% of their final root visits inherited, evaluations per decision 90.5 ->
+   21.2; every decision still sees >= 1 + n root visits (148 on average vs 89).
+   A Gumbel root's sequential halving still spends its n (inherited visits count
+   for q). Worker RSS 1.35 -> 1.8 GB (a tree node is ~124 KB, mostly its game
+   clone); `additional` trees grow ~4.5x (capped by `--reuse-max-root-visits`).
+
+**Generation end to end** (`scripts/bench_search_generation.py`, 10 workers x 32
+games, 150 s each, the same hour):
+
+| config | decisions/s | evaluations/s | evaluations / decision | searched rows/h |
+|---|---|---|---|---|
+| before (unpacked server) | 68.4 | 6,255 | 91.4 | 63k |
+| packed fast path | 71.9 | 6,519 | 90.6 | 66k |
+| + dedupe + 2 replicas | 112.7 | 10,054 | 89.2 | 100k |
+| + reuse total (1 replica, no dedupe) | 254.9 | 5,026 | 19.7 | 228k |
+| all: dedupe + reuse total + 2 replicas | 492.5 | 11,027 | 22.4 | 443k |
+
+Not done: `torch.compile` of the trunk (dynamic shapes) cut its GPU time ~17%
+and launches ~30%, with TF32-sized differences (6.9e-3 on trunk features) and a
+recompile on every reload (a new model object); CUDA graphs need bucketed batch,
+map and tile-lay-row counts. SDPA / `baddbmm` attention variants: within +-10%
+at the deduped sizes. Next exact step: cache map encodings across rounds (a
+tree's root map recurs in every round of its search; per-worker map ids, a
+server-side cache dropped on reload). Changes to the network (retraining,
+strength to re-check): one map encoder for policy and critic (~-45% forward), a
+lighter critic, a smaller or local-attention map encoder, bf16 for the trunk
+only (the policy head stays fp32; prove no argmax moves first).
+
 ## Open questions (decided by the verification results)
 
 - The search budget n and `p_full`; how low `c_puct_init` should go (0.15
@@ -220,3 +300,39 @@ GPU the network sets the rate: at ~11-15k evaluations/s (a composite costs
   its mistakes more readily at low exploration).
 - Placement vs win reward for the value targets (the policy-gradient A/B
   favored placement).
+
+## What the pilots and az1 taught us, and az2 (agreed with the user 2026-10-18)
+
+**Pilots (2026-10-17, 100 updates each, the critic frozen or trained on mostly-policy games):**
+every one made the policy worse when it plays alone (pruned visits: 0.481 / 0.475 / 0.278 at
+updates 20 / 50 / 100, policy-only 2v2 vs gen4@0.5; one-hot targets 0.395 at 20; gen4 at T=1
+0.407; checkpoint 10 flat). At the positions where a pilot's top move changed, the new move was
+no better than the old one in policy-only rollouts (-0.019 / -0.009 / +0.001 +- 0.016), while
+the search's own changes win +0.09..+0.17: the policy did not absorb the search's improvements,
+it got flatter. Missing: the critic learning from search-played games (75% of the pilots' moves
+were raw-policy moves), and gen4 is sharper than the search's visits (86-95% top-move agreement).
+
+**az1 (the full loop: every move searched, the critic trained on the outcomes):** stable where
+the pilots weren't (KL to gen4 at its 0.02 limit, entropy ~0.15, top-move agreement 0.87 ->
+0.92), even with gen4 at updates 25 / 50 (system @64 0.487 / 0.504, policy-only 0.497), its
+critic slowly better on held-out search games (win CE 0.909 -> 0.892 by update 50, mid and late
+game). Limited by throughput (~600-770 games/h) and by one outcome per 700-decision game.
+
+**az2, in order (each an option, judged against az1 by system strength per GPU-hour):**
+1. One shared network: policy + value heads on one trunk (AlphaZero / KataGo / MuZero), about
+   1.33x throughput (no separate critic forward). gen4's own value head was never trained during
+   policy gradient: fit it to the critic's predictions and to outcomes first, then switch.
+2. Better value targets: n-step bootstrapped / lambda-return targets from the search's root
+   values later in the game (MuZero; KataGo's short-term value heads) instead of only the final
+   outcome; the score / net-worth head blended into the search's utility (KataGo; tested at play
+   time first: `#blend=<w>`); more auxiliary targets (each player's final net worth, cash,
+   floated corporations); every searched position per game for the value (not 32: rows are used
+   once, so AlphaGo's one-position-per-game anti-memorization doesn't apply).
+3. Policy surprise weighting (KataGo): oversample rows where the search target disagrees with
+   the policy -- the 8-14% that carry the signal.
+4. Gumbel root + completed-Q targets at small budgets (16-64 readouts) if learning per GPU-hour
+   holds up -- the route to thousands of games per hour.
+5. Reanalyze (MuZero): re-search replay-buffer positions with the latest network for fresh
+   targets without new games, if game generation still dominates the cost.
+Not taken from MuZero: the learned dynamics model (we have the exact engine). Pure performance
+work first (tree reuse in the lockstep generator, compiled forward, server pipelining).

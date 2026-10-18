@@ -61,6 +61,66 @@ class ServerState(str, Enum):
     SHUTDOWN = "SHUTDOWN"
 
 
+class LegalIndices:
+    """Per-state legal action indices stored flat: ``flat`` (int32, every state's
+    indices back to back) and ``lengths`` (int64, per state). A sequence of the
+    per-state arrays (views), so it stands in for the list of arrays; code that
+    knows it reads the flat arrays (one pickle each instead of one per state,
+    no re-concatenation on the server)."""
+
+    __slots__ = ("flat", "lengths", "_offsets")
+
+    def __init__(self, flat: np.ndarray, lengths: np.ndarray):
+        self.flat = np.ascontiguousarray(flat, dtype=np.int32)
+        self.lengths = np.ascontiguousarray(lengths, dtype=np.int64)
+        self._offsets = None
+
+    @classmethod
+    def of(cls, legal) -> "LegalIndices":
+        """``legal`` as a :class:`LegalIndices` (a list of arrays is concatenated)."""
+        if isinstance(legal, LegalIndices):
+            return legal
+        lengths = np.fromiter((len(ix) for ix in legal), dtype=np.int64, count=len(legal))
+        flat = np.concatenate([np.asarray(ix, dtype=np.int32) for ix in legal]) if len(legal) else np.zeros(0, np.int32)
+        return cls(flat, lengths)
+
+    @classmethod
+    def concat(cls, parts: list) -> "LegalIndices":
+        parts = [cls.of(p) for p in parts]
+        if len(parts) == 1:
+            return parts[0]
+        return cls(np.concatenate([p.flat for p in parts]), np.concatenate([p.lengths for p in parts]))
+
+    def _offs(self) -> np.ndarray:
+        if self._offsets is None:
+            self._offsets = np.concatenate([[0], np.cumsum(self.lengths)])
+        return self._offsets
+
+    def __len__(self) -> int:
+        return len(self.lengths)
+
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return [self[j] for j in range(*i.indices(len(self)))]
+        offs = self._offs()
+        return self.flat[offs[i]:offs[i + 1]]
+
+    def __iter__(self):
+        offs = self._offs()
+        return (self.flat[offs[i]:offs[i + 1]] for i in range(len(self.lengths)))
+
+    def row_ids(self) -> np.ndarray:
+        """Each flat entry's state."""
+        return np.repeat(np.arange(len(self.lengths), dtype=np.int64), self.lengths)
+
+    def __getstate__(self):
+        return (self.flat, self.lengths)
+
+    def __setstate__(self, state):
+        self.flat, self.lengths = state
+        self._offsets = None
+
+
 @dataclass
 class PackedStates:
     """A batch of encoded states as two stacked numpy arrays + small extras.
@@ -80,9 +140,39 @@ class PackedStates:
     # floats per leaf instead of a 26,537-wide vector, which made reply
     # serialization the server's bottleneck (~0.5 GB/s at 9k leaves/s).
     legal_indices: Optional[list] = None
+    # Optional (n,) int64: ``node_features`` then holds each distinct hex map
+    # once (m rows) and state i's map is row ``map_index[i]`` -- a lockstep
+    # request's leaves mostly share their trees' maps, and the node features
+    # are ~92% of a state's bytes (``engine_rs.mcts_collect_leaves(...,
+    # dedupe_maps=True)``). The server's map encoder then runs once per map.
+    map_index: Optional[np.ndarray] = None
 
     def __len__(self) -> int:
         return len(self.extras)
+
+    def __getstate__(self):
+        # Pickled compactly (the request queue's cost is per object): the legal
+        # indices as two flat arrays, the extras as one int64 array (rows iterate
+        # as they did, as numpy ints).
+        state = dict(self.__dict__)
+        try:
+            if state.get("legal_indices") is not None:
+                state["legal_indices"] = LegalIndices.of(state["legal_indices"])
+            extras = state.get("extras")
+            if isinstance(extras, list) and extras and all(len(e) == len(extras[0]) for e in extras):
+                state["extras"] = np.asarray(extras, dtype=np.int64)
+        except (TypeError, ValueError):  # not plain integers: pickled as they are
+            state = dict(self.__dict__)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
+    def dense_node_features(self) -> np.ndarray:
+        """``node_features`` with one row per state."""
+        if self.map_index is None:
+            return self.node_features
+        return self.node_features[self.map_index]
 
     @classmethod
     def pack(cls, encoded_states: list) -> Optional["PackedStates"]:
@@ -102,7 +192,7 @@ class PackedStates:
     def unpack(self) -> list:
         """Encoded tuples ``(gs (1, D), nf, None, None, *extras)`` as tensor views."""
         game_states = torch.from_numpy(self.game_states)
-        node_features = torch.from_numpy(self.node_features)
+        node_features = torch.from_numpy(self.dense_node_features())
         return [
             (game_states[i:i + 1], node_features[i], None, None, *extra)
             for i, extra in enumerate(self.extras)
@@ -230,6 +320,42 @@ def _accepts_legal_indices(model) -> bool:
     return "legal_indices" in params or any(p.kind == p.VAR_KEYWORD for p in params.values())
 
 
+def _supports_packed(model) -> bool:
+    """Whether ``model`` has the stacked-input fast path (``run_packed``; the
+    transformer and policy+value composites of transformers do)."""
+    return hasattr(model, "run_packed") and bool(getattr(model, "supports_packed", True))
+
+
+def _packed_parts(packs: list) -> Optional[list]:
+    """``packed_inputs`` parts for a batch of ``PackedStates``, or None if one
+    lacks the per-state player count (legacy 7-tuple encodings)."""
+    parts = []
+    for p in packs:
+        try:
+            extras = np.asarray(p.extras, dtype=np.int64)
+        except (TypeError, ValueError):  # ragged or not integers
+            return None
+        if extras.ndim != 2 or extras.shape[1] < 4:
+            return None
+        parts.append((p.game_states, p.node_features, extras, p.map_index))
+    return parts
+
+
+def run_packed_states(model, packs: list) -> tuple:
+    """``model.run_many_encoded`` over the states of ``packs`` (``PackedStates``
+    with legal indices) through the stacked-input fast path when the model has
+    one (else unpacked): ``(probs, log_probs, values)``."""
+    parts = _packed_parts(packs) if _supports_packed(model) else None
+    if parts is not None:
+        legal = LegalIndices.concat([p.legal_indices for p in packs])
+        return model.run_packed(model.packed_inputs(parts), legal_indices=legal)
+    legal = [ix for p in packs for ix in p.legal_indices]
+    states = [s for p in packs for s in p.unpack()]
+    if _accepts_legal_indices(model):
+        return model.run_many_encoded(states, legal_indices=legal)
+    return model.run_many_encoded(states)
+
+
 def _batched_legal_replies(batch: list, spans: list, probs: Any, values: Any, price: Optional[dict]) -> list:
     """Replies for a batch whose requests all carry legal indices: the legal priors,
     values and price logits of the whole batch move to the CPU in one transfer each
@@ -239,10 +365,10 @@ def _batched_legal_replies(batch: list, spans: list, probs: Any, values: Any, pr
         probs = torch.stack([torch.as_tensor(r) for r in probs])
     if not isinstance(values, torch.Tensor):
         values = torch.stack([torch.as_tensor(r) for r in values])
-    legal = [ix for req in batch for ix in req.encoded_states.legal_indices]
-    lengths = np.array([len(ix) for ix in legal], dtype=np.int64)
-    row_ids = torch.repeat_interleave(torch.arange(len(legal), device=probs.device), torch.from_numpy(lengths).to(probs.device))
-    col_ids = torch.from_numpy(np.concatenate([np.asarray(ix, dtype=np.int64) for ix in legal])).to(probs.device)
+    legal = LegalIndices.concat([req.encoded_states.legal_indices for req in batch])
+    lengths = legal.lengths
+    row_ids = torch.from_numpy(legal.row_ids()).to(probs.device)
+    col_ids = torch.from_numpy(legal.flat.astype(np.int64)).to(probs.device)
     priors = probs[row_ids, col_ids].float().cpu().numpy()
     values_np = values.detach().to(torch.float32).cpu().numpy()
     logits = price.get("price_logits") if price is not None else None
@@ -326,6 +452,8 @@ class InferenceServer:
         autocast_device: Optional[str] = None,
         idle_poll_ms: float = 1.0,
         control_reply_q: Optional[Any] = None,
+        fast_path: bool = True,
+        pipeline: bool = False,
     ):
         self.request_q = request_q
         self.reply_qs = reply_qs
@@ -337,6 +465,12 @@ class InferenceServer:
         self.batch_timeout_ms = batch_timeout_ms
         self.autocast_device = autocast_device
         self.idle_poll_ms = idle_poll_ms
+        # Stacked requests (lockstep searches, policy play) go to the model as
+        # arrays (``_run_forward_packed``); False: through per-state tuples.
+        self.fast_path = fast_path
+        # A collector thread receives and stacks the next batch while the
+        # current one runs (``_PipelinedCollector``).
+        self.pipeline = pipeline
 
         self.state = ServerState.STARTING
         self._model = None
@@ -465,7 +599,31 @@ class InferenceServer:
             size += self._request_size(req)
         return batch
 
-    def _run_forward(self, batch: list[InferenceRequest]) -> list[InferenceReply]:
+    def _prepare(self, batch: list) -> Optional[dict]:
+        """The model-independent CPU work of the fast path for ``batch`` (its
+        stacked numpy inputs and legal indices), or None if the batch takes the
+        unpacked path. The pipeline's collector thread runs it."""
+        if not self.fast_path:
+            return None
+        packs = [req.encoded_states for req in batch]
+        if not all(isinstance(p, PackedStates) and p.legal_indices is not None for p in packs):
+            return None
+        parts = _packed_parts(packs)
+        if parts is None:
+            return None
+        from rl18xx.agent.alphazero.model_transformer import MAX_PLAYERS, packed_arrays
+
+        return {
+            "parts": parts,
+            "arrays": packed_arrays(parts, MAX_PLAYERS),
+            "legal": LegalIndices.concat([p.legal_indices for p in packs]),
+        }
+
+    def _run_forward(self, batch: list[InferenceRequest], prepared: Optional[dict] = None) -> list[InferenceReply]:
+        if self.fast_path and _supports_packed(self._model):
+            prepared = prepared if prepared is not None else self._prepare(batch)
+            if prepared is not None:
+                return self._run_forward_packed(batch, prepared)
         tu = time.monotonic()
         encoded_states: list = []
         spans: list[tuple[int, int]] = []
@@ -548,6 +706,39 @@ class InferenceServer:
             _PROFILE.add("replies", time.monotonic() - tr)
         return replies
 
+    def _autocast(self):
+        return torch.amp.autocast(self.autocast_device) if self.autocast_device else _NullCtx()
+
+    def _run_forward_packed(self, batch: list, prepared: dict) -> list:
+        """``_run_forward`` for requests that are all ``PackedStates`` with legal
+        indices, on a model with ``run_packed``: the requests' stacked arrays go to
+        the device as they are (no per-state tuples, one set of inputs for both
+        networks of a composite). Same inputs, same forward: the replies are the
+        unpacked path's (bit for bit without map indices, ``test_inference_fast_path``)."""
+        tu = time.monotonic()
+        spans, start = [], 0
+        for req in batch:
+            spans.append((start, len(req.encoded_states)))
+            start += len(req.encoded_states)
+        legal = prepared["legal"]
+        with torch.no_grad(), self._autocast():
+            try:
+                inputs = self._model.packed_inputs(prepared["arrays"])
+            except ValueError:  # laid out for another player count than the model's
+                inputs = self._model.packed_inputs(prepared["parts"])
+            tf = time.monotonic()
+            probs, _, values = self._model.run_packed(inputs, legal_indices=legal)
+        if _PROFILE:
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            _PROFILE.add("unpack", tf - tu)
+            _PROFILE.add("forward", time.monotonic() - tf)
+        tr = time.monotonic()
+        replies = _batched_legal_replies(batch, spans, probs, values, getattr(self._model, "last_price_components", None))
+        if _PROFILE:
+            _PROFILE.add("replies", time.monotonic() - tr)
+        return replies
+
     def _dispatch_replies(self, batch: list[InferenceRequest], replies: list[InferenceReply]):
         for req, reply in zip(batch, replies):
             try:
@@ -581,48 +772,72 @@ class InferenceServer:
                 raise
             self.state = ServerState.IDLE
 
-        while self.state != ServerState.SHUTDOWN:
-            # 1. Drain control queue (non-blocking).
-            self._poll_control()
-            if self.state == ServerState.SHUTDOWN:
-                break
+        collector = _BatchCollector(self) if self.pipeline else None
+        try:
+            while self.state != ServerState.SHUTDOWN:
+                # 1. Drain control queue (non-blocking).
+                self._poll_control()
+                if self.state == ServerState.SHUTDOWN:
+                    break
 
-            # 2. If draining, finish whatever's in the request queue then unload.
-            if self.state == ServerState.DRAINING:
-                if not self._drain_in_flight():
-                    self._unload_model()
-                    self.state = ServerState.IDLE
-                    LOGGER.info("InferenceServer: IDLE")
-                continue
+                # 2. If draining, finish whatever's in the request queue then unload.
+                if self.state == ServerState.DRAINING:
+                    if collector is not None:
+                        collector.pause_and_flush(self._serve)  # what it took first, then the queue here
+                    if not self._drain_in_flight():
+                        self._unload_model()
+                        self.state = ServerState.IDLE
+                        LOGGER.info("InferenceServer: IDLE")
+                    continue
 
-            # 3. Idle / reloading — wait for control.
-            if self.state in (ServerState.IDLE, ServerState.RELOADING, ServerState.STARTING):
-                time.sleep(self.idle_poll_ms / 1000.0)
-                continue
+                # 3. Idle / reloading — wait for control.
+                if self.state in (ServerState.IDLE, ServerState.RELOADING, ServerState.STARTING):
+                    time.sleep(self.idle_poll_ms / 1000.0)
+                    continue
 
-            # 4. ACCEPTING: drain a batch + forward + reply.
-            tc = time.monotonic()
-            batch = self._collect_batch()
-            if not batch:
-                if _PROFILE:
-                    _PROFILE.add("idle", time.monotonic() - tc)
-                continue
-            t0 = time.monotonic()
-            replies = self._run_forward(batch)
-            elapsed_ms = (time.monotonic() - t0) * 1000.0
-            td = time.monotonic()
-            self._dispatch_replies(batch, replies)
-            if _PROFILE:
-                _PROFILE.add("collect", t0 - tc)
-                _PROFILE.add("dispatch", time.monotonic() - td)
-                _PROFILE.batch(sum(self._request_size(req) for req in batch))
-            leaves = sum(self._request_size(req) for req in batch)
-            self.stats.batches_served += 1
-            self.stats.requests_served += leaves
-            self.stats.total_batch_size += leaves
-            self.stats.total_forward_ms += elapsed_ms
+                # 4. ACCEPTING: drain a batch + forward + reply.
+                tc = time.monotonic()
+                if collector is not None:
+                    # The collector thread received (and stacked) this batch while the
+                    # previous one ran.
+                    collector.resume()
+                    item = collector.get(self.idle_poll_ms / 1000.0)
+                    if item is None:
+                        if _PROFILE:
+                            _PROFILE.add("idle", time.monotonic() - tc)
+                        continue
+                    batch, prepared = item
+                    self._serve(batch, prepared, tc)
+                    continue
+                batch = self._collect_batch()
+                if not batch:
+                    if _PROFILE:
+                        _PROFILE.add("idle", time.monotonic() - tc)
+                    continue
+                self._serve(batch, None, tc)
+        finally:
+            if collector is not None:
+                collector.stop()
 
         LOGGER.info("InferenceServer.run: exited cleanly")
+
+    def _serve(self, batch: list, prepared: Optional[dict] = None, collected_at: Optional[float] = None):
+        """Forward ``batch`` and send its replies."""
+        t0 = time.monotonic()
+        replies = self._run_forward(batch, prepared)
+        elapsed_ms = (time.monotonic() - t0) * 1000.0
+        td = time.monotonic()
+        self._dispatch_replies(batch, replies)
+        leaves = sum(self._request_size(req) for req in batch)
+        if _PROFILE:
+            if collected_at is not None:
+                _PROFILE.add("collect", t0 - collected_at)
+            _PROFILE.add("dispatch", time.monotonic() - td)
+            _PROFILE.batch(leaves)
+        self.stats.batches_served += 1
+        self.stats.requests_served += leaves
+        self.stats.total_batch_size += leaves
+        self.stats.total_forward_ms += elapsed_ms
 
     def _poll_control(self):
         while True:
@@ -646,11 +861,109 @@ class InferenceServer:
         return True
 
 
+class _BatchCollector:
+    """``InferenceServer(pipeline=True)``: a thread that receives the next batch
+    (``_collect_batch``: the queue reads and unpickling) and stacks its inputs
+    (``_prepare``: numpy, no model) while the server thread runs the current
+    batch's forward pass and replies. Batches are served in the order they were
+    collected, by the same code, so the replies are those of the unpipelined
+    server; only when the work happens changes. One batch is held ready at a time
+    (``depth``), so requests wait in the queue -- not in the server -- and a
+    batch never waits behind more than one other.
+
+    Control stays on the server thread: a pause (DRAINING) stops the collector,
+    serves what it took, and drains the queue the usual way; it resumes once the
+    server accepts again. The collector never touches the model, so a reload
+    can happen while it collects (the batch it holds is served by the new
+    model, as a request queued during a reload is without the pipeline)."""
+
+    def __init__(self, server: "InferenceServer", depth: int = 1):
+        import threading
+
+        self.server = server
+        self.ready: queue.Queue = queue.Queue(maxsize=depth)
+        self._pause = threading.Event()
+        self._idle = threading.Event()
+        self._stop = threading.Event()
+        self._idle.set()
+        self.error: Optional[BaseException] = None
+        self.thread = threading.Thread(target=self._loop, daemon=True, name="InferenceCollector")
+        self.thread.start()
+
+    def _loop(self):
+        poll = self.server.idle_poll_ms / 1000.0
+        try:
+            while not self._stop.is_set():
+                if self._pause.is_set():
+                    self._idle.set()
+                    time.sleep(poll)
+                    continue
+                self._idle.clear()
+                if self._pause.is_set():
+                    continue
+                t0 = time.monotonic()
+                batch = self.server._collect_batch()
+                if not batch:
+                    continue
+                t1 = time.monotonic()
+                prepared = self.server._prepare(batch)
+                if _PROFILE:
+                    _PROFILE.add("bg_collect", t1 - t0)
+                    _PROFILE.add("bg_prepare", time.monotonic() - t1)
+                while not self._stop.is_set():
+                    try:
+                        self.ready.put((batch, prepared), timeout=0.05)
+                        break
+                    except queue.Full:
+                        continue
+        except BaseException as e:  # surfaced on the server thread by get()
+            self.error = e
+            self._idle.set()
+            raise
+
+    def _check(self):
+        if self.error is not None:
+            raise RuntimeError("inference server: the batch collector thread failed") from self.error
+
+    def get(self, timeout: float):
+        """The next collected ``(batch, prepared)``, or None after ``timeout``."""
+        self._check()
+        try:
+            return self.ready.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def resume(self):
+        self._pause.clear()
+
+    def pause_and_flush(self, serve):
+        """Stop collecting and ``serve(batch, prepared)`` every batch already taken."""
+        self._pause.set()
+        while True:
+            self._check()
+            try:
+                batch, prepared = self.ready.get_nowait()
+            except queue.Empty:
+                if self._idle.is_set() and self.ready.empty():
+                    return
+                time.sleep(0.0005)
+                continue
+            serve(batch, prepared)
+
+    def stop(self):
+        self._stop.set()
+        self.thread.join(timeout=5.0)
+
+
 class _StageProfile:
     """``RL18XX_SERVER_PROFILE=<seconds>``: every that many seconds a server logs how
     its time split between waiting for requests (idle), collecting a batch (incl.
     unpickling), unpacking states, the forward pass (synchronized), building
-    replies and dispatching them."""
+    replies and dispatching them. With ``pipeline``, "collect" is the server
+    thread's wait for the collector's next batch and ``bg_collect`` /
+    ``bg_prepare`` the collector thread's own time (overlapping the rest)."""
+
+    STAGES = ("idle", "collect", "unpack", "forward", "replies", "dispatch")
 
     def __init__(self, every_s: float):
         import os
@@ -659,19 +972,19 @@ class _StageProfile:
         self.reset()
 
     def reset(self):
-        self.t = {k: 0.0 for k in ("idle", "collect", "unpack", "forward", "replies", "dispatch")}
+        self.t = {k: 0.0 for k in self.STAGES}
         self.batches = self.leaves = 0
         self.start = time.monotonic()
 
     def add(self, stage: str, seconds: float):
-        self.t[stage] += seconds
+        self.t[stage] = self.t.get(stage, 0.0) + seconds
 
     def batch(self, leaves: int):
         self.batches += 1
         self.leaves += leaves
         wall = time.monotonic() - self.start
         if wall >= self.every_s:
-            parts = "  ".join(f"{k} {100 * v / wall:4.1f}%" for k, v in self.t.items())
+            parts = "  ".join(f"{k} {100 * v / wall:4.1f}%" for k, v in list(self.t.items()))
             print(
                 f"[server {self.pid}] {wall:.0f}s: {self.batches} batches, {self.leaves / max(1, self.batches):.1f} "
                 f"states/batch, {self.leaves / wall:.0f} states/s | {parts}",
@@ -734,6 +1047,10 @@ class InferenceClient:
         worker_id: int,
         client_config: Optional[InferenceClientConfig] = None,
     ):
+        if isinstance(request_q, (list, tuple)):
+            # A replicated server (``start_inference_server(replicas=R)``): each
+            # worker sends to one replica, all of which can answer every worker.
+            request_q = request_q[worker_id % len(request_q)]
         self.request_q = request_q
         self.reply_q = reply_q
         self.worker_id = worker_id
@@ -957,6 +1274,81 @@ class ServerHandle:
                     self.process.terminate()
 
 
+class _ReplicaProcesses:
+    """The replicas' processes as one: alive while all are; the exit code of the
+    first that died (what ``wait_checking_servers`` and the evals read)."""
+
+    def __init__(self, processes: list):
+        self.processes = processes
+
+    def is_alive(self) -> bool:
+        return all(p.is_alive() for p in self.processes)
+
+    @property
+    def exitcode(self):
+        return next((p.exitcode for p in self.processes if not p.is_alive()), None)
+
+    def join(self, timeout: Optional[float] = None):
+        for p in self.processes:
+            p.join(timeout)
+
+    def terminate(self):
+        for p in self.processes:
+            p.terminate()
+
+
+class ReplicatedServerHandle:
+    """``ServerHandle`` for ``start_inference_server(replicas=R)``: R server
+    processes on one model, with one ticket queue and one reply queue per worker
+    shared by all of them, and a request queue each -- ``request_q`` is their
+    list, from which an ``InferenceClient`` takes its worker's (``worker_id %
+    R``). Control ops go to every replica. Each replica batches its own workers'
+    requests; while one runs its forward pass the others receive, unpickle and
+    reply, which a single server process does in series."""
+
+    def __init__(self, replicas: list):
+        self.replicas = replicas
+        self.request_q = [h.request_q for h in replicas]
+        self.reply_qs = replicas[0].reply_qs
+        self.ticket_q = replicas[0].ticket_q
+        self.num_workers = replicas[0].num_workers
+        self.ctx = replicas[0].ctx
+        self.process = _ReplicaProcesses([h.process for h in replicas])
+
+    def reset_worker_slots(self) -> None:
+        self.replicas[0].reset_worker_slots()  # the ticket and reply queues are shared
+
+    def pause(self, timeout_s: float = 30.0):
+        return self._all("pause", timeout_s)
+
+    def reload(self, checkpoint_path: Optional[str], timeout_s: float = 60.0):
+        replies = [h.reload(checkpoint_path, timeout_s=timeout_s) for h in self.replicas]
+        bad = [r for r in replies if not (isinstance(r, dict) and r.get("ok"))]
+        return bad[0] if bad else {"ok": True}
+
+    def _all(self, op: str, timeout_s: float):
+        replies = [getattr(h, op)(timeout_s=timeout_s) for h in self.replicas]
+        bad = [r for r in replies if not (isinstance(r, dict) and r.get("ok"))]
+        return bad[0] if bad else {"ok": True}
+
+    def health(self, timeout_s: float = 5.0) -> HealthReport:
+        reports = [h.health(timeout_s=timeout_s) for h in self.replicas]
+        batches = sum(r.batches_served for r in reports)
+        states = {r.state for r in reports}
+        return HealthReport(
+            state=reports[0].state if len(states) == 1 else "MIXED:" + ",".join(sorted(states)),
+            batches_served=batches,
+            requests_served=sum(r.requests_served for r in reports),
+            avg_batch_size=sum(r.avg_batch_size * r.batches_served for r in reports) / max(batches, 1),
+            avg_forward_ms=sum(r.avg_forward_ms * r.batches_served for r in reports) / max(batches, 1),
+            queue_depth_approx=sum(max(r.queue_depth_approx, 0) for r in reports),
+        )
+
+    def shutdown(self, timeout_s: float = 30.0):
+        for h in self.replicas:
+            h.shutdown(timeout_s=timeout_s)
+
+
 def wait_checking_servers(futures, handles: dict, executor, timeout: float = 30.0):
     """``concurrent.futures.wait(futures, timeout, FIRST_COMPLETED)`` that fails if a server died.
 
@@ -990,6 +1382,8 @@ def _server_main(
     batch_timeout_ms: float,
     autocast_device: Optional[str],
     control_reply_q: Any = None,
+    fast_path: bool = True,
+    pipeline: bool = False,
 ):
     """Entry point for the inference server child process."""
     server = InferenceServer(
@@ -1002,6 +1396,8 @@ def _server_main(
         batch_size=batch_size,
         batch_timeout_ms=batch_timeout_ms,
         autocast_device=autocast_device,
+        fast_path=fast_path,
+        pipeline=pipeline,
     )
     server.exit_on_load_failure = True  # the process exits, so the coordinator sees it die
     server.run()
@@ -1016,22 +1412,42 @@ def start_inference_server(
     batch_timeout_ms: float = 2.0,
     autocast_device: Optional[str] = None,
     mp_context: str = "spawn",
-) -> ServerHandle:
+    fast_path: bool = True,
+    pipeline: bool = False,
+    replicas: int = 1,
+):
     """Spawn the inference server process and return a coordinator-side handle.
 
     Workers receive the request queue + their reply queue via
     ``ProcessPoolExecutor(initializer=worker_init_inference, initargs=...)``
-    using ``ticket_q`` to self-assign a worker slot.
+    using ``ticket_q`` to self-assign a worker slot. ``fast_path`` /
+    ``pipeline``: see ``InferenceServer``. ``replicas`` > 1: that many server
+    processes on the same model (``ReplicatedServerHandle``); worker ``w`` sends
+    to replica ``w % replicas``, so one replica receives and replies while
+    another's forward runs.
     """
     ctx = mp.get_context(mp_context)
-    request_q = ctx.Queue()
     reply_qs = [ctx.Queue() for _ in range(num_workers)]
-    control_q = ctx.Queue()
-    control_reply_q = ctx.Queue()
     ticket_q = ctx.Queue()
     for i in range(num_workers):
         ticket_q.put(i)
+    handles = [
+        _start_server_process(
+            ctx, reply_qs, ticket_q, num_workers, model_factory, checkpoint_path, batch_size, batch_timeout_ms,
+            autocast_device, fast_path, pipeline, name="InferenceServer" if replicas == 1 else f"InferenceServer{r}",
+        )
+        for r in range(max(1, int(replicas)))
+    ]
+    return handles[0] if len(handles) == 1 else ReplicatedServerHandle(handles)
 
+
+def _start_server_process(
+    ctx, reply_qs, ticket_q, num_workers, model_factory, checkpoint_path, batch_size, batch_timeout_ms,
+    autocast_device, fast_path, pipeline, name="InferenceServer",
+) -> ServerHandle:
+    request_q = ctx.Queue()
+    control_q = ctx.Queue()
+    control_reply_q = ctx.Queue()
     proc = ctx.Process(
         target=_server_main,
         kwargs=dict(
@@ -1044,9 +1460,11 @@ def start_inference_server(
             batch_size=batch_size,
             batch_timeout_ms=batch_timeout_ms,
             autocast_device=autocast_device,
+            fast_path=fast_path,
+            pipeline=pipeline,
         ),
         daemon=True,
-        name="InferenceServer",
+        name=name,
     )
     proc.start()
     return ServerHandle(

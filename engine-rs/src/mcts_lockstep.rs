@@ -16,7 +16,7 @@
 //! expanded and backed up, as ``tree_search`` + ``incorporate_results`` do.
 //! ``rl18xx/agent/alphazero/lockstep.py`` drives it.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArrayDyn, PyUntypedArrayMethods};
@@ -127,7 +127,23 @@ impl RustMCTSPlayer {
     }
 }
 
-/// Stacked network inputs for a list of positions, as numpy arrays.
+/// A hash of a node-feature block's bit patterns (equal blocks hash equal;
+/// a hit is confirmed by comparing the bits, so the quality only matters for
+/// speed).
+fn map_hash(features: &[f32]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ features.len() as u64;
+    for &x in features {
+        h = (h ^ x.to_bits() as u64).wrapping_mul(0x0000_0100_0000_01b3).rotate_left(5);
+    }
+    h
+}
+
+/// Stacked network inputs for a list of positions, as numpy arrays. With
+/// ``dedupe_maps``, a position whose node features (the hex map -- the map
+/// encoder's only input) are bit-for-bit an earlier row's stores no copy:
+/// ``node_features`` holds each distinct map once, in order of first
+/// appearance, and ``map_index`` gives each row's map. A search's leaves
+/// mostly share their tree's map (all of them in a stock round).
 struct Stacked {
     game_states: Vec<f32>,
     node_features: Vec<f32>,
@@ -136,10 +152,14 @@ struct Stacked {
     rows: usize,
     width: usize,
     num_players: usize,
+    dedupe_maps: bool,
+    map_index: Vec<i64>,
+    num_maps: usize,
+    maps_by_hash: HashMap<u64, Vec<usize>>,
 }
 
 impl Stacked {
-    fn new(width: usize, num_players: usize) -> Self {
+    fn new(width: usize, num_players: usize, dedupe_maps: bool) -> Self {
         Stacked {
             game_states: Vec::new(),
             node_features: Vec::new(),
@@ -148,7 +168,31 @@ impl Stacked {
             rows: 0,
             width,
             num_players,
+            dedupe_maps,
+            map_index: Vec::new(),
+            num_maps: 0,
+            maps_by_hash: HashMap::new(),
         }
+    }
+
+    /// The map row of ``features``: an equal map already stored, or a new row.
+    fn map_slot(&mut self, features: &[f32]) -> usize {
+        let n = features.len();
+        if self.dedupe_maps {
+            let h = map_hash(features);
+            if let Some(slots) = self.maps_by_hash.get(&h) {
+                for &slot in slots {
+                    let stored = &self.node_features[slot * n..(slot + 1) * n];
+                    if stored.iter().zip(features).all(|(a, b)| a.to_bits() == b.to_bits()) {
+                        return slot;
+                    }
+                }
+            }
+            self.maps_by_hash.entry(h).or_default().push(self.num_maps);
+        }
+        self.node_features.extend_from_slice(features);
+        self.num_maps += 1;
+        self.num_maps - 1
     }
 
     fn push(&mut self, game: &BaseGame) -> PyResult<usize> {
@@ -160,7 +204,8 @@ impl Stacked {
             )));
         }
         self.game_states.extend_from_slice(&enc.game_state);
-        self.node_features.extend_from_slice(&enc.node_features);
+        let slot = self.map_slot(&enc.node_features);
+        self.map_index.push(slot as i64);
         self.round_types.push(enc.round_type);
         self.rotations.push(enc.rotation as i64);
         self.rows += 1;
@@ -173,11 +218,18 @@ impl Stacked {
         d.set_item("game_states", PyArray1::from_vec(py, self.game_states).reshape([self.rows, self.width])?)?;
         d.set_item(
             "node_features",
-            PyArray1::from_vec(py, self.node_features).reshape([self.rows, spec.num_hexes(), spec.num_node_features()])?,
+            PyArray1::from_vec(py, self.node_features).reshape([
+                self.num_maps,
+                spec.num_hexes(),
+                spec.num_node_features(),
+            ])?,
         )?;
         d.set_item("round_types", PyArray1::from_vec(py, self.round_types))?;
         d.set_item("rotations", PyArray1::from_vec(py, self.rotations))?;
         d.set_item("num_players", self.num_players)?;
+        if self.dedupe_maps {
+            d.set_item("map_index", PyArray1::from_vec(py, self.map_index))?;
+        }
         Ok(d)
     }
 }
@@ -192,15 +244,19 @@ impl Stacked {
 /// features) float32 in the encoder's canonical frame, ``round_types`` /
 /// ``rotations`` (B,) int64, ``num_players``, ``legal`` (int32, each leaf's
 /// legal policy indices back to back) and ``legal_lengths`` (B,) int64. Each
-/// tree keeps its leaves pending until ``mcts_apply_results``.
+/// tree keeps its leaves pending until ``mcts_apply_results``. With
+/// ``dedupe_maps``, ``node_features`` is (M, hexes, features), each distinct
+/// map once, and ``map_index`` (B,) int64 each leaf's row in it
+/// (``node_features[map_index]`` is the plain layout).
 #[pyfunction]
-#[pyo3(signature = (trees, max_leaves, dedupe, use_score_values))]
+#[pyo3(signature = (trees, max_leaves, dedupe, use_score_values, dedupe_maps=false))]
 pub fn mcts_collect_leaves<'py>(
     py: Python<'py>,
     trees: Vec<Bound<'py, RustMCTSPlayer>>,
     max_leaves: Vec<usize>,
     dedupe: Vec<bool>,
     use_score_values: Vec<bool>,
+    dedupe_maps: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
     let t = trees.len();
     if max_leaves.len() != t || dedupe.len() != t || use_score_values.len() != t {
@@ -222,7 +278,7 @@ pub fn mcts_collect_leaves<'py>(
             let s = stacked.get_or_insert_with(|| {
                 title = node.game.title.clone();
                 let np = node.game.players_for_factored().len();
-                Stacked::new(spec_for(&node.game.title).encoding_size(np), np)
+                Stacked::new(spec_for(&node.game.title).encoding_size(np), np, dedupe_maps)
             });
             entry.1 = s.push(&node.game)?;
             legal.extend(node.legal_action_indices.iter().map(|&i| i as i32));
@@ -243,7 +299,7 @@ pub fn mcts_collect_leaves<'py>(
                 }
                 None => (0, 0),
             };
-            Stacked::new(width, np).into_dict(py, &title)?
+            Stacked::new(width, np, dedupe_maps).into_dict(py, &title)?
         }
     };
     d.set_item("counts", PyArray1::from_vec(py, counts))?;
@@ -256,15 +312,21 @@ pub fn mcts_collect_leaves<'py>(
 /// Encode positions that are not search leaves (e.g. a policy player's
 /// moves) into the same stacked layout as ``mcts_collect_leaves``:
 /// ``game_states``, ``node_features``, ``round_types``, ``rotations``,
-/// ``num_players``. One player count per call.
+/// ``num_players`` (with ``dedupe_maps``, each distinct map once and
+/// ``map_index``). One player count per call.
 #[pyfunction]
-pub fn encode_games<'py>(py: Python<'py>, games: Vec<PyRef<'py, BaseGame>>) -> PyResult<Bound<'py, PyDict>> {
+#[pyo3(signature = (games, dedupe_maps=false))]
+pub fn encode_games<'py>(
+    py: Python<'py>,
+    games: Vec<PyRef<'py, BaseGame>>,
+    dedupe_maps: bool,
+) -> PyResult<Bound<'py, PyDict>> {
     let Some(first) = games.first() else {
-        return Stacked::new(0, 0).into_dict(py, "1830");
+        return Stacked::new(0, 0, dedupe_maps).into_dict(py, "1830");
     };
     let np = first.players_for_factored().len();
     let title = first.title.clone();
-    let mut stacked = Stacked::new(spec_for(&title).encoding_size(np), np);
+    let mut stacked = Stacked::new(spec_for(&title).encoding_size(np), np, dedupe_maps);
     for game in &games {
         stacked.push(game)?;
     }

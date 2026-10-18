@@ -58,10 +58,10 @@ def _forward(games_legal: list):
     with torch.no_grad():
         probs, _, _ = _MODEL.run_many_encoded(encoded, legal_indices=[legal for _, legal in games_legal])
     price = getattr(_MODEL, "last_price_components", None)
-    rows = price["price_logits"].numpy() if price is not None else None
+    rows = price["price_logits"].detach().cpu().numpy() if price is not None else None
     out = []
     for i, (_, legal) in enumerate(games_legal):
-        p = np.asarray(probs[i])[legal].astype(np.float64)
+        p = np.asarray(probs[i].detach().cpu() if hasattr(probs[i], "detach") else probs[i])[legal].astype(np.float64)
         p = p / p.sum() if p.sum() > 0 else np.full(len(legal), 1.0 / len(legal))
         out.append((p, rows[i] if rows is not None else None))
     return out, encoded

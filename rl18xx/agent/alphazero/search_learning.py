@@ -98,8 +98,17 @@ class SearchLearningConfig:
     # On gen4 the raw visits put 12-19% of the target on moves its policy gives
     # under 1% (FPU exploration), KL(target || policy) 1.6-2.4; pruned 0.2-0.35.
     visit_target: str = "pruned"
+    # Sharpen the target: target ** (1 / t) renormalized; 0 is one-hot on the move the
+    # search played. The 2026-10-17 pilot (t = 1, pruned visits @200) flattened gen4: its
+    # targets carried more entropy than the sharp policy (0.19 vs 0.14 at the start), the
+    # policy followed (0.14 -> 0.45 by update 100) and played worse (0.28 2v2 vs gen4).
+    target_temperature: float = 1.0
     p_full: float = 0.25
     n_full: int = 200
+    # Readouts of the other learner decisions (KataGo's fast searches: played, never
+    # trained on); 0 lets the policy play them at T. With 0 a game is mostly policy
+    # play, so the critic learns how the raw policy's games end, not search play's.
+    n_fast: int = 0
     c_puct_init: float = 0.15
     mean_q: bool = True
     fpu_reduction: float = 0.0
@@ -115,6 +124,31 @@ class SearchLearningConfig:
     full_move_temperature: float = 0.0
     # The search's leaf value: the critic's win head ("win") or score head ("score").
     value_head: str = "win"
+    # Tree reuse (KataGo / the single-tree Rust path's advance_root): each game keeps
+    # its tree across decisions, advanced along every move played, so a search starts
+    # from the chosen move's subtree. "total": a search stops once the root has the
+    # visits a fresh search ends with (1 + readouts), counting the inherited ones --
+    # the same per-decision visit budget, fewer evaluations; "additional": readouts
+    # more on top of them (RustMCTSPlayer.suggest_move's and eval_head_to_head's
+    # count) -- the same evaluations, more visits; "off": a fresh tree each decision.
+    # A Gumbel root spends its budget either way (inherited visits inform q). A tree is
+    # dropped when the network version changes or the game left the tree's line (an
+    # open-price forced move the tree priced itself).
+    reuse_tree: str = "off"
+    # "additional" trees keep growing: one whose root passed this many visits is
+    # rebuilt (None: 2 * n_full; a tree node holds a game clone, ~124 KB).
+    reuse_max_root_visits: Optional[int] = None
+    # Each request sends each distinct hex map once (lockstep dedupe_maps); the
+    # server's map encoder runs once per map. Outputs within float rounding.
+    dedupe_maps: bool = False
+    # Inference server processes (start_inference_server(replicas=)): while one
+    # runs a forward pass the others receive, unpickle and reply. Replies are
+    # unchanged (each is one server's answer to its own batch).
+    server_replicas: int = 1
+    # The inference server: a collector thread receives the next batch while
+    # the current one runs (InferenceServer.pipeline); replies are unchanged.
+    # Measured slower than replicas (the threads contend for the GIL).
+    server_pipeline: bool = False
     # Generation
     workers: int = 48
     games_per_worker: int = 24
@@ -148,6 +182,19 @@ class SearchLearningConfig:
     anchor_every: int = 50
     max_updates: int = 1000
     snapshot_every: int = 10
+
+
+def sharpen_target(target: np.ndarray, legal: np.ndarray, move: int, temperature: float) -> np.ndarray:
+    """``target`` over ``legal`` normalized and sharpened to ``target ** (1 / temperature)``;
+    temperature 0 (or an all-zero target) puts everything on ``move``, the move played."""
+    target = np.asarray(target, dtype=np.float64)
+    if temperature <= 0 or target.sum() <= 0:
+        out = np.zeros(len(legal), dtype=np.float64)
+        out[int(np.flatnonzero(legal == move)[0])] = 1.0
+        return out
+    if temperature != 1.0:
+        target = np.power(target / target.max(), 1.0 / temperature)
+    return target / target.sum()
 
 
 def run_temperature(path) -> float:
@@ -363,6 +410,12 @@ class _Game:
     rows: list = field(default_factory=list)
     need: Any = None
     pending: Any = None
+    # ``reuse_tree``: the game's search tree, kept across decisions (advanced
+    # along every move played), the network version it was searched with, and
+    # the root-log length up to which it is known to match the game.
+    tree: Any = None
+    tree_version: Optional[int] = None
+    tree_synced: int = 0
 
 
 def search_config(settings: dict, client=None):
@@ -418,7 +471,7 @@ class Generator:
         from rl18xx.agent.alphazero.lockstep import LockstepSearcher
 
         self.settings = settings
-        self.searcher = LockstepSearcher(evaluators)
+        self.searcher = LockstepSearcher(evaluators, dedupe_maps=bool(settings.get("dedupe_maps", False)))
         self.games: dict = {}
         self.config = search_config(settings)
         self.rng = np.random.default_rng()
@@ -484,9 +537,70 @@ class Generator:
         server = g.seat_servers[int(mover[3])]
         if server == "learner" and len(legal) > 1 and self.rng.random() < s["p_full"]:
             g.pending = mover
-            return TreeSearch(self._tree(rs), s["n_full"], key=server)
+            return self._search(g, rs, s["n_full"], server)
+        if server == "learner" and len(legal) > 1 and s.get("n_fast", 0) > 0:
+            g.pending = None  # a fast search: played, no row
+            return self._search(g, rs, s["n_fast"], server)
         g.pending = s["learner_temperature"] if server == "learner" else s.get("opponent_temperature", 1.0)
         return PolicyRequest(rs, legal, key=server)
+
+    def _search(self, g: _Game, rs, readouts: int, key):
+        """The decision's search: on the game's kept tree with ``reuse_tree``
+        (when it still matches the position and was searched by the current
+        network version), else on a fresh tree."""
+        from rl18xx.agent.alphazero.lockstep import TreeSearch
+
+        s = self.settings
+        reuse = s.get("reuse_tree", "off")
+        if reuse == "off":
+            return TreeSearch(self._tree(rs), readouts, key=key)
+        handle = g.tree if self._tree_in_sync(g, rs) else None
+        if handle is not None:
+            tree = handle._rust_player
+            if g.tree_version != s.get("version", 0):
+                self.counts["reuse_dropped_version"] += 1  # searched by an older network
+                handle = None
+            elif reuse == "additional" and tree.n_at_root() > s.get("reuse_max_root_visits", 2 * s["n_full"]):
+                self.counts["reuse_dropped_size"] += 1  # an "additional" tree keeps growing; start over
+                handle = None
+        if handle is None:
+            handle = self._tree(rs)
+            g.tree_version = s.get("version", 0)
+            g.tree_synced = int(handle._rust_player.root_move_number())
+        else:
+            self.counts["reused_searches"] += 1
+        g.tree = handle
+        search = TreeSearch(handle, readouts, key=key, budget="total" if reuse == "total" else "additional")
+        self.counts["searches"] += 1
+        self.counts["inherited_visits"] += search.inherited
+        return search
+
+    def _tree_in_sync(self, g: _Game, rs) -> bool:
+        """Whether the game's kept tree is at the game's position (else it is
+        dropped). The tree's forced chains apply every single-legal-move
+        position, a price drawn from the price head where one is open; the game
+        plays an open-price move as a decision, so there they part."""
+        if g.tree is None:
+            return False
+        if not g.tree._rust_player.root_log_matches(rs, g.tree_synced):
+            self.counts["reuse_dropped_mismatch"] += 1
+            g.tree = None
+            return False
+        g.tree_synced = int(g.tree._rust_player.root_move_number())
+        return True
+
+    def _advance_tree(self, g: _Game, move: int, price) -> None:
+        """Move the game's kept tree (at the position the move was played from)
+        along it: its child for (move, price) becomes the root, matched to the
+        game's position when next used (``_tree_in_sync``)."""
+        if g.tree is None:
+            return
+        tree = g.tree._rust_player
+        try:
+            tree.advance_root_to(int(move), None if price is None else int(price))
+        except Exception:  # not a legal move at the tree's root: forget the tree
+            self.counts["reuse_dropped_error"] += 1
+            g.tree = None
 
     def _answer(self, g: _Game) -> None:
         """Play the move the finished need gives (and keep a searched one's row)."""
@@ -504,10 +618,14 @@ class Generator:
             move = int(need.legal[int(self.rng.choice(len(p), p=p))])
             g.price_row = need.price_row
             price, _, _ = choose_price(g.game, move, need.price_row, self.rng, 0.0)
+            in_sync = self._tree_in_sync(g, rs)
             rs.apply_action_index(move, price)
+            if in_sync:
+                self._advance_tree(g, move, price)
             self.counts["fast_decisions"] += 1
         else:
             tree = need.tree
+            self.counts["final_visits"] += float(tree.n_at_root())
             legal = np.asarray(tree.legal_action_indices_at_root(), dtype=np.int64)
             if s["target"] == "gumbel":
                 target = np.asarray(tree.gumbel_policy_target(), dtype=np.float64)[legal]
@@ -518,12 +636,16 @@ class Generator:
                 target = visits
                 if s.get("visit_target", "pruned") == "pruned":
                     target = np.asarray(tree.pruned_child_n_at_root(), dtype=np.float64)[legal]
-            total = target.sum()
-            target = target / total if total > 0 else np.full(len(legal), 1.0 / len(legal))
             price, price_target = self._searched_price(tree, rs, move)
-            # The tree is done with: the move goes straight onto the game (the
-            # most-visited price, as advance_root would commit).
+            # The move goes straight onto the game (the most-visited price, as
+            # advance_root would commit); a kept tree follows it.
             rs.apply_action_index(move, price)
+            self._advance_tree(g, move, price)
+            if g.pending is None:  # a fast search
+                self.counts["fast_search_decisions"] += 1
+                g.decisions += 1
+                return
+            target = sharpen_target(target, legal, move, float(s.get("target_temperature", 1.0)))
             state, nodes, _, rotation, _ = g.pending
             g.rows.append(
                 SearchRow(
@@ -627,6 +749,7 @@ class Generator:
 
         if settings is not None:
             self.settings = settings
+            self.searcher.dedupe_maps = bool(settings.get("dedupe_maps", False))
         started = time.time()
         stats_before = dict(vars(self.searcher.stats))
         finished = []
@@ -659,7 +782,7 @@ class Generator:
                         continue
                     self._step_game(slot, g)
         after = vars(self.searcher.stats)
-        stats = {k: after[k] - stats_before.get(k, 0) for k in ("rounds", "requests", "leaves", "policy_states")}
+        stats = {k: after[k] - stats_before.get(k, 0) for k in ("rounds", "requests", "leaves", "policy_states", "maps")}
         stats.update(self.counts)
         stats["seconds"] = time.time() - started
         stats["games_in_progress"] = len(self.games)
@@ -820,6 +943,7 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "target": cfg.target,
         "p_full": cfg.p_full,
         "n_full": cfg.n_full,
+        "n_fast": cfg.n_fast,
         "learner_temperature": cfg.learner_temperature,
         "prior_temperature": cfg.prior_temperature,
         "c_puct_init": cfg.c_puct_init,
@@ -833,6 +957,7 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "gumbel_noise_scale": cfg.gumbel_noise_scale,
         "full_move_temperature": cfg.full_move_temperature,
         "visit_target": cfg.visit_target,
+        "target_temperature": cfg.target_temperature,
         "games_per_worker": cfg.games_per_worker,
         "max_decisions": cfg.max_decisions,
         "price_eps": 0.0,
@@ -844,6 +969,9 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "critic_positions_per_game": cfg.critic_positions_per_game,
         "reward": cfg.reward,
         "opponent_servers": [],
+        "reuse_tree": cfg.reuse_tree,
+        "reuse_max_root_visits": cfg.reuse_max_root_visits or 2 * cfg.n_full,
+        "dedupe_maps": cfg.dedupe_maps,
     }
 
 
@@ -858,6 +986,8 @@ def _validate(cfg: SearchLearningConfig) -> None:
         raise SystemExit("--p-full must be in [0, 1]")
     if cfg.value_head not in ("win", "score"):
         raise SystemExit("--value-head must be win or score")
+    if cfg.reuse_tree not in ("off", "total", "additional"):
+        raise SystemExit(f"--reuse-tree must be off, total or additional, got {cfg.reuse_tree!r}")
     kind, _ = parse_reward(cfg.reward)
     if kind not in ("win", "placement"):
         raise SystemExit("--reward must be win or placement (the critic's score-head target)")
@@ -881,12 +1011,14 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
     if resume:
         run_dir = Path(resume)
         state = json.loads((run_dir / "state.json").read_text())
-        # The run keeps its settings; its length, its generation layout and the
-        # microbatch (the same step, other memory) can change.
+        # The run keeps its settings; its length, its generation layout, the
+        # microbatch (the same step, other memory) and the inference speed-ups
+        # (the same outputs) can change.
         overrides = {
             k: getattr(cfg, k)
             for k in ("max_updates", "microbatch", "workers", "games_per_worker", "task_seconds",
-                      "midgame_positions", "midgame_fraction", "auction_fraction")
+                      "midgame_positions", "midgame_fraction", "auction_fraction", "dedupe_maps", "server_pipeline",
+                      "server_replicas")
         }
         cfg = SearchLearningConfig(**{**state["config"], **overrides})
         update = int(state["snapshot_update"])
@@ -944,6 +1076,8 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
             checkpoint_path=spec(current_learner, current_critic),
             batch_size=cfg.inference_batch_size,
             autocast_device=None,
+            pipeline=cfg.server_pipeline,
+            replicas=cfg.server_replicas,
         )
     }
     queues = {name: (h.request_q, h.reply_qs, h.ticket_q) for name, h in handles.items()}
@@ -1045,12 +1179,29 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                     "games_total": totals["games"],
                     "games_per_hour": gen["games"] / elapsed * 3600,
                     "searched_rows_per_hour": gen["rows"] / elapsed * 3600,
-                    "decisions_per_second": (gen["searched_decisions"] + gen["fast_decisions"]) / elapsed,
+                    "decisions_per_second": (
+                        gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"]
+                    ) / elapsed,
                     "evaluations_per_second": (gen["leaves"] + gen["policy_states"]) / elapsed,
                     "searched_share": (
-                        gen["searched_decisions"] / max(gen["searched_decisions"] + gen["fast_decisions"], 1)
+                        gen["searched_decisions"]
+                        / max(gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"], 1)
                     ),
+                    "fast_search_share": gen["fast_search_decisions"]
+                    / max(gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"], 1),
                     "mean_decisions": gen["game_decisions"] / max(gen["games"], 1),
+                    "evaluations_per_decision": (gen["leaves"] + gen["policy_states"]) / max(
+                        gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"], 1
+                    ),
+                    # Tree reuse: searches that started on a kept subtree, and the share of
+                    # the searches' final root visits they inherited.
+                    "reused_search_share": gen["reused_searches"] / max(gen["searches"], 1),
+                    "inherited_visit_share": gen["inherited_visits"] / max(gen["final_visits"], 1),
+                    "reuse_dropped": {
+                        k[len("reuse_dropped_"):]: gen[k] for k in list(gen) if k.startswith("reuse_dropped_")
+                    },
+                    # Map dedupe: node-feature rows sent per state.
+                    "map_rows_per_state": gen["maps"] / max(gen["leaves"] + gen["policy_states"], 1),
                     "skipped_starts": gen["skipped_starts"],
                     "dropped_games": gen["dropped_games"],
                     "terminations": dict(terminations),

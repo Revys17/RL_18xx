@@ -241,7 +241,7 @@ def run(args) -> None:
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     if device == "cpu" and args.cpu_threads:
         torch.set_num_threads(args.cpu_threads)
-    models = AdvisorModels.load(args.policy, args.auction_policy, args.value, device)
+    models = AdvisorModels.load(args.policy, args.auction_policy, args.value, device, getattr(args, "search_value", None))
     app = create_app(Advisor(models), port=args.port, debug_page=args.debug_page)
     host = getattr(args, "host", "127.0.0.1")
     LOGGER.info("Advisor backend on http://%s:%d (device %s)", host, args.port, device)

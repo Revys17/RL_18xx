@@ -1116,6 +1116,78 @@ impl RustMCTSPlayer {
         } else {
             self.maybe_add_child(self.root_idx, action_index, None)?
         };
+        self.rebase_root(child_idx);
+        Ok(())
+    }
+
+    /// ``advance_root`` to the child for ``action_index`` played at ``price``:
+    /// a price-bearing slot's grandchild at that price (made, unvisited, if the
+    /// search never tried it) rather than the most-visited one; any other move's
+    /// child as ``advance_root`` (``price`` ignored). For a caller that plays
+    /// the move on its own game and keeps the tree (search learning's tree
+    /// reuse); ``root_log_matches`` then confirms the two positions agree.
+    #[pyo3(signature = (action_index, price=None))]
+    pub fn advance_root_to(&mut self, action_index: u32, price: Option<i64>) -> PyResult<()> {
+        let is_pw = Self::is_pw_slot(&self.arena[self.root_idx], action_index);
+        if !is_pw || price.is_none() {
+            return self.advance_root(action_index);
+        }
+        let child_idx = self.maybe_add_child(self.root_idx, action_index, price)?;
+        self.rebase_root(child_idx);
+        Ok(())
+    }
+
+    /// Whether the root's position is ``game``'s: the same number of actions
+    /// played and the same action entries from ``start`` on (the entries
+    /// before it known to agree, e.g. the root log's length before the last
+    /// ``advance_root_to``). The engine is deterministic, so equal action
+    /// sequences from one position give one position.
+    pub fn root_log_matches(&self, game: PyRef<'_, BaseGame>, start: usize) -> bool {
+        let root_game = &self.arena[self.root_idx].game;
+        let total = self.root_log.len() + root_game.action_log.len();
+        if total != game.action_log.len() || start > total {
+            return false;
+        }
+        (start..total).all(|i| {
+            let ours = if i < self.root_log.len() {
+                &self.root_log[i]
+            } else {
+                &root_game.action_log[i - self.root_log.len()]
+            };
+            *ours == game.action_log[i]
+        })
+    }
+
+    /// Nodes in the arena (the current root's subtree between searches).
+    #[getter]
+    fn tree_size(&self) -> usize {
+        self.arena.len()
+    }
+
+    /// Diagnostics (tests): node ``arena_idx``'s per-move statistics, in its
+    /// ``legal_action_indices`` order: ``{"legal", "child_n", "child_w"
+    /// (moves x VALUE_SIZE), "child_prior", "price_child_n" ({move: {price:
+    /// n}}), "expanded"}``.
+    pub fn node_stats(&self, py: Python<'_>, arena_idx: usize) -> PyResult<PyObject> {
+        let node = self
+            .arena
+            .get(arena_idx)
+            .ok_or_else(|| PyIndexError::new_err("arena_idx out of bounds"))?;
+        let d = PyDict::new(py);
+        d.set_item("legal", node.legal_action_indices.clone())?;
+        d.set_item("child_n", node.child_n.clone())?;
+        d.set_item("child_w", node.child_w.iter().map(|w| w.to_vec()).collect::<Vec<_>>())?;
+        d.set_item("child_prior", node.child_prior.clone())?;
+        d.set_item("price_child_n", node.price_child_n.clone())?;
+        d.set_item("expanded", node.is_expanded)?;
+        Ok(d.into_any().unbind())
+    }
+}
+
+impl RustMCTSPlayer {
+    /// Make ``child_idx`` (a child or price grandchild of the root) the root:
+    /// the bookkeeping of ``advance_root``.
+    fn rebase_root(&mut self, child_idx: usize) {
         // Rebase the root tally from the committed child's OWN stats. For a
         // PW price grandchild that is the per-price entry — the categorical
         // slot aggregates ALL price siblings and would inflate n_at_root and
@@ -1170,9 +1242,11 @@ impl RustMCTSPlayer {
                 node.game.action_log.drain(..k.min(node.game.action_log.len()));
             }
         }
-        Ok(())
     }
+}
 
+#[pymethods]
+impl RustMCTSPlayer {
     /// Reseed the tree's random source (price proposals, Dirichlet and
     /// Gumbel noise) for reproducible runs; trees start from OS entropy.
     pub fn seed(&mut self, seed: u64) {

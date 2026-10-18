@@ -220,8 +220,10 @@ def cmd_search_learning(args):
         learner_temperature=args.learner_temperature,
         target=args.target,
         visit_target=args.visit_target,
+        target_temperature=args.target_temperature,
         p_full=args.p_full,
         n_full=args.n_full,
+        n_fast=args.n_fast,
         c_puct_init=args.c_puct,
         mean_q=not args.no_mean_q,
         fpu_reduction=args.fpu_reduction,
@@ -234,6 +236,11 @@ def cmd_search_learning(args):
         gumbel_noise_scale=args.gumbel_noise_scale,
         full_move_temperature=args.full_move_temperature,
         value_head=args.value_head,
+        reuse_tree=args.reuse_tree,
+        reuse_max_root_visits=args.reuse_max_root_visits,
+        dedupe_maps=args.dedupe_maps,
+        server_pipeline=args.server_pipeline,
+        server_replicas=args.server_replicas,
         workers=args.workers,
         games_per_worker=args.games_per_worker,
         task_seconds=args.task_seconds,
@@ -610,8 +617,12 @@ def build_parser():
                    help="Policy target: the search's visit distribution, or the Gumbel root's completed-Q policy")
     p.add_argument("--visit-target", choices=("pruned", "raw"), default=_SL.visit_target,
                    help="--target visits: KataGo's policy-target pruning of exploration visits, or the raw visits")
+    p.add_argument("--target-temperature", type=float, default=_SL.target_temperature,
+                   help="Sharpen the search target to target ** (1 / t); 0: one-hot on the move the search played")
     p.add_argument("--p-full", type=float, default=_SL.p_full, help="Share of decisions searched (and trained on)")
     p.add_argument("--n-full", type=int, default=_SL.n_full, help="Readouts of a searched decision")
+    p.add_argument("--n-fast", type=int, default=_SL.n_fast,
+                   help="Readouts of the other learner decisions (played, not trained on); 0: the policy plays them")
     p.add_argument("--c-puct", type=float, default=_SL.c_puct_init, help="c_puct_init in every round")
     p.add_argument("--no-mean-q", action="store_true", help="minigo's W / (1 + N) instead of mean Q")
     p.add_argument("--fpu-reduction", type=float, default=_SL.fpu_reduction)
@@ -628,6 +639,20 @@ def build_parser():
     )
     p.add_argument("--value-head", choices=("win", "score"), default=_SL.value_head,
                    help="The critic head the search reads its leaf values from")
+    p.add_argument(
+        "--reuse-tree", choices=("off", "total", "additional"), default=_SL.reuse_tree,
+        help="Keep each game's tree across decisions: 'total' counts the inherited root visits toward the "
+        "budget (same visits per decision, fewer evaluations), 'additional' searches the budget on top of them",
+    )
+    p.add_argument("--reuse-max-root-visits", type=int, default=None,
+                   help="--reuse-tree additional: rebuild a tree whose root passed this many visits (default 2 * n_full)")
+    p.add_argument("--dedupe-maps", action="store_true",
+                   help="Send each distinct hex map of a request once; the map encoder runs once per map")
+    p.add_argument("--server-pipeline", action="store_true",
+                   help="The inference server receives the next batch on a thread while the current one runs "
+                   "(measured slower than --server-replicas 2: GIL contention)")
+    p.add_argument("--server-replicas", type=int, default=_SL.server_replicas,
+                   help="Inference server processes (one forward runs while another receives and replies)")
     p.add_argument("--workers", type=int, default=_SL.workers)
     p.add_argument("--games-per-worker", type=int, default=_SL.games_per_worker, help="Games each worker plays at once")
     p.add_argument("--task-seconds", type=float, default=_SL.task_seconds, help="A worker reports its finished games this often")
@@ -719,7 +744,7 @@ def build_parser():
     )
 
     # advisor
-    from rl18xx.agent.advisor import DEFAULT_AUCTION_POLICY, DEFAULT_POLICY, DEFAULT_VALUE
+    from rl18xx.agent.advisor import DEFAULT_AUCTION_POLICY, DEFAULT_POLICY, DEFAULT_SEARCH_VALUE, DEFAULT_VALUE
 
     p = sub.add_parser(
         "advisor",
@@ -738,6 +763,10 @@ def build_parser():
         help="Policy checkpoint for the private auction (policy-gradient runs never trained on it)",
     )
     p.add_argument("--value", type=str, default=DEFAULT_VALUE, help="Value checkpoint for win estimates")
+    p.add_argument(
+        "--search-value", type=str, default=DEFAULT_SEARCH_VALUE,
+        help="Value checkpoint the 'think harder' search uses (gen4's critic searches better than value_v2)",
+    )
     p.add_argument("--device", type=str, default=None, help="cuda / cpu (default: cuda if available)")
     p.add_argument("--cpu-threads", type=int, default=4, help="Torch threads when on CPU (default: 4)")
     p.add_argument(

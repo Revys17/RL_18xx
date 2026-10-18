@@ -10,7 +10,10 @@
   (``main.py advisor``).
 """
 
-# The default checkpoints (``main.py advisor --policy / --auction-policy / --value``).
-DEFAULT_POLICY = "model_checkpoints_pg/pg4_20261007/learner/600.pth"
+# The default checkpoints (``main.py advisor --policy / --auction-policy / --value / --search-value``).
+DEFAULT_POLICY = "model_checkpoints_pg/rab_place_20261014/learner/1800.pth"
 DEFAULT_AUCTION_POLICY = "model_checkpoints/AlphaZeroTransformer/20261004_134558_804974562/10.pth"
 DEFAULT_VALUE = "model_checkpoints_value/AlphaZeroTransformer/20261004_134558_804974562/26.pth"
+# The search's leaf value: gen4's critic beat value_v2 there (0.658 for the critic side, 2v2,
+# 2026-10-17), while value_v2 predicts human games better and keeps the win estimates.
+DEFAULT_SEARCH_VALUE = "model_checkpoints_pg/rab_place_20261014/critic/1800.pth"
