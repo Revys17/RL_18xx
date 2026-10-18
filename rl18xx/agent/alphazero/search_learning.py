@@ -140,6 +140,10 @@ class SearchLearningConfig:
     gumbel_noise_scale: float = 1.0
     # visits: 0 plays the most-visited move; > 0 samples it with weight N ** (1 / t).
     full_move_temperature: float = 0.0
+    # Exploration as AlphaZero's first-30-moves temperature: full_move_temperature applies only to
+    # each game's first explore_decisions decisions (0: every decision). The targets stay the
+    # search's visits; only which move is played (and so which positions the games reach) changes.
+    explore_decisions: int = 0
     # The search's leaf value: the critic's win head ("win") or score head ("score").
     value_head: str = "win"
     # Tree reuse (KataGo / the single-tree Rust path's advance_root): each game keeps
@@ -874,7 +878,7 @@ class Generator:
                 move = int(tree.gumbel_action())
             else:
                 visits = np.asarray(tree.child_n_at_root(), dtype=np.float64)[legal]
-                move = self._visit_move(tree, legal, visits)
+                move = self._visit_move(tree, legal, visits, g.decisions)
                 target = visits
                 if s.get("visit_target", "pruned") == "pruned":
                     target = np.asarray(tree.pruned_child_n_at_root(), dtype=np.float64)[legal]
@@ -937,10 +941,15 @@ class Generator:
 
         return RustGameAdapter(rs)
 
-    def _visit_move(self, tree, legal: np.ndarray, visits: np.ndarray) -> int:
+    def _visit_move(self, tree, legal: np.ndarray, visits: np.ndarray, decisions: int = 0) -> int:
+        """The searched move to play: the most visited, or -- with ``full_move_temperature`` t > 0,
+        while the game has made fewer than ``explore_decisions`` decisions (0: always) -- one drawn
+        with weight N ** (1 / t)."""
         t = float(self.settings.get("full_move_temperature", 0.0))
-        if t <= 0 or visits.sum() <= 0:
+        k = int(self.settings.get("explore_decisions", 0) or 0)
+        if t <= 0 or visits.sum() <= 0 or (k > 0 and decisions >= k):
             return int(tree.pick_best_action())
+        self.counts["explored_moves"] += 1
         w = np.power(visits, 1.0 / t)
         return int(legal[int(self.rng.choice(len(legal), p=w / w.sum()))])
 
@@ -1292,6 +1301,7 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "gumbel_c_scale": cfg.gumbel_c_scale,
         "gumbel_noise_scale": cfg.gumbel_noise_scale,
         "full_move_temperature": cfg.full_move_temperature,
+        "explore_decisions": cfg.explore_decisions,
         "visit_target": cfg.visit_target,
         "target_temperature": cfg.target_temperature,
         "games_per_worker": cfg.games_per_worker,
@@ -1389,11 +1399,14 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
         run_dir = Path(resume)
         state = json.loads((run_dir / "state.json").read_text())
         # The run keeps its settings; its length, its generation layout, the
-        # microbatch (the same step, other memory) and the inference speed-ups
-        # (the same outputs) can change.
+        # microbatch (the same step, other memory), the inference speed-ups
+        # (the same outputs) and the exploration (full_move_temperature /
+        # explore_decisions: a resume without them turns it off) can change.
         overrides = {
             k: getattr(cfg, k)
             for k in (
+                "full_move_temperature",
+                "explore_decisions",
                 "max_updates",
                 "microbatch",
                 "workers",
@@ -1587,6 +1600,8 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                         gen["searched_decisions"]
                         / max(gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"], 1)
                     ),
+                    "explored_share": gen["explored_moves"]
+                    / max(gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"], 1),
                     "fast_search_share": gen["fast_search_decisions"]
                     / max(gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"], 1),
                     "mean_decisions": gen["game_decisions"] / max(gen["games"], 1),

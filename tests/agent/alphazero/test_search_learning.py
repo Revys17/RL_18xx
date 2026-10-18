@@ -409,3 +409,49 @@ def test_fast_searches_play_the_other_decisions_without_rows(start_file):
     assert policy_with_choice == 0
     rows = sum(len(g["rows"]) for g in out["games"])
     assert rows <= searched
+
+
+def test_visit_move_explores_only_the_first_decisions():
+    # AlphaZero-style exploration: full_move_temperature applies only while the game has
+    # made fewer than explore_decisions decisions (0: always); afterwards the most visited.
+    from collections import Counter
+    from types import SimpleNamespace
+
+    from rl18xx.agent.alphazero.search_learning import Generator
+
+    class Tree:
+        def pick_best_action(self):
+            return 7
+
+    legal, visits = np.array([3, 7]), np.array([10.0, 10.0])
+
+    def gen(t, k):
+        return SimpleNamespace(
+            settings={"full_move_temperature": t, "explore_decisions": k},
+            rng=np.random.default_rng(0),
+            counts=Counter(),
+        )
+
+    g = gen(0.0, 0)
+    assert all(Generator._visit_move(g, Tree(), legal, visits, d) == 7 for d in range(20))
+    g = gen(1.0, 10)
+    early = {Generator._visit_move(g, Tree(), legal, visits, 3) for _ in range(50)}
+    assert early == {3, 7}  # sampled
+    assert g.counts["explored_moves"] == 50
+    assert all(Generator._visit_move(g, Tree(), legal, visits, d) == 7 for d in (10, 11, 500))
+    assert g.counts["explored_moves"] == 50  # past the cutoff: the most visited, not counted
+    g = gen(1.0, 0)
+    assert {Generator._visit_move(g, Tree(), legal, visits, 500) for _ in range(50)} == {3, 7}  # 0: always
+
+
+def test_generation_explores_the_early_decisions(start_file):
+    settings = _settings(
+        start_file, target="visits", p_full=0.25, n_full=2, parallel_readouts=2, games_per_worker=4, max_decisions=60
+    )
+    settings["n_fast"] = 2
+    settings["full_move_temperature"] = 1.0
+    settings["explore_decisions"] = 5
+    _, out = _generate(settings, seconds=8.0)
+    stats = out["stats"]
+    games = stats.get("games_in_progress", 0) + len(out["games"])
+    assert 0 < stats.get("explored_moves", 0) <= 5 * max(games, 1)
