@@ -242,6 +242,14 @@ pub enum Action {
         hex_id: String,
         token_type: Option<String>,
     },
+    /// A company assigned to a hex or corporation (Ruby `Action::Assign`;
+    /// 1822PNW's P15 paper mill / P17 ski haus). `target_type` is "hex" or
+    /// "corporation".
+    Assign {
+        entity_id: String,
+        target: String,
+        target_type: String,
+    },
     /// Pay off the whole player loan (Ruby `Action::PayoffPlayerDebt`).
     PayoffPlayerDebt {
         entity_id: String,
@@ -276,6 +284,7 @@ impl Action {
             Action::RemoveToken { entity_id, .. } => entity_id,
             Action::Choose { entity_id, .. } => entity_id,
             Action::ChooseAbility { entity_id, .. } => entity_id,
+            Action::Assign { entity_id, .. } => entity_id,
             Action::AcquireCompany { entity_id, .. } => entity_id,
             Action::HexToken { entity_id, .. } => entity_id,
             Action::PayoffPlayerDebt { entity_id } => entity_id,
@@ -305,6 +314,7 @@ impl Action {
             Action::RemoveToken { .. } => "remove_token",
             Action::Choose { .. } => "choose",
             Action::ChooseAbility { .. } => "choose_ability",
+            Action::Assign { .. } => "assign",
             Action::AcquireCompany { .. } => "acquire_company",
             Action::HexToken { .. } => "hex_token",
             Action::PayoffPlayerDebt { .. } => "payoff_player_debt",
@@ -499,6 +509,12 @@ impl Action {
                 Ok(Action::Choose { entity_id, choice })
             }
 
+            "assign" => {
+                let target = extract_string(dict, "target")?;
+                let target_type = extract_string(dict, "target_type").unwrap_or_else(|_| "hex".to_string());
+                Ok(Action::Assign { entity_id, target, target_type })
+            }
+
             "choose_ability" => {
                 let choice = extract_string(dict, "choice")?;
                 Ok(Action::ChooseAbility { entity_id, choice })
@@ -667,6 +683,10 @@ impl Action {
             }
             Action::AcquireCompany { company_sym, .. } => {
                 map.insert("company".to_string(), company_sym.clone());
+            }
+            Action::Assign { target, target_type, .. } => {
+                map.insert("target".to_string(), target.clone());
+                map.insert("target_type".to_string(), target_type.clone());
             }
             Action::HexToken { hex_id, token_type, .. } => {
                 map.insert("hex".to_string(), hex_id.clone());

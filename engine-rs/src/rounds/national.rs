@@ -416,7 +416,13 @@ impl BaseGame {
     /// Ruby G1867 `event_minors_nationalized!` (game.rb:1015-1023, first
     /// 8-train): every remaining minor leaves play — floated ones are
     /// nationalized (in operating order), unstarted ones simply close.
-    pub(crate) fn event_minors_nationalized(&mut self) {
+    ///
+    /// `export_force` (the OR-end export case, see
+    /// `BaseGame::ruby_export_force_target`): when that minor closes, Ruby
+    /// force-ends the finished round's entity — G1867 BuyTrain#pass!
+    /// nationalizes its last operator if the rust (the trains named) left
+    /// it trainless.
+    pub(crate) fn event_minors_nationalized(&mut self, export_force: Option<(String, Vec<String>)>) {
         let minors: Vec<String> = self
             .corporations
             .iter()
@@ -429,6 +435,23 @@ impl BaseGame {
                 self.nationalize_corporation(&sym);
             } else {
                 self.corporations[ci].closed = true;
+            }
+            if let Some((target, rusting)) = &export_force {
+                if *target == sym {
+                    let op = match &self.round {
+                        crate::rounds::Round::Operating(s) => s.operating_order.last().cloned(),
+                        _ => None,
+                    };
+                    if let Some(op) = op {
+                        if let Some(&oi) = self.corp_idx.get(op.as_str()) {
+                            let c = &self.corporations[oi];
+                            let trainless = c.trains.iter().all(|t| rusting.iter().any(|r| *r == t.name));
+                            if c.floated && !c.closed && trainless {
+                                self.nationalize_corporation(&op);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -501,6 +524,26 @@ impl BaseGame {
             Some("nationalize") => {
                 let sym = self.trainless_major.remove(pos);
                 self.nationalize_corporation(&sym);
+                // Ruby nationalize!: `@round.force_next_entity! if
+                // @round.current_entity == corporation` — the operator's own
+                // nationalization ends its turn. Park its pc at Done; the
+                // drain resume advances (skipping the reset major).
+                //
+                // Ruby evaluates current_entity AFTER process_choose dropped
+                // the corp from the queue: with others still queued it is the
+                // next trainless major, so Ruby does NOT force — and then
+                // dead-ends: reset_corporation swaps a NEW object into
+                // @corporations while the round's @entities keep the OLD one
+                // as current operator, so no action by id ever matches it
+                // again ("Blocking step Lay/Upgrade Track cannot process
+                // action pass"; probed on fuzz games). Where Ruby can go on
+                // (the queue's last choice) both agree; the rest follows
+                // nationalize!'s intent.
+                if let crate::rounds::Round::Operating(s) = &mut self.round {
+                    if s.current_corp_sym() == Some(sym.as_str()) {
+                        s.step = crate::rounds::OperatingStep::Done;
+                    }
+                }
             }
             Some(other) => {
                 return Err(GameError::new(format!(

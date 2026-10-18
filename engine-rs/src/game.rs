@@ -276,6 +276,11 @@ pub struct BaseGame {
     /// 1867's $80 waters): hex -> [(edge, cost)]. Static, Arc-shared; empty
     /// for 1830.
     pub(crate) border_costs: Arc<HashMap<String, Vec<(u8, i32)>>>,
+    /// Impassable hex edges (Ruby `border=...,type:impassable`; see
+    /// `title::title_walls`): hex -> sorted edges. Static, Arc-shared.
+    /// Read by `passable_exits_for` (tile-lay rotations) and the lay
+    /// frontier — Ruby drops these edges from `hex.neighbors`.
+    pub(crate) walls: Arc<HashMap<String, Vec<u8>>>,
     /// Borders whose crossing cost has been paid, as (hex, edge) — Ruby
     /// `remove_border_calculate_cost!` deletes a paid border from BOTH
     /// tiles, so it is charged once.
@@ -552,6 +557,7 @@ impl BaseGame {
             auction_unlock_discounts: self.auction_unlock_discounts,
             optional_rules: self.optional_rules.clone(),
             border_costs: Arc::clone(&self.border_costs),
+            walls: Arc::clone(&self.walls),
             paid_borders: self.paid_borders.clone(),
             pending_force_next_entity: self.pending_force_next_entity,
             g1822: self.g1822.clone(),
@@ -1260,8 +1266,8 @@ impl BaseGame {
                 "majors_can_ipo" => {}
                 // Consumed as a flag by the stock-round minor-founding gate.
                 "minors_cannot_start" => {}
-                // Trade-in usability is phase-8-gated where the discounts
-                // are consumed — TODO(1867-trains): enforce in BuyTrain.
+                // A no-op in Ruby too: trade-ins are gated by phase
+                // (GameTitle::trade_in_allowed — 1867 phase 8) in BuyTrain.
                 "train_trade_allowed" => {}
                 // Privates are nationalized: owners paid FACE VALUE by the
                 // bank, and the companies pass to the CN — they stay OPEN
@@ -1310,7 +1316,8 @@ impl BaseGame {
                 // rusted yet; Ruby fires events before rusting too).
                 "minors_nationalized" => {
                     self.note_ruby_force_next_entity(base_name, &phase_defs, &train_defs);
-                    self.event_minors_nationalized();
+                    let export_force = self.ruby_export_force_target(base_name, &phase_defs, &train_defs);
+                    self.event_minors_nationalized(export_force);
                 }
                 other => unimplemented!("train event {other}"),
             }
@@ -1409,6 +1416,53 @@ impl BaseGame {
         if !in_live_or {
             return;
         }
+        if self
+            .ruby_first_crowded_after(base_name, phase_defs, train_defs)
+            .is_some_and(|(_, t)| t == crate::title::CorpType::Minor)
+        {
+            self.pending_force_next_entity = true;
+        }
+    }
+
+    /// The OR-END export variant of [`Self::note_ruby_force_next_entity`]
+    /// (G1867 or_round_finished → Depot#export! → the first 8's
+    /// minors_nationalized, on the FINISHED operating round): when the
+    /// minor that Ruby's DiscardTrain step names as the round's current
+    /// entity closes, `force_next_entity!` runs `@steps.each(&:pass!)` and
+    /// G1867 BuyTrain#pass! nationalizes the round's last operator if the
+    /// export's rust left it trainless (probed on a fuzz game: "NTR is
+    /// nationalized" right after BBG closes, before "-- Stock Round --").
+    /// Returns the minor and this train's rusting names.
+    fn ruby_export_force_target(
+        &self,
+        base_name: &str,
+        phase_defs: &[crate::title::PhaseDef],
+        train_defs: &[crate::title::TrainDef],
+    ) -> Option<(String, Vec<String>)> {
+        if !matches!(&self.round, Round::Operating(s) if s.finished) {
+            return None;
+        }
+        let (sym, t) = self.ruby_first_crowded_after(base_name, phase_defs, train_defs)?;
+        if t != crate::title::CorpType::Minor {
+            return None;
+        }
+        let rusting = train_defs
+            .iter()
+            .filter(|td| td.rusts_on == Some(base_name))
+            .map(|td| td.name.to_string())
+            .collect();
+        Some((sym, rusting))
+    }
+
+    /// The first corporation (definition order) over the train limits of
+    /// the phase `base_name` triggers, with this train's rust applied —
+    /// Ruby `crowded_corps.first` as the purchase's events see it.
+    fn ruby_first_crowded_after(
+        &self,
+        base_name: &str,
+        phase_defs: &[crate::title::PhaseDef],
+        train_defs: &[crate::title::TrainDef],
+    ) -> Option<(String, crate::title::CorpType)> {
         let target = phase_defs.iter().find(|p| p.on == Some(base_name));
         let (major_limit, minor_limit) = match target {
             Some(p) => (p.train_limit as usize, p.minor_train_limit.unwrap_or(0) as usize),
@@ -1419,17 +1473,17 @@ impl BaseGame {
             .filter(|td| td.rusts_on == Some(base_name))
             .map(|td| td.name)
             .collect();
-        let first_crowded = self.corporations.iter().find(|c| {
-            if !c.floated || c.closed || c.corp_type == crate::title::CorpType::National {
-                return false;
-            }
-            let n = c.trains.iter().filter(|t| !rusting.contains(&t.name.as_str())).count();
-            let limit = if c.corp_type == crate::title::CorpType::Minor { minor_limit } else { major_limit };
-            n > limit
-        });
-        if first_crowded.is_some_and(|c| c.corp_type == crate::title::CorpType::Minor) {
-            self.pending_force_next_entity = true;
-        }
+        self.corporations
+            .iter()
+            .find(|c| {
+                if !c.floated || c.closed || c.corp_type == crate::title::CorpType::National {
+                    return false;
+                }
+                let n = c.trains.iter().filter(|t| !rusting.contains(&t.name.as_str())).count();
+                let limit = if c.corp_type == crate::title::CorpType::Minor { minor_limit } else { major_limit };
+                n > limit
+            })
+            .map(|c| (c.sym.clone(), c.corp_type))
     }
 
     /// Remove all trains of a given name from corporations.
@@ -2079,6 +2133,19 @@ impl BaseGame {
     /// — Ruby `Operating#skip_entity?` skips closed round entities). The
     /// plain `advance_to_next_corp` only steps the index.
     pub(crate) fn or_advance_to_next_corp(&mut self) {
+        // 1867: while trainless majors owe their MajorTrainless choice the
+        // round is frozen on the CURRENT operator (Ruby Operating#
+        // after_process returns while a step is active and the operator's
+        // owner is a player): its turn is over — park it at Done — but the
+        // next operator (or the round's end) waits until the queue drains;
+        // the drain resume in process_action_internal advances then. Never
+        // taken by 1830 (no trainless queue).
+        if !self.trainless_major.is_empty() {
+            if let Round::Operating(ref mut s) = self.round {
+                s.step = crate::rounds::OperatingStep::Done;
+            }
+            return;
+        }
         let dead: Vec<String> = self
             .corporations
             .iter()
@@ -2504,6 +2571,16 @@ pub(crate) fn build_hex_from_def(title: &dyn GameTitle, def: &HexDef) -> Hex {
             "red" => TileColor::Red,
             "gray" => TileColor::Gray,
             "yellow" => TileColor::Yellow,
+            // 1867's lake ports (E19/H16; 1830 has no blue hexes). Ruby's
+            // IMPASSABLE_HEX_COLORS treat blue like red and gray — never
+            // upgraded, impassable unless targeting — so they take the red
+            // color (`TileColor` has no blue; the color is not otherwise
+            // read for these offboards). The 1822 family keeps blue as
+            // white: its code reads blue from the hex DSL
+            // (`g1822_hex_is_blue`, `g1822_tile_color_name`) and lays port
+            // tiles on blue hexes.
+            "blue" if title.is_g1822_family() => TileColor::White,
+            "blue" => TileColor::Red,
             _ => TileColor::White,
         };
         let tile_def = tiles::parse_preprinted_tile(def.coord, dsl, color);
@@ -2878,6 +2955,7 @@ impl BaseGame {
             auction_unlock_discounts: 0,
             optional_rules,
             border_costs: Arc::new(border_costs),
+            walls: Arc::new(crate::title::title_walls(title)),
             paid_borders: Vec::new(),
             pending_force_next_entity: false,
             g1822: None,
@@ -2952,9 +3030,18 @@ impl BaseGame {
             names.insert(id, name);
         }
         let t = crate::title::resolve(title);
+        // 1867 seats 2-6 (Ruby CERT_LIMIT / STARTING_CASH keys); other
+        // counts used to panic in the title's starting_cash.
+        if t.name() == "1867" && !(2..=6).contains(&player_ids.len()) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "1867: unsupported player count {}",
+                player_ids.len()
+            )));
+        }
         if t.is_g1822_family() {
             let n = player_ids.len() as u8;
-            if !(crate::title::g1822::MIN_PLAYERS..=crate::title::g1822::MAX_PLAYERS).contains(&n) {
+            let (lo, hi) = t.g1822_family().map_or((0, 0), |f| f.player_range);
+            if !(lo..=hi).contains(&n) {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "{title}: unsupported player count {n}"
                 )));
@@ -3205,6 +3292,8 @@ impl BaseGame {
             let atype = action.action_type();
             let price: Option<i32> = if atype == "buy_shares" || atype == "sell_shares" {
                 match action_dict.get_item("share_price") {
+                    // Ruby `@share_price || price_per_share`: false is none
+                    Ok(Some(v)) if v.is_instance_of::<pyo3::types::PyBool>() => None,
                     Ok(Some(v)) => v.extract().ok(),
                     _ => None,
                 }

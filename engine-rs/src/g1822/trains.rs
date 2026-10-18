@@ -8,12 +8,11 @@ use crate::entities::{EntityId, Train};
 use crate::game::BaseGame;
 
 use super::shares::Bundle;
-use super::{err, Ent, Step, E_TRAIN, EXTRA_TRAINS, EXTRA_TRAIN_PERMANENTS, EXTRA_TRAIN_PULLMAN, UPGRADE_COST_L_TO_2};
-use crate::title::g1822 as data;
+use super::{err, Ent, Step};
 
 impl BaseGame {
-    pub(crate) fn g1822_is_extra_train(name: &str) -> bool {
-        EXTRA_TRAINS.contains(&name)
+    pub(crate) fn g1822_is_extra_train(&self, name: &str) -> bool {
+        self.fam().extra_trains.contains(&name)
     }
 
     /// Phase#train_limit(entity) by corporation type.
@@ -50,13 +49,13 @@ impl BaseGame {
                 _ => t.name.clone(),
             }
         };
-        let normal = co.trains.iter().filter(|t| !Self::g1822_is_extra_train(&name_of(t))).count() as u32;
+        let normal = co.trains.iter().filter(|t| !self.g1822_is_extra_train(&name_of(t))).count() as u32;
         let perm = co
             .trains
             .iter()
-            .filter(|t| EXTRA_TRAIN_PERMANENTS.contains(&name_of(t).as_str()))
+            .filter(|t| self.fam().extra_train_permanents.contains(&name_of(t).as_str()))
             .count();
-        let pullman = co.trains.iter().filter(|t| name_of(t) == EXTRA_TRAIN_PULLMAN).count();
+        let pullman = co.trains.iter().filter(|t| name_of(t) == self.fam().extra_train_pullman).count();
         normal > self.g1822_train_limit(c) || perm > 1 || pullman > 1
     }
 
@@ -124,9 +123,9 @@ impl BaseGame {
             return vec![(t.name.clone(), t.price)];
         }
         let base = Self::g1822_base_name(t);
-        let vs: Vec<(String, i32)> = data::train_variants(base)
+        let vs: Vec<(String, i32)> = (self.fam().train_variants)(base)
             .iter()
-            .filter_map(|v| data::train_variant(base, v).map(|x| (x.0.to_string(), x.2)))
+            .filter_map(|v| (self.fam().train_variant)(base, v).map(|x| (x.0.to_string(), x.2)))
             .collect();
         if vs.is_empty() {
             vec![(t.name.clone(), t.price)]
@@ -179,7 +178,7 @@ impl BaseGame {
     /// G1822 BuyTrain `can_buy_train?` (room? counts non-extra trains).
     pub(crate) fn g1822_can_buy_train(&self, c: &str) -> bool {
         let co = &self.corporations[self.ci(c)];
-        let normal = co.trains.iter().filter(|t| !Self::g1822_is_extra_train(&t.name)).count() as u32;
+        let normal = co.trains.iter().filter(|t| !self.g1822_is_extra_train(&t.name)).count() as u32;
         let room = normal < self.g1822_train_limit(c);
         self.g1822_can_buy_train_with_room(c, room)
     }
@@ -187,13 +186,13 @@ impl BaseGame {
     fn g1822_can_buy_train_with_room(&self, c: &str, room: bool) -> bool {
         let cash = self.corporations[self.ci(c)].cash;
         let normal = room && self.g1822_min_price(c).map_or(false, |m| cash >= m);
-        normal || (!self.g1822_l_upgrades(c).is_empty() && cash >= UPGRADE_COST_L_TO_2)
+        normal || (!self.g1822_l_upgrades(c).is_empty() && cash >= self.fam().upgrade_cost_l_to_2)
     }
 
     /// G1822 `must_buy_train?`: no non-extra trains and a depot train.
     pub(crate) fn g1822_must_buy_train(&self, c: &str) -> bool {
         let co = &self.corporations[self.ci(c)];
-        co.trains.iter().all(|t| Self::g1822_is_extra_train(&t.name)) && !self.g1822_depot_trains().is_empty()
+        co.trains.iter().all(|t| self.g1822_is_extra_train(&t.name)) && !self.g1822_depot_trains().is_empty()
     }
 
     /// G1822 BuyTrain#buyable_trains: depot only before 'can_buy_trains'.
@@ -261,9 +260,9 @@ impl BaseGame {
                 if exchange.is_some() {
                     self.g1822_upgrade_l_train(&c, train_name, *price, variant.as_deref())?;
                 } else {
-                    if variant.as_deref() == Some(E_TRAIN) {
+                    if variant.as_deref() == Some(self.fam().e_train) {
                         let ci = self.ci(&c);
-                        if self.corporations[ci].trains.iter().any(|t| t.name == E_TRAIN) {
+                        if self.corporations[ci].trains.iter().any(|t| t.name == self.fam().e_train) {
                             return err(format!("{c} can only own one E-train"));
                         }
                     }
@@ -315,7 +314,7 @@ impl BaseGame {
             return err("Only an L train can be upgraded");
         }
         let v = variant.unwrap_or("2");
-        let (name, dist, vprice, _) = data::train_variant("L", v).ok_or_else(|| GameError::new("bad variant"))?;
+        let (name, dist, vprice, _) = (self.fam().train_variant)("L", v).ok_or_else(|| GameError::new("bad variant"))?;
         self.corp_spend(c, price)?;
         let t = self.corporations[ci].trains.iter_mut().find(|t| t.id == train_id).unwrap();
         t.name = name.to_string();
@@ -370,7 +369,7 @@ impl BaseGame {
                 if v != train.name {
                     return err(format!("{v} is not a variant of {}", train.id));
                 }
-            } else if let Some((name, dist, vprice, _)) = data::train_variant(&base, v) {
+            } else if let Some((name, dist, vprice, _)) = (self.fam().train_variant)(&base, v) {
                 train.name = name.to_string();
                 train.distance = dist;
                 train.price = vprice;
@@ -465,7 +464,7 @@ impl BaseGame {
         let amount = cost - cash;
         // take_cash_loan: bank pays, debt += amount × 1.5 (ceil).
         self.g1822_bank_pay(&EntityId::player(pid), amount);
-        let debt = amount as i64 + (amount as i64 * super::PLAYER_LOAN_INTEREST_RATE as i64 + 99) / 100;
+        let debt = amount as i64 + (amount as i64 * self.fam().player_loan_interest_rate as i64 + 99) / 100;
         let e = self.gm().player_debt.entry(pid).or_insert(0);
         *e = (*e as i64 + debt).min(i32::MAX as i64) as i32;
         Ok(())
@@ -494,6 +493,10 @@ impl BaseGame {
 
     /// EmergencyMoney#can_sell? (EBUY_SELL_MORE_THAN_NEEDED false).
     pub(crate) fn g1822_emr_can_sell(&self, pid: u32, b: &Bundle) -> bool {
+        // Train#can_sell?: MUST_SELL_IN_BLOCKS — once per corporation
+        if self.fam().must_sell_in_blocks && self.rnd().corporations_sold.iter().any(|c| *c == b.corp) {
+            return false;
+        }
         let eid = EntityId::player(pid);
         let c = &self.corporations[self.ci(&b.corp)];
         if b.shares.iter().any(|&i| c.shares[i].owner != eid) {
@@ -566,7 +569,7 @@ impl BaseGame {
             .position(|t| t.id == train_id)
             .ok_or_else(|| GameError::new(format!("{c} does not own {train_id}")))?;
         let mut t = self.corporations[ci].trains.remove(pos);
-        let removed = EXTRA_TRAIN_PERMANENTS.contains(&t.name.as_str()) || t.name == EXTRA_TRAIN_PULLMAN;
+        let removed = self.fam().extra_train_permanents.contains(&t.name.as_str()) || t.name == self.fam().extra_train_pullman;
         if !removed {
             // remove_variants! + reclaim_train → the discard pile.
             t.owner = EntityId::none();
@@ -624,12 +627,13 @@ impl BaseGame {
 
     /// rust_trains!: every train whose rusts_on is the bought sym.
     fn g1822_rust_trains(&mut self, sym: &str) {
+        let fam = self.fam();
         let rusts = |t: &Train| -> bool {
             let base = Self::g1822_base_name(t);
             let rusts_on = if t.name == base {
-                data::trains().into_iter().find(|d| d.name == base).and_then(|d| d.rusts_on)
+                (fam.trains)().into_iter().find(|d| d.name == base).and_then(|d| d.rusts_on)
             } else {
-                data::train_variant(base, &t.name).and_then(|v| v.3)
+                (fam.train_variant)(base, &t.name).and_then(|v| v.3)
             };
             rusts_on == Some(sym)
         };
@@ -672,7 +676,7 @@ impl BaseGame {
                 }
             }
             "phase_revenue" => {
-                for c in super::PRIVATE_PHASE_REVENUE {
+                for c in self.fam().private_phase_revenue {
                     if self.co_closed(c) {
                         continue;
                     }
@@ -691,6 +695,11 @@ impl BaseGame {
     /// Ruby `remove_train` + `close_corporation` for minors that leave play.
     pub(crate) fn g1822_close_corporation(&mut self, sym: &str) {
         let ci = self.ci(sym);
+        if self.g1822_is_pnw() && Self::g1822_pnw_is_regional(sym) {
+            // PNW close_corporation: a regional's company closes with it
+            let company = format!("M{sym}");
+            self.close_company(&company);
+        }
         // CLOSED_CORP_TOKENS_REMOVED: tokens leave the map.
         for hex in &mut self.hexes {
             for city in &mut hex.tile.cities {

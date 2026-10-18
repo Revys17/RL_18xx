@@ -268,6 +268,11 @@ impl GameTitle for G1867 {
     ) -> Option<Result<i32, crate::actions::GameError>> {
         Some(recorded_route_revenue(game, corp_sym, route))
     }
+    /// G1867 BuyTrain#discountable_trains_allowed?: phase 8 (the
+    /// `train_trade_allowed` event itself is a no-op in Ruby).
+    fn trade_in_allowed(&self, phase: &str) -> bool {
+        phase == "8"
+    }
     /// Two lays per OR turn: the second never an upgrade after an upgrade,
     /// costs $20, and must target a fresh hex (game.rb:330-333 TILE_LAYS).
     fn tile_lays(&self) -> &'static [super::TileLayDef] {
@@ -1327,6 +1332,28 @@ const PLAIN_WHITE_HEXES: &[&str] = &[
     "N6", "O11",
 ];
 
+/// The map.rb HEXES entries that list SEVERAL coordinates under one DSL
+/// string. Ruby builds each preprinted tile with `index:` = the hex's
+/// position in its list, so its tile id (and its cities' ids, e.g.
+/// "C17-4-0") is "<hex>-<index>"; a hex listed alone is "<hex>-0". Only
+/// the wire form of city references reads this.
+pub const PREPRINTED_GROUPS: &[&[&str]] = &[
+    PLAIN_WHITE_HEXES,
+    &["N10", "M11"],
+    &["D8", "F8", "E13", "E15", "C17", "I15", "N12"],
+    &["E17", "D16", "O7"],
+    &["C15", "B18", "H10", "M13"],
+];
+
+/// Ruby's preprinted tile id of `hex` ("<hex>-<index in its HEXES list>").
+pub fn preprinted_tile_id(hex: &str) -> String {
+    let index = PREPRINTED_GROUPS
+        .iter()
+        .find_map(|g| g.iter().position(|h| *h == hex))
+        .unwrap_or(0);
+    format!("{hex}-{index}")
+}
+
 pub fn hex_definitions() -> Vec<HexDef> {
     use HexType::*;
 
@@ -1338,6 +1365,14 @@ pub fn hex_definitions() -> Vec<HexDef> {
             impassable: true,
         }
     }
+    /// A border with no type (a drawn line; crossing is unrestricted).
+    const fn plain(edge: u8) -> BorderDef {
+        BorderDef {
+            edge,
+            cost: None,
+            impassable: false,
+        }
+    }
     const fn water80(edge: u8) -> BorderDef {
         BorderDef {
             edge,
@@ -1346,6 +1381,8 @@ pub fn hex_definitions() -> Vec<HexDef> {
         }
     }
     // Named border sets (const items so the slices are 'static).
+    const PLAIN_0: &[BorderDef] = &[plain(0)];
+    const PLAIN_3: &[BorderDef] = &[plain(3)];
     const WALL_0: &[BorderDef] = &[wall(0)];
     const WALL_2: &[BorderDef] = &[wall(2)];
     const WALL_3: &[BorderDef] = &[wall(3)];
@@ -1453,8 +1490,11 @@ pub fn hex_definitions() -> Vec<HexDef> {
         HexDef { coord: "P8", hex_type: Offboard { yellow_revenue: 30, brown_revenue: 40 }, terrain_cost: 0, borders: NO_BORDERS },
         // A17+A19 are ONE grouped offboard (groups:Detroit, A17 hide:1) —
         // the native router stops at one of them at most.
-        HexDef { coord: "A17", hex_type: Offboard { yellow_revenue: 30, brown_revenue: 50 }, terrain_cost: 0, borders: WALL_0 },
-        HexDef { coord: "A19", hex_type: Offboard { yellow_revenue: 30, brown_revenue: 50 }, terrain_cost: 0, borders: WALL_3 },
+        // Their shared `border=edge:0` / `border=edge:3` has NO type: drawn
+        // between the two halves of the group, not a wall (Ruby
+        // connect_hexes only drops `type: :impassable` borders).
+        HexDef { coord: "A17", hex_type: Offboard { yellow_revenue: 30, brown_revenue: 50 }, terrain_cost: 0, borders: PLAIN_0 },
+        HexDef { coord: "A19", hex_type: Offboard { yellow_revenue: 30, brown_revenue: 50 }, terrain_cost: 0, borders: PLAIN_3 },
         // --- Blue hexes (lake ports, flat revenue 10 at all phases) ---
         HexDef { coord: "E19", hex_type: Offboard { yellow_revenue: 10, brown_revenue: 10 }, terrain_cost: 0, borders: WALL_2 },
         HexDef { coord: "H16", hex_type: Offboard { yellow_revenue: 10, brown_revenue: 10 }, terrain_cost: 0, borders: WALL_3 },

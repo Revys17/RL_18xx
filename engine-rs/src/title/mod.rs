@@ -1,4 +1,6 @@
 pub mod g1822;
+pub mod g1822pnw;
+pub mod g1822pnw_data;
 pub mod g1830;
 pub mod g1867;
 #[cfg(test)]
@@ -244,6 +246,15 @@ pub trait GameTitle: Sync {
 
     // -- train-market rules --
 
+    /// Whether a train may be bought as a trade-in (`exchange`) in phase
+    /// `phase` (Ruby BuyTrain#discountable_trains_allowed?). 1867: phase 8
+    /// only, so never with the first 8-train. Ruby enforces it in the UI
+    /// and in the step's activity, not in process_buy_train; the engine's
+    /// handler rejects it too. Default: always (1830's D-train trade-in).
+    fn trade_in_allowed(&self, _phase: &str) -> bool {
+        true
+    }
+
     /// Whether a corp may buy trains from corps with a DIFFERENT president
     /// (Ruby `ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS`; 1830 false, 1867 true).
     fn train_buy_from_other_players(&self) -> bool {
@@ -369,6 +380,12 @@ pub trait GameTitle: Sync {
     /// which is `Some` exactly for these titles. Default false.
     fn is_g1822_family(&self) -> bool {
         false
+    }
+    /// The 1822-family constants table (`crate::g1822::family`: Ruby's
+    /// `self.class::` constants and the data the step machine reads) —
+    /// `Some` exactly for the 1822-family titles.
+    fn g1822_family(&self) -> Option<&'static crate::g1822::family::Family> {
+        None
     }
 
     /// Hex order for the flat action layout.
@@ -540,13 +557,13 @@ impl GameTitle for G1830 {
 pub fn all_titles() -> &'static [&'static dyn GameTitle] {
     #[cfg(test)]
     {
-        static TITLES: [&'static dyn GameTitle; 4] =
-            [&G1830, &g1867::G1867, &g1822::G1822, &test_title::Test5Share];
+        static TITLES: [&'static dyn GameTitle; 5] =
+            [&G1830, &g1867::G1867, &g1822::G1822, &g1822pnw::G1822Pnw, &test_title::Test5Share];
         &TITLES
     }
     #[cfg(not(test))]
     {
-        static TITLES: [&'static dyn GameTitle; 3] = [&G1830, &g1867::G1867, &g1822::G1822];
+        static TITLES: [&'static dyn GameTitle; 4] = [&G1830, &g1867::G1867, &g1822::G1822, &g1822pnw::G1822Pnw];
         &TITLES
     }
 }
@@ -657,6 +674,52 @@ pub fn compute_adjacency(coords: &[&str], layout: HexLayout) -> HashMap<String, 
     }
 
     adjacency
+}
+
+/// The hex edges track may never cross, per hex: Ruby's impassable borders
+/// (`border=edge:N,type:impassable`), from the title's `HexDef.borders`
+/// (`impassable: true`) and from the preprinted-hex DSL. Ruby
+/// `Game::Base#connect_hexes` drops exactly these from `hex.neighbors`
+/// (`border.type == :impassable`); a border with no type (1830's I1/J2/A9/
+/// A11, 1867's D2/C3/E1/A17/A19 — drawn between hexes of one offboard
+/// group) or a cost-only border (1867's $80 waters) is NOT a wall. Edges
+/// are sorted, deduplicated; hexes without walls are absent.
+pub fn title_walls(title: &dyn GameTitle) -> HashMap<String, Vec<u8>> {
+    let mut out: HashMap<String, Vec<u8>> = HashMap::new();
+    for d in title.hex_definitions() {
+        let mut edges: Vec<u8> = d.borders.iter().filter(|b| b.impassable).map(|b| b.edge).collect();
+        if let Some((dsl, _)) = title.preprinted_hex_dsl(d.coord) {
+            edges.extend(dsl_impassable_edges(dsl));
+        }
+        edges.sort_unstable();
+        edges.dedup();
+        if !edges.is_empty() {
+            out.insert(d.coord.to_string(), edges);
+        }
+    }
+    out
+}
+
+/// The `border=edge:N,type:impassable` edges of a hex DSL string.
+pub fn dsl_impassable_edges(dsl: &str) -> Vec<u8> {
+    dsl.split(';')
+        .filter_map(|part| {
+            let rest = part.trim().strip_prefix("border=")?;
+            let (mut edge, mut impassable) = (None, false);
+            for kv in rest.split(',') {
+                match kv.split_once(':') {
+                    Some(("edge", v)) => edge = v.trim().parse::<u8>().ok(),
+                    Some(("type", v)) => impassable = v.trim() == "impassable",
+                    _ => {}
+                }
+            }
+            if impassable {
+                edge
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -902,8 +965,9 @@ pub struct HexDef {
     pub hex_type: HexType,
     pub terrain_cost: i32,
     /// Per-edge specialities (impassable borders, edge-crossing costs).
-    /// Empty for hexes without them (all of 1830's blocks are ability- or
-    /// geometry-derived; 1867 has impassable river edges + $80 waters).
+    /// Empty for hexes without them (1830: the seven impassable edges of
+    /// E7/F8/C11/C13/D12/B16/C17; 1867: impassable river edges + $80
+    /// waters). Walls are read through [`title_walls`].
     pub borders: &'static [BorderDef],
 }
 

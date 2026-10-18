@@ -1296,6 +1296,15 @@ impl BaseGame {
             }
         }
 
+        // Trade-ins only while the title allows them (1867: phase 8 —
+        // never the first 8-train). No-op for 1830 (always allowed).
+        if exchange.is_some() && !self.title_def().trade_in_allowed(&self.phase.name) {
+            return Err(GameError::new(format!(
+                "Trade-ins are not allowed in phase {}",
+                self.phase.name
+            )));
+        }
+
         // Determine source: "depot", explicit corp sym, or auto-detect.
         // When "from" is unspecified (defaults to "depot"), use these heuristics:
         // 1. If the price differs from the depot price for this train type → inter-corp
@@ -1666,14 +1675,6 @@ impl BaseGame {
 
         self.round = crate::rounds::Round::Operating(new_state);
 
-        // Ruby runs `post_train_buy` after EVERY purchase (depot or
-        // inter-corp), once events/phase/rusting are settled — the 1867
-        // trainless-nationalization consumer (no-op elsewhere). It runs
-        // AFTER the new state is installed: nationalizing minors must not
-        // be clobbered by the `new_state` write, and while the resulting
-        // MajorTrainless queue is non-empty the round freezes as-is.
-        self.post_train_buy();
-
         // If the purchase's events nationalized the BUYING corp itself
         // (`minors_nationalized` on the first 8 can hit a minor buyer),
         // its turn is over — Ruby `@round.force_next_entity!`.
@@ -1687,6 +1688,29 @@ impl BaseGame {
         // purchase's `minors_nationalized` was the round's current entity
         // (see `note_ruby_force_next_entity`).
         let forced = std::mem::take(&mut self.pending_force_next_entity);
+        if (buyer_dead || forced)
+            && self.title_def().buy_train_pass_nationalizes()
+            && (buyer_dead || !self.ruby_can_buy_train(&corp_sym))
+        {
+            // ...and the purchase's trailing `pass!` (Step::Train
+            // buy_train_action: `pass! if !can_buy_train?(buyer)`) then
+            // lands on the round's NEW current entity: G1867
+            // BuyTrain#pass! nationalizes it if the purchase's rust left it
+            // trainless — before post_train_buy, so it is never queued as a
+            // trainless major (probed on a fuzz game: a minor's first 8
+            // rusts CPR's 4s; Ruby nationalizes CPR from BuyTrain#pass! and
+            // C&O operates next). A buyer that can still buy skips the
+            // pass (246533 file id 712: C&O, GTR operates next).
+            self.ruby_trailing_pass_nationalize(&corp_sym);
+        }
+
+        // Ruby runs `post_train_buy` after EVERY purchase (depot or
+        // inter-corp), once events/phase/rusting are settled — the 1867
+        // trainless-nationalization consumer (no-op elsewhere). It runs
+        // AFTER the new state is installed: nationalizing minors must not
+        // be clobbered by the `new_state` write, and while the resulting
+        // MajorTrainless queue is non-empty the round freezes as-is.
+        self.post_train_buy();
         if buyer_dead || forced {
             if let crate::rounds::Round::Operating(ref mut s) = self.round {
                 if s.current_corp_sym() == Some(corp_sym.as_str()) {
@@ -1697,6 +1721,76 @@ impl BaseGame {
 
         self.update_round_state();
         Ok(())
+    }
+
+    /// Ruby Step::Train#can_buy_train? for a 1867 corp: room for a train
+    /// and buying power (full while it must buy) for the cheapest
+    /// available train — another corporation's train counts at $1 — or a
+    /// trade-in it can afford.
+    fn ruby_can_buy_train(&mut self, sym: &str) -> bool {
+        let Some(&ci) = self.corp_idx.get(sym) else { return false };
+        let power = if self.operating_must_buy_train(sym) {
+            self.corp_buying_power_full(ci)
+        } else {
+            self.corporations[ci].cash
+        };
+        let room = self.corporations[ci].trains.len() < self.corp_train_limit(ci);
+        let mut min_price: Option<i32> = None;
+        let mut consider = |p: i32| min_price = Some(min_price.map_or(p, |m: i32| m.min(p)));
+        if let Some(h) = self.depot.trains.first() {
+            consider(h.price);
+        }
+        for t in &self.depot.trains {
+            if self.phase_available(t.available_on.as_deref()) {
+                consider(t.price);
+            }
+        }
+        for t in &self.depot.discarded {
+            consider(t.price);
+        }
+        if self.title_def().train_buy_from_other_players()
+            && self
+                .corporations
+                .iter()
+                .any(|c| c.sym != sym && !c.closed && !c.trains.is_empty())
+        {
+            consider(1);
+        }
+        if room && min_price.is_some_and(|m| power >= m) {
+            return true;
+        }
+        if !self.title_def().trade_in_allowed(&self.phase.name) {
+            return false;
+        }
+        let owned: Vec<String> = self.corporations[ci].trains.iter().map(|t| t.name.clone()).collect();
+        self.depot.trains.iter().chain(self.depot.discarded.iter()).any(|dt| {
+            dt.discount.iter().any(|(n, d)| owned.contains(n) && dt.price - d <= power && dt.price - d < dt.price)
+        })
+    }
+
+    /// The operator after `buyer` in this OR (Ruby next_entity! skipping
+    /// unfloated / closed corps): nationalized when trainless (see the
+    /// force-next branch of the buy handler).
+    fn ruby_trailing_pass_nationalize(&mut self, buyer: &str) {
+        let next = match &self.round {
+            crate::rounds::Round::Operating(s) => {
+                let start = s.operating_order.iter().position(|c| c == buyer).map_or(s.operating_order.len(), |i| i + 1);
+                s.operating_order[start..]
+                    .iter()
+                    .find(|sym| {
+                        self.corp_idx
+                            .get(sym.as_str())
+                            .is_some_and(|&ci| self.corporations[ci].floated && !self.corporations[ci].closed)
+                    })
+                    .cloned()
+            }
+            _ => None,
+        };
+        let Some(next) = next else { return };
+        let ci = self.corp_idx[next.as_str()];
+        if self.corporations[ci].trains.is_empty() {
+            self.nationalize_corporation(&next);
+        }
     }
 
     /// Emergency sell: president sells shares during BuyTrain step to fund
@@ -2373,6 +2467,13 @@ impl BaseGame {
     /// Stops when a corp has a blocking step (waiting for player action) or
     /// all corps have been processed (round finished).
     pub(crate) fn start_operating(&mut self) {
+        // A turn parked at Done while the 1867 trainless queue drains (see
+        // or_advance_to_next_corp) is not set up again.
+        if !self.trainless_major.is_empty()
+            && matches!(&self.round, crate::rounds::Round::Operating(s) if s.step == OperatingStep::Done)
+        {
+            return;
+        }
         // If no corps to operate, mark the round as finished immediately
         if let crate::rounds::Round::Operating(ref s) = self.round {
             if s.operating_order.is_empty() {
@@ -3550,6 +3651,54 @@ mod g1867_or_tests {
         let (cur, step) = run(false);
         assert_eq!(cur.as_deref(), Some("CNR"));
         assert_eq!(step, OperatingStep::BuyTrain, "no crowded minor: CNR may still buy");
+    }
+
+    /// T5: a trade-in (`exchange`) is refused until phase 8 (Ruby
+    /// discountable_trains_allowed?) — so never with the first 8 — and
+    /// accepted at the discounted price once phase 8 is on.
+    #[test]
+    fn trade_in_only_in_phase_8() {
+        let set_phase = |game: &mut BaseGame, name: &str| {
+            let pd = game.title_def().phases().into_iter().find(|p| p.name == name).unwrap();
+            game.phase = crate::core::Phase::new(
+                pd.name.to_string(),
+                pd.operating_rounds,
+                pd.train_limit,
+                pd.tiles.iter().map(|s| s.to_string()).collect(),
+            );
+        };
+        let mut game = new_4p_game();
+        rig_floated(&mut game, "CPR", 14); // a major: the first 8 nationalizes minors
+        let ci = game.corp_idx["CPR"];
+        game.corporations[ci].cash = 2000;
+        while game.depot.trains.first().map(|t| t.name.as_str()) != Some("5") {
+            game.depot.trains.remove(0);
+        }
+        let mut five = game.depot.trains.remove(0);
+        five.owner = EntityId::corporation("CPR");
+        let five_id = five.id.clone();
+        game.corporations[ci].trains.push(five);
+        while game.depot.trains.first().map(|t| t.name.as_str()) != Some("8") {
+            game.depot.trains.remove(0);
+        }
+        let eight = game.depot.trains[0].id.clone();
+        let buy = |id: &str, price: i32| crate::actions::Action::BuyTrain {
+            entity_id: "CPR".into(),
+            train_name: id.to_string(),
+            price,
+            from: "depot".into(),
+            variant: Some("8".into()),
+            exchange: Some(five_id.clone()),
+        };
+        set_phase(&mut game, "7");
+        enter_buy_train(&mut game, "CPR");
+        let err = game.process_action_internal(&buy(&eight, 725)).unwrap_err();
+        assert!(err.to_string().contains("Trade-ins are not allowed"), "{err}");
+        set_phase(&mut game, "8");
+        enter_buy_train(&mut game, "CPR");
+        game.process_action_internal(&buy(&eight, 725)).expect("phase-8 trade-in");
+        assert_eq!(game.corporations[ci].cash, 2000 - 725);
+        assert!(game.corporations[ci].trains.iter().all(|t| t.name != "5"));
     }
 
     /// `needed_cash` for the obligation is Ruby Depot#min_depot_price

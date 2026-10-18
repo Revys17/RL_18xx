@@ -537,7 +537,8 @@ pub fn parse_tile(name: &str, code: &str, color: TileColor) -> TileDef {
                 match k {
                     "a" => a_ref = v,
                     "b" => b_ref = v,
-                    "terminal" => terminal = v == "true" || v == "1",
+                    // Ruby keeps the string ("1", "2"): any value is terminal
+                    "terminal" => terminal = !matches!(v, "" | "0" | "false"),
                     _ => {}
                 }
             }

@@ -166,6 +166,9 @@ impl GameTitle for G1822 {
     fn is_g1822_family(&self) -> bool {
         true
     }
+    fn g1822_family(&self) -> Option<&'static crate::g1822::family::Family> {
+        Some(&FAMILY)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1145,3 +1148,154 @@ pub const FRANCE_HEX: &str = "Q44";
 pub const CARDIFF_HEX: &str = "F35";
 pub const MERTHYR_TYDFIL_PONTYPOOL_HEX: &str = "F33";
 pub const UPGRADEABLE_S_HEX_NAME: &str = "D35";
+
+// ---------------------------------------------------------------------------
+// The family table (crate::g1822::family): 1822's class constants. The
+// variants' tables start from this one (Ruby inheritance).
+// ---------------------------------------------------------------------------
+
+/// BIDDING_TOKENS = { '2': 8, '3': 6, '4': 5, '5': 4, '6': 3, '7': 3 }.
+fn bidding_tokens(players: usize) -> i32 {
+    match players {
+        2 => 8,
+        3 => 6,
+        4 => 5,
+        5 => 4,
+        _ => 3,
+    }
+}
+
+/// PRIVATE_COMPANIES_ACQUISITION: (acquirer classes, phase).
+pub fn private_acquisition(sym: &str) -> crate::g1822::family::Acquisition {
+    use CorpType::{Major as J, Minor as N};
+    const MAJ: &[CorpType] = &[J];
+    const BOTH: &[CorpType] = &[J, N];
+    const NONE: &[CorpType] = &[];
+    Some(match sym {
+        "P1" => (MAJ, 5),
+        "P2" => (BOTH, 2),
+        "P3" => (MAJ, 2),
+        "P4" => (MAJ, 2),
+        "P5" => (MAJ, 3),
+        "P6" => (MAJ, 3),
+        "P7" => (MAJ, 3),
+        "P8" => (BOTH, 3),
+        "P9" => (BOTH, 3),
+        "P10" => (BOTH, 3),
+        "P11" => (BOTH, 2),
+        "P12" => (BOTH, 3),
+        "P13" => (BOTH, 5),
+        "P14" => (BOTH, 5),
+        "P15" => (BOTH, 2),
+        "P16" => (NONE, 0),
+        "P17" => (MAJ, 2),
+        "P18" => (MAJ, 5),
+        "P19" => (BOTH, 1),
+        "P20" => (BOTH, 3),
+        "P21" => (BOTH, 2),
+        _ => return None,
+    })
+}
+
+pub static FAMILY: crate::g1822::family::Family = crate::g1822::family::Family {
+    variant: crate::g1822::family::Variant::G1822,
+    player_range: (MIN_PLAYERS, MAX_PLAYERS),
+    bidding_box_minor_count: 4,
+    bidding_box_concession_count: 3,
+    bidding_box_private_count: 3,
+    bidding_box_start_minor: "M24",
+    bidding_box_start_concession: "C1",
+    bidding_box_start_private: "P1",
+    bidding_tokens,
+    bidding_tokens_per_action: 3,
+    min_bid_increment: 5,
+    minor_start_par_price: 50,
+    minor_bidbox_price: 200,
+    token_price: 100,
+    upgrade_cost_l_to_2: 80,
+    player_loan_interest_rate: 50,
+    starting_companies: STARTING_COMPANIES,
+    starting_companies_plus: STARTING_COMPANIES_PLUS,
+    starting_corporations: STARTING_CORPORATIONS,
+    starting_corporations_plus: STARTING_CORPORATIONS_PLUS,
+    plus_expansion_bidbox: [
+        &["P1", "P3", "P4", "P13", "P14", "P19"],
+        &["P2", "P5", "P8", "P10", "P11", "P12", "P21"],
+        &["P6", "P7", "P9", "P15", "P16", "P17", "P18", "P20"],
+    ],
+    two_home_corporation: "LNWR",
+    minor_14_id: "14",
+    minor_14_home_hex: "M38",
+    company_mtonr: "P2",
+    company_lcdr: "P5",
+    company_egr: "P8",
+    company_double_cash: "P9",
+    company_double_cash_revenue: &[0, 0, 0, 20, 20, 40, 40, 60],
+    company_gswr: "P10",
+    company_gswr_discount: 40,
+    company_ber: "P11",
+    company_lsr: "P12",
+    company_10x_revenue: "P15",
+    company_osth: "P16",
+    company_lur: "P17",
+    company_chpr: "P18",
+    company_5x_revenue: "P20",
+    company_hsbc: "P21",
+    company_hsbc_tiles: &["N21", "N23"],
+    private_mail_contracts: &["P6", "P7"],
+    private_remove_revenue: &["P5", "P6", "P7", "P8", "P10", "P17", "P18", "P21"],
+    private_phase_revenue: &["P15", "P20"],
+    private_trains: &["P1", "P3", "P4", "P13", "P14", "P19"],
+    private_acquisition,
+    company_trains: &[("P3", "2P-0"), ("P4", "2P-1"), ("P1", "5P-0"), ("P13", "P+-0"), ("P14", "P+-1"), ("P19", "LP-0")],
+    concessions: &[
+        ("C1", "LNWR"),
+        ("C2", "GWR"),
+        ("C3", "LBSCR"),
+        ("C4", "SECR"),
+        ("C5", "CR"),
+        ("C6", "MR"),
+        ("C7", "LYR"),
+        ("C8", "NBR"),
+        ("C9", "SWR"),
+        ("C10", "NER"),
+    ],
+    abilities: crate::g1822::track::abilities_1822,
+    corp_token_abilities: &[("SECR", &["P43"], 0)],
+    consent_blockers: &[
+        ("C1", "LNWR", "M36"),
+        ("C2", "GWR", "L39"),
+        ("C3", "LBSCR", "M40"),
+        ("C4", "SECR", "N39"),
+        ("M15", "15", "N37"),
+        ("M16", "16", "L37"),
+    ],
+    extra_trains: &["2P", "P+", "LP"],
+    extra_train_pullman: "P+",
+    extra_train_permanents: &["2P", "LP"],
+    local_trains: &["L", "LP"],
+    e_train: "E",
+    local_train_can_carry_mail: false,
+    trains,
+    train_variant,
+    train_variants,
+    destination,
+    exchange_tokens,
+    london_hex: LONDON_HEX,
+    english_channel_hex: ENGLISH_CHANNEL_HEX,
+    france_hex: FRANCE_HEX,
+    cardiff_hex: CARDIFF_HEX,
+    merthyr_tydfil_pontypool_hex: MERTHYR_TYDFIL_PONTYPOOL_HEX,
+    upgradeable_s_hex_name: UPGRADEABLE_S_HEX_NAME,
+    upgradeable_s_yellow_city_tile: "57",
+    upgradeable_s_yellow_rotations: &[2, 5],
+    double_hex: &["D35", "F7", "H21", "H37"],
+    track_plain: &["7", "8", "9", "80", "81", "82", "83", "544", "545", "546", "60", "169"],
+    track_town: &["3", "4", "58", "141", "142", "143", "144", "767", "768", "769", "X17"],
+    minor_green_upgrade: &["yellow", "green"],
+    hex_dsl,
+    hex_dsl_all: HEX_DSL,
+    tile_dsl,
+    must_sell_in_blocks: false,
+    game_end_lock_first_trigger: true,
+};

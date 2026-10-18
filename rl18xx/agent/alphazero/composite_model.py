@@ -56,6 +56,24 @@ class PolicyValueComposite:
             _, _, values = self.value_model.run_many_encoded(encoded_game_states, *args, **kwargs)
         return probs, log_probs, values
 
+    @property
+    def supports_packed(self) -> bool:
+        return all(hasattr(m, "run_packed") for m in (self.policy_model, self.value_model))
+
+    def packed_inputs(self, parts: list) -> dict:
+        """One set of device inputs for both networks (``AlphaZeroTransformerModel.packed_inputs``)."""
+        return self.policy_model.packed_inputs(parts)
+
+    def run_packed(self, inputs: dict, legal_indices=None):
+        """``run_many_encoded`` on ``packed_inputs``: the policy network's forward
+        and the value network's value-only forward read the same device tensors."""
+        probs, log_probs, _ = self.policy_model.run_packed(inputs, legal_indices)
+        self.last_price_components = getattr(self.policy_model, "last_price_components", None)
+        if self.blend is not None:
+            win, score = self.value_model.run_packed(inputs, head="win+score")
+            return probs, log_probs, (1.0 - self.blend) * win + self.blend * score
+        return probs, log_probs, self.value_model.run_packed(inputs, head=self.value_head)
+
     def run_encoded(self, encoded_game_state):
         probs, log_probs, values = self.run_many_encoded([encoded_game_state])
         return probs[0], log_probs[0] if log_probs is not None else None, values[0]
@@ -128,6 +146,29 @@ class SharedValueModel:
     def run_encoded(self, encoded_game_state):
         probs, log_probs, values = self.run_many_encoded([encoded_game_state])
         return probs[0], log_probs[0] if log_probs is not None else None, values[0]
+
+    @property
+    def supports_packed(self) -> bool:
+        return hasattr(self.model, "run_packed")
+
+    def packed_inputs(self, parts):
+        return self.model.packed_inputs(parts)
+
+    def run_packed(self, inputs: dict, legal_indices=None, head: str = "policy"):
+        """``run_many_encoded`` on ``packed_inputs`` (the inference server's fast path):
+        one forward gives the policy and this wrapper's values."""
+        import torch.nn.functional as F
+
+        m = self.model
+        if head != "policy":
+            _, win_loss_logits, score_pred, _ = m.forward_packed(inputs, value_only=True)
+            return self._values(win_loss_logits, score_pred)
+        hints = m._policy_row_hints(legal_indices) if legal_indices is not None else {}
+        policy_logits, win_loss_logits, score_pred, _ = m.forward_packed(inputs, **hints)
+        self.last_price_components = getattr(m, "last_price_components", None)
+        probs = F.softmax(policy_logits, dim=1)
+        log_probs = None if legal_indices is not None else F.log_softmax(policy_logits, dim=1)
+        return probs, log_probs, self._values(win_loss_logits, score_pred)
 
     def run_values_encoded(self, encoded_game_states):
         _, win_loss_logits, score_pred, _ = self.model._forward_encoded_batch(encoded_game_states, value_only=True)

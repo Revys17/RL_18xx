@@ -65,7 +65,7 @@ def supported_titles() -> set[str]:
 # against corporations first for titles with NUMERIC corporation syms (1822's
 # minors are "1".."30"), so those titles seat players at 1001+ (the engine
 # rejects colliding ids). Every other title keeps the 1830 convention 1..N.
-SEAT_ID_BASE = {"1822": 1000}
+SEAT_ID_BASE = {"1822": 1000, "1822PNW": 1000, "1822MX": 1000, "1822CA": 1000}
 
 
 def game_seed(game: dict) -> int:

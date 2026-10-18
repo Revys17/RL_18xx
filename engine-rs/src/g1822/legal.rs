@@ -23,16 +23,13 @@ use serde_json::{json, Map, Value};
 use crate::actions::{Action, DividendKind, GameError, RouteData};
 use crate::entities::EntityId;
 use crate::game::BaseGame;
-use crate::title::g1822 as data;
 use crate::title::{CorpType, CrossPlayerPolicy};
 
 use super::shares::Bundle;
 use super::tile_rules::RotRule;
 use super::track::AbKind;
-use super::{
-    AcquireState, Ent, RoundKind, Step, COMPANY_CHPR, COMPANY_DOUBLE_CASH, COMPANY_EGR, COMPANY_HSBC, COMPANY_LCDR,
-    COMPANY_LSR, COMPANY_LUR, COMPANY_MTONR, COMPANY_OSTH, E_TRAIN, MIN_BID_INCREMENT, UPGRADE_COST_L_TO_2,
-};
+use super::family::Family;
+use super::{AcquireState, Ent, RoundKind, Step};
 
 /// An inclusive price range with a step (`lo + k*step <= hi`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,7 +57,7 @@ pub struct Move {
 }
 
 impl Move {
-    fn plain(action: Action) -> Move {
+    pub(crate) fn plain(action: Action) -> Move {
         Move {
             action,
             combo: Vec::new(),
@@ -100,11 +97,18 @@ pub fn g1822_generator_status(step: Step, action_type: &str) -> GenStatus {
         | (Step::BuySellParShares, "payoff_player_debt" | "payoff_player_debt_partial" | "choose_ability") => {
             Generated
         }
+        // 1822PNW: the conversion's exchange choice (pnw_legal)
+        (Step::BuySellParShares, "choose") => Generated,
         (Step::Choose, "choose" | "pass") => Generated,
         (Step::DiscardTrain, "discard_train") => Generated,
         (Step::PendingToken, "place_token") => Generated,
         (Step::FirstTurnHousekeeping, "buy_train" | "pass") => Generated,
         (Step::AcquireCompany, "acquire_company" | "pass") => Generated,
+        // 1822PNW (pnw_legal): P20's associated-minor choice, the Assign
+        // step's paper mill / ski haus, the Merger round
+        (Step::AcquireCompany, "choose") => Generated,
+        (Step::Assign, "assign") => Generated,
+        (Step::Merge, "merge" | "choose" | "pass") => Generated,
         (Step::SpecialChoose, "choose") => Generated,
         (Step::SpecialTrack, "lay_tile" | "pass") => Generated,
         (Step::SpecialToken, "place_token" | "pass") => Generated,
@@ -164,6 +168,18 @@ impl BaseGame {
         if self.finished || self.g1822.is_none() {
             return Vec::new();
         }
+        // The UI-side graph computes the generator makes (e.g. a minor
+        // acquisition's connection checks) are not Ruby process computes:
+        // they must not fill the route latch or the Ruby graph cache.
+        let memo = (self.g().route_purchase.clone(), self.g().ruby_graphs.clone());
+        let out = self.g1822_legal_moves_inner(policy);
+        let gm = self.gm();
+        gm.route_purchase = memo.0;
+        gm.ruby_graphs = memo.1;
+        out
+    }
+
+    fn g1822_legal_moves_inner(&mut self, policy: CrossPlayerPolicy) -> Vec<Move> {
         let Some(bi) = self.g1822_active_step() else { return Vec::new() };
         let step = self.rnd().steps[bi];
         let Some(ent) = self.g1822_step_current_entity(bi) else { return Vec::new() };
@@ -218,6 +234,15 @@ impl BaseGame {
 
     /// Debug: every candidate before the apply filter, with its error.
     pub fn g1822_candidates_debug(&mut self) -> Vec<(String, Option<String>)> {
+        let memo = (self.g().route_purchase.clone(), self.g().ruby_graphs.clone());
+        let out = self.g1822_candidates_debug_inner();
+        let gm = self.gm();
+        gm.route_purchase = memo.0;
+        gm.ruby_graphs = memo.1;
+        out
+    }
+
+    fn g1822_candidates_debug_inner(&mut self) -> Vec<(String, Option<String>)> {
         let Some(bi) = self.g1822_active_step() else { return Vec::new() };
         let step = self.rnd().steps[bi];
         let Some(ent) = self.g1822_step_current_entity(bi) else { return Vec::new() };
@@ -288,14 +313,35 @@ impl BaseGame {
     fn gen_bsps(&mut self, ent: &Ent) -> Vec<Move> {
         let Ent::Player(pid) = ent else { return Vec::new() };
         let pid = *pid;
+        // 1822PNW: converting an associated minor → its share-count choice
+        if self.g1822_is_pnw() && self.rnd().converting_major.is_some() {
+            // (an exchange that leaves the player unable to pay the bids
+            // they hold dead-ends the round — Ruby raises there; offered
+            // only when nothing else is)
+            let all: Vec<Move> = self
+                .g1822_pnw_convert_choices()
+                .into_iter()
+                .map(|choice| Move::plain(Action::Choose { entity_id: player_ent(pid), choice }))
+                .collect();
+            let ok: Vec<Move> = all
+                .iter()
+                .filter(|m| match &m.action {
+                    Action::Choose { choice, .. } => self.pnw_exchange_affordable(pid, choice.parse().unwrap_or(0), None),
+                    _ => true,
+                })
+                .cloned()
+                .collect();
+            return if ok.is_empty() { all } else { ok };
+        }
         let types = self.g1822_bsps_actions(ent);
         let me = player_ent(pid);
         let mut out = Vec::new();
         // P16 tax haven (the current player's): choose_ability.
-        if !self.co_closed(COMPANY_OSTH) && self.co_owner(COMPANY_OSTH) == EntityId::player(pid) {
-            for choice in self.g1822_tax_haven_choices(COMPANY_OSTH) {
+        let osth = self.fam().company_osth;
+        if !self.co_closed(osth) && self.co_owner(osth) == EntityId::player(pid) {
+            for choice in self.g1822_tax_haven_choices(osth) {
                 out.push(Move::plain(Action::ChooseAbility {
-                    entity_id: COMPANY_OSTH.to_string(),
+                    entity_id: osth.to_string(),
                     choice,
                 }));
             }
@@ -435,6 +481,36 @@ impl BaseGame {
             if c.closed || c.corp_type != CorpType::Major {
                 continue;
             }
+            // 1822PNW get_par_prices: converting one's floated associated
+            // minor — the par prices (not 50) some exchange works at
+            if self.g1822_is_pnw()
+                && self.g1822_pnw_formation(&c.sym, Some(pid)) == super::pnw::Formation::Convertable
+            {
+                let Some(minor) = self.g1822_pnw_assoc_minor(&c.sym) else { continue };
+                let m = &self.corporations[self.ci(&minor)];
+                if m.floated {
+                    let value = m.share_price.as_ref().map_or(0, |sp| sp.price) * 2;
+                    let mut pars: Vec<i32> = self.g1822_pnw_par_prices().into_iter().map(|sp| sp.price).collect();
+                    pars.dedup();
+                    for p in pars {
+                        let shares = Self::g1822_pnw_possible_shares(p, m.cash, value, self.player_cash(pid));
+                        if p != 50 && shares.iter().any(|&n| self.pnw_exchange_affordable(pid, n, Some((p, value, m.cash)))) {
+                            out.push(Move::plain(Action::Par {
+                                entity_id: player_ent(pid),
+                                corporation_sym: c.sym.clone(),
+                                share_price: p,
+                            }));
+                        }
+                    }
+                    continue;
+                }
+            }
+            // 1822PNW ipo_type: a major is parable only while its associated
+            // minor is unowned (Ruby's process_par does not check: parring
+            // another player's minor's major crashes in after_par)
+            if self.g1822_is_pnw() && self.g1822_pnw_formation(&c.sym, Some(pid)) != super::pnw::Formation::Parable {
+                continue;
+            }
             let mult = c.president_percent() as i32 / 10;
             let avail = self.g1822_available_par_cash(pid, &c.sym, None);
             for &p in &par_cells {
@@ -455,13 +531,7 @@ impl BaseGame {
     /// strings are symbols — so the UI limits bids by tokens; the server
     /// only checks prices).
     fn bidding_tokens_per_player(&self) -> i32 {
-        match self.players.len() {
-            2 => 8,
-            3 => 6,
-            4 => 5,
-            5 => 4,
-            _ => 3,
-        }
+        (self.fam().bidding_tokens)(self.players.len())
     }
 
     fn gen_bids(&self, pid: u32) -> Vec<Move> {
@@ -477,8 +547,9 @@ impl BaseGame {
         for co in targets {
             let Some(ci) = self.co_idx(&co) else { continue };
             let high = self.g1822_highest_bid(&co);
+            let inc = self.fam().min_bid_increment;
             let min = match &high {
-                Some(h) => h.price + MIN_BID_INCREMENT,
+                Some(h) => h.price + inc,
                 None => self.companies[ci].min_bid(),
             };
             // can_bid_company?
@@ -494,13 +565,13 @@ impl BaseGame {
             if mine.is_none() && tokens <= 0 {
                 continue;
             }
-            let hi = min + ((max - min) / MIN_BID_INCREMENT) * MIN_BID_INCREMENT;
+            let hi = min + ((max - min) / inc) * inc;
             let mut m = Move::plain(Action::Bid {
                 entity_id: player_ent(pid),
                 company_sym: co.clone(),
                 price: min,
             });
-            m.price = Some(PriceRange { lo: min, hi, step: MIN_BID_INCREMENT });
+            m.price = Some(PriceRange { lo: min, hi, step: inc });
             out.push(m);
         }
         out
@@ -515,7 +586,6 @@ impl BaseGame {
         if self.g1822_choose_actions(ent).is_empty() {
             return Vec::new();
         }
-        let _ = COMPANY_DOUBLE_CASH;
         vec![
             Move::plain(Action::Choose {
                 entity_id: player_ent(*pid),
@@ -541,6 +611,10 @@ impl BaseGame {
         let pass = || Move::plain(Action::Pass { entity_id: eid.clone() });
         let mut out = Vec::new();
         match step {
+            // 1822PNW: the Merger round (Assign never blocks: its
+            // companies act in parallel, see gen_parallel_companies)
+            Step::Merge => out.extend(self.gen_pnw_merge(ent)),
+            Step::Assign => {}
             Step::DiscardTrain => {
                 if let Ent::Corp(c) = ent {
                     out.extend(self.gen_discards(c));
@@ -565,6 +639,10 @@ impl BaseGame {
             }
             Step::AcquireCompany => {
                 if let Ent::Corp(c) = ent {
+                    // 1822PNW: after P20, only its associated-minor choice
+                    if self.g1822_is_pnw() && !self.rnd().p20_choices.is_empty() {
+                        return self.gen_pnw_p20_choices(c);
+                    }
                     for co in self.g1822_purchasable_companies(c) {
                         out.push(Move::plain(Action::AcquireCompany {
                             entity_id: c.clone(),
@@ -616,7 +694,7 @@ impl BaseGame {
             Step::DestinationToken => {
                 if let Ent::Corp(c) = ent {
                     if self.g1822_destination_connected(c) {
-                        if let Some(hex) = data::destination(c) {
+                        if let Some(hex) = self.g1822_destination(c) {
                             out.push(Move::plain(Action::HexToken {
                                 entity_id: c.clone(),
                                 hex_id: hex.to_string(),
@@ -690,14 +768,14 @@ impl BaseGame {
 
     fn gen_discards(&self, c: &str) -> Vec<Move> {
         let co = &self.corporations[self.ci(c)];
-        let perm = co.trains.iter().filter(|t| super::EXTRA_TRAIN_PERMANENTS.contains(&t.name.as_str())).count();
-        let pull = co.trains.iter().filter(|t| t.name == super::EXTRA_TRAIN_PULLMAN).count();
+        let perm = co.trains.iter().filter(|t| self.fam().extra_train_permanents.contains(&t.name.as_str())).count();
+        let pull = co.trains.iter().filter(|t| t.name == self.fam().extra_train_pullman).count();
         let eligible: Vec<&crate::entities::Train> = if perm > 1 {
-            co.trains.iter().filter(|t| super::EXTRA_TRAIN_PERMANENTS.contains(&t.name.as_str())).collect()
+            co.trains.iter().filter(|t| self.fam().extra_train_permanents.contains(&t.name.as_str())).collect()
         } else if pull > 1 {
-            co.trains.iter().filter(|t| t.name == super::EXTRA_TRAIN_PULLMAN).collect()
+            co.trains.iter().filter(|t| t.name == self.fam().extra_train_pullman).collect()
         } else {
-            co.trains.iter().filter(|t| !Self::g1822_is_extra_train(&t.name)).collect()
+            co.trains.iter().filter(|t| !self.g1822_is_extra_train(&t.name)).collect()
         };
         let mut seen: Vec<String> = Vec::new();
         let mut out = Vec::new();
@@ -721,7 +799,7 @@ impl BaseGame {
         // — only minor 14's own home token skips Tokener#check_connected;
         // a major's London token after acquiring bid-box minor 14 must go
         // to a city it connects to.
-        let graph = (p.corp != super::MINOR_14_ID).then(|| self.g1822_graph(&p.corp));
+        let graph = (p.corp != self.fam().minor_14_id).then(|| self.g1822_graph(&p.corp));
         let mut out = Vec::new();
         for hex in &p.hexes {
             let Some(&hi) = self.hex_idx.get(hex) else { continue };
@@ -747,7 +825,8 @@ impl BaseGame {
     fn gen_company_choices(&self, c: &str, time: &str) -> Vec<Move> {
         let mut out = Vec::new();
         for co in self.companies_of(&EntityId::corporation(c)) {
-            if !matches!(co.as_str(), COMPANY_CHPR | COMPANY_LCDR | COMPANY_LUR) {
+            let f = self.fam();
+            if ![f.company_chpr, f.company_lcdr, f.company_lur].iter().any(|x| Family::is(x, &co)) {
                 continue;
             }
             for choice in self.g1822_company_choices(&co, time) {
@@ -771,6 +850,7 @@ impl BaseGame {
             // Ruby step walk for the company's action types.
             let mut lay = false;
             let mut tok = false;
+            let mut assign = false;
             for (i, s) in steps.iter().enumerate().take(bi + 1) {
                 if !self.g1822_step_active(i) {
                     continue;
@@ -779,8 +859,12 @@ impl BaseGame {
                 match s {
                     Step::SpecialTrack if acts.contains(&"lay_tile") => lay = true,
                     Step::SpecialToken if acts.contains(&"place_token") => tok = true,
+                    Step::Assign if acts.contains(&"assign") => assign = true,
                     _ => {}
                 }
+            }
+            if assign {
+                out.extend(self.gen_pnw_assigns(&co));
             }
             if lay {
                 out.extend(self.gen_company_lays(&co, false));
@@ -816,6 +900,9 @@ impl BaseGame {
     }
 
     fn gen_corp_lays_inner(&mut self, c: &str) -> Vec<Move> {
+        if self.g1822_is_pnw() {
+            return self.gen_pnw_corp_lays(c);
+        }
         let graph = self.g1822_graph(c);
         let nbrs = self.g1822_neighbors();
         let Some((lay, upgrade, no_reuse)) = self.g1822_tile_lay(c, false) else { return Vec::new() };
@@ -841,7 +928,7 @@ impl BaseGame {
     /// (tile, rotation) candidates on one hex, with the UI's max-exits
     /// filter and (for a corporation's own lay) check_track_restrictions!.
     #[allow(clippy::too_many_arguments)]
-    fn lays_for(
+    pub(crate) fn lays_for(
         &mut self,
         entity: &str,
         operator: &str,
@@ -869,7 +956,8 @@ impl BaseGame {
         // A corporation's own lay (Track step): every process-side check is
         // the generator's (slot rules, supply, rotation) except the cost,
         // checked here, so the lay skips the apply-on-a-clone filter.
-        let own = restrict && entity == operator && combo.is_empty();
+        // (1822PNW: every lay goes through the apply filter)
+        let own = restrict && entity == operator && combo.is_empty() && !self.g1822_is_pnw();
         let cash = self.corp_idx.get(operator).map_or(0, |&i| self.corporations[i].cash);
         let mut out = Vec::new();
         for (t, rots) in with_rot {
@@ -916,8 +1004,8 @@ impl BaseGame {
     ) -> bool {
         let hex = &self.hexes[hi];
         if hex.tile.paths.is_empty()
-            || hex.id == data::ENGLISH_CHANNEL_HEX
-            || hex.id == data::CARDIFF_HEX
+            || Family::is(self.fam().english_channel_hex, &hex.id)
+            || Family::is(self.fam().cardiff_hex, &hex.id)
         {
             return true; // laying on track-less ground always uses new track
         }
@@ -975,6 +1063,18 @@ impl BaseGame {
     /// SpecialTrack lays by a company (alone and in Ruby-valid combos).
     fn gen_company_lays(&mut self, co: &str, in_step: bool) -> Vec<Move> {
         let _ = in_step;
+        if self.g1822_is_pnw() {
+            if let Some(v) = self.gen_pnw_company_lays(co) {
+                return v;
+            }
+            let mut v = self.gen_company_lays_1822(co);
+            v.extend(self.pnw_company_extras(co));
+            return v;
+        }
+        self.gen_company_lays_1822(co)
+    }
+
+    fn gen_company_lays_1822(&mut self, co: &str) -> Vec<Move> {
         let Some((_, ab)) = self.g1822_track_ability(co) else { return Vec::new() };
         let Some(owner) = self.co_owner(co).corp_sym().map(str::to_string) else { return Vec::new() };
         // Combos: companies this one combines with (owned by the same
@@ -1016,17 +1116,17 @@ impl BaseGame {
         let nbrs = self.g1822_neighbors();
         let mut entities = vec![co.to_string()];
         entities.extend(combo.iter().cloned());
-        let has = |id: &str| entities.iter().any(|e| e == id);
-        let rule = if co == COMPANY_LCDR {
+        let f = self.fam();
+        let rule = if Family::is(f.company_lcdr, co) {
             RotRule::LcdrChannel
-        } else if has(COMPANY_MTONR) {
+        } else if entities.iter().any(|e| self.g1822_must_remove_town(e)) {
             RotRule::RemoveTown
         } else {
             RotRule::Normal
         };
         let graph = self.g1822_graph(owner);
-        let extra = has(COMPANY_LSR);
-        let tile_lay = self.g1822_tile_lay(owner, co == COMPANY_HSBC);
+        let extra = entities.iter().any(|e| self.g1822_company_ability_extra_track(e));
+        let tile_lay = self.g1822_tile_lay(owner, Family::is(f.company_hsbc, co));
         let mut out = Vec::new();
         let hexes: Vec<usize> = if ab.kind == AbKind::Teleport {
             ab.hexes.iter().filter_map(|h| self.hex_idx.get(h).copied()).collect()
@@ -1036,6 +1136,10 @@ impl BaseGame {
             graph.connected_hexes.keys().copied().collect()
         };
         for hi in hexes {
+            // 1822PNW SpecialTrack#available_hex: never a mountain-icon hex
+            if self.g1822_is_pnw() && self.pnw_mountain_icon(hi) {
+                continue;
+            }
             let hex = &self.hexes[hi];
             let connected: Vec<u8> = if ab.kind == AbKind::Teleport {
                 nbrs.get(&hi).map(|m| m.keys().copied().collect()).unwrap_or_default()
@@ -1045,7 +1149,7 @@ impl BaseGame {
                     None => continue,
                 }
             };
-            if ab.kind != AbKind::Teleport && co != COMPANY_HSBC {
+            if ab.kind != AbKind::Teleport && !Family::is(f.company_hsbc, co) {
                 // available_hex: the operator's lay slot, unless P12 adds one.
                 let white = hex.tile.color == crate::tiles::TileColor::White;
                 match tile_lay {
@@ -1066,34 +1170,37 @@ impl BaseGame {
                         }
                     }
                 }
-                if has(COMPANY_MTONR) && hex.tile.towns.len() != 1 {
+                if entities.iter().any(|e| self.g1822_must_remove_town(e)) && hex.tile.towns.len() != 1 {
                     continue;
                 }
-                if has("P11")
-                    && !super::tile_rules::TRACK_PLAIN.contains(&base(&hex.tile.name))
-                    && !super::tile_rules::TRACK_TOWN.contains(&base(&hex.tile.name))
+                if entities.iter().any(|e| self.g1822_can_only_lay_plain_or_towns(e))
+                    && !self.fam().track_plain.contains(&base(&hex.tile.name))
+                    && !self.fam().track_town.contains(&base(&hex.tile.name))
                 {
                     continue;
                 }
-                if has("P11") {
+                if entities.iter().any(|e| self.g1822_can_upgrade_one_phase_ahead(e)) {
                     let last = self.phase.tiles.last().cloned().unwrap_or_default();
                     if super::tile_rules::color_name(hex.tile.color) != last {
                         continue;
                     }
                 }
-                if has(COMPANY_EGR) {
+                if entities.iter().any(|e| self.g1822_must_be_on_terrain(e)) {
                     let terrain = hex.tile.upgrades.iter().any(|u| u.terrain == "mountain" || u.terrain == "hill");
                     if !terrain {
                         continue;
                     }
                 }
-                if has(super::COMPANY_GSWR)
+                if entities.iter().any(|e| self.g1822_must_be_on_estuary(e))
                     && !self.g().borders.get(&hex.id).map_or(false, |v| v.iter().any(|b| b.2 == "water"))
                 {
                     continue;
                 }
             }
-            let tiles = self.special_potential_tiles(co, combo, owner, hi);
+            let mut tiles = self.special_potential_tiles(co, combo, owner, hi);
+            if self.g1822_is_pnw() {
+                tiles = self.pnw_potential_tiles(hi, tiles);
+            }
             out.extend(self.lays_for(co, owner, hi, tiles, &connected, &nbrs, rule, combo, false, &graph.connected_nodes));
         }
         out
@@ -1135,7 +1242,7 @@ impl BaseGame {
         if minor && matches!(hex_color, Green | Brown | Gray) {
             return Vec::new();
         }
-        let advanced = company == "P11";
+        let advanced = self.g1822_can_upgrade_one_phase_ahead(company);
         if advanced && minor && hex_color != Yellow {
             return Vec::new();
         }
@@ -1185,15 +1292,16 @@ impl BaseGame {
     }
 
     fn gen_special_tokens(&self, co: &str) -> Vec<Move> {
-        if co != COMPANY_LCDR {
+        let f = self.fam();
+        if !Family::is(f.company_lcdr, co) {
             return Vec::new();
         }
-        let Some(&hi) = self.hex_idx.get(data::ENGLISH_CHANNEL_HEX) else { return Vec::new() };
+        let Some(&hi) = self.hex_idx.get(f.english_channel_hex) else { return Vec::new() };
         (0..self.hexes[hi].tile.cities.len())
             .map(|ci| {
                 Move::plain(Action::PlaceToken {
                     entity_id: co.to_string(),
-                    hex_id: data::ENGLISH_CHANNEL_HEX.to_string(),
+                    hex_id: f.english_channel_hex.to_string(),
                     city_index: ci as u8,
                 })
             })
@@ -1284,7 +1392,7 @@ impl BaseGame {
                         out.push(Move::plain(Action::BuyTrain {
                             entity_id: c.clone(),
                             train_name: l.clone(),
-                            price: UPGRADE_COST_L_TO_2,
+                            price: self.fam().upgrade_cost_l_to_2,
                             from: "depot".into(),
                             variant: Some("2".into()),
                             exchange: Some(l.clone()),
@@ -1300,7 +1408,6 @@ impl BaseGame {
                 if has("pass") {
                     out.push(Move::plain(Action::Pass { entity_id: c.clone() }));
                 }
-                let _ = E_TRAIN;
             }
             Ent::Company(_) => {}
         }
@@ -1341,6 +1448,12 @@ impl BaseGame {
             }
             AcquireState::SelectMinor => {
                 for m in self.g1822_mergeable(c) {
+                    // 1822PNW's regionals join potentially_mergeable without
+                    // the pay-choice filter: one the major cannot pay for
+                    // leaves a choose with no choices (a Ruby dead end)
+                    if self.g1822_is_pnw() && self.g1822_pay_choices(c, &m).is_empty() {
+                        continue;
+                    }
                     out.push(Move::plain(Action::Merge {
                         entity_id: c.to_string(),
                         corporation_sym: m,
@@ -1396,8 +1509,10 @@ impl BaseGame {
         let ci = self.ci(c);
         let Some(sp) = self.corporations[ci].share_price.clone() else { return 0 };
         let (mut r, mut col) = (sp.row, sp.column);
+        let pnw = self.g1822_is_pnw();
         for _ in 0..n {
-            let (nr, nc) = self.stock_market.move_down(r, col);
+            // PNW reduced_bundle_price_for_market_drop: [:left] * n
+            let (nr, nc) = if pnw { self.stock_market.move_left(r, col) } else { self.stock_market.move_down(r, col) };
             r = nr;
             col = nc;
         }
@@ -1523,6 +1638,10 @@ impl BaseGame {
             Action::PayoffPlayerDebtPartial { amount, .. } => {
                 o.insert("amount".into(), json!(amount));
             }
+            Action::Assign { target, target_type, .. } => {
+                o.insert("target".into(), json!(target));
+                o.insert("target_type".into(), json!(target_type));
+            }
             _ => {}
         }
         Value::Object(o)
@@ -1552,8 +1671,8 @@ impl BaseGame {
     /// destination hex's first node reaches the home token's city.
     pub(crate) fn g1822_destination_connected(&self, c: &str) -> bool {
         use super::graph::{Node, NodeKind};
-        let Some(dest) = data::destination(c) else { return false };
-        let Some(&dhi) = self.hex_idx.get(dest) else { return false };
+        let Some(dest) = self.g1822_destination(c) else { return false };
+        let Some(&dhi) = self.hex_idx.get(dest.as_str()) else { return false };
         let tile = &self.hexes[dhi].tile;
         let start = if !tile.cities.is_empty() {
             Node { hex: dhi, kind: NodeKind::City, index: 0 }
@@ -1607,12 +1726,20 @@ impl BaseGame {
     /// connects to (entity_connects?).
     pub(crate) fn g1822_mergeable(&self, c: &str) -> Vec<String> {
         use super::graph::{Node, NodeKind};
+        if self.g1822_is_pnw() {
+            // PNW MinorAcquisition: Connections#entity_connects?
+            return self
+                .g1822_potentially_mergeable(c)
+                .into_iter()
+                .filter(|m| self.g1822_pnw_entity_connects(c, m))
+                .collect();
+        }
         let graph = self.g1822_graph(c);
         let mut out = Vec::new();
         for m in self.g1822_potentially_mergeable(c) {
             let floated = self.corporations[self.ci(&m)].floated;
-            let connected = if !floated && m == super::MINOR_14_ID {
-                let Some(&hi) = self.hex_idx.get(super::MINOR_14_HOME_HEX) else { continue };
+            let connected = if !floated && m == self.fam().minor_14_id {
+                let Some(&hi) = self.hex_idx.get(self.fam().minor_14_home_hex) else { continue };
                 (0..self.hexes[hi].tile.cities.len())
                     .any(|k| graph.connected_nodes.contains(&Node { hex: hi, kind: NodeKind::City, index: k }))
             } else if !floated {

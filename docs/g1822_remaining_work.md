@@ -26,18 +26,24 @@ but no effort goes into 2p/7p-only rules.*
 | Auto-router (`g1822/router.rs`) + router check | done (numbers below) |
 | Fuzz: in-crate random walks (`cargo test g1822::fuzz`), Python wire walks + Ruby HEAD replay | clean (numbers below) |
 | Corpus completeness (`scripts/g1822_completeness.py`) | see numbers below |
+| **1822PNW** (3-5p): title, replay, router, generator | done — see "1822PNW" below (17/17 Ruby fixtures, 589/597 corpus + 8 Ruby-rejects-same, zero per-action divergence, router 0 shortfalls, fuzz + Ruby replay clean) |
+| 1822MX, 1822CA | not started (MX: 363 scraped games, 6 Ruby fixtures, 12 overridden steps incl. the NdeM auction / cash-out; CA: 187 games) |
 
 ### Validation numbers (2026-10-16)
 
 * **Router check** (`scripts/g1822_router_check.py --ruby`, every recorded
-  `run_routes` of the 743-game scrape, 72,554 runs): the engine's optimum
-  equals the human's in 66,167 (91.2%) and beats it in 6,376 (8.8%; Ruby
-  HEAD validates and prices every one of those engine runs at the
-  engine's total). 11 are below: 2 records are stale (Ruby HEAD prices
-  the human run under the engine's optimum), 2 human runs Ruby HEAD
-  rejects, 7 real shortfalls (0.010%: dense late-game maps with pullman
-  7-trains where the 3M-step walk budget runs out; 10-240 short). 33 ms
-  per call on average; the budget-bound calls take 2-8 s (one 18 s).
+  `run_routes` of the 743-game scrape, 72,554 runs; router v2,
+  2026-10-17): the engine's optimum equals the human's in 66,149 (91.2%)
+  and beats it in 6,402 (8.8%; Ruby HEAD validates and prices every one
+  of those engine runs at the engine's total). 3 are below, none a router
+  shortfall: 2 records are stale (Ruby HEAD prices the human run under the
+  engine's optimum) and 1 human run Ruby HEAD rejects. 1.3 ms per call on
+  average, the slowest call 0.59 s (2,600 s of router time before → 96 s).
+  Against the legacy router at every one of those 72,554 positions v2 is
+  never lower and higher in 46. Before v2 (legacy walk): 66,167 equal /
+  6,376 above / 11 below incl. 7 real shortfalls (dense late-game maps
+  where its 3M-step budget ran out), 25-33 ms per call, calls up to 400 s
+  on a loaded machine (the combination search, not the walk).
 * **Fuzz**: in-crate 16 walks (3-6p × base/plus × both purchase
   policies, up to 3,000 moves) — no panic, no rejected generated move,
   no stuck state. The Python wire driver's 48 walks (3-6p × base/plus ×
@@ -93,8 +99,12 @@ but no effort goes into 2p/7p-only rules.*
   `process_action_internal`, `step_action_types_impl`,
   `calculate_results`, the constructor (`build_seeded`, `new_titled(...,
   seed=)`), the PyO3 `process_action` (`combo_entities`, `share_price`).
-  `factored.rs` is untouched: 1822 never reaches it (its own generator
-  reads impassable borders from title data via `g1822_neighbors`).
+  `factored.rs` is untouched: 1822 never reaches it. Impassable borders
+  come from `BaseGame.walls` (`title::title_walls`, shared by every
+  title); `g1822_neighbors` reads them (the family's earlier own reading of
+  the HexDef `impassable` flags was identical for 1822 and 1822PNW — test
+  `g1822::graph::walls_tests`). Preprinted blue hexes build WHITE for the
+  family (its code reads blue from the hex DSL; 1867's build red).
 * Seats: 1822 minors are "1".."30", so the replay harness seats players at
   1001+ (`SEAT_ID_BASE`); the constructor rejects colliding ids.
 
@@ -131,6 +141,44 @@ gaps):
   `choose` with a pay choice in the token state, raising one's own
   highest bid (`can_bid_company?` excludes it), re-acquiring a company
   the corporation already owns (`process_acquire_company` does not check).
+
+## Router (v2, 2026-10-17)
+
+`g1822/router.rs`, `g1822_best_routes` → `g1822_best_routes_v2` (the
+legacy walk stays as `g1822_best_routes_legacy` / the pymethod
+`g1822_router_best_legacy`, for comparison only):
+
+* **Per-kind walks.** Each distinct train kind walks the chain graph on
+  its own cost cap (numeric: every stop but France costs 1; pullman:
+  towns and France are free, other stops cost 1; local: city + town; E:
+  unbounded) instead of one walk bounded by the widest train.
+* **Branch and bound.** A partial route is cut when its value plus an
+  upper bound on what the rest can add cannot reach the kind's threshold.
+  The bound is a walk relaxation of the chain graph (`ub[h][u]`: the best
+  revenue of any WALK of h more costly stops from u — nodes may repeat),
+  pullman towns folded into their town components (a component's whole
+  revenue, then any exit), capped by the h best costly stops plus every
+  free stop. This is what "prices stop sets instead of walking every town
+  permutation" became: a route into a town cluster is bounded by the
+  cluster, not walked through every order of its towns.
+* **Thresholds from the combination.** A scouting pass keeps each kind's
+  64 best routes; their best combination is a lower bound LB. A route for
+  train t can only be in a combination ≥ LB if its value ≥ LB − Σ(best
+  single route of the other trains); the full pass keeps every route above
+  that (TOP_K = 4,000, best first). The combination search is exact
+  unless a kind overflows TOP_K above its threshold or a walk exhausts its
+  4M-step budget (counters: `BaseGame.g1822_router_stats()`).
+* **Combination search** on dense track / city ids with a bonus-aware
+  bound (Σ revenue + the single biggest destination bonus, not Σ (revenue
+  + bonus)): the legacy search spent minutes double-counting the bonus
+  (264603 @1315: 404 s → 0.56 s).
+* **E-trains**: a 300k-step walk plus the token-to-token tours, which may
+  now end Channel city → France (`english_channel_etrain?`; 264603 @1341).
+* Revenue-first children, token-city starts first; routes deduplicated by
+  (oriented stops, track) and recorded from either end. Numeric and
+  pullman routes are priced incrementally on the walk; test builds assert
+  every such price equals `g1822_price_route` (the fuzz runs it).
+* `G1822_ROUTER_DEBUG=1` prints per-call walk/combination timings.
 
 ## Cross-player purchases (confirmed by the user, 2026-10-17)
 
@@ -175,36 +223,65 @@ president. Cases, and what the switch does with each:
 
 ## Remaining work (ordered)
 
-1. Router speed/strength on dense late-game maps: the walk is budget-
-   bound there (2-8 s a call, 7 recorded runs still above the engine's
-   optimum). A search that prices stop sets instead of walking every
-   town permutation for pullman (towns free) trains, plus revenue-first
-   chain ordering, would make it exact and fast. ~1-2 days.
+1. ~~Router speed/strength~~ done 2026-10-17 (router v2, see "Router"
+   below and the numbers above).
 2. RL bridge: action layout and encoder for 1822 (the action families
    above), behind `alphazero_bridge_ready()` (false today). See
    `docs/rl_bridge_design.md`.
-3. Variants (1822CA/MX/PNW) subclass this: see "What variants need".
+3. Variants: 1822PNW done (see "1822PNW"); 1822MX and 1822CA next, the
+   same way — `scripts/g1822_title_data.{rb,py}` generates the data module
+   from Ruby, a `Family` row + `Variant` arm, the variant's steps in
+   `g1822/<variant>.rs`, its generator in `g1822/<variant>_legal.rs`, and
+   the same validation (fixtures, audit, Ruby diff, router check, fuzz,
+   completeness — every script takes `--title`).
 
-## What variants need (1822CA / MX / PNW)
+## The family table (per-title constants, 2026-10-17)
 
-Each is a Ruby `G1822::Game` subclass; port each as a new `GameTitle`
-with `is_g1822_family() = true` and its own data module, then branch in
-`crate::g1822` where Ruby overrides a method. From the census (bridge
-design appendix A): CA adds `assign` and mixed 1-/2-slot cities (the
-`city_sizes_maintained` check is already ported), MX adds `remove_token`
-and `higher_cert_limit`, PNW adds `assign`, `starting_packet` and its own
-regional rules (and its own `check_route_token`). The step machine,
-graph, tile rules, generator, router and share pool are title-neutral
-apart from constants: the ones in `g1822/mod.rs` (company ids, bid-box
-sizes, private lists), `tile_rules.rs` (`CONSENT_BLOCKERS`, stubs) and
-`router.rs` (`DOUBLE_HEX`, Merthyr/London/France hexes) should move
-behind a per-title table first.
+Ruby's G1822 code reads its class constants as `self.class::X`
+throughout (the one exception: `london_hex` reads `LONDON_HEX` lexically,
+only for minor 14), so a subclass's override applies inside inherited
+code. `crate::g1822::family::Family` is that lookup: one static table
+per title (`title::g1822::FAMILY`, `title::g1822pnw::FAMILY`, ...),
+reached through `BaseGame::fam()` (via `GameTitle::g1822_family()`), with
+every field a variant does not override copied from 1822's. A constant a
+variant sets to `nil` is `""` (no id is empty, so `Family::is(c, x)` and
+lookups fail exactly as Ruby's `== nil` / `hex_by_id(nil)`). Behaviour a
+variant overrides (a Ruby METHOD, not a constant) branches on
+`BaseGame::variant()`; the predicate methods G1822 defines on constants
+(`can_upgrade_one_phase_ahead?`, `can_only_lay_plain_or_towns?`,
+`must_be_on_terrain?`, `must_be_on_estuary?`, `must_remove_town?`,
+`company_ability_extra_track?`) are methods in `g1822/mod.rs` so a
+variant's override has one place to go.
+
+| field(s) | Ruby constant(s) | used by |
+|---|---|---|
+| `player_range` | meta.rb PLAYER_RANGE | constructor (player count) |
+| `bidding_box_{minor,concession,private}_count` | BIDDING_BOX_*_COUNT | bid boxes (mod.rs) |
+| `bidding_box_start_{minor,concession,private}` | BIDDING_BOX_START_* | setup_companies |
+| `bidding_tokens`, `bidding_tokens_per_action`, `min_bid_increment` | BIDDING_TOKENS(_PER_ACTION), MIN_BID_INCREMENT | stock round, generator |
+| `minor_start_par_price`, `minor_bidbox_price`, `token_price`, `upgrade_cost_l_to_2`, `player_loan_interest_rate` | same names | float, minor acquisition, tokens, L→2, loans |
+| `starting_companies(_plus)`, `starting_corporations(_plus)`, `plus_expansion_bidbox` | STARTING_*, PLUS_EXPANSION_BIDBOX_1..3 | setup, 1822+ bid boxes |
+| `two_home_corporation`, `minor_14_id`, `minor_14_home_hex` | TWO_HOME_CORPORATION, MINOR_14_ID, MINOR_14_HOME_HEX | LNWR destination, minor 14 London |
+| `company_{mtonr,lcdr,egr,double_cash,gswr,ber,lsr,10x_revenue,osth,lur,chpr,5x_revenue,hsbc}` (+ `_double_cash_revenue`, `_gswr_discount`, `_hsbc_tiles`) | COMPANY_* | company abilities / choices everywhere |
+| `private_{mail_contracts,remove_revenue,phase_revenue,trains}`, `private_acquisition` | PRIVATE_*, PRIVATE_COMPANIES_ACQUISITION | company_bought, mail, acquisition |
+| `company_trains`, `concessions`, `abilities`, `corp_token_abilities`, `consent_blockers` | setup_companies' trains; entities.rb abilities (exchange-from-par, tile_lay / teleport / discount, :token, blocks_hexes_consent) | setup, track, tokens, tile_rules |
+| `extra_trains`, `extra_train_pullman`, `extra_train_permanents`, `local_trains`, `e_train`, `local_train_can_carry_mail` | EXTRA_TRAINS, EXTRA_TRAIN_PULLMAN, EXTRA_TRAIN_PERMANENTS, LOCAL_TRAINS, E_TRAIN, LOCAL_TRAIN_CAN_CARRY_MAIL | trains, router, mail |
+| `trains`, `train_variant(s)`, `destination`, `exchange_tokens` | TRAINS, entities.rb destinations, EXCHANGE_TOKENS | depot, rusting, tokens |
+| `london_hex`, `english_channel_hex`, `france_hex`, `cardiff_hex`, `merthyr_tydfil_pontypool_hex` | LONDON_HEX, ENGLISH_CHANNEL_HEX, FRANCE_HEX, CARDIFF_HEX, MERTHYR_TYDFIL_PONTYPOOL_HEX | tokens, tile rules, router |
+| `upgradeable_s_hex_name`, `upgradeable_s_yellow_city_tile`, `upgradeable_s_yellow_rotations`, `track_plain`, `track_town`, `minor_green_upgrade` | UPGRADEABLE_S_*, TRACK_PLAIN, TRACK_TOWN, MINOR_GREEN_UPGRADE | tile rules |
+| `double_hex` | DOUBLE_HEX | router (`revenue_for`) |
+| `hex_dsl`, `hex_dsl_all`, `tile_dsl` | map.rb HEXES / TILES | graph, tile rules, router, borders |
+| `game_end_lock_first_trigger` | GAME_END_LOCK_FIRST_TRIGGER | game end |
+
+1822's behaviour is byte-identical through the move (a per-action digest
+of state snapshot + both legal-move sets + the router's best run over the
+whole 743-game scrape, before vs after: identical — `logs/digest.py`).
 
 ## Known issues / divergences
 
-* Lanes are not modelled in the graph (`lanes:2` parses as one path):
+* Lanes are not modelled in 1822's graph (`lanes:2` parses as one path):
   reachability is unaffected on this map; the router counts lane
-  capacity per hexside instead.
+  capacity per hexside instead. (1822PNW models them: see "1822PNW".)
 * Mail-contract subsidies price the route's first/last stop hexes by their
   best node (exact except a city+town hex like D35 when a non-L train stops
   at its town).
@@ -216,6 +293,126 @@ behind a per-title table first.
   walk stops (`fuzz::ruby_dead_end`).
 * The old corpus mostly predates current Ruby rules; Ruby HEAD rejects
   those records itself (bucket `ruby_rejects_same`).
+
+## 1822PNW (2026-10-18)
+
+Pacific Northwest, 3-5 players: a `GameTitle` of the 1822 family
+(`title/g1822pnw.rs`, data `title/g1822pnw_data.rs` generated verbatim
+from `lib/engine/game/g_1822_pnw/` by `scripts/g1822_title_data.{rb,py}`),
+the family table's `Variant::Pnw` row, and its own behaviour in
+`g1822/pnw.rs` (replay) and `g1822/pnw_legal.rs` (generator). Ruby's
+`G1822PNW` subclasses, and what the engine does for each:
+
+* Steps: PNW `AcquireCompany` (P20 backroom negotiations → choose the
+  associated minor to replace), `Assign` (P15 paper mill, P17 ski haus;
+  parallel company actions, never blocking), `SpecialTrack` (P10 cubes,
+  P12/P13 port tiles, P16 portage, P18 boom town, P19 coal mine + coal
+  token, extra-track cubes), `Track` (builder cubes, token cities,
+  forests, H19's city+town tiles), `Dividend` (3× jumps), `MinorAcquisition`
+  (regionals after two payouts, the coal token moves), `IssueShares` (no
+  minors), `BuySellParShares` (associated-minor conversion: par → choose
+  the exchange), the Merger round (`Merge`: merge / par / shares / token,
+  `TokenMerger`), the regional railways (A, B, C: bid for in the SR, never
+  operate), starting packets, the tokencity tile sequences (Portland O8,
+  Seattle H11), mail subsidy on laid port tiles, `MUST_SELL_IN_BLOCKS`.
+* Map: lanes are modelled in the graph walk for PNW (Ruby
+  `Path.make_lanes`: a `lanes:2` path is two paths, crossings
+  lane-matched, the walk's edge counters keyed by lane — Portland's
+  `lanes:2` and P9's `b_lane` reach hexes a merged path cannot); `track:thin`
+  ferry paths are never walked; builder cubes are icons on the TILE (a tile
+  upgraded away keeps its cubes in the supply and brings them back, with
+  their £40 discounts, when it is laid again — 243949).
+* Ruby quirks reproduced (each probe-confirmed): Ruby's Graph cache is
+  never cleared after a home token, a regional's float token or a
+  closure, so a graph the Merger round computed (`Merge#mergeable`)
+  answers stale through the stock round into the next OR until the first
+  tile lay / token (`G1822State::ruby_graphs`, PNW only — 238430, 239750);
+  the route latch also fills from those computes; the coal token is not a
+  graph origin (`city_tokened_by?` takes :normal and :destination only)
+  and a route's token stop may not hold it (`check_other`); a minor's
+  `tokens.first` is its home token, never the coal token; any
+  corporation may `choose` in the Route step, and run_routes detaches the
+  pullman from whoever holds it (265923); a pullman choice is `to_i`'d
+  ("withhold" → train 0, 253182); a portage lay uses up the turn's lay for
+  every other company (`SpecialTrack#get_tile_lay`); a blue hex only
+  upgrades to blue.
+
+### Validation numbers (2026-10-18)
+
+* **Ruby fixtures**: all 17 of `public/fixtures/1822PNW` (vendored
+  anonymized by `scripts/vendor_ruby_fixture.py`) replay end to end with
+  the recorded scores (`tests/test_g1822pnw_fixture_replay.py`) and zero
+  per-action divergence from Ruby HEAD.
+* **Corpus audit** (597-game 2026-10 scrape, 3-5p): 589 outcome match, 8
+  rejected — all 8 `ruby_rejects_same` (Ruby HEAD rejects the record at
+  the same action: 4 tokens into a full I12, 3 old-rules rotations, a ski
+  haus on the coal mine). Ruby per-action diff of all 597: zero state
+  divergence.
+* **Router check** (59,301 recorded runs): engine = human in 55,336
+  (93.3%), above in 3,944 (6.7%; Ruby HEAD validates and prices every
+  one of those runs at the engine's total), below in 21 — none a router
+  shortfall: Ruby HEAD rejects 17 of those human runs (old servers let two
+  trains share track) and prices 4 under the engine's optimum (stale
+  records). 1.6 ms per call, the slowest 0.44 s. The router knows PNW's
+  revenue extras (forest +10 per timber hex crossed, the ski haus +30, the
+  portage −10 per PNW1/PNW2 tile unless P16, the biggest mill and lumber
+  baron bonuses per run — each a per-run maximum like the destination
+  bonus, with E-train rules) and counts lane capacity per path END (P9's
+  `b_lane` lets two routes, or one route twice, through its hexside).
+* **Fuzz**: in-crate `g1822::fuzz::pnw_random_walks_3_to_5_players` (12
+  walks, both purchase policies, 9,488 moves, all finished). Python wire
+  walks: 30 under the title's policy (seeds 1-10) and 30 under the
+  rules' (seeds 11-20), 3-5p, 43,406 moves, all finished; Ruby HEAD replays all 60
+  with zero divergence and zero rejections. Bugs the walks found, fixed:
+  Assign's wire fields, conversions at a par no exchange works at (or that
+  leaves the player short of their open bids / the major short of the
+  difference — Ruby raises), parring a major whose associated minor
+  another player owns (Ruby crashes in `after_par`), regionals the major
+  cannot pay for, laying on a port tile, the portage lay rule.
+* **Completeness** (`scripts/g1822_completeness.py --title 1822PNW`, all
+  474,694 human decisions of the 597 games except `run_routes`, against
+  the rules' move set): 474,659 match exactly one generated move
+  (99.993%), none matches two; 16 (0.003%: 10 private acquisitions, 4
+  merges, 2 train buys) are legal but excluded by the cross-player
+  policy. The 35 misses are replay-only: 8 decisions Ruby HEAD itself
+  rejects (the `ruby_rejects_same` records), 14 out-of-order discards, 3
+  re-acquisitions of an owned company, 3 raises of one's own highest
+  bid, 5 UI-stale chooses (3 share counts sent at the merge token prompt
+  — Ruby takes them as `exchange` —, a "withhold" taken as pullman train
+  0, another corporation's pullman choice in the Route step), 1 cube on
+  a hex that holds none (the UI never offers it; process does not check),
+  1 partial payoff above the player's cash. Generator calls leave the
+  state untouched (the latch and the Ruby graph cache are restored):
+  replay with the generator interleaved rejects exactly the 8 records
+  Ruby rejects.
+
+### Cross-player cases (PNW)
+
+The title uses the family default (`RESTRICTED`). PNW adds:
+
+1. Regionals (A/B/C) are owned by the player who won their bid and are
+   acquired by majors through MinorAcquisition — counted as "another
+   player's minor" (excluded unless the major's president owns it). The
+   ambiguity: regionals never operate, so they are closer to a private
+   than a minor; the policy treats them like minors (the user's rule for
+   minors).
+2. Merger-round merges need both minors to have the same owner (a rule,
+   not the policy).
+3. Conversion (SR) and P20 are the owner's own minor / the bank's — not
+   purchases.
+4. P20's replaced associated minor is a bank minor — unaffected.
+
+### PNW known issues
+
+* The generator applies every PNW lay to a clone (no pre-validated fast
+  path as in 1822): ~11 ms per state on average, Track 64 ms (1822: 47).
+* The Ruby graph-cache emulation is entered only where Rust mirrors a full
+  Ruby compute (the Merger round's connection checks); a graph Ruby
+  caches elsewhere and later reads stale would still be fresh here (none
+  in the corpus or the fuzz).
+* 1822 itself keeps one path per `lanes:2` path and per-hexside lane
+  caps (a_lane / b_lane widths are read for PNW only); its corpus never
+  needs more.
 
 ## Rigs and gates
 
@@ -236,6 +433,10 @@ CUDA_VISIBLE_DEVICES="" uv run python scripts/ruby_diff.py --title 1822 --refres
 # completeness and router check (memory: cap each worker, e.g. ulimit -v 12000000)
 CUDA_VISIBLE_DEVICES="" uv run python scripts/g1822_completeness.py --jobs 8 --json /tmp/c.json
 CUDA_VISIBLE_DEVICES="" uv run python scripts/g1822_router_check.py --jobs 6 --ruby --json /tmp/r.json
+# 1822PNW: the same scripts with --title 1822PNW (ruby_diff takes directories too)
+CUDA_VISIBLE_DEVICES="" uv run python scripts/ruby_diff.py --title 1822PNW tests/fixtures/1822PNW
+CUDA_VISIBLE_DEVICES="" uv run python scripts/g1822_fuzz.py --title 1822PNW --players 3 4 5 --seeds 1-10 --out /tmp/fzp
+CUDA_VISIBLE_DEVICES="" uv run python scripts/ruby_diff.py --title 1822PNW --refresh --work /tmp/rd /tmp/fzp
 # per-commit gates: see docs/g1867_remaining_work.md (cargo test, pytest,
 # parity_runner --random 0:100, tests/g1867_corpus_audit.py --limit 300).
 ```

@@ -369,6 +369,17 @@ impl BaseGame {
     /// Ruby `sell_shares_and_change_price` with SELL_MOVEMENT :down_share.
     pub(crate) fn g1822_sell_shares_and_change_price(&mut self, b: &Bundle) {
         let ci = self.ci(&b.corp);
+        if self.g1822_is_pnw() {
+            // SELL_MOVEMENT :left_per_10_if_pres_else_left_one
+            let owner = self.corporations[ci].shares[b.shares[0]].owner.clone();
+            let was_president = self.corporations[ci].owner_id == owner && !owner.is_none();
+            let spaces = if was_president { b.percent as u32 / 10 } else { 1 };
+            self.g1822_pool_sell_shares(b, true);
+            for _ in 0..spaces {
+                self.g1822_move_price(&b.corp, Dir::Left);
+            }
+            return;
+        }
         let unit = self.corporations[ci].share_unit_percent as u32;
         let num_shares = (b.percent as u32).div_ceil(unit);
         self.g1822_pool_sell_shares(b, true);

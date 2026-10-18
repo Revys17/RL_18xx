@@ -29,7 +29,7 @@ Usage:
 Mind the id pitfall: Ruby dumps are keyed by FILE action ids; the Rust side
 tags every filtered action with its originating file id (auto_actions
 inherit the parent's) — never compare by the renumbered filtered index.
-Docker runs pinned (--cpuset-cpus 24-31,56-63).
+Docker runs pinned (--cpuset-cpus 24-31,56-63, or $RUBY_DOCKER_CPUSET).
 """
 
 from __future__ import annotations
@@ -45,7 +45,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-CPUSET = "24-31,56-63"
+# Override with RUBY_DOCKER_CPUSET (e.g. "40-63"; RUBY_CPUSET is accepted
+# too) to keep the containers off cores another job owns.
+CPUSET = os.environ.get("RUBY_DOCKER_CPUSET") or os.environ.get("RUBY_CPUSET", "24-31,56-63")
 
 
 def ensure_gems(gems: Path) -> None:
@@ -219,7 +221,7 @@ def first_finished(states: dict):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("games", nargs="*", help="game ids (looked up in --corpus-dir) or JSON paths")
+    ap.add_argument("games", nargs="*", help="game ids (looked up in --corpus-dir), JSON paths or directories")
     ap.add_argument("--title", default="1867")
     ap.add_argument("--corpus-dir", default=None, help="default human_games/<title>")
     ap.add_argument("--audit", help="corpus-audit --json output: diff its failing games")
@@ -239,6 +241,9 @@ def main() -> int:
     paths: list[Path] = []
     for g in args.games:
         p = Path(g)
+        if p.is_dir():
+            paths.extend(sorted(p.glob("*.json")))
+            continue
         paths.append(p if p.suffix == ".json" else corpus / f"{g}.json")
     if args.audit:
         audit = json.load(open(args.audit))

@@ -955,6 +955,13 @@ feature.
 
 ### Rules gaps only self-play reaches (the replay path never needed them)
 
+*Status 2026-10-18: T1-T6 are done for the base rules at 3-6 players —
+the legal-move generator lives in `engine-rs/src/g1867/` (beside
+`factored.rs`, as suggested in §2.4; it reads the step machine through
+`steps.rs::step_offers`), with the router, fuzz, corpus completeness and
+Ruby replay of fuzz games; numbers and the remaining open questions are in
+`docs/g1867_remaining_work.md` ("Self-play readiness").*
+
 | # | Gap | Evidence | Work | Effort |
 |---|---|---|---|---|
 | T1 | **Impassable borders.** 1830 walls are hardcoded by hex id, so 1867's C11, C13, D12, F8, C17, B16 and E7 get 1830's walls, and 1867's own walls (D18, C9, D10, E11, C11, D12, C13, H14, A17, A19, E19, H16, and D2's DSL borders) are ignored. | `factored.rs:1138-1147`; data in `g1867.rs:1330-1460` | `passable_exits_for` and `legal_rotations_for` read `HexDef.borders` and DSL `border=edge:N` (no type = wall). For 1830 the data reproduces today's list exactly (test). Graph and frontier expansion (`lay_tile_candidate_hexes`) respect walls. | 1-2 |

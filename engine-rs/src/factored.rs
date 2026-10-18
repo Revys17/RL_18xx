@@ -780,10 +780,17 @@ impl BaseGame {
         for (h, edges) in &connected {
             conn.entry(h.clone()).or_default().extend(edges.iter().copied());
         }
-        // (B) frontier expansion from the walked exits.
+        // (B) frontier expansion from the walked exits — across the hex's
+        // non-wall edges only (Ruby `hexes[hex.neighbors[edge]]`: a wall
+        // leaves no neighbour; a no-op for 1830, whose legal lays never
+        // point track at a wall).
         for (h, edges) in &connected {
+            let walls: &[u8] = self.walls.get(h).map_or(&[], |v| v.as_slice());
             if let Some(adj) = self.hex_adjacency.get(h) {
                 for &edge in edges {
+                    if walls.contains(&edge) {
+                        continue;
+                    }
                     if let Some(nid) = adj.get(&edge) {
                         let inv = (edge + 3) % 6;
                         conn.entry(nid.clone()).or_default().insert(inv);
@@ -1021,12 +1028,6 @@ impl BaseGame {
         out
     }
 
-    /// Helper: return the set of edges on `hex_id` that are "passable" — i.e.,
-    /// have an adjacent hex that is NOT impassable (gray/blue/red) unless the
-    /// adjacent hex's tile already targets us back, AND the edge is not
-    /// blocked by a hardcoded impassable border on the starting tile. Mirrors
-    /// Python's ``Hex.neighbors`` (vs ``all_neighbors``) which filters out
-    /// impassable neighbors during ``connect_hexes`` and tile-laying logic.
     /// Enumerate teleport-ability company lays (1830: DH tile "57" on F16).
     ///
     /// Rules (from the ability data, g1830.py:54-68): a corp owning the
@@ -1130,21 +1131,23 @@ impl BaseGame {
         out
     }
 
+    /// Helper: return the set of edges on `hex_id` that are "passable" — i.e.,
+    /// have an adjacent hex that is NOT impassable (gray/blue/red) unless the
+    /// adjacent hex's tile already targets us back, AND the edge is not
+    /// an impassable border of the hex (title data, `BaseGame::walls`).
+    /// Mirrors Python/Ruby ``Hex.neighbors`` (vs ``all_neighbors``) which
+    /// filters out impassable neighbors during ``connect_hexes`` and
+    /// tile-laying logic.
     pub(crate) fn passable_exits_for(&self, hex_id: &str) -> Vec<u8> {
         let neighbors = match self.hex_adjacency.get(hex_id) {
             Some(n) => n,
             None => return Vec::new(),
         };
-        let impassable_border_edges: &[u8] = match hex_id {
-            "E7" => &[5],
-            "F8" => &[2],
-            "C11" => &[5],
-            "C13" => &[0],
-            "D12" => &[2, 3],
-            "B16" => &[5],
-            "C17" => &[2],
-            _ => &[],
-        };
+        // The hex's impassable borders, from the title data (Ruby
+        // connect_hexes: `border.type == :impassable`). For 1830 these are
+        // exactly the edges this function used to hardcode (pinned by
+        // `walls_from_title_data_match_the_old_1830_list`).
+        let impassable_border_edges: &[u8] = self.walls.get(hex_id).map_or(&[], |v| v.as_slice());
         let mut out: Vec<u8> = Vec::new();
         for (&edge, neighbor_id) in neighbors.iter() {
             if impassable_border_edges.contains(&edge) {
@@ -1155,6 +1158,8 @@ impl BaseGame {
                 None => continue,
             };
             let neighbor_tile = &self.hexes[ni].tile;
+            // Ruby IMPASSABLE_HEX_COLORS (blue/gray/red; 1867's blue lake
+            // ports are built red, see `build_hex_from_def`).
             let impassable = matches!(
                 neighbor_tile.color,
                 crate::tiles::TileColor::Gray
@@ -1808,5 +1813,125 @@ impl BaseGame {
         }
         out.sort_unstable();
         out
+    }
+}
+
+#[cfg(test)]
+mod wall_tests {
+    use crate::game::BaseGame;
+    use std::collections::HashMap;
+
+    fn game(title: &str) -> BaseGame {
+        let players: HashMap<u32, String> = (1..=4).map(|i| (i, format!("P{i}"))).collect();
+        BaseGame::build_titled(title, vec![1, 2, 3, 4], players)
+    }
+
+    fn walls_of(title: &dyn crate::title::GameTitle) -> Vec<(String, Vec<u8>)> {
+        let mut v: Vec<(String, Vec<u8>)> = crate::title::title_walls(title).into_iter().collect();
+        v.sort();
+        v
+    }
+
+    fn expect(list: &[(&str, &[u8])]) -> Vec<(String, Vec<u8>)> {
+        let mut v: Vec<(String, Vec<u8>)> = list.iter().map(|(h, e)| (h.to_string(), e.to_vec())).collect();
+        v.sort();
+        v
+    }
+
+    /// The pre-title-data `passable_exits_for`, with 1830's hardcoded wall
+    /// list (factored.rs before 2026-10-17), kept as the reference.
+    fn old_passable_exits_for(g: &BaseGame, hex_id: &str) -> Vec<u8> {
+        let Some(neighbors) = g.hex_adjacency.get(hex_id) else { return Vec::new() };
+        let impassable_border_edges: &[u8] = match hex_id {
+            "E7" => &[5],
+            "F8" => &[2],
+            "C11" => &[5],
+            "C13" => &[0],
+            "D12" => &[2, 3],
+            "B16" => &[5],
+            "C17" => &[2],
+            _ => &[],
+        };
+        let mut out = Vec::new();
+        for (&edge, nid) in neighbors.iter() {
+            if impassable_border_edges.contains(&edge) {
+                continue;
+            }
+            let Some(&ni) = g.hex_idx.get(nid) else { continue };
+            let t = &g.hexes[ni].tile;
+            if matches!(t.color, crate::tiles::TileColor::Gray | crate::tiles::TileColor::Red) {
+                let inv = (edge + 3) % 6;
+                let back = t.paths.iter().any(|p| {
+                    matches!(p.a, crate::tiles::PathEndpoint::Edge(e) if e == inv)
+                        || matches!(p.b, crate::tiles::PathEndpoint::Edge(e) if e == inv)
+                });
+                if !back {
+                    continue;
+                }
+            }
+            out.push(edge);
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn walls_from_title_data_match_the_old_1830_list() {
+        // Ruby g_1830/map.rb `type:impassable` borders (the no-type borders
+        // of I1/J2/A9/A11 are drawn lines, not walls).
+        assert_eq!(
+            walls_of(&crate::title::G1830),
+            expect(&[
+                ("E7", &[5]),
+                ("F8", &[2]),
+                ("C11", &[5]),
+                ("C13", &[0]),
+                ("D12", &[2, 3]),
+                ("B16", &[5]),
+                ("C17", &[2]),
+            ])
+        );
+        // Byte-identical passable exits on every 1830 hex.
+        let g = game("1830");
+        for h in &g.hexes {
+            assert_eq!(g.passable_exits_for(&h.id), old_passable_exits_for(&g, &h.id), "{}", h.id);
+        }
+    }
+
+    #[test]
+    fn walls_from_title_data_match_ruby_1867() {
+        // Ruby g_1867/map.rb `type:impassable` borders, white + blue hexes.
+        assert_eq!(
+            walls_of(&crate::title::g1867::G1867),
+            expect(&[
+                ("D18", &[5]),
+                ("C9", &[0, 5]),
+                ("D10", &[0, 1, 2, 5]),
+                ("E11", &[1, 2]),
+                ("C11", &[0, 3, 4]),
+                ("D12", &[3, 4]),
+                ("C13", &[3]),
+                ("H14", &[0]),
+                ("E19", &[2]),
+                ("H16", &[3]),
+            ])
+        );
+        let g = game("1867");
+        // A walled edge is never passable.
+        for (hex, edges) in g.walls.iter() {
+            let passable = g.passable_exits_for(hex);
+            for e in edges {
+                assert!(!passable.contains(e), "{hex} edge {e} is a wall");
+            }
+        }
+        // The blue port E19 is entered only across its path's edge 3.
+        for h in &g.hexes {
+            let Some(adj) = g.hex_adjacency.get(&h.id) else { continue };
+            for (&edge, nid) in adj {
+                if nid == "E19" && g.passable_exits_for(&h.id).contains(&edge) {
+                    assert_eq!((edge + 3) % 6, 3, "{} reaches E19 through its edge {}", h.id, (edge + 3) % 6);
+                }
+            }
+        }
     }
 }

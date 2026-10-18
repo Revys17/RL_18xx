@@ -7,23 +7,28 @@
 //! junction paths are terminal (never walked), and `ignore:1` paths at
 //! Merthyr Tydfil / Pontypool. Ruby walks OUT of a node along a terminal
 //! path and reaches a terminal city's node without passing through it;
-//! this module follows those rules exactly. Lanes are not modelled
+//! this module follows those rules exactly. 1822 does not model lanes
 //! (`lanes:2` parses as one path): they never change which hexes or
 //! nodes are reachable on the 1822 map, only route-overlap legality.
+//! 1822PNW does (Ruby `Path.make_lanes`: lane copies `base + LANE_STRIDE ×
+//! k`, lane-matched crossings, edge counters keyed by lane) — Portland's
+//! `lanes:2` and P9's `b_lane` paths reach hexes one merged path cannot.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+
+use serde::{Deserialize, Serialize};
 
 use crate::game::BaseGame;
 use crate::tiles::PathEndpoint;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum NodeKind {
     City,
     Town,
     Offboard,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Node {
     pub hex: usize,
     pub kind: NodeKind,
@@ -33,7 +38,7 @@ pub struct Node {
 pub(crate) type PathRef = (usize, usize);
 
 /// What Ruby's Graph#compute produces for one corporation.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CorpGraph {
     /// hex index → edges (connected_hexes: where track may be laid).
     pub connected_hexes: BTreeMap<usize, Vec<u8>>,
@@ -51,17 +56,100 @@ struct Ctx<'a> {
     game: &'a BaseGame,
     corp: &'a str,
     neighbors: &'a HashMap<usize, BTreeMap<u8, usize>>,
+    /// 1822PNW: lanes modelled (Path.make_lanes copies, lane-matched hex
+    /// crossings, per-lane edge counters); `lanes[hex][path]` = the lane
+    /// specs (a end, b end) of each copy. None for 1822 (one path each).
+    lanes: Option<Vec<Vec<Vec<LaneSpec>>>>,
+}
+
+/// A path copy's lanes at its (a, b) ends: (width, index) — Ruby
+/// `Path#lanes`.
+pub(crate) type LaneSpec = ((u8, u8), (u8, u8));
+
+/// A lane copy's path index: base + LANE_STRIDE × copy.
+const LANE_STRIDE: usize = 1000;
+
+/// Ruby `Path.make_lanes` / `decode_lane_spec` for one `path=` DSL part.
+pub(crate) fn lane_specs(attrs: &str) -> Vec<LaneSpec> {
+    let mut lanes: Option<u8> = None;
+    let mut a_lane = (1u8, 0u8);
+    let mut b_lane = (1u8, 0u8);
+    let mut a_edge = false;
+    let mut b_edge = false;
+    let decode = |v: &str| -> (u8, u8) {
+        let (w, i) = v.split_once('.').unwrap_or((v, "0"));
+        (w.parse().unwrap_or(1), i.parse().unwrap_or(0))
+    };
+    for kv in attrs.split(',') {
+        let Some((k, v)) = kv.split_once(':') else { continue };
+        match k {
+            "lanes" => lanes = v.parse().ok(),
+            "a_lane" => a_lane = decode(v),
+            "b_lane" => b_lane = decode(v),
+            "a" => a_edge = !v.starts_with('_') && v != "junction",
+            "b" => b_edge = !v.starts_with('_') && v != "junction",
+            _ => {}
+        }
+    }
+    match lanes {
+        Some(n) if n > 1 => (0..n)
+            .map(|k| {
+                let a = (n, k);
+                let b = if a_edge && b_edge { (n, n - k - 1) } else { a };
+                (a, b)
+            })
+            .collect(),
+        _ => vec![(a_lane, b_lane)],
+    }
+}
+
+/// Ruby `Path#lane_match?`.
+fn lane_match(l0: (u8, u8), l1: (u8, u8)) -> bool {
+    l1.0 == l0.0 && l1.1 == l0.0 - l0.1 - 1
 }
 
 impl<'a> Ctx<'a> {
+    fn new(game: &'a BaseGame, corp: &'a str, neighbors: &'a HashMap<usize, BTreeMap<u8, usize>>) -> Ctx<'a> {
+        let lanes = game.g1822_is_pnw().then(|| game.g1822_lane_table());
+        Ctx { game, corp, neighbors, lanes }
+    }
+    fn base(p: PathRef) -> PathRef {
+        (p.0, p.1 % LANE_STRIDE)
+    }
     fn path(&self, p: PathRef) -> &crate::tiles::PathDef {
-        &self.game.hexes[p.0].tile.paths[p.1]
+        &self.game.hexes[p.0].tile.paths[p.1 % LANE_STRIDE]
+    }
+    /// The copies of base path `pi` on `hex`.
+    fn copies(&self, hex: usize, pi: usize) -> Vec<PathRef> {
+        let n = self
+            .lanes
+            .as_ref()
+            .and_then(|t| t.get(hex))
+            .and_then(|v| v.get(pi))
+            .map_or(1, |c| c.len().max(1));
+        (0..n).map(|k| (hex, pi + k * LANE_STRIDE)).collect()
+    }
+    /// The lane of copy `p` at its exit `edge` ((1, 0) without lanes).
+    fn exit_lane(&self, p: PathRef, edge: u8) -> (u8, u8) {
+        let Some(t) = &self.lanes else { return (1, 0) };
+        let spec = t
+            .get(p.0)
+            .and_then(|v| v.get(p.1 % LANE_STRIDE))
+            .and_then(|c| c.get(p.1 / LANE_STRIDE))
+            .copied()
+            .unwrap_or(((1, 0), (1, 0)));
+        let pd = self.path(p);
+        if pd.a.edge_num() == Some(edge) {
+            spec.0
+        } else {
+            spec.1
+        }
     }
     fn path_terminal(&self, p: PathRef) -> bool {
         self.path(p).terminal
     }
     fn path_ignore(&self, p: PathRef) -> bool {
-        self.game.g1822_path_ignored(p.0, p.1)
+        self.game.g1822_path_ignored(p.0, p.1 % LANE_STRIDE)
     }
     fn path_junction(&self, p: PathRef) -> bool {
         let pd = self.path(p);
@@ -89,29 +177,32 @@ impl<'a> Ctx<'a> {
             .iter()
             .enumerate()
             .filter(|(i, _)| self.path_nodes((n.hex, *i)).contains(&n))
-            .map(|(i, _)| (n.hex, i))
+            .flat_map(|(i, _)| self.copies(n.hex, i))
             .collect()
     }
-    /// Ruby Hex#paths[edge].
+    /// Ruby Hex#paths[edge] (a `track:thin` path never matches a walk's
+    /// gauge: Path#tracks_match?).
     fn hex_paths_at(&self, hex: usize, edge: u8) -> Vec<PathRef> {
         let tile = &self.game.hexes[hex].tile;
         (0..tile.paths.len())
             .filter(|&i| self.path_exits((hex, i)).contains(&edge))
-            .map(|i| (hex, i))
+            .filter(|&i| !self.game.g1822_path_thin(hex, i))
+            .flat_map(|i| self.copies(hex, i))
             .collect()
     }
     fn junction_paths(&self, hex: usize) -> Vec<PathRef> {
         let tile = &self.game.hexes[hex].tile;
         (0..tile.paths.len())
             .filter(|&i| self.path_junction((hex, i)))
-            .map(|i| (hex, i))
+            .flat_map(|i| self.copies(hex, i))
             .collect()
     }
     /// Tile#converging_exit?: more than one path exits through the edge.
     fn converging_exit(&self, hex: usize, edge: u8) -> bool {
         let tile = &self.game.hexes[hex].tile;
         (0..tile.paths.len())
-            .map(|i| self.path_exits((hex, i)).iter().filter(|&&e| e == edge).count())
+            .flat_map(|i| self.copies(hex, i))
+            .map(|p| self.path_exits(p).iter().filter(|&&e| e == edge).count())
             .sum::<usize>()
             > 1
     }
@@ -136,7 +227,8 @@ impl<'a> Ctx<'a> {
 
 struct Walk {
     visited_paths: HashSet<PathRef>,
-    counter_edges: HashMap<(usize, u8), i32>,
+    /// Ruby `counter[edge.id]` — Edge#id carries the lane index.
+    counter_edges: HashMap<(usize, u8, u8), i32>,
     counter_junctions: HashMap<usize, i32>,
 }
 
@@ -150,6 +242,7 @@ struct Found<'b> {
 
 impl<'b> Found<'b> {
     fn record(&mut self, ctx: &Ctx, p: PathRef) {
+        let p = Ctx::base(p);
         if !self.paths.insert(p) {
             return;
         }
@@ -218,7 +311,7 @@ fn path_walk(
         return;
     }
     let exits = ctx.path_exits(p);
-    if exits.iter().map(|&e| *w.counter_edges.get(&(p.0, e)).unwrap_or(&0)).sum::<i32>() > 0 {
+    if exits.iter().map(|&e| *w.counter_edges.get(&(p.0, e, ctx.exit_lane(p, e).1)).unwrap_or(&0)).sum::<i32>() > 0 {
         return;
     }
     let terminal = ctx.path_terminal(p);
@@ -251,13 +344,17 @@ fn path_walk(
             continue;
         }
         let Some(&nb) = ctx.neighbors.get(&p.0).and_then(|m| m.get(&e)) else { continue };
-        *w.counter_edges.entry((p.0, e)).or_insert(0) += 1;
+        let lane = ctx.exit_lane(p, e);
+        *w.counter_edges.entry((p.0, e, lane.1)).or_insert(0) += 1;
         let np_edge = (e + 3) % 6;
         let conv = converging || ctx.converging_exit(p.0, e);
         for np in ctx.hex_paths_at(nb, np_edge) {
+            if ctx.lanes.is_some() && !lane_match(lane, ctx.exit_lane(np, np_edge)) {
+                continue;
+            }
             path_walk(ctx, np, Some(np_edge), None, w, conv, origin, visited_nodes, origin_converging_path, found);
         }
-        *w.counter_edges.entry((p.0, e)).or_insert(0) -= 1;
+        *w.counter_edges.entry((p.0, e, lane.1)).or_insert(0) -= 1;
     }
     if converging {
         w.visited_paths.remove(&p);
@@ -268,12 +365,15 @@ fn path_walk(
 }
 
 impl BaseGame {
-    /// The token cities of `corp` (Ruby `city_tokened_by?`, any token type).
+    /// The token cities of `corp` (Ruby `Game#city_tokened_by?`).
     pub(crate) fn g1822_token_nodes(&self, corp: &str) -> Vec<Node> {
+        // Game#city_tokened_by?: 1822PNW counts :normal and :destination
+        // tokens only (not the coal token).
+        let pnw = self.g1822_is_pnw();
         let mut out = Vec::new();
         for (hi, hex) in self.hexes.iter().enumerate() {
             for (ci, city) in hex.tile.cities.iter().enumerate() {
-                if city.tokens.iter().flatten().any(|t| t.corporation_id == corp) {
+                if city.tokens.iter().flatten().any(|t| t.corporation_id == corp && !(pnw && t.token_type == "coal")) {
                     out.push(Node { hex: hi, kind: NodeKind::City, index: ci });
                 }
             }
@@ -281,14 +381,38 @@ impl BaseGame {
         out
     }
 
-    /// Ruby Graph#compute(corporation).
+    /// Ruby `Graph#connected_*(corporation)`: 1822PNW answers from Ruby's
+    /// cache when Rust mirrored the compute that filled it (see
+    /// `G1822State::ruby_graphs`), else a fresh compute.
     pub(crate) fn g1822_graph(&self, corp: &str) -> CorpGraph {
+        if self.g1822_is_pnw() {
+            if let Some(g) = self.g().ruby_graphs.get(corp) {
+                return g;
+            }
+        }
+        self.g1822_graph_fresh(corp)
+    }
+
+    /// A full Ruby Graph#compute whose result Ruby keeps until its next
+    /// Graph#clear (1822PNW only).
+    pub(crate) fn g1822_ruby_graph_store(&self, corp: &str) {
+        if self.g1822_is_pnw() && !self.g().ruby_graphs.contains(corp) {
+            let g = self.g1822_graph_fresh(corp);
+            self.g().ruby_graphs.insert(corp, g);
+        }
+    }
+
+    /// Ruby Graph#clear / clear_graph_for_entity (1822PNW's cache).
+    pub(crate) fn g1822_ruby_graph_clear(&self) {
+        if self.g1822_is_pnw() {
+            self.g().ruby_graphs.clear();
+        }
+    }
+
+    /// Ruby Graph#compute(corporation) on the current map.
+    pub(crate) fn g1822_graph_fresh(&self, corp: &str) -> CorpGraph {
         let neighbors = self.g1822_neighbors();
-        let ctx = Ctx {
-            game: self,
-            corp,
-            neighbors: &neighbors,
-        };
+        let ctx = Ctx::new(self, corp, &neighbors);
         let mut hexes: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
         let mut nodes: HashSet<Node> = HashSet::new();
         let tokens = self.g1822_token_nodes(corp);
@@ -344,11 +468,7 @@ impl BaseGame {
     /// Ruby `node.walk(corporation:)` from one node: every path walked.
     pub(crate) fn g1822_walk_from(&self, corp: &str, start: Node) -> HashSet<PathRef> {
         let neighbors = self.g1822_neighbors();
-        let ctx = Ctx {
-            game: self,
-            corp,
-            neighbors: &neighbors,
-        };
+        let ctx = Ctx::new(self, corp, &neighbors);
         let mut paths: HashSet<PathRef> = HashSet::new();
         let mut nodes: HashSet<Node> = HashSet::new();
         let mut local: HashSet<Node> = HashSet::new();
@@ -369,6 +489,25 @@ impl BaseGame {
         paths
     }
 
+    /// 1822PNW: every hex's per-path lane copies (from the preprinted or
+    /// the laid tile's DSL).
+    pub(crate) fn g1822_lane_table(&self) -> Vec<Vec<Vec<LaneSpec>>> {
+        let f = self.fam();
+        self.hexes
+            .iter()
+            .map(|hex| {
+                let dsl = if hex.tile.id.starts_with("preprinted_") {
+                    (f.hex_dsl)(&hex.id).map(|(d, _)| d)
+                } else {
+                    let base = hex.tile.name.split('-').next().unwrap_or(&hex.tile.name);
+                    (f.tile_dsl)(base).map(|(d, _)| d)
+                };
+                let Some(dsl) = dsl else { return vec![] };
+                dsl.split(';').filter_map(|p| p.trim().strip_prefix("path=")).map(lane_specs).collect()
+            })
+            .collect()
+    }
+
     /// The nodes on path `p` (hex, kind, index).
     pub(crate) fn g1822_path_nodes(&self, p: PathRef) -> Vec<Node> {
         let pd = &self.hexes[p.0].tile.paths[p.1];
@@ -387,6 +526,9 @@ impl BaseGame {
     /// impassable colour (gray/red/blue) that don't target the hex, minus
     /// edges behind the hex's OWN impassable borders (asymmetric, as Ruby).
     pub(crate) fn g1822_neighbors(&self) -> HashMap<usize, BTreeMap<u8, usize>> {
+        if self.g1822_is_pnw() {
+            return self.g1822_pnw_neighbors();
+        }
         let mut out: HashMap<usize, BTreeMap<u8, usize>> = HashMap::new();
         let walls = self.g1822_impassable_edges();
         for (hi, hex) in self.hexes.iter().enumerate() {
@@ -398,7 +540,7 @@ impl BaseGame {
                     // connect_hexes runs once at setup: the PREPRINTED colour
                     // decides (a hex later upgraded to a gray tile, e.g. P2's
                     // 169, stays a neighbour).
-                    let impassable_color = crate::title::g1822::hex_dsl(&self.hexes[ni].id)
+                    let impassable_color = (self.fam().hex_dsl)(&self.hexes[ni].id)
                         .map_or(false, |(_, c)| matches!(c, "gray" | "red" | "blue"));
                     if impassable_color {
                         let inv = (dir + 3) % 6;
@@ -421,20 +563,34 @@ impl BaseGame {
     }
 
     pub(crate) fn g1822_hex_is_blue(&self, coord: &str) -> bool {
-        crate::title::g1822::hex_dsl(coord).map_or(false, |(_, c)| c == "blue")
+        if self.g1822_is_pnw() {
+            return self.hex_idx.get(coord).map_or(false, |&hi| self.g1822_tile_color_name(hi) == "blue");
+        }
+        (self.fam().hex_dsl)(coord).map_or(false, |(_, c)| c == "blue")
     }
 
-    /// Impassable border edges per hex (title data).
-    pub(crate) fn g1822_impassable_edges(&self) -> HashMap<String, Vec<u8>> {
-        let mut out: HashMap<String, Vec<u8>> = HashMap::new();
-        for d in self.title_def().hex_definitions() {
-            for b in d.borders {
-                if b.impassable {
-                    out.entry(d.coord.to_string()).or_default().push(b.edge);
-                }
-            }
+    /// Impassable border edges per hex: the game's `walls`
+    /// (`title::title_walls`, shared with every title — Ruby
+    /// `connect_hexes` drops these edges from `hex.neighbors`).
+    pub(crate) fn g1822_impassable_edges(&self) -> std::sync::Arc<HashMap<String, Vec<u8>>> {
+        std::sync::Arc::clone(&self.walls)
+    }
+
+    /// Whether path `pi` of hex `hi` is `track:thin` (1822PNW's D9 / E8
+    /// ferry lines; preprinted only).
+    pub(crate) fn g1822_path_thin(&self, hi: usize, pi: usize) -> bool {
+        if !self.g1822_is_pnw() {
+            return false;
         }
-        out
+        let hex = &self.hexes[hi];
+        if !hex.tile.id.starts_with("preprinted_") {
+            return false;
+        }
+        let Some((dsl, _)) = (self.fam().hex_dsl)(&hex.id) else { return false };
+        dsl.split(';')
+            .filter(|part| part.trim().starts_with("path="))
+            .nth(pi)
+            .map_or(false, |part| part.contains("track:thin"))
     }
 
     /// Whether path `pi` of hex `hi` carries `ignore:1` (only the static
@@ -444,7 +600,7 @@ impl BaseGame {
         if !hex.tile.id.starts_with("preprinted_") {
             return false;
         }
-        let Some((dsl, _)) = crate::title::g1822::hex_dsl(&hex.id) else { return false };
+        let Some((dsl, _)) = (self.fam().hex_dsl)(&hex.id) else { return false };
         dsl.split(';')
             .filter(|part| part.trim().starts_with("path="))
             .nth(pi)
@@ -474,5 +630,38 @@ impl BaseGame {
             .iter()
             .filter(|n| n.kind == NodeKind::City)
             .any(|n| self.g1822_city_tokenable(corp, n.hex, n.index, true, false))
+    }
+}
+
+#[cfg(test)]
+mod walls_tests {
+    use std::collections::HashMap;
+
+    use crate::title::GameTitle;
+
+    /// The impassable borders 1822-family code read itself before it moved
+    /// onto `BaseGame.walls` (the HexDef `impassable` flags) are exactly
+    /// `title::title_walls`' (which also reads `border=edge:N,type:
+    /// impassable` from the preprinted DSL): the move changed nothing.
+    #[test]
+    fn g1822_family_walls_are_title_walls() {
+        let titles: [&dyn GameTitle; 2] = [&crate::title::g1822::G1822, &crate::title::g1822pnw::G1822Pnw];
+        for t in titles {
+            let mut own: HashMap<String, Vec<u8>> = HashMap::new();
+            for d in t.hex_definitions() {
+                for b in d.borders {
+                    if b.impassable {
+                        own.entry(d.coord.to_string()).or_default().push(b.edge);
+                    }
+                }
+            }
+            for v in own.values_mut() {
+                v.sort_unstable();
+                v.dedup();
+            }
+            let walls = crate::title::title_walls(t);
+            assert!(!walls.is_empty(), "{}: no walls", t.name());
+            assert_eq!(own, walls, "{}", t.name());
+        }
     }
 }

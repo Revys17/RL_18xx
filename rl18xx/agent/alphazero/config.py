@@ -494,6 +494,13 @@ class SelfPlayHyperparams:
     gumbel_c_visit: float = 50.0
     gumbel_c_scale: float = 1.0
     gumbel_noise_scale: float = 1.0
+    # Rust MCTS on a tree kept from the previous move (its root already has
+    # visits): "additional" searches num_readouts more (as always); "total"
+    # stops once the root has the visits a fresh search ends with (1 +
+    # num_readouts), the inherited ones counted -- KataGo's maxVisits. Fresh
+    # roots search the same either way; a Gumbel root's schedule always spends
+    # num_readouts (lockstep.TreeSearch).
+    readout_budget: str = "additional"
     c_puct_by_round: dict = field(default_factory=_default_c_puct_by_round)
     dirichlet_noise_alpha: float = 0.03
     dirichlet_noise_weight: float = 0.25

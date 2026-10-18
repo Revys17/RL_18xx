@@ -221,7 +221,7 @@ impl BaseGame {
     /// Ruby SingleItemAuction#min_bid: dutch mode → the company's dropped
     /// price; otherwise highest standing bid + $5, or the company's
     /// `min_bid()` (value - discount) opening price when no bid stands.
-    fn sa_min_bid(&self, state: &AuctionState, ci: usize) -> i32 {
+    pub(crate) fn sa_min_bid(&self, state: &AuctionState, ci: usize) -> i32 {
         let company_min = self.companies[ci].min_bid();
         if state.single_item.as_ref().expect("single-item").dutch_mode {
             return company_min;

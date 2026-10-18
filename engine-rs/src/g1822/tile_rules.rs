@@ -28,25 +28,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::game::BaseGame;
 use crate::graph::Tile;
 use crate::tiles::{PathDef, PathEndpoint, TileColor, TileDef};
-use crate::title::g1822 as data;
+use super::family::Family;
 
-/// G1822 TRACK_PLAIN / TRACK_TOWN (P2 Middleton Railway's town removal).
-pub const TRACK_PLAIN: &[&str] = &["7", "8", "9", "80", "81", "82", "83", "544", "545", "546", "60", "169"];
-pub const TRACK_TOWN: &[&str] = &["3", "4", "58", "141", "142", "143", "144", "767", "768", "769", "X17"];
-pub const UPGRADEABLE_S_YELLOW_CITY_TILE: &str = "57";
-pub const UPGRADEABLE_S_YELLOW_ROTATIONS: &[u8] = &[2, 5];
-/// MINOR_GREEN_UPGRADE colours (phase status `minors_green_upgrade`).
-pub const MINOR_GREEN_UPGRADE: &[&str] = &["yellow", "green"];
-
-/// `blocks_hexes_consent` (entities.rb): (company, its corporation, hex).
-pub const CONSENT_BLOCKERS: &[(&str, &str, &str)] = &[
-    ("C1", "LNWR", "M36"),
-    ("C2", "GWR", "L39"),
-    ("C3", "LBSCR", "M40"),
-    ("C4", "SECR", "N39"),
-    ("M15", "15", "N37"),
-    ("M16", "16", "L37"),
-];
+// TRACK_PLAIN / TRACK_TOWN, UPGRADEABLE_S_*, MINOR_GREEN_UPGRADE and the
+// consent blockers (`blocks_hexes_consent`) are family constants
+// (`family::Family`).
 
 /// A path end as `Part#<=` sees it: edges by number, nodes by class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,8 +296,8 @@ fn cte_subset(from: &TV, to: &TV) -> bool {
 
 /// The number of Ruby `Part::Edge`s of a catalog tile (`Tile#edges.size`):
 /// one per path edge end, a `lanes:N` path counting N times.
-pub(crate) fn tile_edge_count(name: &str) -> usize {
-    let Some((dsl, _)) = data::tile_dsl(name) else { return 0 };
+pub(crate) fn tile_edge_count(fam: &Family, name: &str) -> usize {
+    let Some((dsl, _)) = (fam.tile_dsl)(name) else { return 0 };
     let mut n = 0;
     for part in dsl.split(';') {
         let Some(attrs) = part.trim().strip_prefix("path=") else { continue };
@@ -333,8 +319,8 @@ pub(crate) fn tile_edge_count(name: &str) -> usize {
 }
 
 /// Stub edges of a hex's preprinted tile (map DSL `stub=edge:N`).
-fn hex_stubs(coord: &str) -> Vec<u8> {
-    let Some((dsl, _)) = data::hex_dsl(coord) else { return Vec::new() };
+fn hex_stubs(fam: &Family, coord: &str) -> Vec<u8> {
+    let Some((dsl, _)) = (fam.hex_dsl)(coord) else { return Vec::new() };
     dsl.split(';')
         .filter_map(|p| p.trim().strip_prefix("stub=edge:"))
         .filter_map(|v| v.parse().ok())
@@ -370,6 +356,15 @@ pub(crate) enum RotRule {
     RemoveTown,
     /// SpecialTrack P5 teleport onto the English Channel: rotation 0.
     LcdrChannel,
+    /// 1822PNW P12 / P13 port tiles: the exits of one of the blue hex's
+    /// long (terminal:1) spikes.
+    PnwPort,
+    /// 1822PNW P16 portage: every exit faces a hex, none Seattle.
+    PnwPortage,
+    /// 1822PNW P18 boomtown: any rotation.
+    PnwBoomtown,
+    /// 1822PNW P19 coal mine: some exit's neighbour is connected.
+    PnwCoal,
 }
 
 impl BaseGame {
@@ -390,6 +385,17 @@ impl BaseGame {
 
     /// `Game#upgrades_to?(hex.tile, to, special)` for the tile on `hi`.
     pub(crate) fn g1822_upgrades_to(&self, hi: usize, to: &TileDef, special: bool) -> bool {
+        self.g1822_upgrades_to_sel(hi, to, special, None)
+    }
+
+    /// `upgrades_to?(from, to, special, selected_company:)`.
+    pub(crate) fn g1822_upgrades_to_sel(&self, hi: usize, to: &TileDef, special: bool, selected: Option<&str>) -> bool {
+        if self.g1822_is_pnw() {
+            let base = to.name.split('-').next().unwrap_or(&to.name);
+            if let Some(v) = self.g1822_pnw_upgrades_to(hi, base, selected) {
+                return v;
+            }
+        }
         let hex = &self.hexes[hi];
         // Blue (sea / port) hexes: COLORS has no tile colour after blue
         // that a catalog tile carries (the engine stores blue as white).
@@ -398,15 +404,16 @@ impl BaseGame {
         }
         let from = TV::from_tile(&hex.tile);
         // G1822: the D35 S tile removes the town in yellow.
-        if hex.id == data::UPGRADEABLE_S_HEX_NAME && from.color == TileColor::White {
-            return to.name == UPGRADEABLE_S_YELLOW_CITY_TILE;
+        let f = self.fam();
+        if Family::is(f.upgradeable_s_hex_name, &hex.id) && from.color == TileColor::White {
+            return to.name == f.upgradeable_s_yellow_city_tile;
         }
         let step_ok = match (color_index(from.color), color_index(to.color)) {
             (Some(a), Some(b)) => b == a + 1,
             _ => false,
         };
         // G1822: P2 Middleton removes a town (colour step only).
-        if TRACK_TOWN.contains(&from.name.as_str()) && TRACK_PLAIN.contains(&to.name.as_str()) {
+        if f.track_town.contains(&from.name.as_str()) && f.track_plain.contains(&to.name.as_str()) {
             return step_ok;
         }
         if !step_ok {
@@ -431,7 +438,7 @@ impl BaseGame {
         if from.towns.len() != to_tv.towns.len() {
             return false;
         }
-        if from.label.is_none() && from.cities.len() != to_tv.cities.len() {
+        if from.label.is_none() && from.cities.len() != to_tv.cities.len() && !self.g1822_pnw_ignore_num_cities(hi) {
             return false;
         }
         if from.cities.len() > 1 && to_tv.cities.len() > 1 && !cte_subset(&from, &to_tv) {
@@ -465,13 +472,13 @@ impl BaseGame {
         if !hex.tile.id.starts_with("preprinted_") {
             return true;
         }
-        let stubs = hex_stubs(&hex.id);
+        let stubs = hex_stubs(self.fam(), &hex.id);
         if stubs.is_empty() {
             return true;
         }
         // blockers, in Ruby's add order
         let mut blockers: Vec<Option<u32>> = Vec::new();
-        for (company, corp, h) in CONSENT_BLOCKERS {
+        for (company, corp, h) in self.fam().consent_blockers {
             if *h != hex.id {
                 continue;
             }
@@ -488,10 +495,10 @@ impl BaseGame {
                 blockers.push(self.g1822_corp_president(corp));
             }
         }
-        if let (Some(exit), Some(&lh)) = (self.g().minor_14_city_exit, self.hex_idx.get(data::LONDON_HEX)) {
+        if let (Some(exit), Some(&lh)) = (self.g().minor_14_city_exit, self.hex_idx.get(self.fam().london_hex)) {
             let nb = self.g1822_neighbors().get(&lh).and_then(|m| m.get(&exit)).copied();
             if nb == Some(hi) {
-                blockers.push(self.g1822_corp_president(super::MINOR_14_ID));
+                blockers.push(self.g1822_corp_president(self.fam().minor_14_id));
             }
         }
         // preprocess_action removes every other one
@@ -520,12 +527,26 @@ impl BaseGame {
         connected: &[u8],
         neighbors: &HashMap<usize, BTreeMap<u8, usize>>,
     ) -> bool {
+        if self.g1822_is_pnw() && rule == RotRule::Normal {
+            let hex = &self.hexes[hi];
+            let base = to_def.name.split('-').next().unwrap_or(&to_def.name);
+            let cur = hex.tile.name.split('-').next().unwrap_or(&hex.tile.name);
+            if !hex.tile.id.starts_with("preprinted_") && cur == base && hex.tile.rotation == rotation {
+                return true;
+            }
+            if base == "BC" || Self::g1822_pnw_city_and_town_tile(&hex.id, base) {
+                return true;
+            }
+        }
         let hex = &self.hexes[hi];
         let to = TV::from_def(to_def, rotation);
         let from = TV::from_tile(&hex.tile);
         let nbrs = neighbors.get(&hi);
         let has_nb = |e: &u8| nbrs.map_or(false, |m| m.contains_key(e));
         match rule {
+            RotRule::PnwPort | RotRule::PnwPortage | RotRule::PnwBoomtown | RotRule::PnwCoal => {
+                return self.g1822_pnw_special_rotation(rule, operator, hi, &to.exits());
+            }
             RotRule::LcdrChannel => return rotation == 0,
             RotRule::RemoveTown => {
                 if !self.g1822_game_legal_rotation(operator, hi, &to) {
@@ -540,9 +561,10 @@ impl BaseGame {
             RotRule::Normal => {}
         }
         // G1822 Tracker: the white S hex's 57 at rotation 2 or 5 is legal.
-        if hex.id == data::UPGRADEABLE_S_HEX_NAME
-            && to_def.name == UPGRADEABLE_S_YELLOW_CITY_TILE
-            && UPGRADEABLE_S_YELLOW_ROTATIONS.contains(&rotation)
+        let f = self.fam();
+        if Family::is(f.upgradeable_s_hex_name, &hex.id)
+            && to_def.name == f.upgradeable_s_yellow_city_tile
+            && f.upgradeable_s_yellow_rotations.contains(&rotation)
         {
             return true;
         }
@@ -649,7 +671,7 @@ impl BaseGame {
     /// green while `minors_green_upgrade` holds) and that upgrade the hex.
     pub(crate) fn g1822_potential_tiles(&self, operator: &str, hi: usize) -> Vec<String> {
         let colors: Vec<String> = if self.is_minor(operator) && self.phase_has_status("minors_green_upgrade") {
-            MINOR_GREEN_UPGRADE.iter().map(|s| s.to_string()).collect()
+            self.fam().minor_green_upgrade.iter().map(|s| s.to_string()).collect()
         } else {
             self.phase.tiles.clone()
         };
@@ -676,13 +698,13 @@ impl BaseGame {
         let mut best: BTreeMap<u8, usize> = BTreeMap::new();
         for t in &tiles {
             let c = self.tile_catalog[t].color.index();
-            let n = tile_edge_count(t);
+            let n = tile_edge_count(self.fam(), t);
             let e = best.entry(c).or_insert(0);
             *e = (*e).max(n);
         }
         tiles
             .into_iter()
-            .filter(|t| best.get(&self.tile_catalog[t].color.index()) == Some(&tile_edge_count(t)))
+            .filter(|t| best.get(&self.tile_catalog[t].color.index()) == Some(&tile_edge_count(self.fam(), t)))
             .collect()
     }
 
@@ -691,7 +713,8 @@ impl BaseGame {
     /// is the tile it replaced). English Channel and Cardiff are exempt.
     pub(crate) fn g1822_track_restrictions_ok(&self, operator: &str, hi: usize, old: &Tile) -> bool {
         let hex = &self.hexes[hi];
-        if hex.id == data::ENGLISH_CHANNEL_HEX || hex.id == data::CARDIFF_HEX {
+        let f = self.fam();
+        if Family::is(f.english_channel_hex, &hex.id) || Family::is(f.cardiff_hex, &hex.id) {
             return true;
         }
         let new = TV::from_tile(&hex.tile);

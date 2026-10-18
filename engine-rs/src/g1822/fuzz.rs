@@ -32,9 +32,14 @@ impl Rng {
 }
 
 pub fn new_game(players: usize, seed: u64, rules: &[&str]) -> BaseGame {
+    new_game_titled("1822", players, seed, rules)
+}
+
+/// A fresh game of any 1822-family title.
+pub fn new_game_titled(title: &str, players: usize, seed: u64, rules: &[&str]) -> BaseGame {
     let ids: Vec<u32> = (0..players as u32).map(|i| 1001 + i).collect();
     let names: HashMap<u32, String> = ids.iter().map(|&i| (i, format!("Player {}", i - 1000))).collect();
-    BaseGame::build_seeded("1822", ids, names, rules.iter().map(|s| s.to_string()).collect(), Some(seed))
+    BaseGame::build_seeded(title, ids, names, rules.iter().map(|s| s.to_string()).collect(), Some(seed))
 }
 
 /// A price inside a range (the ends favoured).
@@ -70,7 +75,19 @@ pub fn choose(moves: &[Move], rng: &mut Rng) -> Move {
 
 /// One random walk from a fresh game, generating under `policy`.
 pub fn walk(players: usize, seed: u64, rules: &[&str], policy: CrossPlayerPolicy, max_moves: usize) -> WalkReport {
-    let mut g = new_game(players, seed, rules);
+    walk_titled("1822", players, seed, rules, policy, max_moves)
+}
+
+/// [`walk`] for any 1822-family title.
+pub fn walk_titled(
+    title: &str,
+    players: usize,
+    seed: u64,
+    rules: &[&str],
+    policy: CrossPlayerPolicy,
+    max_moves: usize,
+) -> WalkReport {
+    let mut g = new_game_titled(title, players, seed, rules);
     let mut rng = Rng::new(seed ^ 0xA5A5);
     let mut log = Vec::new();
     for n in 0..max_moves {
@@ -210,5 +227,31 @@ fn random_walks_3_to_6_players() {
         }
     }
     eprintln!("1822 fuzz: {total_moves} moves, {finished}/16 games finished");
+    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+}
+
+/// 1822PNW (3-5 players): the same walks, both purchase policies.
+#[test]
+fn pnw_random_walks_3_to_5_players() {
+    let mut failures = Vec::new();
+    let mut finished = 0;
+    let mut total_moves = 0;
+    for players in 3..=5usize {
+        for k in 1..=4u64 {
+            let seed = k * 7919 + players as u64;
+            let policy = if k <= 2 { CrossPlayerPolicy::RESTRICTED } else { CrossPlayerPolicy::RULES };
+            match std::panic::catch_unwind(|| walk_titled("1822PNW", players, seed, &[], policy, 3000)) {
+                Ok(rep) => {
+                    total_moves += rep.moves;
+                    finished += rep.finished as usize;
+                    if let Some(e) = rep.error {
+                        failures.push(e);
+                    }
+                }
+                Err(p) => failures.push(format!("panic ({players}p seed {seed}): {}", panic_text(&p))),
+            }
+        }
+    }
+    eprintln!("1822PNW fuzz: {total_moves} moves, {finished}/12 games finished");
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
 }

@@ -286,6 +286,14 @@ pub enum StepEntity {
     Company(String),
 }
 
+/// One step's offer to an entity ([`BaseGame::step_offers`]).
+#[derive(Clone, Debug)]
+pub(crate) struct StepOffer {
+    pub kind: StepKind,
+    pub entity: StepEntity,
+    pub types: Vec<&'static str>,
+}
+
 fn operating<'a>(snap: &'a Round) -> Option<&'a OperatingState> {
     match snap {
         Round::Operating(s) => Some(s),
@@ -428,6 +436,63 @@ impl BaseGame {
                     }
                     let ts = self.step_actions(desc, &ce, &snap);
                     push_all(ts, &mut out);
+                }
+            }
+        }
+        out
+    }
+
+    /// The accumulation loop above, keeping each action type with the
+    /// STEP that offers it (input of the per-title legal-move generators,
+    /// e.g. `crate::g1867::legal`): per acting entity (the blocking step's
+    /// entity, then its parallel companies), the active steps up to the
+    /// blocking one with their non-empty `actions`, each type attributed to
+    /// the FIRST step listing it — the step `dispatch_gate` hands that
+    /// action to. BuyCompany kinds offer what their DISPATCH arm accepts
+    /// (Ruby `can_buy_company?`: any player's company), not the
+    /// president-only enumeration arm kept for 1830's ActionHelper parity.
+    /// Read-only: no 1830 path calls it.
+    pub(crate) fn step_offers(&mut self) -> Vec<StepOffer> {
+        if self.finished || self.g1822.is_some() {
+            return Vec::new();
+        }
+        let snap = self.round.clone();
+        let steps = self.round_step_descs(&snap);
+        let Some((bidx, entity)) = self.blocking_step_entity(&snap) else {
+            return Vec::new();
+        };
+        let mut entities = vec![entity.clone()];
+        if !self.suppress_parallel_companies(&entity, &snap) {
+            for csym in self.parallel_companies(&entity) {
+                let ce = StepEntity::Company(csym);
+                if ce != entity {
+                    entities.push(ce);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for ent in entities {
+            let mut seen: Vec<&'static str> = Vec::new();
+            for desc in steps.iter().take(bidx + 1) {
+                if !self.step_active(desc, &snap) {
+                    continue;
+                }
+                let mut ts = self.step_actions(desc, &ent, &snap);
+                if matches!(desc.kind, StepKind::BuyCompany | StepKind::BuyCompanyPreloan) {
+                    for t in self.step_actions_dispatch(desc, &ent, &snap) {
+                        if !ts.contains(&t) {
+                            ts.push(t);
+                        }
+                    }
+                }
+                ts.retain(|t| !seen.contains(t));
+                seen.extend(ts.iter().copied());
+                if !ts.is_empty() {
+                    out.push(StepOffer {
+                        kind: desc.kind,
+                        entity: ent.clone(),
+                        types: ts,
+                    });
                 }
             }
         }
@@ -836,6 +901,17 @@ impl BaseGame {
             }
             StepKind::CompanyPendingPar => match snap {
                 Round::Auction(s) => s.pending_par.as_ref().map(|(_, pid)| StepEntity::Player(*pid)),
+                _ => None,
+            },
+            // A live 1867 minor auction (ViaBid `active_entities`): the
+            // active bidder after the standing high bid acts, not the
+            // round's current player (who opened it). No-op for 1830
+            // (`bid_auction` is always None).
+            StepKind::BuySellParShares => match snap {
+                Round::Stock(s) => match &s.bid_auction {
+                    Some(auction) => self.stock_bid_active_player(auction).map(StepEntity::Player),
+                    None => Some(StepEntity::Player(s.current_player_id())),
+                },
                 _ => None,
             },
             _ => match snap {

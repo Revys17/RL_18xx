@@ -60,6 +60,11 @@ round: it replaces SelfPlayConfig's per-round c_puct_by_round table) and
   Gumbel noise (0: deterministic), ``cvisit=`` / ``cscale=`` set sigma's
   constants (SelfPlayConfig.gumbel_k / gumbel_noise_scale / gumbel_c_visit /
   gumbel_c_scale; engine-rs/src/gumbel.rs)
+- ``budget=total``: on a seat's own consecutive moves the tree is kept (the
+  chosen move's subtree) and by default the next search adds the ``@`` budget
+  to its inherited visits ("additional"); ``total`` stops once the root has
+  1 + budget visits, inherited ones included (SelfPlayConfig.readout_budget;
+  search learning's ``--reuse-tree total``)
 
 Standard errors treat games as independent; the six arrangements of one start
 are correlated, which (over the 21 runs checked 2026-10-06) moved a
@@ -167,6 +172,10 @@ def parse_player(spec: str, default_readouts: int) -> tuple:
             overrides["gumbel_c_visit"] = float(value)
         elif key == "cscale":
             overrides["gumbel_c_scale"] = float(value)
+        elif key == "budget":
+            if value not in ("additional", "total"):
+                raise SystemExit(f"budget={value!r}: additional or total")
+            overrides["readout_budget"] = value
         elif key == "sample":
             overrides = {"policy_temperature": float(value) if value else 1.0}
             break
@@ -496,7 +505,10 @@ def serve_games(settings: dict, concurrency: int) -> int:
     seed = settings["seed"] * 100_003 + os.getpid()
     random.seed(seed)
     np.random.seed(seed % (2**32))
-    searcher = LockstepSearcher({name: ClientEvaluator(client) for name, client in _CLIENTS.items()})
+    searcher = LockstepSearcher(
+        {name: ClientEvaluator(client) for name, client in _CLIENTS.items()},
+        dedupe_maps=bool(settings.get("dedupe_maps", False)),
+    )
     runs, needs, labels = {}, {}, {}
     exhausted, slot, played = False, 0, 0
     while True:
@@ -621,6 +633,14 @@ def main():
         "per task through RustMCTSPlayer.suggest_move as before",
     )
     parser.add_argument("--batch-size", type=int, default=512)
+    parser.add_argument(
+        "--dedupe-maps", action="store_true",
+        help="--games-per-task > 1: send each distinct hex map of a request once (the map encoder runs once per map)",
+    )
+    parser.add_argument(
+        "--server-replicas", type=int, default=1,
+        help="Inference server processes per checkpoint (workers split between them)",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--start-positions", default=None,
@@ -658,6 +678,7 @@ def main():
         "start_positions": args.start_positions,
         "random_start_fraction": args.random_start_fraction,
         "arrangements": seatings,
+        "dedupe_maps": args.dedupe_maps,
     }
     (out_dir / "settings.json").write_text(
         json.dumps({**settings, "matches": args.match, "games_per_match": games_per_match}, indent=2)
@@ -675,6 +696,7 @@ def main():
             batch_size=args.batch_size,
             batch_timeout_ms=2.0,
             autocast_device=None,
+            replicas=args.server_replicas,
         )
     server_queues = {path: (h.request_q, h.reply_qs, h.ticket_q) for path, h in servers.items()}
 

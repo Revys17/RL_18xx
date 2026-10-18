@@ -22,6 +22,7 @@ impl BaseGame {
             RoundKind::Stock => "Stock",
             RoundKind::Choices => "Choices",
             RoundKind::Operating => "Operating",
+            RoundKind::Merger => "Merger",
         };
         let active = self.g1822_active_step();
         let step = active.map(|i| format!("{:?}", r.steps[i]));
@@ -172,6 +173,25 @@ impl BaseGame {
         (total, serde_json::Value::Array(rs).to_string())
     }
 
+    /// The legacy (pre-2026-10-17) router's best total, for comparison.
+    fn g1822_router_best_legacy(&self, corp: &str) -> i32 {
+        self.g1822_best_routes_legacy(corp).1
+    }
+
+    /// Router v2 counters: (calls, walk steps, exhausted walks, TOP_K
+    /// overflows) since the process started.
+    #[staticmethod]
+    fn g1822_router_stats() -> (u64, u64, u64, u64) {
+        use super::router::stats;
+        use std::sync::atomic::Ordering::Relaxed;
+        (
+            stats::CALLS.load(Relaxed),
+            stats::WALK_STEPS.load(Relaxed),
+            stats::EXHAUSTED.load(Relaxed),
+            stats::OVERFLOW.load(Relaxed),
+        )
+    }
+
     /// Debug: explain recorded routes (JSON list of run_routes entries).
     fn g1822_router_explain_json(&self, corp: &str, routes_json: &str) -> Vec<String> {
         let v: Vec<serde_json::Value> = serde_json::from_str(routes_json).unwrap_or_default();
@@ -283,6 +303,15 @@ impl BaseGame {
         (String::new(), String::new())
     }
 
+    /// Debug: the generator's candidates before the apply filter, each
+    /// with the error applying it raises (None = applies).
+    fn g1822_candidates(&mut self) -> Vec<(String, Option<String>)> {
+        if self.g1822.is_none() {
+            return vec![];
+        }
+        self.g1822_candidates_debug()
+    }
+
     /// Whether a state with no legal moves is one Ruby cannot continue
     /// either (see g1822::fuzz::ruby_dead_end).
     fn g1822_ruby_dead_end(&mut self) -> bool {
@@ -305,12 +334,16 @@ impl BaseGame {
         use super::legal::{g1822_generator_status, GenStatus};
         use super::Step::*;
         let pairs: &[(super::Step, &[&str])] = &[
-            (BuySellParShares, &["bid", "buy_shares", "sell_shares", "par", "pass", "payoff_player_debt", "payoff_player_debt_partial", "choose_ability"]),
+            // (1822PNW: BSPS `choose` = the conversion's exchange,
+            // AcquireCompany `choose` = P20's minor, Assign, Merge)
+            (BuySellParShares, &["bid", "buy_shares", "sell_shares", "par", "pass", "payoff_player_debt", "payoff_player_debt_partial", "choose_ability", "choose"]),
             (Choose, &["choose", "pass"]),
             (DiscardTrain, &["discard_train"]),
             (PendingToken, &["place_token"]),
             (FirstTurnHousekeeping, &["buy_train", "pass"]),
-            (AcquireCompany, &["acquire_company", "pass"]),
+            (AcquireCompany, &["acquire_company", "pass", "choose"]),
+            (Assign, &["assign"]),
+            (Merge, &["merge", "choose", "pass"]),
             (SpecialChoose, &["choose"]),
             (SpecialTrack, &["lay_tile", "pass"]),
             (SpecialToken, &["place_token", "pass"]),

@@ -35,6 +35,7 @@ import engine_rs  # noqa: E402
 
 from tests.title_replay_harness import SEAT_ID_BASE, game_seed, ruby_filtered_actions  # noqa: E402
 
+TITLE = "1822"
 SKIP = {"run_routes"}
 # Action types the cross-player policy (GameTitle::generator_cross_player) can exclude.
 POLICY_TYPES = {"buy_train", "acquire_company", "merge"}
@@ -68,10 +69,12 @@ def _key(g, a: dict):
             sp = int(sp.split(",")[0])
         return (a.get("corporation"), sp)
     if t == "lay_tile":
+        tile = str(a.get("tile")).split("-")[0]
         return (
             a.get("hex"),
-            str(a.get("tile")).split("-")[0],
-            int(a.get("rotation") or 0),
+            tile,
+            # (a builder cube's rotation changes nothing)
+            0 if tile == "BC" else int(a.get("rotation") or 0),
             tuple(sorted(a.get("combo_entities") or [])),
         )
     if t == "place_token":
@@ -92,6 +95,8 @@ def _key(g, a: dict):
         return (a.get("corporation"),)
     if t == "acquire_company":
         return (a.get("company"),)
+    if t == "assign":
+        return (a.get("target"), a.get("target_type"))
     return ()
 
 
@@ -133,15 +138,15 @@ def audit_game(path: str) -> dict:
     game = json.load(open(path))
     gid = Path(path).stem
     out = {"id": gid, "counts": Counter(), "examples": defaultdict(list), "error": None}
-    if game.get("title") != "1822" or game.get("status") not in ("finished", "archived"):
+    if game.get("title") != TITLE or game.get("status") not in ("finished", "archived"):
         out["error"] = "skipped"
         return out
-    base = SEAT_ID_BASE.get("1822", 0)
+    base = SEAT_ID_BASE.get(TITLE, 0)
     seat = {p["id"]: base + i + 1 for i, p in enumerate(game["players"])}
     rules = list((game.get("settings") or {}).get("optional_rules") or [])
     try:
         g = engine_rs.BaseGame.new_titled(
-            "1822", {v: f"Player {v - base}" for v in seat.values()}, rules or None, game_seed(game)
+            TITLE, {v: f"Player {v - base}" for v in seat.values()}, rules or None, game_seed(game)
         )
     except ValueError as exc:
         out["error"] = f"construction: {exc}"
@@ -179,12 +184,15 @@ def audit_game(path: str) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--glob", default="human_games/scrape_2026_10/1822/*.json")
+    ap.add_argument("--title", default="1822", help="an 1822-family title (1822, 1822PNW, ...)")
+    ap.add_argument("--glob", default=None, help="default: human_games/scrape_2026_10/<title>/*.json")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--json", dest="json_out", default=None)
     args = ap.parse_args()
-    paths = sorted(globmod.glob(args.glob))[: args.limit]
+    global TITLE
+    TITLE = args.title
+    paths = sorted(globmod.glob(args.glob or f"human_games/scrape_2026_10/{TITLE}/*.json"))[: args.limit]
     if args.jobs > 1:
         with mp.get_context("fork").Pool(args.jobs) as pool:
             results = pool.map(audit_game, paths, chunksize=2)
