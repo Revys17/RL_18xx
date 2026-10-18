@@ -2575,7 +2575,11 @@ pub(crate) fn build_hex_from_def(title: &dyn GameTitle, def: &HexDef) -> Hex {
             // IMPASSABLE_HEX_COLORS treat blue like red and gray — never
             // upgraded, impassable unless targeting — so they take the red
             // color (`TileColor` has no blue; the color is not otherwise
-            // read for these offboards).
+            // read for these offboards). The 1822 family keeps blue as
+            // white: its code reads blue from the hex DSL
+            // (`g1822_hex_is_blue`, `g1822_tile_color_name`) and lays port
+            // tiles on blue hexes.
+            "blue" if title.is_g1822_family() => TileColor::White,
             "blue" => TileColor::Red,
             _ => TileColor::White,
         };
@@ -3036,7 +3040,8 @@ impl BaseGame {
         }
         if t.is_g1822_family() {
             let n = player_ids.len() as u8;
-            if !(crate::title::g1822::MIN_PLAYERS..=crate::title::g1822::MAX_PLAYERS).contains(&n) {
+            let (lo, hi) = t.g1822_family().map_or((0, 0), |f| f.player_range);
+            if !(lo..=hi).contains(&n) {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "{title}: unsupported player count {n}"
                 )));
@@ -3287,6 +3292,8 @@ impl BaseGame {
             let atype = action.action_type();
             let price: Option<i32> = if atype == "buy_shares" || atype == "sell_shares" {
                 match action_dict.get_item("share_price") {
+                    // Ruby `@share_price || price_per_share`: false is none
+                    Ok(Some(v)) if v.is_instance_of::<pyo3::types::PyBool>() => None,
                     Ok(Some(v)) => v.extract().ok(),
                     _ => None,
                 }

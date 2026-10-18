@@ -15,7 +15,8 @@ use crate::game::BaseGame;
 use crate::title::CorpType;
 
 use super::shares::{Bundle, Dir};
-use super::{err, Ent, RoundKind, RoundSt, RunRoute, Step, COMPANY_DOUBLE_CASH, COMPANY_DOUBLE_CASH_REVENUE};
+use super::family::Family;
+use super::{err, Ent, RoundKind, RoundSt, RunRoute, Step};
 
 impl BaseGame {
     // =====================================================================
@@ -61,8 +62,8 @@ impl BaseGame {
         });
     }
 
-    pub(crate) fn g1822_or_steps() -> Vec<Step> {
-        vec![
+    pub(crate) fn g1822_or_steps(&self) -> Vec<Step> {
+        let mut v = vec![
             Step::DiscardTrain,
             Step::PendingToken,
             Step::FirstTurnHousekeeping,
@@ -79,7 +80,12 @@ impl BaseGame {
             Step::MinorAcquisition,
             Step::PendingToken,
             Step::IssueShares,
-        ]
+        ];
+        if self.g1822_is_pnw() {
+            // G1822PNW: Assign after AcquireCompany
+            v.insert(4, Step::Assign);
+        }
+        v
     }
 
     /// `new_operating_round(round_num)` + Operating#setup.
@@ -89,7 +95,7 @@ impl BaseGame {
             self.gm().operating_rounds = self.phase.operating_rounds;
         }
         let entities = self.g1822_operating_order();
-        let round = RoundSt::new(RoundKind::Operating, round_num, entities, Self::g1822_or_steps());
+        let round = RoundSt::new(RoundKind::Operating, round_num, entities, self.g1822_or_steps());
         self.gm().round = round;
         self.g1822_or_steps_setup();
         // Operating#setup: payout_companies (G1822 set_private_revenues
@@ -129,6 +135,7 @@ impl BaseGame {
         r.tokened = false;
         r.last_share_sold_price = None;
         r.corporations_sold.clear();
+        r.num_laid_portage = 0;
     }
 
     /// Operating#start_operating.
@@ -188,14 +195,17 @@ impl BaseGame {
     /// P9's corporate revenue).
     fn g1822_payout_companies(&mut self) {
         let phase = self.phase_num() as i32;
+        let f = self.fam();
         let syms: Vec<String> = self.g().company_order.clone();
-        for c in &syms {
+        // PNW set_private_revenues is a no-op
+        let set_private_revenues = !self.g1822_is_pnw();
+        for c in syms.iter().filter(|_| set_private_revenues) {
             let Some(i) = self.co_idx(c) else { continue };
             if self.companies[i].closed || self.companies[i].owner.is_none() {
                 continue;
             }
-            if super::PRIVATE_PHASE_REVENUE.contains(&c.as_str()) {
-                let mult = if c == super::COMPANY_10X_REVENUE { 10 } else { 5 };
+            if f.private_phase_revenue.contains(&c.as_str()) {
+                let mult = if Family::is(f.company_10x_revenue, c) { 10 } else { 5 };
                 let rev = phase * mult;
                 self.companies[i].revenue = rev;
                 self.g1822_bank_spend(rev);
@@ -203,8 +213,8 @@ impl BaseGame {
                     *cash += rev;
                 }
             }
-            if c == COMPANY_DOUBLE_CASH && self.companies[i].owner.is_corporation() {
-                self.companies[i].revenue = COMPANY_DOUBLE_CASH_REVENUE[phase as usize];
+            if Family::is(f.company_double_cash, c) && self.companies[i].owner.is_corporation() {
+                self.companies[i].revenue = f.company_double_cash_revenue[phase as usize];
             }
         }
         // Base payout_companies: owned, positive revenue; players (seat
@@ -227,6 +237,17 @@ impl BaseGame {
         for (_, _, rev, _, c) in payees {
             let owner = self.co_owner(&c);
             self.g1822_bank_pay(&owner, rev);
+        }
+        if self.g1822_is_pnw() {
+            // PNW payout_companies: count the regionals' payouts
+            for r in super::pnw::REGIONALS {
+                let owned = self.corp_idx.get(*r).map_or(false, |&ri| {
+                    !self.corporations[ri].closed && !self.corporations[ri].owner_id.is_none()
+                });
+                if owned {
+                    *self.gm().regional_payout_count.entry(r.to_string()).or_insert(0) += 1;
+                }
+            }
         }
     }
 
@@ -273,6 +294,9 @@ impl BaseGame {
                 }
             }
             Step::AcquireCompany => {
+                if self.g1822_is_pnw() && !self.rnd().p20_choices.is_empty() {
+                    return vec!["choose"];
+                }
                 if !self.is_operator(ent) {
                     return vec![];
                 }
@@ -283,6 +307,8 @@ impl BaseGame {
                     vec!["acquire_company", "pass"]
                 }
             }
+            // Engine::Step::SpecialChoose (PNW): no :choose_ability companies
+            Step::SpecialChoose if self.g1822_is_pnw() => vec![],
             Step::SpecialChoose => {
                 if !self.is_operator(ent) {
                     return vec![];
@@ -370,6 +396,15 @@ impl BaseGame {
                 _ => err("FirstTurnHousekeeping cannot process this action"),
             },
             Step::AcquireCompany => match action {
+                Action::Choose { choice, .. } if self.g1822_is_pnw() => self.g1822_pnw_p20_choose(choice),
+                Action::AcquireCompany { company_sym, .. } if self.g1822_is_pnw() && company_sym == "P20" => {
+                    let Ent::Corp(c) = ent else { return err("acquire by a non-corporation") };
+                    self.g1822_pnw_acquire_p20(c)?;
+                    if self.g1822_purchasable_companies(c).is_empty() && self.rnd().p20_choices.is_empty() {
+                        self.rndm().passed[i] = true;
+                    }
+                    Ok(())
+                }
                 Action::AcquireCompany { company_sym, .. } => {
                     let Ent::Corp(c) = ent else { return err("acquire by a non-corporation") };
                     self.g1822_process_acquire_company(c, company_sym)?;
@@ -481,7 +516,7 @@ impl BaseGame {
         if trains.is_empty() || !self.g1822_can_run_route(c) {
             return vec![];
         }
-        if self.is_minor(c) && trains.iter().all(|t| t.name == super::E_TRAIN) {
+        if self.is_minor(c) && trains.iter().all(|t| t.name == self.fam().e_train) {
             return vec![];
         }
         let mut a = vec!["run_routes"];
@@ -497,7 +532,7 @@ impl BaseGame {
         self.corporations[ci]
             .trains
             .iter()
-            .filter(|t| t.name != super::EXTRA_TRAIN_PULLMAN && !t.operated)
+            .filter(|t| t.name != self.fam().extra_train_pullman && !t.operated)
             .cloned()
             .collect()
     }
@@ -509,7 +544,7 @@ impl BaseGame {
         if self.corporations[ci]
             .trains
             .iter()
-            .any(|t| super::LOCAL_TRAINS.contains(&t.name.as_str()))
+            .any(|t| self.fam().local_trains.contains(&t.name.as_str()))
         {
             return true;
         }
@@ -529,7 +564,7 @@ impl BaseGame {
     pub(crate) fn g1822_pullman_choices(&self, c: &str) -> Vec<String> {
         self.g1822_route_trains(c)
             .into_iter()
-            .filter(|t| !super::LOCAL_TRAINS.contains(&t.name.as_str()) && t.name != super::E_TRAIN)
+            .filter(|t| !self.fam().local_trains.contains(&t.name.as_str()) && t.name != self.fam().e_train)
             .map(|t| t.id)
             .collect()
     }
@@ -537,7 +572,7 @@ impl BaseGame {
     fn g1822_choosing_pullman(&self, c: &str) -> bool {
         let ci = self.ci(c);
         self.rnd().pullman_train.is_none()
-            && self.corporations[ci].trains.iter().any(|t| t.name == super::EXTRA_TRAIN_PULLMAN)
+            && self.corporations[ci].trains.iter().any(|t| t.name == self.fam().extra_train_pullman)
             && !self.g1822_pullman_choices(c).is_empty()
     }
 
@@ -545,11 +580,15 @@ impl BaseGame {
         let Ent::Corp(c) = ent else { return err("route by a non-corporation") };
         match action {
             Action::Choose { choice, .. } => {
-                let idx: usize = choice.parse().map_err(|_| GameError::new("bad pullman choice"))?;
-                let tid = self
-                    .g1822_pullman_choices(c)
-                    .get(idx)
-                    .cloned()
+                // pullman_train_choices(entity)[action.choice.to_i]: Ruby's
+                // String#to_i (a non-number is 0, a negative counts from
+                // the end; out of range raises on nil.name)
+                let choices = self.g1822_pullman_choices(c);
+                let n = ruby_to_i(choice);
+                let idx = if n < 0 { choices.len() as i64 + n } else { n };
+                let tid = usize::try_from(idx)
+                    .ok()
+                    .and_then(|i| choices.get(i).cloned())
                     .ok_or_else(|| GameError::new("bad pullman choice"))?;
                 // attach_pullman: the train becomes "<name>+" (city visit =
                 // its distance, everything pays) for this run.
@@ -599,9 +638,11 @@ impl BaseGame {
                 self.rndm().routes = run;
                 self.rndm().extra_revenue = *extra_revenue;
                 self.rndm().passed[i] = true;
-                // detach_pullman
+                // detach_pullman: the step's @pullman_train, whoever owns it
+                // (Route#actions offers `choose` to any corporation, so
+                // another one's choose can attach its train meanwhile)
                 if let (Some(tid), Some((name, _))) = (self.rnd().pullman_train.clone(), self.rnd().pullman_original.clone()) {
-                    if let Some(t) = self.corporations[ci].trains.iter_mut().find(|t| t.id == tid) {
+                    if let Some(t) = self.corporations.iter_mut().flat_map(|co| co.trains.iter_mut()).find(|t| t.id == tid) {
                         t.name = name;
                     }
                 }
@@ -628,7 +669,7 @@ impl BaseGame {
         let t = self.corporations[ci]
             .trains
             .iter()
-            .find(|t| super::EXTRA_TRAIN_PERMANENTS.contains(&t.name.as_str()))?;
+            .find(|t| self.fam().extra_train_permanents.contains(&t.name.as_str()))?;
         let rev = self
             .rnd()
             .routes
@@ -669,6 +710,9 @@ impl BaseGame {
 
     /// G1822 `process_dividend`.
     pub(crate) fn g1822_process_dividend(&mut self, c: &str, kind: &str) -> Result<(), GameError> {
+        if self.g1822_is_pnw() {
+            self.g1822_pnw_pay_portage_fee();
+        }
         let total = self.g1822_routes_revenue();
         let subsidy = self.g1822_routes_subsidy(c);
         let extra_choice = self.rnd().extra_train_choice.clone();
@@ -767,6 +811,10 @@ impl BaseGame {
         if revenue >= sp.price * 2 && major {
             times = 2;
         }
+        // PNW Dividend#share_price_change: 3 → for a triple dividend ≤ 150
+        if self.g1822_is_pnw() && revenue >= sp.price * 3 && sp.price <= 150 && major {
+            times = 3;
+        }
         for _ in 0..times {
             self.g1822_move_price(c, Dir::Right);
         }
@@ -776,7 +824,7 @@ impl BaseGame {
     /// value of the first and last stops of the best route(s).
     fn g1822_routes_subsidy(&self, c: &str) -> i32 {
         let owner = EntityId::corporation(c);
-        let contracts = super::PRIVATE_MAIL_CONTRACTS
+        let contracts = self.fam().private_mail_contracts
             .iter()
             .filter(|p| !self.co_closed(p) && self.co_owner(p) == owner)
             .count();
@@ -791,11 +839,13 @@ impl BaseGame {
             if stops.is_empty() {
                 continue;
             }
-            if t.name.starts_with('L') || stops.len() < 2 {
+            // LOCAL_TRAIN_CAN_CARRY_MAIL (1822PNW) lets L trains and
+            // single-stop runs carry mail too.
+            if !self.fam().local_train_can_carry_mail && (t.name.starts_with('L') || stops.len() < 2) {
                 continue;
             }
             let first = stops[0];
-            let last = *stops.last().unwrap();
+            let last = if stops.len() < 2 { 0 } else { *stops.last().unwrap() };
             subsidies.push((first + last) / 2);
         }
         subsidies.sort_by(|a, b| b.cmp(a));
@@ -838,6 +888,10 @@ impl BaseGame {
 
     fn g1822_issue_shares_actions(&self, ent: &Ent) -> Vec<&'static str> {
         let mut a: Vec<&'static str> = Vec::new();
+        // PNW IssueShares#actions: nothing for minors
+        if self.g1822_is_pnw() && matches!(ent, Ent::Corp(c) if self.is_minor(c)) {
+            return a;
+        }
         match ent {
             Ent::Corp(c) if self.is_operator(ent) => {
                 if !self.g1822_redeemable_bundles(c).is_empty() {
@@ -850,7 +904,7 @@ impl BaseGame {
                     a.push("pass");
                 }
                 // LUR special case: a corp owning P17 stops here.
-                if a.is_empty() && self.g1822_owns(c, super::COMPANY_LUR) {
+                if a.is_empty() && self.g1822_owns(c, self.fam().company_lur) {
                     a.push("choose_ability");
                 }
             }
@@ -880,7 +934,15 @@ impl BaseGame {
                     return err("can only issue own shares");
                 }
                 let b = self.g1822_action_bundle_pub(c, *percent, share_indices)?;
-                self.g1822_sell_shares_and_change_price(&b);
+                if self.g1822_is_pnw() {
+                    // PNW: sell, then one step left per certificate
+                    self.g1822_pool_sell_shares(&b, true);
+                    for _ in 0..b.shares.len() {
+                        self.g1822_move_price(c, super::shares::Dir::Left);
+                    }
+                } else {
+                    self.g1822_sell_shares_and_change_price(&b);
+                }
                 self.rndm().passed[i] = true;
                 Ok(())
             }
@@ -922,5 +984,33 @@ impl BaseGame {
     #[allow(dead_code)]
     fn corp_type_of(&self, c: &str) -> CorpType {
         self.corporations[self.ci(c)].corp_type
+    }
+}
+
+/// Ruby `String#to_i`: leading whitespace, an optional sign, then digits
+/// (underscores between them allowed); anything else ends it (no digits: 0).
+pub(crate) fn ruby_to_i(s: &str) -> i64 {
+    let t = s.trim_start();
+    let (neg, rest) = match t.as_bytes().first() {
+        Some(b'-') => (true, &t[1..]),
+        Some(b'+') => (false, &t[1..]),
+        _ => (false, t),
+    };
+    let mut v: i64 = 0;
+    let mut prev_digit = false;
+    for ch in rest.chars() {
+        if let Some(d) = ch.to_digit(10) {
+            v = v.saturating_mul(10).saturating_add(d as i64);
+            prev_digit = true;
+        } else if ch == '_' && prev_digit {
+            prev_digit = false;
+        } else {
+            break;
+        }
+    }
+    if neg {
+        -v
+    } else {
+        v
     }
 }

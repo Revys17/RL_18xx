@@ -8,7 +8,7 @@ use crate::actions::{Action, GameError};
 use crate::entities::Token;
 use crate::game::BaseGame;
 
-use super::{err, Ent, PendingTok, COMPANY_CHPR, COMPANY_LCDR, MINOR_14_HOME_HEX, MINOR_14_ID, TOKEN_PRICE};
+use super::{err, Ent, PendingTok};
 
 fn res_key(hex: &str, city: usize) -> String {
     format!("{hex}#{city}")
@@ -271,15 +271,20 @@ impl BaseGame {
         // City#tokenable?(corporation, tokens: token) — not free.
         let price = self.corporations[cix].tokens[tidx].price;
         if self.g1822_city_tokenable(corp, hi, ci, false, false) {
-            if self.g1822_put_token(corp, tidx, hi, ci, false).is_ok() && price > 0 {
+            // City#place_token spends nothing (1822 never reaches a priced
+            // home token here: minor 14's London token is a pending one)
+            if self.g1822_put_token(corp, tidx, hi, ci, false).is_ok() && price > 0 && !self.g1822_is_pnw() {
                 let _ = self.corp_spend(corp, price);
             }
+        } else if self.g1822_is_pnw() {
+            // PNW home_token_can_be_cheater
+            let _ = self.g1822_put_token(corp, tidx, hi, ci, true);
         }
         // LNWR places its destination token too (no bonus until connected).
-        if corp == super::TWO_HOME_CORPORATION {
-            if let Some(dest) = crate::title::g1822::destination(corp) {
+        if corp == self.fam().two_home_corporation {
+            if let Some(dest) = self.g1822_destination(corp) {
                 if let Some(t) = self.g1822_find_token(corp, "destination") {
-                    let _ = self.g1822_place_destination(corp, dest, t);
+                    let _ = self.g1822_place_destination(corp, &dest, t);
                 }
             }
         }
@@ -289,6 +294,7 @@ impl BaseGame {
     fn g1822_place_destination(&mut self, corp: &str, hex: &str, tidx: usize) -> Result<(), GameError> {
         let hi = *self.hex_idx.get(hex).ok_or_else(|| GameError::new("unknown hex"))?;
         self.g1822_put_token(corp, tidx, hi, 0, true)?;
+        self.g1822_ruby_graph_clear();
         self.gm().destination_ability.retain(|c| c != corp);
         Ok(())
     }
@@ -303,7 +309,7 @@ impl BaseGame {
         let tidx = self
             .g1822_unplaced_destination_token(corp)
             .ok_or_else(|| GameError::new("Corporation does not have a destination token unused"))?;
-        if crate::title::g1822::destination(corp) != Some(hex) {
+        if self.g1822_destination(corp).as_deref() != Some(hex) {
             return err(format!("{hex} is not {corp}'s destination"));
         }
         self.g1822_place_destination(corp, hex, tidx)?;
@@ -363,7 +369,7 @@ impl BaseGame {
                     }
                     self.corporations[cix].tokens[idx].used = false;
                     self.corporations[cix].tokens[idx].city_hex_id.clear();
-                    self.corporations[cix].tokens[idx].price = TOKEN_PRICE;
+                    self.corporations[cix].tokens[idx].price = self.fam().token_price;
                     removed_any = true;
                 }
             }
@@ -409,7 +415,8 @@ impl BaseGame {
     pub(crate) fn g1822_move_exchange_token(&mut self, corp: &str) {
         self.g1822_remove_exchange_token(corp);
         let cix = self.ci(corp);
-        self.corporations[cix].tokens.push(Token::new(corp.to_string(), TOKEN_PRICE));
+        let price = self.fam().token_price;
+        self.corporations[cix].tokens.push(Token::new(corp.to_string(), price));
     }
 
     // -- steps --------------------------------------------------------------
@@ -429,7 +436,7 @@ impl BaseGame {
         if self.g1822_city_tokened_by(hi, ci, &p.corp) {
             return err(format!("{} cant have 2 tokens in the same city", p.corp));
         }
-        if p.corp == MINOR_14_ID {
+        if p.corp == self.fam().minor_14_id {
             self.hexes[hi].tile.cities[ci].tokens.push(None);
         }
         if self.g1822_get_slot(hi, ci, &p.corp, false).is_none() {
@@ -441,11 +448,12 @@ impl BaseGame {
         // unchecked) — the token ability price/consumption applies.
         let price = self.g1822_token_ability_price(&p.corp, &hex, price);
         self.g1822_put_token(&p.corp, tidx, hi, ci, false)?;
+        self.g1822_ruby_graph_clear();
         if price > 0 {
             self.corp_spend(&p.corp, price)?;
         }
         self.rndm().pending_tokens.remove(0);
-        if hex == MINOR_14_HOME_HEX {
+        if hex == self.fam().minor_14_home_hex {
             // after_place_pending_token: remember the city's exit edge.
             let exit = self.hexes[hi].tile.paths.iter().find_map(|pd| match (&pd.a, &pd.b) {
                 (crate::tiles::PathEndpoint::City(c), crate::tiles::PathEndpoint::Edge(e))
@@ -510,7 +518,7 @@ impl BaseGame {
                     a.push("pass");
                 }
                 if a.is_empty()
-                    && (self.g1822_owns(c, COMPANY_CHPR) || self.g1822_owns(c, COMPANY_LCDR))
+                    && (self.g1822_owns(c, self.fam().company_chpr) || self.g1822_owns(c, self.fam().company_lcdr))
                     && self.g1822_exchange_tokens(c) > 0
                 {
                     a.push("choose_ability");
@@ -561,17 +569,18 @@ impl BaseGame {
     /// no token in the English Channel yet. (Its `when: token` holds
     /// whenever the Token step is the one asking.)
     pub(crate) fn g1822_lcdr_token_usable(&self, c: &str) -> bool {
-        if !self.g().lcdr_token_ability || !self.g1822_ability_owner_ok(COMPANY_LCDR) {
+        let lcdr = self.fam().company_lcdr;
+        if !self.g().lcdr_token_ability || !self.g1822_ability_owner_ok(lcdr) {
             return false;
         }
-        if self.co_owner(COMPANY_LCDR).corp_sym() != Some(c) {
+        if self.co_owner(lcdr).corp_sym() != Some(c) {
             return false;
         }
         let Some(&cix) = self.corp_idx.get(c) else { return false };
         !self.corporations[cix]
             .tokens
             .iter()
-            .any(|t| t.used && t.city_hex_id == crate::title::g1822::ENGLISH_CHANNEL_HEX)
+            .any(|t| t.used && t.city_hex_id == self.fam().english_channel_hex)
     }
 
     /// G1822 Token#can_place_token? (+ Tokener's).
@@ -621,11 +630,12 @@ impl BaseGame {
                 let price = self.g1822_token_ability_price(c, &hex, base_price);
                 // Tokener#check_connected computes the corporation's graph.
                 self.g1822_note_graph(c);
-                let check = hex != super::data_london();
+                let check = hex != self.fam().london_hex;
                 if check && !self.g1822_city_tokenable(c, hi, ci, price <= 0, false) {
                     return err(format!("{c} cannot lay token on {hex}"));
                 }
                 self.g1822_put_token(c, tidx, hi, ci, false)?;
+                self.g1822_ruby_graph_clear();
                 if price > 0 {
                     self.corp_spend(c, price)?;
                 }
@@ -658,7 +668,7 @@ impl BaseGame {
     /// while the active step can place tokens.
     pub(crate) fn g1822_special_token_actions(&self, ent: &Ent) -> Vec<&'static str> {
         let Ent::Company(co) = ent else { return vec![] };
-        if co != COMPANY_LCDR || self.co_closed(co) {
+        if co != self.fam().company_lcdr || self.co_closed(co) {
             return vec![];
         }
         let Some(owner) = self.co_owner(co).corp_sym().map(str::to_string) else { return vec![] };
@@ -697,7 +707,7 @@ impl BaseGame {
         match action {
             Action::PlaceToken { hex_id, city_index, .. } => {
                 let hex = self.g1822_resolve_hex(hex_id)?;
-                if hex != crate::title::g1822::ENGLISH_CHANNEL_HEX {
+                if hex != self.fam().english_channel_hex {
                     return err(format!("Cannot place token on {hex}"));
                 }
                 let hi = self.hex_idx[&hex];
@@ -707,6 +717,7 @@ impl BaseGame {
                 self.corporations[cix].tokens.push(Token::new(owner.clone(), 0));
                 let tidx = self.corporations[cix].tokens.len() - 1;
                 self.g1822_put_token(&owner, tidx, hi, ci, false)?;
+                self.g1822_ruby_graph_clear();
                 if self.rnd().teleported.is_none() {
                     // the token ability is used up (count 1)
                     self.gm().lcdr_token_ability = false;

@@ -8,7 +8,8 @@ use crate::entities::EntityId;
 use crate::game::BaseGame;
 use crate::graph::City;
 
-use super::{err, Ent, COMPANY_GSWR, COMPANY_GSWR_DISCOUNT, COMPANY_HSBC, COMPANY_LCDR, COMPANY_LSR, MINOR_14_HOME_HEX, MINOR_14_ID};
+use super::family::Family;
+use super::{err, Ent};
 
 /// A company ability (Ruby Ability::TileLay / Teleport / TileDiscount /
 /// Token), the subset 1822 uses.
@@ -30,6 +31,10 @@ pub struct Ab {
     pub combo: Vec<String>,
     pub discount: i32,
     pub terrain: Option<String>,
+    /// `when: 'track'` only (1822PNW's P10, P12, P13, P16, P18, P19):
+    /// usable while the Track step blocks, by its owner as operator.
+    #[serde(default)]
+    pub track_only: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -58,6 +63,7 @@ impl Ab {
             combo: vec![],
             discount: 0,
             terrain: None,
+            track_only: false,
         }
     }
     fn discount(d: i32, terrain: Option<&str>, hexes: &[&str]) -> Ab {
@@ -77,7 +83,7 @@ fn strs(v: &[&str]) -> Vec<String> {
 }
 
 /// entities.rb abilities of the 1822 privates (owner_type corporation).
-pub fn initial_abilities() -> std::collections::BTreeMap<String, Vec<Ab>> {
+pub fn abilities_1822() -> std::collections::BTreeMap<String, Vec<Ab>> {
     let mut m = std::collections::BTreeMap::new();
     let plain = ["7", "8", "9", "80", "81", "82", "83", "544", "545", "546", "60", "169"];
     m.insert(
@@ -183,10 +189,11 @@ impl BaseGame {
             return None;
         }
         let owner = self.co_owner(company).corp_sym()?.to_string();
-        if company == COMPANY_LCDR && !self.rnd().special_track_in_process {
+        let f = self.fam();
+        if Family::is(f.company_lcdr, company) && !self.rnd().special_track_in_process {
             // P5 may only teleport-upgrade when the Channel is full and an
             // upgrade in the current phase would open a slot.
-            let hi = self.hex_idx[crate::title::g1822::ENGLISH_CHANNEL_HEX];
+            let hi = self.hex_idx[f.english_channel_hex];
             let tile_color = self.hexes[hi].tile.color;
             let phase_color = self.phase.tiles.last().cloned().unwrap_or_default();
             if self.g1822_available_slots(hi, 0) > 0
@@ -197,7 +204,7 @@ impl BaseGame {
                 return None;
             }
         }
-        if company == COMPANY_HSBC {
+        if Family::is(f.company_hsbc, company) {
             if self.rnd().num_laid_track > 0 && self.rnd().special_track_company.as_deref() != Some(company) {
                 // `entity != current_entity` — the company is never the
                 // round's current entity unless it is mid-use.
@@ -207,15 +214,17 @@ impl BaseGame {
             let has = self.corporations[cix]
                 .tokens
                 .iter()
-                .any(|t| t.used && (t.city_hex_id == "N21" || t.city_hex_id == "N23"));
+                .any(|t| t.used && f.company_hsbc_tiles.contains(&t.city_hex_id.as_str()));
             if !has {
                 return None;
             }
         }
+        let track_time = self.g1822_track_is_blocking_step() && self.g1822_operator().as_deref() == Some(owner.as_str());
         self.g1822_abilities(company)
             .into_iter()
             .enumerate()
             .find(|(_, a)| match a.kind {
+                AbKind::TileLay if a.track_only && !track_time => false,
                 AbKind::TileLay => a.count.map_or(true, |c| c > 0),
                 AbKind::Teleport => !a.used,
                 _ => false,
@@ -268,7 +277,7 @@ impl BaseGame {
 
     /// G1822 Tracker#can_lay_tile? for the operating corporation.
     pub(crate) fn g1822_can_lay_tile(&self, c: &str) -> bool {
-        if c == MINOR_14_ID && !self.g1822_operated(c) {
+        if c == self.fam().minor_14_id && !self.g1822_operated(c) {
             return false;
         }
         // tile_lay_abilities_should_block?: an owned company's tile_lay
@@ -289,7 +298,7 @@ impl BaseGame {
     }
 
     /// Ruby `ability_blocking_step` is the Track step (not passed).
-    fn g1822_track_is_blocking_step(&self) -> bool {
+    pub(crate) fn g1822_track_is_blocking_step(&self) -> bool {
         let r = self.rnd();
         for (i, s) in r.steps.iter().enumerate() {
             match s {
@@ -330,13 +339,47 @@ impl BaseGame {
             Action::LayTile { hex_id, tile_id, rotation, .. } => {
                 let Ent::Corp(c) = ent else { return err("lay_tile by a non-corporation") };
                 let c = c.clone();
+                let pnw = self.g1822_is_pnw();
+                if pnw {
+                    if self.rnd().num_laid_portage > 0 {
+                        return err("Cannot place a tile or cube now");
+                    }
+                    if tile_id.split('-').next() == Some("BC") {
+                        // a builder cube: uses the lay, keeps the step
+                        let lay = self.g1822_tile_lay(&c, false).map_or(false, |t| t.0);
+                        if !lay {
+                            return err("Cannot lay a builder cube now");
+                        }
+                        self.g1822_pnw_place_cube(hex_id);
+                        self.rndm().num_laid_track += 1;
+                        self.rndm().laid_hexes.push(hex_id.clone());
+                        return Ok(());
+                    }
+                }
+                let hi = *self.hex_idx.get(hex_id.as_str()).ok_or_else(|| GameError::new(format!("Unknown hex {hex_id}")))?;
+                let forest = pnw && self.g1822_pnw_forest_tile(hi);
                 // Ruby computes the operator's graph in legal_tile_rotation?
-                // (before) and check_track_restrictions! (after the lay).
-                self.g1822_note_graph(&c);
+                // (before) and check_track_restrictions! (after the lay) —
+                // PNW's rotation check returns early (no graph) for the same
+                // tile and rotation, the cube and H19's city+town tiles.
+                let base = tile_id.split('-').next().unwrap_or(tile_id);
+                let cur = self.hexes[hi].tile.name.split('-').next().unwrap_or("").to_string();
+                let early = pnw
+                    && ((!self.hexes[hi].tile.id.starts_with("preprinted_") && cur == base && self.hexes[hi].tile.rotation == *rotation)
+                        || Self::g1822_pnw_city_and_town_tile(hex_id, base));
+                if !early {
+                    self.g1822_note_graph(&c);
+                }
                 self.g1822_lay_tile_action(&c, &c, &[], hex_id, tile_id, *rotation, false)?;
                 self.g1822_note_graph(&c);
                 if !self.g1822_can_lay_tile(&c) {
                     self.rndm().passed[i] = true;
+                }
+                if pnw {
+                    self.g1822_pnw_drop_cubes(hex_id.as_str());
+                    if forest {
+                        self.g1822_pnw_assign(hex_id, "forest");
+                    }
                 }
                 Ok(())
             }
@@ -354,7 +397,7 @@ impl BaseGame {
 
     /// Tracker#lay_tile_action (the slot rules) + lay_tile.
     #[allow(clippy::too_many_arguments)]
-    fn g1822_lay_tile_action(
+    pub(crate) fn g1822_lay_tile_action(
         &mut self,
         entity: &str,
         spender: &str,
@@ -376,9 +419,19 @@ impl BaseGame {
         } else {
             self.co_owner(entity).corp_sym().unwrap_or(spender).to_string()
         };
-        let upgrade = self.hexes[hi].tile.color != crate::tiles::TileColor::White;
-        let (lay, can_upgrade, no_reuse) = self
-            .g1822_tile_lay(&operator, hsbc)
+        // track_upgrade? (PNW: token cities always; blue counts as colour)
+        let upgrade = if self.g1822_is_pnw() {
+            self.g1822_tile_color_name(hi) != "white" || Self::g1822_pnw_tokencity(hex_id)
+        } else {
+            self.hexes[hi].tile.color != crate::tiles::TileColor::White
+        };
+        // 1822PNW SpecialTrack#get_tile_lay: a portage lay uses up the
+        // turn's lay for every other company
+        let portage_used = self.g1822_is_pnw()
+            && self.rnd().num_laid_portage > 0
+            && !self.corp_idx.contains_key(entity)
+            && entity != "P16";
+        let (lay, can_upgrade, no_reuse) = (if portage_used { None } else { self.g1822_tile_lay(&operator, hsbc) })
             .ok_or_else(|| GameError::new("No tile lay available"))?;
         if upgrade && !can_upgrade {
             return err("Cannot lay an upgrade now");
@@ -423,14 +476,23 @@ impl BaseGame {
         // check_track_restrictions! for a corporation's own lay. Shared with
         // the legal-move generator (g1822::tile_rules).
         let is_company = self.company_idx.contains_key(entity);
-        if !self.g1822_upgrades_to(hi, &def, is_company) {
+        let pnw = self.g1822_is_pnw();
+        // PNW Track/SpecialTrack#lay_tile: 'Cannot upgrade forests'
+        if pnw && self.g1822_pnw_assigned(&hex_id, "forest") {
+            return err("Cannot upgrade forests");
+        }
+        let selected = is_company.then_some(entity);
+        if !self.g1822_upgrades_to_sel(hi, &def, is_company, selected) {
             return err(format!("{} is not upgradeable to {}", self.hexes[hi].tile.name, base));
         }
         {
             use super::tile_rules::RotRule;
-            let rule = if entity == COMPANY_LCDR && hex_id == crate::title::g1822::ENGLISH_CHANNEL_HEX {
+            let f = self.fam();
+            let rule = if Family::is(f.company_lcdr, entity) && hex_id == f.english_channel_hex {
                 RotRule::LcdrChannel
-            } else if entities.iter().any(|e| e == super::COMPANY_MTONR) {
+            } else if pnw && is_company && self.g1822_pnw_rot_rule(entity).is_some() {
+                self.g1822_pnw_rot_rule(entity).unwrap()
+            } else if entities.iter().any(|e| self.g1822_must_remove_town(e)) {
                 RotRule::RemoveTown
             } else {
                 RotRule::Normal
@@ -469,7 +531,11 @@ impl BaseGame {
         if remaining == 0 {
             return err(format!("No tiles of type {base} remaining"));
         }
-        let old_cost = self.g1822_upgrade_cost(hi, spender);
+        let old_cost = match pnw.then(|| self.g1822_pnw_tokencity_cost(hi, &base)).flatten() {
+            Some(c) => c,
+            None => self.g1822_upgrade_cost(hi, spender),
+        };
+        let old_color = self.g1822_tile_color_name(hi);
         let old_name = self.hexes[hi].tile.name.clone();
         let old_base = old_name.split('-').next().unwrap_or(&old_name).to_string();
         if !self.hexes[hi].tile.id.starts_with("preprinted_") && !old_base.is_empty() && old_base != hex_id {
@@ -490,11 +556,25 @@ impl BaseGame {
         } else {
             self.g1822_next_tile_instance(&base)
         };
+        let old_tile_id = self.hexes[hi].tile.id.clone();
         self.g1822_hex_lay(hi, &def, rotation, &instance)?;
+        if pnw {
+            // Tracker#lay_tile: a lay on an impassable colour opens it
+            self.g1822_pnw_open_neighbors(hi, old_color);
+            self.g1822_pnw_carry_cubes(&old_tile_id, &instance);
+        }
         // costs
         let (border, _) = self.g1822_remove_border_cost(hi, &entities)?;
         let cost = if free {
             0
+        } else if pnw {
+            // PNW tile_cost_with_discount: the boomtown is free, each
+            // builder cube on the hex takes 40 off
+            if base == "PNW3" {
+                0
+            } else {
+                (old_cost + border - 40 * self.g1822_pnw_cubes(&hex_id) as i32).max(0)
+            }
         } else {
             // Game#tile_cost_with_discount: the operator's terrain-less
             // tile_discount abilities naming the hex (P8 "discount" choice:
@@ -525,8 +605,11 @@ impl BaseGame {
         }
         // update_token!: G1822 remove_extra_tokens! first.
         self.g1822_remove_extra_tokens(hi);
+        if pnw {
+            self.g1822_pnw_after_lay_tile(hi);
+        }
         // after_lay_tile: minor 14's extra London slot survives upgrades.
-        if hex_id == MINOR_14_HOME_HEX {
+        if hex_id == self.fam().minor_14_home_hex {
             if let Some(exit) = self.g().minor_14_city_exit {
                 let tile = &self.hexes[hi].tile;
                 let city = tile.paths.iter().find_map(|p| match (&p.a, &p.b) {
@@ -624,17 +707,20 @@ impl BaseGame {
                 }
             }
             types.push(ty);
-            total += cost;
+            // border_cost_discount (PNW: Seattle's water border is free)
+            let discount = if self.g1822_is_pnw() && hex_id == "H11" { 75 } else { 0 };
+            total += cost - discount;
         }
         // P10 must cross an estuary; P21 must point into the Humber
         // (Ruby raises these even while loading).
-        if entities.iter().any(|e| e == COMPANY_GSWR) {
+        let f = self.fam();
+        if entities.iter().any(|e| Family::is(f.company_gswr, e)) {
             if total == 0 {
                 return err("Must lay tile with one path over an estuary crossing");
             }
-            total -= COMPANY_GSWR_DISCOUNT;
+            total -= f.company_gswr_discount;
         }
-        if entities.first().map(String::as_str) == Some(COMPANY_HSBC) && total == 0 {
+        if entities.first().map_or(false, |e| Family::is(f.company_hsbc, e)) && total == 0 {
             return err("Must lay tile with one path over the Hull / Grimsby estuary");
         }
         Ok((total, types))
@@ -775,6 +861,8 @@ impl BaseGame {
             }
         }
         self.clear_graph_cache();
+        // Tracker#lay_tile: clear_graph_for_entity right after Hex#lay
+        self.g1822_ruby_graph_clear();
         Ok(())
     }
 
@@ -785,6 +873,11 @@ impl BaseGame {
         let co = co.clone();
         match action {
             Action::LayTile { hex_id, tile_id, rotation, .. } => {
+                if self.g1822_is_pnw() {
+                    if let Some(r) = self.g1822_pnw_special_lay(&co, hex_id, tile_id, *rotation) {
+                        return r;
+                    }
+                }
                 let (ab_idx, ab) = self
                     .g1822_track_ability(&co)
                     .ok_or_else(|| GameError::new(format!("{co} has no tile lay ability")))?;
@@ -796,7 +889,7 @@ impl BaseGame {
                 let combo = self.g().pending_combo.clone();
                 // legal_tile_rotation? walks the operator's graph (not for
                 // P5's Channel rotation rule).
-                if co != COMPANY_LCDR {
+                if !Family::is(self.fam().company_lcdr, &co) {
                     self.g1822_note_graph(&spender);
                 }
                 let tile_color = {
@@ -811,8 +904,10 @@ impl BaseGame {
                 self.rndm().special_track_in_process = true;
                 let mut minor_single_use = false;
                 let hi = *self.hex_idx.get(hex_id.as_str()).ok_or_else(|| GameError::new("unknown hex"))?;
+                let pnw_forest = self.g1822_is_pnw() && self.g1822_pnw_forest_tile(hi);
                 let upgrade = self.hexes[hi].tile.color != crate::tiles::TileColor::White;
-                let extra_track = co == COMPANY_LSR || combo.iter().any(|c| c == COMPANY_LSR);
+                let extra_track =
+            self.g1822_company_ability_extra_track(&co) || combo.iter().any(|c| self.g1822_company_ability_extra_track(c));
                 let res = if extra_track {
                     let consume = ab.consume_tile_lay;
                     if upgrade && self.rnd().extra_laided_track && consume {
@@ -830,7 +925,7 @@ impl BaseGame {
                         r
                     }
                 } else {
-                    let hsbc = co == COMPANY_HSBC;
+                    let hsbc = Family::is(self.fam().company_hsbc, &co);
                     self.g1822_lay_tile_action(&co, &spender, &combo, hex_id, tile_id, *rotation, hsbc)
                 };
                 self.rndm().special_track_in_process = false;
@@ -875,6 +970,13 @@ impl BaseGame {
                         self.rndm().special_track_company = None;
                     }
                 }
+                if self.g1822_is_pnw() {
+                    // PNW SpecialTrack#process_lay_tile after super
+                    self.g1822_pnw_drop_cubes(hex_id.as_str());
+                    if pnw_forest {
+                        self.g1822_pnw_assign(hex_id, "forest");
+                    }
+                }
                 if ab.kind == AbKind::Teleport {
                     // the teleport is used; its token step follows.
                     if let Some(v) = self.gm().abilities.get_mut(&co) {
@@ -904,7 +1006,7 @@ impl BaseGame {
     }
 
     /// Ability#use! (TileLay with lay/upgrade counts).
-    fn g1822_use_ability(&mut self, co: &str, idx: usize, upgrade: bool) -> Result<(), GameError> {
+    pub(crate) fn g1822_use_ability(&mut self, co: &str, idx: usize, upgrade: bool) -> Result<(), GameError> {
         let Some(v) = self.gm().abilities.get_mut(co) else { return Ok(()) };
         let Some(a) = v.get_mut(idx) else { return Ok(()) };
         if a.count.map_or(false, |c| c <= 0) {

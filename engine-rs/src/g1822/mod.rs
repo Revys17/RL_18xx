@@ -23,11 +23,14 @@
 //! `BaseGame::g1822.is_some()` — 1830/1867 never take them.
 
 pub mod acquisition;
+pub mod family;
 pub mod graph;
 pub mod legal;
 #[cfg(test)]
 mod fuzz;
 pub mod operating;
+pub mod pnw;
+pub mod pnw_legal;
 pub mod py;
 pub mod router;
 pub mod shares;
@@ -44,7 +47,6 @@ use serde::{Deserialize, Serialize};
 use crate::actions::{Action, GameError};
 use crate::entities::{EntityId, Token, Train};
 use crate::game::BaseGame;
-use crate::title::g1822 as data;
 use crate::title::CorpType;
 
 // ---------------------------------------------------------------------------
@@ -72,86 +74,9 @@ impl RubyRand {
 }
 
 // ---------------------------------------------------------------------------
-// Constants (game.rb)
+// Constants: Ruby's `self.class::` constants live in the title's family
+// table (`family::Family`, reached through `BaseGame::fam()`).
 // ---------------------------------------------------------------------------
-
-pub const BIDDING_BOX_MINOR_COUNT: usize = 4;
-pub const BIDDING_BOX_CONCESSION_COUNT: usize = 3;
-pub const BIDDING_BOX_PRIVATE_COUNT: usize = 3;
-pub const BIDDING_BOX_START_MINOR: &str = "M24";
-pub const BIDDING_BOX_START_CONCESSION: &str = "C1";
-pub const BIDDING_BOX_START_PRIVATE: &str = "P1";
-pub const BIDDING_TOKENS_PER_ACTION: u32 = 3;
-pub const MIN_BID_INCREMENT: i32 = 5;
-pub const MINOR_START_PAR_PRICE: i32 = 50;
-pub const MINOR_BIDBOX_PRICE: i32 = 200;
-pub const TOKEN_PRICE: i32 = 100;
-pub const UPGRADE_COST_L_TO_2: i32 = 80;
-pub const PLAYER_LOAN_INTEREST_RATE: i32 = 50;
-pub const TWO_HOME_CORPORATION: &str = "LNWR";
-pub const MINOR_14_ID: &str = "14";
-pub const MINOR_14_HOME_HEX: &str = "M38";
-
-pub const COMPANY_MTONR: &str = "P2";
-pub const COMPANY_LCDR: &str = "P5";
-pub const COMPANY_EGR: &str = "P8";
-pub const COMPANY_DOUBLE_CASH: &str = "P9";
-pub const COMPANY_DOUBLE_CASH_REVENUE: [i32; 8] = [0, 0, 0, 20, 20, 40, 40, 60];
-pub const COMPANY_GSWR: &str = "P10";
-pub const COMPANY_GSWR_DISCOUNT: i32 = 40;
-pub const COMPANY_BER: &str = "P11";
-pub const COMPANY_LSR: &str = "P12";
-pub const COMPANY_10X_REVENUE: &str = "P15";
-pub const COMPANY_OSTH: &str = "P16";
-pub const COMPANY_LUR: &str = "P17";
-pub const COMPANY_CHPR: &str = "P18";
-pub const COMPANY_5X_REVENUE: &str = "P20";
-pub const COMPANY_HSBC: &str = "P21";
-
-pub const PRIVATE_MAIL_CONTRACTS: &[&str] = &["P6", "P7"];
-pub const PLUS_EXPANSION_BIDBOX_1: &[&str] = &["P1", "P3", "P4", "P13", "P14", "P19"];
-pub const PLUS_EXPANSION_BIDBOX_2: &[&str] = &["P2", "P5", "P8", "P10", "P11", "P12", "P21"];
-pub const PLUS_EXPANSION_BIDBOX_3: &[&str] = &["P6", "P7", "P9", "P15", "P16", "P17", "P18", "P20"];
-pub const PRIVATE_REMOVE_REVENUE: &[&str] = &["P5", "P6", "P7", "P8", "P10", "P17", "P18", "P21"];
-pub const PRIVATE_PHASE_REVENUE: &[&str] = &["P15", "P20"];
-pub const PRIVATE_TRAINS: &[&str] = &["P1", "P3", "P4", "P13", "P14", "P19"];
-pub const EXTRA_TRAINS: &[&str] = &["2P", "P+", "LP"];
-pub const EXTRA_TRAIN_PULLMAN: &str = "P+";
-pub const EXTRA_TRAIN_PERMANENTS: &[&str] = &["2P", "LP"];
-pub const LOCAL_TRAINS: &[&str] = &["L", "LP"];
-pub const E_TRAIN: &str = "E";
-
-/// PRIVATE_COMPANIES_ACQUISITION: (acquirer classes, phase).
-pub fn private_acquisition(sym: &str) -> Option<(&'static [CorpType], u32)> {
-    use CorpType::{Major as J, Minor as N};
-    const MAJ: &[CorpType] = &[J];
-    const BOTH: &[CorpType] = &[J, N];
-    const NONE: &[CorpType] = &[];
-    Some(match sym {
-        "P1" => (MAJ, 5),
-        "P2" => (BOTH, 2),
-        "P3" => (MAJ, 2),
-        "P4" => (MAJ, 2),
-        "P5" => (MAJ, 3),
-        "P6" => (MAJ, 3),
-        "P7" => (MAJ, 3),
-        "P8" => (BOTH, 3),
-        "P9" => (BOTH, 3),
-        "P10" => (BOTH, 3),
-        "P11" => (BOTH, 2),
-        "P12" => (BOTH, 3),
-        "P13" => (BOTH, 5),
-        "P14" => (BOTH, 5),
-        "P15" => (BOTH, 2),
-        "P16" => (NONE, 0),
-        "P17" => (MAJ, 2),
-        "P18" => (MAJ, 5),
-        "P19" => (BOTH, 1),
-        "P20" => (BOTH, 3),
-        "P21" => (BOTH, 2),
-        _ => return None,
-    })
-}
 
 // ---------------------------------------------------------------------------
 // State
@@ -178,6 +103,10 @@ pub enum Step {
     BuyTrain,
     MinorAcquisition,
     IssueShares,
+    /// 1822PNW: G1822PNW::Step::Assign (P15 paper mill, P17 ski haus).
+    Assign,
+    /// 1822PNW: the Merger round's G1822PNW::Step::Merge.
+    Merge,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +114,18 @@ pub enum RoundKind {
     Stock,
     Choices,
     Operating,
+    /// 1822PNW: G1822PNW::Round::Merger (after each OR from phase 2).
+    Merger,
+}
+
+/// 1822PNW Merge `@merge_state`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MergeState {
+    #[default]
+    None,
+    SelectingPar,
+    SelectingShares,
+    SelectingToken,
 }
 
 /// Ruby `players_sold[player][corp]` values.
@@ -305,6 +246,34 @@ pub struct RoundSt {
     pub corporations_sold: Vec<String>,
     /// SpecialTrack `@in_process`.
     pub special_track_in_process: bool,
+    /// 1822PNW Merge step: `@merge_state`, the associated / unassociated
+    /// minors, the new major, the merging player, the chosen par.
+    #[serde(default)]
+    pub merge_state: MergeState,
+    #[serde(default)]
+    pub merge_assoc: Option<String>,
+    #[serde(default)]
+    pub merge_unassoc: Option<String>,
+    #[serde(default)]
+    pub merge_new: Option<String>,
+    #[serde(default)]
+    pub merge_player: Option<u32>,
+    #[serde(default)]
+    pub merge_par: i32,
+    /// 1822PNW SpecialTrack `@round.num_laid_portage`.
+    #[serde(default)]
+    pub num_laid_portage: u32,
+    /// 1822PNW AcquireCompany: P20's `@choices` (minor ids) and
+    /// `@new_associated_minor`.
+    #[serde(default)]
+    pub p20_choices: Vec<String>,
+    #[serde(default)]
+    pub p20_minor: Option<String>,
+    /// 1822PNW BSPS: `@converting_major` and its `@par_price`.
+    #[serde(default)]
+    pub converting_major: Option<String>,
+    #[serde(default)]
+    pub convert_par: i32,
 }
 
 impl RoundSt {
@@ -351,6 +320,17 @@ impl RoundSt {
             token_choices: Vec::new(),
             corporations_sold: Vec::new(),
             special_track_in_process: false,
+            merge_state: MergeState::None,
+            merge_assoc: None,
+            merge_unassoc: None,
+            merge_new: None,
+            merge_player: None,
+            merge_par: 0,
+            num_laid_portage: 0,
+            p20_choices: Vec::new(),
+            p20_minor: None,
+            converting_major: None,
+            convert_par: 0,
         }
     }
 
@@ -430,6 +410,15 @@ pub struct G1822State {
     /// it counts as able to for the rest of the game.
     #[serde(default)]
     pub route_purchase: Latch,
+    /// 1822PNW: Ruby's Graph cache — the connected hexes/nodes/paths of
+    /// each corporation whose graph Ruby fully computed since its last
+    /// Graph#clear. Ruby never clears after a home token, a regional's
+    /// float token or a closure, so a graph computed in the Merger round
+    /// (Merge#mergeable) answers stale through the stock round into the
+    /// next operating round until the first tile lay / token. Filled only
+    /// where Rust mirrors such a Ruby compute; anything else is fresh.
+    #[serde(default)]
+    pub ruby_graphs: GraphMemo,
     /// The city holding each corporation's FIRST token (Ruby
     /// `tokens.first.city`: the destination bonus and destination check
     /// need that very token, not any of the corporation's): (hex, city),
@@ -441,6 +430,38 @@ pub struct G1822State {
     /// (e.g. consent blockers), their owner is the bank.
     #[serde(default)]
     pub deleted_open: Vec<String>,
+
+    // -- 1822PNW (empty for the other titles) -----------------------------
+    /// `@minor_associations`: minor → major, in Ruby hash order.
+    #[serde(default)]
+    pub minor_associations: Vec<(String, String)>,
+    /// `@empty_bidboxes` / `@any_bidboxes_empty` (a major parred straight
+    /// from the bid box closes its associated minor, leaving its box empty
+    /// until the round's refill).
+    #[serde(default)]
+    pub empty_bidboxes: Vec<bool>,
+    #[serde(default)]
+    pub any_bidboxes_empty: bool,
+    /// `@regional_payout_count` per regional railway.
+    #[serde(default)]
+    pub regional_payout_count: BTreeMap<String, u32>,
+    /// Hex assignments (Ruby Assignable#assignments keys, in order):
+    /// 'forest', 'P15' (paper mill), 'P17' (ski haus).
+    #[serde(default)]
+    pub hex_assignments: BTreeMap<String, Vec<String>>,
+    /// Builder cubes by TILE id (`block` icons; see `g1822_pnw_cubes`).
+    #[serde(default)]
+    pub builder_cubes: BTreeMap<String, u32>,
+    /// Neighbour links a lay on a blue / gray / red hex opened (Tracker
+    /// #lay_tile): (hex, direction, neighbour).
+    #[serde(default)]
+    pub opened_neighbors: Vec<(usize, u8, usize)>,
+    /// P20 (backroom negotiations) moved a major's home and destination:
+    /// `major.coordinates` / `destination_coordinates` overrides.
+    #[serde(default)]
+    pub home_override: BTreeMap<String, String>,
+    #[serde(default)]
+    pub destination_override: BTreeMap<String, String>,
 }
 
 /// A memo Ruby fills lazily while it evaluates step actions (read-side
@@ -467,6 +488,52 @@ impl Latch {
 impl Clone for Latch {
     fn clone(&self) -> Self {
         Latch(std::sync::Mutex::new(self.snapshot()))
+    }
+}
+
+/// Ruby's per-corporation Graph cache (see `G1822State::ruby_graphs`).
+#[derive(Debug, Default)]
+pub struct GraphMemo(std::sync::Mutex<Vec<(String, graph::CorpGraph)>>);
+
+impl GraphMemo {
+    pub fn contains(&self, s: &str) -> bool {
+        self.0.lock().map(|v| v.iter().any(|(k, _)| k == s)).unwrap_or(false)
+    }
+    pub fn get(&self, s: &str) -> Option<graph::CorpGraph> {
+        self.0.lock().ok().and_then(|v| v.iter().find(|(k, _)| k == s).map(|(_, g)| g.clone()))
+    }
+    pub fn insert(&self, s: &str, g: graph::CorpGraph) {
+        if let Ok(mut v) = self.0.lock() {
+            if !v.iter().any(|(k, _)| k == s) {
+                v.push((s.to_string(), g));
+            }
+        }
+    }
+    pub fn clear(&self) {
+        if let Ok(mut v) = self.0.lock() {
+            v.clear();
+        }
+    }
+    fn snapshot(&self) -> Vec<(String, graph::CorpGraph)> {
+        self.0.lock().map(|v| v.clone()).unwrap_or_default()
+    }
+}
+
+impl Clone for GraphMemo {
+    fn clone(&self) -> Self {
+        GraphMemo(std::sync::Mutex::new(self.snapshot()))
+    }
+}
+
+impl Serialize for GraphMemo {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        self.snapshot().serialize(ser)
+    }
+}
+
+impl<'de> Deserialize<'de> for GraphMemo {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        Ok(GraphMemo(std::sync::Mutex::new(Vec::<(String, graph::CorpGraph)>::deserialize(de)?)))
     }
 }
 
@@ -508,6 +575,65 @@ pub fn err<T>(msg: impl Into<String>) -> Result<T, GameError> {
 }
 
 impl BaseGame {
+    /// The title's family table (Ruby `self.class::` constants).
+    pub(crate) fn fam(&self) -> &'static family::Family {
+        self.title_def().g1822_family().expect("1822-family title")
+    }
+    /// A major's destination (`destination_coordinates`, P20-aware).
+    pub(crate) fn g1822_destination(&self, c: &str) -> Option<String> {
+        if let Some(d) = self.g().destination_override.get(c) {
+            return Some(d.clone());
+        }
+        (self.fam().destination)(c).map(str::to_string)
+    }
+
+    /// The Ruby subclass (for the methods a variant overrides).
+    pub(crate) fn variant(&self) -> family::Variant {
+        self.fam().variant
+    }
+
+    // -- G1822 predicate methods a variant overrides ------------------------
+
+    /// `can_upgrade_one_phase_ahead?(entity)` (G1822: COMPANY_BER).
+    pub(crate) fn g1822_can_upgrade_one_phase_ahead(&self, company: &str) -> bool {
+        match self.variant() {
+            family::Variant::Pnw => false,
+            _ => family::Family::is(self.fam().company_ber, company),
+        }
+    }
+    /// `can_only_lay_plain_or_towns?(entity)` (G1822: COMPANY_BER).
+    pub(crate) fn g1822_can_only_lay_plain_or_towns(&self, company: &str) -> bool {
+        match self.variant() {
+            family::Variant::Pnw => false,
+            _ => family::Family::is(self.fam().company_ber, company),
+        }
+    }
+    /// `must_be_on_terrain?(entity)` (G1822: COMPANY_EGR).
+    pub(crate) fn g1822_must_be_on_terrain(&self, company: &str) -> bool {
+        match self.variant() {
+            family::Variant::Pnw => false,
+            _ => family::Family::is(self.fam().company_egr, company),
+        }
+    }
+    /// `must_be_on_estuary?(entity)` (G1822: COMPANY_GSWR).
+    pub(crate) fn g1822_must_be_on_estuary(&self, company: &str) -> bool {
+        family::Family::is(self.fam().company_gswr, company)
+    }
+    /// `must_remove_town?(entity)` (G1822: COMPANY_MTONR; 1822PNW: P7, P8).
+    pub(crate) fn g1822_must_remove_town(&self, company: &str) -> bool {
+        match self.variant() {
+            family::Variant::Pnw => matches!(company, "P7" | "P8"),
+            _ => family::Family::is(self.fam().company_mtonr, company),
+        }
+    }
+    /// `company_ability_extra_track?(company)` (G1822: COMPANY_LSR;
+    /// 1822PNW: P11, P12, P13).
+    pub(crate) fn g1822_company_ability_extra_track(&self, company: &str) -> bool {
+        match self.variant() {
+            family::Variant::Pnw => matches!(company, "P11" | "P12" | "P13"),
+            _ => family::Family::is(self.fam().company_lsr, company),
+        }
+    }
     pub(crate) fn g(&self) -> &G1822State {
         self.g1822.as_deref().expect("1822 state")
     }
@@ -614,28 +740,44 @@ impl BaseGame {
     }
     pub(crate) fn bidbox_minors(&self) -> Vec<String> {
         let cache = &self.g().bidbox_minors_cache;
-        self.bank_companies('M')
+        let minors: Vec<String> = self
+            .bank_companies('M')
             .into_iter()
-            .take(BIDDING_BOX_MINOR_COUNT)
+            .take(self.fam().bidding_box_minor_count)
             .filter(|c| cache.contains(c))
-            .collect()
+            .collect();
+        if !self.g().any_bidboxes_empty {
+            return minors;
+        }
+        // 1822PNW: an emptied box keeps its place (EMPTY placeholder)
+        let empty = &self.g().empty_bidboxes;
+        let mut out: Vec<String> = Vec::new();
+        for m in minors {
+            while empty.get(out.len()).copied().unwrap_or(false) {
+                out.push(pnw::EMPTY_BIDBOX.to_string());
+            }
+            out.push(m);
+        }
+        out
     }
     pub(crate) fn bidbox_concessions(&self) -> Vec<String> {
         self.bank_companies('C')
             .into_iter()
-            .take(BIDDING_BOX_CONCESSION_COUNT)
+            .take(self.fam().bidding_box_concession_count)
             .collect()
     }
     pub(crate) fn bidbox_privates(&self) -> Vec<String> {
         let privates = self.bank_companies('P');
         if self.g1822_plus() && !self.optional_rules.iter().any(|r| r == "plus_expansion_single_stack") {
             // One bid box per private category (first of each stack).
-            return [PLUS_EXPANSION_BIDBOX_1, PLUS_EXPANSION_BIDBOX_2, PLUS_EXPANSION_BIDBOX_3]
+            return self
+                .fam()
+                .plus_expansion_bidbox
                 .iter()
                 .filter_map(|bx| privates.iter().find(|c| bx.contains(&c.as_str())).cloned())
                 .collect();
         }
-        privates.into_iter().take(BIDDING_BOX_PRIVATE_COUNT).collect()
+        privates.into_iter().take(self.fam().bidding_box_private_count).collect()
     }
 
     /// Whether the 1822+ expansion is in play.
@@ -648,10 +790,16 @@ impl BaseGame {
         self.optional_rules.iter().any(|r| r == "tax_haven_multiple")
     }
     pub(crate) fn bidbox_minors_refill(&mut self) {
+        // 1822PNW init_empty_bidboxes!
+        if self.g().any_bidboxes_empty {
+            let n = self.fam().bidding_box_minor_count;
+            self.gm().empty_bidboxes = vec![false; n];
+        }
+        self.gm().any_bidboxes_empty = false;
         let cache: Vec<String> = self
             .bank_companies('M')
             .into_iter()
-            .take(BIDDING_BOX_MINOR_COUNT)
+            .take(self.fam().bidding_box_minor_count)
             .collect();
         self.gm().bidbox_minors_cache = cache;
     }
@@ -751,18 +899,23 @@ impl BaseGame {
         // Non-starting companies / corporations (the 1822+ ones) leave play
         // (Ruby never instantiates them).
         let plus = self.g1822_plus();
+        let fam = self.fam();
+        // setup_optional_rules runs before setup (base initialize)
+        if fam.variant == family::Variant::Pnw {
+            self.g1822_pnw_setup_optional_rules();
+        }
         let starting_companies: Vec<String> = if plus {
-            data::STARTING_COMPANIES_PLUS
+            fam.starting_companies_plus
         } else {
-            data::STARTING_COMPANIES
+            fam.starting_companies
         }
         .iter()
         .map(|s| s.to_string())
         .collect();
         let starting_corps: &[&str] = if plus {
-            data::STARTING_CORPORATIONS_PLUS
+            fam.starting_corporations_plus
         } else {
-            data::STARTING_CORPORATIONS
+            fam.starting_corporations
         };
         for co in &mut self.companies {
             if !starting_companies.contains(&co.sym) {
@@ -789,6 +942,10 @@ impl BaseGame {
             .collect();
         keyed.sort_by_key(|(k, i, _)| (*k, *i));
         let shuffled: Vec<String> = keyed.into_iter().map(|(_, _, s)| s).collect();
+        let company_order: Vec<String> = if fam.variant == family::Variant::Pnw {
+            // PNW's own setup_companies
+            self.g1822_pnw_order_companies(&shuffled, &mut rng)
+        } else {
         let by_prefix = |p: char| -> Vec<String> {
             shuffled.iter().filter(|s| s.starts_with(p)).cloned().collect()
         };
@@ -796,9 +953,9 @@ impl BaseGame {
         let mut concessions = by_prefix('C');
         let mut privates = by_prefix('P');
         for (list, first) in [
-            (&mut minors, BIDDING_BOX_START_MINOR),
-            (&mut concessions, BIDDING_BOX_START_CONCESSION),
-            (&mut privates, BIDDING_BOX_START_PRIVATE),
+            (&mut minors, fam.bidding_box_start_minor),
+            (&mut concessions, fam.bidding_box_start_concession),
+            (&mut privates, fam.bidding_box_start_private),
         ] {
             if let Some(pos) = list.iter().position(|s| s == first) {
                 let s = list.remove(pos);
@@ -810,19 +967,19 @@ impl BaseGame {
         if plus && !self.optional_rules.iter().any(|r| r == "plus_expansion_no_removals") {
             let in_box = |b: &[&str], s: &String| b.contains(&s.as_str());
             let mut grouped: Vec<String> = Vec::new();
-            for bx in [PLUS_EXPANSION_BIDBOX_1, PLUS_EXPANSION_BIDBOX_2, PLUS_EXPANSION_BIDBOX_3] {
+            for bx in fam.plus_expansion_bidbox {
                 grouped.extend(privates.iter().filter(|s| in_box(bx, s)).cloned());
             }
             privates = grouped;
             let mut removed: Vec<String> = Vec::new();
             if let Some(pos) = privates
                 .iter()
-                .position(|s| s != COMPANY_LCDR && in_box(PLUS_EXPANSION_BIDBOX_2, s))
+                .position(|s| s != fam.company_lcdr && in_box(fam.plus_expansion_bidbox[1], s))
             {
                 removed.push(privates.remove(pos));
             }
             for _ in 0..2 {
-                if let Some(pos) = privates.iter().position(|s| in_box(PLUS_EXPANSION_BIDBOX_3, s)) {
+                if let Some(pos) = privates.iter().position(|s| in_box(fam.plus_expansion_bidbox[2], s)) {
                     removed.push(privates.remove(pos));
                 }
             }
@@ -835,18 +992,13 @@ impl BaseGame {
         let mut company_order = minors;
         company_order.extend(concessions);
         company_order.extend(privates);
+        company_order
+        };
 
         // Company trains (find_and_remove_train_by_id): reserved, out of
         // the depot. P1's 5P stays buyable; the 2P/P+ are not.
         let mut company_trains = BTreeMap::new();
-        for (co, tid) in [
-            ("P3", "2P-0"),
-            ("P4", "2P-1"),
-            ("P1", "5P-0"),
-            ("P13", "P+-0"),
-            ("P14", "P+-1"),
-            ("P19", "LP-0"),
-        ] {
+        for &(co, tid) in fam.company_trains {
             if let Some(pos) = self.depot.trains.iter().position(|t| t.id == tid) {
                 let t = self.depot.trains.remove(pos);
                 company_trains.insert(co.to_string(), t);
@@ -857,13 +1009,13 @@ impl BaseGame {
         // :destination per major (price 0).
         let mut destination_ability = Vec::new();
         for corp in &mut self.corporations {
-            if corp.closed || data::destination(&corp.sym).is_none() {
+            if corp.closed || (fam.destination)(&corp.sym).is_none() {
                 continue;
             }
             let mut t = Token::new(corp.sym.clone(), 0);
             t.token_type = "destination".to_string();
             corp.tokens.push(t);
-            if corp.sym == TWO_HOME_CORPORATION {
+            if corp.sym == fam.two_home_corporation {
                 destination_ability.push(corp.sym.clone());
             }
         }
@@ -872,25 +1024,14 @@ impl BaseGame {
         let exchange_tokens: BTreeMap<String, u32> = self
             .corporations
             .iter()
-            .filter(|c| !c.closed && data::exchange_tokens(&c.sym) > 0)
-            .map(|c| (c.sym.clone(), data::exchange_tokens(&c.sym)))
+            .filter(|c| !c.closed && (fam.exchange_tokens)(&c.sym) > 0)
+            .map(|c| (c.sym.clone(), (fam.exchange_tokens)(&c.sym)))
             .collect();
 
         // init_company_abilities: each concession's exchange-from-par
         // ability sets its major's par_via_exchange.
         let mut par_via_exchange = BTreeMap::new();
-        for (conc, corp) in [
-            ("C1", "LNWR"),
-            ("C2", "GWR"),
-            ("C3", "LBSCR"),
-            ("C4", "SECR"),
-            ("C5", "CR"),
-            ("C6", "MR"),
-            ("C7", "LYR"),
-            ("C8", "NBR"),
-            ("C9", "SWR"),
-            ("C10", "NER"),
-        ] {
+        for &(conc, corp) in fam.concessions {
             par_via_exchange.insert(corp.to_string(), conc.to_string());
         }
 
@@ -901,7 +1042,7 @@ impl BaseGame {
             .collect();
 
         let mut phase_revenue = BTreeMap::new();
-        for c in PRIVATE_PHASE_REVENUE {
+        for c in fam.private_phase_revenue {
             phase_revenue.insert(c.to_string(), Some(0));
         }
 
@@ -923,9 +1064,11 @@ impl BaseGame {
             player_debt: BTreeMap::new(),
             city_reservations: BTreeMap::new(),
             tile_reservations: BTreeMap::new(),
-            abilities: track::initial_abilities(),
-            corp_token_abilities: [("SECR".to_string(), vec![(vec!["P43".to_string()], 0)])]
-                .into_iter()
+            abilities: (fam.abilities)(),
+            corp_token_abilities: fam
+                .corp_token_abilities
+                .iter()
+                .map(|(c, hexes, price)| (c.to_string(), vec![(hexes.iter().map(|h| h.to_string()).collect(), *price)]))
                 .collect(),
             lcdr_token_ability: true,
             borders: BTreeMap::new(),
@@ -941,8 +1084,26 @@ impl BaseGame {
             stock_market_max_reached: false,
             pending_error: None,
             route_purchase: Latch::default(),
+            ruby_graphs: GraphMemo::default(),
             home_city: BTreeMap::new(),
             deleted_open: Vec::new(),
+            minor_associations: if fam.variant == family::Variant::Pnw {
+                pnw::ASSOCIATIONS.iter().map(|(m, j)| (m.to_string(), j.to_string())).collect()
+            } else {
+                Vec::new()
+            },
+            empty_bidboxes: vec![false; fam.bidding_box_minor_count],
+            any_bidboxes_empty: false,
+            regional_payout_count: if fam.variant == family::Variant::Pnw {
+                pnw::REGIONALS.iter().map(|r| (r.to_string(), 0)).collect()
+            } else {
+                BTreeMap::new()
+            },
+            hex_assignments: BTreeMap::new(),
+            builder_cubes: BTreeMap::new(),
+            opened_neighbors: Vec::new(),
+            home_override: BTreeMap::new(),
+            destination_override: BTreeMap::new(),
             round: RoundSt::new(RoundKind::Stock, 1, players, vec![Step::DiscardTrain, Step::BuySellParShares]),
         };
         self.g1822 = Some(Box::new(state));
@@ -955,12 +1116,16 @@ impl BaseGame {
             if !starting_corps.contains(&cd.sym) || cd.home_hex.is_empty() {
                 continue;
             }
+            // 1822PNW reservation_corporations: corporations.reject(major)
+            if fam.variant == family::Variant::Pnw && cd.corp_type == CorpType::Major {
+                continue;
+            }
             let city = (cd.home_city_index != u8::MAX).then_some(cd.home_city_index as usize);
             self.g1822_add_reservation(cd.home_hex, city, cd.sym);
         }
         // Live water borders (border=edge:N,type:water,cost:C).
         let mut borders = BTreeMap::new();
-        for (coord, dsl, _) in data::HEX_DSL {
+        for (coord, dsl, _) in fam.hex_dsl_all {
             let mut v = Vec::new();
             for part in dsl.split(';') {
                 let Some(attrs) = part.trim().strip_prefix("border=") else { continue };
@@ -983,7 +1148,13 @@ impl BaseGame {
             }
         }
         self.gm().borders = borders;
-        // init_round = the first stock round.
+        // init_round = the first stock round (1822PNW's starting packet:
+        // the packets, then straight into an operating round).
+        if self.g1822_is_pnw() && self.g1822_pnw_starting_packet() {
+            self.g1822_pnw_setup_starting_packets();
+            let _ = self.g1822_start_operating_round(1);
+            return;
+        }
         self.g1822_start_stock_round();
     }
 
@@ -1074,6 +1245,9 @@ impl BaseGame {
     /// (:full_or during an OR, :current_or otherwise) or the stock market's
     /// end cell (:current_or).
     pub(crate) fn g1822_game_end_check(&mut self) {
+        if !self.fam().game_end_lock_first_trigger {
+            return self.g1822_game_end_check_unlocked();
+        }
         if self.g().game_end_trigger.is_some() {
             return;
         }
@@ -1085,6 +1259,32 @@ impl BaseGame {
         }
         if self.g().stock_market_max_reached {
             self.gm().game_end_trigger = Some(("stock_market".to_string(), "current_or".to_string()));
+        }
+    }
+
+    /// Base `game_end_check` without GAME_END_LOCK_FIRST_TRIGGER (1822PNW):
+    /// every check re-evaluates the triggers (GAME_END_CHECK order: bank,
+    /// stock_market) and a more urgent timing replaces the latched one.
+    fn g1822_game_end_check_unlocked(&mut self) {
+        const PRIORITY: [&str; 5] = ["immediate", "current_round", "current_or", "full_or", "one_more_full_or_set"];
+        let prio = |a: &str| PRIORITY.iter().position(|p| *p == a).unwrap_or(PRIORITY.len());
+        if self.bank_broken || self.bank.cash < 0 {
+            self.bank_broken = true;
+        }
+        let mut triggered: Vec<(&str, &str)> = Vec::new();
+        if self.bank_broken {
+            triggered.push(("bank", if self.rnd().kind == RoundKind::Operating { "full_or" } else { "current_or" }));
+        }
+        if self.g().stock_market_max_reached {
+            triggered.push(("stock_market", "current_or"));
+        }
+        for (reason, after) in triggered {
+            if let Some((_, cur)) = &self.g().game_end_trigger {
+                if prio(after) >= prio(cur) {
+                    continue;
+                }
+            }
+            self.gm().game_end_trigger = Some((reason.to_string(), after.to_string()));
         }
     }
 
@@ -1108,7 +1308,7 @@ impl BaseGame {
         }
         match self.rnd().kind {
             RoundKind::Stock => self.g1822_stock_finished(),
-            RoundKind::Choices => self.g1822_active_step().is_none(),
+            RoundKind::Choices | RoundKind::Merger => self.g1822_active_step().is_none(),
             RoundKind::Operating => self.g1822_or_finished(),
         }
     }
@@ -1155,6 +1355,9 @@ impl BaseGame {
         match r.steps[i] {
             Step::SpecialTrack => r.special_track_company.is_some(),
             Step::SpecialToken => self.g1822_can_token_after_teleport(),
+            // Engine::Step::Assign / SpecialChoose: never block
+            Step::Assign => false,
+            Step::SpecialChoose if self.g1822_is_pnw() => false,
             _ => true,
         }
     }
@@ -1178,7 +1381,7 @@ impl BaseGame {
         let r = self.rnd();
         let id = r.entities.get(r.entity_index)?;
         Some(match r.kind {
-            RoundKind::Operating => Ent::Corp(id.clone()),
+            RoundKind::Operating | RoundKind::Merger => Ent::Corp(id.clone()),
             _ => Ent::Player(id.parse().ok()?),
         })
     }
@@ -1221,6 +1424,8 @@ impl BaseGame {
         match self.rnd().steps[i] {
             Step::BuySellParShares => self.g1822_bsps_actions(ent),
             Step::Choose => self.g1822_choose_actions(ent),
+            Step::Merge => self.g1822_pnw_merge_actions(ent),
+            Step::Assign => self.g1822_pnw_assign_actions(ent),
             _ => self.g1822_or_step_actions(i, ent),
         }
     }
@@ -1229,6 +1434,8 @@ impl BaseGame {
         match self.rnd().steps[i] {
             Step::BuySellParShares => self.g1822_bsps_process(ent, action),
             Step::Choose => self.g1822_choose_process(ent, action),
+            Step::Merge => self.g1822_pnw_merge_process(i, ent, action),
+            Step::Assign => self.g1822_pnw_assign_process(ent, action),
             _ => self.g1822_or_step_process(i, ent, action),
         }
     }
@@ -1255,7 +1462,7 @@ impl BaseGame {
     fn g1822_step_skip(&mut self, i: usize) {
         match self.rnd().steps[i] {
             Step::BuySellParShares => self.g1822_bsps_pass(),
-            Step::Choose => self.rndm().passed[i] = true,
+            Step::Choose | Step::Merge | Step::Assign => self.rndm().passed[i] = true,
             _ => self.g1822_or_step_skip(i),
         }
     }
@@ -1268,6 +1475,7 @@ impl BaseGame {
                 }
             }
             RoundKind::Choices => {}
+            RoundKind::Merger => self.g1822_pnw_merger_after_process(),
             RoundKind::Operating => self.g1822_or_after_process()?,
         }
         Ok(())
@@ -1284,7 +1492,16 @@ impl BaseGame {
                 self.g1822_start_operating_round(1)?;
             }
             RoundKind::Stock => self.g1822_start_choices_round()?,
-            RoundKind::Operating => {
+            RoundKind::Operating if self.g1822_is_pnw() && self.g1822_pnw_starting_packet() && self.phase_num() == 1 => {
+                // PNW starting packet: phase-1 ORs repeat (round 1 again)
+                self.turn += 1;
+                self.g1822_start_operating_round(1)?;
+            }
+            RoundKind::Operating if self.g1822_is_pnw() && self.phase_num() >= 2 => {
+                let round_num = self.rnd().round_num;
+                self.g1822_pnw_start_merger_round(round_num)?;
+            }
+            RoundKind::Operating | RoundKind::Merger => {
                 let round_num = self.rnd().round_num;
                 let total = self.g1822_operating_rounds_in_set();
                 if (round_num as u32) < total {
@@ -1323,7 +1540,7 @@ impl BaseGame {
                 self.round_state.round_num = r.round_num;
                 self.round_state.active_entity_id = EntityId::player(cur_pid);
             }
-            RoundKind::Operating => {
+            RoundKind::Operating | RoundKind::Merger => {
                 let mut s = crate::rounds::OperatingState::new(
                     r.round_num,
                     self.g1822_operating_rounds_in_set() as u8,
@@ -1331,7 +1548,8 @@ impl BaseGame {
                 );
                 s.entity_index = r.entity_index;
                 self.round = crate::rounds::Round::Operating(s);
-                self.round_state.round_type = "Operating".to_string();
+                self.round_state.round_type =
+                    if r.kind == RoundKind::Merger { "Merger" } else { "Operating" }.to_string();
                 self.round_state.round_num = r.round_num;
                 let current = self
                     .g1822_active_step()
@@ -1400,7 +1618,8 @@ impl BaseGame {
         }
         v -= self.player_debt(pid);
         // tax_haven_value: P16's owner gets the haven's cash + shares.
-        if self.co_owner(COMPANY_OSTH) == eid && !self.co_closed(COMPANY_OSTH) {
+        let osth = self.fam().company_osth;
+        if self.co_owner(osth) == eid && !self.co_closed(osth) {
             v += self.g1822_tax_haven_value();
         }
         v
@@ -1463,7 +1682,7 @@ impl BaseGame {
     pub(crate) fn g1822_hex_stop_revenue(&self, hex: &str) -> i32 {
         let Some(&hi) = self.hex_idx.get(hex) else { return 0 };
         let tile = &self.hexes[hi].tile;
-        let tiers = data_tiered_city_revenue(hex, &self.phase.tiles);
+        let tiers = self.g1822_tiered_city_revenue(hi);
         let mut best = 0;
         for c in &tile.cities {
             best = best.max(tiers.unwrap_or(c.revenue));
@@ -1478,9 +1697,27 @@ impl BaseGame {
     }
 }
 
+impl BaseGame {
+    /// The phase-tiered city revenue of the tile on `hi`: a preprinted
+    /// hex's DSL, or (1822PNW's port tiles) a laid tile's own DSL.
+    pub(crate) fn g1822_tiered_city_revenue(&self, hi: usize) -> Option<i32> {
+        let hex = &self.hexes[hi];
+        if !self.g1822_is_pnw() || hex.tile.id.starts_with("preprinted_") {
+            return data_tiered_city_revenue(self.fam(), &hex.id, &self.phase.tiles);
+        }
+        let base = hex.tile.name.split('-').next().unwrap_or(&hex.tile.name);
+        let (dsl, _) = (self.fam().tile_dsl)(base)?;
+        tiered_from_dsl(dsl, &self.phase.tiles)
+    }
+}
+
 /// A gray hex's phase-tiered city revenue ("revenue:yellow_40|green_50|...").
-pub(crate) fn data_tiered_city_revenue(hex: &str, phase_tiles: &[String]) -> Option<i32> {
-    let (dsl, _) = data::hex_dsl(hex)?;
+pub(crate) fn data_tiered_city_revenue(fam: &family::Family, hex: &str, phase_tiles: &[String]) -> Option<i32> {
+    let (dsl, _) = (fam.hex_dsl)(hex)?;
+    tiered_from_dsl(dsl, phase_tiles)
+}
+
+fn tiered_from_dsl(dsl: &str, phase_tiles: &[String]) -> Option<i32> {
     let part = dsl.split(';').find(|p| p.starts_with("city=revenue:") && p.contains('|'))?;
     let rev = part.strip_prefix("city=revenue:")?.split(',').next()?;
     let mut out = None;
@@ -1493,6 +1730,3 @@ pub(crate) fn data_tiered_city_revenue(hex: &str, phase_tiles: &[String]) -> Opt
     out
 }
 
-pub(crate) fn data_london() -> &'static str {
-    data::LONDON_HEX
-}

@@ -33,12 +33,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::actions::RouteData;
 use crate::game::BaseGame;
 use crate::tiles::PathEndpoint;
-use crate::title::g1822 as data;
+use super::family::Family;
 
 use super::graph::{Node, NodeKind};
 
-/// DOUBLE_HEX: hexes whose two stops a route may both visit.
-const DOUBLE_HEX: &[&str] = &["D35", "F7", "H21", "H37"];
 /// Bound on a route's stops for the unbounded trains (E, pullman towns):
 /// keeps the walk finite on dense maps.
 const MAX_STOPS_UNBOUNDED: usize = 32;
@@ -87,11 +85,15 @@ struct Seg {
     terminal_inner: bool,
 }
 
-/// A walked route.
-#[derive(Clone, Debug)]
+/// A walked route (1822PNW: with its mill and lumber-baron bonus
+/// candidates — each run pays only its biggest one, like the destination
+/// bonus).
+#[derive(Clone, Debug, Default)]
 struct Walked {
     stops: Vec<Node>,
     segs: Vec<Seg>,
+    mill: i32,
+    lumber: i32,
 }
 
 /// A route as priced for one train.
@@ -121,7 +123,10 @@ struct Ctx<'a> {
     g: &'a BaseGame,
     corp: &'a str,
     neighbors: HashMap<usize, BTreeMap<u8, usize>>,
-    lanes: HashMap<PathRef, u8>,
+    /// Lane width of a path at one of its edges, (hex, path, edge) → width
+    /// (only > 1 is stored): `lanes:N` at both ends; 1822PNW also reads
+    /// `a_lane` / `b_lane` (Route#check_overlap keys track by lane).
+    lanes: HashMap<(usize, usize, u8), u8>,
     seg_cache: std::cell::RefCell<HashMap<Node, Vec<Seg>>>,
     london: Option<usize>,
 }
@@ -139,19 +144,57 @@ fn path_lanes_from_dsl(dsl: &str) -> Vec<u8> {
         .collect()
 }
 
+/// Per path: the lane width at its a and b ends (`lanes:N` both,
+/// `a_lane:W.i` / `b_lane:W.i` one end).
+fn path_end_lanes_from_dsl(dsl: &str) -> Vec<(u8, u8)> {
+    dsl.split(';')
+        .filter_map(|p| p.trim().strip_prefix("path="))
+        .map(|attrs| {
+            let mut ab = (1u8, 1u8);
+            for kv in attrs.split(',') {
+                let Some((k, v)) = kv.split_once(':') else { continue };
+                let w = || v.split('.').next().and_then(|x| x.parse::<u8>().ok()).unwrap_or(1);
+                match k {
+                    "lanes" => ab = (w(), w()),
+                    "a_lane" => ab.0 = w(),
+                    "b_lane" => ab.1 = w(),
+                    _ => {}
+                }
+            }
+            ab
+        })
+        .collect()
+}
+
 impl<'a> Ctx<'a> {
     fn new(g: &'a BaseGame, corp: &'a str) -> Ctx<'a> {
         let mut lanes = HashMap::new();
         for (hi, hex) in g.hexes.iter().enumerate() {
+            let fam = g.fam();
             let dsl = if hex.tile.id.starts_with("preprinted_") {
-                data::hex_dsl(&hex.id).map(|(d, _)| d)
+                (fam.hex_dsl)(&hex.id).map(|(d, _)| d)
             } else {
-                data::tile_dsl(hex.tile.name.split('-').next().unwrap_or(&hex.tile.name)).map(|(d, _)| d)
+                (fam.tile_dsl)(hex.tile.name.split('-').next().unwrap_or(&hex.tile.name)).map(|(d, _)| d)
             };
             if let Some(d) = dsl {
-                for (pi, l) in path_lanes_from_dsl(d).into_iter().enumerate() {
-                    if l > 1 {
-                        lanes.insert((hi, pi), l);
+                let paths = &hex.tile.paths;
+                if g.g1822_is_pnw() {
+                    for (pi, (wa, wb)) in path_end_lanes_from_dsl(d).into_iter().enumerate() {
+                        let Some(pd) = paths.get(pi) else { continue };
+                        for (end, w) in [(&pd.a, wa), (&pd.b, wb)] {
+                            if let (Some(e), true) = (end.edge_num(), w > 1) {
+                                lanes.insert((hi, pi, e), w);
+                            }
+                        }
+                    }
+                } else {
+                    for (pi, l) in path_lanes_from_dsl(d).into_iter().enumerate() {
+                        let Some(pd) = paths.get(pi) else { continue };
+                        if l > 1 {
+                            for e in [&pd.a, &pd.b].iter().filter_map(|x| x.edge_num()) {
+                                lanes.insert((hi, pi, e), l);
+                            }
+                        }
                     }
                 }
             }
@@ -162,12 +205,22 @@ impl<'a> Ctx<'a> {
             neighbors: g.g1822_neighbors(),
             lanes,
             seg_cache: std::cell::RefCell::new(HashMap::new()),
-            london: g.hex_idx.get(data::LONDON_HEX).copied(),
+            london: g.hex_idx.get(g.fam().london_hex).copied(),
         }
     }
 
     fn pd(&self, p: PathRef) -> &crate::tiles::PathDef {
         &self.g.hexes[p.0].tile.paths[p.1]
+    }
+
+    /// How many times track (hex, edge) may be used: its widest lane.
+    fn edge_cap(&self, h: usize, e: u8) -> u8 {
+        let tile = &self.g.hexes[h].tile;
+        (0..tile.paths.len())
+            .filter(|&i| self.edges_of((h, i)).contains(&e))
+            .map(|i| *self.lanes.get(&(h, i, e)).unwrap_or(&1))
+            .max()
+            .unwrap_or(1)
     }
 
     fn nodes_of(&self, p: PathRef) -> Vec<Node> {
@@ -188,6 +241,7 @@ impl<'a> Ctx<'a> {
         let tile = &self.g.hexes[hex].tile;
         (0..tile.paths.len())
             .filter(|&i| self.edges_of((hex, i)).contains(&edge))
+            .filter(|&i| !self.g.g1822_path_thin(hex, i))
             .map(|i| (hex, i))
             .collect()
     }
@@ -373,8 +427,8 @@ impl<'a> Ctx<'a> {
         match n.kind {
             NodeKind::City => {
                 let c = &hex.tile.cities[n.index];
-                if hex.tile.id.starts_with("preprinted_") {
-                    super::data_tiered_city_revenue(&hex.id, phase).unwrap_or(c.revenue)
+                if hex.tile.id.starts_with("preprinted_") || self.g.g1822_is_pnw() {
+                    self.g.g1822_tiered_city_revenue(n.hex).unwrap_or(c.revenue)
                 } else {
                     c.revenue
                 }
@@ -385,7 +439,7 @@ impl<'a> Ctx<'a> {
     }
 
     fn visit_cost(&self, n: Node) -> u32 {
-        if self.g.hexes[n.hex].id == data::FRANCE_HEX {
+        if Family::is(self.g.fam().france_hex, &self.g.hexes[n.hex].id) {
             0
         } else {
             1
@@ -443,6 +497,8 @@ impl BaseGame {
         let ci = self.ci(c);
         let mut base = Vec::new();
         let mut bonus = Vec::new();
+        let pnw = self.g1822_pnw_router_info(c);
+        let mut side: Vec<(i32, i32)> = Vec::new();
         for r in routes {
             let t = self.corporations[ci]
                 .trains
@@ -451,11 +507,36 @@ impl BaseGame {
                 .ok_or_else(|| crate::actions::GameError::new(format!("unknown train {}", r.train_name)))?;
             let single = r.connections.len() == 1 && r.connections[0].first().map(String::as_str) == Some("local");
             let stops: Vec<Node> = r.nodes.iter().filter_map(|s| self.g1822_node_from_signature(s)).collect();
+            let kind = Self::g1822_train_kind(t);
             let (rev, b) = self
-                .g1822_price_route(&ctx, &stops, single, Self::g1822_train_kind(t), major, home, dest)
+                .g1822_price_route(&ctx, &stops, single, kind, major, home, dest)
                 .ok_or_else(|| crate::actions::GameError::new(format!("illegal route for {}", r.train_name)))?;
-            base.push(rev);
+            // 1822PNW extras over Route#all_hexes (the connections' hexes)
+            let (x, m, l) = match &pnw {
+                Some(p) => {
+                    let hexes: HashSet<usize> = r
+                        .connections
+                        .iter()
+                        .flatten()
+                        .filter_map(|h| self.hex_idx.get(h.as_str()).copied())
+                        .collect();
+                    let none = HashSet::new();
+                    p.extras(kind, &stops, if single { &none } else { &hexes })
+                }
+                None => (0, 0, 0),
+            };
+            base.push(rev + x);
             bonus.push(b);
+            side.push((m, l));
+        }
+        // 1822PNW mill / lumber-baron bonuses: the biggest, on its route
+        for ch in 0..2 {
+            let vals: Vec<i32> = side.iter().map(|v| if ch == 0 { v.0 } else { v.1 }).collect();
+            if let Some((i, &v)) = vals.iter().enumerate().max_by_key(|(i, v)| (**v, *i)) {
+                if v > 0 {
+                    base[i] += v;
+                }
+            }
         }
         // G1822#destination_bonus: `sort_by { revenue }.reverse.first` —
         // sort_by is stable in MRI, so among equal bonuses the LAST route
@@ -504,7 +585,7 @@ impl BaseGame {
         let mut spent = 0u64;
         for (si, &s) in starts.iter().enumerate() {
             let mut steps = Budget::share(spent, starts.len() - si);
-            let mut stack = Walked { stops: vec![s], segs: Vec::new() };
+            let mut stack = Walked { stops: vec![s], segs: Vec::new(), mill: 0, lumber: 0 };
             let mut used = HashMap::new();
             let b = Bound { total: MAX_STOPS_UNBOUNDED, cities: MAX_STOPS_UNBOUNDED };
             let mut sink = |w: &Walked| {
@@ -554,6 +635,13 @@ impl BaseGame {
     /// The best run for `c`'s route trains: (RouteData per train run,
     /// total revenue incl. the destination bonus).
     pub(crate) fn g1822_best_routes(&self, c: &str) -> (Vec<RouteData>, i32) {
+        self.g1822_best_routes_v2(c)
+    }
+
+    /// The pre-2026-10-17 router (one walk bounded by the widest train,
+    /// every route priced for every kind, a 3M-step budget). Kept for
+    /// comparison (`g1822_router_best_legacy`).
+    pub(crate) fn g1822_best_routes_legacy(&self, c: &str) -> (Vec<RouteData>, i32) {
         let trains = self.g1822_route_trains(c);
         if trains.is_empty() {
             return (Vec::new(), 0);
@@ -622,7 +710,7 @@ impl BaseGame {
         let mut spent = 0u64;
         for (si, &s) in starts.iter().enumerate() {
             let mut steps = Budget::share(spent, starts.len() - si);
-            let mut stack = Walked { stops: vec![s], segs: Vec::new() };
+            let mut stack = Walked { stops: vec![s], segs: Vec::new(), mill: 0, lumber: 0 };
             let mut used: HashMap<(usize, u8), u8> = HashMap::new();
             let mut sink = |w: &Walked| consider(w, &mut routes, &mut tops);
             self.g1822_route_dfs(&ctx, &mut stack, &mut used, bound, &tokens, &mut sink, &mut steps);
@@ -641,7 +729,7 @@ impl BaseGame {
             let mut ts: Vec<Node> = tokens.iter().copied().collect();
             ts.sort();
             for t in ts {
-                consider(&Walked { stops: vec![t], segs: Vec::new() }, &mut routes, &mut tops);
+                consider(&Walked { stops: vec![t], segs: Vec::new(), mill: 0, lumber: 0 }, &mut routes, &mut tops);
             }
         }
         let per_train: Vec<Vec<Priced>> = kinds
@@ -662,12 +750,7 @@ impl BaseGame {
         let caps = |key: &(usize, u8)| -> u8 {
             // capacity: the lanes of the path(s) at this hexside
             let (h, e) = *key;
-            let tile = &self.hexes[h].tile;
-            (0..tile.paths.len())
-                .filter(|&i| ctx.edges_of((h, i)).contains(&e))
-                .map(|i| *ctx.lanes.get(&(h, i)).unwrap_or(&1))
-                .max()
-                .unwrap_or(1)
+            ctx.edge_cap(h, e)
         };
         let mut cap_cache: HashMap<(usize, u8), u8> = HashMap::new();
         for r in &routes {
@@ -688,7 +771,7 @@ impl BaseGame {
             local_cities: HashSet::new(),
             merthyr: [false, false],
             upper: &upper,
-            merthyr_hex: self.hex_idx.get(data::MERTHYR_TYDFIL_PONTYPOOL_HEX).copied(),
+            merthyr_hex: self.hex_idx.get(self.fam().merthyr_tydfil_pontypool_hex).copied(),
         };
         st.search(0, 0, 0, &mut pick, &mut best_total, &mut best_pick);
 
@@ -799,20 +882,28 @@ impl BaseGame {
     fn g1822_e_tours(&self, ctx: &Ctx, connected: &HashSet<Node>) -> Vec<Walked> {
         let mut toks: Vec<Node> = connected.iter().copied().filter(|n| ctx.tokened_normal_or_dest(*n)).collect();
         toks.sort();
+        // France: a tour may end there from the English Channel city
+        // (english_channel_etrain?: one tokened end, both channel stops)
+        let france = connected
+            .iter()
+            .copied()
+            .find(|n| n.kind == NodeKind::Offboard && Family::is(self.fam().france_hex, &self.hexes[n.hex].id));
         let mut out: Vec<Walked> = Vec::new();
         let mut budget = 20_000usize;
         for &t0 in &toks {
-            let mut tour = Walked { stops: vec![t0], segs: Vec::new() };
+            let mut tour = Walked { stops: vec![t0], segs: Vec::new(), mill: 0, lumber: 0 };
             let mut used: HashSet<(usize, u8)> = HashSet::new();
-            self.g1822_e_extend(ctx, &toks, &mut tour, &mut used, &mut out, &mut budget);
+            self.g1822_e_extend(ctx, &toks, france, &mut tour, &mut used, &mut out, &mut budget);
         }
         out
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn g1822_e_extend(
         &self,
         ctx: &Ctx,
         toks: &[Node],
+        france: Option<Node>,
         tour: &mut Walked,
         used: &mut HashSet<(usize, u8)>,
         out: &mut Vec<Walked>,
@@ -839,10 +930,28 @@ impl BaseGame {
             if first <= t && self.g1822_hexes_ok(&tour.stops) {
                 out.push(tour.clone());
             }
+            let terminal = hop.last().map_or(false, |s| s.terminal_last);
+            // the Channel city on to France ends the tour there
+            if let Some(f) = france.filter(|_| !terminal && Family::is(self.fam().english_channel_hex, &self.hexes[t.hex].id)) {
+                if !tour.stops.contains(&f) {
+                    if let Some(fhop) = self.g1822_shortest_hop(ctx, t, f, tour, used) {
+                        let n0 = tour.stops.len();
+                        for s in &fhop {
+                            tour.stops.push(s.to);
+                            tour.segs.push(s.clone());
+                        }
+                        if self.g1822_hexes_ok(&tour.stops) {
+                            out.push(tour.clone());
+                        }
+                        tour.stops.truncate(n0);
+                        tour.segs.truncate(n0 - 1);
+                    }
+                }
+            }
             // a hop that arrives along a terminal path ends the tour
             // (check_terminals!: terminal paths only first or last)
-            if !hop.last().map_or(false, |s| s.terminal_last) {
-                self.g1822_e_extend(ctx, toks, tour, used, out, budget);
+            if !terminal {
+                self.g1822_e_extend(ctx, toks, france, tour, used, out, budget);
             }
             for s in hop.iter().rev() {
                 tour.stops.pop();
@@ -930,7 +1039,7 @@ impl BaseGame {
                 hexes.push(n.hex);
             }
         }
-        if hexes.iter().any(|&h| DOUBLE_HEX.contains(&self.hexes[h].id.as_str())) {
+        if hexes.iter().any(|&h| self.fam().double_hex.contains(&self.hexes[h].id.as_str())) {
             return true;
         }
         let set: HashSet<usize> = hexes.iter().copied().collect();
@@ -967,9 +1076,13 @@ impl BaseGame {
         if stops.iter().filter(|n| ctx.london == Some(n.hex) && n.kind == NodeKind::City).count() > 1 {
             return None;
         }
+        let fam = self.fam();
+        // english_channel_visit: 0 unless both hexes are set
         let channel_hex = |n: &Node| {
             let id = self.hexes[n.hex].id.as_str();
-            id == data::ENGLISH_CHANNEL_HEX || id == data::FRANCE_HEX
+            !fam.english_channel_hex.is_empty()
+                && !fam.france_hex.is_empty()
+                && (id == fam.english_channel_hex || id == fam.france_hex)
         };
         let channel = stops.iter().filter(|n| channel_hex(n)).count();
         let local = matches!(kind, Kind::Local { .. });
@@ -1030,7 +1143,7 @@ impl BaseGame {
                         // english_channel_etrain?: both channel stops and a
                         // token in the Channel city
                         channel == 2
-                            && self.hex_idx.get(data::ENGLISH_CHANNEL_HEX).map_or(false, |&h| {
+                            && self.hex_idx.get(fam.english_channel_hex).map_or(false, |&h| {
                                 self.hexes[h].tile.cities.first().map_or(false, |c| {
                                     c.tokens.iter().flatten().any(|t| t.corporation_id == ctx.corp)
                                 })
@@ -1041,12 +1154,13 @@ impl BaseGame {
                 if !valid_ends {
                     return None;
                 }
-                let france = stops.iter().find(|n| self.hexes[n.hex].id == data::FRANCE_HEX && n.kind == NodeKind::Offboard);
+                let france =
+                    stops.iter().find(|n| Family::is(fam.france_hex, &self.hexes[n.hex].id) && n.kind == NodeKind::Offboard);
                 for (n, t) in stops.iter().zip(&tokened) {
                     if n.kind != NodeKind::City || !t {
                         continue;
                     }
-                    if self.hexes[n.hex].id == data::ENGLISH_CHANNEL_HEX {
+                    if Family::is(fam.english_channel_hex, &self.hexes[n.hex].id) {
                         revenue += france.map_or(0, |f| ctx.stop_revenue(*f) * multiplier);
                     } else {
                         revenue += ctx.stop_revenue(*n) * multiplier;
@@ -1240,5 +1354,1255 @@ impl Search<'_> {
         }
         // this train runs nothing
         self.search(t + 1, revenue, bonus, pick, best, best_pick);
+    }
+}
+
+// ===========================================================================
+// Router v2 (2026-10-17): per-kind branch-and-bound walks.
+//
+// The legacy walk ran ONE depth-first enumeration bounded by the widest
+// train (a pullman or E-train meant 32 stops) and priced every route for
+// every kind under a 3M-step budget; dense late-game maps ran out of
+// budget before the best pullman runs were reached. v2:
+//
+// * walks each distinct train kind on its own, with its own cost cap
+//   (numeric: every stop but France costs 1; pullman: towns and France are
+//   free; local: 1 city + 1 town);
+// * prunes a partial route when its value plus an UPPER BOUND on what the
+//   rest of the route can still add (a walk-relaxation table over the
+//   chain graph, towns folded into their town components for pullman,
+//   capped by the top-h stop revenues) cannot reach the kind's threshold;
+// * thresholds come from the combination: a scouting pass keeps each
+//   kind's SCOUT_K best routes, their best combination is a lower bound LB
+//   on the optimum, and a route for train t can only be in a combination
+//   at least as good as LB if its value ≥ LB − Σ(best single route of
+//   every other train). The full pass keeps every route above that (up to
+//   TOP_K, the best first), so the combination search below is exact
+//   unless a kind holds more than TOP_K routes above its threshold or a
+//   walk exhausts WALK_STEP_BUDGET (both counted in `stats`);
+// * children are tried revenue-first and starts token cities first, so the
+//   dynamic (list-full) thresholds rise early.
+//
+// Routes are deduplicated by (oriented stops, track) and recorded from
+// either end. Numeric and pullman routes are priced incrementally on the
+// walk; local and E routes by `g1822_price_route` (test builds cross-check
+// the incremental prices against it).
+// ===========================================================================
+
+/// Steps one kind's walk may take (a safety net: the bounds keep real
+/// walks far below it).
+const WALK_STEP_BUDGET: u64 = 4_000_000;
+/// Routes kept per kind in the scouting pass.
+const SCOUT_K: usize = 64;
+/// E-trains walk only this far: their routes come from the token-to-token
+/// tours (`g1822_e_tours`); the walk adds the short ones.
+const E_WALK_STEP_BUDGET: u64 = 300_000;
+
+/// `G1822_ROUTER_DEBUG=1`: per-call phase timings on stderr.
+fn router_debug() -> bool {
+    static D: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *D.get_or_init(|| std::env::var("G1822_ROUTER_DEBUG").map_or(false, |v| v == "1"))
+}
+
+/// Router counters (process-wide; debug and the router check read them).
+pub mod stats {
+    use std::sync::atomic::AtomicU64;
+    pub static CALLS: AtomicU64 = AtomicU64::new(0);
+    pub static WALK_STEPS: AtomicU64 = AtomicU64::new(0);
+    /// Walks that hit WALK_STEP_BUDGET (the result may be short).
+    pub static EXHAUSTED: AtomicU64 = AtomicU64::new(0);
+    /// Full passes whose TOP_K list overflowed above the threshold.
+    pub static OVERFLOW: AtomicU64 = AtomicU64::new(0);
+}
+
+/// 1822PNW's revenue extras for one corporation's routing call
+/// (G1822PNW#revenue_for): +10 per forest hex the route's paths cross and
+/// +30 for the Ski Haus hex (not E-trains), −10 per portage tile (PNW1 /
+/// PNW2) unless the owner holds P16; per run, the biggest mill bonus (P15
+/// hex as a stop: 10, 30 from phase 5; E-trains double only through their
+/// own token there) and, with P14, the biggest route's forest revenue
+/// again (lumber baron).
+struct Pnw {
+    forest: Vec<bool>,
+    ski: Vec<bool>,
+    portage: Vec<bool>,
+    p16: bool,
+    lumber: bool,
+    mill_hex: Option<usize>,
+    mill_amount: i32,
+    mill_tok: bool,
+}
+
+impl Pnw {
+    /// Weight of one forest hex in an upper bound (forest + lumber baron).
+    fn forest_w(&self) -> i32 {
+        if self.lumber {
+            20
+        } else {
+            10
+        }
+    }
+
+    /// The most mill bonus a route of `kind` can earn.
+    fn mill_max(&self, kind: Kind) -> i32 {
+        match (self.mill_hex, kind) {
+            (None, _) => 0,
+            (Some(_), Kind::E) => {
+                if self.mill_tok {
+                    2 * self.mill_amount
+                } else {
+                    0
+                }
+            }
+            _ => self.mill_amount,
+        }
+    }
+
+    /// (revenue change, mill bonus, lumber-baron bonus) from the counts.
+    fn value(&self, kind: Kind, forest_n: i32, ski_n: i32, port_n: i32, mill_n: i32) -> (i32, i32, i32) {
+        let e = kind == Kind::E;
+        let forest = if e { 0 } else { 10 * forest_n };
+        let ski = if !e && ski_n > 0 { 30 } else { 0 };
+        let port = if self.p16 { 0 } else { 10 * port_n };
+        let mill = if mill_n > 0 { self.mill_max(kind) } else { 0 };
+        let lumber = if self.lumber { forest } else { 0 };
+        (forest + ski - port, mill, lumber)
+    }
+
+    /// The same from scratch: the route's stops and the hexes its paths
+    /// cross (Route#all_hexes).
+    fn extras(&self, kind: Kind, stops: &[Node], hexes: &HashSet<usize>) -> (i32, i32, i32) {
+        let cnt = |v: &Vec<bool>| hexes.iter().filter(|&&h| v[h]).count() as i32;
+        let mill_n = self.mill_hex.map_or(0, |m| stops.iter().filter(|n| n.hex == m).count() as i32);
+        self.value(kind, cnt(&self.forest), cnt(&self.ski), cnt(&self.portage), mill_n)
+    }
+}
+
+fn walked_hexes(segs: &[Seg]) -> HashSet<usize> {
+    segs.iter().flat_map(|s| s.paths.iter().map(|p| p.0)).collect()
+}
+
+impl BaseGame {
+    fn g1822_pnw_router_info(&self, c: &str) -> Option<Pnw> {
+        if !self.g1822_is_pnw() {
+            return None;
+        }
+        let companies = self.companies_of(&crate::entities::EntityId::corporation(c));
+        let has = |id: &str| companies.iter().any(|x| x == id);
+        let n = self.hexes.len();
+        let assigned = |key: &str| -> Vec<bool> { (0..n).map(|h| self.g1822_pnw_assigned(&self.hexes[h].id, key)).collect() };
+        let portage = (0..n)
+            .map(|h| matches!(self.hexes[h].tile.name.split('-').next(), Some("PNW1" | "PNW2")))
+            .collect();
+        let mill_hex = (0..n).find(|&h| self.g1822_pnw_assigned(&self.hexes[h].id, "P15"));
+        let mill_amount = if super::operating::ruby_to_i(&self.phase.name) < 5 { 10 } else { 30 };
+        // mill_hex.tile.cities[0].tokened_by?(owner) (the coal token has
+        // no corporation)
+        let mill_tok = mill_hex.map_or(false, |h| {
+            self.hexes[h]
+                .tile
+                .cities
+                .first()
+                .map_or(false, |city| city.tokens.iter().flatten().any(|t| t.corporation_id == c && t.token_type != "coal"))
+        });
+        Some(Pnw {
+            forest: assigned("forest"),
+            ski: assigned("P17"),
+            portage,
+            p16: has("P16"),
+            lumber: has("P14"),
+            mill_hex,
+            mill_amount,
+            mill_tok,
+        })
+    }
+}
+
+/// One chain of the dense graph.
+struct RSeg {
+    to: usize,
+    track: Vec<u32>,
+    tfirst: bool,
+    tlast: bool,
+    seg: Seg,
+    /// 1822PNW: the hexes its paths cross, and their forest / ski weight
+    /// in an upper bound (0 elsewhere).
+    hexes: Vec<usize>,
+    ext_w: i32,
+}
+
+/// The router's dense node graph for one corporation.
+struct RG {
+    nodes: Vec<Node>,
+    rev: Vec<i32>,
+    town: Vec<bool>,
+    france: Vec<bool>,
+    pass: Vec<bool>,
+    tok: Vec<bool>,
+    tok_nd: Vec<bool>,
+    london: Vec<bool>,
+    channel: Vec<bool>,
+    out: Vec<Vec<usize>>,
+    segs: Vec<RSeg>,
+    ntrack: usize,
+    /// Per track id: how often ONE route may use it (1822PNW: its lane
+    /// width; 1 elsewhere).
+    tcap: Vec<u8>,
+    /// Walk starts (the corporation's connected nodes), tokens first.
+    starts: Vec<usize>,
+    home: Option<usize>,
+    dest: Option<usize>,
+    major: bool,
+    pnw: Option<Pnw>,
+    /// Upper bound of the forest / ski extras any one route can collect.
+    ext_cap: i32,
+}
+
+impl RG {
+    fn build(g: &BaseGame, ctx: &Ctx, c: &str, connected: &HashSet<Node>) -> RG {
+        let mut nodes: Vec<Node> = connected.iter().copied().collect();
+        nodes.sort();
+        let mut id: HashMap<Node, usize> = nodes.iter().enumerate().map(|(i, n)| (*n, i)).collect();
+        let mut raw: Vec<Vec<Seg>> = Vec::new();
+        let mut i = 0;
+        while i < nodes.len() {
+            let segs: Vec<Seg> = ctx.segs_from(nodes[i]).into_iter().filter(|s| !s.terminal_inner).collect();
+            for s in &segs {
+                if !id.contains_key(&s.to) {
+                    id.insert(s.to, nodes.len());
+                    nodes.push(s.to);
+                }
+            }
+            raw.push(segs);
+            i += 1;
+        }
+        let n = nodes.len();
+        let rev: Vec<i32> = nodes.iter().map(|&x| ctx.stop_revenue(x)).collect();
+        let hex_id = |x: &Node| g.hexes[x.hex].id.as_str();
+        let fam = g.fam();
+        let mut track_id: HashMap<(usize, u8), u32> = HashMap::new();
+        let mut segs: Vec<RSeg> = Vec::new();
+        let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let pnw = g.g1822_pnw_router_info(c);
+        let mut all_hexes: HashSet<usize> = HashSet::new();
+        for (u, list) in raw.into_iter().enumerate() {
+            for s in list {
+                let (hexes, ext_w) = match &pnw {
+                    Some(p) => {
+                        let mut hs: Vec<usize> = s.paths.iter().map(|q| q.0).collect();
+                        hs.sort_unstable();
+                        hs.dedup();
+                        let w = hs.iter().filter(|&&h| p.forest[h]).count() as i32 * p.forest_w()
+                            + if hs.iter().any(|&h| p.ski[h]) { 30 } else { 0 };
+                        all_hexes.extend(hs.iter().copied());
+                        (hs, w)
+                    }
+                    None => (Vec::new(), 0),
+                };
+                let track = s
+                    .track
+                    .iter()
+                    .map(|k| {
+                        let l = track_id.len() as u32;
+                        *track_id.entry(*k).or_insert(l)
+                    })
+                    .collect();
+                out[u].push(segs.len());
+                segs.push(RSeg {
+                    to: id[&s.to],
+                    track,
+                    tfirst: s.terminal_first,
+                    tlast: s.terminal_last,
+                    seg: s,
+                    hexes,
+                    ext_w,
+                });
+            }
+        }
+        let ext_cap = pnw.as_ref().map_or(0, |p| {
+            all_hexes.iter().filter(|&&h| p.forest[h]).count() as i32 * p.forest_w()
+                + if all_hexes.iter().any(|&h| p.ski[h]) { 30 } else { 0 }
+        });
+        // revenue-first children
+        for o in &mut out {
+            o.sort_by_key(|&si| (std::cmp::Reverse(rev[segs[si].to]), si));
+        }
+        // Route#revenue's token stop. 1822PNW (city_tokened_by? + its
+        // check_other): a normal / destination token, in a city without the
+        // coal token.
+        let tok: Vec<bool> = nodes
+            .iter()
+            .map(|&x| {
+                if pnw.is_some() {
+                    ctx.tokened_normal_or_dest(x)
+                        && !g.hexes[x.hex].tile.cities[x.index].tokens.iter().flatten().any(|t| t.token_type == "coal")
+                } else {
+                    ctx.tokened(x)
+                }
+            })
+            .collect();
+        let mut starts: Vec<usize> = (0..n).filter(|&i| connected.contains(&nodes[i])).collect();
+        starts.sort_by_key(|&i| (!tok[i], std::cmp::Reverse(rev[i]), i));
+        let home = g.g1822_home_node(c).and_then(|x| id.get(&x).copied());
+        let dest = g.g1822_destination_node(c).and_then(|x| id.get(&x).copied());
+        RG {
+            rev,
+            town: nodes.iter().map(|x| x.kind == NodeKind::Town).collect(),
+            france: nodes.iter().map(|x| Family::is(fam.france_hex, hex_id(x))).collect(),
+            pass: nodes.iter().map(|&x| !ctx.blocks(x)).collect(),
+            tok,
+            tok_nd: nodes.iter().map(|&x| ctx.tokened_normal_or_dest(x)).collect(),
+            london: nodes.iter().map(|x| ctx.london == Some(x.hex) && x.kind == NodeKind::City).collect(),
+            channel: nodes
+                .iter()
+                .map(|x| {
+                    !fam.english_channel_hex.is_empty()
+                        && !fam.france_hex.is_empty()
+                        && (hex_id(x) == fam.english_channel_hex || hex_id(x) == fam.france_hex)
+                })
+                .collect(),
+            out,
+            segs,
+            ntrack: track_id.len(),
+            tcap: {
+                let mut v = vec![1u8; track_id.len()];
+                if g.g1822_is_pnw() {
+                    for (&(h, e), &id) in &track_id {
+                        v[id as usize] = ctx.edge_cap(h, e);
+                    }
+                }
+                v
+            },
+            starts,
+            home,
+            dest,
+            major: g.is_major(c),
+            nodes,
+            pnw,
+            ext_cap,
+        }
+    }
+
+    /// Visit cost of node `v` for a numeric (`pullman = false`) or pullman
+    /// train.
+    fn cost(&self, v: usize, pullman: bool) -> u32 {
+        if self.france[v] || (pullman && self.town[v]) {
+            0
+        } else {
+            1
+        }
+    }
+
+    /// ub[h][u]: an upper bound on the revenue a route standing at `u`
+    /// (allowed to leave it) can still add with `h` cost left — the best
+    /// WALK (nodes may repeat) of the chain graph, towns of a pullman train
+    /// folded into their town components (each component's whole revenue,
+    /// then any exit), capped by the h best costly stops plus every free
+    /// stop.
+    fn bound_table(&self, d: u32, pullman: bool) -> Vec<Vec<i32>> {
+        let n = self.nodes.len();
+        let d = d as usize;
+        // town components (pullman)
+        let mut comp: Vec<usize> = (0..n).collect();
+        fn find(c: &mut [usize], x: usize) -> usize {
+            let mut r = x;
+            while c[r] != r {
+                r = c[r];
+            }
+            let mut y = x;
+            while c[y] != r {
+                let nx = c[y];
+                c[y] = r;
+                y = nx;
+            }
+            r
+        }
+        if pullman {
+            for u in 0..n {
+                if !self.town[u] {
+                    continue;
+                }
+                for &si in &self.out[u] {
+                    let v = self.segs[si].to;
+                    if self.town[v] {
+                        let (a, b) = (find(&mut comp, u), find(&mut comp, v));
+                        if a != b {
+                            comp[a] = b;
+                        }
+                    }
+                }
+            }
+        }
+        let root: Vec<usize> = (0..n).map(|u| find(&mut comp, u)).collect();
+        let mut sum_c = vec![0i32; n];
+        if pullman {
+            for u in 0..n {
+                if self.town[u] {
+                    sum_c[root[u]] += self.rev[u].max(0);
+                    // 1822PNW: the component's inner chains' extras
+                    for &si in &self.out[u] {
+                        if self.town[self.segs[si].to] {
+                            sum_c[root[u]] += self.segs[si].ext_w;
+                        }
+                    }
+                }
+            }
+        }
+        // global caps
+        let mut costly: Vec<i32> = (0..n).filter(|&v| self.cost(v, pullman) == 1).map(|v| self.rev[v]).collect();
+        costly.sort_unstable_by(|a, b| b.cmp(a));
+        let free: i32 = (0..n).filter(|&v| self.cost(v, pullman) == 0).map(|v| self.rev[v].max(0)).sum();
+        let mut cap = vec![free + self.ext_cap; d + 1];
+        for h in 1..=d {
+            cap[h] = cap[h - 1] + costly.get(h - 1).copied().unwrap_or(0).max(0);
+        }
+        let neg = i32::MIN / 4;
+        let mut ub: Vec<Vec<i32>> = Vec::with_capacity(d + 1);
+        for h in 0..=d {
+            // a chain into costly (or free offboard) `v`
+            let g = |ub: &Vec<Vec<i32>>, s: &RSeg| -> i32 {
+                let v = s.to;
+                let c = self.cost(v, pullman) as usize;
+                if c > h {
+                    return neg;
+                }
+                // France (cost 0) is an offboard: never passed through
+                let cont = if c == 1 && self.pass[v] && !s.tlast { ub[h - 1][v] } else { 0 };
+                self.rev[v].max(0) + s.ext_w + cont
+            };
+            // per town component: its best exit
+            let mut m_c = vec![0i32; n];
+            if pullman {
+                for u in 0..n {
+                    if !self.town[u] {
+                        continue;
+                    }
+                    let r = root[u];
+                    for &si in &self.out[u] {
+                        let s = &self.segs[si];
+                        if !self.town[s.to] {
+                            m_c[r] = m_c[r].max(g(&ub, s));
+                        }
+                    }
+                }
+            }
+            let mut row = vec![0i32; n];
+            for u in 0..n {
+                if pullman && self.town[u] {
+                    row[u] = (sum_c[root[u]] + m_c[root[u]]).min(cap[h]);
+                    continue;
+                }
+                let mut best = 0;
+                for &si in &self.out[u] {
+                    let s = &self.segs[si];
+                    let val = if pullman && self.town[s.to] {
+                        s.ext_w + sum_c[root[s.to]] + m_c[root[s.to]]
+                    } else {
+                        g(&ub, s)
+                    };
+                    best = best.max(val);
+                }
+                row[u] = best.min(cap[h]);
+            }
+            ub.push(row);
+        }
+        ub
+    }
+}
+
+/// A kind's route list: (value, revenue, bonus, route index), best first.
+type KindList = Vec<(i32, i32, i32, usize)>;
+
+/// One kind's walk.
+struct KWalk<'r> {
+    g: &'r BaseGame,
+    ctx: &'r Ctx<'r>,
+    rg: &'r RG,
+    kind: Kind,
+    /// Cost cap (numeric / pullman) and stop cap.
+    d: u32,
+    max_stops: usize,
+    ub: Vec<Vec<i32>>,
+    /// E-trains: the whole map's paying value (an upper bound).
+    e_total: i32,
+    thr: i32,
+    cap: usize,
+    list: KindList,
+    routes: Vec<Walked>,
+    seen: HashSet<Vec<u32>>,
+    steps: u64,
+    limit: u64,
+    exhausted: bool,
+    // walk state
+    stops: Vec<usize>,
+    segs: Vec<usize>,
+    visited: Vec<bool>,
+    used: Vec<u8>,
+    rev: i32,
+    cost: u32,
+    n_tok: u32,
+    bonus: i32,
+    // 1822PNW extras: per-hex use counts and the route's counts
+    hcnt: Vec<u16>,
+    forest_n: i32,
+    ski_n: i32,
+    port_n: i32,
+    mill_n: i32,
+}
+
+impl<'r> KWalk<'r> {
+    fn new(g: &'r BaseGame, ctx: &'r Ctx<'r>, rg: &'r RG, kind: Kind, thr: i32, cap: usize) -> KWalk<'r> {
+        let (d, max_stops) = match kind {
+            Kind::Local { .. } => (1, 2),
+            Kind::Numeric(d) => (d, d as usize + 2),
+            Kind::Pullman(d) => (d, MAX_STOPS_UNBOUNDED),
+            Kind::E => (0, MAX_STOPS_UNBOUNDED),
+        };
+        let ub = match kind {
+            Kind::Numeric(d) => rg.bound_table(d, false),
+            Kind::Pullman(d) => rg.bound_table(d, true),
+            _ => Vec::new(),
+        };
+        let n = rg.nodes.len();
+        let e_total = if kind == Kind::E {
+            let france = (0..n).filter(|&v| rg.france[v]).map(|v| rg.rev[v]).max().unwrap_or(0);
+            (0..n)
+                .filter(|&v| rg.tok_nd[v] && rg.nodes[v].kind == NodeKind::City)
+                .map(|v| 2 * if rg.channel[v] { france } else { rg.rev[v] }.max(0))
+                .sum()
+        } else {
+            0
+        };
+        KWalk {
+            g,
+            ctx,
+            rg,
+            kind,
+            d,
+            max_stops,
+            ub,
+            e_total,
+            thr: thr.max(1),
+            cap,
+            list: Vec::new(),
+            routes: Vec::new(),
+            seen: HashSet::new(),
+            steps: 0,
+            limit: if kind == Kind::E { E_WALK_STEP_BUDGET } else { WALK_STEP_BUDGET },
+            exhausted: false,
+            stops: Vec::new(),
+            segs: Vec::new(),
+            visited: vec![false; n],
+            used: vec![0; rg.ntrack],
+            rev: 0,
+            cost: 0,
+            n_tok: 0,
+            bonus: 0,
+            hcnt: if rg.pnw.is_some() { vec![0; g.hexes.len()] } else { Vec::new() },
+            forest_n: 0,
+            ski_n: 0,
+            port_n: 0,
+            mill_n: 0,
+        }
+    }
+
+    /// 1822PNW: (revenue change, mill, lumber baron) of the current route.
+    fn pnw_now(&self) -> (i32, i32, i32) {
+        match &self.rg.pnw {
+            Some(p) => p.value(self.kind, self.forest_n, self.ski_n, self.port_n, self.mill_n),
+            None => (0, 0, 0),
+        }
+    }
+
+    /// Mill bonus the route could still add.
+    fn mill_pot(&self) -> i32 {
+        match &self.rg.pnw {
+            Some(p) if self.mill_n == 0 => p.mill_max(self.kind),
+            _ => 0,
+        }
+    }
+
+    fn pnw_track(&mut self, v: usize, seg: Option<usize>, add: bool) {
+        let rg = self.rg;
+        let Some(p) = &rg.pnw else { return };
+        let d = if add { 1 } else { -1 };
+        if p.mill_hex == Some(rg.nodes[v].hex) {
+            self.mill_n += d;
+        }
+        if let Some(si) = seg {
+            for &h in &rg.segs[si].hexes {
+                let first = if add {
+                    self.hcnt[h] += 1;
+                    self.hcnt[h] == 1
+                } else {
+                    self.hcnt[h] -= 1;
+                    self.hcnt[h] == 0
+                };
+                if first {
+                    self.forest_n += d * p.forest[h] as i32;
+                    self.ski_n += d * p.ski[h] as i32;
+                    self.port_n += d * p.portage[h] as i32;
+                }
+            }
+        }
+    }
+
+    fn pullman(&self) -> bool {
+        matches!(self.kind, Kind::Pullman(_))
+    }
+
+    /// The value a route must reach to be kept.
+    fn eff_thr(&self) -> i32 {
+        if self.list.len() >= self.cap {
+            self.thr.max(self.list.last().map_or(0, |l| l.0) + 1)
+        } else {
+            self.thr
+        }
+    }
+
+    fn mult(&self) -> i32 {
+        if self.kind == Kind::E {
+            2
+        } else {
+            1
+        }
+    }
+
+    /// The destination bonus this route could still pick up.
+    fn bonus_pot(&self) -> i32 {
+        let (Some(h), Some(d)) = (self.rg.home, self.rg.dest) else { return 0 };
+        if !self.rg.major || (self.visited[h] && self.visited[d]) {
+            return 0;
+        }
+        self.rg.rev[d].max(0) * self.mult()
+    }
+
+    fn upper(&self, u: usize) -> i32 {
+        let (x, m, l) = self.pnw_now();
+        match self.kind {
+            Kind::Numeric(_) | Kind::Pullman(_) => {
+                self.rev + x + self.bonus + m + l + self.ub[(self.d - self.cost) as usize][u] + self.bonus_pot() + self.mill_pot()
+            }
+            // (an E-train's only extra besides the mill is a penalty)
+            Kind::E => self.e_total + self.bonus + self.bonus_pot() + m + self.mill_pot(),
+            Kind::Local { .. } => i32::MAX,
+        }
+    }
+
+    fn run(&mut self) {
+        let starts = self.rg.starts.clone();
+        for s in starts {
+            if self.exhausted {
+                break;
+            }
+            self.push(s, None);
+            self.extend();
+            self.pop(None);
+        }
+    }
+
+    fn push(&mut self, v: usize, seg: Option<usize>) {
+        let rg = self.rg;
+        self.stops.push(v);
+        self.visited[v] = true;
+        self.rev += rg.rev[v];
+        self.cost += rg.cost(v, self.pullman());
+        if rg.tok[v] {
+            self.n_tok += 1;
+        }
+        if let Some(si) = seg {
+            self.segs.push(si);
+            for &k in &rg.segs[si].track {
+                self.used[k as usize] += 1;
+            }
+        }
+        self.pnw_track(v, seg, true);
+        self.bonus = self.cur_bonus();
+    }
+
+    fn pop(&mut self, seg: Option<usize>) {
+        let rg = self.rg;
+        let v = self.stops.pop().unwrap();
+        self.visited[v] = false;
+        self.rev -= rg.rev[v];
+        self.cost -= rg.cost(v, self.pullman());
+        if rg.tok[v] {
+            self.n_tok -= 1;
+        }
+        if let Some(si) = seg {
+            self.segs.pop();
+            for &k in &rg.segs[si].track {
+                self.used[k as usize] -= 1;
+            }
+        }
+        self.pnw_track(v, seg, false);
+        self.bonus = self.cur_bonus();
+    }
+
+    fn cur_bonus(&self) -> i32 {
+        match (self.rg.home, self.rg.dest) {
+            (Some(h), Some(d)) if self.rg.major && self.visited[h] && self.visited[d] => self.rg.rev[d] * self.mult(),
+            _ => 0,
+        }
+    }
+
+    fn extend(&mut self) {
+        self.steps += 1;
+        if self.steps > self.limit {
+            self.exhausted = true;
+            return;
+        }
+        let rg = self.rg;
+        let u = *self.stops.last().unwrap();
+        if self.stops.len() > 1 && !rg.pass[u] {
+            return;
+        }
+        if let Some(&si) = self.segs.last() {
+            if rg.segs[si].tlast {
+                return;
+            }
+        }
+        if self.stops.len() >= self.max_stops {
+            return;
+        }
+        if self.upper(u) < self.eff_thr() {
+            return;
+        }
+        let london_used = self.stops.iter().any(|&x| rg.london[x]);
+        for &si in &rg.out[u] {
+            if self.exhausted {
+                return;
+            }
+            let s = &rg.segs[si];
+            let v = s.to;
+            if self.visited[v] || (s.tfirst && !self.segs.is_empty()) {
+                continue;
+            }
+            if london_used && rg.london[v] {
+                continue;
+            }
+            match self.kind {
+                Kind::Numeric(_) | Kind::Pullman(_) => {
+                    if self.cost + rg.cost(v, self.pullman()) > self.d {
+                        continue;
+                    }
+                }
+                // 1 city + 1 town
+                Kind::Local { .. } => {
+                    if rg.town[u] == rg.town[v] {
+                        continue;
+                    }
+                }
+                Kind::E => {}
+            }
+            if s.track.iter().any(|&k| self.used[k as usize] >= rg.tcap[k as usize]) {
+                continue;
+            }
+            self.push(v, Some(si));
+            self.record();
+            self.extend();
+            self.pop(Some(si));
+        }
+    }
+
+    fn record(&mut self) {
+        let rg = self.rg;
+        if self.n_tok == 0 {
+            return;
+        }
+        let thr = self.eff_thr();
+        let (px, pm, pl) = self.pnw_now();
+        let priced = match self.kind {
+            Kind::Numeric(_) | Kind::Pullman(_) => {
+                if self.rev + px + self.bonus + pm + pl < thr {
+                    return;
+                }
+                // check_distance's channel rules
+                let ch = self.stops.iter().filter(|&&x| rg.channel[x]).count();
+                if ch == 1 || (ch == 2 && self.stops.len() == 2) {
+                    return;
+                }
+                let stops: Vec<Node> = self.stops.iter().map(|&i| rg.nodes[i]).collect();
+                if !self.g.g1822_hexes_ok(&stops) {
+                    return;
+                }
+                let p = (self.rev, self.bonus);
+                if cfg!(test) {
+                    let q = self.g.g1822_price_route(
+                        self.ctx,
+                        &stops,
+                        false,
+                        self.kind,
+                        rg.major,
+                        self.home_node(),
+                        self.dest_node(),
+                    );
+                    assert_eq!(q, Some(p), "router v2 incremental price for {:?}", self.kind);
+                }
+                p
+            }
+            _ => {
+                if self.kind == Kind::E {
+                    // both ends tokened, unless the Channel exception
+                    let (a, b) = (self.stops[0], *self.stops.last().unwrap());
+                    if !(rg.tok_nd[a] && rg.tok_nd[b]) && !self.stops.iter().any(|&x| rg.channel[x]) {
+                        return;
+                    }
+                    if self.e_total + self.bonus + pm < thr {
+                        return;
+                    }
+                }
+                let stops: Vec<Node> = self.stops.iter().map(|&i| rg.nodes[i]).collect();
+                if !self.g.g1822_hexes_ok(&stops) {
+                    return;
+                }
+                let Some(p) = self.g.g1822_price_route(
+                    self.ctx,
+                    &stops,
+                    false,
+                    self.kind,
+                    rg.major,
+                    self.home_node(),
+                    self.dest_node(),
+                ) else {
+                    return;
+                };
+                p
+            }
+        };
+        if let Some(p) = &self.rg.pnw {
+            if cfg!(test) {
+                let stops: Vec<Node> = self.stops.iter().map(|&i| rg.nodes[i]).collect();
+                let segs: Vec<Seg> = self.segs.iter().map(|&si| rg.segs[si].seg.clone()).collect();
+                assert_eq!(p.extras(self.kind, &stops, &walked_hexes(&segs)), (px, pm, pl), "router v2 PNW extras");
+            }
+        }
+        let priced = (priced.0 + px, priced.1);
+        let value = priced.0 + priced.1 + pm + pl;
+        if value < thr || value <= 0 {
+            return;
+        }
+        // dedupe: oriented stops + sorted track
+        let mut key: Vec<u32> = if self.stops[0] <= *self.stops.last().unwrap() {
+            self.stops.iter().map(|&x| x as u32).collect()
+        } else {
+            self.stops.iter().rev().map(|&x| x as u32).collect()
+        };
+        key.push(u32::MAX);
+        let mut tr: Vec<u32> = self.segs.iter().flat_map(|&si| rg.segs[si].track.iter().copied()).collect();
+        tr.sort_unstable();
+        key.extend(tr);
+        if !self.seen.insert(key) {
+            return;
+        }
+        let w = Walked {
+            stops: self.stops.iter().map(|&i| rg.nodes[i]).collect(),
+            segs: self.segs.iter().map(|&si| rg.segs[si].seg.clone()).collect(),
+            mill: pm,
+            lumber: pl,
+        };
+        self.insert(w, priced.0, priced.1);
+    }
+
+    fn insert(&mut self, w: Walked, rev: i32, bonus: i32) {
+        let value = rev + bonus + w.mill + w.lumber;
+        let pos = self.list.partition_point(|e| e.0 >= value);
+        if self.list.len() >= self.cap && pos >= self.cap {
+            return;
+        }
+        self.routes.push(w);
+        self.list.insert(pos, (value, rev, bonus, self.routes.len() - 1));
+        if self.list.len() > self.cap {
+            self.list.pop();
+        }
+    }
+
+    fn home_node(&self) -> Option<Node> {
+        self.rg.home.map(|i| self.rg.nodes[i])
+    }
+    fn dest_node(&self) -> Option<Node> {
+        self.rg.dest.map(|i| self.rg.nodes[i])
+    }
+
+    /// A valid upper bound on this kind's best single route.
+    fn root_upper(&self) -> i32 {
+        let found = self.list.first().map_or(0, |l| l.0);
+        match self.kind {
+            Kind::Numeric(_) | Kind::Pullman(_) => {
+                let mut best = 0;
+                for &s in &self.rg.starts {
+                    let c = self.rg.cost(s, self.pullman());
+                    if c > self.d {
+                        continue;
+                    }
+                    best = best.max(self.rg.rev[s].max(0) + self.ub[(self.d - c) as usize][s]);
+                }
+                found.max(best + self.bonus_pot() + self.mill_pot())
+            }
+            Kind::E => found.max(self.e_total + self.bonus_pot() + self.mill_pot()),
+            Kind::Local { .. } => found,
+        }
+    }
+}
+
+impl BaseGame {
+    /// Router v2 (see the section comment above).
+    pub(crate) fn g1822_best_routes_v2(&self, c: &str) -> (Vec<RouteData>, i32) {
+        use std::sync::atomic::Ordering::Relaxed;
+        stats::CALLS.fetch_add(1, Relaxed);
+        let trains = self.g1822_route_trains(c);
+        if trains.is_empty() {
+            return (Vec::new(), 0);
+        }
+        let kinds: Vec<Kind> = trains.iter().map(Self::g1822_train_kind).collect();
+        let mut distinct: Vec<Kind> = Vec::new();
+        for k in &kinds {
+            if !distinct.contains(k) {
+                distinct.push(*k);
+            }
+        }
+        let ctx = Ctx::new(self, c);
+        let graph = self.g1822_graph(c);
+        let rg = RG::build(self, &ctx, c, &graph.connected_nodes);
+        let tokens: Vec<usize> = (0..rg.nodes.len()).filter(|&i| rg.tok[i]).collect();
+
+        // one kind's walk (+ the E tours / single-city local runs):
+        // (list, routes, list cut or walk exhausted, best-single bound)
+        let walk = |k: Kind, thr: i32, cap: usize| -> (KindList, Vec<Walked>, bool, i32) {
+            let mut w = KWalk::new(self, &ctx, &rg, k, thr, cap);
+            w.run();
+            if k == Kind::E {
+                for mut t in self.g1822_e_tours(&ctx, &graph.connected_nodes) {
+                    let th = w.eff_thr();
+                    if let Some((r, b)) =
+                        self.g1822_price_route(&ctx, &t.stops, false, k, rg.major, w.home_node(), w.dest_node())
+                    {
+                        let (x, m, l) = rg.pnw.as_ref().map_or((0, 0, 0), |p| p.extras(k, &t.stops, &walked_hexes(&t.segs)));
+                        t.mill = m;
+                        t.lumber = l;
+                        if r + x + b + m + l >= th && r + x + b + m + l > 0 {
+                            w.insert(t, r + x, b);
+                        }
+                    }
+                }
+            }
+            if matches!(k, Kind::Local { .. }) {
+                for &t in &tokens {
+                    let st = vec![rg.nodes[t]];
+                    if let Some((r, b)) =
+                        self.g1822_price_route(&ctx, &st, true, k, rg.major, w.home_node(), w.dest_node())
+                    {
+                        // (no paths: only the mill can apply)
+                        let (x, m, l) = rg.pnw.as_ref().map_or((0, 0, 0), |p| p.extras(k, &st, &HashSet::new()));
+                        if r + x + b + m + l >= w.eff_thr() && r + x + b + m + l > 0 {
+                            w.insert(Walked { stops: st, segs: Vec::new(), mill: m, lumber: l }, r + x, b);
+                        }
+                    }
+                }
+            }
+            stats::WALK_STEPS.fetch_add(w.steps, Relaxed);
+            if router_debug() {
+                eprintln!(
+                    "  walk {:?} thr {} cap {}: steps {} exhausted {} kept {} best {:?} nodes {} segs {}",
+                    k,
+                    thr,
+                    cap,
+                    w.steps,
+                    w.exhausted,
+                    w.list.len(),
+                    w.list.first().map(|l| l.0),
+                    rg.nodes.len(),
+                    rg.segs.len()
+                );
+            }
+            if w.exhausted {
+                stats::EXHAUSTED.fetch_add(1, Relaxed);
+            }
+            let up = w.root_upper();
+            let up = if w.exhausted { up } else { w.list.first().map_or(0, |l| l.0) };
+            let full = w.exhausted || w.list.len() >= cap;
+            (std::mem::take(&mut w.list), std::mem::take(&mut w.routes), full, up)
+        };
+
+        // -- scouting pass: each kind's SCOUT_K best ------------------------
+        let mut lists: Vec<(KindList, Vec<Walked>)> = Vec::new();
+        let mut full: Vec<bool> = Vec::new();
+        let mut best_single: Vec<i32> = Vec::new();
+        for &k in &distinct {
+            let (l, r, f, up) = walk(k, 1, SCOUT_K);
+            lists.push((l, r));
+            full.push(f);
+            best_single.push(up);
+        }
+        let ki = |k: &Kind| distinct.iter().position(|d| d == k).unwrap();
+        let t0 = std::time::Instant::now();
+        let (mut pick, mut lb) = self.g1822_combine(&ctx, &kinds, &distinct, &lists);
+        if router_debug() {
+            eprintln!("  scout combine: lb {} in {:?}; best single {:?}", lb, t0.elapsed(), best_single);
+        }
+
+        // -- full pass for kinds whose scouting list was cut ----------------
+        if full.iter().any(|&f| f) && kinds.len() > 1 {
+            let total_up: i32 = kinds.iter().map(|k| best_single[ki(k)]).sum();
+            let mut changed = false;
+            for (di, &k) in distinct.iter().enumerate() {
+                if !full[di] {
+                    continue;
+                }
+                // LB − Σ the other trains' best (one train of this kind
+                // taken out: the loosest of this kind's trains)
+                let thr = lb - (total_up - best_single[di]);
+                let (l, r, f, _) = walk(k, thr.max(1), TOP_K);
+                if f {
+                    stats::OVERFLOW.fetch_add(1, Relaxed);
+                }
+                lists[di] = (l, r);
+                changed = true;
+            }
+            if changed {
+                let t0 = std::time::Instant::now();
+                let (p2, t2) = self.g1822_combine(&ctx, &kinds, &distinct, &lists);
+                if router_debug() {
+                    eprintln!("  full combine: {} in {:?}", t2, t0.elapsed());
+                }
+                pick = p2;
+                lb = t2;
+            }
+        }
+
+        // -- output -----------------------------------------------------
+        let mut out = Vec::new();
+        // destination, mill, lumber baron
+        let mut best3: [Option<(usize, i32)>; 3] = [None; 3];
+        for (ti, p) in pick.iter().enumerate() {
+            let Some(pi) = p else { continue };
+            let (list, routes) = &lists[ki(&kinds[ti])];
+            let (_, rev, bonus, ri) = list[*pi];
+            let oi = out.len();
+            out.push(self.g1822_route_data(&ctx, &routes[ri], &trains[ti].id, rev));
+            // each bonus rides on the route that earns the biggest (ties:
+            // the last one, as Ruby's stable sort_by + reverse picks)
+            for (ch, v) in [bonus, routes[ri].mill, routes[ri].lumber].into_iter().enumerate() {
+                if v > 0 && best3[ch].map_or(true, |(_, bb)| v >= bb) {
+                    best3[ch] = Some((oi, v));
+                }
+            }
+        }
+        for (oi, b) in best3.into_iter().flatten() {
+            if let Some(rv) = out[oi].revenue.as_mut() {
+                *rv += b;
+            }
+        }
+        (out, lb)
+    }
+
+    /// The best combination over per-kind route lists: (pick per train
+    /// into its kind's list, total) — branch-and-bound over one route (or
+    /// none) per train, on dense track counters (see [`Combo`]).
+    fn g1822_combine(
+        &self,
+        ctx_lanes: &Ctx,
+        kinds: &[Kind],
+        distinct: &[Kind],
+        lists: &[(KindList, Vec<Walked>)],
+    ) -> (Vec<Option<usize>>, i32) {
+        let merthyr_hex = self.hex_idx.get(self.fam().merthyr_tydfil_pontypool_hex).copied();
+        let mut track_id: HashMap<(usize, u8), u32> = HashMap::new();
+        let mut caps: Vec<u8> = Vec::new();
+        let mut city_id: HashMap<Node, u32> = HashMap::new();
+        // per distinct kind, per route: (track ids, local city ids, merthyr)
+        let mut dense: Vec<Vec<CRoute>> = Vec::new();
+        for (_, routes) in lists {
+            let mut v = Vec::with_capacity(routes.len());
+            for r in routes {
+                let mut track = Vec::new();
+                let mut m = (false, false);
+                for s in &r.segs {
+                    for k in &s.track {
+                        let id = *track_id.entry(*k).or_insert_with(|| {
+                            caps.push(ctx_lanes.edge_cap(k.0, k.1));
+                            caps.len() as u32 - 1
+                        });
+                        track.push(id);
+                        if Some(k.0) == merthyr_hex {
+                            m.0 |= k.1 == 1;
+                            m.1 |= k.1 == 2;
+                        }
+                    }
+                }
+                let cities = r
+                    .stops
+                    .iter()
+                    .filter(|n| n.kind == NodeKind::City)
+                    .map(|n| {
+                        let l = city_id.len() as u32;
+                        *city_id.entry(*n).or_insert(l)
+                    })
+                    .collect();
+                let multi = {
+                    let mut t2 = track.clone();
+                    t2.sort_unstable();
+                    t2.windows(2).any(|w| w[0] == w[1])
+                };
+                v.push(CRoute { track, cities, merthyr: m, mill: r.mill, lumber: r.lumber, multi });
+            }
+            dense.push(v);
+        }
+        let kind_of: Vec<usize> = kinds.iter().map(|k| distinct.iter().position(|d| d == k).unwrap()).collect();
+        let nt = kinds.len();
+        let max_rev: Vec<i32> = (0..nt).map(|t| lists[kind_of[t]].0.iter().map(|e| e.1).max().unwrap_or(0)).collect();
+        let max_bonus: Vec<i32> = (0..nt).map(|t| lists[kind_of[t]].0.iter().map(|e| e.2).max().unwrap_or(0)).collect();
+        let max_side = |f: fn(&CRoute) -> i32| -> Vec<i32> {
+            (0..nt).map(|t| dense[kind_of[t]].iter().map(f).max().unwrap_or(0)).collect()
+        };
+        let max_mill = max_side(|r| r.mill);
+        let max_lumber = max_side(|r| r.lumber);
+        let mut rest_rev = vec![0i32; nt + 1];
+        let mut rest_bonus = vec![[0i32; 3]; nt + 1];
+        for t in (0..nt).rev() {
+            rest_rev[t] = rest_rev[t + 1] + max_rev[t];
+            let nx = rest_bonus[t + 1];
+            rest_bonus[t] = [nx[0].max(max_bonus[t]), nx[1].max(max_mill[t]), nx[2].max(max_lumber[t])];
+        }
+        let mut c = Combo {
+            lists,
+            dense: &dense,
+            kind_of: &kind_of,
+            e: kinds.iter().map(|k| *k == Kind::E).collect(),
+            local: kinds.iter().map(|k| matches!(k, Kind::Local { .. })).collect(),
+            caps: &caps,
+            used_normal: vec![0; caps.len()],
+            used_e: vec![0; caps.len()],
+            local_cities: vec![false; city_id.len()],
+            merthyr: [false, false],
+            rest_rev: &rest_rev,
+            rest_bonus: &rest_bonus,
+            pick: vec![None; nt],
+            best: 0,
+            best_pick: vec![None; nt],
+        };
+        c.search(0, 0, [0; 3]);
+        (c.best_pick, c.best)
+    }
+}
+
+/// A route as the combination search sees it.
+struct CRoute {
+    track: Vec<u32>,
+    cities: Vec<u32>,
+    merthyr: (bool, bool),
+    mill: i32,
+    lumber: i32,
+    /// Uses some track id twice (two lanes of one hexside).
+    multi: bool,
+}
+
+/// Σ of per-channel maxima (destination, mill, lumber baron).
+fn bmax(a: [i32; 3], b: [i32; 3]) -> [i32; 3] {
+    [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])]
+}
+
+fn bsum(a: [i32; 3]) -> i32 {
+    a[0] + a[1] + a[2]
+}
+
+/// Branch-and-bound over one route (or none) per train: track used once
+/// per train type (E-trains and the rest separately, lanes counted), local
+/// trains use each city once, only one of the two Merthyr Tydfil–Pontypool
+/// tracks; the total is Σ revenue + the biggest destination bonus (1822PNW:
+/// + the biggest mill and lumber-baron bonuses).
+struct Combo<'s> {
+    lists: &'s [(KindList, Vec<Walked>)],
+    dense: &'s [Vec<CRoute>],
+    kind_of: &'s [usize],
+    e: Vec<bool>,
+    local: Vec<bool>,
+    caps: &'s [u8],
+    used_normal: Vec<u8>,
+    used_e: Vec<u8>,
+    local_cities: Vec<bool>,
+    merthyr: [bool; 2],
+    rest_rev: &'s [i32],
+    rest_bonus: &'s [[i32; 3]],
+    pick: Vec<Option<usize>>,
+    best: i32,
+    best_pick: Vec<Option<usize>>,
+}
+
+impl Combo<'_> {
+    fn fits(&self, t: usize, r: &CRoute) -> bool {
+        let used = if self.e[t] { &self.used_e } else { &self.used_normal };
+        if r.track.iter().any(|&k| used[k as usize] >= self.caps[k as usize]) {
+            return false;
+        }
+        if r.multi && r.track.iter().any(|&k| {
+            used[k as usize] + r.track.iter().filter(|&&x| x == k).count() as u8 > self.caps[k as usize]
+        }) {
+            return false;
+        }
+        if self.local[t] && r.cities.iter().any(|&c| self.local_cities[c as usize]) {
+            return false;
+        }
+        (!r.merthyr.0 && !self.merthyr[0]) || (!r.merthyr.1 && !self.merthyr[1])
+    }
+
+    fn apply(&mut self, t: usize, r: &CRoute, add: bool) {
+        let used = if self.e[t] { &mut self.used_e } else { &mut self.used_normal };
+        for &k in &r.track {
+            if add {
+                used[k as usize] += 1;
+            } else {
+                used[k as usize] -= 1;
+            }
+        }
+        if self.local[t] {
+            for &c in &r.cities {
+                self.local_cities[c as usize] = add;
+            }
+        }
+    }
+
+    fn search(&mut self, t: usize, revenue: i32, bonus: [i32; 3]) {
+        if revenue + bsum(bonus) > self.best {
+            self.best = revenue + bsum(bonus);
+            self.best_pick.clone_from(&self.pick);
+        }
+        if t == self.kind_of.len() {
+            return;
+        }
+        if revenue + self.rest_rev[t] + bsum(bmax(bonus, self.rest_bonus[t])) <= self.best {
+            return;
+        }
+        let ki = self.kind_of[t];
+        let lists = self.lists;
+        let dense = self.dense;
+        let (rr, rb) = (self.rest_rev[t + 1], self.rest_bonus[t + 1]);
+        let open = bsum(bmax(bonus, rb));
+        for (pi, &(value, rev, b, ri)) in lists[ki].0.iter().enumerate() {
+            // monotone in list order (sorted by value = revenue + every
+            // bonus): max(x, y, z) ≤ y + max(x, z) per channel
+            if revenue + value + rr + open <= self.best {
+                break;
+            }
+            let r = &dense[ki][ri];
+            let nb = bmax(bonus, [b, r.mill, r.lumber]);
+            if revenue + rev + rr + bsum(bmax(nb, rb)) <= self.best {
+                continue;
+            }
+            if !self.fits(t, r) {
+                continue;
+            }
+            let saved = self.merthyr;
+            self.merthyr[0] |= r.merthyr.0;
+            self.merthyr[1] |= r.merthyr.1;
+            self.apply(t, r, true);
+            self.pick[t] = Some(pi);
+            self.search(t + 1, revenue + rev, nb);
+            self.pick[t] = None;
+            self.apply(t, r, false);
+            self.merthyr = saved;
+        }
+        // this train runs nothing
+        self.search(t + 1, revenue, bonus);
     }
 }

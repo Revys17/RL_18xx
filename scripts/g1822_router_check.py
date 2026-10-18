@@ -35,6 +35,9 @@ import engine_rs  # noqa: E402
 from tests.title_replay_harness import SEAT_ID_BASE, game_seed, ruby_filtered_actions  # noqa: E402
 
 
+TITLE = "1822"
+
+
 def check_game(path: str) -> dict:
     game = json.load(open(path))
     gid = Path(path).stem
@@ -45,18 +48,19 @@ def check_game(path: str) -> dict:
         "above": [],
         "time": 0.0,
         "calls": 0,
+        "slow": [],
         "error": None,
         "checks": [],
     }
-    if game.get("title") != "1822" or game.get("status") not in ("finished", "archived"):
+    if game.get("title") != TITLE or game.get("status") not in ("finished", "archived"):
         out["error"] = "skipped"
         return out
-    base = SEAT_ID_BASE["1822"]
+    base = SEAT_ID_BASE.get(TITLE, 1000)
     seat = {p["id"]: base + i + 1 for i, p in enumerate(game["players"])}
     rules = list((game.get("settings") or {}).get("optional_rules") or [])
     try:
         g = engine_rs.BaseGame.new_titled(
-            "1822", {v: f"Player {v - base}" for v in seat.values()}, rules or None, game_seed(game)
+            TITLE, {v: f"Player {v - base}" for v in seat.values()}, rules or None, game_seed(game)
         )
     except ValueError as exc:
         out["error"] = f"construction: {exc}"
@@ -74,8 +78,11 @@ def check_game(path: str) -> dict:
             recorded = sum(int(r.get("revenue") or 0) for r in a.get("routes") or [])
             t0 = time.perf_counter()
             best, _routes = g.g1822_router_best(str(a["entity"]))
-            out["time"] += time.perf_counter() - t0
+            dt = time.perf_counter() - t0
+            out["time"] += dt
             out["calls"] += 1
+            if dt > 0.25:
+                out["slow"].append((fid, round(dt, 3)))
             if best == recorded:
                 out["counts"]["equal"] += 1
             elif best > recorded:
@@ -152,14 +159,17 @@ def ruby_validate(path: str, checks: list[dict], work: Path) -> list[dict]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--glob", default="human_games/scrape_2026_10/1822/*.json")
+    ap.add_argument("--title", default="1822", help="an 1822-family title (1822, 1822PNW, ...)")
+    ap.add_argument("--glob", default=None, help="default: human_games/scrape_2026_10/<title>/*.json")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--json", dest="json_out", default=None)
     ap.add_argument("--ruby", action="store_true", help="Ruby-validate every 'above' and 'below' case")
     ap.add_argument("--work", default="logs/ruby/router")
     args = ap.parse_args()
-    paths = sorted(globmod.glob(args.glob))[: args.limit]
+    global TITLE
+    TITLE = args.title
+    paths = sorted(globmod.glob(args.glob or f"human_games/scrape_2026_10/{TITLE}/*.json"))[: args.limit]
     if args.jobs > 1:
         with mp.get_context("fork").Pool(args.jobs) as pool:
             results = pool.map(check_game, paths, chunksize=2)
@@ -169,17 +179,21 @@ def main() -> int:
     below, above = [], []
     t, n = 0.0, 0
     errors = Counter()
+    slow = []
     for r in results:
         totals.update(r["counts"])
         below += [(r["id"], *x) for x in r["below"]]
         above += [(r["id"], *x) for x in r["above"]]
         t += r["time"]
         n += r["calls"]
+        slow += [(r["id"], *x) for x in r["slow"]]
         if r["error"]:
             errors[r["error"].split(":")[0]] += 1
     print(f"{len(paths)} games, {n} run_routes; errors {dict(errors)}")
     print(f"equal {totals['equal']}  above {totals['above']}  BELOW {totals['below']}")
     print(f"router time: {t:.1f}s total, {1000 * t / max(n, 1):.1f} ms/call")
+    slow.sort(key=lambda x: -x[2])
+    print(f"calls over 0.25 s: {len(slow)}; slowest (game, file id, s): {slow[:8]}")
     print("below examples (game, file id, recorded, engine):", below[:12])
     print("above examples:", above[:8])
     ruby = Counter()
@@ -225,6 +239,7 @@ def main() -> int:
                 "above": above,
                 "errors": dict(errors),
                 "ms_per_call": 1000 * t / max(n, 1),
+                "slow": slow,
                 "ruby": dict(ruby),
                 "ruby_bad": ruby_bad,
             },

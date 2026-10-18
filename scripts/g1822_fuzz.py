@@ -8,7 +8,7 @@ back through ``process_action`` — the same path a replay uses. A walk
 fails on an exception, a rejected generated move, or an unfinished state
 with no moves. Each walk is written to ``--out``/<name>.json (players
 "Player N", ids 1001+, seed and optional rules in settings) so
-``scripts/ruby_diff.py --title 1822 <file>`` can replay it in Ruby HEAD:
+``scripts/ruby_diff.py --title <title> <file>`` can replay it in Ruby HEAD:
 a Ruby rejection or a state divergence there is a generator soundness bug
 (an illegal move our process accepts) or an engine divergence.
 
@@ -44,9 +44,11 @@ def pick(moves: list[dict], rng: random.Random) -> dict:
     return wire
 
 
-def walk(players: int, seed: int, rules: list[str], max_moves: int, policy: str | None = None) -> dict:
+def walk(
+    players: int, seed: int, rules: list[str], max_moves: int, policy: str | None = None, title: str = "1822"
+) -> dict:
     ids = {1000 + i + 1: f"Player {i + 1}" for i in range(players)}
-    g = engine_rs.BaseGame.new_titled("1822", ids, rules or None, seed)
+    g = engine_rs.BaseGame.new_titled(title, ids, rules or None, seed)
     rng = random.Random(seed * 1_000_003 + players)
     actions: list[dict] = []
     error = None
@@ -84,7 +86,7 @@ def walk(players: int, seed: int, rules: list[str], max_moves: int, policy: str 
     return {
         "game": {
             "id": f"fuzz{players}p{seed}",
-            "title": "1822",
+            "title": title,
             "status": "finished" if g.finished else "active",
             "settings": {"seed": seed, "optional_rules": rules},
             "players": [{"id": pid, "name": name} for pid, name in ids.items()],
@@ -111,6 +113,7 @@ def parse_seeds(spec: str) -> list[int]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--title", default="1822", help="an 1822-family title (1822, 1822PNW, ...)")
     ap.add_argument("--players", type=int, nargs="+", default=[3, 4, 5, 6])
     ap.add_argument("--seeds", default="1-4")
     ap.add_argument("--moves", type=int, default=3000)
@@ -131,9 +134,12 @@ def main() -> int:
     for players in args.players:
         for seed in parse_seeds(args.seeds):
             variants = {"base": [[]], "plus": [["plus_expansion"]], "both": [[], ["plus_expansion"]]}[args.rules]
+            if args.title != "1822":
+                variants = [[]]  # (the plus expansion is 1822's own)
             for rules in variants:
-                rep = walk(players, seed, rules, args.moves, policy)
-                name = f"fuzz_{players}p_s{seed}{'_plus' if rules else ''}"
+                rep = walk(players, seed, rules, args.moves, policy, args.title)
+                prefix = "" if args.title == "1822" else f"{args.title}_"
+                name = f"{prefix}fuzz_{players}p_s{seed}{'_plus' if rules else ''}"
                 if out:
                     (out / f"{name}.json").write_text(json.dumps(rep["game"]))
                 status = (

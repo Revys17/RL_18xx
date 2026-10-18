@@ -7,11 +7,8 @@ use crate::entities::{EntityId, Token};
 use crate::game::BaseGame;
 
 use super::track::AbKind;
-use super::{
-    err, AcquireState, Ent, COMPANY_CHPR, COMPANY_DOUBLE_CASH, COMPANY_DOUBLE_CASH_REVENUE, COMPANY_EGR,
-    COMPANY_LCDR, COMPANY_LUR, MINOR_14_HOME_HEX, MINOR_14_ID, MINOR_BIDBOX_PRICE, PRIVATE_PHASE_REVENUE,
-    PRIVATE_REMOVE_REVENUE, PRIVATE_TRAINS,
-};
+use super::family::Family;
+use super::{err, AcquireState, Ent};
 
 impl BaseGame {
     // =====================================================================
@@ -32,7 +29,7 @@ impl BaseGame {
                 if company.closed || !company.owner.is_player() {
                     return false;
                 }
-                match super::private_acquisition(co) {
+                match (self.fam().private_acquisition)(co) {
                     Some((types, ph)) => phase >= ph && types.contains(&ctype),
                     None => false,
                 }
@@ -61,7 +58,8 @@ impl BaseGame {
     /// remove-revenue privates stop paying, phase-revenue credits move to
     /// the acquirer, P9 pays its corporate revenue.
     fn g1822_company_bought(&mut self, company: &str, c: &str) {
-        if PRIVATE_TRAINS.contains(&company) {
+        let f = self.fam();
+        if f.private_trains.contains(&company) {
             if let Some(mut t) = self.gm().company_trains.remove(company) {
                 t.owner = EntityId::corporation(c);
                 t.operated = false;
@@ -70,12 +68,22 @@ impl BaseGame {
             }
             self.close_company(company);
         }
-        if PRIVATE_REMOVE_REVENUE.contains(&company) {
+        if f.variant == super::family::Variant::Pnw {
+            // PNW company_bought: only the cube company, P14 and P9 stop
+            // paying (no remove-revenue / phase-revenue / double-cash).
+            if matches!(company, "P10" | "P14" | "P9") {
+                if let Some(i) = self.co_idx(company) {
+                    self.companies[i].revenue = 0;
+                }
+            }
+            return;
+        }
+        if f.private_remove_revenue.contains(&company) {
             if let Some(i) = self.co_idx(company) {
                 self.companies[i].revenue = 0;
             }
         }
-        if PRIVATE_PHASE_REVENUE.contains(&company) {
+        if f.private_phase_revenue.contains(&company) {
             if let Some(Some(cash)) = self.g().phase_revenue.get(company).cloned() {
                 if cash > 0 {
                     let ci = self.ci(c);
@@ -85,9 +93,9 @@ impl BaseGame {
             self.gm().phase_revenue.insert(company.to_string(), None);
             self.close_company(company);
         }
-        if company == COMPANY_DOUBLE_CASH {
+        if Family::is(f.company_double_cash, company) {
             if let Some(i) = self.co_idx(company) {
-                self.companies[i].revenue = COMPANY_DOUBLE_CASH_REVENUE[self.phase_num() as usize];
+                self.companies[i].revenue = f.company_double_cash_revenue[self.phase_num() as usize];
             }
         }
     }
@@ -113,9 +121,14 @@ impl BaseGame {
         if self.co_closed(co) {
             return vec![];
         }
+        if self.g1822_is_pnw() {
+            // PNW company_choices: P21 (Credit Mobilier) only
+            return if co == "P21" { self.g1822_pnw_p21_choices(time) } else { vec![] };
+        }
         let owner = self.co_owner(co);
+        let f = self.fam();
         match co {
-            COMPANY_CHPR => {
+            x if Family::is(f.company_chpr, x) => {
                 if !matches!(time, "token" | "track") {
                     return vec![];
                 }
@@ -127,18 +140,18 @@ impl BaseGame {
                 }
                 let cix = self.ci(c);
                 let has_available = self.corporations[cix].tokens.iter().any(|t| !t.used);
-                if has_available && n < crate::title::g1822::exchange_tokens(c) {
+                if has_available && n < (f.exchange_tokens)(c) {
                     v.push("available".to_string());
                 }
                 v
             }
-            COMPANY_EGR => {
+            x if Family::is(f.company_egr, x) => {
                 if time != "special_choose" || self.g1822_abilities(co).len() != 3 {
                     return vec![];
                 }
                 vec!["token".to_string(), "discount".to_string()]
             }
-            COMPANY_LCDR => {
+            x if Family::is(f.company_lcdr, x) => {
                 if time != "token" {
                     return vec![];
                 }
@@ -147,7 +160,7 @@ impl BaseGame {
                     _ => vec![],
                 }
             }
-            COMPANY_LUR => {
+            x if Family::is(f.company_lur, x) => {
                 if !matches!(time, "token" | "track" | "issue") || !owner.is_corporation() {
                     return vec![];
                 }
@@ -167,7 +180,7 @@ impl BaseGame {
                 }
                 v
             }
-            COMPANY_DOUBLE_CASH => {
+            x if Family::is(f.company_double_cash, x) => {
                 if self.g().double_cash_choice.is_some() || !owner.is_player() || time != "choose" {
                     return vec![];
                 }
@@ -183,19 +196,27 @@ impl BaseGame {
             return err(format!("{choice} is not a valid choice for {co}"));
         }
         let owner = self.co_owner(co);
+        let f = self.fam();
+        if self.g1822_is_pnw() && co == "P21" && choice == "exchange" {
+            // company_made_choice_p21: an exchange token becomes available
+            let c = owner.corp_sym().unwrap().to_string();
+            self.g1822_move_exchange_token(&c);
+            self.close_company(co);
+            return Ok(());
+        }
         match co {
-            COMPANY_EGR => {
+            x if Family::is(f.company_egr, x) => {
                 let remove = if choice == "token" { AbKind::TileDiscount } else { AbKind::TileLay };
                 if let Some(v) = self.gm().abilities.get_mut(co) {
                     v.retain(|a| a.kind != remove);
                 }
             }
-            COMPANY_LCDR => {
+            x if Family::is(f.company_lcdr, x) => {
                 let c = owner.corp_sym().unwrap().to_string();
                 self.g1822_move_exchange_token(&c);
                 self.close_company(co);
             }
-            COMPANY_CHPR => {
+            x if Family::is(f.company_chpr, x) => {
                 let c = owner.corp_sym().unwrap().to_string();
                 if choice == "exchange" {
                     self.g1822_move_exchange_token(&c);
@@ -215,7 +236,7 @@ impl BaseGame {
                 }
                 self.close_company(co);
             }
-            COMPANY_LUR => {
+            x if Family::is(f.company_lur, x) => {
                 let (target, where_) = choice.split_once('_').ok_or_else(|| GameError::new("bad choice"))?;
                 let target = target.to_string();
                 let top = where_ == "top";
@@ -235,7 +256,7 @@ impl BaseGame {
                 }
                 self.close_company(co);
             }
-            COMPANY_DOUBLE_CASH => {
+            x if Family::is(f.company_double_cash, x) => {
                 self.gm().double_cash_choice = owner.player_id();
             }
             _ => return err(format!("{co} has no choices")),
@@ -252,15 +273,19 @@ impl BaseGame {
     }
 
     fn g1822_minor_from_bank(&self, m: &str) -> bool {
-        // A bidbox minor: not floated, owned by nobody.
+        // A bidbox minor: not floated, owned by nobody (`!minor.owner`;
+        // 1822PNW's regionals are owned without floating).
+        if self.g1822_is_pnw() {
+            return self.corporations[self.ci(m)].owner_id.is_none();
+        }
         !self.corporations[self.ci(m)].floated
     }
 
     /// The pay choice keys (`pay_choices(entity, minor)`).
-    fn g1822_pay_choices(&self, c: &str, m: &str) -> Vec<String> {
+    pub(crate) fn g1822_pay_choices(&self, c: &str, m: &str) -> Vec<String> {
         let cash = self.corporations[self.ci(c)].cash;
         if self.g1822_minor_from_bank(m) {
-            return if cash >= MINOR_BIDBOX_PRICE { vec!["money".to_string()] } else { vec![] };
+            return if cash >= self.fam().minor_bidbox_price { vec!["money".to_string()] } else { vec![] };
         }
         let mut v = Vec::new();
         let mprice = self.g1822_minor_price(m) * 2;
@@ -309,6 +334,18 @@ impl BaseGame {
                 let m = Self::minor_of_company(&co);
                 if !self.g1822_pay_choices(c, &m).is_empty() {
                     out.push(m);
+                }
+            }
+        }
+        if self.g1822_is_pnw() {
+            // PNW: no associated minors; regionals after two payouts
+            out.retain(|m| !self.g1822_pnw_is_associated(m));
+            for r in super::pnw::REGIONALS {
+                if self.corp_idx.contains_key(*r)
+                    && !self.corporations[self.ci(r)].closed
+                    && self.g().regional_payout_count.get(*r).copied().unwrap_or(0) > 1
+                {
+                    out.push(r.to_string());
                 }
             }
         }
@@ -392,19 +429,20 @@ impl BaseGame {
     }
 
     fn g1822_acquire_bank_minor(&mut self, c: &str, m: &str, token_choice: &str) -> Result<(), GameError> {
-        self.corp_spend(c, MINOR_BIDBOX_PRICE)?;
+        self.corp_spend(c, self.fam().minor_bidbox_price)?;
         match token_choice {
             "replace" => {
-                if m == MINOR_14_ID {
+                if m == self.fam().minor_14_id {
                     self.g1822_remove_exchange_token(c);
                     let cix = self.ci(c);
                     self.corporations[cix].tokens.push(Token::new(c.to_string(), 0));
                     let tidx = self.corporations[cix].tokens.len() - 1;
                     // minor_14_token_ability: a £20 token anywhere.
                     self.gm().corp_token_abilities.entry(c.to_string()).or_default().push((vec![], 20));
+                    let home = self.fam().minor_14_home_hex.to_string();
                     self.rndm().pending_tokens.push(super::PendingTok {
                         corp: c.to_string(),
-                        hexes: vec![MINOR_14_HOME_HEX.to_string()],
+                        hexes: vec![home],
                         token_idx: tidx,
                     });
                 } else {
@@ -426,6 +464,7 @@ impl BaseGame {
                         self.corporations[cix].tokens.push(Token::new(c.to_string(), 0));
                         let tidx = self.corporations[cix].tokens.len() - 1;
                         self.g1822_put_token(c, tidx, hi, ci, false)?;
+                        self.g1822_ruby_graph_clear();
                     }
                 }
             }
@@ -485,6 +524,10 @@ impl BaseGame {
             t.owner = EntityId::corporation(c);
             self.corporations[cix].trains.push(t);
         }
+        if self.g1822_is_pnw() {
+            // PNW extra_transfers: the coal token
+            self.g1822_pnw_move_coal_token(m, c);
+        }
         match token_choice {
             "replace" => {
                 let (hi, ci) = self
@@ -517,6 +560,8 @@ impl BaseGame {
                     all.truncate(9);
                     self.corporations[cix].tokens = all;
                     self.g1822_put_token(c, new_idx, hi, ci, false)?;
+                    // TokenMerger: clear_graph_for(surviving)
+                    self.g1822_ruby_graph_clear();
                 }
             }
             "exchange" => {
@@ -560,7 +605,7 @@ impl BaseGame {
     fn g1822_min_city_slots(&self, hi: usize, ci: usize) -> usize {
         let city = &self.hexes[hi].tile.cities[ci];
         let normal = city.slots as usize;
-        if self.hexes[hi].id != MINOR_14_HOME_HEX {
+        if self.hexes[hi].id != self.fam().minor_14_home_hex {
             return normal;
         }
         let exit = self.hexes[hi].tile.paths.iter().find_map(|p| match (&p.a, &p.b) {

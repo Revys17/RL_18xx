@@ -394,6 +394,10 @@ impl BaseGame {
             Action::AcquireCompany { company_sym, .. } => {
                 m.insert("company".to_string(), json!(company_sym));
             }
+            Action::Assign { target, target_type, .. } => {
+                m.insert("target".to_string(), json!(target));
+                m.insert("target_type".to_string(), json!(target_type));
+            }
             Action::HexToken { hex_id, token_type, .. } => {
                 m.insert("hex".to_string(), json!(hex_id));
                 if let Some(t) = token_type {

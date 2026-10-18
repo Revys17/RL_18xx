@@ -1,4 +1,6 @@
 pub mod g1822;
+pub mod g1822pnw;
+pub mod g1822pnw_data;
 pub mod g1830;
 pub mod g1867;
 #[cfg(test)]
@@ -379,6 +381,12 @@ pub trait GameTitle: Sync {
     fn is_g1822_family(&self) -> bool {
         false
     }
+    /// The 1822-family constants table (`crate::g1822::family`: Ruby's
+    /// `self.class::` constants and the data the step machine reads) —
+    /// `Some` exactly for the 1822-family titles.
+    fn g1822_family(&self) -> Option<&'static crate::g1822::family::Family> {
+        None
+    }
 
     /// Hex order for the flat action layout.
     fn action_hex_order(&self) -> Vec<&'static str> {
@@ -549,13 +557,13 @@ impl GameTitle for G1830 {
 pub fn all_titles() -> &'static [&'static dyn GameTitle] {
     #[cfg(test)]
     {
-        static TITLES: [&'static dyn GameTitle; 4] =
-            [&G1830, &g1867::G1867, &g1822::G1822, &test_title::Test5Share];
+        static TITLES: [&'static dyn GameTitle; 5] =
+            [&G1830, &g1867::G1867, &g1822::G1822, &g1822pnw::G1822Pnw, &test_title::Test5Share];
         &TITLES
     }
     #[cfg(not(test))]
     {
-        static TITLES: [&'static dyn GameTitle; 3] = [&G1830, &g1867::G1867, &g1822::G1822];
+        static TITLES: [&'static dyn GameTitle; 4] = [&G1830, &g1867::G1867, &g1822::G1822, &g1822pnw::G1822Pnw];
         &TITLES
     }
 }

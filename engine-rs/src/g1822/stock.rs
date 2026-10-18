@@ -9,9 +9,7 @@ use crate::title::CorpType;
 
 use super::shares::Bundle;
 use super::{
-    err, BidRec, CurAct, Ent, RoundKind, RoundSt, SoldWhen, Step, BIDDING_TOKENS_PER_ACTION,
-    COMPANY_DOUBLE_CASH, COMPANY_OSTH, MINOR_START_PAR_PRICE, MIN_BID_INCREMENT,
-    PLAYER_LOAN_INTEREST_RATE, TAX_HAVEN_OWNER,
+    err, BidRec, CurAct, Ent, RoundKind, RoundSt, SoldWhen, Step, TAX_HAVEN_OWNER,
 };
 
 impl BaseGame {
@@ -151,7 +149,11 @@ impl BaseGame {
         // first; ties → lower index first.
         float_minors.sort_by_key(|(b, _, idx)| (b.price, minor_count as i64 - *idx as i64));
         for (bid, company, _) in float_minors.into_iter().rev() {
-            self.g1822_float_minor(&bid, &company)?;
+            if self.g1822_is_pnw() && Self::g1822_pnw_is_regional(&Self::minor_of_company(&company)) {
+                self.g1822_pnw_float_regional(&bid, &company)?;
+            } else {
+                self.g1822_float_minor(&bid, &company)?;
+            }
         }
         if remove_l_count > 0
             && self.depot.trains.first().map_or(false, |t| t.name == "L")
@@ -174,7 +176,9 @@ impl BaseGame {
         self.g1822_sort_operating(&mut corps);
         for sym in corps {
             if self.g1822_sold_out(&sym) {
-                self.g1822_move_price(&sym, super::shares::Dir::Up);
+                // PNW sold_out_stock_movement: move_right
+                let dir = if self.g1822_is_pnw() { super::shares::Dir::Right } else { super::shares::Dir::Up };
+                self.g1822_move_price(&sym, dir);
             }
         }
         Ok(())
@@ -195,7 +199,7 @@ impl BaseGame {
     }
 
     /// Ruby `G1822::Round::Stock#buy_company`.
-    fn g1822_buy_company(&mut self, bid: &BidRec, company: &str) -> Result<(), GameError> {
+    pub(crate) fn g1822_buy_company(&mut self, bid: &BidRec, company: &str) -> Result<(), GameError> {
         let ci = self.co_idx(company).expect("company");
         self.companies[ci].owner = EntityId::player(bid.player);
         self.gm().bank_owned.retain(|c| c != company);
@@ -212,7 +216,7 @@ impl BaseGame {
         pars.sort_by(|a, b| (b.price, b.column, b.row).cmp(&(a.price, a.column, a.row)));
         let max_par = pars.iter().map(|p| p.price).max().unwrap_or(0);
         let mut target = if self.phase_num() == 1 {
-            MINOR_START_PAR_PRICE
+            self.fam().minor_start_par_price
         } else {
             bid_price / 2
         };
@@ -296,6 +300,9 @@ impl BaseGame {
     /// `remove_minor_and_first_train(company)`: export the next train (as
     /// if bought: phase change, events, rusting) and close the minor.
     fn g1822_remove_minor_and_first_train(&mut self, company: &str) {
+        if company == super::pnw::EMPTY_BIDBOX {
+            return;
+        }
         if !self.depot.trains.is_empty() {
             let train = self.depot.trains.remove(0);
             self.g1822_phase_buying_train(&train, None);
@@ -312,7 +319,7 @@ impl BaseGame {
         for (p, d) in debts {
             if d > 0 {
                 // i64: degenerate games compound debt past i32 (saturate).
-                let added = (d as i64 * PLAYER_LOAN_INTEREST_RATE as i64 + 99) / 100;
+                let added = (d as i64 * self.fam().player_loan_interest_rate as i64 + 99) / 100;
                 let total = (d as i64 + added).min(i32::MAX as i64) as i32;
                 self.gm().player_debt.insert(p, total);
             }
@@ -417,7 +424,7 @@ impl BaseGame {
         }
         let companies = self.companies.iter().filter(|c| !c.closed && c.owner == eid).count() as i32;
         n += companies;
-        if self.companies.iter().any(|c| !c.closed && c.owner == eid && c.sym == COMPANY_OSTH) {
+        if self.companies.iter().any(|c| !c.closed && c.owner == eid && c.sym == self.fam().company_osth) {
             n -= 1;
         }
         n
@@ -470,6 +477,10 @@ impl BaseGame {
 
     /// G1822 `can_buy?(entity, bundle, available_cash:)`.
     fn g1822_can_buy(&self, pid: u32, b: &Bundle, available: Option<i32>) -> bool {
+        // PNW: the associated minor's owner may always convert
+        if self.g1822_is_pnw() && self.g1822_pnw_formation(&b.corp, Some(pid)) == super::pnw::Formation::Convertable {
+            return true;
+        }
         let c = &self.corporations[self.ci(&b.corp)];
         if c.corp_type != CorpType::Major {
             return false;
@@ -633,7 +644,13 @@ impl BaseGame {
         if b.shares.iter().any(|&i| c.shares[i].owner != *owner) {
             return false;
         }
+        let sold_now = || {
+            owner.player_id().map_or(false, |p| {
+                self.rnd().players_sold.get(&p).and_then(|m| m.get(&b.corp)) == Some(&SoldWhen::Now)
+            })
+        };
         self.g1822_check_sale_timing(&b.corp)
+            && !(self.fam().must_sell_in_blocks && sold_now())
             && !self.g1822_bought()
             && self.g1822_fit_in_bank(b)
             && self.g1822_can_dump(owner, b)
@@ -672,6 +689,10 @@ impl BaseGame {
         if Some(*pid) != self.g1822_current_player() {
             return vec![];
         }
+        // PNW: converting an associated minor → choose the share count
+        if self.rnd().converting_major.is_some() {
+            return vec!["choose"];
+        }
         if self.g1822_must_sell(*pid) {
             return vec!["sell_shares"];
         }
@@ -703,10 +724,11 @@ impl BaseGame {
     /// `company_choices_osth(company, :stock_round)` + the BSPS
     /// `choices_ability` gate (no P16 buys after bids / with debt).
     pub(crate) fn g1822_tax_haven_choices(&self, company: &str) -> Vec<String> {
-        if company != COMPANY_OSTH || self.co_closed(COMPANY_OSTH) {
+        let osth = self.fam().company_osth;
+        if company != osth || self.co_closed(osth) {
             return vec![];
         }
-        let owner = self.co_owner(COMPANY_OSTH);
+        let owner = self.co_owner(osth);
         let Some(pid) = owner.player_id() else { return vec![] };
         if self.rnd().kind != RoundKind::Stock || self.rnd().tax_haven_bought {
             return vec![];
@@ -762,6 +784,11 @@ impl BaseGame {
         }
     }
 
+    /// track_action for PNW's conversion choose.
+    pub(crate) fn g1822_pnw_track_choose(&mut self, pid: u32) {
+        self.g1822_track_action(pid, CurAct::Choose);
+    }
+
     fn g1822_track_action(&mut self, pid: u32, kind: CurAct) {
         self.rndm().last_to_act = Some(pid);
         self.rndm().current_actions.push(kind);
@@ -811,6 +838,10 @@ impl BaseGame {
                 let Ent::Company(sym) = ent else { return err("choose_ability by a non-company") };
                 self.g1822_process_tax_haven(sym, choice)
             }
+            Action::Choose { choice, .. } if self.g1822_is_pnw() => {
+                let Ent::Player(pid) = ent else { return err("choose by a non-player") };
+                self.g1822_pnw_convert_choose(*pid, choice)
+            }
             Action::PayoffPlayerDebt { .. } => {
                 let Ent::Player(pid) = ent else { return err("payoff by a non-player") };
                 self.g1822_payoff_player_loan(*pid, None);
@@ -849,14 +880,15 @@ impl BaseGame {
         self.g1822_set_player_passed(pid, false);
         // Auctioner#add_bid with BidboxAuction's min/max.
         let min = match self.g1822_highest_bid(company) {
-            Some(h) => h.price + MIN_BID_INCREMENT,
+            Some(h) => h.price + self.fam().min_bid_increment,
             None => self.companies[ci].min_bid(),
         };
         if price < min {
             return err(format!("Minimum bid is {} for {}", min, company));
         }
-        if (price - min) % MIN_BID_INCREMENT != 0 {
-            return err(format!("Must increase bid by a multiple of {MIN_BID_INCREMENT}"));
+        let inc = self.fam().min_bid_increment;
+        if (price - min) % inc != 0 {
+            return err(format!("Must increase bid by a multiple of {inc}"));
         }
         let max = self.player_cash(pid) - self.g1822_committed_cash(pid);
         if price > max {
@@ -867,7 +899,7 @@ impl BaseGame {
         bids.push(BidRec { player: pid, price });
         self.g1822_track_action(pid, CurAct::Bid);
         self.rndm().bid_actions += 1;
-        if self.rnd().bid_actions >= BIDDING_TOKENS_PER_ACTION {
+        if self.rnd().bid_actions >= self.fam().bidding_tokens_per_action {
             self.g1822_bsps_pass();
         }
         Ok(())
@@ -961,6 +993,12 @@ impl BaseGame {
         if !self.g1822_can_par(sym, pid) {
             return err(format!("{sym} can't be parred"));
         }
+        if self.g1822_is_pnw() && self.g1822_pnw_formation(sym, Some(pid)) == super::pnw::Formation::Convertable {
+            // PNW process_par: start converting the associated minor
+            self.rndm().converting_major = Some(sym.to_string());
+            self.rndm().convert_par = price;
+            return Ok(());
+        }
         let sp = self
             .stock_market
             .share_prices_with_types(&["par", "par_1"])
@@ -1008,6 +1046,9 @@ impl BaseGame {
                 return err(format!("Cannot buy a share of {sym}"));
             }
             self.g1822_pool_buy_shares(&player, &bundle, None, false, true)?;
+            if self.g1822_is_pnw() {
+                self.g1822_pnw_after_par(sym);
+            }
         }
         self.g1822_track_action(pid, CurAct::Par);
         self.g1822_bsps_pass();
@@ -1016,13 +1057,14 @@ impl BaseGame {
 
     /// BSPS `process_choose_ability` for P16 (the tax haven).
     fn g1822_process_tax_haven(&mut self, company: &str, choice: &str) -> Result<(), GameError> {
-        if company != COMPANY_OSTH {
+        let osth = self.fam().company_osth;
+        if company != osth {
             return err(format!("{company} has no stock-round choice"));
         }
         if !self.g1822_tax_haven_choices(company).iter().any(|c| c == choice) {
             return err(format!("Can't buy a share for {choice}"));
         }
-        let owner_pid = self.co_owner(COMPANY_OSTH).player_id().expect("player owner");
+        let owner_pid = self.co_owner(osth).player_id().expect("player owner");
         let (corp, from) = choice
             .rsplit_once('_')
             .ok_or_else(|| GameError::new("bad tax haven choice"))?;
@@ -1080,8 +1122,11 @@ impl BaseGame {
     // =====================================================================
 
     pub(crate) fn g1822_start_choices_round(&mut self) -> Result<(), GameError> {
-        let entities: Vec<String> = match self.co_owner(COMPANY_DOUBLE_CASH).player_id() {
-            Some(p) if !self.co_closed(COMPANY_DOUBLE_CASH) => vec![p.to_string()],
+        let dc = self.fam().company_double_cash;
+        let entities: Vec<String> = match self.co_owner(dc).player_id() {
+            // 1822PNW choices_entities: []
+            _ if self.g1822_is_pnw() => vec![],
+            Some(p) if !self.co_closed(dc) => vec![p.to_string()],
             _ => vec![],
         };
         let round_num = self.rnd().round_num;
@@ -1095,7 +1140,8 @@ impl BaseGame {
         if self.g1822_round_entity() != Some(ent.clone()) {
             return vec![];
         }
-        if self.co_closed(COMPANY_DOUBLE_CASH) || self.co_owner(COMPANY_DOUBLE_CASH) != EntityId::player(*pid) {
+        let dc = self.fam().company_double_cash;
+        if self.co_closed(dc) || self.co_owner(dc) != EntityId::player(*pid) {
             return vec![];
         }
         vec!["choose", "pass"]
