@@ -1366,12 +1366,19 @@ def server_spec(cfg: SearchLearningConfig, learner_path, critic_path=None) -> st
 
 def learner_param_groups(learner, cfg: SearchLearningConfig) -> list:
     """The learner's optimizer groups: with ``cfg.shared`` its value heads (and
-    auxiliary heads) at ``critic_lr``, the rest at ``lr``; otherwise all at ``lr``."""
+    auxiliary heads, and a value-only entity encoder: ``value_entity_encoder``) at
+    ``critic_lr``, the rest at ``lr``; otherwise all at ``lr``."""
     if not cfg.shared:
         return [{"params": list(learner.parameters()), "lr": cfg.lr}]
     heads = [learner.win_loss_head, learner.score_head]
     heads += [
-        h for h in (getattr(learner, "aux_seat_head", None), getattr(learner, "aux_global_head", None)) if h is not None
+        h
+        for h in (
+            getattr(learner, "aux_seat_head", None),
+            getattr(learner, "aux_global_head", None),
+            getattr(learner, "value_econ_transformer", None),
+        )
+        if h is not None
     ]
     value_ids = {id(p) for h in heads for p in h.parameters()}
     value = [p for p in learner.parameters() if id(p) in value_ids]

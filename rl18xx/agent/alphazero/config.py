@@ -199,6 +199,14 @@ class ModelTransformerConfig:
     # them (inference is unchanged); 0 builds none, as in every older checkpoint.
     aux_seat_targets: int = 0
     aux_global_targets: int = 0
+    # The value heads read their player tokens from a value-only Economic State
+    # Transformer (``value_econ_transformer``, the same shape as the shared one)
+    # instead of the shared one; the map encoder, fusion and trunk stay shared.
+    # A policy network's entity encoder carries little of what a critic ranks a
+    # position's children by (docs/search_learning_design.md, "Why the shared
+    # network searched badly"); this gives the value its own at ~4% of the
+    # parameters, and leaves the policy path untouched. Off in every older checkpoint.
+    value_entity_encoder: bool = False
 
     model_checkpoint_file: Optional[str] = None
     timestamp: Optional[str] = None

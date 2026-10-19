@@ -141,11 +141,21 @@ class Rows:
         }
 
 
-def losses(original, tuned, batch, temperature: float):
+def losses(original, tuned, batch, temperature: float, value_only: bool = False):
+    """The distillation losses of a batch; ``value_only``: the value terms alone, from
+    a value-only forward (the policy is frozen: its KL is 0 by construction)."""
     import torch
 
     from rl18xx.agent.alphazero.policy_gradient import _masked_log_softmax
 
+    if value_only:
+        _, win_logits, score, _ = tuned(batch["gs"], batch["nodes"], batch["rt"], None, batch["npl"], value_only=True)
+        log_v = torch.log_softmax(win_logits.float()[:, :NUM_PLAYERS], dim=1)
+        ce = -(batch["target"] * log_v).sum(1).mean()
+        floor = -(batch["target"] * torch.log(batch["target"].clamp_min(1e-9))).sum(1).mean()
+        mse = ((score.float()[:, :NUM_PLAYERS] - batch["score"]) ** 2).mean()
+        zero = torch.zeros((), device=ce.device)
+        return {"ce": ce, "kl_target": ce - floor, "mse": mse, "kl": zero, "price_kl": zero, "top1": zero + 1}
     with torch.no_grad():
         logits0, _, _, _ = original(batch["gs"], batch["nodes"], batch["rt"], None, batch["npl"], lay_tile_rows=batch["tiles"])
         price0 = original.last_price_components["price_logits"]
@@ -220,6 +230,10 @@ def main():
     parser.add_argument("--score-weight", type=float, default=1.0)
     parser.add_argument("--outcome-weight", type=float, default=0.0)
     parser.add_argument("--temperature", type=float, default=0.5)
+    parser.add_argument(
+        "--train-only", choices=("all", "value"), default="all",
+        help="value: train only the value heads (and a value entity encoder), the policy path frozen",
+    )
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--epochs", type=float, default=3.0)
     parser.add_argument("--eval-every", type=int, default=500)
@@ -260,11 +274,19 @@ def main():
     for p in tuned.parameters():
         p.requires_grad_(True)
     device = next(tuned.parameters()).device
-    heads = {id(p) for h in (tuned.win_loss_head, tuned.score_head) for p in h.parameters()}
+    value_modules = [tuned.win_loss_head, tuned.score_head]
+    if getattr(tuned, "value_econ_transformer", None) is not None:
+        value_modules.append(tuned.value_econ_transformer)
+    heads = {id(p) for h in value_modules for p in h.parameters()}
+    if args.train_only == "value":
+        # Only the value side trains: the policy path is bit for bit the starting network's.
+        for p in tuned.parameters():
+            p.requires_grad_(id(p) in heads)
     groups = [
-        {"params": [p for p in tuned.parameters() if id(p) not in heads], "lr": args.trunk_lr},
+        {"params": [p for p in tuned.parameters() if id(p) not in heads and p.requires_grad], "lr": args.trunk_lr},
         {"params": [p for p in tuned.parameters() if id(p) in heads], "lr": args.head_lr},
     ]
+    groups = [g for g in groups if g["params"]]
     opt = torch.optim.AdamW(groups, weight_decay=0.0)
     base_lrs = [g["lr"] for g in opt.param_groups]
     steps = int(args.epochs * len(rows.train) / args.batch_size)
@@ -290,7 +312,7 @@ def main():
             g["lr"] = lr * frac
         tuned.eval()
         batch = rows.batch(ids, device)
-        stats = losses(original, tuned, batch, args.temperature)
+        stats = losses(original, tuned, batch, args.temperature, value_only=args.train_only == "value")
         loss = (
             args.value_weight * (stats["ce"] + args.score_weight * stats["mse"])
             + args.kl_weight * (stats["kl"] + stats["price_kl"])

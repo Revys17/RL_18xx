@@ -402,3 +402,73 @@ A Gumbel root spends its whole budget every search (inherited visits inform q, n
 schedule), so `--reuse-tree total` saves nothing with Gumbel: at az1's budget it is ~3x the
 evaluations of PUCT with reuse. A Gumbel budget that counts inherited visits would be a tree
 change; small budgets (Gumbel's strength) are the cheap route.
+
+## Why the shared network searched badly (2026-10-18)
+
+The refit shared network (az1 update 280's policy, value heads fit to az1's critic, trunk tuned 4
+epochs at 5e-5) scored 0.308 at 200 readouts against gen4 + critic, where az1 u250 (policy +
+critic) scored 0.613, though its held-out win CE was 0.926 against the critic's 0.881.
+
+**Not a serving bug** (`scripts/diag_value_paths.py`): on 1,742 held-out positions the values
+through the refit's evaluation, the full forward, the packed fast path, a real inference server
+(2 replicas, lockstep, `dedupe_maps`) and a search tree's root (rotated back from absolute seats)
+agree to 3e-6, for the shared network and the composite alike; the round type the model reads
+back from the state equals the encoder's in every position.
+
+**The value can't rank a position's children** (`scripts/diag_sibling_values.py`): 1,080 held-out
+positions (az1_u250/u300_sys200, az2_u0_sys200), every child built as the search builds it
+(forced moves collapsed, the price head's price), each child's value for the parent's mover
+against az1's critic 280 (Spearman across siblings / the critic's best child / the critic's loss
+choosing the source's best child):
+
+| value | Spearman | top-1 | regret | stock | track | train buy |
+|---|---|---|---|---|---|---|
+| az1's critic 250 | 0.942 | 0.831 | 0.001 | 0.945 | 0.944 | 0.927 |
+| gen4's critic | 0.838 | 0.689 | 0.003 | 0.857 | 0.805 | 0.814 |
+| shared, stale heads | 0.248 | 0.312 | 0.025 | 0.269 | 0.095 | 0.280 |
+| shared, heads refit | 0.422 | 0.357 | 0.017 | 0.516 | 0.088 | 0.305 |
+| shared, refit + tune (played 0.308) | 0.475 | 0.413 | 0.014 | 0.570 | 0.122 | 0.373 |
+| az2b update 52 (52 updates of shared training) | 0.478 | 0.417 | 0.014 | 0.569 | 0.147 | 0.384 |
+| the policy's prior | 0.376 | 0.434 | 0.010 | 0.438 | 0.109 | 0.426 |
+
+The refit ranks siblings barely better than the policy prior; value spreads are not compressed
+(std across siblings 0.028 vs the critic's 0.025: the differences are there, in the wrong order).
+Win CE can't see this: the mover's value varies 27x more between positions than between siblings
+(variance 0.038 vs 0.0014), and the critic's own values shuffled at random among each position's
+siblings lose only 0.0099 nats -- a fifth of the 0.045 CE gap.
+
+**The policy network lacks the features, at every depth** (`diag_value_heads_on_children.py`,
+`diag_value_probe_depth.py`): heads fit to the critic on 9.5k positions *and their 130k
+children* ranked 0.48-0.50 on the shared trunk, 0.94 on the critic's trunk and 0.92 on gen4's
+critic's; fit on the policy network's player tokens, its fusion output or any of its six blocks
+(or with a 1024-wide head), 0.50-0.54, while the critic's player tokens alone -- its entity
+encoder, which never sees the map -- give 0.873. gen4's value heads were never trained during
+policy gradient, so nothing in the policy's encoders was ever shaped by value; the critic
+lineage's were, over hundreds of thousands of games.
+
+**Training the shared trunk on the critic is slow** (`distill_value_on_children.py`, positions +
+children, KL(policy || tuned) at T 0.5 anchoring the policy): 0.475 -> 0.578 (470k states,
+2 epochs) -> 0.693 (2M states, 1.5 epochs, trunk lr 3e-4, value weight 3) -> 0.733 (+1 epoch on
+3.4M states), the policy drifting (KL 0.005, policy-only 0.483 vs 0.504) -- at 0.578 it played
+0.415 +- 0.042 (142 of 240 games). The reverse (a critic network distilled toward az1's policy)
+kept the ranking (0.876) but its policy (KL 0.16, top-1 0.92) played 0.136 policy-only.
+
+**Fix: a value-only entity encoder** (`ModelTransformerConfig.value_entity_encoder`,
+`scripts/build_value_encoder_network.py`): the value heads read their player tokens from a
+second entity encoder (4.2% of the parameters; a 512-state forward 102 vs 104 ms on the shared
+GPU); map encoder, fusion and trunk stay shared, and the policy path is bit for bit the policy
+network's. Copied from az1's critic 280 and untrained it
+ranks 0.747; with the encoder and the heads fit to the critic on 3.4M positions + children
+(policy frozen, ~20 min) **0.920** (top-1 0.812, regret 0.001; stock 0.966, track 0.747, train
+0.902), held-out win CE 0.882 (the critic 0.881; by stage 1.235 / 0.935 / 0.416). Checkpoint:
+`model_checkpoints_pg/shared_diag_venc1_20261018/learner/280.pth`. `search-learning --shared`
+trains the encoder with the value heads at `--critic-lr`; `value_stop_grad` stops the value loss
+at the shared layers but still trains it.
+
+**For a shared AlphaZero run:** judge a shared network's value by sibling ranking, not win CE;
+the value loss on played positions at the policy's trunk lr (az2: 5e-6, a sixth of the critic's
+3e-5) moved the ranking nowhere in 52-90 updates (0.475 -> 0.478); a value that misranks
+children also makes the search's targets noisy: at 200 readouts on 60 human positions,
+KL(pruned visits || policy) 0.47 for the refit vs 0.16 for policy + critic, 4.1% vs 1.4% of the
+target on moves the policy gives under 1% -- what az2b's policy then learned (entropy 0.29 ->
+0.55; it also ran without a KL anchor).

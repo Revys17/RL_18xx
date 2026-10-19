@@ -1614,6 +1614,19 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
             d_ff=c.econ_transformer_ff_dim,
             max_players=c.max_players,
         )
+        # Optional value-only entity encoder (``value_entity_encoder``): the value
+        # heads' player tokens come from it; nothing else reads it.
+        self.value_econ_transformer = (
+            EconomicStateTransformer(
+                d_entity=c.d_entity,
+                num_layers=c.econ_transformer_layers,
+                num_heads=c.econ_transformer_heads,
+                d_ff=c.econ_transformer_ff_dim,
+                max_players=c.max_players,
+            )
+            if getattr(c, "value_entity_encoder", False)
+            else None
+        )
 
         # 2. Map encoder — swappable between the attention-based Hex
         # Transformer and the convolutional Hex ResNet. Both produce the
@@ -2184,10 +2197,19 @@ class AlphaZeroTransformerModel(AlphaZeroModel):
         # ``win_loss_logits`` and backs it up through the tree; ``score_pred``
         # is auxiliary and discarded at inference time.
         econ = self.econ_transformer
+        if self.value_econ_transformer is not None:
+            # The value's own entity encoder (``value_entity_encoder``): its player tokens.
+            _, value_entity_embeds, _ = self.value_econ_transformer(game_state_data, num_players=num_players)
+            econ, entity_embeds = self.value_econ_transformer, value_entity_embeds
         player_tokens = entity_embeds[:, econ.player_token_start:econ.player_token_end]  # (B, P, d_entity)
-        seat_input = torch.cat([player_tokens, x.unsqueeze(1).expand(-1, player_tokens.shape[1], -1)], dim=-1)
+        trunk = x
         if self.value_stop_grad:
-            seat_input = seat_input.detach()
+            # The shared layers learn only the policy; a value-only entity encoder
+            # still trains on the value loss.
+            trunk = x.detach()
+            if self.value_econ_transformer is None:
+                player_tokens = player_tokens.detach()
+        seat_input = torch.cat([player_tokens, trunk.unsqueeze(1).expand(-1, player_tokens.shape[1], -1)], dim=-1)
         win_loss_logits = self.win_loss_head(seat_input).squeeze(-1)  # (B, P)
         score_pred = self.score_head(seat_input).squeeze(-1)
         # Seats past the game's player count don't exist: keep them out of the
