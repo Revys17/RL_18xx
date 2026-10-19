@@ -565,7 +565,7 @@ def build_parser():
         "--midgame-fraction", type=float, default=0.0,
         help="Share of games starting at a later Stock Round of a recorded human game (with --resume: from now on)",
     )
-    p.add_argument("--midgame-positions", type=str, default="human_games/midgame_positions_1830_4p.jsonl")
+    p.add_argument("--midgame-positions", type=str, default="human_games/midgame_positions_1830_4p_v2.jsonl")
     p.add_argument(
         "--auction-fraction", type=float, default=0.0,
         help="Share of games starting at the waterfall auction, the learner's bids trained too (with --resume: from now on)",
@@ -621,7 +621,7 @@ def build_parser():
     p.add_argument("--snapshot-every", type=int, default=10)
     p.add_argument("--pool-refresh-every", type=int, default=5)
     p.add_argument("--max-decisions", type=int, default=1000)
-    p.add_argument("--start-positions", type=str, default="human_games/start_positions_1830_4p.jsonl")
+    p.add_argument("--start-positions", type=str, default="human_games/start_positions_1830_4p_v2.jsonl")
     p.add_argument("--random-start-fraction", type=float, default=0.2)
     p.add_argument(
         "--save-game-every", type=int, default=0,
@@ -730,7 +730,7 @@ def build_parser():
     p.add_argument("--start-positions", type=str, default=_SL.start_positions)
     p.add_argument("--random-start-fraction", type=float, default=_SL.random_start_fraction)
     p.add_argument("--midgame-fraction", type=float, default=_SL.midgame_fraction)
-    p.add_argument("--midgame-positions", type=str, default="human_games/midgame_positions_1830_4p.jsonl")
+    p.add_argument("--midgame-positions", type=str, default="human_games/midgame_positions_1830_4p_v2.jsonl")
     p.add_argument("--auction-fraction", type=float, default=_SL.auction_fraction)
     p.add_argument("--inference-batch-size", type=int, default=_SL.inference_batch_size)
     p.add_argument("--critic-positions-per-game", type=int, default=_SL.critic_positions_per_game,

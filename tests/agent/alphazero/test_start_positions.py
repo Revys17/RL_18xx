@@ -403,3 +403,53 @@ def test_a_share_of_starts_are_midgame_positions(tmp_path):
         state = sp.apply_actions(sp.new_game(4), start.actions)
         assert state._game.round.round_type == "Stock"
     assert all(s.label == sp.RANDOM_START for s in starts if s not in midgame)
+
+
+# --------------------------------------------------------------- stale starts
+# A recorded start the engine no longer replays, as a position file built before a
+# rules fix holds one (2026-10-19: such a mid-game position killed a policy-gradient
+# run). The second pass is out of turn: P2 is to act.
+STALE = [pass_(1), pass_(1)]
+
+
+def stale_file(tmp_path, midgame: bool = False) -> str:
+    path = tmp_path / ("stale_midgame.jsonl" if midgame else "stale_starts.jsonl")
+    record = {"id": "stale", "num_players": 4, "actions": STALE}
+    if midgame:
+        record["cuts"] = {"2": len(STALE)}
+    path.write_text(json.dumps(record) + "\n")
+    return str(path)
+
+
+def test_a_start_the_engine_no_longer_replays_is_redrawn_and_counted(tmp_path):
+    path = stale_file(tmp_path)
+    with pytest.raises(RuntimeError, match="cannot process action pass"):
+        sp.apply_actions(sp.new_game(4), sp.load_start_positions(path)[4][0].actions)
+    rng = random.Random(0)
+    skipped = 0
+    for _ in range(12):
+        start, game, n = sp.replayed_start(4, path, random_fraction=0.5, rng=rng)
+        skipped += n
+        assert start.label == sp.RANDOM_START and game._game.round.round_type == "Stock"
+        assert not game._game.auction_unlock
+    assert skipped > 0  # about half the draws took the stale start
+
+    empty = tmp_path / "none.jsonl"
+    empty.write_text("")
+    midgame = stale_file(tmp_path, midgame=True)
+    skipped = 0
+    for _ in range(12):
+        start, game, n = sp.replayed_start(4, str(empty), 1.0, rng=rng, midgame_path=midgame, midgame_fraction=0.5)
+        skipped += n
+        assert start.label == sp.RANDOM_START
+    assert skipped > 0
+
+    # Nothing replays: give up loudly rather than loop.
+    with pytest.raises(RuntimeError, match="no start position replayed in 3 draws"):
+        sp.replayed_start(4, path, random_fraction=0.0, rng=rng, max_draws=3)
+
+
+def test_replayed_auction_starts_play_with_the_unlock():
+    start, game, skipped = sp.replayed_start(4, None, 0.0, rng=random.Random(0), auction_fraction=1.0)
+    assert start.label == sp.AUCTION_START and skipped == 0
+    assert sp.in_auction(game) and game._game.auction_unlock

@@ -1263,9 +1263,19 @@ run first; both with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_T
       --value-follow model_checkpoints_ag/ag1_val --out-dir model_checkpoints_ag --run-name ag1_pg \
       --population model_checkpoints_pg/populations/league_v7.json --reward placement \
       --learner-temperature 0.5 --opponent-temperature 0.5 --lr 2e-5 --kl-coef 0.02 --kl-target 0.08 --anchor-every 50 \
-      --midgame-positions human_games/midgame_positions_1830_4p.jsonl --midgame-fraction 0.3 --auction-fraction 0.15 \
+      --start-positions human_games/start_positions_1830_4p_v2.jsonl --random-start-fraction 0.2 \
+      --midgame-positions human_games/midgame_positions_1830_4p_v2.jsonl --midgame-fraction 0.3 --auction-fraction 0.15 \
       --workers 24 --games-per-task 96 --rows-per-update 65536 --minibatch 2048 --microbatch 1024 \
       --save-game-every 20 --max-updates 600 --snapshot-every 10
+
+Both runs take the `_v2` position files (rebuilt 2026-10-17 under the Ruby-faithful rules fixes; the
+policy-gradient and search-learning defaults since 2026-10-19). The PG command first copied the old paths,
+and on 2026-10-19 a mid-game position that no longer replays (`Blocking step Run Routes cannot process
+action pass`) killed the run from inside a worker: 13 of the old mid-game file's 1,933 games fail that way
+at their last cut (none of the old start file's, none of either `_v2` file's). A start that fails to replay
+is now skipped and another drawn in both stages (`start_positions.replayed_start`), counted as
+`skipped_starts` in the history (`PG/skipped_starts`, `SL/skipped_starts`): nonzero means the run's
+position file is stale.
 
 **Step 3 -- judging, every 50 PG updates** (a PG checkpoint is the whole system):
 - system: `ag1_pg/learner/<u>.pth@200/...` vs az6 u200 and vs gen4 + critic (240 games);

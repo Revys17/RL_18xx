@@ -449,3 +449,55 @@ def sample_start_position(
     if human and rng.random() >= random_fraction:
         return rng.choice(human)
     return StartPosition(RANDOM_START, tuple(random_start_actions(num_players, rng, max_price_multiple)))
+
+
+_STALE_WARNED: set = set()
+
+
+def replayed_start(
+    num_players: int,
+    path,
+    random_fraction: float = 0.2,
+    rng: Optional[random.Random] = None,
+    midgame_path=None,
+    midgame_fraction: float = 0.0,
+    auction_fraction: float = 0.0,
+    max_draws: int = 100,
+) -> tuple:
+    """``(start, game, skipped)``: a :func:`sample_start_position` start applied to a
+    new game, with ``auction_unlock`` on for an auction start (as the generators play
+    those).
+
+    A recorded start whose actions the engine now rejects -- a position file built
+    before a rules fix (2026-10-19: one stale mid-game position killed a
+    policy-gradient run) -- is skipped and another start drawn; ``skipped`` counts the
+    draws skipped, for the caller's history. Only the start's replay is guarded: an
+    engine error later in the game is the caller's to see. Raises RuntimeError after
+    ``max_draws`` draws in a row fail to replay.
+    """
+    for skipped in range(max_draws):
+        start = sample_start_position(
+            num_players,
+            path,
+            random_fraction,
+            rng=rng,
+            midgame_path=midgame_path,
+            midgame_fraction=midgame_fraction,
+            auction_fraction=auction_fraction,
+        )
+        try:
+            game = apply_actions(new_game(num_players), start.actions)
+        except RuntimeError as e:  # the engine's GameError: the file predates a rules change
+            if start.label not in _STALE_WARNED:
+                _STALE_WARNED.add(start.label)
+                LOGGER.warning(
+                    "Start %s no longer replays (%s); skipped -- rebuild its file "
+                    "(scripts/build_start_positions.py / build_midgame_positions.py)",
+                    start.label,
+                    e,
+                )
+            continue
+        if start.label == AUCTION_START:
+            game._game.set_auction_unlock(True)
+        return start, game, skipped
+    raise RuntimeError(f"no start position replayed in {max_draws} draws ({path}, {midgame_path})")

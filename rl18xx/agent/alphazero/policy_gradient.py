@@ -40,7 +40,9 @@ trained on that policy's games -> search. This module is the second step for
   auction endings) or, in ``midgame_fraction`` of them, at a later Stock Round
   of a recorded human game (``midgame_positions``; see ``start_positions``),
   which puts the agents into positions self-play rarely reaches. ``starts`` in
-  the history counts the games by kind.
+  the history counts the games by kind, ``skipped_starts`` the recorded starts
+  the engine no longer replays (a file built before a rules fix), which are
+  redrawn (``start_positions.replayed_start``).
 - **Opponents**: the fixed opponent (``opponent_checkpoint``, default the
   starting policy) in ``sl_opponent_fraction`` of the games, the pool of
   learner snapshots (seeded with the starting policy) in the rest. With a
@@ -136,7 +138,9 @@ class PGConfig:
     opponent_temperature: float = 1.0
     opponent_price_eps: float = 0.0
     max_decisions: int = 1000
-    start_positions: str = "human_games/start_positions_1830_4p.jsonl"
+    # The _v2 files: rebuilt (2026-10-17) under the Ruby-faithful rules fixes; some of the
+    # older files' positions no longer replay.
+    start_positions: str = "human_games/start_positions_1830_4p_v2.jsonl"
     random_start_fraction: float = 0.2
     # Mid-game starts (start_positions.sample_start_position): this share of the
     # games begins at a later Stock Round of a recorded human game.
@@ -527,7 +531,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
     sampled decisions (with advantages) and each game's result."""
     from rl18xx.agent.alphazero.mcts import _rust_encode
     from rl18xx.agent.alphazero.policy_selfplay import _advance
-    from rl18xx.agent.alphazero.start_positions import AUCTION_START, apply_actions, new_game, sample_start_position
+    from rl18xx.agent.alphazero.start_positions import replayed_start
 
     rng = np.random.default_rng()
     py_rng = random.Random()
@@ -537,9 +541,10 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
     k = settings["positions_per_seat"]
     start_time = time.time()
 
-    games = []
+    games, skipped_starts = [], 0
     for _ in range(num_games):
-        start = sample_start_position(
+        # A recorded start the engine no longer replays is skipped (and counted), not raised.
+        start, game, skipped = replayed_start(
             NUM_PLAYERS,
             settings["start_positions"],
             settings["random_start_fraction"],
@@ -548,9 +553,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             midgame_fraction=settings.get("midgame_fraction", 0.0),
             auction_fraction=settings.get("auction_fraction", 0.0),
         )
-        game = apply_actions(new_game(NUM_PLAYERS), start.actions)
-        if start.label == AUCTION_START:
-            game._game.set_auction_unlock(True)
+        skipped_starts += skipped
         learner, seat_models, seat_members = _deal_seats(settings, py_rng)
         opponent = "league" if settings.get("league") else seat_models[min(set(range(NUM_PLAYERS)) - learner)]
         g = _PGGame(game=game, uid=uuid.uuid4().hex, opponent=opponent, seat_models=seat_models, start=start.label)
@@ -683,7 +686,12 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
                 "raw_actions": list(g.game.raw_actions),
             }
         records.append(record)
-    return {"games": records, "decisions": decisions_total, "seconds": time.time() - start_time}
+    return {
+        "games": records,
+        "decisions": decisions_total,
+        "skipped_starts": skipped_starts,
+        "seconds": time.time() - start_time,
+    }
 
 
 def save_game(run_dir: Path, record: dict, update: int, learner_checkpoint: str, opponent_checkpoint: str, cfg) -> str:
@@ -1131,12 +1139,13 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                 for future in done:
                     result = future.result()
                     gen["decisions"] += result["decisions"]
+                    gen["skipped_starts"] += result.get("skipped_starts", 0)
                     for record in result["games"]:
                         gen["games"] += 1
                         scores.add(record)
                         if league:
-                            for member, result in record.get("pairwise", []):
-                                league.record(member, result)
+                            for member, pairwise in record.get("pairwise", []):
+                                league.record(member, pairwise)
                         terminations[record["termination"]] += 1
                         starts[record.get("start_kind")] += 1
                         lengths.append(record["decisions"])
@@ -1256,6 +1265,8 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                     "mean_decisions": float(np.mean(lengths)) if lengths else 0.0,
                     "terminations": dict(terminations),
                     "starts": dict(starts),
+                    # Recorded starts the engine no longer replays (a stale position file), redrawn.
+                    "skipped_starts": gen["skipped_starts"],
                     "train_seconds": train_seconds,
                     "pool_size": len(pool),
                     "pool_opponent": pool_label if pool else None,

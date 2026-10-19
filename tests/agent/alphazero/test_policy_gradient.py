@@ -320,6 +320,41 @@ def test_games_can_start_mid_game(monkeypatch, tmp_path, start_file):
             assert int(encoded[4]) in (0, 1)  # Stock / Operating: decisions after the start, never the auction
 
 
+def test_a_start_that_no_longer_replays_is_skipped_and_counted_not_raised(monkeypatch, tmp_path, start_file):
+    """2026-10-19: a mid-game position recorded before a rules fix raised out of a
+    worker and killed the run. Such a start is now redrawn, and counted."""
+    from tests.agent.alphazero.test_start_positions import stale_file
+    from rl18xx.agent.alphazero import start_positions as sp
+
+    real = sp.sample_start_position
+    draws = iter([1.0, 0.0] * 3)  # per game: the stale mid-game start, then a random one
+
+    def sample(num_players, path, random_fraction, **kwargs):
+        return real(num_players, path, random_fraction, **{**kwargs, "midgame_fraction": next(draws)})
+
+    monkeypatch.setattr(sp, "sample_start_position", sample)
+    monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Client(), "sl": _Client(), "pool": _Client()})
+    settings = _settings(start_file, midgame_positions=stale_file(tmp_path, midgame=True), midgame_fraction=0.3,
+                         max_decisions=8)
+    result = pg.play_pg_games(2, settings)
+    assert result["skipped_starts"] == 2
+    assert [g["start_kind"] for g in result["games"]] == ["random", "random"]
+    assert all(g["decisions"] == 8 for g in result["games"])
+
+
+def test_an_engine_error_during_play_is_not_swallowed(monkeypatch, start_file):
+    """Only the start's replay is guarded: an engine error later in a game propagates."""
+    from rl18xx.agent.alphazero import policy_selfplay
+
+    def rejects(*args, **kwargs):
+        raise RuntimeError("Blocking step Run Routes cannot process action pass (entity NYC)")
+
+    monkeypatch.setattr(policy_selfplay, "_advance", rejects)
+    monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Client(), "sl": _Client(), "pool": _Client()})
+    with pytest.raises(RuntimeError, match="Run Routes"):
+        pg.play_pg_games(1, _settings(start_file))
+
+
 # ------------------------------------------------------------------ league mode
 def test_league_plays_the_members_the_learner_beats_least_most():
     league = pg.League(["a", "b", "c"], power=2.0, prior=4.0)

@@ -223,7 +223,7 @@ class SearchLearningConfig:
     games_per_worker: int = 24
     task_seconds: float = 30.0
     max_decisions: int = 1000
-    start_positions: str = "human_games/start_positions_1830_4p.jsonl"
+    start_positions: str = "human_games/start_positions_1830_4p_v2.jsonl"
     random_start_fraction: float = 0.2
     midgame_positions: Optional[str] = None
     midgame_fraction: float = 0.0
@@ -865,28 +865,20 @@ class Generator:
     # -- games -----------------------------------------------------------------
 
     def _new_game(self) -> _Game:
-        from rl18xx.agent.alphazero.start_positions import AUCTION_START, apply_actions, new_game, sample_start_position
+        from rl18xx.agent.alphazero.start_positions import replayed_start
 
         s = self.settings
-        for _ in range(100):
-            start = sample_start_position(
-                NUM_PLAYERS,
-                s["start_positions"],
-                s["random_start_fraction"],
-                rng=self.py_rng,
-                midgame_path=s.get("midgame_positions"),
-                midgame_fraction=s.get("midgame_fraction", 0.0),
-                auction_fraction=s.get("auction_fraction", 0.0),
-            )
-            try:
-                game = apply_actions(new_game(NUM_PLAYERS), start.actions)
-            except RuntimeError:
-                self.counts["skipped_starts"] += 1  # recorded before an engine rules change
-                continue
-            if start.label == AUCTION_START:
-                game._game.set_auction_unlock(True)
-            return _Game(game=game, uid=uuid.uuid4().hex, start=start.label, seat_servers=deal_seats(s, self.py_rng))
-        raise RuntimeError("no start position replays")
+        start, game, skipped = replayed_start(
+            NUM_PLAYERS,
+            s["start_positions"],
+            s["random_start_fraction"],
+            rng=self.py_rng,
+            midgame_path=s.get("midgame_positions"),
+            midgame_fraction=s.get("midgame_fraction", 0.0),
+            auction_fraction=s.get("auction_fraction", 0.0),
+        )
+        self.counts["skipped_starts"] += skipped  # recorded before an engine rules change
+        return _Game(game=game, uid=uuid.uuid4().hex, start=start.label, seat_servers=deal_seats(s, self.py_rng))
 
     def _tree(self, game):
         """A search tree at ``game`` (an ``engine_rs.BaseGame``, cloned), set up as
