@@ -131,7 +131,7 @@ def search(args) -> None:
     rng = np.random.default_rng(args.seed)
     positions = []
     for collection in args.collection:
-        positions.extend(sample_positions(Path(collection), args.games, args.per_game, rng))
+        positions.extend(sample_positions(Path(collection), args.games, args.per_game, rng, args.game_offset))
         LOGGER.info(f"{collection}: {len(positions)} positions so far")
     if args.limit:
         positions = positions[: args.limit]
@@ -433,6 +433,279 @@ def paired(args) -> None:
               f"+- {1e3 * se(d):.2f} (x1e-3); top-1 {dt.mean():+.4f} +- {se(dt):.4f}")
 
 
+def _auc(scores: np.ndarray, labels: np.ndarray) -> float:
+    """P(score of a positive > score of a negative), ties half (Mann-Whitney)."""
+    from scipy.stats import rankdata
+
+    scores, labels = np.asarray(scores, dtype=np.float64), np.asarray(labels, dtype=bool)
+    pos, neg = labels.sum(), (~labels).sum()
+    if not pos or not neg:
+        return float("nan")
+    ranks = rankdata(scores)
+    return float((ranks[labels].sum() - pos * (pos + 1) / 2) / (pos * neg))
+
+
+SIGNALS = ("z", "gap", "share", "t_mass", "log_ratio", "nontrack")
+
+
+def _passes(row: dict, rule: str) -> bool:
+    """``rule``: comma-separated ``<signal>=<min>`` conditions, all required (``all``: none)."""
+    if rule == "all":
+        return True
+    for cond in rule.split(","):
+        sig, _, value = cond.partition("=")
+        if row[sig] < float(value):
+            return False
+    return True
+
+
+def confidence(args) -> None:
+    """The confidence filter (``search_targets.confident_target``) offline: on each run
+    (``--config``) and target kind, the departures (target argmax != the policy's) with
+    their confidence z and simpler signals -- the q gap, ``share`` (the target move's
+    share of the two moves' visits), ``t_mass`` (the target's mass on its move),
+    ``log_ratio`` (log prior ratio of the two moves), ``nontrack`` (1 outside track
+    lays). Per rule (``--thresholds``: ``<signal>=<min>[,...]``, all required), the
+    departures kept and, against each reference: precision (the kept departure is the
+    reference's move), recall (of the positions where the reference's move is not the
+    policy's, the share a kept departure finds), ``better`` (the reference values the
+    kept departure's move above the policy's), and the filtered target's regret / its
+    change from the unfiltered target (> 0: filtering lost value by that reference) /
+    push off the policy's argmax. ``pair``: with a ``pairwise`` file
+    (``pairwise.<config>.<target>.<--pairwise>.json``), each departure's two moves
+    searched as roots by an independent network -- the kept share it values above the
+    policy's move and the share of the total pairwise gain (sum over departures of
+    q(target move) - q(policy move)) the kept departures carry. ``--reference`` /
+    ``--reference-data`` as ``score``; ``--self-reference`` names the same network's
+    deeper run in ``--data``."""
+    from rl18xx.agent.alphazero import search_targets as st
+
+    data = Path(args.data)
+    meta = json.loads((data / "positions.json").read_text())
+    refs = {}
+    with (data / f"{args.self_reference}.pkl").open("rb") as f:
+        refs["self"] = [reference_values(s) for s in pickle.load(f)["records"]]
+    if args.reference_data:
+        ref_dir = Path(args.reference_data)
+        if json.loads((ref_dir / "positions.json").read_text()) != meta:
+            raise SystemExit(f"{ref_dir} was searched on other positions")
+        with (ref_dir / f"{args.reference}.pkl").open("rb") as f:
+            refs["az1"] = [reference_values(s) for s in pickle.load(f)["records"]]
+    variants = target_variants()
+    lines = []
+    select = list(range(len(meta)))
+    for config in args.config:
+        with (data / f"{config}.pkl").open("rb") as f:
+            records = pickle.load(f)["records"]
+        if "child_q_var" not in records[0]:
+            raise SystemExit(f"{config}: no child_q_var (searched by an older engine build)")
+        select = [i for i, m in enumerate(meta) if not args.step or m["step"] == args.step]
+        for kind in args.targets:
+            pair_path = data / f"pairwise.{config}.{kind}.{args.pairwise}.json"
+            pair = {}
+            if pair_path.exists():
+                for e in json.loads(pair_path.read_text())["departures"]:
+                    pair[e["i"]] = e["t_mean"] - e["p_mean"]
+            rows = []
+            for i in select:
+                s = records[i]
+                prior = s["child_prior"] / s["child_prior"].sum()
+                t = variants[kind](s)
+                p_top, t_top = int(np.argmax(prior)), int(np.argmax(t))
+                n = s["child_n"]
+                rows.append({
+                    "i": i, "t": t, "prior": prior, "dep": t_top != p_top, "p_top": p_top, "t_top": t_top,
+                    "z": min(st.departure_confidence(s, t, args.prior_weight), 1e6),
+                    "gap": float(s["completed_q"][t_top] - s["completed_q"][p_top]),
+                    "share": float(n[t_top] / max(n[t_top] + n[p_top], 1.0)),
+                    "t_mass": float(t[t_top]),
+                    "log_ratio": float(np.log(max(prior[t_top], 1e-12) / prior[p_top])),
+                    "nontrack": float(meta[i]["step"] != "track"),
+                    "pair": pair.get(i),
+                })
+            deps = [r for r in rows if r["dep"]]
+            paired = [r for r in deps if r["pair"] is not None]
+            # Signal quality: AUC of each signal for "the departure is the reference's move" / "better".
+            for ref_name, ref in refs.items():
+                labels = np.array([r["t_top"] == ref[r["i"]]["best_i"] for r in deps])
+                better = np.array([ref[r["i"]]["q"][r["t_top"]] > ref[r["i"]]["q"][r["p_top"]] for r in deps])
+                lines.append({
+                    "config": config, "target": kind, "ref": ref_name, "kind": "auc", "departures": len(deps),
+                    "prec_all": float(labels.mean()) if len(deps) else float("nan"),
+                    "better_all": float(better.mean()) if len(deps) else float("nan"),
+                    **{f"auc_{sig}": _auc([r[sig] for r in deps], labels) for sig in SIGNALS},
+                    **{f"auc_better_{sig}": _auc([r[sig] for r in deps], better) for sig in SIGNALS},
+                })
+            if paired:
+                labels = np.array([r["pair"] > 0 for r in paired])
+                lines.append({
+                    "config": config, "target": kind, "ref": "pair", "kind": "auc", "departures": len(paired),
+                    "prec_all": float("nan"), "better_all": float(labels.mean()),
+                    "gain_all": float(np.mean([r["pair"] for r in paired])),
+                    **{f"auc_{sig}": float("nan") for sig in SIGNALS},
+                    **{f"auc_better_{sig}": _auc([r[sig] for r in paired], labels) for sig in SIGNALS},
+                })
+            for rule in args.thresholds:
+                kept = [r for r in deps if _passes(r, rule)]
+                for ref_name, ref in refs.items():
+                    overrides = [r for r in rows if ref[r["i"]]["best_i"] != r["p_top"]]
+                    found = sum(1 for r in kept if r["t_top"] == ref[r["i"]]["best_i"])
+                    better = sum(1 for r in kept if ref[r["i"]]["q"][r["t_top"]] > ref[r["i"]]["q"][r["p_top"]])
+                    regret, push, regret0 = [], [], []
+                    for r in rows:
+                        q = ref[r["i"]]["q"]
+                        t = r["t"]
+                        if r["dep"] and not _passes(r, rule):
+                            soft = args.mode == "soft" and rule.startswith("z=") and "," not in rule
+                            if soft and float(rule[2:]) > 0:
+                                c = min(max(r["z"], 0.0) / float(rule[2:]), 1.0)
+                                t = r["prior"] + c * (r["t"] - r["prior"])
+                            else:
+                                t = r["prior"]
+                        regret.append(float(q[ref[r["i"]]["best_i"]] - t @ q))
+                        regret0.append(float(q[ref[r["i"]]["best_i"]] - r["t"] @ q))
+                        push.append(float((1 - t[r["p_top"]]) - (1 - r["prior"][r["p_top"]])))
+                    d = np.array(regret) - np.array(regret0)
+                    lines.append({
+                        "config": config, "target": kind, "ref": ref_name, "kind": "threshold", "rule": rule,
+                        "departures": len(deps), "kept": len(kept), "kept_share": len(kept) / max(len(deps), 1),
+                        "precision": found / len(kept) if kept else float("nan"),
+                        "recall": found / max(len(overrides), 1),
+                        "better": better / len(kept) if kept else float("nan"),
+                        "regret": float(np.mean(regret)), "regret_vs_unfiltered": float(d.mean()),
+                        "regret_vs_unfiltered_se": float(d.std(ddof=1) / np.sqrt(len(d))), "push": float(np.mean(push)),
+                    })
+                if paired:
+                    kp = [r for r in paired if _passes(r, rule)]
+                    total = sum(r["pair"] for r in paired)
+                    lines.append({
+                        "config": config, "target": kind, "ref": "pair", "kind": "threshold", "rule": rule,
+                        "departures": len(paired), "kept": len(kp), "kept_share": len(kp) / len(paired),
+                        "precision": float("nan"), "recall": float("nan"),
+                        "better": float(np.mean([r["pair"] > 0 for r in kp])) if kp else float("nan"),
+                        "gain_kept": float(np.mean([r["pair"] for r in kp])) if kp else float("nan"),
+                        "gain_dropped": float(np.mean([r["pair"] for r in paired if not _passes(r, rule)]))
+                        if len(kp) < len(paired) else float("nan"),
+                        "gain_share": sum(r["pair"] for r in kp) / total if total else float("nan"),
+                        "regret": float("nan"), "regret_vs_unfiltered": float("nan"), "push": float("nan"),
+                    })
+    out = data / (args.out or "confidence.jsonl")
+    out.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    print(f"positions {len(select)}{' step ' + args.step if args.step else ''}; written to {out}")
+    for line in lines:
+        if line["kind"] == "auc":
+            print(f"{line['config']:<9} {line['target']:<13} ref {line['ref']:<5} departures {line['departures']:4d} "
+                  f"prec {line['prec_all']:.3f} better {line['better_all']:.3f} | AUC(match) "
+                  + " ".join(f"{sig} {line['auc_' + sig]:.2f}" for sig in SIGNALS)
+                  + " | AUC(better) " + " ".join(f"{sig} {line['auc_better_' + sig]:.2f}" for sig in SIGNALS))
+    print(f"{'config':<9} {'target':<13} {'ref':<5} {'rule':<16} {'kept':>5} {'share':>6} {'prec':>6} {'recall':>6} "
+          f"{'better':>6} {'regret':>8} {'d_regret':>9} {'push':>7} {'gain_k':>7} {'gain_d':>7} {'gain%':>6}")
+    for line in lines:
+        if line["kind"] == "threshold":
+            print(f"{line['config']:<9} {line['target']:<13} {line['ref']:<5} {line['rule']:<16} {line['kept']:5d} "
+                  f"{line['kept_share']:6.3f} {line['precision']:6.3f} {line['recall']:6.3f} {line['better']:6.3f} "
+                  f"{1e3 * line['regret']:8.3f} {1e3 * line['regret_vs_unfiltered']:+9.3f} {line['push']:+7.3f} "
+                  f"{1e3 * line.get('gain_kept', float('nan')):7.2f} "
+                  f"{1e3 * line.get('gain_dropped', float('nan')):7.2f} "
+                  f"{line.get('gain_share', float('nan')):6.3f}")
+
+
+def pairwise(args) -> None:
+    """For each departure of a target (its argmax is not the policy's) on a run, the two
+    children -- the target's move and the policy's top move, built as the judged search
+    builds them (``--expander``: the judged network's priors and price head) -- are each
+    searched as a root by ``--model`` (an independent network) with ``--readouts``; the
+    mover's value of each (the root's mean backed-up value, and its most visited move's)
+    is a direct, prior-free comparison of the two moves. Writes ``pairwise.<config>.<target>.json``."""
+    import engine_rs
+    import torch
+
+    from diag_sibling_values import sample_positions
+    from reanalyze_siblings import reanalysis_settings, search_values
+
+    from rl18xx.agent.alphazero import search_learning as sl
+    from rl18xx.agent.alphazero.composite_model import load_policy_value
+    from rl18xx.agent.alphazero.config import SelfPlayConfig
+    from rl18xx.agent.alphazero.lockstep import LockstepSearcher, ModelEvaluator, TreeSearch
+    from rl18xx.agent.alphazero.policy_gradient import use_tf32
+    from rl18xx.agent.alphazero.rust_mcts_player import RustMCTSPlayer
+    from rl18xx.rust_adapter import RustGameAdapter
+
+    data = Path(args.data)
+    meta = json.loads((data / "positions.json").read_text())
+    rng = np.random.default_rng(args.seed)
+    positions = []
+    for collection in args.collection:
+        positions.extend(sample_positions(Path(collection), args.games, args.per_game, rng, args.game_offset))
+    if len(positions) != len(meta) or any(
+        p[0] != m["game"] or p[1] != m["action"] for p, m in zip(positions, meta)
+    ):
+        raise SystemExit("the collection arguments do not give the run's positions")
+    with (data / f"{args.config}.pkl").open("rb") as f:
+        records = pickle.load(f)["records"]
+    variants = target_variants()
+    deps = []
+    for i, s in enumerate(records):
+        t = variants[args.target](s)
+        p_top, t_top = int(np.argmax(s["child_prior"])), int(np.argmax(t))
+        if p_top != t_top:
+            deps.append((i, int(s["legal"][t_top]), int(s["legal"][p_top])))
+    LOGGER.info(f"{args.config}/{args.target}: {len(deps)} departures")
+
+    use_tf32()
+    torch.set_num_threads(args.torch_threads)
+    net = load_policy_value(args.model)
+    expander = load_policy_value(args.expander)
+    evaluator, expand_eval = ModelEvaluator(net), ModelEvaluator(expander)
+    gen = sl.Generator(reanalysis_settings(args.readouts, 0.05, args.temperature), {"m": evaluator})
+    searcher = LockstepSearcher({"m": evaluator, "x": expand_eval}, dedupe_maps=True)
+    out = []
+    for b in range(0, len(deps), args.chunk):
+        part = deps[b : b + args.chunk]
+        players, roots = [], []
+        for i, _, _ in part:
+            rs = positions[i][3]
+            config = SelfPlayConfig(
+                network=expander, use_inference_server=False, num_readouts=1, min_readouts=1, c_puct_init=0.05,
+                c_puct_by_round={}, mcts_mean_q=True, fpu_reduction=0.0, dedupe_leaves=True, parallel_readouts=8,
+                prior_temperature=args.temperature, softpick_move_cutoff=0, dirichlet_noise_weight=0.0,
+                enable_resign=False, noresign_holdout_rate=0.0, max_game_length=1000,
+                player_count_distribution={NUM_PLAYERS: 1.0}, auction_unlock=True,
+            )
+            player = RustMCTSPlayer(config)
+            player.initialize_game(RustGameAdapter(rs.pickle_clone()))
+            players.append(player)
+            s = player.start_search(key="x")
+            if s is not None:
+                roots.append(s)
+        with torch.no_grad():
+            searcher.round(roots)
+        jobs, entries = [], []
+        for (i, t_move, p_move), player in zip(part, players):
+            tree = player._rust_player
+            mover = int(positions[i][3].encode_canonical_py()[3])
+            entry = {"i": i, "t": t_move, "p": p_move, "mover": mover}
+            for side, move in (("t", t_move), ("p", p_move)):
+                game = tree.get_game_for_idx(tree.maybe_add_child(tree.root_idx, move, None))
+                if bool(game.finished):
+                    v = np.asarray(engine_rs.mcts_terminal_value(game, True), dtype=np.float64)[:NUM_PLAYERS]
+                    entry[f"{side}_mean"] = entry[f"{side}_best"] = float(v[mover] / max(v.sum(), 1e-9))
+                else:
+                    jobs.append((entry, side, TreeSearch(gen._tree(game), args.readouts, key="m", budget="total")))
+            entries.append(entry)
+        with torch.no_grad():
+            searcher.run([s for _, _, s in jobs])
+        for entry, side, s in jobs:
+            for kind, value in search_values(s.tree).items():
+                entry[f"{side}_{kind}"] = float(value[entry["mover"]])
+        out.extend(entries)
+        LOGGER.info(f"{len(out)} / {len(deps)} departures compared, {evaluator.states} evaluations")
+    path = data / f"pairwise.{args.config}.{args.target}.{args.name}.json"
+    path.write_text(json.dumps({"model": args.model, "readouts": args.readouts, "departures": out}))
+    better = np.array([e["t_mean"] > e["p_mean"] for e in out])
+    LOGGER.info(f"wrote {path}: the target's move valued above the policy's in {better.mean():.3f} of departures")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -441,6 +714,7 @@ def main():
     p.add_argument("--collection", action="append", required=True)
     p.add_argument("--games", type=int, default=40, help="games per collection")
     p.add_argument("--per-game", type=int, default=5)
+    p.add_argument("--game-offset", type=int, default=0, help="skip each collection's first games")
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--config", nargs="+", required=True, help="<c_puct>[:qnorm]@<readouts>")
     p.add_argument("--temperature", type=float, default=0.0, help="priors' temperature (0: the checkpoint run's)")
@@ -472,9 +746,41 @@ def main():
     p.add_argument("--run", action="append", required=True, help="<label>=<data dir>/<config>.pkl")
     p.add_argument("--targets", nargs="*", default=None)
     p.add_argument("--out", default=None)
+    p = sub.add_parser("confidence")
+    p.add_argument("--data", required=True)
+    p.add_argument("--config", nargs="+", required=True, help="the runs whose targets to filter (e.g. 0.05@48)")
+    p.add_argument("--self-reference", default="0.05@800", help="the same network's deeper run in --data")
+    p.add_argument("--reference", default="0.05@800")
+    p.add_argument("--reference-data", default=None, help="an independent network's run directory (az1)")
+    p.add_argument("--targets", nargs="+", default=["cq", "visits_pruned"])
+    p.add_argument("--thresholds", nargs="+", default=["all", "z=1", "z=2", "z=3", "share=0.5", "nontrack=1"],
+                   help="<signal>=<min>[,<signal>=<min>...] (all required), signals " + ", ".join(SIGNALS))
+    p.add_argument("--pairwise", default="az1",
+                   help="the pairwise file's name (pairwise.<config>.<target>.<name>.json)")
+    p.add_argument("--mode", choices=("prior", "soft"), default="prior")
+    p.add_argument("--prior-weight", type=float, default=2.0)
+    p.add_argument("--step", default=None)
+    p.add_argument("--out", default=None)
+    p = sub.add_parser("pairwise")
+    p.add_argument("--data", required=True)
+    p.add_argument("--config", required=True)
+    p.add_argument("--target", default="cq")
+    p.add_argument("--model", required=True, help="the independent network that searches both children")
+    p.add_argument("--expander", required=True, help="the judged network (builds the children as its search did)")
+    p.add_argument("--name", default="az1")
+    p.add_argument("--readouts", type=int, default=400)
+    p.add_argument("--temperature", type=float, default=0.5)
+    p.add_argument("--collection", action="append", required=True)
+    p.add_argument("--games", type=int, default=40)
+    p.add_argument("--per-game", type=int, default=5)
+    p.add_argument("--game-offset", type=int, default=0)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--chunk", type=int, default=32)
+    p.add_argument("--torch-threads", type=int, default=2)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    {"search": search, "score": score, "steps": steps, "pressure": pressure, "paired": paired}[args.cmd](args)
+    {"search": search, "score": score, "steps": steps, "pressure": pressure, "paired": paired,
+     "confidence": confidence, "pairwise": pairwise}[args.cmd](args)
 
 
 if __name__ == "__main__":
