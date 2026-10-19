@@ -21,6 +21,8 @@ the same machine load. A variant is ``+``-joined flags:
 - ``rep<N>``: N server processes (``start_inference_server(replicas=N)``), the clients split between them
 - ``legacyreply``: replies through ``_batched_legal_replies`` (a GPU round trip per transfer, before
   2026-10-19) instead of staged replies (the reply's device work queued behind the forward, one copy)
+- ``noprice``: replies without their price rows (99% of their bytes; the network still computes
+  them) -- an upper bound on what a smaller reply transport could save, not a valid server
 
     uv run python scripts/bench_inference_server.py capture --out logs/perf/requests_mid.npz \\
         --midgame-fraction 1 --auction-fraction 0 --skip-seconds 50 --seconds 170 --every 3
@@ -56,6 +58,34 @@ GEN4 = (
     "model_checkpoints_pg/rab_place_20261014/learner/1800.pth"
     "+model_checkpoints_pg/rab_place_20261014/critic/1800.pth"
 )
+
+
+# ----------------------------------------------------------------------------- reply size bound
+
+
+class _NoPriceRows:
+    """The served model without price rows in its replies (the ``noprice`` variant):
+    the network still computes them, the replies leave them out -- what a reply
+    without its largest part (99% of its bytes) could save in transport. Not a
+    valid server for a search."""
+
+    def __init__(self, model):
+        self.model = model
+        self.last_price_components = None
+
+    def __getattr__(self, name):
+        return getattr(self.model, name)
+
+    def run_packed(self, inputs, legal_indices=None):
+        out = self.model.run_packed(inputs, legal_indices)
+        self.last_price_components = None
+        return out
+
+
+def noprice_model_factory(spec):
+    from rl18xx.agent.alphazero.policy_gradient import load_server_model
+
+    return _NoPriceRows(load_server_model(spec))
 
 
 # ----------------------------------------------------------------------------- capture
@@ -346,12 +376,15 @@ def serve_variant(args, variant: str) -> dict:
 
     flags = set(variant.split("+"))
     replicas = next((int(f[3:]) for f in flags if f.startswith("rep")), 1)
-    unknown = {f for f in flags if not f.startswith("rep")} - {"base", "fast", "dedupe", "pipeline", "legacyreply"}
+    unknown = {f for f in flags if not f.startswith("rep")} - {
+        "base", "fast", "dedupe", "pipeline", "legacyreply", "noprice"
+    }
     if unknown:
         raise SystemExit(f"unknown variant flags {unknown}")
     os.environ["RL18XX_SERVER_PROFILE"] = str(args.profile_every)
     handle = start_inference_server(
-        num_workers=args.clients, model_factory=load_server_model, checkpoint_path=args.model,
+        num_workers=args.clients, checkpoint_path=args.model,
+        model_factory=noprice_model_factory if "noprice" in flags else load_server_model,
         batch_size=args.batch_size, fast_path="base" not in flags, pipeline="pipeline" in flags, replicas=replicas,
         staged_replies="legacyreply" not in flags,
     )

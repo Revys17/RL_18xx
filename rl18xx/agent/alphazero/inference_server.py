@@ -464,6 +464,8 @@ def _stage_replies(probs: Any, values: Any, price: Optional[dict], gather: tuple
         return None
     if logits is not None and not isinstance(logits, torch.Tensor):
         return None
+    if values.device != probs.device or (logits is not None and logits.device != probs.device):
+        return None
     rows, cols = gather
     if rows.device != probs.device:
         rows, cols = rows.to(probs.device), cols.to(probs.device)
@@ -1108,7 +1110,11 @@ class _StageProfile:
     """``RL18XX_SERVER_PROFILE=<seconds>``: every that many seconds a server logs how
     its time split between waiting for requests (idle), collecting a batch (incl.
     unpickling), unpacking states, the forward pass (synchronized), building
-    replies and dispatching them. With ``pipeline``, "collect" is the server
+    replies and dispatching them. With ``staged_replies`` (the default) the
+    replies' device work (gather, one copy to the host) is queued with the
+    forward and counts in "forward"; "replies" is then host work only (before
+    2026-10-19 it held ~1/3 of a busy server's time: five more waits on the GPU
+    per batch). With ``pipeline``, "collect" is the server
     thread's wait for the collector's next batch and ``bg_collect`` /
     ``bg_prepare`` the collector thread's own time (overlapping the rest)."""
 

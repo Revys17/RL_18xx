@@ -9,15 +9,20 @@ A config is ``+``-joined options (``base`` or ``unpacked``: the server path befo
 ``fast``: the packed fast path, the default now):
 ``unpacked`` (the server's per-state path), ``dedupe`` (``--dedupe-maps``),
 ``total`` / ``additional`` (``--reuse-tree``), ``rep<N>`` (``--server-replicas``), ``gumbel``
-(``--target gumbel``). ``--model`` is a server spec: ``<policy>+<critic>`` (default, gen4)
+(``--target gumbel``), ``legacyreply`` (the server's replies before 2026-10-19: a GPU round trip
+per transfer, not staged). ``--model`` is a server spec: ``<policy>+<critic>`` (default, gen4)
 or a single checkpoint (``--shared``: the learner's own value heads, one forward).
 Search settings as az1_20261017 (visits target, pruned, n_full 200, n_fast 48,
 p_full 0.25, c_puct 0.05, 32 games per worker, mid-game 0.3, auction 0.15).
 
     uv run python scripts/bench_search_generation.py --configs base dedupe+total+rep2 --workers 8 --seconds 150
+    uv run python scripts/bench_search_generation.py --run-config model_checkpoints_search/az8_20261019/config.json \\
+        --model model_checkpoints_search/az8_20261019/learner/10.pth --games-per-worker 20 \\
+        --configs dedupe+total+rep2+legacyreply dedupe+total+rep2 --workers 10 --rounds 2
 """
 
 import argparse
+import dataclasses
 import json
 import multiprocessing
 import os
@@ -61,15 +66,28 @@ def run_config(args, config: str) -> dict:
     flags = set(config.split("+"))
     replicas = next((int(f[3:]) for f in flags if f.startswith("rep")), 1)
     reuse = "total" if "total" in flags else "additional" if "additional" in flags else "off"
-    cfg = sl.SearchLearningConfig(
-        policy_checkpoint="", value_checkpoint="", learner_temperature=0.5, prior_temperature=0.5,
-        target="gumbel" if "gumbel" in flags else "visits", visit_target="pruned", p_full=0.25, n_full=args.n_full, n_fast=args.n_fast, c_puct_init=0.05,
-        workers=args.workers, games_per_worker=args.games_per_worker, task_seconds=args.task_seconds,
-        start_positions="human_games/start_positions_1830_4p_v2.jsonl",
-        midgame_positions="human_games/midgame_positions_1830_4p_v2.jsonl",
-        midgame_fraction=0.3, auction_fraction=0.15, reuse_tree=reuse, dedupe_maps="dedupe" in flags,
-        server_replicas=replicas,
-    )
+    if args.run_config:
+        # A run's own search settings (its config.json); the config's flags set the
+        # speed-ups, the command line the generation layout.
+        raw = json.loads(Path(args.run_config).read_text())
+        fields = {f.name for f in dataclasses.fields(sl.SearchLearningConfig)}
+        cfg = sl.SearchLearningConfig(**{k: tuple(v) if isinstance(v, list) else v for k, v in raw.items() if k in fields})
+        cfg.workers, cfg.games_per_worker, cfg.task_seconds = args.workers, args.games_per_worker, args.task_seconds
+        cfg.reuse_tree, cfg.dedupe_maps, cfg.server_replicas = reuse, "dedupe" in flags, replicas
+        for key in ("n_full", "n_fast", "p_full"):
+            if getattr(args, key) is not None:
+                setattr(cfg, key, getattr(args, key))
+    else:
+        cfg = sl.SearchLearningConfig(
+            policy_checkpoint="", value_checkpoint="", learner_temperature=0.5, prior_temperature=0.5,
+            target="gumbel" if "gumbel" in flags else "visits", visit_target="pruned", p_full=args.p_full or 0.25,
+            n_full=args.n_full or 200, n_fast=args.n_fast if args.n_fast is not None else 48, c_puct_init=0.05,
+            workers=args.workers, games_per_worker=args.games_per_worker, task_seconds=args.task_seconds,
+            start_positions="human_games/start_positions_1830_4p_v2.jsonl",
+            midgame_positions="human_games/midgame_positions_1830_4p_v2.jsonl",
+            midgame_fraction=0.3, auction_fraction=0.15, reuse_tree=reuse, dedupe_maps="dedupe" in flags,
+            server_replicas=replicas,
+        )
     handle = start_inference_server(
         num_workers=args.workers, model_factory=load_server_model, checkpoint_path=args.model,
         batch_size=cfg.inference_batch_size, autocast_device=None, fast_path=not flags & {"unpacked", "base"},
@@ -125,8 +143,12 @@ def main():
     parser.add_argument("--configs", nargs="+", default=["base", "dedupe+total+rep2"])
     parser.add_argument("--model", default=GEN4)
     parser.add_argument("--workers", type=int, default=8)
-    parser.add_argument("--n-full", type=int, default=200, help="Readouts of a recorded search (az1: 200)")
-    parser.add_argument("--n-fast", type=int, default=48, help="Readouts of the other searches (az1: 48)")
+    parser.add_argument("--n-full", type=int, default=None, help="Readouts of a recorded search (default az1's 200)")
+    parser.add_argument("--n-fast", type=int, default=None, help="Readouts of the other searches (default az1's 48)")
+    parser.add_argument("--p-full", type=float, default=None, help="Share of decisions searched at n_full (default 0.25)")
+    parser.add_argument("--run-config", default=None,
+                        help="A search-learning run's config.json: its search settings (az8's: n_full 800, n_fast 64, "
+                             "p_full 0.1, cq targets, Gumbel root); --n-full / --n-fast / --p-full override them")
     parser.add_argument("--games-per-worker", type=int, default=32)
     parser.add_argument("--seconds", type=float, default=150)
     parser.add_argument("--task-seconds", type=float, default=30)

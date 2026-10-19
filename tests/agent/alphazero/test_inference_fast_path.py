@@ -249,6 +249,16 @@ def test_staged_replies_on_cuda_are_the_legacy_replies(packs):
     assert staged.host.is_pinned() and staged.event is not None
     priors, values, logits = staged.arrays()
     assert priors.tolist() == [1.0, 1.0, 1.0] and values.shape == (2, 6) and logits is None
+    # The packed inputs on the GPU are the stacked arrays.
+    from rl18xx.agent.alphazero.model_transformer import packed_arrays
+
+    arrays = packed_arrays(srv._packed_parts(packs))
+    inputs = policy.packed_inputs(arrays)
+    for key, tensor in inputs.items():
+        if arrays[key] is None:
+            assert tensor is None
+        else:
+            assert tensor.is_cuda and torch.equal(tensor.cpu(), torch.from_numpy(arrays[key]))
 
 
 def test_packed_states_pickle_compactly_and_unpickle_to_the_same_states(packs):
