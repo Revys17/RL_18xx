@@ -290,6 +290,11 @@ def cmd_search_learning(args):
         aux_loss_weight=args.aux_loss_weight,
         surprise_weight=args.surprise_weight,
         surprise_cap=args.surprise_cap,
+        target_confidence=args.target_confidence,
+        target_confidence_mode=args.target_confidence_mode,
+        target_confidence_prior_weight=args.target_confidence_prior_weight,
+        target_confidence_signal=args.target_confidence_signal,
+        target_distrust_steps=tuple(x for x in (args.target_distrust_steps or "").split(",") if x),
     )
     print(run(config, resume=args.resume))
 
@@ -747,6 +752,19 @@ def build_parser():
     p.add_argument("--surprise-weight", type=float, default=_SL.surprise_weight,
                    help="KataGo's policy surprise weighting: a row's target CE weighs (1 - a) + a * KL / mean KL; 0 = off")
     p.add_argument("--surprise-cap", type=float, default=_SL.surprise_cap, help="Largest surprise weight")
+    p.add_argument("--target-confidence", type=float, default=_SL.target_confidence,
+                   help="Keep a target that departs from the policy's top move only where z = (q_t - q_p) / se >= this "
+                   "(search_targets.departure_confidence); weaker departures shrink toward the policy. Default: off")
+    p.add_argument("--target-confidence-mode", choices=("prior", "soft"), default=_SL.target_confidence_mode,
+                   help="Below the threshold: prior = the policy's distribution; "
+                   "soft = keep z / threshold of the departure")
+    p.add_argument("--target-confidence-prior-weight", type=float, default=_SL.target_confidence_prior_weight,
+                   help="Pseudo-visits of the root's pooled value variance in each move's variance estimate")
+    p.add_argument("--target-confidence-signal", choices=("z", "share"), default=_SL.target_confidence_signal,
+                   help="z: (q_t - q_p) / se; share: N_t / (N_t + N_p), the departure's share of the two moves' visits")
+    p.add_argument("--target-distrust-steps", default="",
+                   help="Comma-separated step types (stock, track, token, route, dividend, train, other) whose "
+                   "departures from the policy's top move always shrink toward the policy (e.g. track)")
 
     # convert (encode games to LMDB for pretraining)
     p = sub.add_parser("convert", help="Convert cleaned game JSONs to LMDB training data")

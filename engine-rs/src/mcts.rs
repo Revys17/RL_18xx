@@ -74,6 +74,11 @@ pub struct RustMCTSNode {
     /// Virtual losses in flight through each child (``mean_q`` uses them to
     /// count an in-flight descent as a zero-value visit).
     pub child_vl: Vec<f32>,
+    /// Sum of the squared values backed up through each child for this node's
+    /// mover (``active_player_index``), real backups only (virtual losses never
+    /// touch it). Read by ``root_target_stats`` (``child_q_var``: the
+    /// confidence of a policy target's departure); selection never reads it.
+    pub child_w2: Vec<f32>,
     pub child_prior: Vec<f32>,
     pub original_prior: Vec<f32>,
 
@@ -342,6 +347,7 @@ impl RustMCTSPlayer {
             action_types,
             child_n: vec![0.0; num_legal],
             child_vl: vec![0.0; num_legal],
+            child_w2: vec![0.0; num_legal],
             child_w: vec![[0.0; VALUE_SIZE]; num_legal],
             child_prior: vec![0.0; num_legal],
             original_prior: vec![0.0; num_legal],
@@ -1217,6 +1223,8 @@ impl RustMCTSPlayer {
     ///   the policy head's view of the slot);
     /// - ``child_q``: the mover's mean backed-up value of each move (in-flight
     ///   virtual losses undone), NaN where unvisited;
+    /// - ``child_q_var``: the sample variance of those backed-up values
+    ///   (E[v^2] - q^2 over the move's visits), NaN where unvisited;
     /// - ``completed_q``: ``child_q`` with the unvisited moves at ``v_mix``
     ///   (the Gumbel root's completion, ``gumbel.rs``);
     /// - scalars ``raw_value`` (the network's value of the root for its mover),
@@ -1246,6 +1254,20 @@ impl RustMCTSPlayer {
         d.set_item("child_n", root.child_n.clone())?;
         d.set_item("child_prior", root.child_prior.clone())?;
         d.set_item("child_q", child_q)?;
+        // The sample variance of each move's backed-up values for the mover
+        // (E[v^2] - q^2, clamped at 0), NaN where unvisited.
+        let child_q_var: Vec<f32> = (0..num_legal)
+            .map(|i| {
+                let n = root.child_n[i];
+                if n > 0.0 {
+                    let q = (root.child_w[i][ap] + root.child_vl[i]) / n;
+                    (root.child_w2[i] / n - q * q).max(0.0)
+                } else {
+                    f32::NAN
+                }
+            })
+            .collect();
+        d.set_item("child_q_var", child_q_var)?;
         d.set_item(
             "open_price",
             root.legal_action_indices.iter().map(|&a| Self::is_pw_slot(root, a)).collect::<Vec<bool>>(),
@@ -1567,6 +1589,8 @@ impl RustMCTSPlayer {
                     self.arena[parent].child_w[pidx][i] += current_value[i];
                 }
             }
+            let mover_value = current_value[self.arena[parent].active_player_index];
+            self.arena[parent].child_w2[pidx] += mover_value * mover_value;
             if current == up_to {
                 return;
             }
@@ -1609,6 +1633,7 @@ impl RustMCTSPlayer {
         node.child_prior = legal_probs;
         // child_w stays zeroed (standard AlphaZero).
         node.child_w = vec![[0.0; VALUE_SIZE]; node.legal_action_indices.len()];
+        node.child_w2 = vec![0.0; node.legal_action_indices.len()];
         node.raw_value = value;
         self.backup(arena_idx, value);
     }

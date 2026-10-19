@@ -56,14 +56,10 @@ EVAL_OVERRIDES = dict(
 
 
 def step_type(rs, legal) -> str:
-    if rs.round.round_type == "Stock":
-        return "stock"
-    types = {rs.decode_index_to_map(int(ix), None).get("type") for ix in legal}
-    for name, kind in (("lay_tile", "track"), ("place_token", "token"), ("run_routes", "route"),
-                       ("dividend", "dividend"), ("buy_train", "train")):
-        if name in types:
-            return kind
-    return "other"
+    """``search_learning.decision_step``: stock, track, token, route, dividend, train or other."""
+    from rl18xx.agent.alphazero.search_learning import decision_step
+
+    return decision_step(rs, legal)
 
 
 def collection_games(directory: Path) -> list:
@@ -93,15 +89,16 @@ def collection_games(directory: Path) -> list:
     return out
 
 
-def sample_positions(collection: Path, games: int, per_game: int, rng: np.random.Generator) -> list:
+def sample_positions(
+    collection: Path, games: int, per_game: int, rng: np.random.Generator, offset: int = 0
+) -> list:
     """Decision positions (several legal moves, past the auction) drawn uniformly
-    from each game: ``(game id, action index, n actions, engine clone, recorded
-    action, record)``."""
-    from rl18xx.agent.alphazero import value_refit as vr
+    from each of the collection's games ``offset`` to ``offset + games``: ``(game id,
+    action index, n actions, engine clone, recorded action, record)``."""
     from rl18xx.agent.alphazero.start_positions import new_game
 
     out = []
-    for game_id, actions, record in collection_games(collection)[:games]:
+    for game_id, actions, record in collection_games(collection)[offset : offset + games]:
         g = new_game(NUM_PLAYERS)
         rs = g._game
         candidates = []

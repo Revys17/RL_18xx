@@ -48,14 +48,16 @@ LOW_LOGIT = -1e9  # gumbel.rs's floor for log-priors
 Q_NORM_EPS = 1e-6
 TARGET_KINDS = ("visits", "cq", "rpo")
 RPO_UNVISITED = ("vmix", "parent", "min")
+SURE = 1e12  # departure_confidence of a departure whose values have no spread at all
 
 
 def root_stats(tree) -> dict:
     """``tree.root_target_stats()`` (a ``engine_rs.RustMCTSPlayer``) as numpy."""
     s = dict(tree.root_target_stats())
     s["legal"] = np.asarray(s["legal"], dtype=np.int64)
-    for key in ("child_n", "child_prior", "child_q", "completed_q"):
-        s[key] = np.asarray(s[key], dtype=np.float64)
+    for key in ("child_n", "child_prior", "child_q", "completed_q", "child_q_var"):
+        if key in s:
+            s[key] = np.asarray(s[key], dtype=np.float64)
     s["open_price"] = np.asarray(s["open_price"], dtype=bool)
     for key in ("raw_value", "root_value", "v_mix", "root_n", "c_puct"):
         s[key] = float(s[key])
@@ -156,6 +158,100 @@ def rpo_target(
     if stats["child_n"].sum() <= 0 or prior.sum() <= 0:
         return prior / prior.sum() if prior.sum() > 0 else visit_target(stats)
     return solve_rpo(prior, rpo_q(stats, unvisited, normalize), rpo_lambda(stats, c))
+
+
+def pooled_q_var(stats: dict) -> float:
+    """The variance of every value backed up through the root's visited moves (for
+    the mover): the prior variance a move's own estimate shrinks toward."""
+    n = stats["child_n"]
+    visited = n > 0
+    if not visited.any() or "child_q_var" not in stats:
+        return float("nan")
+    n, q, var = n[visited], stats["child_q"][visited], np.nan_to_num(stats["child_q_var"][visited], nan=0.0)
+    total = float(n.sum())
+    mean = float((n * q).sum()) / total
+    return max(float((n * (var + q * q)).sum()) / total - mean * mean, 0.0)
+
+
+def departure_confidence(stats: dict, target: np.ndarray, prior_weight: float = 2.0) -> float:
+    """How surely the target's preferred move beats the policy's top move: z = (q_t - q_p) /
+    sqrt(var_t / N_t + var_p / N_p), t = argmax(target), p = argmax of the tree's priors
+    (the policy at T), q the mover's mean backed-up value of each, var its variance
+    (``child_q_var``) shrunk toward the root's pooled variance with ``prior_weight``
+    pseudo-visits ((N var + k pooled) / (N + k): one or two visits say little about a
+    spread) -- the standard error of each mean as KataGo's LCB move selection uses
+    it. ``inf`` where the target agrees with the policy; 0 where either move is
+    unvisited (no evidence) or the root has no variances (an older engine build).
+    Finite for every departure."""
+    prior = stats["child_prior"]
+    t, p = int(np.argmax(target)), int(np.argmax(prior))
+    if t == p:
+        return float("inf")
+    n = stats["child_n"]
+    if n[t] <= 0 or n[p] <= 0 or "child_q_var" not in stats:
+        return 0.0
+    pooled = pooled_q_var(stats)
+    k = max(float(prior_weight), 0.0)
+
+    def var(i):
+        v = float(np.nan_to_num(stats["child_q_var"][i], nan=0.0))
+        return (n[i] * v + k * pooled) / (n[i] + k) if n[i] + k > 0 else pooled
+
+    se = np.sqrt(var(t) / n[t] + var(p) / n[p])
+    gap = float(stats["child_q"][t] - stats["child_q"][p])
+    if se <= 0:  # no spread at all (every backed-up value equal): only the sign is known
+        return SURE if gap > 0 else 0.0
+    return gap / float(se)
+
+
+CONFIDENCE_MODES = ("prior", "soft")
+CONFIDENCE_SIGNALS = ("z", "share")
+
+
+def departure_share(stats: dict, target: np.ndarray) -> float:
+    """The target's move's share of the two moves' visits, N_t / (N_t + N_p) (t = argmax
+    target, p = argmax of the tree's priors): >= 0.5 where the search spent at least as
+    much on the departure as on the policy's move; ``inf`` where the target agrees."""
+    t, p = int(np.argmax(target)), int(np.argmax(stats["child_prior"]))
+    if t == p:
+        return float("inf")
+    n = stats["child_n"]
+    return float(n[t] / max(n[t] + n[p], 1.0))
+
+
+def departure_signal(stats: dict, target: np.ndarray, signal: str = "z", prior_weight: float = 2.0) -> float:
+    """:func:`departure_confidence` (``z``) or :func:`departure_share` (``share``)."""
+    if signal == "z":
+        return departure_confidence(stats, target, prior_weight)
+    if signal == "share":
+        return departure_share(stats, target)
+    raise ValueError(f"signal must be one of {CONFIDENCE_SIGNALS}, got {signal!r}")
+
+
+def confident_target(
+    stats: dict,
+    target: np.ndarray,
+    threshold: float,
+    mode: str = "prior",
+    prior_weight: float = 2.0,
+    signal: str = "z",
+    distrust: bool = False,
+) -> tuple:
+    """``(target', value)``: the target kept (the same object) where it agrees with the
+    policy's top move or departs from it with ``value >= threshold`` (``value`` =
+    :func:`departure_signal`), else shrunk toward the policy (the tree's priors,
+    normalized): ``prior`` mode replaces it by the policy, ``soft`` keeps c = max(value,
+    0) / threshold of the departure (prior + c * (target - prior)). ``distrust``: a
+    departure shrinks to the policy whatever its value (a step type where the value
+    can't rank the moves)."""
+    if mode not in CONFIDENCE_MODES:
+        raise ValueError(f"mode must be one of {CONFIDENCE_MODES}, got {mode!r}")
+    value = departure_signal(stats, target, signal, prior_weight)
+    if value == float("inf") or (not distrust and value >= threshold):
+        return target, value
+    prior = stats["child_prior"] / stats["child_prior"].sum()
+    c = 0.0 if distrust or mode == "prior" or threshold <= 0 else min(max(value, 0.0) / threshold, 1.0)
+    return prior + c * (np.asarray(target, dtype=np.float64) - prior), value
 
 
 def search_target(tree, legal: np.ndarray, settings: dict) -> np.ndarray:

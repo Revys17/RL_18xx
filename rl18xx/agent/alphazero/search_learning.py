@@ -36,6 +36,14 @@ search's value network) toward the games' outcomes:
   become rows, with the same kind of target, weighted w in the policy loss
   (and, with ``fast_row_value``, trained on by the value as any row).
 
+  Confidence-filtered targets (``target_confidence``, ``target_confidence_signal``,
+  ``target_distrust_steps``; off by default): a row whose target's top move is
+  not the policy's keeps its target only where the departure is well supported
+  (``search_targets.confident_target``: z = (q_t - q_p) / se from the root's
+  per-move value variances, or the departure's share of the two moves' visits)
+  and not in a distrusted step type (``decision_step``: e.g. track lays); else
+  the target shrinks toward the policy.
+
   The price head's target at a searched price decision is the searched price
   grandchildren's visit distribution over the slot's price cells.
 - **Playout-cap randomization** (KataGo): each decision with several legal
@@ -104,7 +112,14 @@ from typing import Any, Optional
 
 import numpy as np
 
-from rl18xx.agent.alphazero.search_targets import RPO_UNVISITED, search_target
+from rl18xx.agent.alphazero.search_targets import (
+    CONFIDENCE_MODES,
+    CONFIDENCE_SIGNALS,
+    RPO_UNVISITED,
+    confident_target,
+    root_stats,
+    search_target,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -266,10 +281,48 @@ class SearchLearningConfig:
     # a = surprise_weight (KataGo's 0.5), 0 = off. The price and anchor terms are unweighted.
     surprise_weight: float = 0.0
     surprise_cap: float = 8.0
+    # Confidence-filtered policy targets (docs/search_learning_design.md, "Confidence-filtered
+    # targets"): a row whose target's top move is not the policy's (the tree's priors) keeps
+    # its target only where the search's evidence for that departure is strong -- z = (q_t -
+    # q_p) / sqrt(var_t / N_t + var_p / N_p) >= target_confidence (``search_targets.
+    # departure_confidence``: each move's mean backed-up value and its variance, shrunk toward
+    # the root's pooled variance with ``target_confidence_prior_weight`` pseudo-visits); a weaker
+    # departure's target is shrunk toward the policy ("prior": replaced by it; "soft": keeps
+    # z / target_confidence of the departure). Rows that agree with the policy are unchanged.
+    # None: off.
+    target_confidence: Optional[float] = None
+    target_confidence_mode: str = "prior"
+    target_confidence_prior_weight: float = 2.0
+    # The confidence signal: "z" (above) or "share" -- N_t / (N_t + N_p), the target move's
+    # share of the two moves' visits (the search spent at least as much on it: >= 0.5).
+    target_confidence_signal: str = "z"
+    # Step types (``decision_step``: stock, track, token, route, dividend, train, other)
+    # whose departures always shrink toward the policy, whatever their confidence: where
+    # the value can't rank siblings (track lays: Spearman 0.74 against az1's critic,
+    # docs "Confidence-filtered targets").
+    target_distrust_steps: tuple = ()
 
 
 AUX_SEAT_TARGETS = 2  # final net-worth share, final cash share
 AUX_GLOBAL_TARGETS = 8  # floated, per corporation (the engine's order)
+
+
+STEP_TYPES = ("stock", "track", "token", "route", "dividend", "train", "other")
+
+
+def decision_step(rs, legal) -> str:
+    """The kind of decision at ``rs`` (an ``engine_rs.BaseGame``) with legal moves ``legal``:
+    a stock round's, else by the first of these move types among the legal moves -- tile
+    lay (track), token, routes, dividend, train purchase -- else other
+    (``scripts/diag_sibling_values.py``'s step types)."""
+    if rs.round.round_type == "Stock":
+        return "stock"
+    types = {rs.decode_index_to_map(int(ix), None).get("type") for ix in legal}
+    for name, kind in (("lay_tile", "track"), ("place_token", "token"), ("run_routes", "route"),
+                       ("dividend", "dividend"), ("buy_train", "train")):
+        if name in types:
+            return kind
+    return "other"
 
 
 def sharpen_target(target: np.ndarray, legal: np.ndarray, move: int, temperature: float) -> np.ndarray:
@@ -959,6 +1012,11 @@ class Generator:
                 move = self._visit_move(tree, legal, visits, g.decisions)
                 target = search_target(tree, legal, s) if g.pending is not None else None
             price, price_target = self._searched_price(tree, rs, move)
+            if g.pending is not None:
+                target = sharpen_target(target, legal, move, float(s.get("target_temperature", 1.0)))
+                if s.get("target_confidence") is not None or s.get("target_distrust_steps"):
+                    # Read before the tree moves on and the game takes the move.
+                    target = self._confident(root_stats(tree), target, rs, legal)
             g.search_values.append(root_value(tree))  # the n-step value targets' bootstrap (before the tree moves on)
             # The move goes straight onto the game (the most-visited price, as
             # advance_root would commit); a kept tree follows it.
@@ -969,7 +1027,6 @@ class Generator:
             if g.pending is None:  # a fast search without a row
                 g.decisions += 1
                 return
-            target = sharpen_target(target, legal, move, float(s.get("target_temperature", 1.0)))
             state, nodes, _, rotation, _ = g.pending
             g.rows.append(
                 SearchRow(
@@ -992,6 +1049,32 @@ class Generator:
                 g.searched += 1
                 self.counts["searched_decisions"] += 1
         g.decisions += 1
+
+    def _confident(self, stats: dict, target: np.ndarray, rs, legal: np.ndarray) -> np.ndarray:
+        """``target_confidence`` / ``target_distrust_steps``: the target kept where it agrees
+        with the policy's top move or departs from it with confidence (and not in a
+        distrusted step type), else shrunk toward the policy (counted)."""
+        s = self.settings
+        self.counts["confidence_rows"] += 1
+        if int(np.argmax(target)) == int(np.argmax(stats["child_prior"])):
+            return target
+        self.counts["confidence_departures"] += 1
+        steps = s.get("target_distrust_steps") or ()
+        distrust = bool(steps) and decision_step(rs, legal) in steps
+        threshold = s.get("target_confidence")
+        out, _ = confident_target(
+            stats,
+            target,
+            float("-inf") if threshold is None else float(threshold),
+            str(s.get("target_confidence_mode", "prior")),
+            float(s.get("target_confidence_prior_weight", 2.0)),
+            str(s.get("target_confidence_signal", "z")),
+            distrust,
+        )
+        if out is not target:
+            self.counts["confidence_shrunk"] += 1
+            self.counts["confidence_distrusted"] += int(distrust)
+        return out
 
     def _searched_price(self, tree, rs, move: int) -> tuple:
         """``(price to play, price target or None)`` for a searched move: a
@@ -1417,6 +1500,11 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "reuse_tree": cfg.reuse_tree,
         "reuse_max_root_visits": cfg.reuse_max_root_visits or 2 * cfg.n_full,
         "dedupe_maps": cfg.dedupe_maps,
+        "target_confidence": cfg.target_confidence,
+        "target_confidence_mode": cfg.target_confidence_mode,
+        "target_confidence_prior_weight": cfg.target_confidence_prior_weight,
+        "target_confidence_signal": cfg.target_confidence_signal,
+        "target_distrust_steps": tuple(cfg.target_distrust_steps or ()),
     }
 
 
@@ -1448,6 +1536,15 @@ def _validate(cfg: SearchLearningConfig) -> None:
         raise SystemExit("--surprise-weight must be in [0, 1] and --surprise-cap >= 1")
     if cfg.value_stop_grad and not cfg.shared:
         raise SystemExit("--value-stop-grad needs --shared (the critic has no policy to protect)")
+    if cfg.target_confidence_mode not in CONFIDENCE_MODES:
+        raise SystemExit(f"--target-confidence-mode must be one of {CONFIDENCE_MODES}")
+    if cfg.target_confidence_prior_weight < 0:
+        raise SystemExit("--target-confidence-prior-weight must be >= 0")
+    if cfg.target_confidence_signal not in CONFIDENCE_SIGNALS:
+        raise SystemExit(f"--target-confidence-signal must be one of {CONFIDENCE_SIGNALS}")
+    unknown = set(cfg.target_distrust_steps or ()) - set(STEP_TYPES)
+    if unknown:
+        raise SystemExit(f"--target-distrust-steps: unknown step types {sorted(unknown)} (of {STEP_TYPES})")
     if cfg.reuse_tree not in ("off", "total", "additional"):
         raise SystemExit(f"--reuse-tree must be off, total or additional, got {cfg.reuse_tree!r}")
     kind, _ = parse_reward(cfg.reward)
@@ -1734,6 +1831,19 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                     },
                     # Map dedupe: node-feature rows sent per state.
                     "map_rows_per_state": gen["maps"] / max(gen["leaves"] + gen["policy_states"], 1),
+                    # target_confidence: rows whose target departs from the policy's top move, and
+                    # the share of those departures shrunk toward the policy (low confidence).
+                    **(
+                        {
+                            "target_departure_share": gen["confidence_departures"] / max(gen["confidence_rows"], 1),
+                            "target_departure_shrunk_share": gen["confidence_shrunk"]
+                            / max(gen["confidence_departures"], 1),
+                            "target_departure_distrusted_share": gen["confidence_distrusted"]
+                            / max(gen["confidence_departures"], 1),
+                        }
+                        if cfg.target_confidence is not None or cfg.target_distrust_steps
+                        else {}
+                    ),
                     "skipped_starts": gen["skipped_starts"],
                     "dropped_games": gen["dropped_games"],
                     "terminations": dict(terminations),
