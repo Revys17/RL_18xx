@@ -4,7 +4,8 @@ entity encoder (``ModelTransformerConfig.value_entity_encoder``) copied from the
 The result's policy path (entity encoder, map encoder, fusion, trunk, policy and price
 heads) is the policy checkpoint's, bit for bit; its value heads read
 ``[value encoder's player tokens, shared trunk]``: the value encoder starts as the
-critic's entity encoder and the value heads as the critic's (whose trunk half now sees
+critic's entity encoder (or, for a critic that is itself a shared value-encoder network,
+its value encoder) and the value heads as the critic's (whose trunk half now sees
 the policy's trunk -- fit them, e.g. ``distill_value_on_children.py --train-only value``).
 ``<out>/../config.json`` carries the policy run's ``learner_temperature``.
 
@@ -33,7 +34,11 @@ def build(policy_path: str, critic_path: str):
     missing, unexpected = model.load_state_dict(policy.state_dict(), strict=False)
     if unexpected or any(not k.startswith("value_econ_transformer.") for k in missing):
         raise RuntimeError(f"unexpected state mismatch: missing {missing}, unexpected {unexpected}")
-    model.value_econ_transformer.load_state_dict(critic.econ_transformer.state_dict())
+    # A critic that is itself a shared value-encoder network (e.g. az7b) gives its value
+    # encoder; a plain critic its (whole-network) entity encoder.
+    source = getattr(critic, "value_econ_transformer", None)
+    source = critic.econ_transformer if source is None else source
+    model.value_econ_transformer.load_state_dict(source.state_dict())
     model.win_loss_head.load_state_dict(critic.win_loss_head.state_dict())
     model.score_head.load_state_dict(critic.score_head.state_dict())
     return model.eval()

@@ -301,6 +301,16 @@ class SearchLearningConfig:
     # the value can't rank siblings (track lays: Spearman 0.74 against az1's critic,
     # docs "Confidence-filtered targets").
     target_distrust_steps: tuple = ()
+    # -- The AlphaGo-style split (docs/search_learning_design.md, "AlphaGo-style split") --
+    # shared: train only the value side (value entity encoder + heads, ``shared_split``) on
+    # the search games -- no policy, price or anchor loss; the trunk is detached from the
+    # value loss (as value_stop_grad) and each value row trains once. The games are still
+    # searched with the learner's policy as the prior and its value at the leaves.
+    freeze_policy: bool = False
+    # shared: a policy-gradient run (``--shared``) training this network's policy path;
+    # before each update the learner takes the policy path of that run's latest checkpoint
+    # (``shared_split.Follower``), so the games are played by the PG run's current policy.
+    policy_follow: Optional[str] = None
 
 
 AUX_SEAT_TARGETS = 2  # final net-worth share, final cash share
@@ -1454,6 +1464,68 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, window: ReplayWind
     return stats
 
 
+def _update_value_only(learner, learner_opt, window: ReplayWindow, cfg, device, rng) -> dict:
+    """``freeze_policy``: up to ``steps_per_update`` steps of ``minibatch`` rows still
+    flagged for the value (each trains once), value-only forwards with the trunk
+    detached, the optimizer holding the value side alone. The policy, price and anchor
+    statistics of :func:`_update` are not computed (reported as NaN)."""
+    import torch
+
+    aux = cfg.aux_loss_weight > 0
+    learner.eval()
+    learner.value_stop_grad = True
+    pending = [r for r in window.rows if r.critic and r.fractions is not None]
+    order = rng.permutation(len(pending))[: cfg.steps_per_update * cfg.minibatch]
+    pending = [pending[i] for i in order]
+    micro = min(cfg.microbatch, cfg.minibatch)
+    sums, rows_seen, steps, ages = Counter(), 0, 0, []
+    try:
+        for start in range(0, len(pending), cfg.minibatch):
+            rows = pending[start : start + cfg.minibatch]
+            learner_opt.zero_grad(set_to_none=True)
+            for m in range(0, len(rows), micro):
+                chunk = rows[m : m + micro]
+                batch = search_batch(chunk, device)
+                store, hook = learner.capture_value_input() if aux else ({}, None)
+                try:
+                    _, win_logits, score_pred, _ = learner(batch["game_state"], batch["nodes"], value_only=True)
+                finally:
+                    if hook is not None:
+                        hook.remove()
+                loss, vstats = _value_terms(learner, store.get("seat_input"), win_logits, score_pred, batch, cfg)
+                if not torch.isfinite(loss):
+                    raise RuntimeError("search learning: the value loss is not finite")
+                (loss * len(chunk) / len(rows)).backward()
+                for key, value in vstats.items():
+                    sums[key] += float(value.detach()) * len(chunk)
+            norm = torch.nn.utils.clip_grad_norm_(learner_opt.param_groups[0]["params"], max_norm=1.0)
+            if not torch.isfinite(norm):
+                raise RuntimeError("search learning: non-finite value gradient norm")
+            learner_opt.step()
+            for r in rows:
+                r.critic = False
+            sums["value_grad_norm"] += float(norm)
+            rows_seen += len(rows)
+            ages.extend(r.version for r in rows)
+            steps += 1
+    finally:
+        learner.value_stop_grad = False
+    nan = float("nan")
+    value_keys = ["critic_ce", "critic_outcome_ce", "critic_mse", "critic_winner_hit"] + (["aux_mse", "aux_bce"] if aux else [])
+    stats = {key: sums[key] / max(rows_seen, 1) for key in value_keys}
+    stats.update({k: nan for k in ("ce", "search_kl", "target_entropy", "kl_anchor", "entropy", "top1_agreement",
+                                   "price_ce", "price_kl_anchor", "grad_norm")})
+    stats.update(
+        value_grad_norm=sums["value_grad_norm"] / max(steps, 1),
+        optimizer_steps=steps,
+        rows_trained=rows_seen,
+        price_rows_trained=0,
+        critic_rows_trained=rows_seen,
+        row_version_mean=float(np.mean(ages)) if ages else float("nan"),
+    )
+    return stats
+
+
 def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
     return {
         "version": version,
@@ -1536,6 +1608,10 @@ def _validate(cfg: SearchLearningConfig) -> None:
         raise SystemExit("--surprise-weight must be in [0, 1] and --surprise-cap >= 1")
     if cfg.value_stop_grad and not cfg.shared:
         raise SystemExit("--value-stop-grad needs --shared (the critic has no policy to protect)")
+    if (cfg.freeze_policy or cfg.policy_follow) and not cfg.shared:
+        raise SystemExit("--freeze-policy / --policy-follow need --shared (one network: its value side trains here)")
+    if cfg.policy_follow and not cfg.freeze_policy:
+        raise SystemExit("--policy-follow needs --freeze-policy (the followed run trains the policy path)")
     if cfg.target_confidence_mode not in CONFIDENCE_MODES:
         raise SystemExit(f"--target-confidence-mode must be one of {CONFIDENCE_MODES}")
     if cfg.target_confidence_prior_weight < 0:
@@ -1566,9 +1642,14 @@ def server_spec(cfg: SearchLearningConfig, learner_path, critic_path=None) -> st
 def learner_param_groups(learner, cfg: SearchLearningConfig) -> list:
     """The learner's optimizer groups: with ``cfg.shared`` its value heads (and
     auxiliary heads, and a value-only entity encoder: ``value_entity_encoder``) at
-    ``critic_lr``, the rest at ``lr``; otherwise all at ``lr``."""
+    ``critic_lr``, the rest at ``lr``; otherwise all at ``lr``. With
+    ``cfg.freeze_policy`` the value side alone."""
     if not cfg.shared:
         return [{"params": list(learner.parameters()), "lr": cfg.lr}]
+    if cfg.freeze_policy:
+        from rl18xx.agent.alphazero.shared_split import value_parameters
+
+        return [{"params": value_parameters(learner), "lr": cfg.critic_lr, "name": "value_side"}]
     heads = [learner.win_loss_head, learner.score_head]
     heads += [
         h
@@ -1626,6 +1707,8 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                 "server_replicas",
             )
         }
+        if cfg.policy_follow:
+            overrides["policy_follow"] = cfg.policy_follow
         cfg = SearchLearningConfig(**{**state["config"], **overrides})
         update = int(state["snapshot_update"])
         kl_coef = float(state["kl_coef"])
@@ -1660,6 +1743,12 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
         param.requires_grad_(False)
     if cfg.aux_loss_weight > 0:  # training-only heads on the network that learns the value
         (critic if critic is not None else learner).add_aux_heads(AUX_SEAT_TARGETS, AUX_GLOBAL_TARGETS)
+    follower = None
+    if cfg.policy_follow:
+        from rl18xx.agent.alphazero.shared_split import Follower
+
+        follower = Follower(cfg.policy_follow, "policy")
+        LOGGER.info(f"policy path from {cfg.policy_follow}: update {follower.poll(learner)}")
     learner_opt = torch.optim.AdamW(learner_param_groups(learner, cfg), weight_decay=0.0)
     critic_opt = torch.optim.AdamW(critic.parameters(), lr=cfg.critic_lr, weight_decay=0.0) if critic else None
     if resume and (run_dir / "optimizer.pth").exists():
@@ -1670,7 +1759,8 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
 
     current_learner = run_dir / "learner" / f"{update}.pth"
     current_critic = None if cfg.shared else run_dir / "critic" / f"{update}.pth"
-    if not current_learner.exists():
+    if not current_learner.exists() or (follower is not None and follower.update is not None):
+        # (A followed policy path: the server must play it from the start.)
         _save(learner, current_learner)
         if critic is not None:
             _save(critic, current_critic)
@@ -1737,7 +1827,15 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                     continue
 
                 t0 = time.time()
-                stats = _update(learner, critic, anchor, learner_opt, critic_opt, window, cfg, kl_coef, device, rng)
+                if cfg.freeze_policy:
+                    stats = _update_value_only(learner, learner_opt, window, cfg, device, rng)
+                else:
+                    stats = _update(learner, critic, anchor, learner_opt, critic_opt, window, cfg, kl_coef, device, rng)
+                if follower is not None:
+                    # The PG run's latest policy path: the next games' prior (the value side
+                    # just trained stays). Rows already in the window keep their targets.
+                    stats["policy_follow_loaded"] = follower.poll(learner) is not None
+                    stats["policy_follow_update"] = follower.update
                 train_seconds = time.time() - t0
                 update += 1
                 totals["rows_generated"] += new_rows + new_fast_rows

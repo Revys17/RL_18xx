@@ -1008,3 +1008,286 @@ k children @64.
    barely moved it; test offline with `reanalyze_siblings.py train --teacher critic280` first, then with
    reanalyzed targets at >= 256 readouts (closer to az1's search than @64: 0.721 vs 0.708). Self-reanalysis
    as built is not worth its cost (~0.27 s and ~630 evaluations per position) until (b) exists.
+
+## Hindsight price learning: counterfactual price branching (2026-10-19)
+
+**The question (the user's framing).** A human learns prices ten moves later: "had I paid myself $5 more
+for that private, I could buy the share I want now". The search can't: the consequence is past its horizon,
+the value is too blunt to see $5, and training only sees the price that was played. The engine is
+deterministic, so rewind: find the moments a player or corporation was short of money, go back to the price
+decisions that moved its money, replay them at nearby prices, and see whether a nearby price would have
+played out better.
+
+**Built** (`rl18xx/agent/alphazero/price_hindsight.py`, `scripts/price_hindsight.py`; tests
+`test_price_hindsight.py`, 10):
+
+| piece | what |
+|---|---|
+| Rust `BaseGame.counterfactual_transfer_cash(entity, amount)` | moves cash between the bank and a player / corporation on a clone (the rules never call it); a Rust unit test checks totals and errors |
+| constraint events (`scan_game`, `unaffordable_events`) | **unaffordable**: at a stock- or operating-round decision the acting entity gets $100 more on a clone; if the policy (gen4) at that richer state puts its top move, with p >= 0.25, on a move that was not legal before, it wanted something it couldn't afford -- the shortfall is the least extra cash making it legal (bisection on the legal-move enumeration: only cash changed, so this is affordability, not other illegality). **emr_sale** (a president selling in an operating round to fund a forced train; shortfall = what the sales raised), **president_contribution** (a train bought for more than the corporation's cash), **bankrupt**, **bid_lost** (in agent-played auctions, a company won for <= $10 above this player's best bid) |
+| back-tracing (`link_events`) | price-head decisions (auction bids, a corporation buying a private, a train bought from another corporation, with an open range) within 100 decisions before the event whose money went to or came from the constrained entity (its president too for the operating-round emergencies); the direction that would have helped (+1 paid to it, -1 paid by it, 0 an internal transfer between the two); a lost bid links to the loser's own bids on that company |
+| branching (`BranchRunner`) | from the state before the decision: the played price, played +- $1 / $5 / $10 / $20 and the range's ends (clipped, de-duplicated); **open loop**: the game's own later actions replayed to the event where still legal (cash at the event, is the wanted move legal now, the value there); **closed loop**: 8 policy-only continuations per alternative to the game's end (every seat gen4 @0.5, prices from its head) with **common random numbers** (continuation r of every alternative draws from one seed, so branches part only where the price changed something); final win share, net-worth share and placement points of every seat, and the value (az7b u220) of the deciding player at 0 / 10 / 30 / 60 / 100 decisions after the branch. Par prices and dividends can be branched the same way (the other moves of their kind) |
+| `scripts/price_hindsight.py` | `detect` (inference server, workers) -> `jobs` (stratified per group / price type / event kind, controls = unlinked price decisions, money jobs) -> `branch` (resumable) -> `report` -> `finetune` (the price head alone on cached trunk features, toward advantage-weighted cell targets `p_old(c) exp(A(c) / beta)`, or toward the played price as the control; held-out games' branch outcomes as the test) |
+
+**Data.** 4,303 games: 3,220 search-eval games of the az1-az7 collections (az3 onward, 140 per collection;
+search systems on both sides) and 1,083 of gen4's policy-gradient games (`rab_place`, 170 of them started at
+the auction, the only agent-played bids). 48 PG games no longer replay (pre-10-16 rules). Detection took ~10
+min (12 workers, gen4 serving the probes).
+
+| events (per game) | count | shortfall |
+|---|---|---|
+| unaffordable | 326,259 (76.7) | median ~$50; 13k <= $5, 14k $6-10, 30k $11-20 |
+| -- wanted move: share purchase (stock round) / tile lay (terrain) / train / private / par | 266,973 / 45,799 / 11,520 / 1,628 / 337 | |
+| president contribution | 29,205 (6.9) | 70% > $50 |
+| emergency share sales | 6,373 (1.5) | 88% > $100 |
+| bankruptcy | 636 (0.15) | |
+| lost bid (<= $10) | 374 (2.3 per auction-start game) | 95% <= $5 |
+
+Price decisions: 93,396 cross-corporation trains (~22 a game: half at $1, 17% at the maximum, mostly the
+same president moving a train and cash between his corporations), 18,586 privates sold to corporations
+(99.5% at the maximum, twice face value), 4,577 auction bids (91% at the minimum bid); plus 28,621 pars and
+426,826 dividends. With a 100-decision window 79,423 of the 116,559 price decisions link to at least one event
+(241,493 links; the median distance to the nearest event is ~74 decisions).
+
+**Branched**: 1,160 jobs -- 828 linked decisions (110 per decision type x primary event kind, covering 2,518
+events: 1,578 unaffordable, 597 president contributions, 200 emergency sales, 115 lost bids, 28 bankruptcies),
+212 unlinked controls, 60 pars, 60 dividends -- 58,869 continuations, 26.1M decisions in 80 min (12 workers,
+shared GPU, ~5.4k decisions/s; ~22.5k decisions per job; 57 continuations hit the 1,000-decision cap).
+
+**Results** (paired against the played price, continuation r vs r; `logs/price_hindsight/main/report.txt`):
+
+| decision (linked) | jobs | continuations identical to the played price's (win / worth) | split-half gain: win / placement / net-worth share | significantly better / worse (worth) |
+|---|---|---|---|---|
+| auction bid | 220 | 0.79 / 0.04 | +0.000 +- 0.012 / +0.006 +- 0.012 / +0.0000 +- 0.0014 | 0.15 / 0.77 |
+| private sold to a corporation | 278 | 0.89 / 0.29 | +0.000 +- 0.010 / +0.014 +- 0.009 / +0.0008 +- 0.0018 | 0.11 / 0.26 |
+| train between corporations | 330 | 0.98 / 0.35 | +0.002 +- 0.003 / +0.004 +- 0.003 / +0.0029 +- 0.0009 | 0.22 / 0.39 |
+| (controls, unlinked: bid / private / train) | 22 / 80 / 110 | | -0.023 / +0.003 / +0.009 (win) | |
+| par (alternative par prices) | 60 | 0.69 / 0.03 | +0.042 +- 0.030 / +0.041 +- 0.030 / +0.006 +- 0.004 | 0.27 / 0.38 |
+| dividend (payout <-> withhold) | 60 | 0.86 / 0.00 | +0.013 +- 0.018 / +0.015 +- 0.018 / +0.003 +- 0.003 | 0.05 / 0.35 |
+
+(Split-half gain: the alternative the even continuations prefer, if any beats the played price, scored on the
+odd ones -- an unbiased estimate of what switching to the nearby price that looks best gains. "Significantly":
+some alternative beyond 2 SE, of ~5-6 tried.)
+
+Mean advantage by price move (win share, over jobs; placement and worth mostly agree):
+
+| move | bid | private | train |
+|---|---|---|---|
+| +-$1 | +0.003 +- 0.005 (+1) | -0.003 +- 0.004 (-1) | +0.001 +- 0.001 / +0.001 +- 0.002 |
+| +-$5 | +0.002 +- 0.010 (+5) | -0.005 +- 0.005 | -0.000 / -0.001 |
+| +-$10 | -0.012 +- 0.011 (+10) | -0.004 +- 0.006 | +0.000 / -0.001 |
+| +-$20 | -0.037 +- 0.012 (+20) | -0.006 +- 0.007 | -0.004 / -0.009 +- 0.004 |
+| range end | max: -0.188 +- 0.013 | min (face / 2): -0.042 +- 0.010 | max: -0.016 +- 0.005; $1: -0.004 +- 0.008 |
+
+1. **A nearby price rarely plays out better, and never by much.** The prices played -- privates at twice
+   face, bids at the minimum, trains at $1 or the maximum -- sit at or near a local optimum: moves of $1-10
+   are within +-0.005 win share of them, $20 and the range's far end are clearly worse, and in every class
+   "significantly worse" alternatives outnumber "significantly better" ones. How often a nearby price wins:
+   where the even continuations pick a different price, the odd ones confirm it about as often as not
+   (net-worth share, all jobs of the type: trains 172 of 440 decisions confirmed vs 121 reversed, the only
+   clear edge; privates 120 vs 131 of 358; bids 101 vs 102 of 242; on the win share most picks are ties).
+   The one positive class is trains between
+   corporations, +0.003 net-worth share (3 SE, ~0.3% of a player's worth) and, moving the cash toward the
+   constrained corporation rather than away, +0.010 +- 0.004 win share (118 jobs). Par prices are the one
+   larger hint (+0.04 +- 0.03 win share on 60 jobs) -- a categorical choice, not a price-head slot.
+2. **The hindsight hypothesis itself fails here.** At the 330 unaffordable events, the alternatives whose
+   open-loop replay made the wanted move affordable at the event did *worse* than the played price: win
+   -0.047 +- 0.018, placement -0.078 +- 0.018, worth -0.025 +- 0.005 (the other alternatives -0.022 / -0.028 /
+   -0.007). Shortfalls are mostly large (median ~$50; emergencies > $100) and the cash that would cover them
+   comes from a price far from the played one, which costs more than the wanted move gains. In only 81 of the
+   330 did any tested price make the wanted move legal at the event (open-loop replay).
+3. **The effect is small against the continuations' noise.** Per alternative (8 paired continuations) the
+   noise SE is 0.109 win / 0.090 placement / 0.0135 worth; the implied true-effect SD is 0.067 / 0.089 / 0.023
+   -- almost all of it the far-off prices above. Split-half reliability of an alternative's advantage: 0.17
+   win, 0.32 placement, 0.58 worth (of its full 8-continuation mean: 0.29 / 0.49 / 0.73): per-decision targets on the win
+   are mostly noise even with common random numbers, which kept 79-98% of win outcomes identical.
+4. **The value is less blunt than feared.** az7b's value at the branch point (one forward per alternative)
+   correlates 0.27 / 0.37 / 0.45 (win / placement / worth) with the alternatives' final advantages -- about 0.5
+   with their noise-free part -- and 30 decisions later 0.39 / 0.56 / 0.69 (~0.75-0.8 noise-free). It sees the
+   direction of a price effect early; it is biased slightly against alternatives (mean -0.01).
+
+**Price-head fine-tune (gen4, head only, trunk frozen; 756 training / 284 held-out decisions by game; 300
+steps, lr 1e-4, KL to the old head 0.1).** Held-out gain = the change in the expected branch outcome under
+the head, over the tested cells, on held-out games' own continuations:
+
+| target | train gain | held-out gain | KL(old \|\| new) held-out |
+|---|---|---|---|
+| hindsight, net-worth share (beta 0.005) | +0.00027 +- 0.00009 worth | -0.00002 +- 0.00010 worth | 0.037 |
+| hindsight, win share (beta 0.05) | +0.0012 +- 0.0005 win | -0.0005 +- 0.0006 win | 0.027 |
+| control: imitate the played price | +0.00019 +- 0.00007 worth | -0.00010 +- 0.00011 worth | 0.042 |
+
+The fit is real in-sample and nil on held-out games -- what the targets carry beyond the played price is noise
+at this scale. Policy-only, the hindsight-tuned head (worth, `model_checkpoints_ph/ph_worth_awr`) vs gen4, both
+@0.5, 1200 games each: 2v2 0.506 +- 0.014; 1v3 0.227 +- 0.012 and, with another start seed, 0.268 +- 0.013
+(together 0.248 +- 0.009, equal 0.25): no regression, no gain.
+
+**Recommendation: don't wire hindsight branching into the loop.** It works (2.5k events, paired branches,
+exact rewinds), but the prices the agents play are already where nearby prices can't beat them by more than
+the noise, and the "wanted but unaffordable" moves are mostly not worth the price change that would fund
+them. Cost, had it paid: a job (~6 alternatives x 8 continuations) is ~22.5k decisions, ~38 policy-gradient
+games' worth; at a 10% share of PG's ~53M decisions/hour (~90k games of ~590 decisions) that is ~230 price
+rows an hour against the ~170k price draws PG already trains on by REINFORCE each hour (~1,870 per update,
+~92 updates/hour). Scoring by the value 30 decisions after the branch
+(r ~0.8 with the noise-free effect) would cut it ~15x, by the value at the branch point (~0.5) ~4,000x --
+which is what the search's price grandchildren already do at searched decisions. What's left worth a look:
+par prices (the only sizable hint, a policy-head choice: more jobs), and the toward-the-constrained-corporation
+direction for trains between one president's corporations (a 1% win-share effect).
+
+## AlphaGo-style split: policy gradient for the policy, search games for the value (2026-10-19)
+
+**Why.** Every search-learning run gains early and then plateaus (best system: az6 u200 @200, 0.692 vs gen4 +
+critic). Two limits, both measured above: distilling the search's targets costs the policy its strength alone
+(near-greedy checks fall in every arm, even without flattening), and the value's sibling ranking erodes under
+its own outcome training (0.920 -> 0.843 along az4-az6; az7b, value off the trunk at critic lr 1e-5, 0.874 at
+u50 -> 0.860 at u200). The policy-gradient line (gen1 -> gen4) is the one recipe that kept improving a policy
+(league, placement reward, KL anchor). AlphaGo's split: the policy from RL self-play, the value from games,
+search only at play time. Here: the policy path trained by PPO (as gen4), the value trained on *search* games
+(as az7b: lambda-returns, every position once, trunk detached), search @200-800 at play time.
+
+**One network or two.** One shared value-encoder network (the user's preference; ~1.04 forwards per search
+evaluation against ~1.2-1.33 for a policy + critic composite): the policy path (entity encoder, map encoder,
+fusion, trunk, policy and price heads) and the value side (value entity encoder + win / score heads, 4% of the
+parameters) reading the trunk. The value never trains the trunk (`value_stop_grad`): az7a (value gradient
+into the trunk) lost to az7b 0.45 +- 0.03 at u100 and ranks siblings worse (0.848 vs 0.860 at u200), and in
+PPO a value gradient in the trunk would move the very policy the ratios are taken against.
+
+**How PG interacts with the value.** The value side reads trunk features PPO keeps moving, so a value side
+left alone goes stale as the policy improves -- the price of sharing. Two runs train the two parts of one
+network and follow each other's latest checkpoint every update (`shared_split.Follower`):
+
+| run | trains | follows |
+|---|---|---|
+| `policy-gradient --shared --value-follow <value run>` | the policy path (PPO, league, placement reward, KL anchor); baseline = the network's own value (the score head for placement), at update time | before each update: the value run's latest value side |
+| `search-learning --shared --value-stop-grad --freeze-policy --policy-follow <PG run>` | the value side only (lambda 0.97 / bootstrap 0.5, aux heads, every row once, critic lr 1e-5); no policy, price or anchor loss | before each update: the PG run's latest policy path -- games are searched with PG's current policy as the prior |
+
+Each PG checkpoint is then a whole network -- PG's policy with the newest value side -- and is what the search
+loads at play time. The value lags PPO by one value update (~5 min at az7b's cadence).
+
+**Measured: trunk drift costs the value side nothing at these rates; its own outcome training is what erodes
+it** (2026-10-19, `scripts/check_shared_split.py --mix` + `diag_sibling_values.py score` on siblings_v2 vs
+critic280; trunk change = relative L2 change of the trunk features on 3,000 of its states):
+
+| network | trunk change vs the value side's own | Spearman all / stock / track / train |
+|---|---|---|
+| az7b u100 (matched) | -- | 0.869 / 0.904 / 0.741 / 0.865 |
+| az7b u250 (matched: 150 more updates of value training) | -- | 0.858 / 0.896 / 0.737 / 0.825 |
+| u200 trunk + u100 value side | 15.8% (100 updates) | 0.870 / 0.905 / 0.750 / 0.854 |
+| u250 trunk + u100 value side | (150 updates) | 0.870 / 0.905 / 0.750 / 0.853 |
+| u250 trunk + u200 value side | 7.4% per 50 | 0.860 |
+
+A value side read through a trunk 150 search-learning updates newer ranks as well as when it was trained
+(0.870 vs 0.869), while 150 updates of its own training on outcomes took the matched network from 0.869 to
+0.858 (train purchases 0.865 -> 0.825): the erosion is the value targets, not the moving trunk. PPO moves
+gen4's trunk less than search learning moves az7b's: 7.0% per 100 updates (rab_place 1700 -> 1800), 9.1%
+over 200 (the moving anchor bounds it), against az7b's 15.8% per 100. So a value side can follow PG with a
+lag of many updates -- or not train at all -- without losing its ranking; what needs care is the value run's
+own training (lower `--critic-lr`, or a teacher term as `reanalyze_siblings.py train --teacher` showed keeps
+stock ranking). If drift ever mattered: more value-run workers, a lower PG lr, or a value-only map encoder
+(which track-lay ranking wants anyway, "Reanalyzed sibling values" above).
+
+**Which policy to start from.** gen4: the strongest policy alone and the line PG has been improving; the az
+policies are broader (entropy ~0.66 vs gen4's ~0.15 at T 0.5) and weaker alone. AlphaGo found its broader SL
+policy a better search prior than its sharp RL policy, so the zero-training checks below compare the two
+priors under the same value first; a second arm from az7b's network is the fallback if gen4's prior searches
+worse.
+
+**Built (2026-10-19; all options, off by default -- runs without them are unchanged).**
+
+| piece | what |
+|---|---|
+| `shared_split.py` | `is_value_key` / `value_parameters` / `policy_parameters` (value side = `value_econ_transformer`, `win_loss_head`, `score_head`, aux heads), `load_part(model, state, "value" \| "policy")` (in place, the other part untouched), `latest_checkpoint`, `Follower` (loads one part of another run's newest checkpoint when newer; a checkpoint deleted mid-read is retried) |
+| `policy_gradient.py` | `--shared` (no critic: `subtract_baselines` on the learner's own value heads; optimizer groups: policy path at `--lr`, value side at `--critic-lr`, each clipped on its own); `--value-follow <run>`; `--value-pg-weight w` (also train the value side on PG rows, trunk detached; default 0). History: `value_follow_update` / `value_follow_loaded` |
+| `search_learning.py` | `--freeze-policy` (needs `--shared`: `_update_value_only` -- value-only forwards on the rows still flagged for the value, the optimizer holding the value side alone; the policy statistics are NaN); `--policy-follow <run>`. History: `policy_follow_update` / `policy_follow_loaded` |
+| `scripts/build_value_encoder_network.py` | a critic that is itself a shared value-encoder network (az7b) now gives its *value* encoder |
+| `scripts/check_shared_split.py` | for each checkpoint of either run, which checkpoint of the other run each part equals (bit for bit), plus the follow columns; `--mix POLICY VALUE OUT` builds the drift probe |
+
+Tests: `test_shared_split.py` (9: the partition, part loads bit for bit, a plain network refused, the
+follower, PG shared updates leave the value side untouched and `--value-pg-weight` trains only it, value-only
+updates leave the policy path untouched and train each row once, option validation).
+
+**Smoke test** (`logs/ag_smoke.sh`, 3 + 3 workers, ~15 min, start = gen4's policy path + az7b u220's value
+side copied over unfitted): the value run made 14 updates (critic CE 0.70-1.18 on 4-10 fresh mid-game starts
+each), PG 3 (kl_anchor 0.0003 -> 0.0013, entropy 0.11, 0.47 +- 0.03 vs gen4 over 320 games -- gen4's own
+policy, so ~0.5 is expected; the baseline's Brier on the sampled rows 0.078-0.084 with the unfitted value
+side's score head, gen4's own critic in its run 0.076; advantage SD 0.28-0.29 vs 0.27), each following
+the other: PG 1 / 2 / 3 carry value-run 6 / 7 / 14's value side, value-run 6-7 PG 1's policy path and 8-14 PG
+2's, all bit for bit (`check_shared_split.py`: OK).
+
+### First experiment (ag1)
+
+**Step 0 -- the start network ag0: gen4's policy path + a value side fit to gen4's trunk** (~1 h of GPU):
+
+    G4=model_checkpoints_pg/rab_place_20261014/learner/1800.pth
+    A7=model_checkpoints_search/az7b_20261019/learner/220.pth   # or its latest snapshot
+    uv run python scripts/build_value_encoder_network.py --policy $G4 --critic $A7 \
+        --out model_checkpoints_ag/ag0_build/learner/0.pth
+    # positions + children of recent search games (or reuse the train_children sets of the 10-18 distillation)
+    uv run python scripts/diag_sibling_values.py build --no-played --collection logs/eval/az7a_u100_vs_az7b_u100 \
+        --collection logs/eval/az7b_u100_vs_az6_u100 --collection logs/eval/az6_u200_vs_az5b_u200 \
+        --games 200 --per-game 12 --out logs/ag/train_children
+    uv run python scripts/distill_value_on_children.py --data logs/ag/train_children --test logs/shared_diag/siblings_v2 \
+        --init model_checkpoints_ag/ag0_build/learner/0.pth --teacher az7b=$A7 --train-only value \
+        --epochs 2 --out model_checkpoints_ag/ag0/learner/0.pth
+    uv run python scripts/diag_sibling_values.py score --data logs/shared_diag/siblings_v2 \
+        --source ag0=model_checkpoints_ag/ag0/learner/0.pth --source az7b=$A7 --reference critic280
+
+Gate: ag0 ranks siblings >= ~0.85 (az7b u200: 0.860; the 10-18 fit of the same kind reached 0.920 from az1's
+critic) with its policy bit for bit gen4's (`--train-only value`). Measured before any fit (2026-10-19): the
+build alone -- gen4's trunk with az7b u220's value side copied over -- already ranks 0.844 (az7b u220 itself
+0.863, az6 u200 0.843; stock 0.881 vs 0.900, track 0.694 vs 0.745, train purchases 0.851 vs 0.821), and its win
+probabilities are within KL 0.001 of az7b's on siblings_v2's states (the value entity encoder carries most of
+the value; cf. the drift result): the distillation is a short polish, not a rebuild.
+
+**Step 1 -- zero-training checks** (240 games each, `eval_head_to_head.py` as the evals_v9 queue:
+`@200/0.05:mean,dedupe,par=8,ptemp=0.5`, `--softpick 0 --start-positions human_games/start_positions_1830_4p_v2.jsonl
+--dedupe-maps --server-replicas 2`): ag0 vs gen4 + critic (az6 u200 scored 0.692), ag0 vs az7b (the same value
+behind gen4's prior vs az7b's), ag0 vs az6 u200. These are what the run has to beat; ag0 vs az7b decides
+whether the second arm (from az7b's network) runs too.
+
+**Step 2 -- the two runs, side by side** (GPU shared: e.g. 24 PG workers, 16 value workers; start the value
+run first; both with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=2`):
+
+    # the value learner: az7b's generation and value settings, no policy training
+    uv run python main.py search-learning --policy model_checkpoints_ag/ag0/learner/0.pth --shared --value-stop-grad \
+      --freeze-policy --policy-follow model_checkpoints_ag/ag1_pg --out-dir model_checkpoints_ag --run-name ag1_val \
+      --value-head win --target cq --c-puct 0.05 --n-full 200 --n-fast 48 --p-full 0.25 \
+      --reuse-tree total --dedupe-maps --server-replicas 2 --workers 16 --games-per-worker 32 \
+      --start-positions human_games/start_positions_1830_4p_v2.jsonl --random-start-fraction 0.2 \
+      --midgame-positions human_games/midgame_positions_1830_4p_v2.jsonl --midgame-fraction 0.3 --auction-fraction 0.15 \
+      --full-move-temperature 1 --explore-decisions 120 \
+      --critic-positions-per-game 0 --value-lambda 0.97 --value-bootstrap-weight 0.5 --aux-loss-weight 0.1 \
+      --critic-lr 1e-5 --window-rows 131072 --rows-per-update 8192 --min-window-rows 16384 --steps-per-update 8 \
+      --minibatch 2048 --microbatch 1024 --max-updates 2000 --snapshot-every 10
+    # the policy learner: gen4's run settings, the baseline the network's own score head
+    uv run python main.py policy-gradient --policy model_checkpoints_ag/ag0/learner/0.pth --shared \
+      --value-follow model_checkpoints_ag/ag1_val --out-dir model_checkpoints_ag --run-name ag1_pg \
+      --population model_checkpoints_pg/populations/league_v7.json --reward placement \
+      --learner-temperature 0.5 --opponent-temperature 0.5 --lr 2e-5 --kl-coef 0.02 --kl-target 0.08 --anchor-every 50 \
+      --midgame-positions human_games/midgame_positions_1830_4p.jsonl --midgame-fraction 0.3 --auction-fraction 0.15 \
+      --workers 24 --games-per-task 96 --rows-per-update 65536 --minibatch 2048 --microbatch 1024 \
+      --save-game-every 20 --max-updates 600 --snapshot-every 10
+
+**Step 3 -- judging, every 50 PG updates** (a PG checkpoint is the whole system):
+- system: `ag1_pg/learner/<u>.pth@200/...` vs az6 u200 and vs gen4 + critic (240 games);
+- the policy alone: `eval_policy_only.py` vs gen4 at T 0.5, 2v2 and 1v3 (1200 games, the PG line's measure),
+  and the near-greedy check (T 0.1, as evals_v9);
+- the value: sibling ranking on `siblings_v2` vs critic280 (the PG checkpoint: the followed value side on the
+  current trunk), the value run's `critic_outcome_ce` / `search_value_ce`;
+- frozen vs co-trained value, on the same policy: `check_shared_split.py --mix ag1_pg/learner/<u>.pth
+  model_checkpoints_ag/ag0/learner/0.pth <out>` (update u's policy path, ag0's value side, never retrained)
+  judged @200 like the checkpoint itself -- whether the value run earns its GPU share (by the drift result
+  above, a frozen value side stays valid on PG's trunk; the question is whether training on the new policy's
+  search games improves it or only erodes it); and the drift probe on the run's own checkpoints
+  (`--mix <u+50> <u>`).
+
+Success: the system beats az6 u200 (> 0.55) within ~300 PG updates while the policy alone keeps gaining on
+gen4 (as gen1 -> gen4 did) and the ranking stays >= ag0's. Watch for: the co-trained value's ranking falling
+below the frozen one's (its outcome training eroding it: lower `--critic-lr`, or stop the value run and keep
+ag0's value side); the system flat while the policy gains (the sharp prior: `ptemp=1` at play time, or the
+az7b-start arm). If the value run is not needed, the cheapest form of the split is PG alone with `--shared`
+and no `--value-follow`.
+
+**Control arm (optional, two networks): ag1t** -- the same PG run from gen4 with its own critic as the
+baseline (gen4's run continued as a new run), judged as `<PG checkpoint>+<az7b checkpoint>` composites. It
+asks whether co-training the value side on the moving trunk beats a fixed, separately trained value network
+at equal PG updates, for the cost of a second PG run.

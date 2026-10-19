@@ -3429,6 +3429,33 @@ impl BaseGame {
             .map_or(0, |&i| self.corporations[i].cash)
     }
 
+    /// Counterfactual probe, never called by the rules: move ``amount`` from the
+    /// bank to an entity (negative: back to the bank) -- a player (``"player:<id>"``
+    /// or ``"<id>"``) or a corporation (``"corp:<sym>"`` or ``"<sym>"``) -- so a
+    /// caller can ask which moves a little more cash would make legal
+    /// (``price_hindsight``). The game is no longer one the rules produced: call it
+    /// on a clone (``pickle_clone``), and only enumerate / encode the result.
+    fn counterfactual_transfer_cash(&mut self, entity: &str, amount: i32) -> PyResult<()> {
+        let key = entity.strip_prefix("player:").unwrap_or(entity);
+        if let Ok(pid) = key.parse::<u32>() {
+            let player = self
+                .players
+                .iter_mut()
+                .find(|p| p.id == pid)
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(format!("no player {entity}")))?;
+            player.cash += amount;
+        } else {
+            let sym = entity.strip_prefix("corp:").unwrap_or(entity);
+            let &ci = self
+                .corp_idx
+                .get(sym)
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(format!("no corporation {entity}")))?;
+            self.corporations[ci].cash += amount;
+        }
+        self.bank.cash -= amount;
+        Ok(())
+    }
+
     /// Full action history: every action dict processed, in order.
     ///
     /// Mirrors Python `BaseGame.raw_actions` — each entry is the action dict
@@ -4872,6 +4899,27 @@ mod tests {
         game.bank.cash = -1;
         game.check_game_end();
         assert!(game.bank_broken);
+    }
+
+    #[test]
+    fn counterfactual_cash_moves_bank_money_on_the_clone_only() {
+        let game = new_4p_game();
+        let total = |g: &BaseGame| {
+            g.bank.cash + g.players.iter().map(|p| p.cash).sum::<i32>() + g.corporations.iter().map(|c| c.cash).sum::<i32>()
+        };
+        let mut probe = game.clone_for_search();
+        probe.counterfactual_transfer_cash("player:2", 25).unwrap();
+        probe.counterfactual_transfer_cash("3", -10).unwrap();
+        probe.counterfactual_transfer_cash("corp:PRR", 40).unwrap();
+        probe.counterfactual_transfer_cash("NYC", 5).unwrap();
+        let cash = |g: &BaseGame, id: u32| g.players.iter().find(|p| p.id == id).unwrap().cash;
+        assert_eq!(cash(&probe, 2), cash(&game, 2) + 25);
+        assert_eq!(cash(&probe, 3), cash(&game, 3) - 10);
+        assert_eq!(probe.corporations[probe.corp_idx["PRR"]].cash, game.corporations[game.corp_idx["PRR"]].cash + 40);
+        assert_eq!(probe.corporations[probe.corp_idx["NYC"]].cash, game.corporations[game.corp_idx["NYC"]].cash + 5);
+        assert_eq!(total(&probe), total(&game));
+        assert!(probe.counterfactual_transfer_cash("player:9", 1).is_err());
+        assert!(probe.counterfactual_transfer_cash("XYZ", 1).is_err());
     }
 
     #[test]
