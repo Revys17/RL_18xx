@@ -12,6 +12,7 @@ repository root; results went to `logs/<name>.log` and `logs/eval/`.
 | `after_ab.sh` | picks the round-robin winner and continues it as gen4 (300 -> 800) |
 | `gen4b.sh`, `gen4c.sh` | gen4 800 -> 1300 against population v7, then 1040 -> 1800 at 96 games per worker task |
 | `value_v3.sh` | value_v3: value_v2 fine-tuned on 400k policy games of gen4/800, scored on human and agent games |
+| `qtarget_pilot.sh` | the Q-target pilot: `--target cq` from az4 u100 with and without KataGo surprise weighting (the flattening test, docs/search_learning_design.md "Q-based policy targets"), then each arm's per-step entropies and near-greedy check |
 | `battery.sh` | the validation battery before the October pause: the generational ladder (2v2 and 1v3), gen4 against every population member, search tests (void: pre-3217c28 tree), the bankruptcy hunter, style samples |
 
 Reusable tools that grew out of these live in `scripts/` (`count_bankruptcies.py`,

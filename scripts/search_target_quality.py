@@ -32,6 +32,9 @@ judged network's (the same network's deeper search shares its value's noise).
   where the target's argmax is the reference's move; ``m_ref``: mean target mass on
   the reference's move there (the policy's own mass there: the ``prior`` row).
 
+``pressure``: how a CE step toward each target moves the policy's mass off its
+argmax, with and without KataGo's surprise weights (the flattening push).
+``paired``: paired regret / top-1 differences between two targets.
 ``steps`` breaks the policy's and the targets' entropies down by step type for
 searches by several checkpoints (where a training run's policy broadens).
 
@@ -370,6 +373,66 @@ def steps(args) -> None:
         Path(args.out).write_text("\n".join(json.dumps(line) for line in out) + "\n")
 
 
+def _surprise_weights(s: np.ndarray, a: float = 0.5, cap: float = 8.0) -> np.ndarray:
+    """``search_learning.surprise_weights`` in numpy (KataGo's policy surprise weights)."""
+    s = np.clip(s, 0, None)
+    w = np.minimum((1 - a) + a * s / max(s.mean(), 1e-12), cap)
+    return w * len(w) / w.sum()
+
+
+def _load_targets(data: Path, config: str, kind: str) -> tuple:
+    """``(targets, priors, records)`` of a target variant (or ``play``: the search's move) on a run."""
+    variants = target_variants()
+    with (data / f"{config}.pkl").open("rb") as f:
+        records = pickle.load(f)["records"]
+    priors = [variants["prior"](s) for s in records]
+    if kind == "play":
+        targets = [np.eye(len(s["legal"]))[int(np.flatnonzero(s["legal"] == s["best"])[0])] for s in records]
+    else:
+        targets = [variants[kind](s) for s in records]
+    return targets, priors, records
+
+
+def pressure(args) -> None:
+    """How one CE step toward each target moves the policy's mass off its own argmax: the mean of
+    (target off-argmax mass - policy off-argmax mass) over the positions, plain and with KataGo's
+    surprise weights (a, cap as ``--surprise-weight`` / ``--surprise-cap``) -- > 0 broadens."""
+    data = Path(args.data)
+    print(f"{'config':<16} {'target':<18} {'off_t':>6} {'off_p':>6} {'push':>7} {'push_w':>7} {'H_t':>6} {'H_p':>6}")
+    for config in args.config:
+        for kind in args.targets or ["visits_pruned", "visits_pruned^2", "onehot", "cq", "cq_c3", "rpo"]:
+            targets, priors, _ = _load_targets(data, config, kind)
+            off_t = np.array([1 - t[int(np.argmax(p))] for t, p in zip(targets, priors)])
+            off_p = np.array([1 - p[int(np.argmax(p))] for p in priors])
+            w = _surprise_weights(np.array([kl(t, p) for t, p in zip(targets, priors)]), args.a, args.cap)
+            print(f"{config:<16} {kind:<18} {off_t.mean():6.3f} {off_p.mean():6.3f} {(off_t - off_p).mean():7.3f} "
+                  f"{(w * (off_t - off_p)).mean():7.3f} {np.mean([entropy(t) for t in targets]):6.3f} "
+                  f"{np.mean([entropy(p) for p in priors]):6.3f}")
+
+
+def paired(args) -> None:
+    """Paired per-position differences of regret and top-1 between two ``<config>/<target>`` specs
+    (``~``-separated pairs) against a reference run's pickle."""
+    data = Path(args.data)
+    with Path(args.reference).open("rb") as f:
+        refs = [reference_values(s) for s in pickle.load(f)["records"]]
+
+    def regrets(spec):
+        config, kind = spec.rsplit("/", 1)
+        targets, _, _ = _load_targets(data, config, kind)
+        r = np.array([float(ref["q"][ref["best_i"]] - t @ ref["q"]) for t, ref in zip(targets, refs)])
+        top = np.array([float(int(np.argmax(t)) == ref["best_i"]) for t, ref in zip(targets, refs)])
+        return r, top
+
+    for pair in args.pair:
+        a, b = pair.split("~")
+        (ra, ta), (rb, tb) = regrets(a), regrets(b)
+        d, dt = ra - rb, ta - tb
+        se = lambda x: x.std(ddof=1) / np.sqrt(len(x))  # noqa: E731
+        print(f"{a} - {b}: regret {1e3 * ra.mean():.2f} - {1e3 * rb.mean():.2f} = {1e3 * d.mean():+.2f} "
+              f"+- {1e3 * se(d):.2f} (x1e-3); top-1 {dt.mean():+.4f} +- {se(dt):.4f}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -395,13 +458,23 @@ def main():
     p.add_argument("--stage", choices=("early", "mid", "late"), default=None)
     p.add_argument("--step", default=None)
     p.add_argument("--out", default=None)
+    p = sub.add_parser("pressure")
+    p.add_argument("--data", required=True)
+    p.add_argument("--config", nargs="+", required=True)
+    p.add_argument("--targets", nargs="*", default=None)
+    p.add_argument("--a", type=float, default=0.5, help="surprise weight")
+    p.add_argument("--cap", type=float, default=8.0)
+    p = sub.add_parser("paired")
+    p.add_argument("--data", required=True)
+    p.add_argument("--reference", required=True, help="the reference run's .pkl")
+    p.add_argument("--pair", nargs="+", required=True, help="<config>/<target>~<config>/<target>")
     p = sub.add_parser("steps")
     p.add_argument("--run", action="append", required=True, help="<label>=<data dir>/<config>.pkl")
     p.add_argument("--targets", nargs="*", default=None)
     p.add_argument("--out", default=None)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    {"search": search, "score": score, "steps": steps}[args.cmd](args)
+    {"search": search, "score": score, "steps": steps, "pressure": pressure, "paired": paired}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -477,3 +477,254 @@ children also makes the search's targets noisy: at 200 readouts on 60 human posi
 KL(pruned visits || policy) 0.47 for the refit vs 0.16 for policy + critic, 4.1% vs 1.4% of the
 target on moves the policy gives under 1% -- what az2b's policy then learned (entropy 0.29 ->
 0.55; it also ran without a KL anchor).
+
+## Q-based policy targets (2026-10-18/19)
+
+Every run without an anchor flattened (az2b, az3, az4; az3: target entropy 0.24 -> 0.58, policy
+0.19 -> 0.94 over ~300 updates, near-greedy policy-only 0.514 -> 0.188 vs gen4). The idea tested here: a target
+in which a move gains probability because its Q is better, not because the prior sent visits there.
+
+**Built (all options, off by default; the default tree is bit for bit the old build's).**
+
+| option (`main.py search-learning`) | what |
+|---|---|
+| `--target cq` | Gumbel MuZero's improved policy softmax(logits + sigma(completed q)) on the PUCT root (`search_targets.completed_q_target`): logits = the tree's priors (after `prior_temperature`), unvisited moves at the root's v_mix, sigma = (`--gumbel-c-visit` 50 + max N) * `--gumbel-c-scale` 1 * q on the mover's 0-1 share; `--cq-rescale` min-max rescales the completed q first (mctx's default, there with c_scale 0.1). Equal to `gumbel_policy_target` on a Gumbel root (tested). The move played is unchanged (most visited / explore temperature). |
+| `--target rpo` | Grill et al. 2020's pi_bar = lambda_N pi / (alpha - q), alpha by bisection in [max(q + lambda pi), max q + lambda], lambda_N = c sqrt(sum N) / (\|A\| + sum N); `--rpo-c` 0 = the tree's own effective c_puct at the root (2 ln((1 + N + c_base) / c_base) + 2 c_puct_init, ~0.11 here); `--rpo-unvisited vmix` (default, as cq) / `parent` / `min`; `--rpo-qnorm` min-max q over the root's value and visited children first. |
+| `--fast-row-weight w` | fast searches (`--n-fast`) also become rows (same kind of target; `visits` = pruned visits) weighted w in the policy and price loss; history keeps the plain keys over full rows (comparable to earlier runs) and adds `*_fast`, `fast_rows_trained`, `new_fast_rows`, `fast_rows_per_hour`; `rows_per_update` counts full rows only (the update cadence per game is unchanged), the window holds both. `--no-fast-row-value`: fast rows train the policy only (default: the value trains on every row once, as on full rows -- they are positions with outcomes like any other). |
+| `--q-normalize` (`SelfPlayConfig.mcts_q_normalize`, eval `:qnorm`, `RustMCTSPlayer.set_q_normalize`) | MuZero-style min-max Q in PUCT selection, per node over the node's own mean value and its visited children's (mctx `qtransform_by_parent_and_siblings`, the default of its `muzero_policy`), not tree-wide: the mover changes from node to node and a tree-wide range would mix four seats' values and the whole tree's spread into one scale. A virtual loss still counts as a zero-value visit; the pruned target reads the normalized terms. Needs mean Q; c_puct is then sized for a 0-1 range (MuZero's 1.25 is `/0.625`). |
+
+Rust: `root_target_stats()` (legal, N, the mover's mean q, priors, completed q, v_mix, raw value,
+root value, effective c_puct, open-price slots; a price slot's N and q aggregate its price
+grandchildren, the policy head's view), `set_q_normalize`. Bit-for-bit check: seeded HashNet
+searches (minigo Q, mean Q, mean Q + FPU, Gumbel; alone with `suggest_move`, a second search on the
+kept subtree, and lockstep), digests of every root statistic from the old and the new build, three
+processes each: 184 of 192 searches deterministic in both builds (8 hit HashMap-order ties between
+price grandchildren -- run-to-run noise of both builds), all 184 identical across builds. Tests:
+`test_search_targets.py` (14), `tests/agent/alphazero` 905 passed, `cargo test` 216 passed.
+
+**Fast-row cost.** No new encoding: `_next_need` already encodes every decision
+(`encode_canonical_py`, ~77 us) to find the mover, and a fast search kept it unused. A target is
+29 us (cq) / 310 us (rpo, numpy bisection) / 0.8 ms (pruned visits: the dense 26.5k-slot vector);
+a row is 20.9 KB pickled. With n_fast on 75% of decisions a game gives ~4x the rows: at az4's
+~400k full rows/h, ~1.2M fast rows/h (~25 GB/h through the result queue); the training cost per
+update is unchanged (steps x minibatch), each row is reused ~4x less.
+
+### Offline: which target carries signal at 48 and 200 readouts (`scripts/search_target_quality.py`)
+
+600 decision positions (past the auction; 40 games x 5 from each of az4_u200_vs_az1_u320,
+az3_u200_vs_az1_u320, az1_u300_sys200; stock 308, track 101, train 95, dividend 80, other 16),
+the generator's search (mean Q, c_puct 0.05, FPU 0, dedupe, 8 leaves, priors at T 0.5) on fresh
+trees by az4 u100 (the shared value-encoder network the az5 arms start from; its policy's entropy
+here 0.598). Every target is computed from the same trees. Two references, because they fail
+differently:
+
+- **self**: the same network @800 (more search; 800 vs 1600 agree on the move 94.5%). It shares
+  the judged search's value errors: a 200-readout tree is nearly the first 200 readouts of the 800
+  one, so a target that trusts the 200 tree's q is rewarded for agreeing with the same noise.
+- **az1**: az1 u320 + critic 320 @800 -- an independent value of about the same strength as a
+  search system (against gen4 + critic @200: az1 u300 0.658, the az4 lineage's start 0.667; az3
+  u200 0.538 against it). Its own errors make it a pessimistic judge; the truth is between the two.
+
+Q_ref(a) = the reference tree's mean value of root move a for the mover (unvisited: its v_mix).
+regret = Q_ref(reference move) - E_target[Q_ref]; spread = target mass on moves that are neither
+the policy's argmax nor the reference's move (the prior's own: 0.169); recall = among the 18-19% of
+positions where the reference's move is not the policy's argmax, the share where the target's
+argmax is the reference's move. Standard errors: top-1 ~0.016, regret ~0.0006 (paired differences
+between targets on the same trees ~0.0001-0.0004).
+
+| budget | target | H | KL(t‖π) | low (π < 1%) | spread (az1) | top-1 self / az1 | regret self / az1 (x1e-3) | recall self / az1 |
+|---|---|---|---|---|---|---|---|---|
+| -- | policy prior | 0.598 | 0 | 0.011 | 0.169 | 0.817 / 0.810 | 10.94 / 9.93 | 0 / 0 |
+| 48 | most visited (one-hot) | 0 | 0.360 | 0.008 | 0.035 | 0.833 / 0.812 | 4.59 / 4.95 | 0.19 / 0.13 |
+| 48 | raw visits | 1.165 | 1.026 | 0.189 | 0.388 | 0.822 / 0.800 | 16.07 / 14.94 | 0.16 / 0.11 |
+| 48 | pruned visits | 0.341 | 0.269 | 0.023 | 0.127 | 0.830 / 0.808 | 4.92 / 5.55 | 0.18 / 0.13 |
+| 48 | pruned visits² | 0.216 | 0.293 | 0.019 | 0.084 | 0.830 / 0.808 | 4.66 / 5.16 | 0.18 / 0.13 |
+| 48 | **cq** (c_scale 1) | 0.418 | 0.207 | 0.016 | 0.147 | 0.837 / 0.808 | 4.17 / 5.13 | 0.29 / 0.21 |
+| 48 | cq c_scale 0.3 | 0.493 | 0.048 | 0.008 | 0.139 | 0.832 / 0.817 | 5.99 / 6.42 | 0.14 / 0.11 |
+| 48 | cq c_scale 3 | 0.320 | 0.571 | 0.036 | 0.199 | 0.817 / 0.752 | 2.81 / 4.78 | 0.55 / 0.31 |
+| 48 | cq rescaled, c_scale 0.1 (mctx) | 0.340 | 0.587 | 0.040 | 0.214 | 0.760 / 0.740 | 3.69 / 5.54 | 0.41 / 0.31 |
+| 48 | rpo (tree's c ~0.11) | 0.481 | 0.489 | 0.057 | 0.197 | 0.810 / 0.763 | 4.24 / 5.73 | 0.45 / 0.29 |
+| 48 | rpo c 0.5 | 0.538 | 0.075 | 0.016 | 0.155 | 0.830 / 0.813 | 7.03 / 7.15 | 0.16 / 0.12 |
+| 48 | rpo, q min-max | 0.148 | 1.941 | 0.179 | 0.362 | 0.640 / 0.595 | 2.34 / 4.97 | 0.65 / 0.45 |
+| 200 | most visited (one-hot) | 0 | 0.454 | 0.013 | 0.058 | 0.880 / 0.817 | 2.55 / 3.67 | 0.40 / 0.21 |
+| 200 | raw visits | 0.887 | 0.642 | 0.116 | 0.276 | 0.878 / 0.817 | 7.05 / 8.11 | 0.39 / 0.21 |
+| 200 | pruned visits (az4) | 0.411 | 0.306 | 0.025 | 0.145 | 0.880 / 0.817 | 2.72 / 4.32 | 0.40 / 0.21 |
+| 200 | pruned visits² (az5b) | 0.213 | 0.353 | 0.019 | 0.093 | 0.880 / 0.817 | 2.25 / 3.82 | 0.40 / 0.21 |
+| 200 | **cq** (c_scale 1) | 0.358 | 0.320 | 0.017 | 0.144 | 0.893 / 0.805 | 2.01 / 3.87 | 0.54 / 0.28 |
+| 200 | cq c_scale 0.3 | 0.420 | 0.103 | 0.007 | 0.121 | 0.857 / 0.825 | 3.92 / 4.87 | 0.25 / 0.17 |
+| 200 | cq c_scale 3 | 0.280 | 0.873 | 0.062 | 0.221 | 0.862 / 0.745 | 0.28 / 3.42 | 0.83 / 0.46 |
+| 200 | cq rescaled, c_scale 0.1 (mctx) | 0.267 | 0.988 | 0.084 | 0.245 | 0.783 / 0.703 | 1.47 / 4.13 | 0.63 / 0.35 |
+| 200 | rpo (tree's c) | 0.457 | 0.585 | 0.062 | 0.190 | 0.900 / 0.777 | 2.03 / 4.55 | 0.75 / 0.38 |
+| 200 | rpo c 0.5 | 0.511 | 0.119 | 0.016 | 0.145 | 0.852 / 0.820 | 5.30 / 5.93 | 0.25 / 0.16 |
+| 200 | rpo, q min-max | 0.128 | 2.003 | 0.186 | 0.365 | 0.685 / 0.582 | -0.05 / 3.94 | 0.81 / 0.43 |
+
+(`search_target_quality.py search` then `score`, with `--reference-data` for az1.) Paired regret
+differences (`paired`) against pruned visits at the same budget (self / az1, x1e-3): cq -0.75 /
+-0.42 (+-0.25 / 0.33) at 48 and -0.71 / -0.45 (+-0.17 / 0.15) at 200; pruned² -0.26 / -0.40 and
+-0.47 / -0.50 (+-0.1); one-hot -0.33 / -0.60 and -0.17 / -0.65; cq c_scale 3 -2.11 / -0.77 and
+-2.44 / -0.90 with top-1 vs az1 -0.057 / -0.072 (+-0.016); rpo -0.68 / +0.18 and -0.69 / +0.23. cq at
+48 vs pruned at 200: +1.45 / +0.81 (+-0.3).
+
+What this says:
+
+1. **Little of the value's sibling ranking survives at these budgets.** The more a target trusts
+   the 48/200-readout q (cq c_scale 3, rpo with the tree's c, any min-max q), the better it agrees
+   with the same network's deeper search (regret down to ~0 at 200) and the worse with az1's
+   (top-1 -0.04 to -0.23, spread above the prior's own 0.169): the gain is the shared value noise,
+   amplified. Normalizing q to its min-max range is the worst case -- it scales 0.01 noise to the
+   whole range.
+2. **The mild completed-Q target (cq, c_scale 1) is a small, consistent improvement over pruned
+   visits** on both references (regret -0.4 to -0.75e-3, recall of the reference's move 0.13 ->
+   0.21 at 48 and 0.21 -> 0.28 at 200 vs az1, spread equal), with top-1 vs az1 within noise
+   (-0.012 +- 0.010 at 200). It is not sharper than pruned visits by entropy; it moves a little
+   more mass to the moves deeper search prefers. Sharpening the visits (pruned², one-hot) buys a
+   similar regret drop by concentrating on the search's own move.
+3. **48-readout targets carry real signal**: about half the prior's regret (vs az1 9.9 -> 5.1-5.6e-3)
+   against 3.9-4.3e-3 at 200; fast rows are worth training on at a reduced weight if data, not
+   compute, limits.
+4. The pruned, sharpened and cq targets are all *sharper* than this policy (0.21-0.42 vs 0.60), so
+   "targets echo a flat prior" can't be the whole loop at u100 -- see the next part.
+
+**q-normalize (the searches' own moves):**
+
+| search | top-1 self / az1 | regret self / az1 (x1e-3) | leaves the policy's argmax | of those, az1's move |
+|---|---|---|---|---|
+| 0.05 @48 (generator) | 0.833 / 0.812 | 4.59 / 4.95 | 0.060 | 0.42 |
+| 0.15 @48 | 0.822 / 0.808 | 5.79 / 5.32 | 0.035 | 0.33 |
+| qnorm 0.25 @48 | 0.802 / 0.758 | 3.90 / 4.81 | 0.128 | 0.25 |
+| qnorm 0.625 @48 | 0.810 / 0.787 | 4.74 / 4.87 | 0.075 | 0.29 |
+| 0.05 @200 (generator) | 0.880 / 0.817 | 2.55 / 3.67 | 0.098 | 0.41 |
+| 0.15 @200 | 0.850 / 0.825 | 3.94 / 4.27 | 0.050 | 0.53 |
+| qnorm 0.25 @200 | 0.785 / 0.702 | 2.84 / 4.25 | 0.257 | 0.20 |
+| qnorm 0.625 @200 | 0.820 / 0.757 | 2.88 / 4.17 | 0.172 | 0.26 |
+| 0.05 @800 (self reference) | 1 / 0.807 | 0 / 3.24 | 0.183 | 0.44 |
+| qnorm 0.625 @800 | 0.812 / 0.690 | 2.26 / 4.04 | 0.300 | 0.23 |
+
+Normalized Q makes the search leave the policy's move 2-3x as often, mostly onto moves neither
+reference prefers (20-29% of those departures are az1's move vs 41-44% for the generator's
+search); top-1 drops 2-12 points against both references and regret does not improve (paired vs
+the generator's search, az1: +0.5 +- 0.5e-3 at 200, -0.1 +- 0.6 at 48). Rejected: `--q-normalize`
+stays off.
+
+### What broadens the policy
+
+**Training pushes the policy past its targets, mostly in stock rounds.** The same 600 positions
+searched @200 by checkpoints along az4 (policy = the tree's priors at T 0.5; `search_target_quality.py
+steps`):
+
+| checkpoint | policy H, all / stock / track / train | pruned-visit target H, all / stock / track / train |
+|---|---|---|
+| az4 u0 | 0.178 / 0.184 / 0.310 / 0.134 | 0.224 / 0.249 / 0.390 / 0.122 |
+| az4 u50 | 0.375 / 0.503 / 0.426 / 0.198 | 0.285 / 0.327 / 0.452 / 0.171 |
+| az4 u100 | 0.598 / 0.834 / 0.616 / 0.306 | 0.411 / 0.503 / 0.607 / 0.210 |
+| az4 u150 | 0.749 / 1.009 / 0.776 / 0.452 | 0.485 / 0.582 / 0.669 / 0.310 |
+| az4 u200 | 0.869 / 1.151 / 0.901 / 0.566 | 0.566 / 0.672 / 0.782 / 0.379 |
+| az5a u30 (anchor) | 0.672 / 0.919 / 0.706 / 0.375 | 0.445 / 0.537 / 0.673 / 0.246 |
+| az5b u30 (visits²) | 0.628 / 0.858 / 0.639 / 0.364 | 0.426 / 0.517 / 0.611 / 0.236 (its own target, visits², 0.222) |
+
+At the start the targets were the flatter ones (0.224 vs 0.178: the echo + exploration). From u50
+the policy is broader than its targets and the gap grows (stock: 1.15 vs 0.67 at u200), and az5b
+broadens toward targets of entropy 0.22. Stock rounds (half the decisions) carry most of it; track
+lays follow their targets; dividends and routes stay sharp.
+
+**Suspect: KataGo's surprise weighting** (`--surprise-weight 0.5` in every run since az2; az1, which
+stayed sharp, had none -- and an anchor). One CE step moves the policy's mass off its argmax by the
+row-weighted mean of (target off-argmax mass - policy off-argmax mass). On the 600 positions (u100
+policy, its own targets; `search_target_quality.py pressure`):
+
+| target | push off the argmax, unweighted @48 / @200 | with surprise weights (a 0.5, cap 8) @48 / @200 |
+|---|---|---|
+| pruned visits (az4) | -0.029 / +0.004 | **+0.074 / +0.134** |
+| pruned visits² (az5b) | -0.078 / -0.050 | **+0.011 / +0.078** |
+| one-hot | -0.136 / -0.097 | -0.094 / +0.040 |
+| cq | -0.001 / +0.010 | **+0.118 / +0.155** |
+| cq c_scale 3 | +0.069 / +0.111 | +0.287 / +0.350 |
+
+Unweighted, the pruned and cq targets are neutral and the sharpened ones sharpen; surprise weights
+put the step on the rows where target and policy disagree most -- largely noise (only ~40% of the
+targets' departures from the policy's argmax are az1's move) -- and turn every target into a
+broadening one, in the order of the runs' observed broadening (az4 > az5b). The prediction for the
+pilot below: cq with surprise weights broadens like az4; without them it stays flat.
+
+### Pilot: cq targets with and without surprise weighting (2026-10-19, ~90 min each)
+
+Both arms from az4 u100 with az4 / az5b's settings (`scripts/launch/2026-10/qtarget_pilot.sh`: `--shared
+--value-stop-grad`, PUCT 200 / 48, p_full 0.25, reuse total, explore temperature 1 for 120
+decisions, lambda 0.97 values, aux 0.1, lr 5e-6, no anchor, window 131,072 rows, 8,192 rows per
+update, 8 steps of 2,048), `--target cq`, 12 workers each, run side by side (GPU shared with az5a,
+az5b and evals: ~1,200 games/h, ~220k rows/h each): **A** `--surprise-weight 0.5` (as az4/az5),
+**B** `--surprise-weight 0` (`model_checkpoints_search/qtarget_pilot_sw05_20261019`,
+`qtarget_pilot_20261019`). History per update (full rows; updates after the start, az4 counted from
+its u100):
+
+| run | policy H +1 / +10 / +20 / +28 | target H +1 / +10 / +20 / +28 | KL(t‖π) +1 / +28 | top-1 +1 / +28 |
+|---|---|---|---|---|
+| az4 (pruned, surprise 0.5) | 0.576 / 0.598 / 0.632 / 0.649 | 0.355 / 0.365 / 0.390 / 0.395 | 0.286 / 0.271 | 0.904 / 0.892 |
+| az5a (pruned, surprise 0.5, moving anchor) | 0.581 / 0.596 / 0.638 / 0.649 | 0.371 / 0.375 / 0.396 / 0.405 | 0.298 / 0.281 | 0.894 / 0.893 |
+| az5b (pruned², surprise 0.5) | 0.583 / 0.558 / 0.586 / 0.596 | 0.192 / 0.178 / 0.187 / 0.190 | 0.362 / 0.315 | 0.885 / 0.900 |
+| **A**: cq, surprise 0.5 | 0.573 / 0.625 / 0.648 / **0.680** | 0.315 / 0.339 / 0.355 / 0.376 | 0.362 / 0.341 | 0.855 / 0.857 |
+| **B**: cq, surprise 0 | 0.576 / 0.516 / 0.523 / **0.530** (0.523 at +29) | 0.328 / 0.328 / 0.331 / 0.337 | 0.356 / 0.318 | 0.857 / 0.871 |
+
+The prediction held: with surprise weights the cq arm broadened faster than az4 (as its weighted
+push, +0.155, exceeds pruned visits' +0.134) and its targets followed (0.315 -> 0.376: the loop);
+without them the policy *sharpened* in the first five updates (0.576 -> 0.526) and then stayed
+flat for 24 updates, its targets flat at 0.33, KL(target || policy) falling and top-1 agreement
+rising. Both arms had the same row staleness (mean row age 11.9 updates) and the same fit
+(steps, lr), so neither stale rows nor plain forward-KL mass covering drives the rise at this
+rate; surprise weighting does.
+
+Per step type, on the 600 fixed positions (each checkpoint's own 200-readout search; policy H /
+cq target H):
+
+| checkpoint | all | stock (308) | track (101) | train (95) | dividend (80) |
+|---|---|---|---|---|---|
+| start (az4 u100) | 0.598 / 0.358 | 0.834 / 0.428 | 0.616 / 0.600 | 0.306 / 0.154 | 0.074 / 0.035 |
+| A u10 / u20 / u28 | 0.655 / 0.686 / 0.706 | 0.924 / 0.963 / 0.984 | 0.641 / 0.667 / 0.693 | 0.338 / 0.364 / 0.389 | 0.084 / 0.092 / 0.104 |
+| B u10 / u20 / u29 | 0.551 / 0.557 / 0.565 | 0.731 / 0.731 / 0.734 | 0.642 / 0.665 / 0.685 | 0.310 / 0.319 / 0.329 | 0.079 / 0.083 / 0.088 |
+| B u29's own targets | 0.371 | 0.415 | 0.683 | 0.172 | 0.052 |
+
+The broadening is in the stock round (half the decisions): surprise weighting adds ~0.15 there in
+28 updates; without it the stock policy dropped 0.10 and held. What remains in B is a slow rise in
+track lays (+0.07 in 29 updates), where the policy equals its targets and the targets themselves
+broaden (0.600 -> 0.683) -- the echo loop proper, in the step type with the most near-equal options
+and the value's weakest sibling ranking (the value-encoder network at the lineage's start: track
+0.747 against az1's critic's 0.944; diagnosis above).
+
+**But the policy-only strength still fell.** Near-greedy policy-only checks (T 0.1 both sides,
+1,200 games vs gen4, `logs/orchestration/greedy_checks.sh`'s protocol): start (az4 u100) 0.434 +-
+0.014, **B u29 0.382**, A u28 0.350 (+- 0.014; az4 u150 0.314, az5a / az5b u50 0.362 / 0.332). Not
+flattening is not enough: B's policy moves its argmax toward the targets' (top-1 0.857 -> 0.878),
+and per the offline table only ~40% of the targets' departures from the policy's move are an
+independent strong search's move. With this lineage's value (sibling ranking 0.920 overall, 0.747
+in track at its start) the targets' disagreements with the policy are largely noise, and distilling
+them costs the raw policy strength even when the policy stays sharp. System strength (policy +
+search) was not measured for the pilot.
+
+### Recommendation
+
+1. **Turn surprise weighting off** (`--surprise-weight 0`) in every search-learning run: it is the
+   main driver of the flattening loop (A vs B: one flag apart, broadening vs flat; predicted
+   offline by the weighted push).
+2. **Target: `--target cq`** (c_scale 1, no rescale) or pruned visits -- at these budgets the
+   completed-Q target's extra signal is small (regret -0.4 to -0.7e-3 against both references,
+   more mass on deeper search's move) and its unweighted pressure on the policy is neutral; do not
+   trust q harder (c_scale >= 3, `rpo` with the tree's c, min-max q): that amplifies the value's
+   noise. `rpo` at c >= 0.5 is ~ the prior. `--q-normalize`: off.
+3. **Keep az1's fixed anchor** (KL to the starting policy, target 0.02, never moved -- az1, the one
+   run that stayed sharp *and* kept its policy-only strength, 0.524 near-greedy at u320, had it and
+   no surprise weights; az5a's anchor moved every 50 updates and broadened anyway): without surprise
+   weights the policy no longer needs it against flattening, but the targets' noisy departures
+   still erode policy-only strength. Next arm, from az4 u100 (comparable with az5a / az5b) with
+   az5b's settings and `--target cq --target-temperature 1 --surprise-weight 0 --kl-coef 0.02
+   --kl-target 0.02 --anchor-every 0`, judged by system strength vs az4 u100 every 50 updates *and*
+   the near-greedy check; as its pair the same without the anchor (`--kl-coef 0 --kl-target 0`),
+   to see what the anchor costs in distilled search gains. (Starting instead from the shared
+   network's start, `model_checkpoints_pg/shared_diag_venc1_20261018/learner/280.pth` -- az1 u280's
+   policy, sharper and stronger alone -- is the alternative if the az4 lineage's flattened u100 is
+   the wrong base.)
+4. **Fast rows**: their targets carry real signal (48-readout cq halves the prior's regret against
+   both references), but they would quadruple the rows of a target whose departures are mostly noise.
+   Try `--fast-row-weight 0.3` only after (1)-(3) hold policy-only strength.
+5. The ceiling is the value's sibling ranking (track lays in particular): a better-ranking value
+   (more critic distillation on children, `distill_value_on_children.py`) is what would make any
+   Q-based target pay.
