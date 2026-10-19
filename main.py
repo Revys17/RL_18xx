@@ -225,6 +225,13 @@ def cmd_search_learning(args):
         target=args.target,
         visit_target=args.visit_target,
         target_temperature=args.target_temperature,
+        cq_rescale=args.cq_rescale,
+        rpo_c=args.rpo_c,
+        rpo_unvisited=args.rpo_unvisited,
+        rpo_qnorm=args.rpo_qnorm,
+        q_normalize=args.q_normalize,
+        fast_row_weight=args.fast_row_weight,
+        fast_row_value=not args.no_fast_row_value,
         p_full=args.p_full,
         n_full=args.n_full,
         n_fast=args.n_fast,
@@ -627,9 +634,25 @@ def build_parser():
         "--learner-temperature", type=float, default=None,
         help="The policy is softmax(logits / T), trained and searched so (default: the --policy run's learner_temperature)",
     )
-    p.add_argument("--target", choices=("visits", "gumbel"), default=_SL.target,
+    p.add_argument("--target", choices=("visits", "gumbel", "cq", "rpo"), default=_SL.target,
                    help="Policy target and root selection: the Gumbel root's completed-Q policy (default; every "
-                   "search, full and fast, uses the Gumbel root), or the PUCT search's visit distribution")
+                   "search, full and fast, uses the Gumbel root), or on the PUCT search: its visit distribution, "
+                   "the completed-Q improved policy softmax(logits + sigma(completed q)) (cq; sigma from "
+                   "--gumbel-c-visit / --gumbel-c-scale), or Grill et al. 2020's regularized policy (rpo)")
+    p.add_argument("--cq-rescale", action="store_true",
+                   help="--target cq: min-max rescale the completed q's to [0, 1] first (mctx's rescale_values)")
+    p.add_argument("--rpo-c", type=float, default=_SL.rpo_c,
+                   help="--target rpo: lambda_N's c (0: the tree's own effective c_puct at the root)")
+    p.add_argument("--rpo-unvisited", choices=("vmix", "parent", "min"), default=_SL.rpo_unvisited,
+                   help="--target rpo: q of unvisited moves (the root's v_mix, its mean value, the lowest visited q)")
+    p.add_argument("--rpo-qnorm", action="store_true",
+                   help="--target rpo: q min-max normalized over the root's value and visited children first")
+    p.add_argument("--q-normalize", action="store_true",
+                   help="PUCT selection on min-max normalized Q (MuZero); size --c-puct for a 0-1 range")
+    p.add_argument("--fast-row-weight", type=float, default=_SL.fast_row_weight,
+                   help="Fast searches (--n-fast) also become rows with this weight in the policy loss (0: no rows)")
+    p.add_argument("--no-fast-row-value", action="store_true",
+                   help="--fast-row-weight: fast rows train the policy only, not the value")
     p.add_argument("--visit-target", choices=("pruned", "raw"), default=_SL.visit_target,
                    help="--target visits: KataGo's policy-target pruning of exploration visits, or the raw visits")
     p.add_argument("--target-temperature", type=float, default=_SL.target_temperature,

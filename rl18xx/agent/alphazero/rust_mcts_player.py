@@ -248,6 +248,10 @@ class RustMCTSPlayer:
         )
         if bool(getattr(self.config, "mcts_mean_q", False)):
             self._rust_player.set_q_config(True, float(getattr(self.config, "fpu_reduction", 0.0)))
+            if bool(getattr(self.config, "mcts_q_normalize", False)):
+                self._rust_player.set_q_normalize(True)
+        elif bool(getattr(self.config, "mcts_q_normalize", False)):
+            raise ValueError("mcts_q_normalize needs mcts_mean_q")
         if int(getattr(self.config, "gumbel_k", 0)) > 0:
             self._rust_player.set_gumbel_config(
                 int(self.config.gumbel_k),

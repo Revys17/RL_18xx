@@ -32,6 +32,9 @@ use crate::price_pmf::{proposal_order, PriceCells, NUM_CELLS};
 const VALUE_SIZE: usize = crate::encoder::MAX_PLAYERS;
 const C_PUCT_BASE: f32 = 19652.0;
 const C_PUCT_INIT: f32 = 1.25;
+/// ``q_normalize``: the smallest Q range divided by (values are 0-1 win
+/// shares in f32; mctx uses 1e-8 on f32 values in [-1, 1]).
+const Q_NORM_EPS: f32 = 1e-6;
 
 // ----------------------------------------------------------------------------
 // Price components (per-leaf NN price-head output)
@@ -246,6 +249,14 @@ pub struct RustMCTSPlayer {
     /// ``fpu_reduction * sqrt(visited prior mass)`` (first-play urgency).
     pub mean_q: bool,
     pub fpu_reduction: f32,
+    /// With ``mean_q``: PUCT reads each node's Q min-max normalized
+    /// (MuZero / mctx ``qtransform_by_parent_and_siblings``): q' = (q - lo) /
+    /// max(hi - lo, Q_NORM_EPS), lo / hi the min / max over the node's own
+    /// mean value and its visited children's mean values for the node's
+    /// mover. Sibling gaps of ~0.01-0.03 win share then compete with the
+    /// exploration term at full scale (c_puct is to be sized for a 0-1
+    /// range). Off by default; ignored without ``mean_q``.
+    pub q_normalize: bool,
 
     /// The tree's random source (price proposals, Dirichlet noise, Gumbel
     /// noise): from OS entropy, or ``seed()`` for reproducible tests.
@@ -411,6 +422,7 @@ impl RustMCTSPlayer {
             max_game_length: 1000,
             mean_q: false,
             fpu_reduction: 0.0,
+            q_normalize: false,
             rng: rand::rngs::StdRng::from_entropy(),
             pending: Vec::new(),
             pending_dups: Vec::new(),
@@ -456,6 +468,18 @@ impl RustMCTSPlayer {
     pub fn set_q_config(&mut self, mean_q: bool, fpu_reduction: f32) {
         self.mean_q = mean_q;
         self.fpu_reduction = fpu_reduction;
+    }
+
+    /// Min-max normalized Q in PUCT selection (see the ``q_normalize``
+    /// field; needs ``set_q_config(True, ...)``).
+    pub fn set_q_normalize(&mut self, on: bool) {
+        self.q_normalize = on;
+    }
+
+    /// Whether PUCT reads min-max normalized Q (``set_q_normalize``).
+    #[getter]
+    pub fn q_normalize_enabled(&self) -> bool {
+        self.q_normalize
     }
 
     /// Engine move number at the root (length of the full action log) —
@@ -1182,6 +1206,63 @@ impl RustMCTSPlayer {
         d.set_item("expanded", node.is_expanded)?;
         Ok(d.into_any().unbind())
     }
+
+    /// What a policy target computed outside the tree needs from the root
+    /// (``search_targets.py``: completed-Q and regularized-policy targets on
+    /// PUCT roots), per legal move in ``legal_action_indices_at_root`` order:
+    ///
+    /// - ``legal``, ``child_n``, ``child_prior`` (the tree's priors, after
+    ///   ``prior_temperature`` and any noise), ``open_price`` (a
+    ///   progressive-widening slot: its N / q aggregate its price grandchildren,
+    ///   the policy head's view of the slot);
+    /// - ``child_q``: the mover's mean backed-up value of each move (in-flight
+    ///   virtual losses undone), NaN where unvisited;
+    /// - ``completed_q``: ``child_q`` with the unvisited moves at ``v_mix``
+    ///   (the Gumbel root's completion, ``gumbel.rs``);
+    /// - scalars ``raw_value`` (the network's value of the root for its mover),
+    ///   ``root_value`` (the mean of every value backed up through the root),
+    ///   ``v_mix``, ``root_n``, ``mover`` (the root's ``active_player_index``),
+    ///   ``c_puct`` (the effective exploration constant PUCT used at the root:
+    ///   2 ln((1 + N + c_base) / c_base) + 2 c_puct_init), ``mean_q``,
+    ///   ``q_normalize``, ``expanded``.
+    pub fn root_target_stats(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let root = &self.arena[self.root_idx];
+        let ap = root.active_player_index;
+        let num_legal = root.legal_action_indices.len();
+        let child_q: Vec<f32> = (0..num_legal)
+            .map(|i| {
+                let n = root.child_n[i];
+                if n > 0.0 {
+                    (root.child_w[i][ap] + root.child_vl[i]) / n
+                } else {
+                    f32::NAN
+                }
+            })
+            .collect();
+        let c_puct = 2.0 * ((1.0 + self.root_n + self.c_puct_base) / self.c_puct_base).ln()
+            + 2.0 * self.c_puct_init_for(self.root_idx);
+        let d = PyDict::new(py);
+        d.set_item("legal", root.legal_action_indices.clone())?;
+        d.set_item("child_n", root.child_n.clone())?;
+        d.set_item("child_prior", root.child_prior.clone())?;
+        d.set_item("child_q", child_q)?;
+        d.set_item(
+            "open_price",
+            root.legal_action_indices.iter().map(|&a| Self::is_pw_slot(root, a)).collect::<Vec<bool>>(),
+        )?;
+        let expanded = root.is_expanded && num_legal > 0;
+        d.set_item("completed_q", if expanded { self.root_completed_q() } else { vec![f32::NAN; num_legal] })?;
+        d.set_item("v_mix", if expanded { self.root_v_mix() } else { f32::NAN })?;
+        d.set_item("raw_value", root.raw_value[ap])?;
+        d.set_item("root_value", if self.root_n > 0.0 { self.root_w[ap] / self.root_n } else { f32::NAN })?;
+        d.set_item("root_n", self.root_n)?;
+        d.set_item("mover", ap)?;
+        d.set_item("c_puct", c_puct)?;
+        d.set_item("mean_q", self.mean_q)?;
+        d.set_item("q_normalize", self.q_normalize)?;
+        d.set_item("expanded", root.is_expanded)?;
+        Ok(d.into_any().unbind())
+    }
 }
 
 impl RustMCTSPlayer {
@@ -1271,12 +1352,18 @@ impl RustMCTSPlayer {
             + 2.0 * self.c_puct_init_for(self.root_idx);
         let sqrt_n_s = (n_this - 1.0).max(1.0).sqrt();
         let ap = root.active_player_index;
+        // With q_normalize the PUCT terms are the selection's: Q min-max normalized.
+        let qnorm = (self.mean_q && self.q_normalize).then(|| self.q_norm_range(self.root_idx));
         let q = |i: usize| -> f32 {
             let n = root.child_n[i];
-            if self.mean_q {
+            let raw = if self.mean_q {
                 if n > 0.0 { root.child_w[i][ap] / n } else { 0.0 }
             } else {
                 root.child_w[i][ap] / (1.0 + n)
+            };
+            match qnorm {
+                Some((lo, scale)) => (raw - lo) * scale,
+                None => raw,
             }
         };
         let best = (0..num_legal)
@@ -1776,6 +1863,10 @@ impl RustMCTSPlayer {
         } else {
             0.0
         };
+        // q_normalize: every Q below (first-play value included) on the node's
+        // min-max range; a virtual loss still counts as a zero-value visit, so
+        // an in-flight child can read below 0.
+        let qnorm = (self.mean_q && self.q_normalize).then(|| self.q_norm_range(arena_idx));
         for i in 0..num_legal {
             if let Some(ref mask) = allowed {
                 if !mask[i] {
@@ -1794,6 +1885,10 @@ impl RustMCTSPlayer {
             } else {
                 node.child_w[i][ap] / (1.0 + n_sa)
             };
+            let q_sa = match qnorm {
+                Some((lo, scale)) => (q_sa - lo) * scale,
+                None => q_sa,
+            };
             let u_sa = c_puct * node.child_prior[i] * sqrt_n_s / (1.0 + n_sa);
             let score = q_sa + u_sa;
             if best_i.is_none() || score > best_score {
@@ -1802,6 +1897,28 @@ impl RustMCTSPlayer {
             }
         }
         best_i.unwrap_or(0)
+    }
+
+    /// ``(lo, 1 / max(hi - lo, Q_NORM_EPS))``: the min-max range of node
+    /// ``arena_idx``'s Q for its mover -- its own mean value and each visited
+    /// child's mean value (virtual losses undone) -- for ``q_normalize``
+    /// (mctx ``qtransform_by_parent_and_siblings``). Per node, not per tree:
+    /// the mover changes from node to node (four seats), and a tree-wide range
+    /// would mix the seats' values and the whole tree's spread into one scale.
+    pub(crate) fn q_norm_range(&self, arena_idx: usize) -> (f32, f32) {
+        let node = &self.arena[arena_idx];
+        let ap = node.active_player_index;
+        let v = self.node_mean_value(arena_idx, ap);
+        let (mut lo, mut hi) = (v, v);
+        for i in 0..node.legal_action_indices.len() {
+            let n = node.child_n[i];
+            if n > 0.0 {
+                let q = (node.child_w[i][ap] + node.child_vl[i]) / n;
+                lo = lo.min(q);
+                hi = hi.max(q);
+            }
+        }
+        (lo, 1.0 / (hi - lo).max(Q_NORM_EPS))
     }
 }
 

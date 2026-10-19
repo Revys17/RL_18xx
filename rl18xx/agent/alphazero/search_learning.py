@@ -24,6 +24,17 @@ search's value network) toward the games' outcomes:
     sigma(completed q)) (``engine-rs/src/gumbel.rs``), the move its
     sequential-halving choice. Its logits are the tree's priors, already
     softmax(logits / T), so the target improves on the policy as defined.
+  - ``cq`` / ``rpo``: Q-based targets on the PUCT search ``visits`` runs
+    (``search_targets``): the completed-Q improved policy softmax(logits +
+    sigma(completed q)) (sigma's constants ``gumbel_c_visit`` /
+    ``gumbel_c_scale``; ``cq_rescale``), or Grill et al. 2020's regularized
+    policy lambda_N pi / (alpha - q) (``rpo_c``, ``rpo_unvisited``,
+    ``rpo_qnorm``). The move played is the search's as for ``visits``.
+
+  ``q_normalize``: PUCT selection on min-max normalized Q (MuZero), any
+  PUCT target. ``fast_row_weight`` w > 0: fast searches (``n_fast``) also
+  become rows, with the same kind of target, weighted w in the policy loss
+  (and, with ``fast_row_value``, trained on by the value as any row).
 
   The price head's target at a searched price decision is the searched price
   grandchildren's visit distribution over the slot's price cells.
@@ -93,10 +104,12 @@ from typing import Any, Optional
 
 import numpy as np
 
+from rl18xx.agent.alphazero.search_targets import RPO_UNVISITED, search_target
+
 LOGGER = logging.getLogger(__name__)
 
 NUM_PLAYERS = 4
-TARGETS = ("visits", "gumbel")
+TARGETS = ("visits", "gumbel", "cq", "rpo")
 
 
 @dataclass
@@ -121,6 +134,25 @@ class SearchLearningConfig:
     # targets carried more entropy than the sharp policy (0.19 vs 0.14 at the start), the
     # policy followed (0.14 -> 0.45 by update 100) and played worse (0.28 2v2 vs gen4).
     target_temperature: float = 1.0
+    # --target cq: sigma's q first min-max rescaled to [0, 1] over the root's moves
+    # (mctx's rescale_values; mctx then uses c_scale 0.1). sigma's constants are
+    # gumbel_c_visit / gumbel_c_scale.
+    cq_rescale: bool = False
+    # --target rpo (Grill et al. 2020): lambda_N's c (0: the tree's own effective
+    # c_puct at the root), the q of unvisited moves ("vmix", "parent", "min"), and
+    # q min-max normalized over the root's value and visited children before solving.
+    rpo_c: float = 0.0
+    rpo_unvisited: str = "vmix"
+    rpo_qnorm: bool = False
+    # PUCT selection on min-max normalized Q (needs mean_q; size c_puct_init for a
+    # 0-1 range). Off: the tree is bit for bit the default one.
+    q_normalize: bool = False
+    # Fast searches (n_fast) as training rows too: their target (the same kind as the
+    # full searches'), weighted w in the policy loss (0: no rows, as before). They
+    # don't count toward rows_per_update (the cadence stays per full row) but fill
+    # the window. fast_row_value: they also train the value (each once), as full rows.
+    fast_row_weight: float = 0.0
+    fast_row_value: bool = True
     p_full: float = 0.25
     n_full: int = 200
     # Readouts of the other learner decisions (KataGo's fast searches: played, never
@@ -296,6 +328,8 @@ class SearchRow:
     win_target: Optional[np.ndarray] = None  # the win head's target (player-id order); None: the outcome
     aux_seat: Optional[np.ndarray] = None  # (players, AUX_SEAT_TARGETS) at the game's end, player-id order
     aux_global: Optional[np.ndarray] = None  # (AUX_GLOBAL_TARGETS,) corporations floated at the end
+    fast: bool = False  # from a fast search (fast_row_weight)
+    weight: float = 1.0  # the row's weight in the policy (and price) loss
 
 
 def root_value(tree) -> np.ndarray:
@@ -433,6 +467,12 @@ def search_batch(rows: list, device) -> dict:
             price_masks.append(price_pmf.price_cells(price_pmf.SLOT_TYPES[slot], plo, phi).nonempty)
             price_targets.append(cells)
     critic_rows = [b for b, r in enumerate(rows) if r.critic and r.fractions is not None]
+    # Fast-search rows (fast_row_weight): their mask and every row's loss weight;
+    # None when there are none (the losses are then computed exactly as before).
+    fast = [bool(getattr(r, "fast", False)) for r in rows]
+    weights = [float(getattr(r, "weight", 1.0)) for r in rows]
+    any_fast = any(fast)
+    weighted = any(w != 1.0 for w in weights)
 
     def frame(values: list) -> torch.Tensor:
         return torch.stack([torch.roll(torch.as_tensor(v), shifts=-int(r.rotation), dims=0) for v, r in values]).float()
@@ -481,6 +521,8 @@ def search_batch(rows: list, device) -> dict:
         "outcome_win": outcome_win,
         "aux_seat": aux_seat,
         "aux_global": aux_global,
+        "fast": torch.tensor(fast, dtype=torch.bool, device=device) if any_fast else None,
+        "row_weight": torch.tensor(weights, dtype=torch.float32, device=device) if weighted else None,
     }
 
 
@@ -553,7 +595,14 @@ def search_losses(
     With ``surprise_weight`` a > 0 (KataGo's policy surprise weighting) each row's
     ``ce`` in ``total`` weighs w = (1 - a) + a * s / mean(s), s its KL(target ||
     policy) (no gradient through w), capped at ``surprise_cap`` and rescaled to mean
-    1 over the batch; ``surprise_*`` sums describe the weights."""
+    1 over the batch; ``surprise_*`` sums describe the weights.
+
+    Rows with a ``row_weight`` (fast-search rows, ``fast_row_weight``) weigh their
+    ``ce`` and ``price_ce`` by it in ``total``. With fast rows in the batch the
+    reported sums (``ce``, ``search_kl``, ``target_entropy``, ``kl_anchor``,
+    ``entropy``, ``top1_agreement``, ``price_ce``) are over the full searches' rows
+    -- comparable to runs without fast rows -- and ``*_fast`` / ``rows_fast`` /
+    ``price_rows_fast`` over the fast ones."""
     import torch
 
     from rl18xx.agent.alphazero.policy_gradient import _masked_log_softmax
@@ -569,21 +618,30 @@ def search_losses(
     entropy = -(p * log_p).sum(dim=1)
     top1 = (log_p.masked_fill(~legal, float("-inf")).argmax(dim=1) == batch["target_best"]).float()
 
+    row_weight, fast = batch.get("row_weight"), batch.get("fast")
     price_ce = torch.zeros((), device=log_p.device)
     price_kl = torch.zeros((), device=log_p.device)
+    price_loss = price_ce
+    price_ce_rows = cell_kl = None
     if price_logits is not None and batch["price_rows"].numel():
         prow, slots, masks = batch["price_rows"], batch["price_slots"], batch["price_masks"]
         cell_log_p = _masked_log_softmax(price_logits[prow, slots], masks)
         anchor_cell_log_p = _masked_log_softmax(anchor_price_logits[prow, slots], masks)
         price_ce = -(batch["price_targets"] * cell_log_p).sum()
+        price_loss = price_ce
         cell_kl = (cell_log_p.exp() * masks * (cell_log_p - anchor_cell_log_p)).sum(dim=1)
         kl = kl.index_add(0, prow, cell_kl)
         price_kl = cell_kl.sum()
+        if row_weight is not None or fast is not None:
+            price_ce_rows = -(batch["price_targets"] * cell_log_p).sum(dim=1)
+        if row_weight is not None:
+            price_loss = (row_weight[prow] * price_ce_rows).sum()
     surprise = (ce - batch["target_entropy"]).detach()
+    weighted_ce = ce if row_weight is None else row_weight * ce
     out = {}
     if surprise_weight > 0:
         weights, capped = surprise_weights(surprise, surprise_weight, surprise_cap)
-        policy_term = (weights * ce).sum()
+        policy_term = (weights * weighted_ce).sum()
         disagree = top1 == 0
         top = max(1, int(round(0.1 * n)))
         out.update(
@@ -595,21 +653,35 @@ def search_losses(
             surprise_disagree_rows=disagree.float().sum(),
         )
     else:
-        policy_term = ce.sum()
-    total = policy_term + price_weight * price_ce + kl_coef * kl.sum()
-    out.update(
-        {
-            "total": total,
-            "ce": ce.sum().detach(),
-            "search_kl": surprise.sum(),
-            "target_entropy": batch["target_entropy"].sum().detach(),
-            "kl_anchor": kl.sum().detach(),
-            "entropy": entropy.sum().detach(),
-            "top1_agreement": top1.sum().detach(),
-            "price_ce": price_ce.detach(),
-            "price_kl_anchor": price_kl.detach(),
-        }
-    )
+        policy_term = weighted_ce.sum()
+    total = policy_term + price_weight * price_loss + kl_coef * kl.sum()
+    out["total"] = total
+    per_row = {
+        "ce": ce,
+        "search_kl": surprise,
+        "target_entropy": batch["target_entropy"],
+        "kl_anchor": kl,
+        "entropy": entropy,
+        "top1_agreement": top1,
+    }
+    if fast is None:
+        out.update({key: v.sum().detach() for key, v in per_row.items()})
+        out.update(price_ce=price_ce.detach(), price_kl_anchor=price_kl.detach())
+    else:
+        full = ~fast
+        out.update({key: v[full].sum().detach() for key, v in per_row.items()})
+        out.update({f"{key}_fast": v[fast].sum().detach() for key, v in per_row.items()})
+        out.update(rows_fast=fast.float().sum())
+        if price_ce_rows is not None:
+            pfast = fast[batch["price_rows"]]
+            out.update(
+                price_ce=price_ce_rows[~pfast].sum().detach(),
+                price_kl_anchor=cell_kl[~pfast].sum().detach(),
+                price_ce_fast=price_ce_rows[pfast].sum().detach(),
+                price_rows_fast=pfast.float().sum(),
+            )
+        else:
+            out.update(price_ce=price_ce.detach(), price_kl_anchor=price_kl.detach())
     return {k: (v if k == "total" else v.detach()) for k, v in out.items()}
 
 
@@ -656,6 +728,7 @@ class _Game:
     search_values: list = field(default_factory=list)  # every search's root value, in order
     need: Any = None
     pending: Any = None
+    fast: bool = False  # the pending search is a fast one
     # ``reuse_tree``: the game's search tree, kept across decisions (advanced
     # along every move played), the network version it was searched with, and
     # the root-log length up to which it is known to match the game.
@@ -681,6 +754,7 @@ def search_config(settings: dict, client=None):
         c_puct_by_round={},
         mcts_mean_q=settings["mean_q"],
         fpu_reduction=settings["fpu_reduction"],
+        mcts_q_normalize=bool(settings.get("q_normalize", False)),
         dedupe_leaves=settings["dedupe_leaves"],
         prior_temperature=settings["prior_temperature"],
         gumbel_k=settings["gumbel_k"] if gumbel else 0,
@@ -762,6 +836,8 @@ class Generator:
         tree.set_search_config(c.c_puct_init, c.c_puct_base, {}, c.max_engine_actions)
         if c.mcts_mean_q:
             tree.set_q_config(True, c.fpu_reduction)
+            if c.mcts_q_normalize:
+                tree.set_q_normalize(True)
         if c.gumbel_k > 0:
             tree.set_gumbel_config(c.gumbel_k, c.gumbel_c_visit, c.gumbel_c_scale, c.gumbel_noise_scale)
         return _TreeHandle(c, tree)
@@ -782,10 +858,12 @@ class Generator:
         mover = rs.encode_canonical_py()  # (state, nodes, round type, rotation, players)
         server = g.seat_servers[int(mover[3])]
         if server == "learner" and len(legal) > 1 and self.rng.random() < s["p_full"]:
-            g.pending = mover
+            g.pending, g.fast = mover, False
             return self._search(g, rs, s["n_full"], server)
         if server == "learner" and len(legal) > 1 and s.get("n_fast", 0) > 0:
-            g.pending = None  # a fast search: played, no row
+            # A fast search: played; a row only with fast_row_weight (else no row).
+            g.pending = mover if float(s.get("fast_row_weight", 0.0)) > 0 else None
+            g.fast = True
             return self._search(g, rs, s["n_fast"], server)
         g.pending = s["learner_temperature"] if server == "learner" else s.get("opponent_temperature", 1.0)
         return PolicyRequest(rs, legal, key=server)
@@ -879,17 +957,16 @@ class Generator:
             else:
                 visits = np.asarray(tree.child_n_at_root(), dtype=np.float64)[legal]
                 move = self._visit_move(tree, legal, visits, g.decisions)
-                target = visits
-                if s.get("visit_target", "pruned") == "pruned":
-                    target = np.asarray(tree.pruned_child_n_at_root(), dtype=np.float64)[legal]
+                target = search_target(tree, legal, s) if g.pending is not None else None
             price, price_target = self._searched_price(tree, rs, move)
             g.search_values.append(root_value(tree))  # the n-step value targets' bootstrap (before the tree moves on)
             # The move goes straight onto the game (the most-visited price, as
             # advance_root would commit); a kept tree follows it.
             rs.apply_action_index(move, price)
             self._advance_tree(g, move, price)
-            if g.pending is None:  # a fast search
+            if g.fast:
                 self.counts["fast_search_decisions"] += 1
+            if g.pending is None:  # a fast search without a row
                 g.decisions += 1
                 return
             target = sharpen_target(target, legal, move, float(s.get("target_temperature", 1.0)))
@@ -905,10 +982,15 @@ class Generator:
                     version=int(s.get("version", 0)),
                     root_value=g.search_values[-1],
                     search_index=len(g.search_values) - 1,
+                    fast=g.fast,
+                    weight=float(s.get("fast_row_weight", 0.0)) if g.fast else 1.0,
                 )
             )
-            g.searched += 1
-            self.counts["searched_decisions"] += 1
+            if g.fast:
+                self.counts["fast_rows"] += 1
+            else:
+                g.searched += 1
+                self.counts["searched_decisions"] += 1
         g.decisions += 1
 
     def _searched_price(self, tree, rs, move: int) -> tuple:
@@ -967,7 +1049,9 @@ class Generator:
         if kind == "placement":
             score = placement_points(worth, points or (1.0, 0.5, 0.2, 0.0)).astype(np.float32)
         k = int(s.get("critic_positions_per_game", 0))
-        chosen = range(len(g.rows)) if k <= 0 or k >= len(g.rows) else self.rng.choice(len(g.rows), k, replace=False)
+        # The value's rows: every row, or with fast_row_value off only the full searches'.
+        pool = [i for i, r in enumerate(g.rows) if not r.fast or s.get("fast_row_value", True)]
+        chosen = pool if k <= 0 or k >= len(pool) else self.rng.choice(pool, k, replace=False)
         for i in chosen:
             g.rows[int(i)].critic = True
         aux_seat, aux_global = aux_outcomes(g.game, fractions)
@@ -1253,8 +1337,13 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, window: ReplayWind
         steps += 1
     learner.value_stop_grad = False
     per_row = ("ce", "search_kl", "target_entropy", "kl_anchor", "entropy", "top1_agreement")
-    stats = {key: sums[key] / max(rows_seen, 1) for key in per_row}
-    stats.update({key: sums[key] / max(price_rows, 1) for key in ("price_ce", "price_kl_anchor")})
+    # With fast-search rows the plain keys are over the full searches' rows (search_losses).
+    rows_fast, price_fast = sums["rows_fast"], sums["price_rows_fast"]
+    stats = {key: sums[key] / max(rows_seen - rows_fast, 1) for key in per_row}
+    stats.update({key: sums[key] / max(price_rows - price_fast, 1) for key in ("price_ce", "price_kl_anchor")})
+    if rows_fast:
+        stats.update({f"{key}_fast": sums[f"{key}_fast"] / rows_fast for key in per_row})
+        stats.update(price_ce_fast=sums["price_ce_fast"] / max(price_fast, 1), fast_rows_trained=int(rows_fast))
     value_keys = ["critic_ce", "critic_outcome_ce", "critic_mse", "critic_winner_hit"]
     value_keys += ["aux_mse", "aux_bce"] if aux else []
     stats.update({key: sums[key] / max(critic_rows, 1) for key in value_keys})
@@ -1304,6 +1393,13 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "explore_decisions": cfg.explore_decisions,
         "visit_target": cfg.visit_target,
         "target_temperature": cfg.target_temperature,
+        "cq_rescale": cfg.cq_rescale,
+        "rpo_c": cfg.rpo_c,
+        "rpo_unvisited": cfg.rpo_unvisited,
+        "rpo_qnorm": cfg.rpo_qnorm,
+        "q_normalize": cfg.q_normalize,
+        "fast_row_weight": cfg.fast_row_weight,
+        "fast_row_value": cfg.fast_row_value,
         "games_per_worker": cfg.games_per_worker,
         "max_decisions": cfg.max_decisions,
         "price_eps": 0.0,
@@ -1332,6 +1428,12 @@ def _validate(cfg: SearchLearningConfig) -> None:
         raise SystemExit(f"--target must be one of {TARGETS}, got {cfg.target!r}")
     if cfg.visit_target not in ("pruned", "raw"):
         raise SystemExit(f"--visit-target must be pruned or raw, got {cfg.visit_target!r}")
+    if cfg.rpo_unvisited not in RPO_UNVISITED:
+        raise SystemExit(f"--rpo-unvisited must be one of {RPO_UNVISITED}, got {cfg.rpo_unvisited!r}")
+    if cfg.q_normalize and not cfg.mean_q:
+        raise SystemExit("--q-normalize needs mean Q (drop --no-mean-q)")
+    if cfg.fast_row_weight < 0 or (cfg.fast_row_weight > 0 and cfg.n_fast <= 0):
+        raise SystemExit("--fast-row-weight must be >= 0 and needs --n-fast > 0")
     if not 0.0 <= cfg.p_full <= 1.0:
         raise SystemExit("--p-full must be in [0, 1]")
     try:
@@ -1497,7 +1599,9 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
     window = ReplayWindow(cfg.window_rows)
     rng = np.random.default_rng()
     gen, terminations, starts = Counter(), Counter(), Counter()
-    new_rows, gen_started, run_started = 0, time.time(), time.time()
+    # new_rows: the full searches' rows since the last update (the cadence); fast-search
+    # rows (fast_row_weight) fill the window on top of them.
+    new_rows, new_fast_rows, gen_started, run_started = 0, 0, time.time(), time.time()
     try:
         # Spawned: the learner holds the networks (on the GPU), which a forked worker must not inherit.
         executor = ProcessPoolExecutor(
@@ -1523,8 +1627,11 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                         gen["game_decisions"] += record["decisions"]
                         for row in record["rows"]:
                             window.add(row)
-                        new_rows += len(record["rows"])
-                        gen["rows"] += len(record["rows"])
+                        fast_rows = sum(1 for row in record["rows"] if row.fast)
+                        new_rows += len(record["rows"]) - fast_rows
+                        new_fast_rows += fast_rows
+                        gen["rows"] += len(record["rows"]) - fast_rows
+                        gen["fast_rows_kept"] += fast_rows
                         ce_sum, ce_rows = record.get("root_value_ce", (0.0, 0))
                         gen["root_value_ce_sum"] += ce_sum
                         gen["root_value_rows"] += ce_rows
@@ -1536,14 +1643,15 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                 stats = _update(learner, critic, anchor, learner_opt, critic_opt, window, cfg, kl_coef, device, rng)
                 train_seconds = time.time() - t0
                 update += 1
-                totals["rows_generated"] += new_rows
+                totals["rows_generated"] += new_rows + new_fast_rows
                 totals["rows_trained"] += stats["rows_trained"]
                 totals["games"] += gen["games"]
                 stats["new_rows"] = new_rows
-                stats["reuse_update"] = stats["rows_trained"] / max(new_rows, 1)
+                stats["new_fast_rows"] = new_fast_rows
+                stats["reuse_update"] = stats["rows_trained"] / max(new_rows + new_fast_rows, 1)
                 stats["reuse_run"] = totals["rows_trained"] / max(totals["rows_generated"], 1)
                 stats["row_age_mean"] = (update - 1) - stats.pop("row_version_mean")
-                new_rows = 0
+                new_rows = new_fast_rows = 0
 
                 previous = (current_learner,) if critic is None else (current_learner, current_critic)
                 current_learner = run_dir / "learner" / f"{update}.pth"
@@ -1598,6 +1706,7 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                     "games_total": totals["games"],
                     "games_per_hour": gen["games"] / elapsed * 3600,
                     "searched_rows_per_hour": gen["rows"] / elapsed * 3600,
+                    "fast_rows_per_hour": gen["fast_rows_kept"] / elapsed * 3600,
                     "decisions_per_second": (
                         gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"]
                     )

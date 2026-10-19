@@ -158,15 +158,36 @@ impl RustMCTSPlayer {
     /// backed-up value (in-flight virtual losses undone), an unvisited one's
     /// the root's ``v_mix`` (mctx ``_compute_mixed_value``).
     pub(crate) fn root_completed_q(&self) -> Vec<f32> {
+        let q = self.root_visited_q();
+        let v_mix = self.v_mix_of(&q);
+        q.into_iter().map(|qi| qi.unwrap_or(v_mix)).collect()
+    }
+
+    /// The root's ``v_mix`` (mctx ``_compute_mixed_value``): its network value
+    /// mixed with the prior-weighted mean q of the visited moves.
+    pub(crate) fn root_v_mix(&self) -> f32 {
+        let q = self.root_visited_q();
+        self.v_mix_of(&q)
+    }
+
+    /// Each root move's mean backed-up value for the mover (in-flight virtual
+    /// losses undone), ``None`` where unvisited.
+    fn root_visited_q(&self) -> Vec<Option<f32>> {
         let root = &self.arena[self.root_idx];
         let ap = root.active_player_index;
         let num_legal = root.legal_action_indices.len();
-        let q: Vec<Option<f32>> = (0..num_legal)
+        (0..num_legal)
             .map(|i| {
                 let n = root.child_n[i];
                 (n > 0.0).then(|| (root.child_w[i][ap] + root.child_vl[i]) / n)
             })
-            .collect();
+            .collect()
+    }
+
+    fn v_mix_of(&self, q: &[Option<f32>]) -> f32 {
+        let root = &self.arena[self.root_idx];
+        let ap = root.active_player_index;
+        let num_legal = root.legal_action_indices.len();
         let sum_n: f32 = root.child_n.iter().sum();
         let tiny = f32::MIN_POSITIVE;
         let mut sum_p = 0.0f32;
@@ -179,8 +200,7 @@ impl RustMCTSPlayer {
             }
         }
         let weighted_q = if sum_p > 0.0 { weighted / sum_p } else { 0.0 };
-        let v_mix = (root.raw_value[ap] + sum_n * weighted_q) / (sum_n + 1.0);
-        q.into_iter().map(|qi| qi.unwrap_or(v_mix)).collect()
+        (root.raw_value[ap] + sum_n * weighted_q) / (sum_n + 1.0)
     }
 
     /// ``sigma(q) = sigma_scale * q``: ``(c_visit + max_b N(b)) * c_scale``.

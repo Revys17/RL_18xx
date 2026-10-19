@@ -473,6 +473,13 @@ class SelfPlayHyperparams:
     # "certain loss".
     mcts_mean_q: bool = False
     fpu_reduction: float = 0.0
+    # Rust MCTS with mcts_mean_q: PUCT reads each node's Q min-max normalized over
+    # the node's own mean value and its visited children's (MuZero; mctx
+    # ``qtransform_by_parent_and_siblings``; ``RustMCTSPlayer.set_q_normalize``),
+    # so sibling gaps of ~0.02 win share compete with the exploration term at
+    # full scale -- c_puct_init is then sized for a 0-1 range (MuZero's 1.25 is
+    # c_puct_init 0.625 here). Off by default; needs mcts_mean_q.
+    mcts_q_normalize: bool = False
     # Rust MCTS: value leaves with a heuristic instead of (weight 1) or mixed
     # into (0 < weight < 1) the network's value, like AlphaGo's rollout mix.
     # "net_worth": softmax over players of net worth / leaf_value_heuristic_scale

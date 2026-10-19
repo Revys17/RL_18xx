@@ -40,6 +40,10 @@ round: it replaces SelfPlayConfig's per-round c_puct_by_round table) and
 
 - ``mean`` / ``mean=<fpu_reduction>``: mean-Q selection with first-play
   urgency (SelfPlayConfig.mcts_mean_q / fpu_reduction)
+- ``qnorm``: with ``mean``, PUCT reads each node's Q min-max normalized over
+  the node's value and its visited children's (MuZero;
+  SelfPlayConfig.mcts_q_normalize) -- size ``/<c_puct_init>`` for a 0-1 range
+  (MuZero's 1.25 is ``/0.625``)
 - ``par=<n>``: leaves selected per batch (SelfPlayConfig.parallel_readouts)
 - ``value=networth``: leaf values from a net-worth heuristic instead of the
   network (SelfPlayConfig.leaf_value_heuristic), to test the search alone;
@@ -164,6 +168,8 @@ def parse_player(spec: str, default_readouts: int) -> tuple:
             overrides["prior_temperature"] = float(value)
         elif key == "dedupe":
             overrides["dedupe_leaves"] = True
+        elif key == "qnorm":
+            overrides["mcts_q_normalize"] = True
         elif key == "gumbel":
             overrides["gumbel_k"] = int(value) if value else 16
         elif key == "gscale":
@@ -181,6 +187,8 @@ def parse_player(spec: str, default_readouts: int) -> tuple:
             break
         else:
             raise SystemExit(f"Unknown player option {option!r} in {spec!r}")
+    if overrides.get("mcts_q_normalize") and not overrides.get("mcts_mean_q"):
+        raise SystemExit(f"qnorm needs mean in {spec!r}")
     checkpoint, hash_, value_head = checkpoint.partition("#")  # "<policy>+<value>#blend=<w>"
     paths = "+".join(str(resolve_checkpoint(part)) for part in checkpoint.split("+"))
     return paths + (hash_ + value_head if hash_ else ""), overrides
