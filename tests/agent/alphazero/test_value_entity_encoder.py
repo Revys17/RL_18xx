@@ -19,6 +19,14 @@ from .test_search_learning import _tiny_model  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+def _on_cpu(model):
+    """``model`` on the CPU, its ``device`` too (the forward moves its inputs to ``model.device``:
+    a loaded checkpoint says cuda where a GPU is visible)."""
+    model = model.to("cpu")
+    model.device = torch.device("cpu")
+    return model
+
+
 def _random_value_heads(model, seed):
     g = torch.Generator().manual_seed(seed)
     for head in (model.win_loss_head, model.score_head):
@@ -49,7 +57,7 @@ def test_value_stop_grad_keeps_the_shared_layers_out_of_the_value_loss_but_train
     _save(_tiny_model(0), tmp_path / "p" / "learner" / "1.pth")
     _save(_random_value_heads(_tiny_model(1), 5), tmp_path / "c" / "critic" / "1.pth")
     model = _build_module().build(str(tmp_path / "p" / "learner" / "1.pth"), str(tmp_path / "c" / "critic" / "1.pth"))
-    model = model.to("cpu")
+    model = _on_cpu(model)
     model.value_stop_grad = True
     _, win, _, _ = model._forward_encoded_batch(_states(), value_only=True)
     win.float().pow(2).sum().backward()
@@ -80,7 +88,7 @@ def test_the_value_encoder_feeds_the_value_heads_only_and_survives_a_checkpoint(
     _save(policy, tmp_path / "p" / "learner" / "1.pth")
     _save(critic, tmp_path / "c" / "critic" / "1.pth")
     model = _build_module().build(str(tmp_path / "p" / "learner" / "1.pth"), str(tmp_path / "c" / "critic" / "1.pth"))
-    model = model.to("cpu").eval()
+    model = _on_cpu(model).eval()
     assert model.config.value_entity_encoder and model.value_econ_transformer is not None
     states = _states()
     with torch.no_grad():
@@ -115,7 +123,7 @@ def test_the_value_encoder_feeds_the_value_heads_only_and_survives_a_checkpoint(
     assert torch.equal(logits2, m_logits) and not torch.allclose(win2, m_win)
 
     _save(model, tmp_path / "v" / "learner" / "1.pth")
-    loaded = _load(tmp_path / "v" / "learner" / "1.pth").to("cpu").eval()
+    loaded = _on_cpu(_load(tmp_path / "v" / "learner" / "1.pth")).eval()
     assert loaded.config.value_entity_encoder
     with torch.no_grad():
         l_logits, l_win, _, _ = loaded._forward_encoded_batch(states)
