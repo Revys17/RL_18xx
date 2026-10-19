@@ -728,3 +728,196 @@ search) was not measured for the pilot.
 5. The ceiling is the value's sibling ranking (track lays in particular): a better-ranking value
    (more critic distillation on children, `distill_value_on_children.py`) is what would make any
    Q-based target pay.
+
+## Confidence-filtered targets and reanalyzed sibling values (2026-10-19)
+
+Two levers aimed at the problem above: where the search's target departs from the policy's top move,
+only ~40% of departures are az1's move, and the value ranks track-lay siblings worst. Both are options,
+off by default, built and measured offline; neither has been trained in the loop yet.
+
+### What was built
+
+| option / tool | what |
+|---|---|
+| Rust `root_target_stats()["child_q_var"]` | the sample variance of each root move's backed-up values for the mover (a new per-child sum of squares, `RustMCTSNode.child_w2`, real backups only). Selection never reads it: 288 of 288 seeded HashNet search digests (minigo Q, mean Q, mean Q + FPU, Gumbel; alone, on a kept subtree, lockstep) identical between the old and the new build; `cargo test` 216 passed |
+| `search_targets.departure_confidence` | z = (q_t - q_p) / sqrt(var_t / N_t + var_p / N_p), t = the target's argmax, p = the policy's (the tree's priors), each variance shrunk toward the root's pooled variance with 2 pseudo-visits (KataGo's LCB move selection uses the same standard error); `departure_share` = N_t / (N_t + N_p); `confident_target` keeps or shrinks a departure |
+| `--target-confidence <x>` | departures whose signal is below x shrink toward the policy (`--target-confidence-mode prior`: replaced by the tree's priors; `soft`: keep signal / x of the departure); `--target-confidence-signal z` (default) or `share`; `--target-confidence-prior-weight` 2 |
+| `--target-distrust-steps <types>` | comma-separated step types (`search_learning.decision_step`: stock, track, token, route, dividend, train, other -- `diag_sibling_values`'s classes) whose departures always shrink to the policy. Rows that agree with the policy are never touched. History: `target_departure_share`, `target_departure_shrunk_share`, `target_departure_distrusted_share` |
+| `search_target_quality.py confidence` | per signal / rule (`z=2`, `share=0.5`, `nontrack=1`, combinations): departures kept, precision / recall against a reference's move, the share the reference values above the policy's move, the filtered target's regret, AUCs |
+| `search_target_quality.py pairwise` | each departure's two children (the target's move, the policy's), built as the judged search built them, searched as roots by an independent network (az1 u320 + critic, 400 readouts): a prior-free comparison of the two moves |
+| `scripts/reanalyze_siblings.py` | `build`: positions of saved games, up to 16 children each (top 8 by prior + 8 random), every child searched as a root by the network (the generator's settings) -- targets: the root's mean value (`mean`) or its most visited move's (`best`), in the child's canonical frame; `check`: do those targets rank siblings closer to a reference than the raw values; `train`: fine-tune the value side only (value entity encoder + heads, trunk frozen, as `--value-stop-grad` trains it) on cached trunk features -- win CE to the targets, a ListNet ranking loss over each position's children (`--rank-weight`), outcomes, or a teacher's values (`--teacher`, the distillation baseline) -- evaluated on held-out sets against az1's critic and against az1's searched values |
+
+Tests: `test_target_confidence.py` (12), `test_reanalyze_siblings.py` (5); `tests/agent/alphazero` 922 passed, 1 skipped; `cargo test` 216 passed.
+
+### Confidence filter, offline
+
+Two position sets, every target computed from the same trees: the study's 600 positions (searched again
+by az4 u100 and by az6 u200 at 48 / 200 / 800 with the new build; az1 @800 reference reused), and 1,800
+new positions of the same three collections (games 40-159, disjoint), searched by az6 u200 at 48 / 200 /
+800 and by az1 u320 + critic 320 @800. On top of "is it az1's move" (precision), the pairwise
+comparison: az1 searches the target's move and the policy's move each as a root.
+
+**The departures are mostly improvements.** az6 u200, cq target, 1,800 positions:
+
+| | @48 | @200 |
+|---|---|---|
+| departures (target argmax != policy argmax) | 177 (9.8%) | 251 (13.9%) |
+| precision: the departure is az1@800's move | 0.367 | 0.371 |
+| az1@800's root values the departure's move above the policy's | 0.695 | 0.729 |
+| pairwise: az1 values the departure's child above the policy's | 0.706 | 0.765 |
+| pairwise mean gain q(target move) - q(policy move), win share | +0.021 | +0.021 |
+
+The ~40% is the strict measure (az1's single top move among several near-equal ones); by az1's own
+comparison of the two moves 70-77% of departures improve on the policy's move. The exception is track
+lays (per step type, @200; @48 alike):
+
+| step | departures (share of the step's positions) | precision | pairwise better | pairwise gain (x1e-3) |
+|---|---|---|---|---|
+| stock | 151 (16.6%) | 0.384 | 0.848 | +22.9 +- 2.8 |
+| track | 55 (15.9%) | 0.200 | 0.491 | +3.1 +- 2.0 |
+| train | 32 (13.5%) | 0.594 | 0.844 | +47.3 +- 14.0 |
+| dividend / other | 13 | 0.38 | 0.77 | +18 |
+
+Track-lay departures are coin flips by az1's judgment -- where the value's sibling ranking is weakest.
+
+**Rules** (az6 u200, cq, 1,800 positions; "gain kept": the share of the total pairwise gain the kept
+departures carry; d_regret: the filtered target's regret against az1@800 minus the unfiltered one's, x1e-3,
+< 0 better):
+
+| budget | rule | departures kept | precision | recall | az1 root better | pairwise better | gain kept | d_regret |
+|---|---|---|---|---|---|---|---|---|
+| 48 | none | 1.000 | 0.367 | 0.147 | 0.695 | 0.706 | 1.000 | 0 |
+| 48 | z >= 1 | 0.881 | 0.365 | 0.129 | 0.705 | 0.718 | 0.941 | +0.06 |
+| 48 | z >= 2 | 0.605 | 0.364 | 0.088 | 0.701 | 0.738 | 0.733 | +0.30 |
+| 48 | z >= 3 | 0.384 | 0.456 | 0.070 | 0.794 | 0.809 | 0.602 | +0.43 |
+| 48 | share >= 0.5 | 0.384 | 0.515 | 0.079 | 0.809 | 0.809 | 0.587 | +0.20 |
+| 48 | **no track** | 0.712 | 0.452 | 0.129 | 0.770 | 0.770 | 0.955 | **-0.15** |
+| 200 | none | 1.000 | 0.371 | 0.211 | 0.729 | 0.765 | 1.000 | 0 |
+| 200 | z >= 1 | 0.924 | 0.371 | 0.195 | 0.746 | 0.780 | 0.999 | -0.11 |
+| 200 | z >= 2 | 0.801 | 0.368 | 0.168 | 0.741 | 0.796 | 0.918 | +0.04 |
+| 200 | z >= 3 | 0.661 | 0.410 | 0.154 | 0.771 | 0.849 | 0.807 | +0.13 |
+| 200 | share >= 0.5 | 0.602 | 0.450 | 0.154 | 0.775 | 0.808 | 0.764 | +0.34 |
+| 200 | **no track** | 0.781 | 0.418 | 0.186 | 0.786 | 0.842 | 0.968 | **-0.18** |
+
+(Combinations add little: z >= 1 with no track keeps 0.761 at 200 with precision 0.414.) Standard errors:
+precision ~0.03-0.04, pairwise better ~0.03.
+
+How well each signal separates the departures that are az1's move (AUC; 0.5 = no information):
+
+| | z | q gap | share | same network @800 (self) |
+|---|---|---|---|---|
+| cq @48 / @200, az1's move | 0.53 / 0.56 | 0.40 / 0.50 | 0.69 / 0.68 | z 0.66 / 0.74 |
+| cq @48 / @200, pairwise better | 0.57 / 0.64 | 0.49 / 0.51 | 0.62 / 0.63 | |
+| pruned visits @48 / @200, az1's move | 0.67 / 0.58 | 0.64 / 0.58 | 0.51 / 0.60 | z 0.82 / 0.81 |
+
+The z-score measures the search's sampling noise -- it predicts whether the same network's deeper
+search keeps the departure (AUC 0.66-0.82) -- but barely whether an independent search agrees (0.53-0.58
+for cq): the remaining disagreement is the value's systematic error, which no statistic of one tree can
+see, and backed-up values within a subtree are correlated, so the standard error is optimistic. For
+pruned-visit targets at 48 readouts, where departures include low-visit noise, z does work (precision
+0.395 -> 0.525 at z >= 1 keeping 52%, regret -0.61e-3). On the study's 600 positions the picture is the
+same (az4 u100 @200: 81 departures, precision 0.395, pairwise better 0.741; z >= 2 keeps 77%, precision
+0.403, pairwise better 0.806, the dropped ones' mean gain -2.3e-3; on 1,800 positions the dropped ones
+still gain +8.8e-3 on average).
+
+**Verdict.** Raising precision clearly above 40% costs real signal: the rules that do it (share >= 0.5,
+z >= 3) drop 34-62% of the departures and 19-41% of the pairwise gain, and make the target's regret
+against az1 worse. The one rule that is better on every measure is to stop departing in track lays
+(`--target-distrust-steps track`): precision 0.37 -> 0.42-0.45, pairwise better 0.71/0.77 -> 0.77/0.84, 96-97%
+of the gain kept, regret better. Caveat on every az1 number: az1 is not wholly independent of az6 -- az6's
+value encoder was distilled from az1's critic 280 (az6 u200 still ranks siblings 0.843 like it) -- so
+agreement with az1 is partly shared lineage; the disagreements are the informative part. It touches ~3% of rows (track lays are ~19% of decisions, 15-16% of those
+depart).
+
+### Reanalyzed sibling values, offline
+
+**Where the value stands.** On the held-out sibling set (`siblings_v2`, 1,080 positions, vs az1's critic
+280): the value-encoder network at the lineage's start 0.920 overall (stock 0.966, track 0.747), az4 u100
+0.869 (0.901, 0.744), **az6 u200 0.843 (0.871, 0.741)**: the loop's value training (outcomes / lambda
+returns on played positions) has been eroding the ranking it started with; track never moved.
+
+**The targets** (300 positions of az6 / az5 search games, 2,856 children; every child searched as a root
+by az6 u200; Spearman across siblings against az1's critic 280 (raw values) and against az1 u320 +
+critic searching every child at 256 readouts (`pre256_az1`)):
+
+| values | vs critic 280: all / stock / track / dividend | vs az1's search @256: all / stock / track / dividend |
+|---|---|---|
+| az1's critic 280 | 1 | 0.703 / 0.797 / 0.490 / 0.150 |
+| az6 u200, raw | 0.830 / 0.864 / 0.817 / 1.000 | 0.681 / 0.777 / 0.463 / 0.150 |
+| az6 reanalyzed @64, root mean | 0.731 / 0.816 / 0.585 / 0.550 | 0.708 / 0.821 / 0.415 / 0.600 |
+| az6 reanalyzed @64, best move's value | 0.702 / 0.797 / 0.564 / -0.250 | 0.689 / 0.805 / 0.410 / 0.450 |
+| az6 reanalyzed @256, root mean | 0.697 / 0.787 / 0.552 / 0.150 | 0.721 / 0.830 / 0.427 / 1.000 |
+
+The references disagree: against the critic's raw values the reanalyzed values rank worse than raw; against
+az1's search they rank better (stock, dividend: there both searches reverse the raw values' order).
+Searched values carry the mover's own improved play (a child where the parent's mover moves next gains,
+one where an opponent moves next loses: in dividend decisions the mean gap between the two kinds goes from
+-0.054 raw to +0.031 @256) and Monte Carlo noise larger than track siblings' spread (0.006).
+
+**Fine-tunes** of az6 u200's value side (value encoder + heads; the trunk and the policy bit for bit
+unchanged) on 2,400 positions / 22k children of az4-az6 search games (lr 3e-5, 400 steps of 256 children;
+the az1-search test set's games kept out):
+
+| training | vs critic 280: all / stock / track | vs az1 search: all / stock / track | win CE: siblings_v2 / held-out games |
+|---|---|---|---|
+| start (az6 u200) | 0.845 / 0.871 / 0.750 | 0.682 / 0.779 / 0.461 | 1.250 / 0.989 |
+| outcomes only, 1.8k positions (800 steps, lr 5e-5) | 0.754 / 0.782 / 0.677 | 0.600 / 0.711 / 0.417 | 1.241 / 0.972 |
+| reanalyzed (mean @64), win CE | 0.840 / 0.870 / 0.736 | 0.681 / 0.777 / 0.465 | 1.227 / 0.990 |
+| reanalyzed (best @64), win CE | 0.844 / 0.877 / 0.733 | 0.678 / 0.773 / 0.467 | 1.227 / 0.985 |
+| reanalyzed (mean @64), ranking loss | 0.840 / 0.867 / 0.739 | 0.687 / 0.784 / 0.472 | 1.252 / 0.999 |
+| teacher: critic 280's values, win CE | 0.892 / 0.937 / 0.741 | 0.692 / 0.777 / 0.470 | 1.186 / 1.008 |
+| teacher: critic 280's values, ranking loss | 0.890 / 0.936 / 0.745 | 0.683 / 0.775 / 0.468 | 1.195 / 1.003 |
+| teacher, win CE, lr 1e-4 | 0.910 / 0.956 / 0.753 | 0.691 / 0.778 / 0.463 | 1.185 / 1.012 |
+| teacher, win CE, lr 1e-4, + map read-out (probe) | 0.914 / 0.955 / 0.768 | 0.690 / 0.778 / 0.471 | 1.185 / 1.013 |
+| reanalyzed (mean @64), ranking loss, lr 1e-4, + map read-out | 0.835 / 0.865 / 0.722 | 0.692 / 0.791 / 0.446 | 1.255 / 1.002 |
+
+(Spearman standard errors ~0.01 on siblings_v2, ~0.02 on the 300-position az1-search set.)
+
+1. **Self-reanalysis does not move the ranking** against either reference (within +-0.006); its targets
+   are close to the raw values (held-out CE to them 1.065 -> 1.062), so there is little to learn.
+2. **The value side can learn stock ranking** (the teacher: 0.871 -> 0.937 in 400 steps) **but not track
+   ranking, from any target.** Track-lay siblings differ in the map: 38% of them encode identical game
+   states (stock siblings: none), and with `--value-stop-grad` the value reads the map only through the
+   frozen policy trunk. No value-side training can rank them better than that trunk allows. A value-only
+   attention read-out over the shared map encoder's per-hex embeddings (`--map-readout`, a probe: each
+   seat's value token attends over the hexes, zero-initialized into the trunk features the heads read)
+   moved track only 0.750 -> 0.768 with the teacher (stock to 0.955, train 0.833 -> 0.890): the policy-trained
+   map encoder does not carry it either -- az1's critic, with its own value-trained map encoder, ranks track
+   0.94.
+3. **Outcome training on few positions erodes the ranking** (the control: 0.845 -> 0.754), the same
+   direction as the lineage's drift (0.920 -> 0.843).
+
+**Cost.** @64 readouts a reanalyzed child costs 67 evaluations (10.5-10.8 ms of forward time in-process on
+the shared GPU, batches of ~96 trees); a position (9.4 children on average, at most 16) ~630 evaluations,
+0.27 s wall in one process. In az6's generation (~24.6k evaluations/s, ~170 full rows/s) reanalyzing every
+full row's children would cost ~3.5x the generation's evaluations; 10% of them ~35%.
+
+**Not wired into the loop** (the offline metric did not move). The design, if a variant earns it: the
+generator, at a full search with probability `reanalyze_prob`, builds k children on a separate tree (one
+expansion, so the played tree's progressive widening is untouched) and adds a `TreeSearch` per child at
+`reanalyze_readouts` to its lockstep rounds without blocking the game; finished searches become
+`SiblingRow`s (canonical encoding, the root's value vector, version) returned beside the games; the learner
+keeps them in their own window and adds `reanalyze_weight` x (win CE or the ranking loss over each
+position's children) to the value loss. The GPU share is `reanalyze_prob * k * 67 / 40` of generation at
+k children @64.
+
+### Recommendation
+
+1. **Next arm: az6's flags + `--target-distrust-steps track`**, from az4 u100 like az6 (comparable update for
+   update), judged as az6 (system strength vs its start every 50 updates, near-greedy policy-only checks).
+   It drops the one class of departure the independent search calls a coin flip and keeps 96-97% of the
+   departures' measured gain. Expect a small effect: it changes ~3% of rows.
+2. Do not add `--target-confidence` (z) to cq targets: at these budgets it filters the search's sampling
+   noise, not the value's error, and costs gain. (For pruned-visit targets at 48 readouts, z >= 1 does help.)
+3. The departures that remain are ~80% improvements by az1's own comparison (+0.021 win share each) -- yet
+   az6's policy-only strength falls. That points less at the targets' noise than at what the policy does
+   with them (search-dependent moves played without search; a sharper policy target is not a better
+   greedy player). Worth checking directly: play the policy's old vs new top move at the positions where
+   training changed it, policy-only, as `search_override_rollouts.py` does.
+4. For the value: (a) stop the erosion -- a lower `--critic-lr` or a fixed critic-distillation term on
+   children (the teacher run shows the value side takes it: stock 0.871 -> 0.955); (b) track ranking needs a
+   map encoder trained on value -- a small value-only map encoder, or the value gradient into the map
+   encoder (not through `--value-stop-grad`'s detach) -- since a read-out over the policy's map encoder
+   barely moved it; test offline with `reanalyze_siblings.py train --teacher critic280` first, then with
+   reanalyzed targets at >= 256 readouts (closer to az1's search than @64: 0.721 vs 0.708). Self-reanalysis
+   as built is not worth its cost (~0.27 s and ~630 evaluations per position) until (b) exists.
