@@ -269,6 +269,8 @@ are launch-bound (~1,600 kernels per composite forward).
    A Gumbel root's sequential halving still spends its n (inherited visits count
    for q). Worker RSS 1.35 -> 1.8 GB (a tree node is ~124 KB, mostly its game
    clone); `additional` trees grow ~4.5x (capped by `--reuse-max-root-visits`).
+5. **Staged replies** (2026-10-19, default: `InferenceServer(staged_replies=True)`;
+   the bench scripts' `legacyreply` flag is the old path). See "Reply path" below.
 
 **Generation end to end** (`scripts/bench_search_generation.py`, 10 workers x 32
 games, 150 s each, the same hour):
@@ -291,6 +293,88 @@ server-side cache dropped on reload). Changes to the network (retraining,
 strength to re-check): one map encoder for policy and critic (~-45% forward), a
 lighter critic, a smaller or local-attention map encoder, bf16 for the trunk
 only (the policy head stays fp32; prove no argmax moves first).
+
+### Reply path (2026-10-19; GPU shared with az7b / az8 and an eval queue)
+
+az8_20261019's two server replicas (shared network, 24 workers, n_full 800 /
+n_fast 64 / p_full 0.1, dedupe + reuse total) logged `forward 50.8% replies
+34.5% collect 9.9%`, 365 states per batch. Requests recorded from az8's own
+settings (`bench_inference_server.py capture --run-config`, az8/learner/10, 80
+requests of ~150 states, 11 legal moves each) and the reply path alone, step
+by step with a sync after each (`bench_inference_server.py replies`, ~450 states
+per batch, ms per batch, three passes in rotating order):
+
+| step (before) | ms |
+|---|---|
+| upload the gather indices (two blocking copies from pageable memory) | 13-23 |
+| the gather kernel | 5-10 |
+| download priors / values / price logits (2.6 MB) | 0.1 / 0.05 / 0.7-1.0 |
+| host: slicing, `InferenceReply` objects | 0.1 |
+| pickling the replies (the reply queue's feeder thread) / unpickling (worker) | 0.75 / 0.2 |
+
+The work is tiny; the time is waiting. Each of the five device steps is a round
+trip to a GPU that other processes time-slice, and each waited for this
+process's next slice. **Staged replies** (default): the gather indices go up with
+the inputs (pinned, non-blocking); after the forward the gather, one concat of
+priors, values and price logits and one non-blocking copy into pinned memory
+are queued on the same stream (`_stage_replies`), so a batch waits on the GPU
+once; the replies are numpy views of that buffer (which keeps it alive until
+they are sent). The same ops on the same tensors: bit for bit the old replies
+(0 mismatches over 26 az8 batches x 3; tests on packed and unpacked paths, CPU
+and CUDA, through pickling, and lockstep trees searched through staged and
+legacy servers and in-process ending identical). Per batch, forward + reply:
+52-67 -> 30-34 ms. With the profile on, "forward" now includes the reply's
+device work and the wait, "replies" is host work only (0.1 ms).
+
+| server-only replay (`serve`, az8 requests, 8 clients, in-flight 1) | states/s (rounds) |
+|---|---|
+| 2 replicas, before (`legacyreply`) | 13,232 / 14,327; 14,101 / 15,981 |
+| 2 replicas, staged | 19,568 / 21,795; 24,356 / 26,474 -- x1.50, x1.69 |
+| staged, 1 / 2 / 3 replicas (9 clients) | 14,162 / 25,488 / 33,103 |
+
+Profile lines, one of the 2 replicas, server-only -- before:
+
+    7474 states/s | idle  1.0%  collect  7.3%  unpack  1.1%  forward 46.9%  replies 40.7%  dispatch  0.2%
+
+staged:
+
+    12697 states/s | idle  0.2%  collect  9.0%  unpack  1.4%  forward 85.9%  replies  0.4%  dispatch  0.2%
+
+In generation (10 workers) before `idle 5.8% collect 8.3% unpack 1.0% forward
+45.2% replies 37.4%`, staged `idle 18.9% collect 11.8% unpack 1.8% forward 64.3%
+replies 0.5%`.
+
+| generation end to end (`bench_search_generation.py --run-config` az8, az8/10, dedupe + total + 2 replicas, 20 games per worker, 150 s) | decisions/s | evaluations/s | evaluations / decision |
+|---|---|---|---|
+| 8 workers, before / staged (two rounds each) | 95.9, 88.0 / 120.4, 113.1 (x1.27) | 6,606, 6,015 / 7,930, 7,627 | 68.6 / 66.7 |
+| 10 workers, before / staged (az7b had ended) | 141.7, 147.8 / 185.9, 199.6 (x1.33) | 9,327, 9,923 / 11,911, 12,826 | 66.5 / 64.2 |
+
+With 8-10 workers the staged servers idle 20-50% (the workers are the limit);
+az8's 24 workers keep them busy, so expect nearer the server-only x1.5-1.7
+there. Round-to-round noise: ~5-10% (the GPU's other users come and go).
+
+Measured, not adopted:
+- Pinned memory for the forward's own uploads (the packed inputs and the rotation
+  grid's row selection, `_rotation_logits`): in-process -15% per batch (median;
+  pageable copies made some launches block), in the server neutral -- inputs and
+  selection pinned 25.1k vs 25.4k states/s (the pinning copy took unpack 2 ->
+  4-7%), the selection alone 31.0k vs 25.9k and then 25.4k vs 25.6k.
+- A smaller reply transport (one buffer + offsets, shared memory): price logits
+  are 99% of a reply (60 slots x 24 cells per state, 2.6 MB per 450-state batch);
+  replies without them at all (`serve` variant `noprice`, not a valid server)
+  gave +5% states/s, the most any transport change could save. Sending price rows
+  only for states with a price-bearing legal move would get most of it, but it
+  changes what the trees store (not what they read); not done.
+- More overlap inside a server (the next batch collected and launched while one
+  runs): the replicas give it between processes. They scale (1 -> 2 -> 3: x1.8,
+  x1.3) because each server is bound by its own serial launch (~6-9 ms of host
+  time for a forward's kernels) + wait, not by GPU compute; on a time-sliced GPU
+  a third replica also takes share from the GPU's other users -- watch theirs.
+
+Next for the server: launching a forward's kernels takes 6-9 ms of host time per
+batch (in-process, staged: launch ~6 ms median, then ~16-20 ms waiting on the
+shared GPU); CUDA graphs over bucketed shapes, or `torch.compile`, would cut the
+host time each replica serializes.
 
 ## Open questions (decided by the verification results)
 
