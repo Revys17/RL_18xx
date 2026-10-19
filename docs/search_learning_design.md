@@ -324,7 +324,10 @@ they are sent). The same ops on the same tensors: bit for bit the old replies
 and CUDA, through pickling, and lockstep trees searched through staged and
 legacy servers and in-process ending identical). Per batch, forward + reply:
 52-67 -> 30-34 ms. With the profile on, "forward" now includes the reply's
-device work and the wait, "replies" is host work only (0.1 ms).
+device work and the wait, "replies" is host work only (0.1 ms). The pinned
+buffers come from torch's caching host allocator and are reused: ~30 MB pinned
+after 20k batches of random sizes, RSS flat; a server's RSS flat over a 4-min
+soak at 36k states/s.
 
 | server-only replay (`serve`, az8 requests, 8 clients, in-flight 1) | states/s (rounds) |
 |---|---|
