@@ -1121,7 +1121,8 @@ updates leave the policy path untouched and train each row once, option validati
 **Smoke test** (`logs/ag_smoke.sh`, 3 + 3 workers, ~15 min, start = gen4's policy path + az7b u220's value
 side copied over unfitted): the value run made 14 updates (critic CE 0.70-1.18 on 4-10 fresh mid-game starts
 each), PG 3 (kl_anchor 0.0003 -> 0.0013, entropy 0.11, 0.47 +- 0.03 vs gen4 over 320 games -- gen4's own
-policy, so ~0.5 is expected; the critic-row Brier 0.078-0.084 with the unfitted value side), each following
+policy, so ~0.5 is expected; the baseline's Brier on the sampled rows 0.078-0.084 with the unfitted value
+side's score head, gen4's own critic in its run 0.076; advantage SD 0.28-0.29 vs 0.27), each following
 the other: PG 1 / 2 / 3 carry value-run 6 / 7 / 14's value side, value-run 6-7 PG 1's policy path and 8-14 PG
 2's, all bit for bit (`check_shared_split.py`: OK).
 
