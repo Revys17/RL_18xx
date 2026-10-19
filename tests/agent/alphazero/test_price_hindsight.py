@@ -159,6 +159,34 @@ def test_split_half_gain_and_paired_advantages():
     assert cells[0][0] == 0.0 and cells[1][0] == pytest.approx(0.5)
 
 
+def _script():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[3] / "scripts" / "price_hindsight.py"
+    spec = importlib.util.spec_from_file_location("price_hindsight_script", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_finetune_rows_hindsight_and_played_targets():
+    script = _script()
+    cells = price_pmf.price_cells("BuyCompany", 20, 80)
+    probs = cells.cell_probs(np.zeros(price_pmf.NUM_CELLS))
+    hi, lo = cells.cell_of(80), cells.cell_of(20)
+
+    def alt(price, cell, ys):
+        return {"price": price, "delta": price - 80, "cell": cell, "rollouts": [{"r": r, "win": [y, 0, 0, 0]} for r, y in enumerate(ys)]}
+
+    job = {"job_id": 0, "decision": {"kind": "price", "slot": 55, "lo": 20, "hi": 80, "price": 80}, "heldout": False}
+    result = {"job": 0, "seat": 0, "cell_probs": probs.tolist(), "alts": [alt(80, hi, [0, 0, 1, 0]), alt(20, lo, [1, 1, 1, 0])]}
+    awr = script.finetune_rows({0: job}, [result], "win", beta=0.1, z=0.0, kind="awr")[0]
+    played = script.finetune_rows({0: job}, [result], "win", beta=0.1, z=0.0, kind="played")[0]
+    assert awr["target"][lo] > probs[lo] and awr["cell_adv"][lo][0] == pytest.approx(0.5)
+    assert played["target"][hi] == 1.0 and played["target"].sum() == 1.0
+
+
 def _job(actions, decision, seed=7):
     return {"job_id": 0, "seed": seed, "actions": actions, "decision": decision, "event": None}
 

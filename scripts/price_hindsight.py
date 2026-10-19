@@ -553,9 +553,14 @@ def cmd_report(args) -> None:
                 if len(diff) >= 4:
                     ev_.append(diff[0::2].mean())
                     od_.append(diff[1::2].mean())
+        reliability = None
         if len(ev_) > 10:
             corr = float(np.corrcoef(ev_, od_)[0, 1])
-            lines.append(f"split-half reliability of per-alternative advantages: r = {corr:+.3f} over {len(ev_)} pairs")
+            reliability = 2 * corr / (1 + corr) if corr > 0 else None  # Spearman-Brown: the full mean's
+            lines.append(
+                f"split-half reliability of per-alternative advantages: r = {corr:+.3f} over {len(ev_)} pairs "
+                f"(the whole mean's reliability {reliability if reliability is None else round(reliability, 3)})"
+            )
             rep["split_half_r"] = corr
         # Horizon values vs final outcome.
         hz = defaultdict(lambda: ([], []))
@@ -570,7 +575,9 @@ def cmd_report(args) -> None:
         for h, (xs, ys) in sorted(hz.items()):
             if len(xs) > 10:
                 c = float(np.corrcoef(xs, ys)[0, 1])
-                lines.append(f"value-at-horizon {h:3d} advantage vs final advantage: r = {c:+.3f} (n={len(xs)}), "
+                # Against the final advantage's noise-free part (divided by the root of its reliability).
+                fixed = f", vs the noise-free final ~{c / math.sqrt(reliability):+.2f}" if reliability else ""
+                lines.append(f"value-at-horizon {h:3d} advantage vs final advantage: r = {c:+.3f} (n={len(xs)}){fixed}, "
                              f"mean horizon adv {np.mean(xs):+.4f}, sd {np.std(xs):.4f}")
                 rep[f"horizon_{h}_r"] = c
         # Open loop.
@@ -592,6 +599,20 @@ def cmd_report(args) -> None:
             if np.mean([a.get("open_loop", {}).get("skipped", 0) for a in alts[1:]] or [0]) > 0:
                 ol["replay_skips"] += 1
         lines.append(f"open loop: {dict(ol)}")
+        # The hindsight hypothesis itself: at unaffordable events, are the alternatives whose
+        # open-loop replay made the wanted move affordable better than the played price?
+        made, not_made = [], []
+        for job, r, s in rows:
+            if not job.get("event") or job["event"]["kind"] != "unaffordable":
+                continue
+            for alt, adv, _, _ in ph.paired_advantages(r, key):
+                (made if alt.get("open_loop", {}).get("wanted_legal") else not_made).append(adv)
+        if made or not_made:
+            lines.append(
+                f"unaffordable events: alternatives that made the wanted move affordable at the event "
+                f"{_fmt(*_mean_se(made))}, the others {_fmt(*_mean_se(not_made))}"
+            )
+            rep["made_affordable"] = (_mean_se(made), _mean_se(not_made))
         report[key] = rep
 
     text = "\n".join(lines)
@@ -631,9 +652,12 @@ def _trunk_features(model, rows: list, device, batch_size: int = 128):
     return torch.cat(feats) if feats else torch.zeros(0)
 
 
-def finetune_rows(jobs: dict, results: list, key: str, beta: float, z: float) -> list:
+def finetune_rows(jobs: dict, results: list, key: str, beta: float, z: float, kind: str = "awr") -> list:
     """Price-head rows: the decision's state, slot, live cells, the old head's cell
-    probabilities (from the branch run), the cell advantages and the target."""
+    probabilities (from the branch run), the cell advantages and the target --
+    ``awr``: the advantage-weighted hindsight target; ``played``: one-hot on the
+    played price's cell (imitation of the price the game's player chose: the control
+    that tells hindsight from plain imitation)."""
     from rl18xx.agent.alphazero import price_pmf
 
     rows = []
@@ -646,7 +670,11 @@ def finetune_rows(jobs: dict, results: list, key: str, beta: float, z: float) ->
             continue
         d = job["decision"]
         probs = np.asarray(r["cell_probs"], dtype=np.float64)
-        target = ph.price_cell_target_from_advantages(probs, cell_adv, beta, z)
+        if kind == "played":
+            target = np.zeros_like(probs)
+            target[int(r["alts"][0]["cell"])] = 1.0
+        else:
+            target = ph.price_cell_target_from_advantages(probs, cell_adv, beta, z)
         cells = price_pmf.price_cells(price_pmf.SLOT_TYPES[d["slot"]], d["lo"], d["hi"])
         rows.append({
             "job": job, "result": r, "slot": d["slot"], "mask": cells.nonempty, "probs": probs,
@@ -679,7 +707,7 @@ def cmd_finetune(args) -> None:
     data = Path(args.data)
     jobs = {j["job_id"]: j for j in read_jsonl(Path(args.jobs) if args.jobs else data / "jobs.jsonl")}
     results = read_jsonl(Path(args.branch) if args.branch else data / "branch.jsonl")
-    rows = finetune_rows(jobs, results, args.key, args.beta, args.z)
+    rows = finetune_rows(jobs, results, args.key, args.beta, args.z, args.target)
     train = [r for r in rows if not r["job"]["heldout"]]
     test = [r for r in rows if r["job"]["heldout"]]
     LOGGER.info(f"{len(rows)} price rows: {len(train)} train, {len(test)} held out")
@@ -834,6 +862,8 @@ def main():
     p.add_argument("--init", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--key", default="win")
+    p.add_argument("--target", choices=("awr", "played"), default="awr",
+                   help="awr: hindsight advantage-weighted cells; played: imitate the played price (the control)")
     p.add_argument("--beta", type=float, default=0.05)
     p.add_argument("--z", type=float, default=0.0)
     p.add_argument("--lr", type=float, default=1e-4)

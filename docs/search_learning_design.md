@@ -922,6 +922,130 @@ k children @64.
    reanalyzed targets at >= 256 readouts (closer to az1's search than @64: 0.721 vs 0.708). Self-reanalysis
    as built is not worth its cost (~0.27 s and ~630 evaluations per position) until (b) exists.
 
+## Hindsight price learning: counterfactual price branching (2026-10-19)
+
+**The question (the user's framing).** A human learns prices ten moves later: "had I paid myself $5 more
+for that private, I could buy the share I want now". The search can't: the consequence is past its horizon,
+the value is too blunt to see $5, and training only sees the price that was played. The engine is
+deterministic, so rewind: find the moments a player or corporation was short of money, go back to the price
+decisions that moved its money, replay them at nearby prices, and see whether a nearby price would have
+played out better.
+
+**Built** (`rl18xx/agent/alphazero/price_hindsight.py`, `scripts/price_hindsight.py`; tests
+`test_price_hindsight.py`, 10):
+
+| piece | what |
+|---|---|
+| Rust `BaseGame.counterfactual_transfer_cash(entity, amount)` | moves cash between the bank and a player / corporation on a clone (the rules never call it); a Rust unit test checks totals and errors |
+| constraint events (`scan_game`, `unaffordable_events`) | **unaffordable**: at a stock- or operating-round decision the acting entity gets $100 more on a clone; if the policy (gen4) at that richer state puts its top move, with p >= 0.25, on a move that was not legal before, it wanted something it couldn't afford -- the shortfall is the least extra cash making it legal (bisection on the legal-move enumeration: only cash changed, so this is affordability, not other illegality). **emr_sale** (a president selling in an operating round to fund a forced train; shortfall = what the sales raised), **president_contribution** (a train bought for more than the corporation's cash), **bankrupt**, **bid_lost** (in agent-played auctions, a company won for <= $10 above this player's best bid) |
+| back-tracing (`link_events`) | price-head decisions (auction bids, a corporation buying a private, a train bought from another corporation, with an open range) within 100 decisions before the event whose money went to or came from the constrained entity (its president too for the operating-round emergencies); the direction that would have helped (+1 paid to it, -1 paid by it, 0 an internal transfer between the two); a lost bid links to the loser's own bids on that company |
+| branching (`BranchRunner`) | from the state before the decision: the played price, played +- $1 / $5 / $10 / $20 and the range's ends (clipped, de-duplicated); **open loop**: the game's own later actions replayed to the event where still legal (cash at the event, is the wanted move legal now, the value there); **closed loop**: 8 policy-only continuations per alternative to the game's end (every seat gen4 @0.5, prices from its head) with **common random numbers** (continuation r of every alternative draws from one seed, so branches part only where the price changed something); final win share, net-worth share and placement points of every seat, and the value (az7b u220) of the deciding player at 0 / 10 / 30 / 60 / 100 decisions after the branch. Par prices and dividends can be branched the same way (the other moves of their kind) |
+| `scripts/price_hindsight.py` | `detect` (inference server, workers) -> `jobs` (stratified per group / price type / event kind, controls = unlinked price decisions, money jobs) -> `branch` (resumable) -> `report` -> `finetune` (the price head alone on cached trunk features, toward advantage-weighted cell targets `p_old(c) exp(A(c) / beta)`, or toward the played price as the control; held-out games' branch outcomes as the test) |
+
+**Data.** 4,303 games: 3,220 search-eval games of the az1-az7 collections (az3 onward, 140 per collection;
+search systems on both sides) and 1,083 of gen4's policy-gradient games (`rab_place`, 170 of them started at
+the auction, the only agent-played bids). 48 PG games no longer replay (pre-10-16 rules). Detection took ~10
+min (12 workers, gen4 serving the probes).
+
+| events (per game) | count | shortfall |
+|---|---|---|
+| unaffordable | 326,259 (76.7) | median ~$50; 13k <= $5, 14k $6-10, 30k $11-20 |
+| -- wanted move: share purchase (stock round) / tile lay (terrain) / train / private / par | 266,973 / 45,799 / 11,520 / 1,628 / 337 | |
+| president contribution | 29,205 (6.9) | 70% > $50 |
+| emergency share sales | 6,373 (1.5) | 88% > $100 |
+| bankruptcy | 636 (0.15) | |
+| lost bid (<= $10) | 374 (2.3 per auction-start game) | 95% <= $5 |
+
+Price decisions: 93,396 cross-corporation trains (~22 a game: half at $1, 17% at the maximum, mostly the
+same president moving a train and cash between his corporations), 18,586 privates sold to corporations
+(99.5% at the maximum, twice face value), 4,577 auction bids (91% at the minimum bid); plus 28,621 pars and
+426,826 dividends. With a 100-decision window 79,423 of the 116,559 price decisions link to at least one event
+(241,493 links; the median distance to the nearest event is ~74 decisions).
+
+**Branched**: 1,160 jobs -- 828 linked decisions (110 per decision type x primary event kind, covering 2,518
+events: 1,578 unaffordable, 597 president contributions, 200 emergency sales, 115 lost bids, 28 bankruptcies),
+212 unlinked controls, 60 pars, 60 dividends -- 58,869 continuations, 26.1M decisions in 80 min (12 workers,
+shared GPU, ~5.4k decisions/s; ~22.5k decisions per job; 57 continuations hit the 1,000-decision cap).
+
+**Results** (paired against the played price, continuation r vs r; `logs/price_hindsight/main/report.txt`):
+
+| decision (linked) | jobs | continuations identical to the played price's (win / worth) | split-half gain: win / placement / net-worth share | significantly better / worse (worth) |
+|---|---|---|---|---|
+| auction bid | 220 | 0.79 / 0.04 | +0.000 +- 0.012 / +0.006 +- 0.012 / +0.0000 +- 0.0014 | 0.15 / 0.77 |
+| private sold to a corporation | 278 | 0.89 / 0.29 | +0.000 +- 0.010 / +0.014 +- 0.009 / +0.0008 +- 0.0018 | 0.11 / 0.26 |
+| train between corporations | 330 | 0.98 / 0.35 | +0.002 +- 0.003 / +0.004 +- 0.003 / +0.0029 +- 0.0009 | 0.22 / 0.39 |
+| (controls, unlinked: bid / private / train) | 22 / 80 / 110 | | -0.023 / +0.003 / +0.009 (win) | |
+| par (alternative par prices) | 60 | 0.69 / 0.03 | +0.042 +- 0.030 / +0.041 +- 0.030 / +0.006 +- 0.004 | 0.27 / 0.38 |
+| dividend (payout <-> withhold) | 60 | 0.86 / 0.00 | +0.013 +- 0.018 / +0.015 +- 0.018 / +0.003 +- 0.003 | 0.05 / 0.35 |
+
+(Split-half gain: the alternative the even continuations prefer, if any beats the played price, scored on the
+odd ones -- an unbiased estimate of what switching to the nearby price that looks best gains. "Significantly":
+some alternative beyond 2 SE, of ~5-6 tried.)
+
+Mean advantage by price move (win share, over jobs; placement and worth mostly agree):
+
+| move | bid | private | train |
+|---|---|---|---|
+| +-$1 | +0.003 +- 0.005 (+1) | -0.003 +- 0.004 (-1) | +0.001 +- 0.001 / +0.001 +- 0.002 |
+| +-$5 | +0.002 +- 0.010 (+5) | -0.005 +- 0.005 | -0.000 / -0.001 |
+| +-$10 | -0.012 +- 0.011 (+10) | -0.004 +- 0.006 | +0.000 / -0.001 |
+| +-$20 | -0.037 +- 0.012 (+20) | -0.006 +- 0.007 | -0.004 / -0.009 +- 0.004 |
+| range end | max: -0.188 +- 0.013 | min (face / 2): -0.042 +- 0.010 | max: -0.016 +- 0.005; $1: -0.004 +- 0.008 |
+
+1. **A nearby price rarely plays out better, and never by much.** The prices played -- privates at twice
+   face, bids at the minimum, trains at $1 or the maximum -- sit at or near a local optimum: moves of $1-10
+   are within +-0.005 win share of them, $20 and the range's far end are clearly worse, and in every class
+   "significantly worse" alternatives outnumber "significantly better" ones. How often a nearby price wins:
+   where the even continuations pick a different price, the odd ones confirm it about as often as not
+   (net-worth share, all jobs of the type: trains 172 of 440 decisions confirmed vs 121 reversed, the only
+   clear edge; privates 120 vs 131 of 358; bids 101 vs 102 of 242; on the win share most picks are ties).
+   The one positive class is trains between
+   corporations, +0.003 net-worth share (3 SE, ~0.3% of a player's worth) and, moving the cash toward the
+   constrained corporation rather than away, +0.010 +- 0.004 win share (118 jobs). Par prices are the one
+   larger hint (+0.04 +- 0.03 win share on 60 jobs) -- a categorical choice, not a price-head slot.
+2. **The hindsight hypothesis itself fails here.** At the 330 unaffordable events, the alternatives whose
+   open-loop replay made the wanted move affordable at the event did *worse* than the played price: win
+   -0.047 +- 0.018, placement -0.078 +- 0.018, worth -0.025 +- 0.005 (the other alternatives -0.022 / -0.028 /
+   -0.007). Shortfalls are mostly large (median ~$50; emergencies > $100) and the cash that would cover them
+   comes from a price far from the played one, which costs more than the wanted move gains. In only 81 of the
+   330 did any tested price make the wanted move legal at the event (open-loop replay).
+3. **The effect is small against the continuations' noise.** Per alternative (8 paired continuations) the
+   noise SE is 0.109 win / 0.090 placement / 0.0135 worth; the implied true-effect SD is 0.067 / 0.089 / 0.023
+   -- almost all of it the far-off prices above. Split-half reliability of an alternative's advantage: 0.17
+   win, 0.32 placement, 0.58 worth (of its full 8-continuation mean: 0.29 / 0.49 / 0.73): per-decision targets on the win
+   are mostly noise even with common random numbers, which kept 79-98% of win outcomes identical.
+4. **The value is less blunt than feared.** az7b's value at the branch point (one forward per alternative)
+   correlates 0.27 / 0.37 / 0.45 (win / placement / worth) with the alternatives' final advantages -- about 0.5
+   with their noise-free part -- and 30 decisions later 0.39 / 0.56 / 0.69 (~0.75-0.8 noise-free). It sees the
+   direction of a price effect early; it is biased slightly against alternatives (mean -0.01).
+
+**Price-head fine-tune (gen4, head only, trunk frozen; 756 training / 284 held-out decisions by game; 300
+steps, lr 1e-4, KL to the old head 0.1).** Held-out gain = the change in the expected branch outcome under
+the head, over the tested cells, on held-out games' own continuations:
+
+| target | train gain | held-out gain | KL(old \|\| new) held-out |
+|---|---|---|---|
+| hindsight, net-worth share (beta 0.005) | +0.00027 +- 0.00009 worth | -0.00002 +- 0.00010 worth | 0.037 |
+| hindsight, win share (beta 0.05) | +0.0012 +- 0.0005 win | -0.0005 +- 0.0006 win | 0.027 |
+| control: imitate the played price | +0.00019 +- 0.00007 worth | -0.00010 +- 0.00011 worth | 0.042 |
+
+The fit is real in-sample and nil on held-out games -- what the targets carry beyond the played price is noise
+at this scale. Policy-only, the hindsight-tuned head (worth, `model_checkpoints_ph/ph_worth_awr`) vs gen4, both
+@0.5, 1200 games each: 2v2 0.506 +- 0.014; 1v3 0.227 +- 0.012 and, with another start seed, 0.268 +- 0.013
+(together 0.248 +- 0.009, equal 0.25): no regression, no gain.
+
+**Recommendation: don't wire hindsight branching into the loop.** It works (2.5k events, paired branches,
+exact rewinds), but the prices the agents play are already where nearby prices can't beat them by more than
+the noise, and the "wanted but unaffordable" moves are mostly not worth the price change that would fund
+them. Cost, had it paid: a job (~6 alternatives x 8 continuations) is ~22.5k decisions, ~38 policy-gradient
+games' worth; at a 10% share of PG's ~53M decisions/hour (~90k games of ~590 decisions) that is ~230 price
+rows an hour against the ~170k price draws PG already trains on by REINFORCE each hour (~1,870 per update,
+~92 updates/hour). Scoring by the value 30 decisions after the branch
+(r ~0.8 with the noise-free effect) would cut it ~15x, by the value at the branch point (~0.5) ~4,000x --
+which is what the search's price grandchildren already do at searched decisions. What's left worth a look:
+par prices (the only sizable hint, a policy-head choice: more jobs), and the toward-the-constrained-corporation
+direction for trains between one president's corporations (a 1% win-share effect).
+
 ## AlphaGo-style split: policy gradient for the policy, search games for the value (2026-10-19)
 
 **Why.** Every search-learning run gains early and then plateaus (best system: az6 u200 @200, 0.692 vs gen4 +

@@ -160,12 +160,15 @@ def _search_rows(start_file, n=24):
     return rows[:n]
 
 
-def test_value_only_search_learning_trains_the_value_side_once_per_row(start_file):  # noqa: F811
+@pytest.mark.parametrize("aux", [0.0, 0.1])
+def test_value_only_search_learning_trains_the_value_side_once_per_row(start_file, aux):  # noqa: F811
     rows = _search_rows(start_file)
     learner = _tiny_shared(0)
+    if aux:
+        learner.add_aux_heads(sl.AUX_SEAT_TARGETS, sl.AUX_GLOBAL_TARGETS)
     cfg = sl.SearchLearningConfig(
         policy_checkpoint="p", value_checkpoint="", learner_temperature=0.5, shared=True, freeze_policy=True,
-        steps_per_update=4, minibatch=8, microbatch=4, critic_lr=1e-3, aux_loss_weight=0.0,
+        steps_per_update=4, minibatch=8, microbatch=4, critic_lr=1e-3, aux_loss_weight=aux,
     )
     sl._validate(cfg)
     groups = sl.learner_param_groups(learner, cfg)
@@ -178,6 +181,7 @@ def test_value_only_search_learning_trains_the_value_side_once_per_row(start_fil
     stats = sl._update_value_only(learner, opt, window, cfg, CPU, np.random.default_rng(0))
     assert stats["critic_rows_trained"] == len(rows) == stats["rows_trained"]
     assert not any(r.critic for r in rows)
+    assert (not aux) or math.isfinite(stats["aux_mse"])
     assert math.isfinite(stats["critic_ce"]) and math.isnan(stats["ce"])
     assert not _changed(policy_before, ss.policy_parameters(learner))
     assert _changed(value_before, ss.value_parameters(learner))
