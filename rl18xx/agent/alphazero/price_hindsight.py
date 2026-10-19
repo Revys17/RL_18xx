@@ -289,7 +289,8 @@ def scan_game(
             if agent and decision:
                 d = price_decision(rs, action, legal)
                 if d is not None:
-                    scan.decisions.append({**base, "kind": "price", "type": kind, **d})
+                    what = {k: action[k] for k in ("company", "train", "corporation") if k in action}
+                    scan.decisions.append({**base, "kind": "price", "type": kind, **what, **d})
                 else:
                     m = money_decision(rs, action, legal)
                     if m is not None:
@@ -421,15 +422,30 @@ def link_events(decisions: list, events: list, window: int) -> list:
     constrained entities; ``helps`` = +1 if a higher price would have given them
     cash (they were paid), -1 if a lower one (they paid), 0 if the money moved
     between two of them (a corporation buying its president's private before an
-    emergency both pay for: the pool is unchanged, only where the cash sat)."""
+    emergency both pay for: the pool is unchanged, only where the cash sat). A lost
+    bid links to the loser's own bids on that company, where a higher bid helps (and,
+    as cash, to what the loser paid elsewhere)."""
+    from bisect import bisect_left
+
     links = []
-    prices = [d for d in decisions if d["kind"] == "price"]
+    by_game: dict = {}
+    for d in decisions:
+        if d["kind"] == "price":
+            by_game.setdefault(d["game_id"], []).append(d)
+    for ds in by_game.values():
+        ds.sort(key=lambda d: d["i"])
+    starts = {g: [d["i"] for d in ds] for g, ds in by_game.items()}
     for e in events:
         constrained = set(e.get("constrained") or [])
-        for d in prices:
-            if d["game_id"] != e["game_id"] or d["i"] >= e["i"]:
-                continue
+        ds = by_game.get(e["game_id"], [])
+        for d in ds[: bisect_left(starts.get(e["game_id"], []), e["i"])]:
             if e["decision_number"] - d["decision_number"] > window:
+                continue
+            if (
+                e["kind"] == "bid_lost" and d["type"] == "bid" and d.get("payer") in constrained
+                and d.get("company") == e.get("company")
+            ):
+                links.append((e, d, +1))  # its own bid on the lost company: higher would have won
                 continue
             paid, paying = d.get("payee") in constrained, d.get("payer") in constrained
             if paid or paying:

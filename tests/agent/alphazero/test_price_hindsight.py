@@ -119,6 +119,12 @@ def test_link_events_directions():
     assert got == [("president_contribution", 10, 0), ("unaffordable", 10, 1)]
     corp_only = [{**events[1], "constrained": ["corp:PRR"]}]
     assert [(d["i"], h) for _, d, h in ph.link_events([d_paid], corp_only, 6)] == [(10, -1)]
+    # A lost bid: the loser's bid on that company (higher helps) and, as cash, its bid elsewhere.
+    bid = {"kind": "price", "type": "bid", "game_id": "g", "decision_number": 1, "payer": "player:3", "payee": None}
+    same, other = {**bid, "i": 2, "company": "CA"}, {**bid, "i": 3, "company": "MH"}
+    lost = [{"game_id": "g", "i": 5, "decision_number": 4, "kind": "bid_lost", "constrained": ["player:3"],
+             "company": "CA"}]
+    assert sorted((d["company"], h) for _, d, h in ph.link_events([same, other], lost, 6)) == [("CA", 1), ("MH", -1)]
 
 
 def test_price_alternatives():

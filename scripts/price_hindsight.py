@@ -285,7 +285,8 @@ def cmd_jobs(args) -> None:
         by_decision[(d["game_id"], d["i"])].append((e, d, helps))
     jobs = []
     for key, items in by_decision.items():
-        items.sort(key=lambda x: x[0]["i"])  # the nearest event after the decision first
+        # The primary event: a lost bid on the decision's own company, else the nearest.
+        items.sort(key=lambda x: (not (x[0]["kind"] == "bid_lost" and x[2] > 0), x[0]["i"]))
         e, d, helps = items[0]
         jobs.append({
             "group": "linked", "game_id": d["game_id"], "path": d["path"], "decision": d,
@@ -299,12 +300,23 @@ def cmd_jobs(args) -> None:
         jobs.append({"group": "control", "game_id": d["game_id"], "path": d["path"], "decision": d,
                      "event": None, "helps": 0, "events": []})
     if args.money_jobs:
-        money = [d for d in decisions if d["kind"] in ph.MONEY_TYPES]
-        rng.shuffle(money)
-        for d in money[: args.money_jobs]:
-            jobs.append({"group": f"money:{d['kind']}", "game_id": d["game_id"], "path": d["path"], "decision": d,
-                         "event": None, "helps": 0, "events": []})
+        for kind in ph.MONEY_TYPES:
+            money = [d for d in decisions if d["kind"] == kind]
+            rng.shuffle(money)
+            for d in money[: args.money_jobs]:
+                jobs.append({"group": f"money:{kind}", "game_id": d["game_id"], "path": d["path"], "decision": d,
+                             "event": None, "helps": 0, "events": []})
     rng.shuffle(jobs)
+    if args.per_stratum:
+        # At most N jobs per (group, decision type, primary event kind): rare kinds keep all theirs.
+        kept, seen = [], Counter()
+        for job in jobs:
+            key = (job["group"], job["decision"]["type"], job["event"]["kind"] if job["event"] else None)
+            if seen[key] < args.per_stratum:
+                kept.append(job)
+                seen[key] += 1
+        jobs = kept
+        LOGGER.info("strata: " + ", ".join(f"{k}: {v}" for k, v in sorted(seen.items(), key=str)))
     if args.max_jobs:
         jobs = jobs[: args.max_jobs]
     for k, job in enumerate(jobs):
@@ -451,8 +463,17 @@ def cmd_report(args) -> None:
     decisions = read_jsonl(data / "decisions.jsonl")
     dc = Counter((d["kind"], d["type"]) for d in decisions)
     lines.append("decisions: " + ", ".join(f"{k[1]} {v}" for k, v in dc.most_common()))
+    where = Counter()
+    for d in decisions:
+        if d["kind"] == "price":
+            pos = "lo" if d["price"] == d["lo"] else "hi" if d["price"] == d["hi"] else "interior"
+            where[(d["type"], pos)] += 1
+    for t in sorted({k[0] for k in where}):
+        n = sum(v for k, v in where.items() if k[0] == t)
+        lines.append(f"  played {t}: " + ", ".join(f"{p} {where[(t, p)] / n:.3f}" for p in ("lo", "interior", "hi")) + f" (n={n})")
     report["events"] = dict(ev)
     report["decisions"] = {f"{k[0]}:{k[1]}": v for k, v in dc.items()}
+    report["played_position"] = {f"{k[0]}:{k[1]}": v for k, v in where.items()}
 
     # Branching.
     for key in args.keys.split(","):
@@ -771,7 +792,8 @@ def main():
     p.add_argument("--event-kinds", default="")
     p.add_argument("--max-shortfall", type=int, default=None)
     p.add_argument("--control-rate", type=float, default=0.1)
-    p.add_argument("--money-jobs", type=int, default=0)
+    p.add_argument("--money-jobs", type=int, default=0, help="Par and dividend decisions to branch (each kind)")
+    p.add_argument("--per-stratum", type=int, default=0, help="Jobs per (group, decision type, event kind); 0: all")
     p.add_argument("--max-jobs", type=int, default=0)
     p.add_argument("--heldout-fraction", type=float, default=0.3)
     p.add_argument("--seed", type=int, default=0)
