@@ -460,8 +460,13 @@ GPU); map encoder, fusion and trunk stay shared, and the policy path is bit for 
 network's. Copied from az1's critic 280 and untrained it
 ranks 0.747; with the encoder and the heads fit to the critic on 3.4M positions + children
 (policy frozen, ~20 min) **0.920** (top-1 0.812, regret 0.001; stock 0.966, track 0.747, train
-0.902), held-out win CE 0.882 (the critic 0.881; by stage 1.235 / 0.935 / 0.416). Checkpoint:
-`model_checkpoints_pg/shared_diag_venc1_20261018/learner/280.pth`. `search-learning --shared`
+0.902), held-out win CE 0.882 (the critic 0.881; by stage 1.235 / 0.935 / 0.416). **It played
+0.667 +- 0.030** (240 games, 200 readouts, `/0.05:mean,dedupe,par=8,ptemp=0.5`, vs gen4 + critic;
+seat win rates 0.27-0.38; the refit 0.308, az1 u250 / u300 with their critics 0.613 / 0.658), its
+search targets as close to its policy as policy + critic's (KL(pruned visits || policy) 0.197 vs
+0.162 at 200 readouts on 60 human positions). Checkpoint:
+`model_checkpoints_pg/shared_diag_venc1_20261018/learner/280.pth`. Training the shared trunk too
+afterwards (trunk lr 5e-5, KL weight 3, 0.5 epoch) moved the ranking only to 0.921. `search-learning --shared`
 trains the encoder with the value heads at `--critic-lr`; `value_stop_grad` stops the value loss
 at the shared layers but still trains it.
 
