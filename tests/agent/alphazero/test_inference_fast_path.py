@@ -11,6 +11,11 @@
   map once; the network on it gives the plain batch's outputs (within float
   rounding: the map encoder's matmuls see fewer rows), and lockstep trees
   searched with it end identical.
+- Staged replies (``InferenceServer.staged_replies``: the reply's device work
+  queued behind the forward, one copy to the host) are ``_batched_legal_replies``'
+  replies bit for bit -- packed and unpacked paths, CPU and CUDA, through
+  pickling -- and lockstep trees searched through a staged server end identical
+  to trees searched through a legacy one and in-process.
 """
 
 import queue
@@ -41,10 +46,10 @@ from rl18xx.agent.alphazero.model_transformer import (  # noqa: E402
 from .search_test_utils import HashNet, make_player, random_positions, tree_summary  # noqa: E402
 
 
-def _small_model(seed: int) -> AlphaZeroTransformerModel:
+def _small_model(seed: int, device: str = "cpu") -> AlphaZeroTransformerModel:
     torch.manual_seed(seed)
     config = ModelTransformerConfig(
-        device=torch.device("cpu"),
+        device=torch.device(device),
         d_entity=32,
         econ_transformer_layers=1,
         econ_transformer_ff_dim=64,
@@ -59,7 +64,7 @@ def _small_model(seed: int) -> AlphaZeroTransformerModel:
     # Non-zero value / price outputs (the heads' last layers start at zero).
     for head in (model.win_loss_head[-1], model.score_head[-1], model.price_head.out[-1]):
         torch.nn.init.normal_(head.weight, std=0.1)
-    return model.eval()
+    return model.to(device).eval()
 
 
 @pytest.fixture(scope="module")
@@ -171,10 +176,10 @@ def test_lockstep_with_map_dedupe_ends_with_the_same_trees():
         assert np.array_equal(a["child_n"], b["child_n"]) and np.array_equal(a["q"], b["q"])
 
 
-def _serve(model, packs_, fast_path: bool) -> list:
+def _serve(model, packs_, fast_path: bool, staged_replies: bool = True) -> list:
     server = InferenceServer(
         request_q=queue.Queue(), reply_qs=[queue.Queue()], control_q=queue.Queue(),
-        model_factory=lambda _: model, checkpoint_path=None, fast_path=fast_path,
+        model_factory=lambda _: model, checkpoint_path=None, fast_path=fast_path, staged_replies=staged_replies,
     )
     server._load_model()
     batch = [InferenceRequest(request_id=i, worker_id=0, encoded_states=p) for i, p in enumerate(packs_)]
@@ -189,6 +194,61 @@ def test_server_fast_path_replies_are_the_unpacked_replies(models, packs):
         assert np.array_equal(fast.value, slow.value)
         assert np.array_equal(fast.legal_lengths, slow.legal_lengths)
         assert np.array_equal(fast.price_components["price_logits"], slow.price_components["price_logits"])
+
+
+def _assert_same_replies(got: list, expected: list):
+    assert len(got) == len(expected)
+    for a, b in zip(got, expected):
+        assert a.request_id == b.request_id and a.batched == b.batched and a.log_probs is b.log_probs is None
+        for x, y in ((a.probs, b.probs), (a.value, b.value), (a.legal_lengths, b.legal_lengths)):
+            assert x.dtype == y.dtype and x.shape == y.shape and np.array_equal(x, y)
+        pa, pb = a.price_components, b.price_components
+        assert pa.keys() == pb.keys()
+        assert pa["price_logits"].dtype == pb["price_logits"].dtype
+        assert np.array_equal(pa["price_logits"], pb["price_logits"])
+        assert pa["slot_index"] == pb["slot_index"] and pa["num_slots"] == pb["num_slots"]
+
+
+def _staged_and_legacy(model, packs_, fast_path: bool):
+    from multiprocessing.reduction import ForkingPickler
+    import pickle
+
+    staged = _serve(model, packs_, fast_path, staged_replies=True)
+    legacy = _serve(model, packs_, fast_path, staged_replies=False)
+    _assert_same_replies(staged, legacy)
+    # As a worker gets them: pickled by the reply queue (views of the batch's buffer).
+    _assert_same_replies([pickle.loads(ForkingPickler.dumps(r)) for r in staged], legacy)
+    return staged
+
+
+def test_staged_replies_are_the_legacy_replies(models, packs):
+    policy, critic = models
+    for model in (policy, PolicyValueComposite(policy, critic), PolicyValueComposite(policy, critic, "blend=0.3")):
+        for fast_path in (True, False):
+            for subset in (packs[:1], packs[2:], packs):
+                _staged_and_legacy(model, subset, fast_path)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_staged_replies_on_cuda_are_the_legacy_replies(packs):
+    """On the GPU the staged reply is gathered there and copied into pinned memory
+    without a sync; the replies must still be the legacy ones bit for bit, and the
+    pinned buffer must not be reused while a reply still holds views of it."""
+    from rl18xx.agent.alphazero import inference_server as srv
+
+    policy, critic = _small_model(0, "cuda"), _small_model(1, "cuda")
+    model = PolicyValueComposite(policy, critic)
+    for fast_path in (True, False):
+        kept = [_staged_and_legacy(model, subset, fast_path) for subset in (packs[:1], packs[2:], packs)]
+        # Replies kept alive across later batches keep their bits (their buffers aren't recycled).
+        again = [_serve(model, subset, fast_path, staged_replies=False) for subset in (packs[:1], packs[2:], packs)]
+        for got, expected in zip(kept, again):
+            _assert_same_replies(got, expected)
+    staged = srv._stage_replies(torch.ones(2, 3, device="cuda"), torch.ones(2, 6, device="cuda"), None,
+                                srv._gather_index(srv.LegalIndices.of([[0], [1, 2]]), torch.device("cuda")))
+    assert staged.host.is_pinned() and staged.event is not None
+    priors, values, logits = staged.arrays()
+    assert priors.tolist() == [1.0, 1.0, 1.0] and values.shape == (2, 6) and logits is None
 
 
 def test_packed_states_pickle_compactly_and_unpickle_to_the_same_states(packs):
@@ -208,7 +268,7 @@ def test_packed_states_pickle_compactly_and_unpickle_to_the_same_states(packs):
 # ----------------------------------------------------------------------------- pipelining
 
 
-def _threaded_server(model, pipeline: bool):
+def _threaded_server(model, pipeline: bool, staged_replies: bool = True):
     import threading
     import time
 
@@ -217,7 +277,7 @@ def _threaded_server(model, pipeline: bool):
     server = InferenceServer(
         request_q=queue.Queue(), reply_qs=[queue.Queue(), queue.Queue()], control_q=queue.Queue(),
         model_factory=lambda _: model, checkpoint_path=None, batch_size=40, batch_timeout_ms=1.0,
-        idle_poll_ms=0.5, pipeline=pipeline,
+        idle_poll_ms=0.5, pipeline=pipeline, staged_replies=staged_replies,
     )
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -268,6 +328,45 @@ def test_the_pipelined_server_gives_the_same_replies(models, packs):
         assert a[0] == b[0]
         for x, y in zip(a[1:], b[1:]):
             assert np.array_equal(x, y)
+
+
+def test_lockstep_trees_through_staged_and_legacy_servers_are_identical(models):
+    """Searches whose leaves go through an inference server (``ClientEvaluator``)
+    end with the same trees whether the server stages its replies or not, and the
+    same as searched in-process (``ModelEvaluator``): the priors, values and price
+    rows the trees receive are the same bits."""
+    from rl18xx.agent.alphazero.inference_server import InferenceClient
+    from rl18xx.agent.alphazero.lockstep import ClientEvaluator
+
+    policy, critic = models
+    model = PolicyValueComposite(policy, critic)
+    # One player count: one request per round, so the server's batch is that request
+    # alone, as ModelEvaluator's (a batch of other rows rounds the matmuls differently).
+    positions = random_positions(4, 3, steps=200, every=20) + random_positions(4, 4, steps=150, every=30)
+    config = dict(parallel_readouts=8, num_readouts=24, min_readouts=24, mcts_mean_q=True, dedupe_leaves=True)
+    trees, rows = {}, {}
+    for mode in ("model", "legacy", "staged"):
+        players = [make_player(model, game, seed=k, **config) for k, game in enumerate(positions)]
+        server = thread = None
+        if mode == "model":
+            evaluator = ModelEvaluator(model)
+        else:
+            server, thread = _threaded_server(model, pipeline=False, staged_replies=mode == "staged")
+            evaluator = ClientEvaluator(InferenceClient(server.request_q, server.reply_qs[0], worker_id=0))
+        try:
+            searcher = LockstepSearcher({None: evaluator}, dedupe_maps=True)
+            searcher.run([p.start_search() for p in players])
+        finally:
+            if server is not None:
+                _control(server, "shutdown")
+                thread.join(timeout=10)
+        trees[mode] = [tree_summary(p) for p in players]
+        rows[mode] = searcher.stats.leaves
+    assert rows["model"] == rows["legacy"] == rows["staged"] > 0
+    for a, b, c in zip(trees["model"], trees["legacy"], trees["staged"]):
+        for x in (b, c):
+            assert a["n"] == x["n"] and a["arena"] == x["arena"] and a["prices"] == x["prices"]
+            assert np.array_equal(a["child_n"], x["child_n"]) and np.array_equal(a["q"], x["q"])
 
 
 def _pool_round_trip(signature):

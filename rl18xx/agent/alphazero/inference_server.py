@@ -397,6 +397,123 @@ def _batched_legal_replies(batch: list, spans: list, probs: Any, values: Any, pr
     return replies
 
 
+class _StagedReplies:
+    """A batch's reply data on its way to the host (``InferenceServer.staged_replies``):
+    the legal priors, values and price logits gathered on the model's device into
+    one float32 buffer and copied into pinned host memory by one non-blocking
+    transfer, queued on the stream right behind the forward pass. The reply's
+    device work then rides in the forward's submission: no second round trip to
+    a GPU that other processes time-slice (``_batched_legal_replies`` waits on it
+    five times: two index uploads, the gather, three downloads)."""
+
+    __slots__ = ("host", "event", "n_priors", "value_shape", "logits_shape")
+
+    def __init__(self, host, event, n_priors: int, value_shape: tuple, logits_shape: Optional[tuple]):
+        self.host, self.event = host, event
+        self.n_priors, self.value_shape, self.logits_shape = n_priors, value_shape, logits_shape
+
+    def wait(self) -> None:
+        """Block until the transfer is done."""
+        if self.event is not None:
+            self.event.synchronize()
+
+    def arrays(self) -> tuple:
+        """``(priors, values, logits or None)`` as numpy views of the host buffer, once
+        the transfer is done. The views keep the (pinned) buffer alive, so the
+        allocator reuses it only after the replies made of them are sent."""
+        self.wait()
+        data = self.host.numpy()
+        n_values = int(np.prod(self.value_shape))
+        priors = data[: self.n_priors]
+        values = data[self.n_priors : self.n_priors + n_values].reshape(self.value_shape)
+        logits = None
+        if self.logits_shape is not None:
+            logits = data[self.n_priors + n_values :].reshape(self.logits_shape)
+        return priors, values, logits
+
+
+def _inputs_device(inputs: Any):
+    """The device of ``packed_inputs``' tensors (None if it holds none)."""
+    if isinstance(inputs, dict):
+        for value in inputs.values():
+            if isinstance(value, torch.Tensor):
+                return value.device
+    return None
+
+
+def _gather_index(legal: LegalIndices, device) -> tuple:
+    """The (row, column) gather of each state's legal priors, as int64 device tensors
+    (``_batched_legal_replies``' indices). Uploaded before the forward pass, so the
+    copy overlaps nothing that waits on it."""
+    rows = torch.from_numpy(legal.row_ids())
+    cols = torch.from_numpy(legal.flat.astype(np.int64))
+    if device is None or torch.device(device).type == "cpu":
+        return rows, cols
+    if torch.cuda.is_available():
+        rows, cols = rows.pin_memory(), cols.pin_memory()
+    return rows.to(device, non_blocking=True), cols.to(device, non_blocking=True)
+
+
+def _stage_replies(probs: Any, values: Any, price: Optional[dict], gather: tuple) -> Optional[_StagedReplies]:
+    """Queue a batch's reply data for the host (see ``_StagedReplies``): the same
+    gather and the same dtype conversions as ``_batched_legal_replies``, so the
+    same bits. None when the outputs aren't tensors (the caller then takes
+    ``_batched_legal_replies``)."""
+    logits = price.get("price_logits") if price is not None else None
+    if not (isinstance(probs, torch.Tensor) and isinstance(values, torch.Tensor)):
+        return None
+    if logits is not None and not isinstance(logits, torch.Tensor):
+        return None
+    rows, cols = gather
+    if rows.device != probs.device:
+        rows, cols = rows.to(probs.device), cols.to(probs.device)
+    priors = probs[rows, cols].float()
+    values = values.detach().to(torch.float32)
+    parts = [priors.reshape(-1), values.reshape(-1)]
+    if logits is not None:
+        logits = logits.detach().float()
+        parts.append(logits.reshape(-1))
+    flat = torch.cat(parts)
+    event = None
+    if flat.device.type == "cuda":
+        host = torch.empty(flat.shape, dtype=torch.float32, pin_memory=True)
+        host.copy_(flat, non_blocking=True)
+        event = torch.cuda.Event()
+        event.record()
+    else:
+        host = flat.cpu()
+    return _StagedReplies(
+        host, event, int(priors.numel()), tuple(values.shape), None if logits is None else tuple(logits.shape)
+    )
+
+
+def _staged_legal_replies(batch: list, spans: list, staged: _StagedReplies, legal: LegalIndices, price: Optional[dict]) -> list:
+    """``_batched_legal_replies``' replies from a :class:`_StagedReplies` (the same
+    arrays, sliced the same way)."""
+    priors, values_np, logits_np = staged.arrays()
+    lengths = legal.lengths
+    offsets = legal._offs()
+    slot_index = price.get("slot_index") if price is not None else None
+    num_slots = price.get("num_slots") if price is not None else None
+    replies = []
+    for req, (start, n) in zip(batch, spans):
+        price_rows = None
+        if logits_np is not None:
+            price_rows = {"price_logits": logits_np[start : start + n], "slot_index": slot_index, "num_slots": num_slots}
+        replies.append(
+            InferenceReply(
+                request_id=req.request_id,
+                probs=priors[offsets[start] : offsets[start + n]],
+                log_probs=None,
+                value=values_np[start : start + n],
+                price_components=price_rows,
+                batched=True,
+                legal_lengths=lengths[start : start + n],
+            )
+        )
+    return replies
+
+
 def _slice_price_rows_for_reply(batched: Optional[dict], start: int, n: int) -> Optional[dict]:
     """Rows ``[start, start + n)`` of the model's batched price components, as
     numpy, for a batched reply (``slot_index`` / ``num_slots`` sent once)."""
@@ -454,6 +571,7 @@ class InferenceServer:
         control_reply_q: Optional[Any] = None,
         fast_path: bool = True,
         pipeline: bool = False,
+        staged_replies: bool = True,
     ):
         self.request_q = request_q
         self.reply_qs = reply_qs
@@ -471,6 +589,12 @@ class InferenceServer:
         # A collector thread receives and stacks the next batch while the
         # current one runs (``_PipelinedCollector``).
         self.pipeline = pipeline
+        # Replies to requests with legal indices: their device work (the legal
+        # priors' gather, the values and price rows) is queued behind the forward
+        # pass and reaches the host in one non-blocking copy (``_StagedReplies``);
+        # False: ``_batched_legal_replies``' separate transfers, each a round trip
+        # to the GPU. The same replies bit for bit (``test_inference_fast_path``).
+        self.staged_replies = staged_replies
 
         self.state = ServerState.STARTING
         self._model = None
@@ -650,24 +774,35 @@ class InferenceServer:
             # Only each state's legal priors go back, so the model may skip work for
             # action blocks with no legal move (e.g. the tile-lay grid).
             kwargs["legal_indices"] = [ix for req in batch for ix in req.encoded_states.legal_indices]
+        staged = legal = None
         with torch.no_grad(), autocast_ctx:
             probs, log_probs, values = self._model.run_many_encoded(encoded_states, **kwargs)
+            # Pull the model's batched price-components stash (might be None
+            # for the GNN model) and slice per-leaf in numpy form so the reply
+            # serializes cleanly.
+            batched_price_components = getattr(self._model, "last_price_components", None)
+            if all_legal and self.staged_replies:
+                # Queued behind the forward (``_StagedReplies``).
+                legal = LegalIndices.concat([req.encoded_states.legal_indices for req in batch])
+                device = probs.device if isinstance(probs, torch.Tensor) else None
+                staged = _stage_replies(probs, values, batched_price_components, _gather_index(legal, device))
         if _PROFILE:
-            if torch.cuda.is_available():
+            if staged is not None:
+                staged.wait()
+            elif torch.cuda.is_available():
                 torch.cuda.synchronize()
             _PROFILE.add("unpack", tf - tu)
             _PROFILE.add("forward", time.monotonic() - tf)
         tr = time.monotonic()
-        # Pull the model's batched price-components stash (might be None
-        # for the GNN model) and slice per-leaf in numpy form so the reply
-        # serializes cleanly.
-        batched_price_components = getattr(self._model, "last_price_components", None)
         if all_legal:
             # The usual case (policy-only play, policy-gradient workers): gather every
             # request's legal priors, values and price rows in one transfer each, then
             # slice on the CPU -- per-request transfers each waited on the GPU and took
             # more of the server's time than the forward pass.
-            replies = _batched_legal_replies(batch, spans, probs, values, batched_price_components)
+            if staged is not None:
+                replies = _staged_legal_replies(batch, spans, staged, legal, batched_price_components)
+            else:
+                replies = _batched_legal_replies(batch, spans, probs, values, batched_price_components)
             if _PROFILE:
                 _PROFILE.add("replies", time.monotonic() - tr)
             return replies
@@ -721,20 +856,34 @@ class InferenceServer:
             spans.append((start, len(req.encoded_states)))
             start += len(req.encoded_states)
         legal = prepared["legal"]
+        staged = None
         with torch.no_grad(), self._autocast():
             try:
                 inputs = self._model.packed_inputs(prepared["arrays"])
             except ValueError:  # laid out for another player count than the model's
                 inputs = self._model.packed_inputs(prepared["parts"])
+            # The replies' gather indices go up with the inputs, before the forward.
+            gather = _gather_index(legal, _inputs_device(inputs)) if self.staged_replies else None
             tf = time.monotonic()
             probs, _, values = self._model.run_packed(inputs, legal_indices=legal)
+            price = getattr(self._model, "last_price_components", None)
+            if gather is not None:
+                # Queued behind the forward: the batch's one wait on the GPU is below.
+                staged = _stage_replies(probs, values, price, gather)
         if _PROFILE:
-            if torch.cuda.is_available():
+            # With staged replies "forward" includes their device work (a gather and
+            # one copy) and "replies" is host work only.
+            if staged is not None:
+                staged.wait()
+            elif torch.cuda.is_available():
                 torch.cuda.synchronize()
             _PROFILE.add("unpack", tf - tu)
             _PROFILE.add("forward", time.monotonic() - tf)
         tr = time.monotonic()
-        replies = _batched_legal_replies(batch, spans, probs, values, getattr(self._model, "last_price_components", None))
+        if staged is not None:
+            replies = _staged_legal_replies(batch, spans, staged, legal, price)
+        else:
+            replies = _batched_legal_replies(batch, spans, probs, values, price)
         if _PROFILE:
             _PROFILE.add("replies", time.monotonic() - tr)
         return replies
@@ -1384,6 +1533,7 @@ def _server_main(
     control_reply_q: Any = None,
     fast_path: bool = True,
     pipeline: bool = False,
+    staged_replies: bool = True,
 ):
     """Entry point for the inference server child process."""
     server = InferenceServer(
@@ -1398,6 +1548,7 @@ def _server_main(
         autocast_device=autocast_device,
         fast_path=fast_path,
         pipeline=pipeline,
+        staged_replies=staged_replies,
     )
     server.exit_on_load_failure = True  # the process exits, so the coordinator sees it die
     server.run()
@@ -1415,13 +1566,14 @@ def start_inference_server(
     fast_path: bool = True,
     pipeline: bool = False,
     replicas: int = 1,
+    staged_replies: bool = True,
 ):
     """Spawn the inference server process and return a coordinator-side handle.
 
     Workers receive the request queue + their reply queue via
     ``ProcessPoolExecutor(initializer=worker_init_inference, initargs=...)``
     using ``ticket_q`` to self-assign a worker slot. ``fast_path`` /
-    ``pipeline``: see ``InferenceServer``. ``replicas`` > 1: that many server
+    ``pipeline`` / ``staged_replies``: see ``InferenceServer``. ``replicas`` > 1: that many server
     processes on the same model (``ReplicatedServerHandle``); worker ``w`` sends
     to replica ``w % replicas``, so one replica receives and replies while
     another's forward runs.
@@ -1435,6 +1587,7 @@ def start_inference_server(
         _start_server_process(
             ctx, reply_qs, ticket_q, num_workers, model_factory, checkpoint_path, batch_size, batch_timeout_ms,
             autocast_device, fast_path, pipeline, name="InferenceServer" if replicas == 1 else f"InferenceServer{r}",
+            staged_replies=staged_replies,
         )
         for r in range(max(1, int(replicas)))
     ]
@@ -1443,7 +1596,7 @@ def start_inference_server(
 
 def _start_server_process(
     ctx, reply_qs, ticket_q, num_workers, model_factory, checkpoint_path, batch_size, batch_timeout_ms,
-    autocast_device, fast_path, pipeline, name="InferenceServer",
+    autocast_device, fast_path, pipeline, name="InferenceServer", staged_replies=True,
 ) -> ServerHandle:
     request_q = ctx.Queue()
     control_q = ctx.Queue()
@@ -1462,6 +1615,7 @@ def _start_server_process(
             autocast_device=autocast_device,
             fast_path=fast_path,
             pipeline=pipeline,
+            staged_replies=staged_replies,
         ),
         daemon=True,
         name=name,

@@ -19,11 +19,23 @@ the same machine load. A variant is ``+``-joined flags:
   ``LockstepSearcher(dedupe_maps=True)`` sends them)
 - ``pipeline``: a collector thread receives the next batch during the forward
 - ``rep<N>``: N server processes (``start_inference_server(replicas=N)``), the clients split between them
+- ``legacyreply``: replies through ``_batched_legal_replies`` (a GPU round trip per transfer, before
+  2026-10-19) instead of staged replies (the reply's device work queued behind the forward, one copy)
 
     uv run python scripts/bench_inference_server.py capture --out logs/perf/requests_mid.npz \\
         --midgame-fraction 1 --auction-fraction 0 --skip-seconds 50 --seconds 170 --every 3
     uv run python scripts/bench_inference_server.py serve --requests logs/perf/requests_mid.npz \\
         --variants base fast fast+dedupe fast+dedupe+pipeline --seconds 30 --rounds 2
+
+``replies``: the reply path alone in this process (no server, no IPC): each recorded batch
+forwarded once per reply path, timed step by step, the replies checked bit for bit equal,
+and their pickling timed. With a run's own settings and network (az8: shared network, n_full 800):
+
+    uv run python scripts/bench_inference_server.py capture --out logs/perf/requests_az8.npz \\
+        --model model_checkpoints_search/az8_20261019/learner/10.pth \\
+        --run-config model_checkpoints_search/az8_20261019/config.json --skip-seconds 40 --every 2 --limit 12000
+    uv run python scripts/bench_inference_server.py replies --requests logs/perf/requests_az8.npz \\
+        --model model_checkpoints_search/az8_20261019/learner/10.pth
 """
 
 import argparse
@@ -70,13 +82,18 @@ def capture(args):
 
     torch.set_num_threads(2)
     net = load_server_model(args.model)
-    cfg = sl.SearchLearningConfig(
-        policy_checkpoint="", value_checkpoint="", learner_temperature=0.5, prior_temperature=0.5,
-        target="visits", p_full=0.25, n_full=200, n_fast=48, c_puct_init=0.05, games_per_worker=args.games,
-        start_positions="human_games/start_positions_1830_4p_v2.jsonl",
-        midgame_positions="human_games/midgame_positions_1830_4p_v2.jsonl",
-        midgame_fraction=args.midgame_fraction, auction_fraction=args.auction_fraction,
-    )
+    if args.run_config:
+        # A run's own settings (its config.json), e.g. az8's: n_full 800 / n_fast 64 / p_full 0.1,
+        # Gumbel, tree reuse and map dedupe; --games overrides its games per worker.
+        cfg = run_config(args.run_config, games_per_worker=args.games)
+    else:
+        cfg = sl.SearchLearningConfig(
+            policy_checkpoint="", value_checkpoint="", learner_temperature=0.5, prior_temperature=0.5,
+            target="visits", p_full=0.25, n_full=200, n_fast=48, c_puct_init=0.05, games_per_worker=args.games or 32,
+            start_positions="human_games/start_positions_1830_4p_v2.jsonl",
+            midgame_positions="human_games/midgame_positions_1830_4p_v2.jsonl",
+            midgame_fraction=args.midgame_fraction, auction_fraction=args.auction_fraction,
+        )
     recorder = Recorder(net)
     gen = sl.Generator(sl.worker_settings(cfg, 0), {"learner": recorder})
     gen.run(args.seconds)
@@ -92,6 +109,20 @@ def capture(args):
         batch_sizes=np.array([len(p.extras) for p in packs]),
     )
     print(f"saved {sum(len(p.extras) for p in packs)} states in {len(packs)} requests to {args.out}")
+
+
+def run_config(path, **overrides):
+    """A search-learning run's ``config.json`` as a ``SearchLearningConfig`` (keys the
+    current config lacks dropped), with ``overrides`` that are not None."""
+    import dataclasses
+
+    from rl18xx.agent.alphazero import search_learning as sl
+
+    raw = json.loads(Path(path).read_text())
+    fields = {f.name for f in dataclasses.fields(sl.SearchLearningConfig)}
+    cfg = {k: tuple(v) if isinstance(v, list) else v for k, v in raw.items() if k in fields}
+    cfg.update({k: v for k, v in overrides.items() if v is not None})
+    return sl.SearchLearningConfig(**cfg)
 
 
 def load_requests(path, dedupe: bool) -> list:
@@ -120,6 +151,165 @@ def load_requests(path, dedupe: bool) -> list:
             extras=np.ascontiguousarray(d["extras"][s:e]), legal_indices=legal, map_index=map_index,
         ))
     return out
+
+
+# ----------------------------------------------------------------------------- replies
+
+
+def replies(args):
+    """The reply path alone, in this process: the recorded requests grouped into
+    server batches of ~``--batch-states``, each forwarded once per reply path and
+    timed (CUDA synchronized, as the profiled server is): ``legacy``
+    (``_batched_legal_replies`` after the forward's sync, its steps also timed one by
+    one with a sync after each) and ``staged`` (``_stage_replies`` queued behind the
+    forward, one sync). Checks the two give the same replies bit for bit, and times
+    pickling them (the reply queue's feeder thread) and unpickling (the worker)."""
+    import pickle
+    from multiprocessing.reduction import ForkingPickler
+
+    import torch
+
+    from rl18xx.agent.alphazero import inference_server as srv
+    from rl18xx.agent.alphazero.policy_gradient import load_server_model
+
+    torch.set_num_threads(2)
+    model = load_server_model(args.model)
+    packs = load_requests(args.requests, dedupe=not args.no_dedupe)
+    batches, cur = [], []
+    for k, p in enumerate(packs):
+        cur.append(srv.InferenceRequest(request_id=k, worker_id=k % 8, encoded_states=p))
+        if sum(len(r.encoded_states) for r in cur) >= args.batch_states:
+            batches.append(cur)
+            cur = []
+    server = srv.InferenceServer(
+        request_q=None, reply_qs=[], control_q=None, model_factory=lambda _: model, checkpoint_path=None
+    )
+    server._load_model()
+    sync = torch.cuda.synchronize if torch.cuda.is_available() else (lambda: None)
+    t = {}
+
+    def add(key, seconds):
+        t[key] = t.get(key, 0.0) + seconds
+
+    def forward(prepared):
+        with torch.no_grad():
+            inputs = model.packed_inputs(prepared["arrays"])
+            gather = srv._gather_index(prepared["legal"], inputs["game_states"].device)
+            probs, _, values = model.run_packed(inputs, legal_indices=prepared["legal"])
+        return probs, values, getattr(model, "last_price_components", None), gather
+
+    def spans_of(batch):
+        out, start = [], 0
+        for r in batch:
+            out.append((start, len(r.encoded_states)))
+            start += len(r.encoded_states)
+        return out
+
+    def legacy(batch, spans, prepared, profiled):
+        """The server before staged replies: with the profile's sync after the forward, or without."""
+        t0 = time.perf_counter()
+        probs, values, price, _ = forward(prepared)
+        if profiled:
+            sync()
+        t1 = time.perf_counter()
+        out = srv._batched_legal_replies(batch, spans, probs, values, price)
+        t2 = time.perf_counter()
+        tag = "legacy (profiled)" if profiled else "legacy (unprofiled)"
+        add(f"{tag}: forward", t1 - t0)
+        add(f"{tag}: replies", t2 - t1)
+        add(f"{tag}: total", t2 - t0)
+        return out
+
+    def steps(batch, prepared):
+        """The legacy reply's device steps one by one, a sync after each."""
+        probs, values, price, _ = forward(prepared)
+        sync()
+        legal = srv.LegalIndices.concat([r.encoded_states.legal_indices for r in batch])
+        s0 = time.perf_counter()
+        rows = torch.from_numpy(legal.row_ids()).to(probs.device)
+        cols = torch.from_numpy(legal.flat.astype(np.int64)).to(probs.device)
+        sync()
+        s1 = time.perf_counter()
+        g = probs[rows, cols].float()
+        sync()
+        s2 = time.perf_counter()
+        g.cpu().numpy()
+        s3 = time.perf_counter()
+        values.detach().to(torch.float32).cpu().numpy()
+        s4 = time.perf_counter()
+        if price is not None:
+            price["price_logits"].detach().float().cpu().numpy()
+        s5 = time.perf_counter()
+        for key, a, b in (("index upload", s0, s1), ("gather", s1, s2), ("priors down", s2, s3),
+                          ("values down", s3, s4), ("logits down", s4, s5)):
+            add("legacy step: " + key, b - a)
+
+    def staged(batch, spans, prepared):
+        t3 = time.perf_counter()
+        with torch.no_grad():
+            inputs = model.packed_inputs(prepared["arrays"])
+            gather = srv._gather_index(prepared["legal"], inputs["game_states"].device)
+            ta = time.perf_counter()
+            probs, _, values = model.run_packed(inputs, legal_indices=prepared["legal"])
+            price = getattr(model, "last_price_components", None)
+            tb = time.perf_counter()
+            stage = srv._stage_replies(probs, values, price, gather)
+        tc = time.perf_counter()
+        stage.arrays()  # waits for the transfer (the one sync)
+        t4 = time.perf_counter()
+        for key, a, b in (("inputs upload", t3, ta), ("forward launch", ta, tb), ("reply launch", tb, tc),
+                          ("wait for the GPU", tc, t4)):
+            add("staged step: " + key, b - a)
+        out = srv._staged_legal_replies(batch, spans, stage, prepared["legal"], price)
+        t5 = time.perf_counter()
+        add("staged: forward + transfer", t4 - t3)
+        add("staged: replies", t5 - t4)
+        add("staged: total", t5 - t3)
+        return out
+
+    mismatches, n_states, pickled, k = 0, 0, 0, 0
+    for rep in range(args.repeats):
+        for batch in batches:
+            prepared = server._prepare(batch)
+            spans = spans_of(batch)
+            if rep == 0:
+                n_states += sum(n for _, n in spans)
+            # The paths in rotating order (the GPU's other users vary over time).
+            runs = [
+                ("old", lambda: legacy(batch, spans, prepared, True)),
+                ("old_unprofiled", lambda: legacy(batch, spans, prepared, False)),
+                ("steps", lambda: steps(batch, prepared)),
+                ("new", lambda: staged(batch, spans, prepared)),
+            ]
+            k += 1
+            runs = runs[k % len(runs):] + runs[:k % len(runs)]
+            out = {name: fn() for name, fn in runs}
+            old, new = out["old"], out["new"]
+            for a, b in zip(old, new):
+                same = (a.request_id == b.request_id and np.array_equal(a.probs, b.probs)
+                        and np.array_equal(a.value, b.value) and np.array_equal(a.legal_lengths, b.legal_lengths)
+                        and a.probs.dtype == b.probs.dtype and a.value.dtype == b.value.dtype
+                        and np.array_equal(a.price_components["price_logits"], b.price_components["price_logits"])
+                        and a.price_components["slot_index"] == b.price_components["slot_index"])
+                mismatches += not same
+            # the transport's serialization: pickled by the reply queue's feeder, unpickled by the worker
+            t6 = time.perf_counter()
+            blobs = [bytes(ForkingPickler.dumps(r)) for r in new]
+            t7 = time.perf_counter()
+            for blob in blobs:
+                pickle.loads(blob)
+            t8 = time.perf_counter()
+            add("pickle (server feeder thread)", t7 - t6)
+            add("unpickle (worker)", t8 - t7)
+            pickled += sum(len(b) for b in blobs)
+            del out, old, new
+    nb = len(batches) * args.repeats
+    print(f"{len(batches)} batches x {args.repeats}, {n_states / len(batches):.0f} states/batch, "
+          f"{pickled / nb / 1e6:.2f} MB pickled per batch; mismatched replies: {mismatches}")
+    for key, v in t.items():
+        print(f"  {key:34s} {1000 * v / nb:8.2f} ms/batch")
+    if mismatches:
+        raise SystemExit("the staged replies differ from the legacy ones")
 
 
 # ----------------------------------------------------------------------------- serve
@@ -156,13 +346,14 @@ def serve_variant(args, variant: str) -> dict:
 
     flags = set(variant.split("+"))
     replicas = next((int(f[3:]) for f in flags if f.startswith("rep")), 1)
-    unknown = {f for f in flags if not f.startswith("rep")} - {"base", "fast", "dedupe", "pipeline"}
+    unknown = {f for f in flags if not f.startswith("rep")} - {"base", "fast", "dedupe", "pipeline", "legacyreply"}
     if unknown:
         raise SystemExit(f"unknown variant flags {unknown}")
     os.environ["RL18XX_SERVER_PROFILE"] = str(args.profile_every)
     handle = start_inference_server(
         num_workers=args.clients, model_factory=load_server_model, checkpoint_path=args.model,
         batch_size=args.batch_size, fast_path="base" not in flags, pipeline="pipeline" in flags, replicas=replicas,
+        staged_replies="legacyreply" not in flags,
     )
     deadline = time.time() + 300
     while handle.health(timeout_s=60).state != "ACCEPTING":
@@ -226,9 +417,16 @@ def main():
     c.add_argument("--skip-seconds", type=float, default=0)
     c.add_argument("--every", type=int, default=1)
     c.add_argument("--limit", type=int, default=15000)
-    c.add_argument("--games", type=int, default=32)
+    c.add_argument("--games", type=int, default=None, help="Games per worker (default 32, or the run config's)")
+    c.add_argument("--run-config", default=None, help="A search-learning run's config.json: generate with its settings")
     c.add_argument("--midgame-fraction", type=float, default=0.3)
     c.add_argument("--auction-fraction", type=float, default=0.15)
+    r = sub.add_parser("replies")
+    r.add_argument("--requests", required=True)
+    r.add_argument("--model", default=GEN4)
+    r.add_argument("--batch-states", type=int, default=365, help="States per server batch (az8: ~365)")
+    r.add_argument("--repeats", type=int, default=2)
+    r.add_argument("--no-dedupe", action="store_true")
     s = sub.add_parser("serve")
     s.add_argument("--requests", required=True)
     s.add_argument("--model", default=GEN4)
@@ -244,7 +442,7 @@ def main():
     s.add_argument("--out", default=None)
     args = parser.parse_args()
     os.chdir(REPO_ROOT)
-    capture(args) if args.cmd == "capture" else serve(args)
+    {"capture": capture, "replies": replies, "serve": serve}[args.cmd](args)
 
 
 if __name__ == "__main__":

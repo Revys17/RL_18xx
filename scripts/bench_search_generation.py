@@ -73,7 +73,7 @@ def run_config(args, config: str) -> dict:
     handle = start_inference_server(
         num_workers=args.workers, model_factory=load_server_model, checkpoint_path=args.model,
         batch_size=cfg.inference_batch_size, autocast_device=None, fast_path=not flags & {"unpacked", "base"},
-        replicas=replicas,
+        replicas=replicas, staged_replies="legacyreply" not in flags,
     )
     queues = {"learner": (handle.request_q, handle.reply_qs, handle.ticket_q)}
     executor = ProcessPoolExecutor(
