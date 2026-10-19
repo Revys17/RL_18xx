@@ -10,6 +10,11 @@ checkpoint's policy path must equal some PG checkpoint's, its value side being i
 own training.
 
     uv run python scripts/check_shared_split.py --pg model_checkpoints_ag/ag1_pg --value model_checkpoints_ag/ag1_val
+
+``--mix POLICY VALUE OUT`` instead writes a network with POLICY's policy path and VALUE's
+value side (both shared value-encoder checkpoints) -- the drift probe: a value side
+trained on an older trunk, read through a newer one (score it with
+``diag_sibling_values.py score`` against the matched pair).
 """
 
 import argparse
@@ -49,9 +54,23 @@ def history(run: Path, keys) -> list:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--pg", type=Path, required=True)
-    parser.add_argument("--value", type=Path, required=True)
+    parser.add_argument("--pg", type=Path)
+    parser.add_argument("--value", type=Path)
+    parser.add_argument("--mix", nargs=3, metavar=("POLICY", "VALUE", "OUT"))
     args = parser.parse_args()
+    if args.mix:
+        from rl18xx.agent.alphazero import value_refit as vr
+        from rl18xx.agent.alphazero.policy_gradient import _load
+        from rl18xx.agent.alphazero.shared_split import checkpoint_state, load_part
+
+        policy, value, out = args.mix
+        model = _load(policy)
+        load_part(model, checkpoint_state(value), "value")
+        vr.write_model_checkpoint(model, policy, Path(out), {"mix": {"policy": policy, "value": value}})
+        print(f"saved {out}")
+        return
+    if not (args.pg and args.value):
+        parser.error("--pg and --value (or --mix)")
     pg = {n: parts(p) for n, p in checkpoints(args.pg)}
     val = {n: parts(p) for n, p in checkpoints(args.value)}
     print(f"PG checkpoints {sorted(pg)}, value-run checkpoints {sorted(val)}")

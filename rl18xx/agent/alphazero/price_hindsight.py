@@ -254,15 +254,17 @@ def scan_game(
     probe_cash: int = 100,
     bid_margin: int = 10,
     probe: bool = True,
+    auction_unlock: bool = False,
 ) -> Scan:
     """Replay ``actions`` (a saved game's log) and collect its price / money
     decisions, the log-visible constraint events, and the cash probes for
     :func:`unaffordable_events`. Only actions from ``first_agent_action`` on are
     the agents' (a start position's prefix is not); None: from the first action
-    outside the opening auction (a game started at the first Stock Round)."""
+    outside the opening auction (a game started at the first Stock Round).
+    ``auction_unlock``: a game that was played with the variant (auction starts)."""
     from rl18xx.agent.alphazero.start_positions import new_game
 
-    g = new_game(NUM_PLAYERS)
+    g = new_game(NUM_PLAYERS, auction_unlock=auction_unlock)
     rs = g._game
     scan = Scan(game_id, len(actions), first_agent_action if first_agent_action is not None else -1, {}, [], [], [])
     n_decisions = 0
@@ -497,11 +499,12 @@ def outcomes(game) -> dict:
     }
 
 
-def replay(actions: list, upto: int):
-    """A fresh game with ``actions[:upto]`` applied (a RustGameAdapter)."""
+def replay(actions: list, upto: int, auction_unlock: bool = False):
+    """A fresh game with ``actions[:upto]`` applied (a RustGameAdapter); ``auction_unlock``
+    as games started at the auction are played (``start_positions.AUCTION_START``)."""
     from rl18xx.agent.alphazero.start_positions import new_game
 
-    g = new_game(NUM_PLAYERS)
+    g = new_game(NUM_PLAYERS, auction_unlock=auction_unlock)
     rs = g._game
     for action in actions[:upto]:
         rs.process_action(dict(action))
@@ -605,7 +608,7 @@ class BranchRunner:
             try:
                 actions = job["actions"]
                 d = job["decision"]
-                base = replay(actions, d["i"])
+                base = replay(actions, d["i"], bool(job.get("auction_unlock")))
                 rs = base._game
                 legal = [int(x) for x in rs.factored_legal_indices()]
                 if int(d["index"]) not in legal:

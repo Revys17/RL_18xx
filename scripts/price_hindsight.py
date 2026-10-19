@@ -186,7 +186,9 @@ def detect_task(games: list, settings: dict) -> dict:
         if first == -1:
             out["games"].append({"game_id": game_id, "error": "unknown mid-game prefix"})
             continue
-        scan = ph.scan_game(game_id, actions, first, settings["probe_cash"], settings["bid_margin"])
+        scan = ph.scan_game(
+            game_id, actions, first, settings["probe_cash"], settings["bid_margin"], auction_unlock=start == "auction"
+        )
         if scan.error:
             out["games"].append({"game_id": game_id, "error": scan.error})
             continue
@@ -319,8 +321,11 @@ def cmd_jobs(args) -> None:
         LOGGER.info("strata: " + ", ".join(f"{k}: {v}" for k, v in sorted(seen.items(), key=str)))
     if args.max_jobs:
         jobs = jobs[: args.max_jobs]
+    starts = {g["game_id"]: g.get("start") for g in read_jsonl(data / "games.jsonl")}
     for k, job in enumerate(jobs):
         job["job_id"] = k
+        # Games started at the auction were played with the auction_unlock variant.
+        job["auction_unlock"] = starts.get(job["game_id"]) == "auction"
         job["seed"] = rng.randrange(2**31)
         job["heldout"] = heldout(job["game_id"], args.heldout_fraction)
     out = Path(args.out) if args.out else data / "jobs.jsonl"
@@ -660,7 +665,7 @@ def _encode_rows(rows: list) -> None:
         path = row["job"]["path"]
         if path not in cache:
             cache = {path: load_actions(path)}
-        g = ph.replay(cache[path], d["i"])
+        g = ph.replay(cache[path], d["i"], bool(row["job"].get("auction_unlock")))
         enc = _rust_encode(g)
         row["state"] = (np.asarray(enc[0]).reshape(-1), np.asarray(enc[1]))
 
