@@ -178,6 +178,21 @@ class PGConfig:
     # "rusher", "rust". A goal other than "win" also retargets the critic's score head to the
     # reward and uses it as the baseline.
     reward: str = "win"
+    # -- The AlphaGo-style split (docs/search_learning_design.md, "AlphaGo-style split") --
+    # One shared network: the learner is a shared value-encoder network whose own value
+    # heads give the baseline (no separate critic; value_checkpoint is ignored), and the
+    # PPO loss trains its policy path only (shared_split). Its checkpoints are whole
+    # networks -- what a search at play time loads.
+    shared: bool = False
+    # shared: a search-learning run (``--shared --freeze-policy``) training this network's
+    # value side on search games; before each update the learner takes the value side of
+    # that run's latest checkpoint (shared_split.Follower). None: the value side stays as
+    # loaded (or trains on these games with value_pg_weight).
+    value_follow: Optional[str] = None
+    # shared: also train the value side on the policy-gradient games' sampled rows (win CE
+    # + score MSE on the outcome, value_stop_grad: the trunk is the policy's) with this
+    # weight, at critic_lr. 0: the value side is not trained here.
+    value_pg_weight: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -967,6 +982,8 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
         }
         if cfg.population:
             overrides["population"] = cfg.population
+        if cfg.value_follow:
+            overrides["value_follow"] = cfg.value_follow
         cfg = PGConfig(**{**state["config"], **overrides})
         update = int(state["snapshot_update"])
         pool = list(state["pool"])
@@ -974,7 +991,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
         anchor_update = int(state.get("anchor_update", 0))
         league_state = state.get("league")
         learner_path = run_dir / "learner" / f"{update}.pth"
-        critic_path = run_dir / "critic" / f"{update}.pth"
+        critic_path = None if cfg.shared else run_dir / "critic" / f"{update}.pth"
     else:
         name = cfg.run_name or datetime.now().strftime("pg_%Y%m%d_%H%M%S")
         cfg.run_name = name
@@ -985,30 +1002,43 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
         update, kl_coef, anchor_update = 0, cfg.kl_coef, 0
         pool = [str(cfg.policy_checkpoint)] if cfg.seed_pool else []
         league_state = None
-        learner_path, critic_path = Path(cfg.policy_checkpoint), Path(cfg.value_checkpoint)
+        learner_path = Path(cfg.policy_checkpoint)
+        critic_path = None if cfg.shared else Path(cfg.value_checkpoint)
     if cfg.anchor_every and cfg.anchor_every % cfg.snapshot_every:
         raise SystemExit("--anchor-every must be a multiple of --snapshot-every (the anchor's checkpoint is kept)")
+    if (cfg.value_follow or cfg.value_pg_weight) and not cfg.shared:
+        raise SystemExit("--value-follow / --value-pg-weight need --shared (the learner's own value side)")
     (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
     LOGGER.info(f"Policy-gradient run {run_dir} from update {update}: {asdict(cfg)}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     anchor_path = run_dir / "learner" / f"{anchor_update}.pth" if anchor_update else Path(cfg.policy_checkpoint)
-    learner, critic, anchor = _load(learner_path), _load(critic_path), _load(anchor_path)
+    learner, anchor = _load(learner_path), _load(anchor_path)
+    critic = _load(critic_path) if critic_path is not None else None
     anchor.eval()
     for param in anchor.parameters():
         param.requires_grad_(False)
-    learner_opt = torch.optim.AdamW(learner.parameters(), lr=cfg.lr, weight_decay=0.0)
-    critic_opt = torch.optim.AdamW(critic.parameters(), lr=cfg.critic_lr, weight_decay=0.0)
+    follower = None
+    if cfg.value_follow:
+        from rl18xx.agent.alphazero.shared_split import Follower
+
+        follower = Follower(cfg.value_follow, "value")
+        loaded = follower.poll(learner)
+        LOGGER.info(f"value side from {cfg.value_follow}: update {loaded}")
+    learner_opt = torch.optim.AdamW(shared_param_groups(learner, cfg), weight_decay=0.0)
+    critic_opt = torch.optim.AdamW(critic.parameters(), lr=cfg.critic_lr, weight_decay=0.0) if critic else None
     if resume and (run_dir / "optimizer.pth").exists():
         opt_state = torch.load(run_dir / "optimizer.pth", map_location="cpu")
         learner_opt.load_state_dict(opt_state["learner"])
-        critic_opt.load_state_dict(opt_state["critic"])
+        if critic_opt is not None:
+            critic_opt.load_state_dict(opt_state["critic"])
 
     current_learner = run_dir / "learner" / f"{update}.pth"
-    current_critic = run_dir / "critic" / f"{update}.pth"
+    current_critic = None if cfg.shared else run_dir / "critic" / f"{update}.pth"
     if not current_learner.exists():
         _save(learner, current_learner)
-        _save(critic, current_critic)
+        if critic is not None:
+            _save(critic, current_critic)
     writer = SummaryWriter(str(Path("runs") / "alphazero_runs" / run_dir.name))
     history = (run_dir / "history.jsonl").open("a")
 
@@ -1020,6 +1050,8 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
     def learner_spec(policy, critic) -> str:
         if baseline_at_update:
             return str(policy)  # the critic's values are computed at update time
+        if cfg.shared:
+            return f"{policy}{value_head}"  # its own value heads
         # An exploiter's baseline is the critic's score head, which learns its shaped reward.
         return f"{policy}+{critic}{value_head}"
 
@@ -1127,19 +1159,28 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
 
                 t0 = time.time()
                 baseline_stats = {}
+                if follower is not None:
+                    # The value run's latest value side: this update's baseline, and the
+                    # value this update's checkpoint carries.
+                    loaded = follower.poll(learner)
+                    baseline_stats["value_follow_loaded"] = loaded is not None
+                    baseline_stats["value_follow_update"] = follower.update
                 if baseline_at_update:
-                    buffer, baseline_stats = subtract_baselines(critic, buffer, cfg, device)
+                    baseline_net = learner if cfg.shared else critic
+                    buffer, more = subtract_baselines(baseline_net, buffer, cfg, device)
+                    baseline_stats.update(more)
                 stats = _update(learner, critic, anchor, learner_opt, critic_opt, buffer, cfg, kl_coef, device, rng)
                 stats.update(baseline_stats)
                 train_seconds = time.time() - t0
                 buffer = []
                 update += 1
 
-                previous = (current_learner, current_critic)
+                previous = (current_learner,) if critic is None else (current_learner, current_critic)
                 current_learner = run_dir / "learner" / f"{update}.pth"
-                current_critic = run_dir / "critic" / f"{update}.pth"
                 _save(learner, current_learner)
-                _save(critic, current_critic)
+                if critic is not None:
+                    current_critic = run_dir / "critic" / f"{update}.pth"
+                    _save(critic, current_critic)
                 handles["learner"].reload(learner_spec(current_learner, current_critic))
                 if cfg.anchor_every and update % cfg.anchor_every == 0:
                     # The KL now measures change since this update: a fresh budget around
@@ -1159,7 +1200,10 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                         for member in own[: max(0, len(own) - cfg.league_max_snapshots)]:
                             league.remove(member)
                     torch.save(
-                        {"learner": learner_opt.state_dict(), "critic": critic_opt.state_dict()},
+                        {
+                            "learner": learner_opt.state_dict(),
+                            "critic": critic_opt.state_dict() if critic_opt is not None else None,
+                        },
                         run_dir / "optimizer.pth",
                     )
                     (run_dir / "state.json").write_text(
@@ -1239,7 +1283,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
                     f"±{record.get(f'score_vs_{kind}_se', float('nan')):.3f} "
                     f"(this update {record.get(f'score_vs_{kind}_update', float('nan')):.3f}), "
                     f"kl_anchor {stats['kl_anchor']:.4f}, entropy {stats['entropy']:.3f}, clip {stats['clip_frac']:.3f}, "
-                    f"critic CE {stats['critic_ce']:.4f}, {record['games_per_hour_run']:.0f} games/h, "
+                    f"critic CE {stats.get('critic_ce', float('nan')):.4f}, {record['games_per_hour_run']:.0f} games/h, "
                     f"train {train_seconds:.0f}s"
                 )
         finally:
@@ -1251,6 +1295,20 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
         for handle in handles.values():
             handle.shutdown()
     return run_dir
+
+
+def shared_param_groups(learner, cfg: PGConfig) -> list:
+    """The learner's optimizer groups: one at ``lr`` (as every run before), or with
+    ``cfg.shared`` the policy path at ``lr`` and the value side (``shared_split``) at
+    ``critic_lr`` -- trained only with ``value_pg_weight``."""
+    if not cfg.shared:
+        return [{"params": list(learner.parameters()), "lr": cfg.lr}]
+    from rl18xx.agent.alphazero.shared_split import policy_parameters, value_parameters
+
+    return [
+        {"params": policy_parameters(learner), "lr": cfg.lr, "name": "policy_path"},
+        {"params": value_parameters(learner), "lr": cfg.critic_lr, "name": "value_side"},
+    ]
 
 
 def subtract_baselines(critic, rows: list, cfg: PGConfig, device, chunk: int = 1024) -> tuple:
@@ -1282,8 +1340,13 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfi
     different one from the policy that played the games (eval mode, on the
     inference server) and puts noise into every PPO ratio."""
     learner.eval()
-    critic.eval()
-    advantages =np.array([r[5] for r in rows], dtype=np.float32)
+    if critic is not None:
+        critic.eval()
+    # A shared learner can also train its value side on these rows (value_pg_weight), on
+    # trunk features detached from the value loss (the trunk is the policy's).
+    value_pg = bool(cfg.shared and cfg.value_pg_weight > 0)
+    learner.value_stop_grad = value_pg
+    advantages = np.array([r[5] for r in rows], dtype=np.float32)
     if cfg.normalize_advantages:
         scale = float(advantages.std()) or 1.0
         rows = [r[:5] + (r[5] / scale,) + r[6:] for r in rows]
@@ -1297,7 +1360,8 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfi
             # microbatches (the policy head's activations bound the microbatch).
             step_rows = order[start : start + cfg.minibatch]
             learner_opt.zero_grad(set_to_none=True)
-            critic_opt.zero_grad(set_to_none=True)
+            if critic_opt is not None:
+                critic_opt.zero_grad(set_to_none=True)
             for micro_start in range(0, len(step_rows), micro):
                 batch = batch_tensors([rows[i] for i in step_rows[micro_start : micro_start + micro]], device)
                 n = len(batch["choice"])
@@ -1308,17 +1372,27 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfi
                 with torch.no_grad():
                     sl_logits, _, _, _ = anchor(batch["game_state"], batch["nodes"], lay_tile_rows=tile_rows)
                     sl_price = anchor.last_price_components["price_logits"]
-                policy_logits, _, _, _ = learner(batch["game_state"], batch["nodes"], lay_tile_rows=tile_rows)
+                policy_logits, win_logits, score_pred, _ = learner(
+                    batch["game_state"], batch["nodes"], lay_tile_rows=tile_rows
+                )
                 price = learner.last_price_components["price_logits"]
                 losses = pg_losses(
                     policy_logits, price, sl_logits, sl_price, batch, cfg.clip, kl_coef, cfg.entropy_coef,
                     temperature=cfg.learner_temperature,
                 )
-                if not torch.isfinite(losses["total"]):
+                total = losses["total"]
+                if value_pg and epoch == 0:
+                    v = critic_losses(win_logits, score_pred, batch["fractions"], batch["score_target"])
+                    total = total + cfg.value_pg_weight * (v["ce"] + cfg.score_loss_weight * v["mse"])
+                    critic_count += n
+                    critic_sums["ce"] += float(v["ce"].detach()) * n
+                    critic_sums["mse"] += float(v["mse"].detach()) * n
+                    critic_sums["winner_hit"] += float(v["winner_hit"]) * n
+                if not torch.isfinite(total):
                     raise RuntimeError(
                         f"Policy gradient diverged: non-finite loss ({ {k: float(v) for k, v in losses.items()} })"
                     )
-                (losses["total"] * share).backward()
+                (total * share).backward()
                 if count == 0:
                     first = {"clip_frac_first": float(losses["clip_frac"]), "approx_kl_first": float(losses["approx_kl"])}
                 count += n
@@ -1326,7 +1400,7 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfi
                     if key != "total":
                         sums[key] += float(value) * n
 
-                if epoch == 0:
+                if epoch == 0 and critic is not None:
                     _, win_loss_logits, score_pred, _ = critic(batch["game_state"], batch["nodes"], value_only=True)
                     c = critic_losses(win_loss_logits, score_pred, batch["fractions"], batch["score_target"])
                     loss = c["ce"] + cfg.score_loss_weight * c["mse"]
@@ -1337,17 +1411,21 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfi
                     critic_sums["ce"] += float(c["ce"].detach()) * n
                     critic_sums["mse"] += float(c["mse"].detach()) * n
                     critic_sums["winner_hit"] += float(c["winner_hit"]) * n
-            norm = torch.nn.utils.clip_grad_norm_(learner.parameters(), max_norm=1.0)
-            if not torch.isfinite(norm):
+            # Each optimizer group clipped on its own (one group unless shared): a value
+            # side's gradient must not shrink the policy's step.
+            norms = [torch.nn.utils.clip_grad_norm_(g["params"], max_norm=1.0) for g in learner_opt.param_groups]
+            norm = norms[0]
+            if not all(torch.isfinite(x) for x in norms):
                 raise RuntimeError("Policy gradient diverged: non-finite gradient norm")
             learner_opt.step()
             sums["grad_norm"] += float(norm) * len(step_rows)
             steps += 1
-            if epoch == 0:
+            if epoch == 0 and critic is not None:
                 norm = torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=1.0)
                 if not torch.isfinite(norm):
                     raise RuntimeError("Critic diverged: non-finite gradient norm")
                 critic_opt.step()
+    learner.value_stop_grad = False
     stats = {key: value / max(count, 1) for key, value in sums.items()}
     stats.update(first)
     stats.update({f"critic_{key}": value / max(critic_count, 1) for key, value in critic_sums.items()})

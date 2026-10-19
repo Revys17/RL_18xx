@@ -151,7 +151,12 @@ def cmd_policy_gradient(args):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = PGConfig(
         policy_checkpoint=str(_resolve_checkpoint(args.policy, args.model_dir)),
-        value_checkpoint=str(_resolve_checkpoint(args.value, args.value_model_dir)),
+        value_checkpoint=(
+            "" if args.shared and not args.value else str(_resolve_checkpoint(args.value, args.value_model_dir))
+        ),
+        shared=args.shared,
+        value_follow=args.value_follow,
+        value_pg_weight=args.value_pg_weight,
         out_dir=args.out_dir,
         run_name=args.run_name,
         workers=args.workers,
@@ -295,6 +300,8 @@ def cmd_search_learning(args):
         target_confidence_prior_weight=args.target_confidence_prior_weight,
         target_confidence_signal=args.target_confidence_signal,
         target_distrust_steps=tuple(x for x in (args.target_distrust_steps or "").split(",") if x),
+        freeze_policy=args.freeze_policy,
+        policy_follow=args.policy_follow,
     )
     print(run(config, resume=args.resume))
 
@@ -620,6 +627,20 @@ def build_parser():
         "--save-game-every", type=int, default=0,
         help="Keep the action log of about one game in N in <run>/games/ for the dashboard's game viewer (0 = off)",
     )
+    p.add_argument(
+        "--shared", action="store_true",
+        help="AlphaGo-style split: --policy is a shared value-encoder network whose own value heads give the "
+        "baseline (no --value critic); PPO trains its policy path only",
+    )
+    p.add_argument(
+        "--value-follow", type=str, default=None,
+        help="--shared: a search-learning run (--freeze-policy) training the value side; before each update the "
+        "learner takes its latest value side",
+    )
+    p.add_argument(
+        "--value-pg-weight", type=float, default=0.0,
+        help="--shared: also train the value side on these games' rows (trunk detached) with this weight, at --critic-lr",
+    )
 
     # search-learning (expert iteration: train the policy toward search targets)
     from rl18xx.agent.alphazero.search_learning import SearchLearningConfig as _SL
@@ -765,6 +786,12 @@ def build_parser():
     p.add_argument("--target-distrust-steps", default="",
                    help="Comma-separated step types (stock, track, token, route, dividend, train, other) whose "
                    "departures from the policy's top move always shrink toward the policy (e.g. track)")
+    p.add_argument("--freeze-policy", action="store_true",
+                   help="--shared: train only the value side (value encoder + heads, trunk detached) on the search "
+                   "games -- the AlphaGo-style split's value learner")
+    p.add_argument("--policy-follow", type=str, default=None,
+                   help="--freeze-policy: a policy-gradient run (--shared) training the policy path; before each "
+                   "update the learner takes its latest policy path")
 
     # convert (encode games to LMDB for pretraining)
     p = sub.add_parser("convert", help="Convert cleaned game JSONs to LMDB training data")
