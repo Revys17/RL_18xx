@@ -166,6 +166,7 @@ def test_value_losses_agree_with_critic_losses_on_outcome_targets():
     from rl18xx.agent.alphazero.policy_gradient import critic_losses
 
     rng = np.random.default_rng(0)
+    torch.manual_seed(0)  # unseeded, the result depended on the test order (the tied row's winner hit)
     fractions = rng.dirichlet(np.ones(4), size=6).astype(np.float32)
     fractions[0] = [0.3, 0.3, 0.2, 0.2]  # a tie
     win_logits = torch.randn(6, VALUE_SIZE)
