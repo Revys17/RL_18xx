@@ -1301,3 +1301,40 @@ and no `--value-follow`.
 baseline (gen4's run continued as a new run), judged as `<PG checkpoint>+<az7b checkpoint>` composites. It
 asks whether co-training the value side on the moving trunk beats a fixed, separately trained value network
 at equal PG updates, for the cost of a second PG run.
+
+## Price grandchildren honour mean Q (2026-10-21, a correctness fix)
+
+**The bug.** Once an open-price move's progressive widening is capped (a bid, a train between
+corporations, a private sold to a corporation), the search picks among the move's price grandchildren by
+PUCT. Both engines scored them with minigo's `W / (1 + N)`, an unvisited price at 0, whatever
+`mcts_mean_q` / `fpu_reduction` said. On 0-1 win shares near 0.25 a price with 1 visit reads ~0.125 and
+one with 10 visits ~0.23, so the most visited price -- the first proposal, at the price head's modal cell
+-- kept winning and the widened siblings starved: under the mean-Q settings used since 2026-10-16 the
+price search barely departed from the price head's mode. A virtual loss there counted -1 in W instead
+of a zero-value visit. And `node_mean_value` of a price grandchild (the first-play value and the
+`q_normalize` range of the nodes below it) read the categorical slot -- every sibling price's values --
+while `node_n` read the grandchild's own count. What it biased: the played price (the most visited),
+search learning's price-head targets (`price_grandchildren_at_root`), and through the slot's aggregate
+the completed-Q / rpo / Gumbel q of open-price root moves. Every mean-Q search before the fix (the az
+search-learning runs, `@N` evals with `:mean` settings, the advisor's search) chose prices this way.
+
+**The fix** (`price_child_terms` in `engine-rs/src/mcts.rs`, `MCTSNode._price_child_terms` in Python):
+the price level takes the categorical rule. Minigo stays as it was. Under mean Q: the mean value with each
+in-flight virtual loss a zero-value visit (per-price counts, `price_child_vl` / `price_child_VL`, next to
+`price_child_n` / `_w`); a price with neither at first-play urgency, the slot's own mean value (the move
+over all its prices so far; the node's before any) minus `fpu_reduction * sqrt(prior mass of the visited
+prices)`; with `q_normalize` (Rust only) min-max over the slot's value and its visited prices'. The slot
+is the price level's parent, so its value plays the part the node's value plays one level up. A price
+grandchild's `node_mean_value` reads its own per-price entries. Python's `MCTSNode` now honours
+`mcts_mean_q` / `fpu_reduction` at both levels (it ignored them before), so the reference matches the Rust
+tree again.
+
+**Checked.** Rigged trees in both engines (`tests/agent/alphazero/test_mcts_price_q.py`, `cargo test
+mcts::tests`): under mean Q the modal price with 10 visits at 0.25 loses to one with 1 visit at 0.40
+(minigo keeps the modal one), a virtual loss reads as a zero-value visit, an unvisited price starts at the
+slot's value less the FPU reduction, and the two engines' q / u terms agree. Bit for bit: seeded HashNet
+searches (64 readouts) at 30 random-game positions with an open-price move, three processes per build,
+old vs new: minigo with and without dedupe, 55 of 55 searches deterministic in both builds identical (the
+other 5 vary run to run in the old build too: HashMap-order ties between price grandchildren); mean Q and
+mean Q + FPU 0.1, 49 of 51 changed. `cargo test` 222 passed (2 ignored), `tests/agent/alphazero` 952 passed. Strength not measured yet: the same `@N` mean-Q eval on the old and
+the new build says whether it matters.
