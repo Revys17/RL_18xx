@@ -1669,8 +1669,9 @@ def learner_param_groups(learner, cfg: SearchLearningConfig) -> list:
     ]
 
 
-def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
-    """Run search learning; returns the run directory."""
+def run(cfg: SearchLearningConfig, resume: Optional[str] = None, resume_lrs: Optional[dict] = None) -> Path:
+    """Run search learning; returns the run directory. ``resume_lrs`` ({"lr", "critic_lr"}: the
+    ones passed explicitly) changes a resumed run's learning rates from now on."""
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
 
@@ -1709,6 +1710,7 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
         }
         if cfg.policy_follow:
             overrides["policy_follow"] = cfg.policy_follow
+        overrides.update(resume_lrs or {})
         cfg = SearchLearningConfig(**{**state["config"], **overrides})
         update = int(state["snapshot_update"])
         kl_coef = float(state["kl_coef"])
@@ -1756,6 +1758,12 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
         learner_opt.load_state_dict(opt_state["learner"])
         if critic_opt is not None:
             critic_opt.load_state_dict(opt_state["critic"])
+        # load_state_dict restores the saved learning rates: the config's (a resume can change them) win.
+        for group, fresh in zip(learner_opt.param_groups, learner_param_groups(learner, cfg)):
+            group["lr"] = fresh["lr"]
+        if critic_opt is not None:
+            for group in critic_opt.param_groups:
+                group["lr"] = cfg.critic_lr
 
     current_learner = run_dir / "learner" / f"{update}.pth"
     current_critic = None if cfg.shared else run_dir / "critic" / f"{update}.pth"

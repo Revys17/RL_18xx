@@ -276,8 +276,8 @@ def cmd_search_learning(args):
         steps_per_update=args.steps_per_update,
         minibatch=args.minibatch,
         microbatch=args.microbatch,
-        lr=args.lr,
-        critic_lr=args.critic_lr,
+        lr=SearchLearningConfig.lr if args.lr is None else args.lr,
+        critic_lr=SearchLearningConfig.critic_lr if args.critic_lr is None else args.critic_lr,
         price_loss_weight=args.price_loss_weight,
         score_loss_weight=args.score_loss_weight,
         kl_coef=args.kl_coef,
@@ -303,7 +303,8 @@ def cmd_search_learning(args):
         freeze_policy=args.freeze_policy,
         policy_follow=args.policy_follow,
     )
-    print(run(config, resume=args.resume))
+    lrs = {k: v for k, v in (("lr", args.lr), ("critic_lr", args.critic_lr)) if v is not None}
+    print(run(config, resume=args.resume, resume_lrs=lrs))
 
 
 def cmd_convert(args):
@@ -743,8 +744,9 @@ def build_parser():
     p.add_argument("--steps-per-update", type=int, default=_SL.steps_per_update)
     p.add_argument("--minibatch", type=int, default=_SL.minibatch, help="Rows per optimizer step")
     p.add_argument("--microbatch", type=int, default=_SL.microbatch, help="Rows per forward/backward")
-    p.add_argument("--lr", type=float, default=_SL.lr)
-    p.add_argument("--critic-lr", type=float, default=_SL.critic_lr)
+    p.add_argument("--lr", type=float, default=None, help=f"Trunk and policy (default {_SL.lr}; with --resume: from now on)")
+    p.add_argument("--critic-lr", type=float, default=None,
+                   help=f"Value heads (default {_SL.critic_lr}; with --resume: from now on)")
     p.add_argument("--price-loss-weight", type=float, default=_SL.price_loss_weight)
     p.add_argument("--score-loss-weight", type=float, default=_SL.score_loss_weight)
     p.add_argument("--kl-coef", type=float, default=_SL.kl_coef, help="KL(learner || anchor) at T")
