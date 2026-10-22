@@ -404,6 +404,58 @@ def test_unrotate_value_rotates_only_the_real_seats():
     assert np.allclose(absolute, [0.2, 0.1, 0.4, 0.3, 0.0, 0.0])
 
 
+def test_terminal_backup_value_blends_placement_points_for_a_score_head():
+    import numpy as np
+
+    from rl18xx.agent.alphazero.mcts import terminal_backup_value
+
+    fractions = np.array([0.1, 0.4, 0.3, 0.2, 0, 0], dtype=np.float32)
+    points = (1.0, 0.5, 0.2, 0.0)
+    np.testing.assert_allclose(terminal_backup_value(fractions, 4, 1.0, points), [0, 1, 0.5, 0.2, 0, 0])
+    np.testing.assert_allclose(
+        terminal_backup_value(fractions, 4, 0.25, points), [0, 0.75 + 0.25, 0.125, 0.05, 0, 0], atol=1e-6
+    )
+    tied = np.array([0.3, 0.3, 0.2, 0.2, 0, 0], dtype=np.float32)  # tied places share their points
+    np.testing.assert_allclose(terminal_backup_value(tied, 4, 1.0, points), [0.75, 0.75, 0.1, 0.1, 0, 0])
+    # no points (or weight 0): the share of winners, as before
+    np.testing.assert_allclose(terminal_backup_value(fractions, 4, 1.0, ()), [0, 1, 0, 0, 0, 0])
+
+
+def test_terminal_utility_follows_the_value_head_and_the_reward(tmp_path):
+    import json
+
+    from rl18xx.agent.alphazero.composite_model import checkpoint_reward, terminal_utility
+
+    assert terminal_utility("win", "placement") == (0.0, ())
+    assert terminal_utility("score", "placement") == (1.0, (1.0, 0.5, 0.2, 0.0))
+    assert terminal_utility("blend=0.3", "placement:1,0.3,0.1,0") == (0.3, (1.0, 0.3, 0.1, 0.0))
+    assert terminal_utility("score", "win") == (0.0, ())  # a win-reward score head learned the win share
+    run = tmp_path / "run"
+    (run / "learner").mkdir(parents=True)
+    (run / "config.json").write_text(json.dumps({"reward": "placement"}))
+    assert checkpoint_reward(run / "learner" / "10.pth") == "placement"
+    assert checkpoint_reward(tmp_path / "elsewhere" / "1.pth") is None
+
+
+def test_eval_score_head_specs_set_the_terminal_utility(tmp_path):
+    import importlib.util
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[3] / "scripts" / "eval_head_to_head.py"
+    spec = importlib.util.spec_from_file_location("eval_head_to_head", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    run = tmp_path / "pg_run"
+    (run / "critic").mkdir(parents=True)
+    (run / "config.json").write_text(json.dumps({"reward": "placement"}))
+    critic = run / "critic" / "100.pth"
+    _, overrides = module.parse_player(f"{tmp_path / 'p.pth'}+{critic}#blend=0.6@200/0.05:mean", 64)
+    assert overrides["terminal_score_weight"] == 0.6 and overrides["terminal_score_points"] == (1.0, 0.5, 0.2, 0.0)
+    _, plain = module.parse_player(f"{tmp_path / 'p.pth'}+{critic}@200/0.05:mean", 64)
+    assert "terminal_score_weight" not in plain  # the win head: the share of winners, as before
+
+
 def test_terminal_backup_value_is_share_of_winners():
     """Finished games back up on the win-loss head's scale (what the network
     returns for every other leaf), not as raw net-worth fractions."""

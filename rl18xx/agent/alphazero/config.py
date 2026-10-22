@@ -555,6 +555,14 @@ class SelfPlayHyperparams:
     # price head is confidently wrong. See ``price_pmf.proposal_order``.
     price_explore_eps: float = 0.05
     use_score_values: bool = True
+    # With use_score_values: the utility a finished game backs up when the search's network
+    # values come from the score head (search learning's ``value_head`` score / blend=<w>, eval
+    # ``#score`` / ``#blend=<w>``; ``composite_model.terminal_utility``): (1 - w) * the share of
+    # winners + w * ``terminal_score_points`` by place (net worth; tied seats share their
+    # places' points) -- the leaves' (1 - w) * win + w * score, so ending a game is valued on
+    # the scale the search compares it with. 0 (or no points): the share of winners.
+    terminal_score_weight: float = 0.0
+    terminal_score_points: tuple = ()
     # fp16 autocast for in-process inference. Off: trained checkpoints reach
     # activations that overflow fp16 (NaN priors on ~15% of positions), and
     # fp32 costs only ~7% per batch here.

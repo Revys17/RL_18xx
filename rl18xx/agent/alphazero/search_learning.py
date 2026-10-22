@@ -804,9 +804,14 @@ class _Game:
 def search_config(settings: dict, client=None):
     """The ``SelfPlayConfig`` of a generator's trees (the inference goes
     through the lockstep searcher; ``client`` only satisfies the player)."""
+    from rl18xx.agent.alphazero.composite_model import terminal_utility
     from rl18xx.agent.alphazero.config import SelfPlayConfig
 
     gumbel = settings["target"] == "gumbel"
+    # A finished game backs up the utility the leaves' value head reads (score / blend=<w>).
+    terminal_weight, terminal_points = terminal_utility(
+        settings.get("value_head", "win"), settings.get("reward", "placement")
+    )
     return SelfPlayConfig(
         network=None,
         use_inference_server=client is not None,
@@ -831,6 +836,8 @@ def search_config(settings: dict, client=None):
         softpick_move_cutoff=0,
         max_game_length=settings["max_decisions"],
         player_count_distribution={NUM_PLAYERS: 1.0},
+        terminal_score_weight=terminal_weight,
+        terminal_score_points=terminal_points,
     )
 
 
@@ -894,6 +901,8 @@ class Generator:
             tree.set_q_config(True, c.fpu_reduction)
             if c.mcts_q_normalize:
                 tree.set_q_normalize(True)
+        if c.terminal_score_weight > 0:
+            tree.set_terminal_utility(c.terminal_score_weight, [float(p) for p in c.terminal_score_points])
         if c.gumbel_k > 0:
             tree.set_gumbel_config(c.gumbel_k, c.gumbel_c_visit, c.gumbel_c_scale, c.gumbel_noise_scale)
         return _TreeHandle(c, tree)
@@ -1573,6 +1582,7 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "auction_fraction": cfg.auction_fraction,
         "critic_positions_per_game": cfg.critic_positions_per_game,
         "reward": cfg.reward,
+        "value_head": cfg.value_head,
         "opponent_servers": [],
         "value_nstep": cfg.value_nstep,
         "value_bootstrap_weight": cfg.value_bootstrap_weight,

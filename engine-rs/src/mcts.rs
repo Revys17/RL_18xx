@@ -262,6 +262,13 @@ pub struct RustMCTSPlayer {
     /// exploration term at full scale (c_puct is to be sized for a 0-1
     /// range). Off by default; ignored without ``mean_q``.
     pub q_normalize: bool,
+    /// The utility a finished game backs up (``set_terminal_utility``): with a
+    /// weight w > 0, (1 - w) * the share of winners + w * placement points by
+    /// net worth -- the scale of a search whose network values come from the
+    /// score head (``score`` / ``blend=<w>``). 0 (the default): the share of
+    /// winners, the win head's scale.
+    pub terminal_score_weight: f32,
+    pub terminal_score_points: Vec<f32>,
 
     /// The tree's random source (price proposals, Dirichlet noise, Gumbel
     /// noise): from OS entropy, or ``seed()`` for reproducible tests.
@@ -429,6 +436,8 @@ impl RustMCTSPlayer {
             mean_q: false,
             fpu_reduction: 0.0,
             q_normalize: false,
+            terminal_score_weight: 0.0,
+            terminal_score_points: Vec::new(),
             rng: rand::rngs::StdRng::from_entropy(),
             pending: Vec::new(),
             pending_dups: Vec::new(),
@@ -486,6 +495,24 @@ impl RustMCTSPlayer {
     #[getter]
     pub fn q_normalize_enabled(&self) -> bool {
         self.q_normalize
+    }
+
+    /// The utility finished games back up (see the ``terminal_score_weight``
+    /// field; ``SelfPlayConfig.terminal_score_weight`` / ``terminal_score_points``):
+    /// ``points`` by place, 1st first. Weight 0 or no points: the share of winners.
+    pub fn set_terminal_utility(&mut self, weight: f32, points: Vec<f32>) -> PyResult<()> {
+        if !(0.0..=1.0).contains(&weight) {
+            return Err(PyValueError::new_err(format!("terminal score weight {weight} outside [0, 1]")));
+        }
+        self.terminal_score_weight = weight;
+        self.terminal_score_points = points;
+        Ok(())
+    }
+
+    /// ``(weight, points)`` of ``set_terminal_utility``.
+    #[getter]
+    pub fn terminal_utility(&self) -> (f32, Vec<f32>) {
+        (self.terminal_score_weight, self.terminal_score_points.clone())
     }
 
     /// Engine move number at the root (length of the full action log) —
