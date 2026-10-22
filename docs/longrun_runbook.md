@@ -94,8 +94,8 @@ code.
      the GPU memory time to go). The start limit is 5 failures in 2 h (in the unit template).
    - `--set KEY=VALUE`: anything else in the `.env` -- watchdog thresholds (below), `ALERT_COMMAND`,
      `CUDA_VISIBLE_DEVICES`, `LOG`, `STATE_DIR`, `COMMAND`.
-   - `--stall` threshold: set `STALL_MINUTES` above the time a resumed run needs to refill its replay window
-     (`--min-window-rows`, not saved in the snapshot) plus one update.
+   - `STALL_MINUTES`: above the time a resumed run needs to refill its replay window (`--min-window-rows`;
+     the window is not in the snapshot) plus one update, or every restart ends in a stall alert.
 6. **Dry run** the deployment once (`dryrun.sh`, below): ~6 minutes, CPU only.
 
 ## Operating it
@@ -144,8 +144,13 @@ does TensorBoard: take the last line for an update.
   e96d852): edit `TRAIN_ARGS` in `~/.config/rl18xx-longrun/<instance>.env` (or re-run `install.sh`), then
   `systemctl --user restart`. Anything else is fixed by the run's `state.json`.
 - **New code**: never edit the deployment. Tag the new commit, `deploy.sh create` a second deployment,
-  dry-run it, point the instance's `DEPLOY` / `LAUNCHER` / `WATCHDOG` at it, restart. (`deploy.sh update`
-  rebuilds a deployment in place, only while nothing uses it.)
+  dry-run it, check that its code still reads the run's config
+  (`cd $W && <new>/.venv/bin/python -s -c 'import json, sys; sys.path.insert(0, "<new>"); from
+  rl18xx.agent.alphazero.search_learning import SearchLearningConfig as C; C(**json.load(open("<run dir>/state.json"))["config"])'`
+  -- a removed or renamed config field fails here instead of in a restart loop), point the instance's
+  `DEPLOY` / `LAUNCHER` / `WATCHDOG` at it (re-run `install.sh` with `--deploy <new>`), restart both units.
+  `deploy.sh update` rebuilds a deployment in place instead, only while nothing uses it -- the watchdog
+  counts, since it runs from the deployment.
 - **Evals** run beside the training, not inside its unit. Give each queue its own memory cap so two queues
   can't take the machine down again, e.g.
   `systemd-run --user --unit eval-azl-u3000 -p MemoryMax=40G -p MemorySwapMax=0 --working-directory=$W

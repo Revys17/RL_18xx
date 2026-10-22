@@ -31,12 +31,23 @@ def _state(run_dir: Path):
         raise NotResumable(f"{path} is unreadable: {e!r}")
 
 
+def _workdir(run_dir: Path, config: dict) -> Path:
+    """Where the run's relative paths (its starting policy) resolve: <workdir>/<out_dir>/<run_name> is the
+    run directory, whatever directory this is called from."""
+    out = Path(config.get("out_dir") or ".")
+    tail = out / config.get("run_name", run_dir.name)
+    resolved = run_dir.resolve()
+    if not out.is_absolute() and resolved.parts[-len(tail.parts):] == tail.parts:
+        return Path(*resolved.parts[: -len(tail.parts)])
+    return Path.cwd()
+
+
 def _needed(run_dir: Path, update: int, config: dict, anchor: int):
     needed = [run_dir / "learner" / f"{update}.pth"]
     if not config.get("shared"):
         needed.append(run_dir / "critic" / f"{update}.pth")
     # The KL anchor: the learner at anchor_update, or the run's starting policy.
-    needed.append(run_dir / "learner" / f"{anchor}.pth" if anchor else Path(config["policy_checkpoint"]))
+    needed.append(run_dir / "learner" / f"{anchor}.pth" if anchor else _workdir(run_dir, config) / config["policy_checkpoint"])
     return needed
 
 

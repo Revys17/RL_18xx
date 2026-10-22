@@ -39,7 +39,7 @@ users_of() {
         cwd=$(readlink "$proc/cwd" 2>/dev/null) || cwd=""
         if [[ "$cmd" == *"$dest/"* ]] || [ "$cwd" = "$dest" ] || [[ "$cwd" == "$dest/"* ]] \
             || grep -qF "$dest/" "$proc/maps" 2>/dev/null; then
-            echo "$pid ${cmd:0:160}"
+            echo "$pid ${cmd:0:400}"
         fi
     done
 }

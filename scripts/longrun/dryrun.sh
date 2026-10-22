@@ -136,9 +136,13 @@ systemctl --user stop rl18xx-longrun@lr-dryrun.service
 check "6 stopped: unit inactive" [ "$(prop lr-dryrun ActiveState)" = inactive ]
 check "6 stopped: none of its ${#ids[@]} processes left" eval '! alive "${ids[@]}"'
 # (The watchdog -- system python3 -- and this script also run from the deployment's path; they stay.)
-left=$(bash "$HERE/deploy.sh" in-use "$DEPLOY" | grep -v -e scripts/longrun/dryrun.sh -e scripts/longrun/watchdog.py)
+left=$(bash "$HERE/deploy.sh" in-use "$DEPLOY" | awk '$1 ~ /^[0-9]+$/ {print $1}' | while read -r p; do
+    c=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null) || continue
+    case $c in *scripts/longrun/dryrun.sh*|*scripts/longrun/watchdog.py*) ;; *) echo "$p ${c:0:200}" ;; esac
+done)
 check "6 stopped: no process of the run uses the deployment${left:+ ($left)}" [ -z "$left" ]
-check "6 stopped: no python of the deployment's venv is left" bash -c "! pgrep -f '$DEPLOY/.venv/bin/python' > /dev/null"
+no_venv_python() { ! pgrep -f "$DEPLOY/.venv/bin/[p]ython" > /dev/null; }
+check "6 stopped: no python of the deployment's venv is left" no_venv_python
 check "6 the stop was recorded" grep -q '"event": "stop"' "$WORK/longrun/lr-dryrun/exits.jsonl"
 
 # ----------------------------------------------------------------------------- 7: modified deployment
@@ -167,11 +171,13 @@ echo "$repaired" | sed 's/^/     repair: /'
 check "7b snapshot_check.py --repair rebuilt the snapshot (update $(echo "$repaired" | tail -1), last good $snap)" \
     [ "$(echo "$repaired" | tail -1)" -le "$snap" ]
 systemctl --user reset-failed rl18xx-longrun@lr-dryrun.service
-mark=$(wc -l < "$WORK/$RUN/history.jsonl")
+mark=$(wc -l < "$WORK/$RUN/history.jsonl"); before=$(starts lr-dryrun)
 systemctl --user start rl18xx-longrun@lr-dryrun.service
 wait_for 120 bash -c "[ \$(wc -l < $WORK/$RUN/history.jsonl) -gt $mark ]"
 rec=$(tail -1 "$WORK/longrun/lr-dryrun/starts.jsonl")
-check "7b the repaired run resumes ($rec)" grep -q '"mode": "resume"' <<< "$rec"
+check "7b the repaired run resumes from snapshot $snap and trains ($rec)" \
+    [ "$(starts lr-dryrun)" -gt "$before" -a "$(wc -l < "$WORK/$RUN/history.jsonl")" -gt "$mark" ] \
+    && check "7b ... as a resume" grep -q "\"mode\": \"resume\", \"snapshot_update\": $snap," <<< "$rec"
 systemctl --user stop rl18xx-longrun@lr-dryrun.service
 
 # ----------------------------------------------------------------------------- 8: non-finite loss
@@ -198,6 +204,7 @@ check "9 the kernel's OOM kills were all inside the run's cgroup (CONSTRAINT_MEM
 check "9 the user's systemd and claude-rc are untouched (same PIDs and start times: $rc_before)" [ "$(session)" = "$rc_before" ]
 wait_for 30 alert_logged lr-dryrun-oom "crash_loop"
 check "9 the watchdog reported the crash loop" alert_logged lr-dryrun-oom "CRIT \[lr-dryrun-oom\] crash_loop"
+wait_for 30 alert_logged lr-dryrun-oom "CRIT \[lr-dryrun-oom\] failed"
 check "9 the watchdog reported the failed unit" alert_logged lr-dryrun-oom "CRIT \[lr-dryrun-oom\] failed"
 
 # ----------------------------------------------------------------------------- 10: thresholds, hooks
