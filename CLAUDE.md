@@ -77,6 +77,9 @@ uv run python main.py advisor            # Model advisor backend (127.0.0.1:5002
 uv run python scripts/eval_policy_only.py --match A B --out logs/eval/<name> --save-games 60  # + keep 60 games/match to view
 uv run python main.py policy-gradient ... --save-game-every 1000  # + keep ~1 in 1000 training games to view
 
+# Months-long runs: a frozen deployment (read-only clone + own venv) run as a systemd user service with a watchdog
+bash scripts/longrun/deploy.sh create <tag> <dest> --cpus 24-31,56-63   # then install.sh / dryrun.sh: docs/longrun_runbook.md
+
 # Services (via startup.sh)
 ./startup.sh                     # Starts TensorBoard (:6006) + Dashboard (:5001)
 ```

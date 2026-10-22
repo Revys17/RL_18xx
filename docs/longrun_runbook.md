@@ -96,7 +96,7 @@ code.
      `CUDA_VISIBLE_DEVICES`, `LOG`, `STATE_DIR`, `COMMAND`.
    - `STALL_MINUTES`: above the time a resumed run needs to refill its replay window (`--min-window-rows`;
      the window is not in the snapshot) plus one update, or every restart ends in a stall alert.
-6. **Dry run** the deployment once (`dryrun.sh`, below): ~6 minutes, CPU only.
+6. **Dry run** the deployment once (`dryrun.sh`, below): ~5 minutes, CPU only.
 
 ## Operating it
 
@@ -257,7 +257,36 @@ A tiny CPU search-learning run (random d=32 transformers from `make_tiny_start.p
 each claim and prints PASS / FAIL, then uninstalls its instances (`lr-dryrun`, `lr-dryrun-nan`,
 `lr-dryrun-oom`; their files stay in the scratch dir).
 
-DRY_RUN_RESULTS
+**2026-10-22, commit a2f89a4** (deployed once with `create`, then rebuilt in place with `update` four times
+-- each build ~75 s on 16 pinned cores): **38 of 38 checks passed in 4 min 22 s**; the log is
+`docs/longrun_dryrun_2026-10-22.txt`. The tiny run's unit held 7 processes (launch.sh, main.py, its
+resource tracker, 2 inference servers, 2 pool workers) and peaked at 2.7 GB.
+
+| # | What was done | What happened |
+|---|---|---|
+| 1 | first start | `mode: fresh`; snapshot 5 about 25 s after the start; the watchdog came up with it |
+| 2 | `kill -9` main.py at update 7 (snapshot 5) | all 7 processes gone before the restart; systemd restarted it after `RestartSec`; `resume` from snapshot 5; the next history line is update 6 |
+| 3 | `kill -9` an inference server at update 10 (snapshot 10) | main.py stopped on `RuntimeError: inference server died`; all 7 gone; restarted; resumed from 10; next line update 11 |
+| 4 | `SIGSTOP` main.py for 100 s | `stall` WARN after 1 min, `cleared` within 5 s of `SIGCONT` |
+| 5 | `deploy.sh update` while the run is up | refused, listing the run's processes |
+| 6 | `systemctl --user stop` | inactive; none of the 7 processes left; no process of the deployment's venv anywhere; the stop recorded |
+| 7 | one line appended to the deployment's `search_learning.py` | start refused with 76, not restarted; CRIT `refused` and `failed` |
+| 7b | `state.json` cut to 100 bytes, `optimizer.pth` to 1000 | refused with 77; `snapshot_check.py --repair` rebuilt `state.json` at snapshot 15 and moved `optimizer.pth` aside; the run resumed from 15 and trained |
+| 8 | a fresh run at `--lr 1e30` | `RuntimeError: search learning diverged: non-finite loss`: exit 75, not restarted; CRIT `nonfinite` |
+| 9 | `MemoryMax=1500M` (below the 2.7 GB the run needs) | every kernel OOM kill `constraint=CONSTRAINT_MEMCG, oom_memcg=.../rl18xx-longrun@lr-dryrun-oom.service`, at `oom_score_adj=500`, none global; 5 restarts, then the start limit; the user manager and claude-rc kept their PIDs; CRIT `crash_loop` at the 3rd restart, CRIT `failed` ("start limit ... last failure: an OOM kill") |
+| 10 | `DISK_MIN_GB=1000000`, `GPU_TEMP_MAX_C=1` | `disk:` and `gpu0_temp` alerts; `ALERT_COMMAND` received them (and the instances' alerts) |
+
+Harness bugs the dry runs found, all fixed before the last run: `install.sh` wrote a rejected value as an
+empty one (its check ran inside `$(...)`); when the start limit stops automatic restarts systemd leaves
+`Result` at the last failure (`oom-kill`), not `start-limit-hit` (that is only for a refused manual start),
+so the watchdog now reads a failed unit by its exit status; `OOMPolicy=stop` SIGTERMs the launcher while it
+writes its exit record, so the crash loop counts systemd's `NRestarts` and the launcher ignores SIGTERM once
+main.py has exited; `--repair` resolved the run's relative starting-policy path against the caller's
+directory.
+
+Not covered: the GPU (CUDA was hidden; GPU memory is freed when the processes exit, which checks 2, 3 and 6
+show); `enable` and a reboot; a desktop notification on screen (no notification server was running: the
+D-Bus call is made and fails quietly); `host_hold.sh hold` (needs sudo; `status` was run).
 
 ## Rules for agents (Claude sessions)
 
@@ -267,3 +296,11 @@ DRY_RUN_RESULTS
   `systemctl --user status`. Starting, stopping, restarting or reconfiguring the run is the user's call.
 - Run evals as their own transient units with a `MemoryMax` (above), pinned away from the run if it is
   pinned, and budget their RAM against the run's `MemoryMax`.
+
+## Known gaps (in the training code, not the harness)
+
+- `search_learning.run` and `policy_gradient.run` write `optimizer.pth` (`torch.save`) and `state.json`
+  (`write_text`) in place; `checkpointer._atomic_save_torch` / `_atomic_write_json` would close the torn-snapshot
+  case that `snapshot_check.py --repair` exists for.
+- The replay window is not in the snapshot: every restart refills it (`--min-window-rows`) before the next
+  update, and repeats the updates since the last snapshot in `history.jsonl` / TensorBoard.

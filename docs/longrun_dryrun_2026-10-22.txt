@@ -1,0 +1,100 @@
+15:28:36 dry run: deployment $SCRATCH/deploy (a2f89a4ff2 longrun-dryrun-20261022d), scratch $SCRATCH/run4
+15:29:03 PASS  1 first start is fresh
+15:29:03 PASS  1 reached snapshot 5 (update 5)
+15:29:03 PASS  1 watchdog started with the run
+15:29:03      processes in the unit:  1 launch.sh; 1 main.py; 1 resource tracker; 4 spawned by main.py;
+15:29:06      2 kill main.py: killed 3187763 (kill -9) at update 7, snapshot 5; 7 processes in the unit
+15:29:06 PASS  2 kill main.py: all 7 processes of the killed run exited
+15:29:18 PASS  2 kill main.py: systemd restarted it (NRestarts 0 -> 1)
+15:29:19 PASS  2 kill main.py: resumed from snapshot 5 ({"time": "2026-10-22T15:29:18-07:00", "mode": "resume", "snapshot_update": 5, "pid": 3188358, "commit": "a2f89a4ff2682ae2c2c52ced438f39d139ea82b9", "invocation": "cb7dec19463f46da86dd12cb342b3582"})
+15:29:30 PASS  2 kill main.py: history continues at update 6 = snapshot + 1
+15:29:39      3 kill a spawned child: killed 3188437 (kill -9) at update 10, snapshot 10; 7 processes in the unit
+15:29:44 PASS  3 kill a spawned child: all 7 processes of the killed run exited
+15:29:57 PASS  3 kill a spawned child: systemd restarted it (NRestarts 1 -> 2)
+15:29:57 PASS  3 kill a spawned child: resumed from snapshot 10 ({"time": "2026-10-22T15:29:56-07:00", "mode": "resume", "snapshot_update": 10, "pid": 3189017, "commit": "a2f89a4ff2682ae2c2c52ced438f39d139ea82b9", "invocation": "8b949cf8f48247f78d098167af4d8d3d"})
+15:30:12 PASS  3 kill a spawned child: history continues at update 11 = snapshot + 1
+15:30:12 PASS  2-3 the watchdog alerted on the crashes
+15:30:12      4: SIGSTOP main.py (3189017) for 100 s (STALL_MINUTES=1)
+15:31:13 PASS  4 stall alert
+15:31:18 PASS  4 stall cleared once updates resumed
+15:31:21 PASS  5 deploy.sh update refused while running (/tmp/claude-1000/-home-revys-workspace-RL-18xx--claude-worktrees-recursing-kalam-c6eba1/e2)
+15:31:21 PASS  6 stopped: unit inactive
+15:31:21 PASS  6 stopped: none of its 7 processes left
+15:31:24 PASS  6 stopped: no process of the run uses the deployment
+15:31:24 PASS  6 stopped: no python of the deployment's venv is left
+15:31:24 PASS  6 the stop was recorded
+15:31:25 PASS  7 modified deployment: start refused with 76, not restarted
+15:31:28 PASS  7 the watchdog alerted
+ok: $SCRATCH/deploy is as deployed
+15:31:29 PASS  7 restored: deploy.sh verify passes again
+15:31:30 PASS  7b torn state.json + optimizer.pth: start refused with 77, not restarted
+     repair: $SCRATCH/run4/work/model_checkpoints_search/dryrun/state.json is unreadable: JSONDecodeError('Unterminated string starting at: line 4 column 5 (char 94)')
+     repair: kept the unreadable state.json as state.json.bad-20261022T153130
+     repair: rebuilt state.json at snapshot 15 from config.json and history.jsonl
+     repair: $SCRATCH/run4/work/model_checkpoints_search/dryrun/optimizer.pth is unreadable: RuntimeError('PytorchStreamReader failed reading zip archive: failed finding central directory. This is an internal miniz error. If you are seeing this error, there is a high likelihood that your checkpoint file is corrupted. This can happen if the checkpoint was not saved properly, was transferred incorrectly, or the file was modified after saving.')
+     repair: moved it to optimizer.pth.bad-20261022T153131: the resume starts the optimizer afresh
+     repair: 15
+15:31:32 PASS  7b snapshot_check.py --repair rebuilt the snapshot (update 15, last good 15)
+15:31:46 PASS  7b the repaired run resumes from snapshot 15 and trains ({"time": "2026-10-22T15:31:32-07:00", "mode": "resume", "snapshot_update": 15, "pid": 3195045, "commit": "a2f89a4ff2682ae2c2c52ced438f39d139ea82b9", "invocation": "fbd76607031c401996627b2cb6939d6f"})
+15:31:46 PASS  7b ... as a resume
+15:32:15 PASS  8 non-finite: exit 75, not restarted
+15:32:17 PASS  8 the watchdog alerted: 2026-10-22T15:32:17-07:00 CRIT [lr-dryrun-nan] nonfinite: non-finite-loss stop, not restarted: RuntimeError: search learning diverged: non-finite loss
+15:32:58 PASS  9 OOM: restarted until the start limit stopped it (5 restarts, result oom-kill)
+     kernel:       1 constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/app-rl18xx\x2dlongrun.slice/rl18xx-longrun@lr-dryrun-oom.service,task_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/app-rl18xx\x2dlongrun.slice/rl18xx-longrun@lr-dryrun-oom.service,task=python,pid=3195904,uid=1000
+     kernel:       1 constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/app-rl18xx\x2dlongrun.slice/rl18xx-longrun@lr-dryrun-oom.service,task_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/app-rl18xx\x2dlongrun.slice/rl18xx-longrun@lr-dryrun-oom.service,task=python,pid=3195966,uid=1000
+     kernel:       1 constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/app-rl18xx\x2dlongrun.slice/rl18xx-longrun@lr-dryrun-oom.service,task_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/app-rl18xx\x2dlongrun.slice/rl18xx-longrun@lr-dryrun-oom.service,task=python,pid=3196055,uid=1000
+     kernel:       1 constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/app-rl18xx\x2dlongrun.slice/rl18xx-longrun@lr-dryrun-oom.service,task_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/app-rl18xx\x2dlongrun.slice/rl18xx-longrun@lr-dryrun-oom.service,task=python,pid=3196211,uid=1000
+     kernel:       1 constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/app-rl18xx\x2dlongrun.slice/rl18xx-longrun@lr-dryrun-oom.service,task_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/app-rl18xx\x2dlongrun.slice/rl18xx-longrun@lr-dryrun-oom.service,task=python,pid=3196401,uid=1000
+     kernel:       1 constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/app-rl18xx\x2dlongrun.slice/rl18xx-longrun@lr-dryrun-oom.service,task_memcg=/user.slice/user-1000.slice/user@1000.service/app.slice/app-rl18xx\x2dlongrun.slice/rl18xx-longrun@lr-dryrun-oom.service,task=python,pid=3196574,uid=1000
+15:32:58 PASS  9 the kernel's OOM kills were all inside the run's cgroup (CONSTRAINT_MEMCG), none global
+15:32:58 PASS  9 the user's systemd and claude-rc are untouched (same PIDs and start times: 3246020 3246032 272673876967 )
+15:32:58 PASS  9 the watchdog reported the crash loop
+15:32:58 PASS  9 the watchdog reported the failed unit
+15:32:58 PASS  10 disk threshold alerts
+15:32:58 PASS  10 GPU temperature threshold alerts
+15:32:58 PASS  10 ALERT_COMMAND ran
+15:32:58 PASS  10 ALERT_COMMAND ran for the instances too
+     2026-10-22T15:32:58-07:00 WARN [lr-dryrun] systemd: systemctl --user show failed: Failed to connect to bus: No medium found
+     2026-10-22T15:32:58-07:00 CRIT [lr-dryrun] disk:$SCRATCH/run4/work/model_checkpoints_search/dryrun: 1047 GB free on the filesystem of $SCRATCH/run4/work/model_checkpoints_search/dryrun (threshold 1000000 GB)
+     2026-10-22T15:32:58-07:00 WARN [lr-dryrun] gpu0_temp: GPU 0 at 74 C (threshold 1 C)
+15:32:58 alerts raised:
+     2026-10-22T15:28:47-07:00 INFO [lr-dryrun] start: started fresh (pid 3187763, deployment a2f89a4ff2)
+     2026-10-22T15:29:07-07:00 WARN [lr-dryrun] crash: main.py exited with status 137: signal 9
+     2026-10-22T15:29:17-07:00 WARN [lr-dryrun] restart: systemd restarted the run automatically (restart #1 since the last manual start)
+     2026-10-22T15:29:22-07:00 INFO [lr-dryrun] start: resumed from snapshot 5 (pid 3188358, deployment a2f89a4ff2)
+     2026-10-22T15:29:47-07:00 WARN [lr-dryrun] crash: main.py exited with status 1: RuntimeError: inference server died: learner (exit code -9)
+     2026-10-22T15:29:57-07:00 INFO [lr-dryrun] start: resumed from snapshot 10 (pid 3189017, deployment a2f89a4ff2)
+     2026-10-22T15:29:57-07:00 WARN [lr-dryrun] restart: systemd restarted the run automatically (restart #2 since the last manual start)
+     2026-10-22T15:31:13-07:00 WARN [lr-dryrun] stall: no new history.jsonl line for 1 min (last: update 11 at 2026-10-22T15:30:11; threshold 1 min)
+     2026-10-22T15:31:18-07:00 INFO [lr-dryrun] stall: cleared
+     2026-10-22T15:31:23-07:00 INFO [lr-dryrun] stop: stopped through systemd
+     2026-10-22T15:31:23-07:00 INFO [lr-dryrun] inactive: the run is not running (stopped, or never started)
+     2026-10-22T15:31:28-07:00 CRIT [lr-dryrun] refused: start refused (status 76): the frozen deployment changed since it was built, or the instance config is incomplete
+     2026-10-22T15:31:28-07:00 CRIT [lr-dryrun] failed: the run is down (result exit-code): the frozen deployment changed since it was built, or the instance config is incomplete
+     2026-10-22T15:31:33-07:00 INFO [lr-dryrun] start: resumed from snapshot 15 (pid 3195045, deployment a2f89a4ff2)
+     2026-10-22T15:31:33-07:00 CRIT [lr-dryrun] refused: start refused (status 77): the snapshot to resume from is missing or unreadable: model_checkpoints_search/dryrun/state.json is unreadable: JSONDecodeError('Unterminated string starting at: line 4 column 5 (char 94)')
+     2026-10-22T15:31:33-07:00 INFO [lr-dryrun] failed: cleared
+     2026-10-22T15:31:48-07:00 INFO [lr-dryrun] stop: stopped through systemd
+     2026-10-22T15:31:48-07:00 INFO [lr-dryrun] inactive: the run is not running (stopped, or never started)
+     2026-10-22T15:31:52-07:00 INFO [lr-dryrun-nan] start: started fresh (pid 3195410, deployment a2f89a4ff2)
+     2026-10-22T15:32:17-07:00 CRIT [lr-dryrun-nan] nonfinite: non-finite-loss stop, not restarted: RuntimeError: search learning diverged: non-finite loss ({'total': nan, 'ce': nan, 'search_kl': nan, 'target_entropy': 8.342002868652344, 'kl_anchor': nan, 'entropy': nan, 'top1_agreement': 0.0, 'price_ce': nan, 'price_kl_anchor': nan})
+     2026-10-22T15:32:17-07:00 CRIT [lr-dryrun-nan] failed: the run is down (result exit-code): the training stopped on a non-finite loss or gradient (not restarted: needs a decision)
+     2026-10-22T15:32:22-07:00 INFO [lr-dryrun-oom] start: started fresh (pid 3195904, deployment a2f89a4ff2)
+     2026-10-22T15:32:27-07:00 INFO [lr-dryrun-oom] start: started fresh (pid 3196055, deployment a2f89a4ff2)
+     2026-10-22T15:32:27-07:00 WARN [lr-dryrun-oom] restart: systemd restarted the run automatically (restart #1 since the last manual start)
+     2026-10-22T15:32:32-07:00 INFO [lr-dryrun-oom] stop: stopped through systemd
+     2026-10-22T15:32:37-07:00 INFO [lr-dryrun-oom] start: started fresh (pid 3196211, deployment a2f89a4ff2)
+     2026-10-22T15:32:37-07:00 WARN [lr-dryrun-oom] restart: systemd restarted the run automatically (restart #2 since the last manual start)
+     2026-10-22T15:32:42-07:00 INFO [lr-dryrun-oom] start: started fresh (pid 3196401, deployment a2f89a4ff2)
+     2026-10-22T15:32:42-07:00 INFO [lr-dryrun-oom] stop: stopped through systemd
+     2026-10-22T15:32:42-07:00 WARN [lr-dryrun-oom] restart: systemd restarted the run automatically (restart #3 since the last manual start)
+     2026-10-22T15:32:42-07:00 CRIT [lr-dryrun-oom] crash_loop: 3 automatic restarts in the last 60 min
+     2026-10-22T15:32:47-07:00 INFO [lr-dryrun-oom] stop: stopped through systemd
+     2026-10-22T15:32:52-07:00 INFO [lr-dryrun-oom] start: started fresh (pid 3196574, deployment a2f89a4ff2)
+     2026-10-22T15:32:52-07:00 WARN [lr-dryrun-oom] restart: systemd restarted the run automatically (restart #4 since the last manual start)
+     2026-10-22T15:32:57-07:00 INFO [lr-dryrun-oom] stop: stopped through systemd
+     2026-10-22T15:32:57-07:00 WARN [lr-dryrun-oom] crash: main.py exited with status 137: signal 9
+     2026-10-22T15:32:57-07:00 WARN [lr-dryrun-oom] restart: systemd restarted the run automatically (restart #5 since the last manual start)
+     2026-10-22T15:32:57-07:00 CRIT [lr-dryrun-oom] failed: the run is down (result oom-kill): crash loop: systemd's start limit stopped the restarts (last failure: an OOM kill (MemoryMax))
+15:32:58 dry run: all checks passed
+bash $S/deploy/scripts/longrun/dryrun.sh $S/deploy $S/run4  13.97s user 6.81s system 7% cpu 4:22.26 total
