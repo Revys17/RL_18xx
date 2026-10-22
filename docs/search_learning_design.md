@@ -1301,3 +1301,137 @@ and no `--value-follow`.
 baseline (gen4's run continued as a new run), judged as `<PG checkpoint>+<az7b checkpoint>` composites. It
 asks whether co-training the value side on the moving trunk beats a fixed, separately trained value network
 at equal PG updates, for the cost of a second PG run.
+
+## Rating a long run against a fixed panel (2026-10-22, `scripts/eval_ladder.py`)
+
+**Why.** azl's ladder judged each checkpoint by uM vs u(M-300) at 480 games. Every step won (0.52-0.57), yet
+the system stayed flat against its start: u1800 vs u0 scored 0.500 where the chained steps implied ~0.71.
+The side-A controls of 2026-10-21 ruled out the listing order (+0.011 ± 0.013; the old ladder always listed
+the newer checkpoint first), so the strength is genuinely non-transitive. Four-player self-play drifts in style
+(onto PRR/ERIE plus withholding), and net-worth share against u0 even fell. A step win is evidence of a
+change, not of progress. A ~4-month run needs a judge whose opponents stay fixed. It also needs 1v3, the
+table closest to one bot among humans; table composition already moved the policy-gradient line's results
+(an exploiter even 2v2 was 0.16 alone).
+
+**The scheduler** (`run`). Every `every` updates it takes the run's newest checkpoint at a multiple of
+`every`. When the ladder falls behind, it skips ahead rather than queueing every checkpoint. It plays that
+checkpoint against each member of a fixed panel. Matches run one at a time through `eval_head_to_head.py` on
+`workers` workers (the GPU-share cap). For each panel member:
+- 2v2 and 1v3 (`--a-seats 1`; in 1v3 the candidate sits alone against three copies, and in the reverse match
+  the member sits alone);
+- each pairing both ways, the candidate as side A and then the member. In 2v2 the two directions seat the
+  same arrangements of the same starts, so only the listing differs and any listing bias cancels;
+- every match from the same start set as the old ladder: seed 0 and `start_positions_1830_4p_v2.jsonl`.
+  Game g starts from start g // 6 in 2v2 and g // 4 in 1v3, so all matches and both modes share starts;
+- `softpick 0`, max length 1000, stall 400; all of these are recorded per match and checked on import.
+
+The panel file is re-read before every match, so `workers`, `games` and members can change mid-run. Each
+finished match is appended (fsync'd) to `logs/eval/<name>/ledger.jsonl`, one line per match. The line holds:
+- both specs and the shared settings;
+- the A score with its iid and start-clustered SEs, the net-worth share and the seat win rates;
+- every game as `[start cluster, seats, win shares, net-worth shares]`, about 80 bytes a game.
+
+`state.json` remembers finished candidates and the one in progress, so a restart resumes mid-candidate. The
+directory of a match that crashed is renamed `*.failed_<time>` before the retry, because
+`eval_head_to_head.py` appends to games.jsonl. Each match also adds a line to `--results-log` (az1.log's
+format). After each candidate the scheduler writes `report.txt`, `ratings.json`, `ratings.png` and a
+decision line.
+
+**The panel** (`scripts/launch/2026-10/eval_ladder_azl.json` for azl; copy it for a new run):
+
+| member | spec | why |
+|---|---|---|
+| u0 | the run's own start, played like the candidate | progress against the start; the rating anchor |
+| gen4critic | gen4 + its critic @200, ptemp 0.5 | the policy-gradient line's main checkpoint, searched with its critic |
+| az8_u170 | az8 u170 @200, ptemp 0.5 | a search-learning system from before azl (the old ladder's reference) |
+| sl10_v2 | checkpoint 10 + value_v2 (value checkpoint 26) @200, ptemp 1 | human-like: the supervised policy on human games, with the value net trained on that policy's games and best on human games |
+| self (optional) | the newest run checkpoint at a multiple of 1800 that is at least 1800 behind; 2v2 only | links the run to its own past sparsely; excluded from the decision |
+
+All specs resolve, and sl10_v2 loads as a `PolicyValueComposite` (checked on the CPU). None has been played on
+the GPU yet.
+
+**Ratings** (`report`). The model is a four-seat Luce (Bradley-Terry) model: seat i wins with probability
+proportional to exp(r[player] + seat effect). Between two players d = r_x - r_y apart, 2v2 scores
+sigmoid(d) and x alone at 1v3 scores e^d / (e^d + 3): equal players get 0.5 and 0.25 on one scale.
+
+Three ratings are fit separately: on 2v2 win shares, on 1v3 win shares, and on net-worth shares (both
+modes). Shares are fit as fractional multinomial-logit outcomes (quasi-likelihood: ties split 1/k, net-worth
+share ∝ expected share), by Newton's method with a small ridge that only keeps an undefeated player finite.
+
+Standard errors are sandwich SEs clustered by start position across all matches. A human start is one
+cluster whatever start index drew it (~2 duplicates expected in 120 draws from 1,945 games); a random start
+is its own (seed, index). Ratings print in Elo, 400/ln 10 per unit, so +100 Elo is 0.64 at 2v2. They are
+anchored at u0 and printed by update. The report adds two checks: the clustered/iid SE ratio, and how many
+players are disconnected from the anchor.
+
+The model has no side-A term by default, because the ladder balances directions by design. On one-way data
+such a term also absorbs non-transitivity. On azl's imported history (below), a fitted side term moved every
+run checkpoint ~12 Elo because it explained away the always-newer-first step wins. `--side-effect` turns the
+term on. The listing effect is instead measured on its own, from the 2v2 pairings played both ways. A
+pairing's two directions differ only in listing, so (score as A + score as B - 1) / 2 is the bias. It is
+weighted per direction and its SE is clustered by start.
+
+**Decision** (`decide`). The helper reports whether the latest candidate is significantly above the one
+`--back N` candidates earlier (or `--earlier <update>`). It is fit on matches against the fixed panel only:
+no run-vs-run games and no self members. It uses only the members both candidates played, so a panel member
+added mid-run doesn't skew the comparison.
+
+Output per rating: the difference in Elo with its clustered SE, one-sided z and p, and a verdict (above /
+below at z 1.645 / no significant change). Beside each it shows the latest candidate's implied 2v2 share
+against the earlier one, and each member's excess share for both candidates (share minus seats/4, both
+directions pooled, SE clustered by start). It flags pairings played one way only, where a listing bias does
+not cancel: a candidate whose evaluation is in progress, or imported history.
+
+**Cost and precision.** At the azl file's settings (120 games per match), a candidate plays 4 members × 2
+modes × 2 directions = 1,920 games, plus 240 against the self member. The old ladder ran ~240 games/h (12
+workers × 8 games per task, sharing the GPU with azl), so a candidate takes ~9 h. At azl's ~80 updates/h,
+`every` 600 thus evaluates every 600-1,200 updates.
+
+A candidate's 2v2 rating rests on 960 games against well-pinned panel ratings, about ±12-15 Elo (u3300's
+960 imported games gave ±12). So one step resolves ~±20 Elo (~0.03 in 2v2 score) at 1 SE, and a one-sided
+5% test needs ~+33 Elo (~+0.047). Over months, compare with `--back 2-4`. Net-worth shares are far less noisy
+(±2 Elo on their compressed scale). Raise `games`, or drop the 1v3 reverse
+direction for some members (`modes` per member), if the GPU share allows neither.
+
+**First reading: azl's history, imported** (`import`; 33 single-match directories, 14,640 2v2 games, one way
+except for the swap control; the value checks with a `+` composite were skipped as unknown players; no 1v3):
+
+| player | 2v2 Elo vs u0 | worth Elo vs u0 |
+|---|---|---|
+| u300 | +13 ± 9 | -4 ± 2 |
+| u1200 | -3 ± 10 | -10 ± 2 |
+| u1800 | +11 ± 10 | -6 ± 2 |
+| u2400 | +1 ± 9 | -4 ± 2 |
+| u3000 | +8 ± 11 | -5 ± 2 |
+| u3300 | +3 ± 12 | -4 ± 2 |
+| az8_u170 | -7 ± 10 | -6 ± 2 |
+| gen4critic | -95 ± 11 | -25 ± 2 |
+
+Every checkpoint from u300 to u3300 is within one or two SEs of u0 at 2v2. Every one is below u0 on net-worth
+share, significantly so (-4 to -10 ± 2). The listing effect from the one pairing played both ways (u1500 /
+u1200) is +0.006 ± 0.013. `decide --latest 2400 --back 3` (vs u1500, panel u0 + gen4critic + az8) gives:
+- 2v2: +11 ± 13 Elo (z 0.84, no significant change);
+- worth: +7 ± 2 (z 3.0, above), with u1500 at one of azl's worth lows.
+
+These rows are one-way, so the decision flags them: each candidate may carry the ~+0.01 listing bias (~7 Elo).
+
+    cd <the run's checkout>   # spec paths are relative to it
+    nohup uv run python scripts/eval_ladder.py run --panel scripts/launch/2026-10/eval_ladder_azl.json \
+        --results-log logs/az1.log > logs/eval_ladder_azl.log 2>&1 &
+    uv run python scripts/eval_ladder.py import --panel <panel.json> logs/eval/azl_u*_vs_*  # optional history
+    uv run python scripts/eval_ladder.py report --panel <panel.json> --plot logs/eval/ladder_azl/ratings.png
+    uv run python scripts/eval_ladder.py decide --panel <panel.json> --back 2
+
+Tests: `tests/agent/alphazero/test_eval_ladder.py`, 17, all synthetic, with no GPU and no network:
+- rating recovery in all three fits, with seat effects, on the 2v2 and 1v3 scales;
+- clustering: with a per-start advantage, the clustered SE is 0.157 against the estimates' spread of 0.143
+  over 80 replicates, while the iid SE (0.092) is too small; without one, the two SEs agree;
+- side balancing: every pairing is planned both ways; a planted listing bonus cancels when played both ways,
+  is measured by the diagnostic and recovered by the optional term, and lands in every rating when played
+  one way;
+- the decision ignores self matches that point the other way, compares on common members and flags one-way
+  pairings;
+- the import names players from specs and refuses mismatched settings, and the ledger refuses a renamed spec;
+- the scheduler end to end with a fake `eval_head_to_head.py`: a mid-match crash set aside and retried, a
+  match that keeps failing given up after `max_attempts` (pausing `retry_seconds` between tries), resume, and
+  dry-run.
