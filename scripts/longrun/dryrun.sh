@@ -12,6 +12,7 @@
 #   5  deploy.sh update is refused while the run uses the deployment
 #   6  systemctl stop leaves no process behind
 #   7  a modified deployment: the start is refused (76), not restarted, alerted
+#  7b  a torn state.json + optimizer.pth: refused (77); snapshot_check.py --repair; the run resumes
 #   8  a non-finite loss: exit 75, not restarted, alerted
 #   9  over MemoryMax: OOM-killed inside its cgroup, restarted, then the start limit stops it; the user's
 #      session and other services are untouched; the watchdog reports the crash loop
@@ -86,7 +87,7 @@ wait_for 180 bash -c "[ \$(python3 -c 'import json,sys; print(json.load(open(sys
 check "1 first start is fresh" grep -q '"mode": "fresh"' "$WORK/longrun/lr-dryrun/starts.jsonl"
 check "1 reached snapshot $(snapshot) (update $(last_update))" [ "$(snapshot)" -ge 5 ]
 check "1 watchdog started with the run" systemctl --user is-active --quiet rl18xx-longrun-watchdog@lr-dryrun.service
-log "     processes in the unit: $(cgroup_procs lr-dryrun | wc -l) ($(systemd-cgls --user-unit rl18xx-longrun@lr-dryrun.service --no-pager 2>/dev/null | grep -c spawn_main) spawned)"
+log "     processes in the unit: $(for p in $(cgroup_procs lr-dryrun); do tr '\0' ' ' < /proc/$p/cmdline | cut -c1-60; echo; done | sed 's/^.*spawn_main.*$/spawned child/' | sort | uniq -c | sed 's/^ */ /' | tr '\n' ';')"
 
 # ----------------------------------------------------------------------------- 2, 3: kills
 kill_and_resume() {  # kill_and_resume <label> <pid to kill>
@@ -134,8 +135,10 @@ mapfile -t ids < <(ident $(cgroup_procs lr-dryrun))
 systemctl --user stop rl18xx-longrun@lr-dryrun.service
 check "6 stopped: unit inactive" [ "$(prop lr-dryrun ActiveState)" = inactive ]
 check "6 stopped: none of its ${#ids[@]} processes left" eval '! alive "${ids[@]}"'
-left=$(bash "$HERE/deploy.sh" in-use "$DEPLOY"; pgrep -f "$WORK" | grep -v $$)
-check "6 stopped: nothing uses the deployment or the work dir${left:+ ($left)}" [ -z "$left" ]
+# (The watchdog -- system python3 -- and this script also run from the deployment's path; they stay.)
+left=$(bash "$HERE/deploy.sh" in-use "$DEPLOY" | grep -v -e scripts/longrun/dryrun.sh -e scripts/longrun/watchdog.py)
+check "6 stopped: no process of the run uses the deployment${left:+ ($left)}" [ -z "$left" ]
+check "6 stopped: no python of the deployment's venv is left" bash -c "! pgrep -f '$DEPLOY/.venv/bin/python' > /dev/null"
 check "6 the stop was recorded" grep -q '"event": "stop"' "$WORK/longrun/lr-dryrun/exits.jsonl"
 
 # ----------------------------------------------------------------------------- 7: modified deployment
@@ -151,6 +154,26 @@ git -C "$DEPLOY" show "HEAD:${victim#$DEPLOY/}" > "$victim" && chmod a-w "$victi
 check "7 restored: deploy.sh verify passes again" bash "$HERE/deploy.sh" verify "$DEPLOY"
 systemctl --user reset-failed rl18xx-longrun@lr-dryrun.service
 
+# ----------------------------------------------------------------------------- 7b: a torn snapshot
+snap=$(snapshot)
+head -c 100 "$WORK/$RUN/state.json" > "$WORK/state.torn" && mv "$WORK/state.torn" "$WORK/$RUN/state.json"
+head -c 1000 "$WORK/$RUN/optimizer.pth" > "$WORK/opt.torn" && mv "$WORK/opt.torn" "$WORK/$RUN/optimizer.pth"
+systemctl --user start rl18xx-longrun@lr-dryrun.service
+wait_for 60 bash -c "[ \"\$(systemctl --user show rl18xx-longrun@lr-dryrun.service -p ActiveState --value)\" = failed ]"
+check "7b torn state.json + optimizer.pth: start refused with 77, not restarted" \
+    [ "$(prop lr-dryrun ExecMainStatus)" = 77 -a "$(prop lr-dryrun NRestarts)" = 0 ]
+repaired=$(CUDA_VISIBLE_DEVICES= taskset -c "$CPUS" "$DEPLOY/.venv/bin/python" -s "$HERE/snapshot_check.py" "$WORK/$RUN" --repair 2>&1)
+echo "$repaired" | sed 's/^/     repair: /'
+check "7b snapshot_check.py --repair rebuilt the snapshot (update $(echo "$repaired" | tail -1), last good $snap)" \
+    [ "$(echo "$repaired" | tail -1)" -le "$snap" ]
+systemctl --user reset-failed rl18xx-longrun@lr-dryrun.service
+mark=$(wc -l < "$WORK/$RUN/history.jsonl")
+systemctl --user start rl18xx-longrun@lr-dryrun.service
+wait_for 120 bash -c "[ \$(wc -l < $WORK/$RUN/history.jsonl) -gt $mark ]"
+rec=$(tail -1 "$WORK/longrun/lr-dryrun/starts.jsonl")
+check "7b the repaired run resumes ($rec)" grep -q '"mode": "resume"' <<< "$rec"
+systemctl --user stop rl18xx-longrun@lr-dryrun.service
+
 # ----------------------------------------------------------------------------- 8: non-finite loss
 install_instance lr-dryrun-nan model_checkpoints_search/dryrun_nan "$TRAIN --lr 1e30 --critic-lr 1e30 --steps-per-update 2"
 systemctl --user start rl18xx-longrun@lr-dryrun-nan.service
@@ -160,16 +183,19 @@ wait_for 30 alert_logged lr-dryrun-nan "nonfinite"
 check "8 the watchdog alerted: $(grep -m1 nonfinite "$WORK/longrun/lr-dryrun-nan/alerts.log" | cut -c1-150)" alert_logged lr-dryrun-nan "CRIT \[lr-dryrun-nan\] nonfinite"
 
 # ----------------------------------------------------------------------------- 9: OOM, crash loop
-rc_before=$(systemctl --user show claude-rc.service -p ActiveEnterTimestampMonotonic --value 2>/dev/null)
+session() { echo "$(systemctl show "user@$(id -u).service" -p MainPID --value) $(systemctl --user show claude-rc.service -p MainPID -p ActiveEnterTimestampMonotonic --value 2>/dev/null | tr '\n' ' ')"; }
+rc_before=$(session)
+t9=$(date +%s)
 install_instance lr-dryrun-oom model_checkpoints_search/dryrun_oom "$TRAIN" --memory-high infinity --memory-max 1500M --restart-sec 3
 systemctl --user start rl18xx-longrun@lr-dryrun-oom.service
-wait_for 300 bash -c "[ \"\$(systemctl --user show rl18xx-longrun@lr-dryrun-oom.service -p Result --value)\" = start-limit-hit ]"
-check "9 OOM: restarted until the start limit ($(prop lr-dryrun-oom NRestarts) restarts, result $(prop lr-dryrun-oom Result))" \
-    [ "$(prop lr-dryrun-oom Result)" = start-limit-hit ]
-check "9 OOM kills were confined to the run's cgroup" \
-    bash -c "journalctl --user -u rl18xx-longrun@lr-dryrun-oom.service --no-pager | grep -q 'oom-kill\|OOM'"
-check "9 the user's session and claude-rc are untouched" \
-    [ "$(systemctl --user show claude-rc.service -p ActiveEnterTimestampMonotonic --value 2>/dev/null)" = "$rc_before" ]
+wait_for 300 bash -c "[ \"\$(systemctl --user show rl18xx-longrun@lr-dryrun-oom.service -p ActiveState --value)\" = failed ]"
+check "9 OOM: restarted until the start limit stopped it ($(prop lr-dryrun-oom NRestarts) restarts, result $(prop lr-dryrun-oom Result))" \
+    [ "$(prop lr-dryrun-oom ActiveState)" = failed -a "$(prop lr-dryrun-oom Result)" = oom-kill -a "$(prop lr-dryrun-oom NRestarts)" -ge 4 ]
+kernel=$(journalctl -k --since "@$t9" --no-pager 2>/dev/null | grep -o 'constraint=CONSTRAINT_[A-Z]*,[^ ]*oom_memcg=[^ ]*' | sort | uniq -c)
+echo "$kernel" | sed 's/^/     kernel: /'
+check "9 the kernel's OOM kills were all inside the run's cgroup (CONSTRAINT_MEMCG), none global" \
+    bash -c "grep -q 'CONSTRAINT_MEMCG.*rl18xx-longrun@lr-dryrun-oom' <<< '$kernel' && ! grep -qv 'rl18xx-longrun@lr-dryrun-oom' <<< '$kernel'"
+check "9 the user's systemd and claude-rc are untouched (same PIDs and start times: $rc_before)" [ "$(session)" = "$rc_before" ]
 wait_for 30 alert_logged lr-dryrun-oom "crash_loop"
 check "9 the watchdog reported the crash loop" alert_logged lr-dryrun-oom "CRIT \[lr-dryrun-oom\] crash_loop"
 check "9 the watchdog reported the failed unit" alert_logged lr-dryrun-oom "CRIT \[lr-dryrun-oom\] failed"

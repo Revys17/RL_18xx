@@ -29,18 +29,22 @@ say() {
     echo "$line" >> "$LOG"
 }
 
-# One JSON line per event in $STATE_DIR/<file> (the watchdog reads them).
+# One JSON line per event in $STATE_DIR/<file> (the watchdog reads them). Plain bash, one write: it has to
+# land in the moment between main.py's exit and systemd stopping the unit.
 event() {  # event <file> key=value...
-    python3 - "$STATE_DIR/$1" "${@:2}" <<'PY'
-import json, sys
-from datetime import datetime
-record = {"time": datetime.now().astimezone().isoformat(timespec="seconds")}
-for item in sys.argv[2:]:
-    key, _, value = item.partition("=")
-    record[key] = int(value) if value.lstrip("-").isdigit() else value
-with open(sys.argv[1], "a") as f:
-    f.write(json.dumps(record) + "\n")
-PY
+    local file=$1 line kv key value
+    line="{\"time\": \"$(date -Iseconds)\""
+    shift
+    for kv in "$@"; do
+        key=${kv%%=*}; value=${kv#*=}
+        if [[ "$value" =~ ^-?[0-9]+$ ]]; then
+            line+=", \"$key\": $value"
+        else
+            value=${value//\\/\\\\}; value=${value//\"/\\\"}; value=$(tr -d '\000-\037' <<< "$value")
+            line+=", \"$key\": \"$value\""
+        fi
+    done
+    echo "$line}" >> "$STATE_DIR/$file"
 }
 
 snapshot_mtime_gap() {  # >0 while a snapshot write is in progress (optimizer.pth written, state.json not yet)
@@ -87,7 +91,7 @@ fi
 
 if [ -f "$RUN_DIR/state.json" ]; then
     if ! snapshot=$("$PYTHON" -s "$DEPLOY/scripts/longrun/snapshot_check.py" "$RUN_DIR" 2>&1); then
-        say "refusing to resume: $snapshot (docs/longrun_runbook.md, 'Recovering a snapshot')"
+        say "refusing to resume: $snapshot -- repair: $PYTHON -s $DEPLOY/scripts/longrun/snapshot_check.py $WORKDIR/$RUN_DIR --repair (docs/longrun_runbook.md, 'Recovering a snapshot')"
         event exits.jsonl event=refused rc=77 reason=snapshot_invalid detail="$snapshot"
         exit 77
     fi
@@ -128,6 +132,9 @@ event starts.jsonl mode=$mode snapshot_update="$snapshot" pid=$child commit="$co
     invocation="${INVOCATION_ID:-}"
 wait $child
 rc=$?
+# main.py is gone; if systemd is stopping the unit now (OOMPolicy=stop after an OOM kill), let this
+# script finish its record (milliseconds) instead of dying on the SIGTERM.
+trap '' TERM
 
 if [ $rc -eq 0 ]; then
     say "main.py exited cleanly (max updates reached or a STOP file)"

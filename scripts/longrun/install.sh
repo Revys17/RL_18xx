@@ -23,10 +23,10 @@ CONF=${XDG_CONFIG_HOME:-$HOME/.config}
 ENV_DIR=$CONF/rl18xx-longrun
 UNIT_DIR=$CONF/systemd/user
 
-quote() {  # one systemd EnvironmentFile value
-    case $1 in *[\"\\\$\`]*) die "values can't contain \", \\, \$ or backquotes: $1" ;; esac
-    printf '"%s"' "$1"
-}
+# One systemd EnvironmentFile value, single-quoted: no escapes, no variable expansion ($ALERT_MESSAGE in
+# ALERT_COMMAND stays for the shell that runs it). check_value runs before anything is written.
+check_value() { case $1 in *[\'\\]*|*$'\n'*) die "values can't contain ', \\ or newlines: $1" ;; esac; }
+quote() { printf "'%s'" "$1"; }
 
 if [ "${1:-}" = "--uninstall" ]; then
     instance=${2:?instance}
@@ -69,6 +69,7 @@ done
 [ -n "$start_args" ] || [ -f "$workdir/$run_dir/state.json" ] || [ -f "$run_dir/state.json" ] \
     || die "--start-args (--policy / --value) are needed for a run that has no snapshot yet"
 src=$deploy/scripts/longrun
+for value in "$deploy" "$workdir" "$run_dir" "$start_args" "$train_args" "${extra[@]}"; do check_value "$value"; done
 
 mkdir -p "$ENV_DIR" "$UNIT_DIR/rl18xx-longrun@$instance.service.d"
 [ -f "$ENV_DIR/$instance.env" ] && cp "$ENV_DIR/$instance.env" "$ENV_DIR/$instance.env.bak"

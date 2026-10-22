@@ -6,7 +6,7 @@ run with the system python3, so it keeps working whatever happens to the run's e
     watchdog.py [--instance NAME] --once    one round of checks with alerts (tests)
     watchdog.py [--instance NAME] status    print the run's state and every active alert, change nothing
 
-Alerts on: a crash or an automatic restart, a crash loop (CRASH_LOOP_RESTARTS failed exits within
+Alerts on: a crash or an automatic restart, a crash loop (CRASH_LOOP_RESTARTS automatic restarts within
 CRASH_LOOP_WINDOW_MIN, or systemd's start limit), a non-finite-loss stop, a refused start (deployment
 modified, snapshot unreadable), the unit failing for any other reason (an OOM kill among them), no new
 history.jsonl line for STALL_MINUTES while the run is up, free disk under DISK_MIN_GB, system MemAvailable
@@ -215,8 +215,9 @@ class Watchdog:
             self.state = {}
         self.state.setdefault("active", {})  # condition key -> {"since", "last_sent", "message"}
         self.state.setdefault("offsets", {})
-        self.state.setdefault("failed_exits", [])  # unix times of non-clean exits
+        self.state.setdefault("restart_times", [])  # unix times of systemd's automatic restarts
         self.state.setdefault("throttle_seen", 0)
+        self.started = time.time()
 
     # -- output
 
@@ -265,12 +266,17 @@ class Watchdog:
 
         # Launcher records: starts, exits (crash / non-finite / refused / stop).
         for name in ("starts.jsonl", "exits.jsonl"):
+            first = name not in self.state["offsets"]  # no saved state: skip what happened before we started
             records, offset = read_new_lines(s.state_dir / name, self.state["offsets"].get(name, 0))
             self.state["offsets"][name] = offset
             for r in records:
+                try:
+                    when = datetime.fromisoformat(r["time"]).timestamp()
+                except (KeyError, TypeError, ValueError):
+                    when = now
+                if first and when < self.started - 300:
+                    continue
                 events.append(self.describe_record(name, r))
-                if name == "exits.jsonl" and r.get("event") in ("exit", "refused") and r.get("rc", 0) != 0:
-                    self.state["failed_exits"].append(now)
         events = [e for e in events if e]
 
         # systemd's view: automatic restarts, failure, start limit.
@@ -281,21 +287,28 @@ class Watchdog:
             if previous is not None and unit["NRestarts"] > previous:
                 events.append((WARN, "restart", f"systemd restarted the run automatically (restart "
                                f"#{unit['NRestarts']} since the last manual start)"))
+                # The crash-loop count: systemd's own restarts (an OOM stop can cut the launcher's record).
+                self.state["restart_times"] += [now] * (unit["NRestarts"] - previous)
             self.state["nrestarts"] = unit["NRestarts"]
             active = unit.get("ActiveState")
             if active == "failed":
-                result, status = unit.get("Result"), unit.get("ExecMainStatus")
-                why = {"start-limit-hit": "crash loop: systemd's start limit was hit and it gave up",
-                       "oom-kill": "the kernel OOM-killed a process of the run (MemoryMax)"}.get(
-                    result, EXIT_MEANINGS.get(status, f"main process status {status}"))
-                conditions["failed"] = (CRIT, f"the run is down (result {result}, status {status}): {why}")
+                result, status, code = unit.get("Result"), unit.get("ExecMainStatus"), unit.get("ExecMainCode")
+                if code == "1" and status in EXIT_MEANINGS:  # (CLD_EXITED) a status systemd doesn't restart
+                    why = EXIT_MEANINGS[status]
+                else:
+                    # Under Restart=on-failure any other failure is restarted, so a unit left failed is
+                    # one systemd gave up on: its start limit. Result keeps the last failure's kind.
+                    last = {"oom-kill": "an OOM kill (MemoryMax)", "exit-code": f"exit status {status}",
+                            "signal": f"signal {status}", "start-limit-hit": "a refused start"}.get(result, result)
+                    why = f"crash loop: systemd's start limit stopped the restarts (last failure: {last})"
+                conditions["failed"] = (CRIT, f"the run is down (result {result}): {why}")
             elif active == "inactive" and unit.get("LoadState") == "loaded":
                 conditions["inactive"] = (INFO, "the run is not running (stopped, or never started)")
 
-        recent = [t for t in self.state["failed_exits"] if now - t < s.crash_loop_window]
-        self.state["failed_exits"] = recent
+        recent = [t for t in self.state["restart_times"] if now - t < s.crash_loop_window]
+        self.state["restart_times"] = recent
         if len(recent) >= s.crash_loop_restarts:
-            conditions["crash_loop"] = (CRIT, f"{len(recent)} failed exits in the last "
+            conditions["crash_loop"] = (CRIT, f"{len(recent)} automatic restarts in the last "
                                               f"{s.crash_loop_window / 60:.0f} min")
 
         # Progress: a new history.jsonl line every STALL_MINUTES while the run is up.
