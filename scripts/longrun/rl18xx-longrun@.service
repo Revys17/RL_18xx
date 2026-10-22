@@ -1,0 +1,41 @@
+# A long training run under the user's systemd (docs/longrun_runbook.md). Installed by install.sh, which writes
+# the instance's settings to ~/.config/rl18xx-longrun/%i.env and its limits (memory, CPUs, restart delay) to
+# the drop-in rl18xx-longrun@%i.service.d/10-limits.conf; the values below are the defaults those override.
+[Unit]
+Description=rl18xx long run %i (main.py search-learning)
+Wants=rl18xx-longrun-watchdog@%i.service
+# Five failures within two hours (a crash loop) stop the restarts: `systemctl --user reset-failed` clears it.
+StartLimitIntervalSec=2h
+StartLimitBurst=5
+
+[Service]
+Type=exec
+EnvironmentFile=%h/.config/rl18xx-longrun/%i.env
+Environment=LONGRUN_INSTANCE=%i
+Environment=PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+Environment=OMP_NUM_THREADS=2
+# launch.sh: --resume from the run's snapshot once it has one; exit 75 (non-finite loss), 76 (deployment
+# modified) and 77 (snapshot unreadable) are not restarted.
+ExecStart=/bin/bash ${LAUNCHER} start
+ExecStop=/bin/bash ${LAUNCHER} stop
+Restart=on-failure
+RestartSec=60
+RestartPreventExitStatus=75 76 77
+# Stopping the unit, or its main process dying, kills every process in its cgroup: the inference servers and
+# the pool workers too (and with them their GPU memory), never orphans.
+KillMode=control-group
+TimeoutStopSec=150
+SendSIGKILL=yes
+# Throttled at MemoryHigh, OOM-killed at MemoryMax inside its own cgroup (then restarted), so the run can't
+# push the user's session or claude-rc into the global OOM killer; no swap, and first in line for that killer.
+MemoryAccounting=yes
+MemoryHigh=160G
+MemoryMax=180G
+MemorySwapMax=0
+OOMPolicy=stop
+OOMScoreAdjust=500
+LimitNOFILE=1048576
+
+[Install]
+# Only for `systemctl --user enable` (start at boot; the user manager lingers): install.sh doesn't enable it.
+WantedBy=default.target
