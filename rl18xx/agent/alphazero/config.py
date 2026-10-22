@@ -563,6 +563,12 @@ class SelfPlayHyperparams:
     # the scale the search compares it with. 0 (or no points): the share of winners.
     terminal_score_weight: float = 0.0
     terminal_score_points: tuple = ()
+    # Rust MCTS players: a played move's forced chain stops at a single legal move with an open
+    # price (``RustMCTSPlayer.advance_root``'s ``stop_at_open_price``), which is then priced from its
+    # own position's price head -- as the search-learning generator prices it -- not from the price
+    # row of the position the chain started at (what tree nodes use). The eval harness turns it on;
+    # off, the played path collapses it as before.
+    stop_chain_at_open_price: bool = False
     # fp16 autocast for in-process inference. Off: trained checkpoints reach
     # activations that overflow fp16 (NaN priors on ~15% of positions), and
     # fp32 costs only ~7% per batch here.

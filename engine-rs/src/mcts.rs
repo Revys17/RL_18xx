@@ -867,42 +867,17 @@ impl RustMCTSPlayer {
             if new_game.is_finished_pub() || self.root_log.len() + new_game.action_log.len() >= self.max_game_length {
                 break;
             }
-            // Enumerate factored choices, dedupe to flat indices.
-            let choices = new_game.get_factored_choices_impl();
-            let mut flat_indices: Vec<u32> = Vec::new();
-            let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
-            let mut forced_price_ranges: HashMap<u32, (i64, i64)> = HashMap::new();
-            let mut forced_action_types: HashMap<u32, String> = HashMap::new();
-            for la in &choices {
-                if let Some(idx) = crate::action_index::legal_action_to_index(la) {
-                    if seen.insert(idx) {
-                        flat_indices.push(idx);
-                    }
-                    if let Some(pr) = la.price_range {
-                        let existing = forced_price_ranges.entry(idx).or_insert(pr);
-                        *existing = (existing.0.min(pr.0), existing.1.max(pr.1));
-                    }
-                    forced_action_types
-                        .entry(idx)
-                        .or_insert_with(|| la.action_type.clone());
-                }
-            }
-            if flat_indices.len() != 1 {
+            let Some((forced_idx, forced_range, forced_type)) = single_legal_move(&mut new_game) else {
                 break;
-            }
-            let forced_idx = flat_indices[0];
+            };
             // Python's forced loop draws a price from the price head for
             // non-degenerate ranges (reading this node's stashed
             // price_components); degenerate ranges apply the engine minimum.
-            let forced_price = match forced_price_ranges.get(&forced_idx) {
-                Some(&(lo, hi)) if lo != hi => {
-                    let at = forced_action_types
-                        .get(&forced_idx)
-                        .cloned()
-                        .unwrap_or_default();
-                    Some(self.sample_price_from_head(arena_idx, forced_idx, &at, (lo, hi)))
+            let forced_price = match forced_range {
+                Some((lo, hi)) if lo != hi => {
+                    Some(self.sample_price_from_head(arena_idx, forced_idx, &forced_type, (lo, hi)))
                 }
-                Some(&(lo, _)) => Some(lo),
+                Some((lo, _)) => Some(lo),
                 None => None,
             };
             apply_action(&mut new_game, forced_idx, forced_price)?;
@@ -1145,7 +1120,15 @@ impl RustMCTSPlayer {
     /// For PW slots, the new root is the most-visited price grandchild (so
     /// the next move starts under the committed price). Otherwise the
     /// regular categorical child is used.
-    pub fn advance_root(&mut self, action_index: u32) -> PyResult<()> {
+    ///
+    /// ``stop_at_open_price``: where the child's forced chain reaches a single
+    /// legal move with an open price, the new root is a fresh node at that
+    /// move instead (the subtree is dropped), so the move is priced from its
+    /// own position's price head (``start_search``'s single-legal branch, as
+    /// the search-learning generator prices it) rather than from the price row
+    /// of the position the chain started at, as tree nodes do.
+    #[pyo3(signature = (action_index, stop_at_open_price=false))]
+    pub fn advance_root(&mut self, action_index: u32, stop_at_open_price: bool) -> PyResult<()> {
         let is_pw = Self::is_pw_slot(&self.arena[self.root_idx], action_index);
         let child_idx = if is_pw {
             let price_opt = self.most_visited_price_for_slot(action_index);
@@ -1173,6 +1156,16 @@ impl RustMCTSPlayer {
         } else {
             self.maybe_add_child(self.root_idx, action_index, None)?
         };
+        if stop_at_open_price {
+            if let Some(game) = self.game_at_open_price_in_chain(child_idx)? {
+                let mut node = self.build_node(game, Some(action_index), Some(self.root_idx))?;
+                node.depth = self.arena[child_idx].depth;
+                let fresh = self.arena.len();
+                self.arena.push(node);
+                self.set_root(fresh, 0.0, [0.0; VALUE_SIZE]);
+                return Ok(());
+            }
+        }
         self.rebase_root(child_idx);
         Ok(())
     }
@@ -1187,7 +1180,7 @@ impl RustMCTSPlayer {
     pub fn advance_root_to(&mut self, action_index: u32, price: Option<i64>) -> PyResult<()> {
         let is_pw = Self::is_pw_slot(&self.arena[self.root_idx], action_index);
         if !is_pw || price.is_none() {
-            return self.advance_root(action_index);
+            return self.advance_root(action_index, false);
         }
         let child_idx = self.maybe_add_child(self.root_idx, action_index, price)?;
         self.rebase_root(child_idx);
@@ -1315,6 +1308,33 @@ impl RustMCTSPlayer {
 }
 
 impl RustMCTSPlayer {
+    /// The game at the first single legal move with an open price in
+    /// ``child_idx``'s forced chain: the root's game with the child's move (at
+    /// its price) and the forced moves before that one; None if the chain has
+    /// none (``advance_root``'s ``stop_at_open_price``).
+    fn game_at_open_price_in_chain(&self, child_idx: usize) -> PyResult<Option<BaseGame>> {
+        let child = &self.arena[child_idx];
+        if child.forced_action_chain.is_empty() {
+            return Ok(None);
+        }
+        let action = child.fmove.ok_or_else(|| PyRuntimeError::new_err("a root child without its move"))?;
+        let mut game = self.arena[self.root_idx].game.clone_for_search();
+        apply_action(&mut game, action, child.sampled_price)?;
+        for &recorded in &child.forced_action_chain {
+            let (forced_idx, range, _) = single_legal_move(&mut game)
+                .ok_or_else(|| PyRuntimeError::new_err("forced chain replay: no single legal move"))?;
+            if forced_idx != recorded {
+                return Err(PyRuntimeError::new_err("forced chain replay diverged"));
+            }
+            match range {
+                Some((lo, hi)) if lo != hi => return Ok(Some(game)),
+                Some((lo, _)) => apply_action(&mut game, forced_idx, Some(lo))?,
+                None => apply_action(&mut game, forced_idx, None)?,
+            }
+        }
+        Ok(None)
+    }
+
     /// Make ``child_idx`` (a child or price grandchild of the root) the root:
     /// the bookkeeping of ``advance_root``.
     fn rebase_root(&mut self, child_idx: usize) {
@@ -1347,6 +1367,12 @@ impl RustMCTSPlayer {
                 self.arena[self.root_idx].child_w[pidx],
             )
         };
+        self.set_root(child_idx, new_n, new_w);
+    }
+
+    /// Make ``child_idx`` the root with ``new_n`` visits and ``new_w`` value
+    /// sums (``rebase_root``'s bookkeeping; a fresh node gets 0 / 0).
+    fn set_root(&mut self, child_idx: usize, new_n: f32, new_w: [f32; VALUE_SIZE]) {
         self.root_idx = child_idx;
         self.root_n = new_n;
         self.root_w = new_w;
@@ -1977,6 +2003,34 @@ impl RustMCTSPlayer {
 // ----------------------------------------------------------------------------
 // Action application helper
 // ----------------------------------------------------------------------------
+
+/// ``(index, price range, action type)`` of `game`'s one legal move (the
+/// factored choices deduplicated to flat indices, a price range merged over
+/// the choices of that index), or None when there isn't exactly one.
+fn single_legal_move(game: &mut BaseGame) -> Option<(u32, Option<(i64, i64)>, String)> {
+    let choices = game.get_factored_choices_impl();
+    let mut flat_indices: Vec<u32> = Vec::new();
+    let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut price_ranges: HashMap<u32, (i64, i64)> = HashMap::new();
+    let mut action_types: HashMap<u32, String> = HashMap::new();
+    for la in &choices {
+        if let Some(idx) = crate::action_index::legal_action_to_index(la) {
+            if seen.insert(idx) {
+                flat_indices.push(idx);
+            }
+            if let Some(pr) = la.price_range {
+                let existing = price_ranges.entry(idx).or_insert(pr);
+                *existing = (existing.0.min(pr.0), existing.1.max(pr.1));
+            }
+            action_types.entry(idx).or_insert_with(|| la.action_type.clone());
+        }
+    }
+    if flat_indices.len() != 1 {
+        return None;
+    }
+    let idx = flat_indices[0];
+    Some((idx, price_ranges.get(&idx).copied(), action_types.remove(&idx).unwrap_or_default()))
+}
 
 /// Decode `flat_idx` to a concrete `Action` and apply it natively. Pure Rust —
 /// no Python round-trip — so it needs no GIL token.

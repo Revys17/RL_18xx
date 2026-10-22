@@ -355,6 +355,8 @@ def _setup_game(game_idx: int, seat_names: tuple, settings: dict) -> tuple:
             max_game_length=settings["max_length"],
             player_count_distribution={NUM_PLAYERS: 1.0},
             auction_unlock=True,
+            # A forced move with an open price is priced at its own position (as the generator does).
+            stop_chain_at_open_price=True,
         )
         players[name] = RustMCTSPlayer(config)
     return game, start_label, players
