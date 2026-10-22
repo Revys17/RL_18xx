@@ -490,9 +490,14 @@ impl BaseGame {
         }
         off += np;
 
-        // S30: Player cash committed to standing auction bids
+        // S30: Player cash committed to standing auction bids, summed in the
+        // auction's company order (as the adapter's ``bids`` lists them), not
+        // the HashMap's: that differs between game instances, and a player's
+        // three bids then summed to values a bit apart for one position.
         if let crate::rounds::Round::Auction(ref a) = &self.round {
-            for bids in a.bids.values() {
+            let mut companies: Vec<usize> = a.bids.keys().copied().collect();
+            companies.sort_by_key(|ci| (a.remaining_companies.iter().position(|r| r == ci).unwrap_or(usize::MAX), *ci));
+            for bids in companies.iter().map(|ci| &a.bids[ci]) {
                 for bid in bids {
                     if let Some(i) = pidx(bid.player_id) {
                         enc[off + i] += bid.price as f32 / sc;
