@@ -146,7 +146,7 @@ def cmd_policy_gradient(args):
     import multiprocessing
 
     multiprocessing.set_start_method("spawn", force=True)
-    from rl18xx.agent.alphazero.policy_gradient import PGConfig, run
+    from rl18xx.agent.alphazero.policy_gradient import RESUME_SETTINGS, PGConfig, run
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = PGConfig(
@@ -202,18 +202,19 @@ def cmd_policy_gradient(args):
         start_positions=args.start_positions,
         random_start_fraction=args.random_start_fraction,
         save_game_every=args.save_game_every,
-        midgame_positions=args.midgame_positions if args.midgame_fraction > 0 else None,
+        midgame_positions=args.midgame_positions if args.midgame_fraction > 0 or args.resume else None,
         midgame_fraction=args.midgame_fraction,
         auction_fraction=args.auction_fraction,
     )
-    print(run(config, resume=args.resume))
+    explicit = _resume_explicit(args, RESUME_SETTINGS)
+    print(run(config, resume=args.resume, explicit=explicit))
 
 
 def cmd_search_learning(args):
     import multiprocessing
 
     multiprocessing.set_start_method("spawn", force=True)
-    from rl18xx.agent.alphazero.search_learning import SearchLearningConfig, run
+    from rl18xx.agent.alphazero.search_learning import RESUME_SETTINGS, SearchLearningConfig, run
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     resuming = args.resume and not (args.policy or args.value)  # a resumed run keeps its checkpoints
@@ -264,7 +265,7 @@ def cmd_search_learning(args):
         max_decisions=args.max_decisions,
         start_positions=args.start_positions,
         random_start_fraction=args.random_start_fraction,
-        midgame_positions=args.midgame_positions if args.midgame_fraction > 0 else None,
+        midgame_positions=args.midgame_positions if args.midgame_fraction > 0 or args.resume else None,
         midgame_fraction=args.midgame_fraction,
         auction_fraction=args.auction_fraction,
         inference_batch_size=args.inference_batch_size,
@@ -303,8 +304,8 @@ def cmd_search_learning(args):
         freeze_policy=args.freeze_policy,
         policy_follow=args.policy_follow,
     )
-    lrs = {k: v for k, v in (("lr", args.lr), ("critic_lr", args.critic_lr)) if v is not None}
-    print(run(config, resume=args.resume, resume_lrs=lrs))
+    explicit = _resume_explicit(args, RESUME_SETTINGS)
+    print(run(config, resume=args.resume, explicit=explicit))
 
 
 def cmd_convert(args):
@@ -416,6 +417,34 @@ def cmd_advisor(args):
     from rl18xx.agent.advisor.app import run
 
     run(args)
+
+
+def explicit_options(argv=None) -> set:
+    """The dests of the options given on the command line (``argv``, default ``sys.argv[1:]``), whatever
+    their values -- a resume changes only these (``policy_gradient.resume_overrides``). Parsed again with
+    every option's default suppressed, so abbreviations and ``--opt=value`` count as argparse reads them."""
+    quiet = build_parser()
+    parsers = [quiet]
+    for action in quiet._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            parsers.extend(action.choices.values())
+    for parser in parsers:
+        for action in parser._actions:
+            if action.option_strings:
+                action.default = argparse.SUPPRESS
+    return set(vars(quiet.parse_args(argv))) - {"command"}
+
+
+def _resume_explicit(args, settings) -> set | None:
+    """A resume's explicitly passed options (None outside the command line), warning about the ones a
+    resume ignores (the run keeps its own value)."""
+    explicit = getattr(args, "explicit", None)
+    if args.resume and explicit is not None:
+        ignored = sorted(explicit - set(settings) - {"resume"})
+        if ignored:
+            flags = ", ".join("--" + k.replace("_", "-") for k in ignored)
+            logging.getLogger(__name__).warning(f"--resume keeps the run's own settings; ignoring {flags}")
+    return explicit
 
 
 def build_parser():
@@ -890,6 +919,7 @@ def build_parser():
 if __name__ == "__main__":
     parser = build_parser()
     args = parser.parse_args()
+    args.explicit = explicit_options()
 
     if args.command is None:
         parser.print_help()

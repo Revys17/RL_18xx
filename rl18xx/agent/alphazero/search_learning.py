@@ -1631,6 +1631,29 @@ def server_spec(cfg: SearchLearningConfig, learner_path, critic_path=None) -> st
     return f"{learner_path}+{critic_path}{suffix}"
 
 
+# What a resume may change (each only when passed; the rest stay the run's): its length, its generation
+# layout, the microbatch (the same step, other memory), the inference speed-ups (the same outputs), the
+# exploration, the followed policy run and the learning rates.
+RESUME_SETTINGS = (
+    "full_move_temperature",
+    "explore_decisions",
+    "max_updates",
+    "microbatch",
+    "workers",
+    "games_per_worker",
+    "task_seconds",
+    "midgame_positions",
+    "midgame_fraction",
+    "auction_fraction",
+    "dedupe_maps",
+    "server_pipeline",
+    "server_replicas",
+    "policy_follow",
+    "lr",
+    "critic_lr",
+)
+
+
 def learner_param_groups(learner, cfg: SearchLearningConfig) -> list:
     """The learner's optimizer groups: with ``cfg.shared`` its value heads (and
     auxiliary heads, and a value-only entity encoder: ``value_entity_encoder``) at
@@ -1661,9 +1684,9 @@ def learner_param_groups(learner, cfg: SearchLearningConfig) -> list:
     ]
 
 
-def run(cfg: SearchLearningConfig, resume: Optional[str] = None, resume_lrs: Optional[dict] = None) -> Path:
-    """Run search learning; returns the run directory. ``resume_lrs`` ({"lr", "critic_lr"}: the
-    ones passed explicitly) changes a resumed run's learning rates from now on."""
+def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optional[set] = None) -> Path:
+    """Run search learning; returns the run directory. ``explicit``: on a resume, the options passed on
+    the command line -- only those of ``RESUME_SETTINGS`` change (``policy_gradient.resume_overrides``)."""
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
 
@@ -1671,38 +1694,14 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, resume_lrs: Opt
     from torch.utils.tensorboard import SummaryWriter
 
     from rl18xx.agent.alphazero.inference_server import start_inference_server, wait_checking_servers
-    from rl18xx.agent.alphazero.policy_gradient import _load, _save, load_server_model, use_tf32
+    from rl18xx.agent.alphazero.policy_gradient import _load, _save, load_server_model, resume_overrides, use_tf32
 
     use_tf32()
     totals = Counter()
     if resume:
         run_dir = Path(resume)
         state = json.loads((run_dir / "state.json").read_text())
-        # The run keeps its settings; its length, its generation layout, the
-        # microbatch (the same step, other memory), the inference speed-ups
-        # (the same outputs) and the exploration (full_move_temperature /
-        # explore_decisions: a resume without them turns it off) can change.
-        overrides = {
-            k: getattr(cfg, k)
-            for k in (
-                "full_move_temperature",
-                "explore_decisions",
-                "max_updates",
-                "microbatch",
-                "workers",
-                "games_per_worker",
-                "task_seconds",
-                "midgame_positions",
-                "midgame_fraction",
-                "auction_fraction",
-                "dedupe_maps",
-                "server_pipeline",
-                "server_replicas",
-            )
-        }
-        if cfg.policy_follow:
-            overrides["policy_follow"] = cfg.policy_follow
-        overrides.update(resume_lrs or {})
+        overrides = resume_overrides(cfg, state["config"], RESUME_SETTINGS, explicit)
         cfg = SearchLearningConfig(**{**state["config"], **overrides})
         update = int(state["snapshot_update"])
         kl_coef = float(state["kl_coef"])

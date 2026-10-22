@@ -677,7 +677,8 @@ def test_a_tiny_cpu_az2_run_shared_gumbel_nstep_surprise_aux_speedups_resumes(tm
     # A resume can change the learning rates (the optimizer's saved ones would otherwise win).
     later = copy.copy(cfg)
     later.max_updates = 4
-    assert sl.run(later, resume=str(run_dir), resume_lrs={"critic_lr": 1e-3}) == run_dir
+    later.critic_lr = 1e-3
+    assert sl.run(later, resume=str(run_dir), explicit={"max_updates", "critic_lr"}) == run_dir
     assert json.loads((run_dir / "config.json").read_text())["critic_lr"] == 1e-3
     groups = {g["name"]: g["lr"] for g in torch.load(run_dir / "optimizer.pth")["learner"]["param_groups"]}
     assert groups == {"trunk_policy": 1e-4, "value_heads": 1e-3}

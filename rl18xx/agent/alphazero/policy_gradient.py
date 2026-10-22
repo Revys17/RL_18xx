@@ -964,8 +964,51 @@ class _Scores:
         return out
 
 
-def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
-    """Run the policy-gradient stage; returns the run directory."""
+# What a resume may change (each only when passed; the rest stay the run's): its length, game saving,
+# mid-game and auction starts, the microbatch (gradient accumulation: same step, different memory/speed),
+# the games each worker task plays at once (bigger inference batches; ~2x games/hour at 96 vs 32 in a
+# league run, whose opponent servers otherwise see ~35-state batches), (league mode) its population
+# file -- a new file's members join -- and the value run it follows.
+RESUME_SETTINGS = (
+    "max_updates",
+    "microbatch",
+    "games_per_task",
+    "save_game_every",
+    "midgame_positions",
+    "midgame_fraction",
+    "auction_fraction",
+    "population",
+    "value_follow",
+)
+# Settings a caller without a command line (``explicit=None``) changes only when set (truthy).
+_RESUME_IF_SET = ("population", "value_follow", "policy_follow")
+
+
+def resume_overrides(cfg, saved: dict, settings, explicit=None) -> dict:
+    """The settings of ``settings`` a resume takes from ``cfg`` instead of the run's own (``saved``).
+
+    ``explicit``: the options passed on the command line (``main.explicit_options``) -- only those change,
+    so a flag left out keeps the run's value instead of resetting it to the parser's default (a resume
+    without ``--midgame-fraction`` used to turn mid-game starts off). ``None`` (a caller without a command
+    line): every setting but the learning rates, the followed runs and the population only when set.
+    ``--midgame-fraction`` alone keeps the run's position file (or takes ``cfg``'s if the run had none;
+    none at fraction 0)."""
+    if explicit is None:
+        explicit = {
+            k for k in settings if k not in ("lr", "critic_lr") and (k not in _RESUME_IF_SET or getattr(cfg, k))
+        }
+    overrides = {k: getattr(cfg, k) for k in settings if k in explicit}
+    if "midgame_fraction" in overrides and "midgame_positions" in settings and "midgame_positions" not in explicit:
+        if cfg.midgame_fraction > 0:
+            overrides["midgame_positions"] = saved.get("midgame_positions") or cfg.midgame_positions
+        else:
+            overrides["midgame_positions"] = None
+    return overrides
+
+
+def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = None) -> Path:
+    """Run the policy-gradient stage; returns the run directory. ``explicit``: on a resume, the options
+    passed on the command line (see :func:`resume_overrides`)."""
     from torch.utils.tensorboard import SummaryWriter
 
     from rl18xx.agent.alphazero.inference_server import start_inference_server, wait_checking_servers
@@ -974,24 +1017,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None) -> Path:
     if resume:
         run_dir = Path(resume)
         state = json.loads((run_dir / "state.json").read_text())
-        # The run keeps its own settings; only its length, game saving, mid-game starts,
-        # the microbatch (gradient accumulation: same step, different memory/speed), the
-        # games each worker task plays at once (bigger inference batches; ~2x games/hour at
-        # 96 vs 32 in a league run, whose opponent servers otherwise see ~35-state batches)
-        # and (league mode) its population file can change -- a new file's members join.
-        overrides = {
-            "max_updates": cfg.max_updates,
-            "microbatch": cfg.microbatch,
-            "games_per_task": cfg.games_per_task,
-            "save_game_every": cfg.save_game_every,
-            "midgame_positions": cfg.midgame_positions,
-            "midgame_fraction": cfg.midgame_fraction,
-            "auction_fraction": cfg.auction_fraction,
-        }
-        if cfg.population:
-            overrides["population"] = cfg.population
-        if cfg.value_follow:
-            overrides["value_follow"] = cfg.value_follow
+        overrides = resume_overrides(cfg, state["config"], RESUME_SETTINGS, explicit)
         cfg = PGConfig(**{**state["config"], **overrides})
         update = int(state["snapshot_update"])
         pool = list(state["pool"])
