@@ -1301,3 +1301,89 @@ and no `--value-follow`.
 baseline (gen4's run continued as a new run), judged as `<PG checkpoint>+<az7b checkpoint>` composites. It
 asks whether co-training the value side on the moving trunk beats a fixed, separately trained value network
 at equal PG updates, for the cost of a second PG run.
+
+## Saved games: `--save-data` (2026-10-22)
+
+The 2026-10-21 diagnosis put search learning at a value-bound fixed point. Training the value harder means
+many passes over a large pool of games, reanalysis, and restarting after a recipe change from saved data
+instead of from scratch. None of it was possible: rows lived only in the in-memory `ReplayWindow`, and azl's
+~111k games are gone. `main.py search-learning --save-data <dir>` (off by default; `search_data.py`) now keeps
+every finished game.
+
+**What is kept.** Per game (`pack_game`, in the worker): the engine's action log (`raw_actions`, the actions of
+a `game_records.make_game_record`); the start (label, kind, its number of actions, `auction_unlock`); the
+outcome (win share, net-worth fractions, net worths, the score target, the aux targets). Per search, full and
+fast, in order: decision index, action-log position, flags (fast, has a row, explored = the move was drawn
+from the visits), network version, and the root value per seat in absolute order (the n-step / lambda
+inputs). Per row: the mover's seat, the legal indices, the policy target over them (dense float32: cq and
+Gumbel targets are softmaxes), the price target (slot, range, cells), the critic flag and the loss weight.
+
+**What is not kept.** Encodings: a `SearchRow` pickles to ~21 KB, ~20 GB/hour at azl's rate. Positions are
+re-encoded by replaying the log (`encode_canonical_py` is deterministic). Also not kept: the tree's per-move
+visits and Q (reanalysis searches again from the replayed position), the target before
+`target_temperature` / confidence shrinking (the stored target is the trained one), and the policy-played
+decisions' priors.
+
+**Reading.**
+- `search_data.iter_games(dir)` yields `SavedGame`s (complete shards only).
+- `rebuild_rows(game, value_lambda=..., value_nstep=..., value_bootstrap_weight=..., reward=...)` returns
+  `SearchRow`s. Value targets default to the generating run's settings (each shard carries its config).
+  With `encode=False` there is no replay; with `check` (the default), each replayed position must have the
+  row's mover and legal moves.
+- `replay(game, positions)` steps one engine through any positions, fast searches' included (for reanalysis:
+  clone `rs` before searching it).
+- `SavedGame.game_record()` gives the game as a `make_game_record`. `python -m rl18xx.agent.alphazero.search_data
+  stats <dir>` prints counts and bytes per game; `... export <dir> <collection>` writes games for the
+  dashboard's viewer.
+
+**On disk.** Shards of `--save-data-shard-games` (256) games, `<writer start>-<pid>-<seq>.sld`. Each is one xz
+stream (preset 6 extreme): a JSON header (the run's config, the code's git commit, each game's metadata, the
+column layout), then the columns concatenated. Multi-byte columns are byte-shuffled, and each search's root
+value is XOR-ed with the previous search's (a game's values move slowly). A shard is compressed in a
+background thread (xz releases the GIL: the main thread kept 95% of its speed), written to a temporary file,
+synced and renamed, and never written again. Until then its games are appended to the
+shard's journal (length + CRC + pickle per game, `flock`ed by its writer). A writer starting in the
+directory turns unlocked journals into shards and drops a torn last record. So a crash loses at most the game
+being appended, and a reader never sees a partial shard. A resume keeps saving into the run's directory
+unless `--save-data` names another.
+
+**Bit for bit.** `tests/agent/alphazero/test_search_data.py` rebuilds every row of HashNet generator games
+(PUCT visits with fast rows, lambda returns, exploration and auction starts with price rows; Gumbel with
+n-step targets and the win reward) and of a tiny CPU `sl.run` (rows captured as they enter the window, then
+a resume). Each matches the in-memory row in every field, bit for bit. Other value settings match targets
+computed from the generator's own search values. One engine fix was needed. The encoder's committed-cash
+feature (S30) summed a player's standing bids in `HashMap` order, which differs between game instances: with
+three standing bids (45 + 75 + 120 of 600), the same position encoded 1 ulp apart in a fresh replay. It now
+sums in the auction's company order, as the adapter's `bids` lists them
+(`test_native_encode.py::test_standing_bids_encode_the_same_in_every_game_instance`; the engine before the
+fix gives 2 distinct encodings in 20 instances).
+
+**Measured** (`scripts/bench_search_data.py`, CPU only):
+
+- **Size.** azl's config and its learner u3570 on the CPU: one in-process generator, 16 games, 1 h, 29 games
+  finished. Starts: 15 human, 6 mid-game, 6 auction, 2 random. Per game: 682 decisions, 859 actions, 682
+  searches, 171 rows, 14.7 legal moves per row. **19.9 KB per game**, of which the action log is 1.8 KB, the
+  searches 7.8 KB (mostly root values) and the rows 10.2 KB (the policy targets ~8.8 KB). That is 131 KB
+  uncompressed, against 3.5 MB per game as pickled `SearchRow`s. Games that finish within the hour run short
+  (682 decisions against azl's 727), so an average azl game is ~21 KB. At azl's 2,200 games/h, 4 months is
+  ~6.3M games, ~130 GB (976 GB are free).
+- **What would make it smaller, and why it isn't done.** What's left is mostly float32 mantissas: the dense
+  policy targets (~3.5 bytes a value) and the 4 root values per search. Measured on the same games: legal
+  indices as differences compressed worse than absolute (1.02 vs 0.84 KB, since legal sets recur);
+  XOR-coding the root values saved 0.5 KB; xz extreme saved 0.5 KB; delta-coding the integer columns would
+  save 0.1 KB. Storing fast searches' root values as float16 would save an estimated ~3 KB more, but the rows
+  would no longer rebuild bit for bit.
+- **Generation.** Packing a game in the worker (`raw_actions`, its JSON, the columns) takes 44 ms. At azl's
+  rate a worker spends ~65 s per game (40 workers, 2,200 games/h), so that is 0.07%. Per search, one tuple is
+  appended. A/B (`bench_search_data.py ab`): HashNet generators seeded alike (nearly the same games), azl's
+  settings at a tenth of the readouts, saving off and on alternated over 4 rounds of 120 s. Off: 109.6
+  decisions/s; on: 114.6 (rounds ranged 101-127). **No measurable slowdown.**
+- **Trainer.** Adding a game (pickle + journal append) takes 0.8 ms. A 256-game shard compresses in the
+  writer's thread in ~9 s (34 ms a game); the training loop isn't blocked.
+- **Reading.** Rebuilding a game's rows takes 87 ms: replaying ~860 actions, then encoding and checking 171
+  rows. That is ~41k games/h per core; decompression is 0.4 ms a game.
+
+**Merging with `claude/search-path-fixes`.** That branch tags rows with the version the server serves
+(`g.search_version`). The per-search record here takes `int(s.get("version", 0))` as the rows on master do:
+after the merge it should take `g.search_version`, in `_answer`'s `g.searches.append(...)`. Its
+`RESUME_SETTINGS` needs no entry: `run()` handles `save_data` apart from the overrides.

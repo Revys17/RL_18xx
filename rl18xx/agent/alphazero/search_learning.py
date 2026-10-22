@@ -94,7 +94,9 @@ A run directory as ``policy_gradient``'s: ``<out_dir>/<run>/{learner,critic}/
 ``state.json`` + ``optimizer.pth`` at snapshots (``--resume``), one JSON line
 per update in ``history.jsonl``, TensorBoard ``SL/*`` in
 ``runs/alphazero_runs/<run>``; touch ``STOP`` to end after the current update.
-The replay window is not saved: a resumed run refills it first.
+The replay window is not saved: a resumed run refills it first. ``save_data``
+keeps every finished game instead (``search_data``: action log, outcome, each
+search's targets and root value; rows rebuilt by replaying the log).
 """
 
 from __future__ import annotations
@@ -311,6 +313,12 @@ class SearchLearningConfig:
     # before each update the learner takes the policy path of that run's latest checkpoint
     # (``shared_split.Follower``), so the games are played by the PG run's current policy.
     policy_follow: Optional[str] = None
+    # Keep every finished game on disk (``search_data``; None: off): its action log, its outcome
+    # and each search's target, price target and root value, in compressed shards of
+    # ``save_data_shard_games`` games under this directory. No encodings: a reader rebuilds the
+    # rows by replaying the log (``search_data.rebuild_rows``), with any value-target setting.
+    save_data: Optional[str] = None
+    save_data_shard_games: int = 256
 
 
 AUX_SEAT_TARGETS = 2  # final net-worth share, final cash share
@@ -443,6 +451,29 @@ def lambda_win_target(outcome, returns: list, index: int, weight: float) -> np.n
     if index < 0 or index >= len(returns) or weight <= 0:
         return outcome.astype(np.float32)
     return ((1.0 - weight) * outcome + weight * returns[index]).astype(np.float32)
+
+
+def win_targets(win, search_values: list, settings: dict):
+    """The win head's target of a game's row, as a function of the row's ``search_index``:
+    the outcome ``win`` mixed with the game's search values as ``settings`` say
+    (``value_lambda``, else ``value_nstep``; ``value_bootstrap_weight``)."""
+    nstep, weight = int(settings.get("value_nstep", 0)), float(settings.get("value_bootstrap_weight", 0.5))
+    lam = settings.get("value_lambda")
+    if lam is not None:
+        returns = lambda_returns(win, search_values, float(lam))
+        return lambda index: lambda_win_target(win, returns, index, weight)
+    return lambda index: nstep_win_target(win, search_values, index, nstep, weight)
+
+
+def score_target(worth, reward: str) -> Optional[np.ndarray]:
+    """The score head's target for the final net worths ``worth`` (player-id order): placement
+    points under a ``placement[:<points>]`` reward, else None (the score head learns the shares)."""
+    from rl18xx.agent.alphazero.policy_gradient import parse_reward, placement_points
+
+    kind, points = parse_reward(reward)
+    if kind != "placement":
+        return None
+    return placement_points(worth, points or (1.0, 0.5, 0.2, 0.0)).astype(np.float32)
 
 
 def root_value_ce(rows: list, win: np.ndarray) -> tuple:
@@ -789,6 +820,10 @@ class _Game:
     price_row: Optional[np.ndarray] = None  # policy_selfplay._advance reads it
     rows: list = field(default_factory=list)
     search_values: list = field(default_factory=list)  # every search's root value, in order
+    start_actions: int = 0  # the start's actions (the log's first)
+    # save_data: per search, in step with search_values, (decision, action-log position, fast,
+    # has a row, explored, network version) (``search_data.pack_game``); None: not saved.
+    searches: Optional[list] = None
     need: Any = None
     pending: Any = None
     fast: bool = False  # the pending search is a fast one
@@ -878,7 +913,14 @@ class Generator:
             auction_fraction=s.get("auction_fraction", 0.0),
         )
         self.counts["skipped_starts"] += skipped  # recorded before an engine rules change
-        return _Game(game=game, uid=uuid.uuid4().hex, start=start.label, seat_servers=deal_seats(s, self.py_rng))
+        return _Game(
+            game=game,
+            uid=uuid.uuid4().hex,
+            start=start.label,
+            seat_servers=deal_seats(s, self.py_rng),
+            start_actions=len(start.actions),
+            searches=[] if s.get("save_data") else None,
+        )
 
     def _tree(self, game):
         """A search tree at ``game`` (an ``engine_rs.BaseGame``, cloned), set up as
@@ -1004,6 +1046,7 @@ class Generator:
             self.counts["fast_decisions"] += 1
         else:
             tree = need.tree
+            explored_before = self.counts["explored_moves"]
             self.counts["final_visits"] += float(tree.n_at_root())
             legal = np.asarray(tree.legal_action_indices_at_root(), dtype=np.int64)
             if s["target"] == "gumbel":
@@ -1020,6 +1063,11 @@ class Generator:
                     # Read before the tree moves on and the game takes the move.
                     target = self._confident(root_stats(tree), target, rs, legal)
             g.search_values.append(root_value(tree))  # the n-step value targets' bootstrap (before the tree moves on)
+            if g.searches is not None:  # save_data: where the search was (the move is not on the log yet)
+                explored = self.counts["explored_moves"] > explored_before
+                g.searches.append(
+                    (g.decisions, rs.move_number, g.fast, g.pending is not None, explored, int(s.get("version", 0)))
+                )
             # The move goes straight onto the game (the most-visited price, as
             # advance_root would commit); a kept tree follows it.
             rs.apply_action_index(move, price)
@@ -1121,18 +1169,16 @@ class Generator:
         return int(legal[int(self.rng.choice(len(legal), p=w / w.sum()))])
 
     def _finish(self, g: _Game) -> dict:
-        """The game's record: its rows with the outcome filled in."""
-        from rl18xx.agent.alphazero.policy_gradient import outcome, parse_reward, placement_points
+        """The game's record: its rows with the outcome filled in (and with ``save_data``
+        the game packed for ``search_data``, under ``saved``)."""
+        from rl18xx.agent.alphazero.policy_gradient import outcome
         from rl18xx.agent.alphazero.self_play import _compute_net_worth
 
         s = self.settings
         win_share, fractions = outcome(g.game)
         net_worth = _compute_net_worth(g.game)
         worth = np.array([float(net_worth[pid]) for pid in sorted(net_worth)])
-        kind, points = parse_reward(s.get("reward", "placement"))
-        score = None
-        if kind == "placement":
-            score = placement_points(worth, points or (1.0, 0.5, 0.2, 0.0)).astype(np.float32)
+        score = score_target(worth, s.get("reward", "placement"))
         k = int(s.get("critic_positions_per_game", 0))
         # The value's rows: every row, or with fast_row_value off only the full searches'.
         pool = [i for i, r in enumerate(g.rows) if not r.fast or s.get("fast_row_value", True)]
@@ -1140,21 +1186,14 @@ class Generator:
         for i in chosen:
             g.rows[int(i)].critic = True
         aux_seat, aux_global = aux_outcomes(g.game, fractions)
-        nstep, weight = int(s.get("value_nstep", 0)), float(s.get("value_bootstrap_weight", 0.5))
-        lam = s.get("value_lambda")
-        returns = lambda_returns(share_of_winners(fractions), g.search_values, float(lam)) if lam is not None else None
+        win_target = win_targets(share_of_winners(fractions), g.search_values, s)
         for row in g.rows:
             row.fractions = fractions
             row.score_target = score
-            if returns is not None:
-                row.win_target = lambda_win_target(share_of_winners(fractions), returns, row.search_index, weight)
-            else:
-                row.win_target = nstep_win_target(
-                    share_of_winners(fractions), g.search_values, row.search_index, nstep, weight
-                )
+            row.win_target = win_target(row.search_index)
             row.aux_seat, row.aux_global = aux_seat, aux_global
         self.counts["games"] += 1
-        return {
+        record = {
             "uid": g.uid,
             "start_kind": g.start.split(":")[0] if g.start else None,
             "termination": g.termination,
@@ -1166,6 +1205,15 @@ class Generator:
             # How well the search's root values called this game (win CE), on its rows.
             "root_value_ce": root_value_ce(g.rows, share_of_winners(fractions)),
         }
+        if g.searches is not None:
+            from rl18xx.agent.alphazero.search_data import pack_game
+
+            try:
+                record["saved"] = pack_game(g, worth, win_share, fractions, score, aux_seat, aux_global)
+            except Exception as e:  # keeping the data must never stop the generation
+                LOGGER.warning(f"search self-play: game {g.uid} not saved: {e!r}")
+                self.counts["save_errors"] += 1
+        return record
 
     # -- the loop ----------------------------------------------------------------
 
@@ -1569,6 +1617,7 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "target_confidence_prior_weight": cfg.target_confidence_prior_weight,
         "target_confidence_signal": cfg.target_confidence_signal,
         "target_distrust_steps": tuple(cfg.target_distrust_steps or ()),
+        "save_data": bool(cfg.save_data),
     }
 
 
@@ -1620,6 +1669,8 @@ def _validate(cfg: SearchLearningConfig) -> None:
         raise SystemExit("--reward must be win or placement (the critic's score-head target)")
     if cfg.anchor_every and cfg.anchor_every % cfg.snapshot_every:
         raise SystemExit("--anchor-every must be a multiple of --snapshot-every (the anchor's checkpoint is kept)")
+    if cfg.save_data_shard_games < 1:
+        raise SystemExit("--save-data-shard-games must be >= 1")
 
 
 def server_spec(cfg: SearchLearningConfig, learner_path, critic_path=None) -> str:
@@ -1674,6 +1725,7 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
 
     use_tf32()
     totals = Counter()
+    save_data = cfg.save_data  # where games are kept: a resume keeps the run's unless given another
     if resume:
         run_dir = Path(resume)
         state = json.loads((run_dir / "state.json").read_text())
@@ -1722,6 +1774,8 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
         update, kl_coef, anchor_update = 0, cfg.kl_coef, 0
         learner_path = Path(cfg.policy_checkpoint)
         critic_path = None if cfg.shared else Path(cfg.value_checkpoint)
+    if save_data:
+        cfg.save_data = save_data
     _validate(cfg)
     (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
     LOGGER.info(f"Search-learning run {run_dir} from update {update}: {asdict(cfg)}")
@@ -1758,6 +1812,11 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
             _save(critic, current_critic)
     writer = SummaryWriter(str(Path("runs") / "alphazero_runs" / run_dir.name))
     history = (run_dir / "history.jsonl").open("a")
+    saver = None
+    if cfg.save_data:
+        from rl18xx.agent.alphazero.search_data import SearchDataWriter
+
+        saver = SearchDataWriter(cfg.save_data, asdict(cfg), cfg.save_data_shard_games)
 
     def spec(policy, value) -> str:
         return server_spec(cfg, policy, value)
@@ -1814,6 +1873,8 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                         ce_sum, ce_rows = record.get("root_value_ce", (0.0, 0))
                         gen["root_value_ce_sum"] += ce_sum
                         gen["root_value_rows"] += ce_rows
+                        if saver is not None and "saved" in record:
+                            saver.add(record["saved"])
                     futures.add(executor.submit(generate, worker_settings(cfg, update), cfg.task_seconds))
                 if new_rows < cfg.rows_per_update or len(window) < cfg.min_window_rows:
                     continue
@@ -1939,6 +2000,14 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                     "terminations": dict(terminations),
                     "starts": dict(starts),
                     "train_seconds": train_seconds,
+                    # save_data: games kept so far, games not packed since the last update, and failed
+                    # journal / shard writes so far (a failed shard's games stay in its journal, which
+                    # the next writer in the directory recovers).
+                    **(
+                        {"saved_games": saver.games, "save_errors": gen["save_errors"], "saver_errors": saver.errors}
+                        if saver is not None
+                        else {}
+                    ),
                 }
                 gen, terminations, starts = Counter(), Counter(), Counter()
                 gen_started = time.time()
@@ -1957,6 +2026,8 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
         finally:
             executor.shutdown(wait=True, cancel_futures=True)
     finally:
+        if saver is not None:
+            saver.close()
         history.close()
         writer.close()
         for handle in handles.values():

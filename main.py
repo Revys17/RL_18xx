@@ -300,6 +300,8 @@ def cmd_search_learning(args):
         target_confidence_prior_weight=args.target_confidence_prior_weight,
         target_confidence_signal=args.target_confidence_signal,
         target_distrust_steps=tuple(x for x in (args.target_distrust_steps or "").split(",") if x),
+        save_data=args.save_data,
+        save_data_shard_games=args.save_data_shard_games,
         freeze_policy=args.freeze_policy,
         policy_follow=args.policy_follow,
     )
@@ -792,6 +794,12 @@ def build_parser():
     p.add_argument("--policy-follow", type=str, default=None,
                    help="--freeze-policy: a policy-gradient run (--shared) training the policy path; before each "
                    "update the learner takes its latest policy path")
+    p.add_argument("--save-data", type=str, default=_SL.save_data,
+                   help="Keep every finished game in this directory: action log, outcome, each search's targets and "
+                   "root value (search_data: xz shards; rows are rebuilt by replaying the log). With --resume: the "
+                   "run's own directory unless given. Default: off")
+    p.add_argument("--save-data-shard-games", type=int, default=_SL.save_data_shard_games,
+                   help="Games per --save-data shard (the open shard's games are journaled until it is written)")
 
     # convert (encode games to LMDB for pretraining)
     p = sub.add_parser("convert", help="Convert cleaned game JSONs to LMDB training data")
