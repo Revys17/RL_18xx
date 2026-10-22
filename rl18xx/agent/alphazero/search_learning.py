@@ -798,6 +798,7 @@ class _Game:
     tree: Any = None
     tree_version: Optional[int] = None
     tree_synced: int = 0
+    search_version: int = 0  # the network version the current decision's search started on (its row's)
 
 
 def search_config(settings: dict, client=None):
@@ -923,20 +924,31 @@ class Generator:
         g.pending = s["learner_temperature"] if server == "learner" else s.get("opponent_temperature", 1.0)
         return PolicyRequest(rs, legal, key=server)
 
+    def network_version(self) -> int:
+        """The learner network version its inference server serves now: the counter the trainer sets
+        after each reload (``worker_init``'s ``server_version``), else the task's settings' (in-process
+        generators: tests, benches). A task's settings carry the version at its submission, and the
+        server reloads mid-task, so they lag by up to one update."""
+        if _SERVER_VERSION is not None:
+            return int(_SERVER_VERSION.value)
+        return int(self.settings.get("version", 0))
+
     def _search(self, g: _Game, rs, readouts: int, key):
         """The decision's search: on the game's kept tree with ``reuse_tree``
-        (when it still matches the position and was searched by the current
-        network version), else on a fresh tree."""
+        (when it still matches the position and was searched by the network
+        version the server serves now), else on a fresh tree."""
         from rl18xx.agent.alphazero.lockstep import TreeSearch
 
         s = self.settings
+        version = self.network_version()
+        g.search_version = version
         reuse = s.get("reuse_tree", "off")
         if reuse == "off":
             return TreeSearch(self._tree(rs), readouts, key=key)
         handle = g.tree if self._tree_in_sync(g, rs) else None
         if handle is not None:
             tree = handle._rust_player
-            if g.tree_version != s.get("version", 0):
+            if g.tree_version != version:
                 self.counts["reuse_dropped_version"] += 1  # searched by an older network
                 handle = None
             elif reuse == "additional" and tree.n_at_root() > s.get("reuse_max_root_visits", 2 * s["n_full"]):
@@ -944,7 +956,7 @@ class Generator:
                 handle = None
         if handle is None:
             handle = self._tree(rs)
-            g.tree_version = s.get("version", 0)
+            g.tree_version = version
             g.tree_synced = int(handle._rust_player.root_move_number())
         else:
             self.counts["reused_searches"] += 1
@@ -1038,7 +1050,7 @@ class Generator:
                     legal=legal.astype(np.int32),
                     target=target.astype(np.float32),
                     price=price_target,
-                    version=int(s.get("version", 0)),
+                    version=g.search_version,
                     root_value=g.search_values[-1],
                     search_index=len(g.search_values) - 1,
                     fast=g.fast,
@@ -1230,10 +1242,13 @@ class Generator:
 
 _CLIENTS: dict = {}
 _GENERATOR: Optional[Generator] = None
+_SERVER_VERSION = None  # a shared multiprocessing Value: the learner version the server serves
 
 
-def worker_init(server_queues: dict):
-    """Pool initializer: one slot on every inference server."""
+def worker_init(server_queues: dict, server_version=None):
+    """Pool initializer: one slot on every inference server; ``server_version``: the trainer's
+    shared counter of the network version the learner's server serves (set after each reload)."""
+    global _SERVER_VERSION
     import os
 
     import torch
@@ -1242,6 +1257,7 @@ def worker_init(server_queues: dict):
 
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     torch.set_num_threads(1)
+    _SERVER_VERSION = server_version
     for name, (request_q, reply_qs, ticket_q) in server_queues.items():
         worker_id = ticket_q.get()
         _CLIENTS[name] = InferenceClient(request_q=request_q, reply_q=reply_qs[worker_id], worker_id=worker_id)
@@ -1788,13 +1804,16 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
     # new_rows: the full searches' rows since the last update (the cadence); fast-search
     # rows (fast_row_weight) fill the window on top of them.
     new_rows, new_fast_rows, gen_started, run_started = 0, 0, time.time(), time.time()
+    # The version the learner's server serves, read by the workers at every search: a task's settings
+    # carry the version at its submission, but the server reloads mid-task.
+    server_version = multiprocessing.get_context("spawn").Value("q", update, lock=False)
     try:
         # Spawned: the learner holds the networks (on the GPU), which a forked worker must not inherit.
         executor = ProcessPoolExecutor(
             max_workers=cfg.workers,
             mp_context=multiprocessing.get_context("spawn"),
             initializer=worker_init,
-            initargs=(queues,),
+            initargs=(queues, server_version),
         )
         try:
             futures = {
@@ -1856,6 +1875,7 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
                 reply = handles["learner"].reload(spec(current_learner, current_critic))
                 if not (isinstance(reply, dict) and reply.get("ok")):
                     raise RuntimeError(f"the inference server could not load update {update}: {reply}")
+                server_version.value = update
                 if cfg.anchor_every and update % cfg.anchor_every == 0:
                     anchor.load_state_dict(learner.state_dict(), strict=False)  # not the aux heads
                     anchor_update = update
