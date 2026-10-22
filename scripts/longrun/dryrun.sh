@@ -87,7 +87,9 @@ wait_for 180 bash -c "[ \$(python3 -c 'import json,sys; print(json.load(open(sys
 check "1 first start is fresh" grep -q '"mode": "fresh"' "$WORK/longrun/lr-dryrun/starts.jsonl"
 check "1 reached snapshot $(snapshot) (update $(last_update))" [ "$(snapshot)" -ge 5 ]
 check "1 watchdog started with the run" systemctl --user is-active --quiet rl18xx-longrun-watchdog@lr-dryrun.service
-log "     processes in the unit: $(for p in $(cgroup_procs lr-dryrun); do tr '\0' ' ' < /proc/$p/cmdline | cut -c1-60; echo; done | sed 's/^.*spawn_main.*$/spawned child/' | sort | uniq -c | sed 's/^ */ /' | tr '\n' ';')"
+log "     processes in the unit: $(for p in $(cgroup_procs lr-dryrun); do
+    case $(tr '\0' ' ' < /proc/$p/cmdline) in *spawn_main*) echo "spawned by main.py" ;; *resource_tracker*) echo "resource tracker" ;;
+        *main.py*) echo "main.py" ;; *launch.sh*) echo "launch.sh" ;; *) echo other ;; esac; done | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
 
 # ----------------------------------------------------------------------------- 2, 3: kills
 kill_and_resume() {  # kill_and_resume <label> <pid to kill>
