@@ -110,19 +110,33 @@ tracks distance from the gen4-critic lineage, not ranking quality. Dense targets
 sibling order substantially (0.778 -> 0.664 at 18,500 games) with no change in outcome CE. Neither
 metric can say whether that ranking is better; only play can.
 
+## Play tests (2026-10-22, the azl ladder's harness: seed 0, 80 starts x 6 arrangements, @200 budget=total, ptemp 1)
+
+Both keep azl u2100's policy as the prior, so only the value differs:
+
+| match (480 games, A listed first) | A's score | A's net-worth share |
+|---|---|---|
+| u2100 policy + the 36,989-game outcome-only value vs azl u2100's system (its in-run value) | **0.542 +- 0.023** | **0.507** |
+| u2100 policy + the dense 36,989-game value vs u2100 policy + the outcome-only one | 0.508 +- 0.023 | 0.498 |
+
+(The 2026-10-21 side-A controls put any listing-order effect at +0.011 +- 0.013.)
+
+- **The offline value searches better than the in-run one**: 0.542 (1.8 SE) with a net-worth share above
+  0.5 as well -- unlike azl's step matches, whose wins never showed up in net worth. It was trained on
+  ~1/3 of the games azl's value saw, but over 8 passes.
+- **Dense targets: no effect in play** (0.508, within noise; net worth 0.498), as on outcome CE. The
+  reshaped track-lay order neither helps nor hurts at this scale. Not worth adding to a long run as built.
+
 ## What this decides, and what it doesn't
 
-- **A long run is worth it for the value, if the games are saved and the value is trained over many
-  passes** (as a separate network or with its own encoders). The curve shows no saturation at 37k
-  games; a months-long run produces millions.
-- **Dense targets: not proven.** No outcome-CE gain; a large, unexplained change in track-lay ranking.
-  The deciding test is a search match.
-- **Next: two play tests** (480 games each, @200, the azl ladder's settings), both with azl u2100's
-  policy as the prior so only the value differs:
-  1. azl u2100 + the 36,989-game outcome-only value (a composite) vs azl u2100's own system: does the
-     offline value beat the in-run value in play?
-  2. azl u2100 + the dense 36,989-game value vs azl u2100 + the outcome-only one: do dense targets help
-     search?
+- **A long run is worth it for the value, if every game is saved and the value is trained over many
+  passes** as a separate network: value quality rises ~0.006 test CE per doubling of games with no
+  saturation at 37k, and the offline-trained value already beats the in-run one in play (0.542).
+- **Dense targets as built: no.** No gain in outcome CE at any size and none in play. (Untested: a value
+  trained from scratch, where they might matter more, and larger loss weights.)
+- **Not decided:** where the curve flattens (a floor exists: early-game CE barely moves), and whether
+  the gain compounds when the games come from a system that keeps improving (these games are a fixed
+  pool from ~40 search systems).
 
 Data: `logs/value_gate/data` (gitignored); runs `logs/value_gate/runs/<arm>_<games>/learner/0.pth`;
 results `logs/value_gate/curve.jsonl`, `siblings.jsonl`, `reference.jsonl`; queue `logs/value_gate/curve.sh`.
