@@ -84,3 +84,26 @@ def test_encode_games_rejects_mixed_player_counts():
     games = [random_positions(4, 8, steps=3)[0], random_positions(3, 9, steps=3)[0]]
     with pytest.raises(ValueError):
         engine_rs.encode_games(games)
+
+
+def test_standing_bids_encode_the_same_in_every_game_instance():
+    # A player's cash committed to standing auction bids is a float sum; the engine keeps the
+    # bids in a HashMap whose order differs between game instances, which made one position
+    # (here 45 + 75 + 120 of 600) encode a bit apart in different games. Summed in the
+    # auction's company order, every replay of the position encodes it as the adapter does.
+    passes = [{"type": "pass", "entity": p, "entity_type": "player"} for p in (2, 3, 4)]
+    actions = []
+    for company, price in (("CS", 45), ("DH", 75), ("MH", 120)):
+        actions += [{"type": "bid", "entity": 1, "entity_type": "player", "company": company, "price": price}]
+        actions += passes
+    sums = {np.float32(np.float32(np.float32(a) / 600 + np.float32(b) / 600) + np.float32(c) / 600)
+            for a, b, c in ((45, 75, 120), (45, 120, 75), (120, 75, 45))}
+    assert len(sums) > 1  # the order matters for these bids
+    encodings = set()
+    for _ in range(20):
+        game = engine_rs.BaseGame({i + 1: f"Player {i + 1}" for i in range(4)})
+        for action in actions[:-3]:  # player 1's three bids standing, player 2 to act
+            game.process_action(dict(action))
+        assert_same_encoding(game)
+        encodings.add(game.encode_canonical_py()[0].tobytes())
+    assert len(encodings) == 1
