@@ -331,7 +331,8 @@ def test_a_tiny_cycle_end_to_end(tmp_path, generated, init_checkpoint, fixed_dir
     data = tmp_path / "data"
     shutil.copytree(generated["data"], data)  # new shards arrive below
     cfg = _trainer_config(tmp_path, generated, init_checkpoint, fixed_dir, data=[str(data)], workers=1, epochs=2.0,
-                          cycle_games=1, patience=100, buffer_positions=16)  # two passes through a small buffer
+                          cycle_games=1, patience=100, buffer_positions=16,  # two passes through a small buffer
+                          diverge_ce=10.0)  # a tiny net at lr 1e-3 on a few dozen held-out positions: noise, not a test
     trainer = vt.ValueTrainer(cfg)
     run = tmp_path / "run"
     fixed = vt.load_fixed(fixed_dir)
