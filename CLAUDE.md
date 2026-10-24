@@ -42,6 +42,8 @@ uv run python main.py pretrain --fresh --data-dir human_games/lmdb_v6k  # Fresh 
 uv run python scripts/build_start_positions.py   # Rebuild self-play's first-Stock-Round start file
 uv run python scripts/build_midgame_positions.py  # Rebuild the mid-game (Stock Round 2-6) start file
 uv run python scripts/eval_head_to_head.py --match 107 7 --games 240  # Strength: checkpoint vs checkpoint
+uv run python scripts/eval_ladder.py run --panel scripts/launch/2026-10/eval_ladder_azl.json  # long-run judge: newest ckpt vs a fixed panel, 2v2 + 1v3 both ways
+uv run python scripts/eval_ladder.py report|decide --panel <panel.json>  # Elo by update (start-clustered SEs); latest vs N back, fixed panel only
 uv run python scripts/eval_head_to_head.py --match A B --games-per-task 8 ...  # + several games per worker, searched in lockstep
 uv run python scripts/bench_search_harness.py --model stub --mode server --concurrency 1 16  # Search-harness evaluations/s (CPU)
 uv run python scripts/eval_value_head.py # Value-head quality by game stage (current_best by default)

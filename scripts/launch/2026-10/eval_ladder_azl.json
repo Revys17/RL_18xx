@@ -1,0 +1,32 @@
+{
+  "name": "ladder_azl",
+  "run": "model_checkpoints_search/azl_20261019",
+  "checkpoint": "learner/{update}.pth",
+  "spec": "{checkpoint}@200/0.05:mean,dedupe,par=8,ptemp=1,budget=total",
+  "every": 600,
+  "games": 120,
+  "modes": ["2v2", "1v3"],
+  "workers": 12,
+  "seed": 0,
+  "start_positions": "human_games/start_positions_1830_4p_v2.jsonl",
+  "softpick": 0,
+  "eval_args": ["--games-per-task", "8", "--dedupe-maps", "--server-replicas", "2"],
+  "anchor": "u0",
+  "back": 1,
+  "panel": [
+    {"name": "u0", "update": 0},
+    {
+      "name": "gen4critic",
+      "spec": "model_checkpoints_pg/rab_place_20261014/learner/1800.pth+model_checkpoints_pg/rab_place_20261014/critic/1800.pth@200/0.05:mean,dedupe,par=8,ptemp=0.5,budget=total"
+    },
+    {
+      "name": "az8_u170",
+      "spec": "model_checkpoints_search/az8_20261019/learner/170.pth@200/0.05:mean,dedupe,par=8,ptemp=0.5,budget=total"
+    },
+    {
+      "name": "sl10_v2",
+      "spec": "model_checkpoints/AlphaZeroTransformer/20261004_134558_804974562/10.pth+model_checkpoints_value/AlphaZeroTransformer/20261004_134558_804974562/26.pth@200/0.05:mean,dedupe,par=8,ptemp=1,budget=total"
+    }
+  ],
+  "self": {"every": 1800, "count": 1, "modes": ["2v2"]}
+}
