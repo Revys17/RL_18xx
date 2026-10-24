@@ -637,7 +637,12 @@ class MCTSPlayer(Agent):
                 self.add_metric("MCTS/Finished_Games", 1)
                 value = leaf.game_result()
                 if self.config.use_score_values:
-                    value = mcts.terminal_backup_value(value, len(leaf.game_object.players))
+                    value = mcts.terminal_backup_value(
+                        value,
+                        len(leaf.game_object.players),
+                        float(getattr(self.config, "terminal_score_weight", 0.0)),
+                        tuple(getattr(self.config, "terminal_score_points", ())),
+                    )
                 leaf.backup_value(value, up_to=self.root)
                 if trace is not None:
                     trace.leaf_terminal = True

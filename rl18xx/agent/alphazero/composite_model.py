@@ -10,6 +10,7 @@ search or the inference server uses one (``run_many_encoded``,
 """
 
 from pathlib import Path
+from typing import Optional
 
 
 class PolicyValueComposite:
@@ -89,6 +90,35 @@ def parse_value_head(value_head: str):
     if value_head not in ("win", "score"):
         raise ValueError(f"value head {value_head!r}: 'win', 'score' or 'blend=<w>'")
     return value_head, None
+
+
+def terminal_utility(value_head: str, reward: Optional[str]) -> tuple:
+    """``(weight, points)``: ``SelfPlayConfig.terminal_score_weight`` / ``terminal_score_points`` for a
+    search whose values come from ``value_head`` (``win``, ``score``, ``blend=<w>``) of a network whose
+    score head learned ``reward`` (``policy_gradient.parse_reward``) -- so a finished game backs up the
+    leaves' scale. The score head learns placement points under a ``placement`` reward; under any other
+    reward its target is the share of winners (plus a goal bonus a finished position can't show), so the
+    terminal stays the share of winners (weight 0)."""
+    from rl18xx.agent.alphazero.policy_gradient import PLACEMENT_POINTS, parse_reward
+
+    kind, blend = parse_value_head(value_head)
+    weight = {"win": 0.0, "score": 1.0}.get(kind, blend)
+    reward_kind, points = parse_reward(reward)
+    if not weight or reward_kind != "placement":
+        return 0.0, ()
+    return float(weight), tuple(float(p) for p in (points or PLACEMENT_POINTS))
+
+
+def checkpoint_reward(path) -> Optional[str]:
+    """The ``reward`` of the run a checkpoint (``<run>/learner|critic/<n>.pth``) belongs to, from the
+    run's ``config.json`` (policy-gradient and search-learning runs record it); None if it has none."""
+    import json
+
+    config = Path(path).resolve().parent.parent / "config.json"
+    try:
+        return json.loads(config.read_text()).get("reward")
+    except (OSError, ValueError):
+        return None
 
 
 class SharedValueModel:

@@ -31,6 +31,9 @@ VALUE_DRIVEN = dict(
     DEFAULT, mcts_mean_q=True, c_puct_init=0.15, c_puct_by_round={}, dedupe_leaves=True, prior_temperature=0.5
 )
 GUMBEL = dict(VALUE_DRIVEN, gumbel_k=8)
+# A search on the score head (value_head blend=0.5 under a placement reward): finished games back up
+# the same blend of the share of winners and placement points.
+SCORE_BLEND = dict(VALUE_DRIVEN, terminal_score_weight=0.5, terminal_score_points=(1.0, 0.5, 0.2, 0.0))
 
 
 def _positions():
@@ -135,7 +138,26 @@ def test_native_terminal_value_matches_python(use_score_values):
         np.testing.assert_array_equal(got, expected)
 
 
-@pytest.mark.parametrize("config", [DEFAULT, VALUE_DRIVEN, GUMBEL], ids=["default", "value_driven", "gumbel"])
+@pytest.mark.parametrize("weight,points", [(0.5, (1.0, 0.5, 0.2, 0.0)), (1.0, (1.0, 0.3, 0.1, 0.0)), (0.0, (1.0,))])
+def test_native_terminal_utility_matches_python(weight, points):
+    from rl18xx.agent.alphazero.mcts import terminal_backup_value
+
+    for seed in (0, 1, 4):
+        game = ending_positions(4, seed)[-1]
+        player = make_player(HashNet(), game, **DEFAULT)
+        fractions = player._compute_terminal_value(player._rust_player.root_idx)
+        expected = terminal_backup_value(fractions, len(game.players), weight, points)
+        got = np.asarray(engine_rs.mcts_terminal_value(game, True, weight, list(points)), dtype=np.float32)
+        np.testing.assert_allclose(got, expected, atol=1e-6)
+        if weight == 0.0:
+            np.testing.assert_array_equal(got, terminal_backup_value(fractions, len(game.players)))
+        else:
+            assert got[: len(game.players)].sum() == pytest.approx(1 - weight + weight * sum(points[:4]), abs=1e-5)
+
+
+@pytest.mark.parametrize(
+    "config", [DEFAULT, VALUE_DRIVEN, GUMBEL, SCORE_BLEND], ids=["default", "value_driven", "gumbel", "score_blend"]
+)
 def test_lockstep_matches_alone_near_the_end(config):
     """Positions a few moves from the end: searches reach finished games, whose
     values both paths back up without the network."""

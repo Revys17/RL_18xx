@@ -31,12 +31,43 @@ use crate::price_pmf::NUM_CELLS;
 
 const VALUE_SIZE: usize = MAX_PLAYERS;
 
+/// Per seat the points of its place by ``shares`` (1st first), tied seats
+/// sharing their places' points -- ``mcts._placement_points`` (as
+/// ``policy_gradient.placement_points``, on net-worth shares).
+fn placement_points(shares: &[f32], points: &[f32]) -> Vec<f32> {
+    let n = shares.len();
+    let pts: Vec<f32> = (0..n).map(|i| points.get(i).copied().unwrap_or(0.0)).collect();
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| shares[b].partial_cmp(&shares[a]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out = vec![0.0f32; n];
+    let mut i = 0;
+    while i < n {
+        let mut j = i;
+        while j + 1 < n && (shares[order[j + 1]] - shares[order[i]]).abs() < 1e-6 {
+            j += 1;
+        }
+        let mean = pts[i..=j].iter().sum::<f32>() / (j - i + 1) as f32;
+        for &seat in &order[i..=j] {
+            out[seat] = mean;
+        }
+        i = j + 1;
+    }
+    out
+}
+
 /// The value a finished game backs up, in absolute seat order -- Python
 /// ``RustMCTSPlayer._compute_terminal_value`` followed (with
 /// ``use_score_values``) by ``mcts.terminal_backup_value``: a share of the
-/// win split among the net-worth leaders; without it minigo's +1 / -1 (0 for
-/// each of several tied leaders, -1 in the padded seats).
-pub(crate) fn terminal_value(game: &BaseGame, use_score_values: bool) -> [f32; VALUE_SIZE] {
+/// win split among the net-worth leaders, or with ``score_weight`` w > 0 (a
+/// search on the score head's values) (1 - w) * that + w * ``score_points``
+/// by place; without ``use_score_values`` minigo's +1 / -1 (0 for each of
+/// several tied leaders, -1 in the padded seats).
+pub(crate) fn terminal_value(
+    game: &BaseGame,
+    use_score_values: bool,
+    score_weight: f32,
+    score_points: &[f32],
+) -> [f32; VALUE_SIZE] {
     let results = game.calculate_results();
     let mut ids: Vec<u32> = results.keys().copied().collect();
     ids.sort_unstable();
@@ -70,6 +101,12 @@ pub(crate) fn terminal_value(game: &BaseGame, use_score_values: bool) -> [f32; V
     let count = winners.iter().filter(|&&w| w).count() as f32;
     for i in 0..n {
         out[i] = if winners[i] { 1.0 / count } else { 0.0 };
+    }
+    if score_weight > 0.0 && !score_points.is_empty() {
+        let placed = placement_points(&shares, score_points);
+        for i in 0..n {
+            out[i] = (1.0 - score_weight) * out[i] + score_weight * placed[i];
+        }
     }
     out
 }
@@ -107,7 +144,12 @@ impl RustMCTSPlayer {
             failsafe += 1;
             let idx = self.select_leaf()?;
             if self.arena[idx].is_terminal {
-                let value = terminal_value(&self.arena[idx].game, use_score_values);
+                let value = terminal_value(
+                    &self.arena[idx].game,
+                    use_score_values,
+                    self.terminal_score_weight,
+                    &self.terminal_score_points,
+                );
                 self.backup(idx, value);
                 terminal += 1;
                 continue;
@@ -434,10 +476,17 @@ pub fn mcts_apply_results<'py>(
     Ok(())
 }
 
-/// The value a search backs up at a finished ``game`` (``terminal_value``).
+/// The value a search backs up at a finished ``game`` (``terminal_value``;
+/// ``score_weight`` / ``score_points``: ``RustMCTSPlayer.set_terminal_utility``'s).
 #[pyfunction]
-pub fn mcts_terminal_value(game: PyRef<'_, BaseGame>, use_score_values: bool) -> Vec<f32> {
-    terminal_value(&game, use_score_values).to_vec()
+#[pyo3(signature = (game, use_score_values, score_weight=0.0, score_points=None))]
+pub fn mcts_terminal_value(
+    game: PyRef<'_, BaseGame>,
+    use_score_values: bool,
+    score_weight: f32,
+    score_points: Option<Vec<f32>>,
+) -> Vec<f32> {
+    terminal_value(&game, use_score_values, score_weight, &score_points.unwrap_or_default()).to_vec()
 }
 
 /// Forget the trees' pending batches without applying them (virtual losses

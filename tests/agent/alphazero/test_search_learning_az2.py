@@ -673,3 +673,26 @@ def test_a_tiny_cpu_az2_run_shared_gumbel_nstep_surprise_aux_speedups_resumes(tm
     history = [json.loads(line) for line in (run_dir / "history.jsonl").read_text().splitlines()]
     assert [h["update"] for h in history] == [1, 2, 3]
     assert json.loads((run_dir / "state.json").read_text())["snapshot_update"] == 3
+
+    # A resume can change the learning rates (the optimizer's saved ones would otherwise win).
+    later = copy.copy(cfg)
+    later.max_updates = 4
+    later.critic_lr = 1e-3
+    assert sl.run(later, resume=str(run_dir), explicit={"max_updates", "critic_lr"}) == run_dir
+    assert json.loads((run_dir / "config.json").read_text())["critic_lr"] == 1e-3
+    groups = {g["name"]: g["lr"] for g in torch.load(run_dir / "optimizer.pth")["learner"]["param_groups"]}
+    assert groups == {"trunk_policy": 1e-4, "value_heads": 1e-3}
+
+
+@pytest.mark.parametrize(
+    "value_head,reward,expected",
+    [("win", "placement", (0.0, [])), ("blend=0.3", "placement", (0.3, [1.0, 0.5, 0.2, 0.0])),
+     ("score", "placement:1,0.3,0.1,0", (1.0, [1.0, 0.3, 0.1, 0.0])), ("score", "win", (0.0, []))],
+)
+def test_the_generators_trees_back_up_their_value_heads_utility(start_file, value_head, reward, expected):
+    """A finished game is valued on the leaves' scale: a score / blend value head under a placement
+    reward backs up the blend of the share of winners and placement points."""
+    gen = _generator(_settings(start_file, value_head=value_head, reward=reward), HashNet())
+    tree = gen._tree(random_positions(4, 1, steps=40, every=40)[-1])._rust_player
+    weight, points = tree.terminal_utility
+    assert weight == pytest.approx(expected[0]) and points == pytest.approx(expected[1])

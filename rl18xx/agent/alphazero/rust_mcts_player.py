@@ -252,6 +252,10 @@ class RustMCTSPlayer:
                 self._rust_player.set_q_normalize(True)
         elif bool(getattr(self.config, "mcts_q_normalize", False)):
             raise ValueError("mcts_q_normalize needs mcts_mean_q")
+        if float(getattr(self.config, "terminal_score_weight", 0.0)) > 0:
+            self._rust_player.set_terminal_utility(
+                float(self.config.terminal_score_weight), [float(p) for p in self.config.terminal_score_points]
+            )
         if int(getattr(self.config, "gumbel_k", 0)) > 0:
             self._rust_player.set_gumbel_config(
                 int(self.config.gumbel_k),
@@ -410,7 +414,12 @@ class RustMCTSPlayer:
             if self._rust_player.is_terminal(idx):
                 value = self._compute_terminal_value(idx)
                 if self.config.use_score_values:
-                    value = terminal_backup_value(value, self._num_players)
+                    value = terminal_backup_value(
+                        value,
+                        self._num_players,
+                        float(getattr(self.config, "terminal_score_weight", 0.0)),
+                        tuple(getattr(self.config, "terminal_score_points", ())),
+                    )
                 self._rust_player.backup_value(idx, value.astype(np.float32).tolist())
                 if trace is not None:
                     trace.leaf_terminal = True
@@ -544,6 +553,11 @@ class RustMCTSPlayer:
     def suggest_move(self, override_readouts: Optional[int] = None) -> int:
         legal = self._rust_player.legal_action_indices_at_root()
         if len(legal) == 1:
+            tree = self._rust_player
+            if tree.root_move_has_open_price(int(legal[0])) and not tree.is_expanded(tree.root_idx):
+                # Its price comes from the root's price head (``play_move``): evaluate the root
+                # first, as ``start_search``'s single-legal branch does.
+                self.tree_search(parallel_readouts=1)
             return int(legal[0])
         readouts = (
             override_readouts if override_readouts is not None else self.adaptive_readouts()
@@ -659,7 +673,9 @@ class RustMCTSPlayer:
         # logging a faithful, replayable dict to ``raw_actions`` — so the chosen
         # action dict and any forced-chain dicts are recovered straight from the
         # log, with no Python ActionMapper decode.
-        self._rust_player.advance_root(action_index)
+        self._rust_player.advance_root(
+            action_index, bool(getattr(self.config, "stop_chain_at_open_price", False))
+        )
 
         new_root_game = self._rust_player.root_game_object()
         new_raw = list(new_root_game.raw_actions)

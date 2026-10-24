@@ -191,6 +191,17 @@ def parse_player(spec: str, default_readouts: int) -> tuple:
         raise SystemExit(f"qnorm needs mean in {spec!r}")
     checkpoint, hash_, value_head = checkpoint.partition("#")  # "<policy>+<value>#blend=<w>"
     paths = "+".join(str(resolve_checkpoint(part)) for part in checkpoint.split("+"))
+    if value_head and "policy_temperature" not in overrides:
+        # A search on the score head: finished games back up the same utility as its leaves,
+        # placement points as the value network's run trained its score head on.
+        from rl18xx.agent.alphazero.composite_model import checkpoint_reward, terminal_utility
+
+        reward = checkpoint_reward(paths.split("+")[-1])
+        if reward is None:
+            LOGGER.warning(f"{spec}: no run reward recorded for the score head; finished games back up the win share")
+        else:
+            weight, points = terminal_utility(value_head, reward)
+            overrides.update(terminal_score_weight=weight, terminal_score_points=points)
     return paths + (hash_ + value_head if hash_ else ""), overrides
 
 
@@ -344,6 +355,8 @@ def _setup_game(game_idx: int, seat_names: tuple, settings: dict) -> tuple:
             max_game_length=settings["max_length"],
             player_count_distribution={NUM_PLAYERS: 1.0},
             auction_unlock=True,
+            # A forced move with an open price is priced at its own position (as the generator does).
+            stop_chain_at_open_price=True,
         )
         players[name] = RustMCTSPlayer(config)
     return game, start_label, players

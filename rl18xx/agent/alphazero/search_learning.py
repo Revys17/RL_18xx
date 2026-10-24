@@ -798,14 +798,20 @@ class _Game:
     tree: Any = None
     tree_version: Optional[int] = None
     tree_synced: int = 0
+    search_version: int = 0  # the network version the current decision's search started on (its row's)
 
 
 def search_config(settings: dict, client=None):
     """The ``SelfPlayConfig`` of a generator's trees (the inference goes
     through the lockstep searcher; ``client`` only satisfies the player)."""
+    from rl18xx.agent.alphazero.composite_model import terminal_utility
     from rl18xx.agent.alphazero.config import SelfPlayConfig
 
     gumbel = settings["target"] == "gumbel"
+    # A finished game backs up the utility the leaves' value head reads (score / blend=<w>).
+    terminal_weight, terminal_points = terminal_utility(
+        settings.get("value_head", "win"), settings.get("reward", "placement")
+    )
     return SelfPlayConfig(
         network=None,
         use_inference_server=client is not None,
@@ -830,6 +836,8 @@ def search_config(settings: dict, client=None):
         softpick_move_cutoff=0,
         max_game_length=settings["max_decisions"],
         player_count_distribution={NUM_PLAYERS: 1.0},
+        terminal_score_weight=terminal_weight,
+        terminal_score_points=terminal_points,
     )
 
 
@@ -893,6 +901,8 @@ class Generator:
             tree.set_q_config(True, c.fpu_reduction)
             if c.mcts_q_normalize:
                 tree.set_q_normalize(True)
+        if c.terminal_score_weight > 0:
+            tree.set_terminal_utility(c.terminal_score_weight, [float(p) for p in c.terminal_score_points])
         if c.gumbel_k > 0:
             tree.set_gumbel_config(c.gumbel_k, c.gumbel_c_visit, c.gumbel_c_scale, c.gumbel_noise_scale)
         return _TreeHandle(c, tree)
@@ -923,20 +933,31 @@ class Generator:
         g.pending = s["learner_temperature"] if server == "learner" else s.get("opponent_temperature", 1.0)
         return PolicyRequest(rs, legal, key=server)
 
+    def network_version(self) -> int:
+        """The learner network version its inference server serves now: the counter the trainer sets
+        after each reload (``worker_init``'s ``server_version``), else the task's settings' (in-process
+        generators: tests, benches). A task's settings carry the version at its submission, and the
+        server reloads mid-task, so they lag by up to one update."""
+        if _SERVER_VERSION is not None:
+            return int(_SERVER_VERSION.value)
+        return int(self.settings.get("version", 0))
+
     def _search(self, g: _Game, rs, readouts: int, key):
         """The decision's search: on the game's kept tree with ``reuse_tree``
-        (when it still matches the position and was searched by the current
-        network version), else on a fresh tree."""
+        (when it still matches the position and was searched by the network
+        version the server serves now), else on a fresh tree."""
         from rl18xx.agent.alphazero.lockstep import TreeSearch
 
         s = self.settings
+        version = self.network_version()
+        g.search_version = version
         reuse = s.get("reuse_tree", "off")
         if reuse == "off":
             return TreeSearch(self._tree(rs), readouts, key=key)
         handle = g.tree if self._tree_in_sync(g, rs) else None
         if handle is not None:
             tree = handle._rust_player
-            if g.tree_version != s.get("version", 0):
+            if g.tree_version != version:
                 self.counts["reuse_dropped_version"] += 1  # searched by an older network
                 handle = None
             elif reuse == "additional" and tree.n_at_root() > s.get("reuse_max_root_visits", 2 * s["n_full"]):
@@ -944,7 +965,7 @@ class Generator:
                 handle = None
         if handle is None:
             handle = self._tree(rs)
-            g.tree_version = s.get("version", 0)
+            g.tree_version = version
             g.tree_synced = int(handle._rust_player.root_move_number())
         else:
             self.counts["reused_searches"] += 1
@@ -1038,7 +1059,7 @@ class Generator:
                     legal=legal.astype(np.int32),
                     target=target.astype(np.float32),
                     price=price_target,
-                    version=int(s.get("version", 0)),
+                    version=g.search_version,
                     root_value=g.search_values[-1],
                     search_index=len(g.search_values) - 1,
                     fast=g.fast,
@@ -1230,10 +1251,13 @@ class Generator:
 
 _CLIENTS: dict = {}
 _GENERATOR: Optional[Generator] = None
+_SERVER_VERSION = None  # a shared multiprocessing Value: the learner version the server serves
 
 
-def worker_init(server_queues: dict):
-    """Pool initializer: one slot on every inference server."""
+def worker_init(server_queues: dict, server_version=None):
+    """Pool initializer: one slot on every inference server; ``server_version``: the trainer's
+    shared counter of the network version the learner's server serves (set after each reload)."""
+    global _SERVER_VERSION
     import os
 
     import torch
@@ -1242,6 +1266,7 @@ def worker_init(server_queues: dict):
 
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     torch.set_num_threads(1)
+    _SERVER_VERSION = server_version
     for name, (request_q, reply_qs, ticket_q) in server_queues.items():
         worker_id = ticket_q.get()
         _CLIENTS[name] = InferenceClient(request_q=request_q, reply_q=reply_qs[worker_id], worker_id=worker_id)
@@ -1557,6 +1582,7 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "auction_fraction": cfg.auction_fraction,
         "critic_positions_per_game": cfg.critic_positions_per_game,
         "reward": cfg.reward,
+        "value_head": cfg.value_head,
         "opponent_servers": [],
         "value_nstep": cfg.value_nstep,
         "value_bootstrap_weight": cfg.value_bootstrap_weight,
@@ -1631,6 +1657,29 @@ def server_spec(cfg: SearchLearningConfig, learner_path, critic_path=None) -> st
     return f"{learner_path}+{critic_path}{suffix}"
 
 
+# What a resume may change (each only when passed; the rest stay the run's): its length, its generation
+# layout, the microbatch (the same step, other memory), the inference speed-ups (the same outputs), the
+# exploration, the followed policy run and the learning rates.
+RESUME_SETTINGS = (
+    "full_move_temperature",
+    "explore_decisions",
+    "max_updates",
+    "microbatch",
+    "workers",
+    "games_per_worker",
+    "task_seconds",
+    "midgame_positions",
+    "midgame_fraction",
+    "auction_fraction",
+    "dedupe_maps",
+    "server_pipeline",
+    "server_replicas",
+    "policy_follow",
+    "lr",
+    "critic_lr",
+)
+
+
 def learner_param_groups(learner, cfg: SearchLearningConfig) -> list:
     """The learner's optimizer groups: with ``cfg.shared`` its value heads (and
     auxiliary heads, and a value-only entity encoder: ``value_entity_encoder``) at
@@ -1661,8 +1710,9 @@ def learner_param_groups(learner, cfg: SearchLearningConfig) -> list:
     ]
 
 
-def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
-    """Run search learning; returns the run directory."""
+def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optional[set] = None) -> Path:
+    """Run search learning; returns the run directory. ``explicit``: on a resume, the options passed on
+    the command line -- only those of ``RESUME_SETTINGS`` change (``policy_gradient.resume_overrides``)."""
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
 
@@ -1670,37 +1720,14 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
     from torch.utils.tensorboard import SummaryWriter
 
     from rl18xx.agent.alphazero.inference_server import start_inference_server, wait_checking_servers
-    from rl18xx.agent.alphazero.policy_gradient import _load, _save, load_server_model, use_tf32
+    from rl18xx.agent.alphazero.policy_gradient import _load, _save, load_server_model, resume_overrides, use_tf32
 
     use_tf32()
     totals = Counter()
     if resume:
         run_dir = Path(resume)
         state = json.loads((run_dir / "state.json").read_text())
-        # The run keeps its settings; its length, its generation layout, the
-        # microbatch (the same step, other memory), the inference speed-ups
-        # (the same outputs) and the exploration (full_move_temperature /
-        # explore_decisions: a resume without them turns it off) can change.
-        overrides = {
-            k: getattr(cfg, k)
-            for k in (
-                "full_move_temperature",
-                "explore_decisions",
-                "max_updates",
-                "microbatch",
-                "workers",
-                "games_per_worker",
-                "task_seconds",
-                "midgame_positions",
-                "midgame_fraction",
-                "auction_fraction",
-                "dedupe_maps",
-                "server_pipeline",
-                "server_replicas",
-            )
-        }
-        if cfg.policy_follow:
-            overrides["policy_follow"] = cfg.policy_follow
+        overrides = resume_overrides(cfg, state["config"], RESUME_SETTINGS, explicit)
         cfg = SearchLearningConfig(**{**state["config"], **overrides})
         update = int(state["snapshot_update"])
         kl_coef = float(state["kl_coef"])
@@ -1748,6 +1775,12 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
         learner_opt.load_state_dict(opt_state["learner"])
         if critic_opt is not None:
             critic_opt.load_state_dict(opt_state["critic"])
+        # load_state_dict restores the saved learning rates: the config's (a resume can change them) win.
+        for group, fresh in zip(learner_opt.param_groups, learner_param_groups(learner, cfg)):
+            group["lr"] = fresh["lr"]
+        if critic_opt is not None:
+            for group in critic_opt.param_groups:
+                group["lr"] = cfg.critic_lr
 
     current_learner = run_dir / "learner" / f"{update}.pth"
     current_critic = None if cfg.shared else run_dir / "critic" / f"{update}.pth"
@@ -1781,13 +1814,16 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
     # new_rows: the full searches' rows since the last update (the cadence); fast-search
     # rows (fast_row_weight) fill the window on top of them.
     new_rows, new_fast_rows, gen_started, run_started = 0, 0, time.time(), time.time()
+    # The version the learner's server serves, read by the workers at every search: a task's settings
+    # carry the version at its submission, but the server reloads mid-task.
+    server_version = multiprocessing.get_context("spawn").Value("q", update, lock=False)
     try:
         # Spawned: the learner holds the networks (on the GPU), which a forked worker must not inherit.
         executor = ProcessPoolExecutor(
             max_workers=cfg.workers,
             mp_context=multiprocessing.get_context("spawn"),
             initializer=worker_init,
-            initargs=(queues,),
+            initargs=(queues, server_version),
         )
         try:
             futures = {
@@ -1849,6 +1885,7 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None) -> Path:
                 reply = handles["learner"].reload(spec(current_learner, current_critic))
                 if not (isinstance(reply, dict) and reply.get("ok")):
                     raise RuntimeError(f"the inference server could not load update {update}: {reply}")
+                server_version.value = update
                 if cfg.anchor_every and update % cfg.anchor_every == 0:
                     anchor.load_state_dict(learner.state_dict(), strict=False)  # not the aux heads
                     anchor_update = update

@@ -228,6 +228,34 @@ def test_a_version_change_drops_the_kept_trees(start_file):
     assert stats.get("reuse_dropped_version", 0) > 0
 
 
+class _Counter:
+    def __init__(self, value):
+        self.value = value
+
+
+def test_trees_follow_the_servers_version_not_the_tasks(start_file, monkeypatch):
+    """With the trainer's shared counter, a task whose settings lag (submitted before the server
+    reloaded) neither keeps a tree across the reload nor drops trees the new network built; rows
+    carry the version their search started on."""
+    counter = _Counter(3)
+    monkeypatch.setattr(sl, "_SERVER_VERSION", counter)
+    settings = _settings(start_file, "total")  # version 3
+    gen = sl.Generator(settings, {"learner": ModelEvaluator(HashNet())})
+    gen.run(4.0)
+    counter.value = 4  # the server reloaded mid-task: the task's settings still say 3
+    first = gen.run(4.0, settings)
+    assert first["stats"].get("reuse_dropped_version", 0) > 0
+    assert gen.network_version() == 4
+    for game in first["games"]:
+        assert {r.version for r in game["rows"]} <= {3, 4}
+    later = gen.run(4.0, dict(settings, version=4))  # the next task: same network, nothing to drop
+    assert later["stats"].get("reuse_dropped_version", 0) == 0
+    assert later["stats"].get("reused_searches", 0) > 0
+    # A game that ended in this task searched its last row here, on version 4 (earlier rows may be 3's).
+    finished = [game["rows"] for game in later["games"] if game["rows"]]
+    assert finished and all(rows[-1].version == 4 for rows in finished)
+
+
 def test_a_tiny_cpu_run_with_the_speed_options(tmp_path, start_file, monkeypatch):
     """Search learning end to end with tree reuse, map dedupe and two server
     replicas (reloaded after every update)."""

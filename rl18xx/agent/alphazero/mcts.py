@@ -153,7 +153,26 @@ def unrotate_value(value: np.ndarray, rotation: int, num_players: int) -> np.nda
     return out
 
 
-def terminal_backup_value(result: np.ndarray, num_players: int) -> np.ndarray:
+def _placement_points(shares: np.ndarray, points) -> np.ndarray:
+    """Per seat the points of its place by ``shares`` (1st first), tied seats sharing their
+    places' points (float32; Rust ``mcts_lockstep::placement_points``)."""
+    n = len(shares)
+    pts = np.array([float(points[i]) if i < len(points) else 0.0 for i in range(n)], dtype=np.float32)
+    order = np.argsort(-shares, kind="stable")
+    out = np.zeros(n, dtype=np.float32)
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and abs(shares[order[j + 1]] - shares[order[i]]) < 1e-6:
+            j += 1
+        out[order[i : j + 1]] = np.float32(pts[i : j + 1].sum(dtype=np.float32) / np.float32(j - i + 1))
+        i = j + 1
+    return out
+
+
+def terminal_backup_value(
+    result: np.ndarray, num_players: int, score_weight: float = 0.0, score_points=()
+) -> np.ndarray:
     """Value to back up through the search tree for a finished game.
 
     ``game_result()`` with ``use_score_values`` holds net-worth fractions —
@@ -164,11 +183,19 @@ def terminal_backup_value(result: np.ndarray, num_players: int) -> np.ndarray:
     flatter scale than the network's estimate one move earlier (a clear
     leader saw ~0.35 for ending the game against ~0.9 for playing on), so
     convert to the same share-of-winners the win-loss head is trained on.
+
+    ``score_weight`` w > 0 (``SelfPlayConfig.terminal_score_weight``: the search's values
+    from the score head, ``score`` / ``blend=<w>``): (1 - w) * that share + w *
+    ``score_points`` by place, the leaves' (1 - w) * win + w * score.
     """
     out = np.zeros(len(result), dtype=np.float32)
     real = np.asarray(result[:num_players], dtype=np.float32)
     winners = (real >= real.max() - 1e-6).astype(np.float32)
-    out[:num_players] = winners / winners.sum()
+    share = winners / winners.sum()
+    if score_weight > 0 and len(score_points):
+        w = np.float32(score_weight)
+        share = (np.float32(1.0) - w) * share + w * _placement_points(real, score_points)
+    out[:num_players] = share
     return out
 
 
