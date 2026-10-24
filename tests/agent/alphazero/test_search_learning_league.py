@@ -187,6 +187,22 @@ def test_a_game_whose_member_server_changed_hands_is_not_scored(start_file, monk
     assert g.league_mixed
 
 
+def test_a_training_runs_snapshot_is_linked_where_the_server_can_load_it(tmp_path):
+    from rl18xx.agent.alphazero.composite_model import load_policy_value
+
+    policy, critic = _save_checkpoints(tmp_path)
+    run_dir = tmp_path / "run"
+    cfg = sl.SearchLearningConfig(policy_checkpoint=str(policy), value_checkpoint=str(critic))
+    spec = sl.snapshot_spec(cfg, run_dir, "self_u100", policy, critic, frozen=False)
+    assert spec == f"{run_dir}/league/self_u100/learner/100.pth+{run_dir}/league/self_u100/critic/100.pth"
+    assert os.stat(run_dir / "league" / "self_u100" / "learner" / "100.pth").st_ino == os.stat(policy).st_ino
+    assert load_policy_value(spec) is not None  # a checkpoint's file name is its number
+    frozen = sl.SearchLearningConfig(policy_checkpoint="ckpt10.pth", value_checkpoint="", value_follow="v")
+    assert sl.snapshot_spec(frozen, run_dir, "self_u5_v2", policy, tmp_path / "promoted" / "2.pth", True) == (
+        f"ckpt10.pth+{tmp_path}/promoted/2.pth"
+    )
+
+
 # ----------------------------------------------------------------------------- value_follow
 
 

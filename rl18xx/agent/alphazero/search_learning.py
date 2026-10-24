@@ -1830,17 +1830,19 @@ def generation_only_stats(cfg: SearchLearningConfig) -> dict:
 
 def snapshot_spec(cfg, run_dir: Path, name: str, current_learner: Path, value: Path, frozen: bool) -> str:
     """The checkpoint spec of the main system joining the league as ``name``: its policy (a frozen run's
-    starting checkpoint, else the update's learner linked under ``<run>/league/``, which the retention
-    job keeps while ``league.json`` names it) and its value (the followed run's promoted value, kept
-    there forever, or this run's critic, linked likewise)."""
+    starting checkpoint, else the update's learner linked as ``<run>/league/<name>/learner/<update>.pth``,
+    which the retention job keeps while ``league.json`` names it; a checkpoint's file name must be its
+    number) and its value (the followed run's promoted value, kept there forever, or this run's critic,
+    linked likewise under ``critic/``)."""
     if frozen:
         policy = Path(cfg.policy_checkpoint)
     else:
-        policy = run_dir / "league" / f"{name}.pth"
-        policy.parent.mkdir(exist_ok=True)
+        policy = run_dir / "league" / name / "learner" / current_learner.name
+        policy.parent.mkdir(parents=True, exist_ok=True)
         _link(current_learner, policy)
     if not cfg.shared and not cfg.value_follow:
-        linked = run_dir / "league" / f"{name}_critic.pth"
+        linked = run_dir / "league" / name / "critic" / Path(value).name
+        linked.parent.mkdir(parents=True, exist_ok=True)
         _link(Path(value), linked)
         value = linked
     return server_spec(cfg, policy, value)

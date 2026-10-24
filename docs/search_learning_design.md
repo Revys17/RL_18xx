@@ -1591,7 +1591,7 @@ main system's); the whole game is saved, so the value trains on positions agains
 
 Every `--league-snapshot-hours` (wall clock, kept across resumes) the main system joins as a snapshot member
 `self_u<update>[_v<value version>]`: its policy (a frozen run: the starting checkpoint; else the update's
-learner, linked under `<run>/league/`) and its value (the promoted value, or this run's critic, linked). There
+learner, linked as `<run>/league/<name>/learner/<update>.pth`) and its value (the promoted value, or this run's critic, linked under `critic/`). There
 are `--league-snapshot-slots` snapshot servers (an empty one serves the main system, unused); a full set
 replaces the oldest. When a slot's server changes members, games dealt to the old member are played out but
 not scored: each league server has a shared counter of member changes, read when the game is dealt (against
