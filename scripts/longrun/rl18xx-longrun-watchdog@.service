@@ -1,0 +1,14 @@
+# The long run's watchdog (scripts/longrun/watchdog.py; docs/longrun_runbook.md). Started with the run
+# (its Wants=), kept running after the run stops so it can report why.
+[Unit]
+Description=rl18xx long run %i: watchdog
+
+[Service]
+Type=exec
+EnvironmentFile=%h/.config/rl18xx-longrun/%i.env
+Environment=LONGRUN_INSTANCE=%i
+ExecStart=/usr/bin/python3 ${WATCHDOG} --instance %i
+Restart=always
+RestartSec=30
+Nice=10
+MemoryMax=1G
