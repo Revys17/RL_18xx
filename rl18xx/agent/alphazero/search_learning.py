@@ -1087,7 +1087,7 @@ class Generator:
             if g.searches is not None:  # save_data: where the search was (the move is not on the log yet)
                 explored = self.counts["explored_moves"] > explored_before
                 g.searches.append(
-                    (g.decisions, rs.move_number, g.fast, g.pending is not None, explored, int(s.get("version", 0)))
+                    (g.decisions, rs.move_number, g.fast, g.pending is not None, explored, g.search_version)
                 )
             # The move goes straight onto the game (the most-visited price, as
             # advance_root would commit); a kept tree follows it.
