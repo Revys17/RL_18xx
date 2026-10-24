@@ -103,6 +103,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import time
 import uuid
@@ -319,6 +320,27 @@ class SearchLearningConfig:
     # rows by replaying the log (``search_data.rebuild_rows``), with any value-target setting.
     save_data: Optional[str] = None
     save_data_shard_games: int = 256
+    # -- The long run (docs/long_run_recipe.md) --
+    # A separate value network trained elsewhere (``main.py value-train --run-dir <dir>``): the
+    # search's leaf values come from that run's current promoted value (``promoted.json``), reloaded
+    # whenever it promotes a new one (checked before every update); no critic trains here. With
+    # ``freeze_policy`` the run only generates (no updates of any network): games, saved data and
+    # the history; an "update" is then every ``rows_per_update`` searched rows.
+    value_follow: Optional[str] = None
+    # League seats (``population``: a JSON file of members, ``load_league_members``): a share of the
+    # games (``league_share``) give 1-2 seats (``league_seat_weights``) to one league member, drawn by
+    # PFSP on the main system's score against it (``policy_gradient.League``); each member has its own
+    # inference server and searches at ``league_readouts`` (or plays its policy: "mode": "policy").
+    # Member seats give no rows; their games are saved and scored per member (the history's
+    # ``league``). Every ``league_snapshot_hours`` the main system itself joins as a "snapshot" member
+    # (its current policy + value), the oldest dropped beyond ``league_snapshot_slots``.
+    population: Optional[str] = None
+    league_share: float = 0.3
+    league_seat_weights: Optional[dict] = None  # {seats: weight}; None: {1: 0.5, 2: 0.5}
+    league_readouts: int = 48
+    pfsp_power: float = 2.0
+    league_snapshot_hours: float = 168.0
+    league_snapshot_slots: int = 6
 
 
 AUX_SEAT_TARGETS = 2  # final net-worth share, final cash share
@@ -834,6 +856,12 @@ class _Game:
     tree_version: Optional[int] = None
     tree_synced: int = 0
     search_version: int = 0  # the network version the current decision's search started on (its row's)
+    seat_members: list = field(default_factory=lambda: [MAIN] * NUM_PLAYERS)  # per seat: MAIN or a member
+    # League seats: the member's server's version when dealt (a snapshot slot's server changes
+    # members); a game whose member's server changed hands is played out but not scored.
+    league_version: Optional[int] = None
+    league_mixed: bool = False
+    member_search: bool = False  # the pending need is a league member's search (no row, no record)
 
 
 def search_config(settings: dict, client=None):
@@ -876,16 +904,74 @@ def search_config(settings: dict, client=None):
     )
 
 
-def deal_seats(settings: dict, rng: random.Random) -> list:
-    """The server each seat's moves come from. All the learner's, unless
-    ``settings["opponent_servers"]`` names servers (the league hook): then the
-    learner holds ``learner_seats`` random seats (default 2) and each other seat
-    plays one of those servers' policy (no rows)."""
+DEFAULT_LEAGUE_SEAT_WEIGHTS = {1: 0.5, 2: 0.5}
+MAIN = "main"  # seat_members' name for the main system's seats
+
+
+def deal_seats(settings: dict, rng: random.Random) -> tuple:
+    """``(seat -> server, seat -> member name)`` for a new game. All the learner's, unless
+    ``settings["league"]`` (league seats: with probability ``share`` one member, drawn by its
+    ``weights``, takes 1-2 random seats -- ``seat_weights``) or ``settings["opponent_servers"]``
+    (the older hook: the learner holds ``learner_seats`` random seats, default 2, and each other
+    seat plays one of those servers' policy) say otherwise. Other seats give no rows."""
+    league = settings.get("league")
+    if league and league["members"] and rng.random() < float(league["share"]):
+        names = sorted(league["members"])
+        name = rng.choices(names, weights=[float(league["weights"].get(n, 0.0)) for n in names])[0]
+        counts, weights = zip(*sorted((int(k), float(v)) for k, v in league["seat_weights"].items()))
+        seats = set(rng.sample(range(NUM_PLAYERS), rng.choices(counts, weights=weights)[0]))
+        server = league["members"][name]["server"]
+        return (
+            [server if seat in seats else "learner" for seat in range(NUM_PLAYERS)],
+            [name if seat in seats else MAIN for seat in range(NUM_PLAYERS)],
+        )
     opponents = settings.get("opponent_servers") or []
     if not opponents:
-        return ["learner"] * NUM_PLAYERS
+        return ["learner"] * NUM_PLAYERS, [MAIN] * NUM_PLAYERS
     learner = set(rng.sample(range(NUM_PLAYERS), int(settings.get("learner_seats", 2))))
-    return ["learner" if seat in learner else rng.choice(opponents) for seat in range(NUM_PLAYERS)]
+    servers = ["learner" if seat in learner else rng.choice(opponents) for seat in range(NUM_PLAYERS)]
+    return servers, [MAIN if s == "learner" else s for s in servers]
+
+
+def league_result(record: dict) -> Optional[dict]:
+    """A finished game's league score (None: no league seats, or its member's server changed
+    hands during the game): the member, the main system's seat count, its seats' summed win
+    share and net-worth share, and the pairwise result (1 / 0.5 / 0 per main seat vs member seat
+    by net worth, averaged) that PFSP records."""
+    members = record.get("seat_members") or []
+    others = {m for m in members if m != MAIN}
+    if len(others) != 1 or record.get("league_mixed"):
+        return None
+    member = others.pop()
+    main = [s for s, m in enumerate(members) if m == MAIN]
+    theirs = [s for s, m in enumerate(members) if m == member]
+    worth = record["fractions"]
+    pairs = [1.0 if worth[a] > worth[b] else 0.5 if worth[a] == worth[b] else 0.0 for a in main for b in theirs]
+    return {
+        "member": member,
+        "main_seats": len(main),
+        "win": float(sum(record["win_share"][s] for s in main)),
+        "worth": float(sum(worth[s] for s in main)),
+        "pairwise": float(np.mean(pairs)) if pairs else 0.5,
+    }
+
+
+def add_league_score(scores: dict, result: dict, kind: str) -> None:
+    """Accumulate ``league_result`` into the history's per-member sums (``fair``: the main
+    system's fair win share, its seats / 4; the squares give the daily report its SE)."""
+    s = scores.setdefault(
+        result["member"],
+        {"kind": kind, "games": 0, "main_seats": 0, "win": 0.0, "fair": 0.0, "worth": 0.0,
+         "win_excess_sq": 0.0, "worth_excess_sq": 0.0},
+    )  # fmt: skip
+    fair = result["main_seats"] / NUM_PLAYERS
+    s["games"] += 1
+    s["main_seats"] += result["main_seats"]
+    s["win"] += result["win"]
+    s["fair"] += fair
+    s["worth"] += result["worth"]
+    s["win_excess_sq"] += (result["win"] - fair) ** 2
+    s["worth_excess_sq"] += (result["worth"] - fair) ** 2
 
 
 class Generator:
@@ -904,6 +990,7 @@ class Generator:
         self.py_rng = random.Random()
         self.next_slot = 0
         self.counts = Counter()
+        self._member_configs: dict = {}
 
     # -- games -----------------------------------------------------------------
 
@@ -921,22 +1008,52 @@ class Generator:
             auction_fraction=s.get("auction_fraction", 0.0),
         )
         self.counts["skipped_starts"] += skipped  # recorded before an engine rules change
-        return _Game(
+        servers, members = deal_seats(s, self.py_rng)
+        g = _Game(
             game=game,
             uid=uuid.uuid4().hex,
             start=start.label,
-            seat_servers=deal_seats(s, self.py_rng),
+            seat_servers=servers,
             start_actions=len(start.actions),
             searches=[] if s.get("save_data") else None,
+            seat_members=members,
         )
+        league = s.get("league")
+        server = next((x for x in servers if x != "learner"), None)
+        version = league_server_version(server)
+        if league and version is not None and server in league.get("server_versions", {}):
+            # The settings lag the trainer by up to a task: a server that has moved on since names
+            # another member than the settings do.
+            g.league_version = version
+            g.league_mixed = version != int(league["server_versions"][server])
+        return g
 
-    def _tree(self, game):
+    def _member(self, server: str) -> dict:
+        """The league member a server plays (``settings["league"]``), or the older hook's opponent."""
+        league = self.settings.get("league") or {}
+        for member in league.get("members", {}).values():
+            if member["server"] == server:
+                return member
+        return {"mode": "policy", "temperature": self.settings.get("opponent_temperature", 1.0)}
+
+    def _member_tree(self, game, member: dict):
+        """A fresh tree for a league member's search: the generator's PUCT settings at the member's
+        prior temperature, no Gumbel root, the win head's terminal values."""
+        key = (member.get("prior_temperature", 1.0), member.get("value_head", "win"))
+        config = self._member_configs.get(key)
+        if config is None:
+            s = dict(self.settings, target="visits", prior_temperature=key[0], value_head=key[1])
+            config = self._member_configs[key] = search_config(s)
+        return self._tree(game, config)
+
+    def _tree(self, game, config=None):
         """A search tree at ``game`` (an ``engine_rs.BaseGame``, cloned), set up as
         ``RustMCTSPlayer.initialize_game`` sets its tree up, wrapped for
-        ``lockstep.TreeSearch`` (which reads only the config and the tree)."""
+        ``lockstep.TreeSearch`` (which reads only the config and the tree); ``config``: another
+        ``search_config`` than the generator's (a league member's)."""
         import engine_rs
 
-        c = self.config
+        c = config or self.config
         tree = engine_rs.RustMCTSPlayer(game, c.pw_c, c.pw_alpha, c.min_price_children, c.price_explore_eps)
         tree.set_search_config(c.c_puct_init, c.c_puct_base, {}, c.max_engine_actions)
         if c.mcts_mean_q:
@@ -964,15 +1081,24 @@ class Generator:
             self.counts["single_move_decisions"] += 1  # an open price: the price head plays it
         mover = rs.encode_canonical_py()  # (state, nodes, round type, rotation, players)
         server = g.seat_servers[int(mover[3])]
-        if server == "learner" and len(legal) > 1 and self.rng.random() < s["p_full"]:
+        g.member_search = False
+        if server != "learner":
+            member = self._member(server)
+            if member.get("mode", "search") == "search" and len(legal) > 1:
+                g.pending, g.fast, g.member_search = None, True, True
+                self.counts["league_searches"] += 1
+                return TreeSearch(self._member_tree(rs, member), int(member["readouts"]), key=server)
+            g.pending = float(member.get("temperature", 1.0))
+            return PolicyRequest(rs, legal, key=server)
+        if len(legal) > 1 and self.rng.random() < s["p_full"]:
             g.pending, g.fast = mover, False
             return self._search(g, rs, s["n_full"], server)
-        if server == "learner" and len(legal) > 1 and s.get("n_fast", 0) > 0:
+        if len(legal) > 1 and s.get("n_fast", 0) > 0:
             # A fast search: played; a row only with fast_row_weight (else no row).
             g.pending = mover if float(s.get("fast_row_weight", 0.0)) > 0 else None
             g.fast = True
             return self._search(g, rs, s["n_fast"], server)
-        g.pending = s["learner_temperature"] if server == "learner" else s.get("opponent_temperature", 1.0)
+        g.pending = s["learner_temperature"]
         return PolicyRequest(rs, legal, key=server)
 
     def network_version(self) -> int:
@@ -1060,6 +1186,16 @@ class Generator:
             move = int(need.legal[int(self.rng.choice(len(p), p=p))])
             g.price_row = need.price_row
             price, _, _ = choose_price(g.game, move, need.price_row, self.rng, 0.0)
+            in_sync = self._tree_in_sync(g, rs)
+            rs.apply_action_index(move, price)
+            if in_sync:
+                self._advance_tree(g, move, price)
+            self.counts["fast_decisions"] += 1
+        elif g.member_search:
+            # A league member's search: its most-visited move and price; no row, no recorded search.
+            tree = need.tree
+            move = int(tree.pick_best_action())
+            price, _ = self._searched_price(tree, rs, move)
             in_sync = self._tree_in_sync(g, rs)
             rs.apply_action_index(move, price)
             if in_sync:
@@ -1221,7 +1357,12 @@ class Generator:
             "decisions": g.decisions,
             "searched": g.searched,
             "seat_servers": list(g.seat_servers),
+            "seat_members": list(g.seat_members),
+            "league_mixed": g.league_mixed
+            or (g.league_version is not None and league_server_version(self._league_server(g)) != g.league_version),
             "win_share": win_share.tolist(),
+            "fractions": [float(x) for x in fractions],
+            "value_version": s.get("value_version"),
             "rows": g.rows,
             # How well the search's root values called this game (win CE), on its rows.
             "root_value_ce": root_value_ce(g.rows, share_of_winners(fractions)),
@@ -1230,11 +1371,17 @@ class Generator:
             from rl18xx.agent.alphazero.search_data import pack_game
 
             try:
-                record["saved"] = pack_game(g, worth, win_share, fractions, score, aux_seat, aux_global)
+                record["saved"] = pack_game(
+                    g, worth, win_share, fractions, score, aux_seat, aux_global, s.get("value_version")
+                )
             except Exception as e:  # keeping the data must never stop the generation
                 LOGGER.warning(f"search self-play: game {g.uid} not saved: {e!r}")
                 self.counts["save_errors"] += 1
         return record
+
+    @staticmethod
+    def _league_server(g: _Game) -> Optional[str]:
+        return next((x for x in g.seat_servers if x != "learner"), None)
 
     # -- the loop ----------------------------------------------------------------
 
@@ -1300,12 +1447,23 @@ class Generator:
 _CLIENTS: dict = {}
 _GENERATOR: Optional[Generator] = None
 _SERVER_VERSION = None  # a shared multiprocessing Value: the learner version the server serves
+_LEAGUE_VERSIONS: dict = {}  # league server -> a shared Value: how many times it changed members
 
 
-def worker_init(server_queues: dict, server_version=None):
+def league_server_version(server: Optional[str]) -> Optional[int]:
+    """How many times a league server has changed members (the trainer's shared counter; None:
+    no counter, e.g. an in-process generator)."""
+    value = _LEAGUE_VERSIONS.get(server)
+    return None if value is None else int(value.value)
+
+
+def worker_init(server_queues: dict, server_version=None, league_versions=None):
     """Pool initializer: one slot on every inference server; ``server_version``: the trainer's
-    shared counter of the network version the learner's server serves (set after each reload)."""
+    shared counter of the network version the learner's server serves (set after each reload);
+    ``league_versions``: per league server, its shared count of member changes."""
     global _SERVER_VERSION
+    _LEAGUE_VERSIONS.clear()
+    _LEAGUE_VERSIONS.update(league_versions or {})
     import os
 
     import torch
@@ -1385,16 +1543,17 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, window: ReplayWind
     """``cfg.steps_per_update`` optimizer steps on minibatches from the window:
     the policy toward the search targets (KL to the anchor), the value network on
     the sampled rows still flagged for it (each once) -- the critic, or with
-    ``critic`` None (``cfg.shared``) the learner's own value heads from the same
-    forward as its policy. Eval mode, as in ``policy_gradient._update`` (dropout
-    would make the trained policy a different one from the playing one)."""
+    ``cfg.shared`` the learner's own value heads from the same forward as its policy, or
+    none (``critic`` None without ``cfg.shared``: ``value_follow``, the value trains
+    elsewhere). Eval mode, as in ``policy_gradient._update`` (dropout would make the
+    trained policy a different one from the playing one)."""
     import torch
 
-    shared = critic is None
+    shared = bool(cfg.shared)
     value_net = learner if shared else critic
-    aux = cfg.aux_loss_weight > 0
+    aux = cfg.aux_loss_weight > 0 and value_net is not None
     learner.eval()
-    if not shared:
+    if critic is not None:
         critic.eval()
     learner.value_stop_grad = bool(shared and cfg.value_stop_grad)
     temperature = float(cfg.learner_temperature)
@@ -1407,7 +1566,7 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, window: ReplayWind
         learner_opt.zero_grad(set_to_none=True)
         if critic_opt is not None:
             critic_opt.zero_grad(set_to_none=True)
-        step_critic = [r for r in rows if r.critic and r.fractions is not None]
+        step_critic = [r for r in rows if r.critic and r.fractions is not None] if value_net is not None else []
         n_step = len(rows)
         n_price = sum(1 for r in rows if r.price is not None)
         for start in range(0, n_step, micro):
@@ -1446,7 +1605,7 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, window: ReplayWind
                     sums[key] = max(sums[key], float(value))
                 elif key != "total":
                     sums[key] += float(value)
-            if idx.numel():
+            if idx.numel() and value_net is not None:
                 share = idx.numel() / len(step_critic)
                 if shared:
                     seat_input = store["seat_input"][idx] if aux else None
@@ -1591,7 +1750,11 @@ def _update_value_only(learner, learner_opt, window: ReplayWindow, cfg, device, 
     return stats
 
 
-def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
+def worker_settings(
+    cfg: SearchLearningConfig, version: int, league: Optional[dict] = None, value_version: Optional[int] = None
+) -> dict:
+    """A generation task's settings; ``league``: ``LeagueSeats.settings()`` (None: no league seats);
+    ``value_version``: the followed value run's promoted version (saved with each game)."""
     return {
         "version": version,
         "target": cfg.target,
@@ -1644,7 +1807,43 @@ def worker_settings(cfg: SearchLearningConfig, version: int) -> dict:
         "target_confidence_signal": cfg.target_confidence_signal,
         "target_distrust_steps": tuple(cfg.target_distrust_steps or ()),
         "save_data": bool(cfg.save_data),
+        "league": league,
+        "value_version": value_version,
     }
+
+
+def generation_only_stats(cfg: SearchLearningConfig) -> dict:
+    """A frozen run's update statistics (``value_follow`` + ``freeze_policy``: nothing trains): the
+    training keys :func:`_update` reports, as NaN / 0."""
+    nan = float("nan")
+    keys = ("ce", "search_kl", "target_entropy", "kl_anchor", "entropy", "top1_agreement", "price_ce",
+            "price_kl_anchor", "grad_norm", "critic_ce", "critic_outcome_ce", "critic_mse", "critic_winner_hit")
+    return {
+        **{k: nan for k in keys},
+        "optimizer_steps": 0,
+        "rows_trained": 0,
+        "price_rows_trained": 0,
+        "critic_rows_trained": 0,
+        "row_version_mean": nan,
+    }
+
+
+def snapshot_spec(cfg, run_dir: Path, name: str, current_learner: Path, value: Path, frozen: bool) -> str:
+    """The checkpoint spec of the main system joining the league as ``name``: its policy (a frozen run's
+    starting checkpoint, else the update's learner linked under ``<run>/league/``, which the retention
+    job keeps while ``league.json`` names it) and its value (the followed run's promoted value, kept
+    there forever, or this run's critic, linked likewise)."""
+    if frozen:
+        policy = Path(cfg.policy_checkpoint)
+    else:
+        policy = run_dir / "league" / f"{name}.pth"
+        policy.parent.mkdir(exist_ok=True)
+        _link(current_learner, policy)
+    if not cfg.shared and not cfg.value_follow:
+        linked = run_dir / "league" / f"{name}_critic.pth"
+        _link(Path(value), linked)
+        value = linked
+    return server_spec(cfg, policy, value)
 
 
 def _validate(cfg: SearchLearningConfig) -> None:
@@ -1675,8 +1874,18 @@ def _validate(cfg: SearchLearningConfig) -> None:
         raise SystemExit("--surprise-weight must be in [0, 1] and --surprise-cap >= 1")
     if cfg.value_stop_grad and not cfg.shared:
         raise SystemExit("--value-stop-grad needs --shared (the critic has no policy to protect)")
-    if (cfg.freeze_policy or cfg.policy_follow) and not cfg.shared:
-        raise SystemExit("--freeze-policy / --policy-follow need --shared (one network: its value side trains here)")
+    if cfg.value_follow and cfg.shared:
+        raise SystemExit("--value-follow follows a separate value network (value-train): it excludes --shared")
+    if cfg.freeze_policy and not (cfg.shared or cfg.value_follow):
+        raise SystemExit("--freeze-policy needs --shared (its value side trains here) or --value-follow (nothing does)")
+    if cfg.policy_follow and not cfg.shared:
+        raise SystemExit("--policy-follow needs --shared (one network: its value side trains here)")
+    if cfg.population:
+        if not 0.0 <= cfg.league_share <= 1.0 or cfg.league_readouts < 1 or cfg.league_snapshot_slots < 0:
+            raise SystemExit("--league-share must be in [0, 1], --league-readouts >= 1, --league-snapshot-slots >= 0")
+        weights = cfg.league_seat_weights or DEFAULT_LEAGUE_SEAT_WEIGHTS
+        if not weights or any(int(k) not in (1, 2, 3) or float(v) < 0 for k, v in weights.items()):
+            raise SystemExit("--league-seat-weights: {seats (1-3): weight >= 0}")
     if cfg.policy_follow and not cfg.freeze_policy:
         raise SystemExit("--policy-follow needs --freeze-policy (the followed run trains the policy path)")
     if cfg.target_confidence_mode not in CONFIDENCE_MODES:
@@ -1728,7 +1937,206 @@ RESUME_SETTINGS = (
     "policy_follow",
     "lr",
     "critic_lr",
+    "population",
+    "league_share",
+    "league_readouts",
+    "league_snapshot_hours",
 )
+
+
+class ValueFollower:
+    """``value_follow``: the current promoted value of a ``main.py value-train`` run (its
+    ``promoted.json``: ``{"current": v, "versions": [{"version", "path", ...}]}``, paths relative
+    to the run)."""
+
+    def __init__(self, run_dir):
+        self.run_dir = Path(run_dir)
+        self.version: Optional[int] = None
+        self.path: Optional[Path] = None
+
+    def poll(self) -> bool:
+        """Take the run's current promoted value; True if it is a newer one than the last taken
+        (an unreadable or half-written ``promoted.json`` keeps the last one)."""
+        try:
+            data = json.loads((self.run_dir / "promoted.json").read_text())
+            version = int(data["current"])
+            entry = next(v for v in data["versions"] if int(v["version"]) == version)
+        except (OSError, ValueError, KeyError, TypeError, StopIteration):
+            return False
+        path = self.run_dir / entry["path"]
+        if version == self.version or not path.is_file():
+            return False
+        self.version, self.path = version, path
+        return True
+
+
+SNAPSHOT_PREFIX = "self_"  # the main system's own snapshots in the league
+MEMBER_KEYS = ("server", "kind", "mode", "readouts", "prior_temperature", "temperature", "value_head")
+
+
+def load_league_members(path, readouts: int) -> tuple:
+    """``(name -> member, name -> min_share)`` of a league population file: ``{"members": [{"name",
+    "spec" (an inference-server checkpoint spec: ``<policy>[+<value>][#score]``), "mode" ("search", the
+    default: searched at ``readouts`` -- or "policy": sampled from the policy at "temperature"),
+    "readouts", "prior_temperature" (1), "temperature" (1), "value_head" ("win": the search's terminal
+    utility; put ``#score`` in the spec to search with the score head), "min_share"}, ...]}``."""
+    data = json.loads(Path(path).read_text())
+    raw = data["members"] if isinstance(data, dict) else data
+    members, pins = {}, {}
+    for i, m in enumerate(raw):
+        name = str(m["name"])
+        if name in members or name == MAIN or name.startswith(SNAPSHOT_PREFIX):
+            raise SystemExit(f"population {path}: member name {name!r} is taken or reserved")
+        mode = m.get("mode", "search")
+        if mode not in ("search", "policy"):
+            raise SystemExit(f"population {path}: {name}'s mode must be search or policy, got {mode!r}")
+        members[name] = {
+            "kind": "fixed",
+            "spec": str(m["spec"]),
+            "server": f"lg{i}",
+            "mode": mode,
+            "readouts": int(m.get("readouts", readouts)),
+            "prior_temperature": float(m.get("prior_temperature", 1.0)),
+            "temperature": float(m.get("temperature", 1.0)),
+            "value_head": str(m.get("value_head", "win")),
+        }
+        if m.get("min_share"):
+            pins[name] = float(m["min_share"])
+    if not members:
+        raise SystemExit(f"population {path} has no members")
+    return members, pins
+
+
+class LeagueSeats:
+    """The trainer's side of league seats: the members (the population file's fixed ones and the
+    main system's snapshots, each snapshot in one of ``league_snapshot_slots`` servers), PFSP on
+    the main system's pairwise results against each (``policy_gradient.League``), the settings the
+    workers deal seats by, and the per-member scores of the games since the last update."""
+
+    def __init__(self, cfg: SearchLearningConfig, state: Optional[dict], now: float):
+        from rl18xx.agent.alphazero.policy_gradient import League
+
+        self.cfg = cfg
+        self.fixed, pins = load_league_members(cfg.population, cfg.league_readouts)
+        state = state or {}
+        self.snapshots: list = [s for s in state.get("snapshots", []) if s["slot"] < cfg.league_snapshot_slots]
+        self.snapshot_time = float(state.get("snapshot_time", now))
+        if state.get("pfsp"):
+            self.league = League.from_state(state["pfsp"], power=cfg.pfsp_power)
+        else:
+            self.league = League(power=cfg.pfsp_power)
+        members = self.members
+        for name in list(self.league.members):
+            if name not in members:
+                self.league.remove(name)
+        for name in members:
+            self.league.add(name)  # a member new to the file joins at an even rate
+        self.league.min_shares = pins
+        self.versions: dict = {}  # server -> a shared Value counting its member changes (``start``)
+        self.scores: dict = {}
+
+    @property
+    def members(self) -> dict:
+        out = dict(self.fixed)
+        for snap in self.snapshots:
+            out[snap["name"]] = {**snap["member"], "server": f"snap{snap['slot']}", "kind": "snapshot"}
+        return out
+
+    def server_specs(self, idle_spec: str) -> dict:
+        """Server -> checkpoint spec: each fixed member's, each snapshot slot's member (an empty slot
+        serves ``idle_spec``, unused until a snapshot takes it)."""
+        specs = {m["server"]: m["spec"] for m in self.fixed.values()}
+        taken = {s["slot"]: s["member"]["spec"] for s in self.snapshots}
+        for slot in range(self.cfg.league_snapshot_slots):
+            specs[f"snap{slot}"] = taken.get(slot, idle_spec)
+        return specs
+
+    def start(self, context) -> dict:
+        """The shared member-change counters of every league server (the workers' ``league_versions``)."""
+        self.versions = {server: context.Value("q", 0, lock=False) for server in self.server_specs("")}
+        return self.versions
+
+    def settings(self) -> dict:
+        members = self.members
+        weights = dict(zip(self.league.members, (float(w) for w in self.league.weights())))
+        seat_weights = self.cfg.league_seat_weights or DEFAULT_LEAGUE_SEAT_WEIGHTS
+        return {
+            "share": float(self.cfg.league_share),
+            "seat_weights": {int(k): float(v) for k, v in seat_weights.items()},
+            "members": {name: {k: m[k] for k in MEMBER_KEYS} for name, m in members.items()},
+            "weights": {name: weights.get(name, 0.0) for name in members},
+            "server_versions": {server: int(v.value) for server, v in self.versions.items()},
+        }
+
+    def record(self, record: dict) -> bool:
+        """Score a finished game (False: no league seats, or not scorable) and update PFSP."""
+        result = league_result(record)
+        if result is None:
+            return False
+        kind = "snapshot" if result["member"].startswith(SNAPSHOT_PREFIX) else "fixed"
+        add_league_score(self.scores, result, kind)
+        self.league.record(result["member"], result["pairwise"])
+        return True
+
+    def take_scores(self) -> dict:
+        scores, self.scores = self.scores, {}
+        return scores
+
+    def snapshot_due(self, now: float) -> bool:
+        return self.cfg.league_snapshot_slots > 0 and now - self.snapshot_time >= self.cfg.league_snapshot_hours * 3600
+
+    def add_snapshot(self, name: str, spec: str, now: float) -> str:
+        """The main system joins as ``name`` (searched as the generator searches, at the league's
+        budget): into a free slot, else the oldest snapshot's (which leaves). Returns the server to
+        reload with ``spec`` (then bump its counter)."""
+        used = {s["slot"] for s in self.snapshots}
+        free = [k for k in range(self.cfg.league_snapshot_slots) if k not in used]
+        if free:
+            slot = free[0]
+        else:
+            oldest = self.snapshots.pop(0)
+            self.league.remove(oldest["name"])
+            slot = oldest["slot"]
+        member = {
+            "spec": spec,
+            "mode": "search",
+            "readouts": int(self.cfg.league_readouts),
+            "prior_temperature": float(self.cfg.prior_temperature or 1.0),
+            "temperature": 1.0,
+            "value_head": "win",
+        }
+        self.snapshots.append({"name": name, "slot": slot, "time": now, "member": member})
+        self.league.add(name)
+        self.snapshot_time = now
+        return f"snap{slot}"
+
+    def state(self) -> dict:
+        return {"snapshots": self.snapshots, "snapshot_time": self.snapshot_time, "pfsp": self.league.state()}
+
+    def write(self, path: Path) -> None:
+        """``league.json``: the members, their specs (the retention job keeps their checkpoints) and
+        PFSP weights, rewritten whenever the membership changes."""
+        weights = dict(zip(self.league.members, (float(w) for w in self.league.weights())))
+        members = {
+            name: {**m, "weight": weights.get(name, 0.0), "win_rate": self.league.win_rate(name)}
+            for name, m in self.members.items()
+        }
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"time": datetime.now().isoformat(timespec="seconds"), "members": members}, indent=1))
+        tmp.replace(path)
+
+
+def _link(source: Path, target: Path) -> None:
+    """``target`` as a hard link to ``source`` (a copy where links fail): a frozen learner's
+    per-update checkpoint costs no disk."""
+    import shutil
+
+    if target.exists():
+        return
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copy2(source, target)
 
 
 def learner_param_groups(learner, cfg: SearchLearningConfig) -> list:
@@ -1786,7 +2194,8 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
         anchor_update = int(state.get("anchor_update", 0))
         totals.update(state.get("totals", {}))
         learner_path = run_dir / "learner" / f"{update}.pth"
-        critic_path = None if cfg.shared else run_dir / "critic" / f"{update}.pth"
+        critic_path = None if cfg.shared or cfg.value_follow else run_dir / "critic" / f"{update}.pth"
+        league_state = state.get("league")
     else:
         if cfg.learner_temperature is None:
             cfg.learner_temperature = run_temperature(cfg.policy_checkpoint)
@@ -1800,7 +2209,8 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
         run_dir.mkdir(parents=True)
         update, kl_coef, anchor_update = 0, cfg.kl_coef, 0
         learner_path = Path(cfg.policy_checkpoint)
-        critic_path = None if cfg.shared else Path(cfg.value_checkpoint)
+        critic_path = None if cfg.shared or cfg.value_follow else Path(cfg.value_checkpoint)
+        league_state = None
     if save_data:
         cfg.save_data = save_data
     _validate(cfg)
@@ -1808,12 +2218,21 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
     LOGGER.info(f"Search-learning run {run_dir} from update {update}: {asdict(cfg)}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    followed = None
+    if cfg.value_follow:
+        followed = ValueFollower(cfg.value_follow)
+        if not followed.poll():
+            raise SystemExit(f"--value-follow {cfg.value_follow}: no promoted value (promoted.json)")
+        LOGGER.info(f"value from {cfg.value_follow}: promoted version {followed.version} ({followed.path})")
+    frozen = cfg.freeze_policy and not cfg.shared  # value_follow + freeze_policy: generation only
     anchor_path = run_dir / "learner" / f"{anchor_update}.pth" if anchor_update else Path(cfg.policy_checkpoint)
-    learner, anchor = _load(learner_path), _load(anchor_path)
+    learner = _load(learner_path)
+    anchor = None if frozen else _load(anchor_path)
     critic = _load(critic_path) if critic_path is not None else None
-    anchor.eval()
-    for param in anchor.parameters():
-        param.requires_grad_(False)
+    if anchor is not None:
+        anchor.eval()
+        for param in anchor.parameters():
+            param.requires_grad_(False)
     if cfg.aux_loss_weight > 0:  # training-only heads on the network that learns the value
         (critic if critic is not None else learner).add_aux_heads(AUX_SEAT_TARGETS, AUX_GLOBAL_TARGETS)
     follower = None
@@ -1837,7 +2256,7 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
                 group["lr"] = cfg.critic_lr
 
     current_learner = run_dir / "learner" / f"{update}.pth"
-    current_critic = None if cfg.shared else run_dir / "critic" / f"{update}.pth"
+    current_critic = None if critic is None else run_dir / "critic" / f"{update}.pth"
     if not current_learner.exists() or (follower is not None and follower.update is not None):
         # (A followed policy path: the server must play it from the start.)
         _save(learner, current_learner)
@@ -1854,18 +2273,42 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
     def spec(policy, value) -> str:
         return server_spec(cfg, policy, value)
 
+    def value_now():
+        """The search's value network: the followed run's promoted value, or this run's critic."""
+        return followed.path if followed is not None else current_critic
+
     handles = {
         "learner": start_inference_server(
             num_workers=cfg.workers,
             model_factory=load_server_model,
-            checkpoint_path=spec(current_learner, current_critic),
+            checkpoint_path=spec(current_learner, value_now()),
             batch_size=cfg.inference_batch_size,
             autocast_device=None,
             pipeline=cfg.server_pipeline,
             replicas=cfg.server_replicas,
         )
     }
+    context = multiprocessing.get_context("spawn")
+    league = LeagueSeats(cfg, league_state, time.time()) if cfg.population else None
+    league_versions = {}
+    if league is not None:
+        league_versions = league.start(context)
+        for server, member_spec in league.server_specs(spec(current_learner, value_now())).items():
+            handles[server] = start_inference_server(
+                num_workers=cfg.workers,
+                model_factory=load_server_model,
+                checkpoint_path=member_spec,
+                batch_size=cfg.inference_batch_size,
+                autocast_device=None,
+            )
+        league.write(run_dir / "league.json")
+        LOGGER.info(f"league: {sorted(league.members)} on {len(handles) - 1} servers")
     queues = {name: (h.request_q, h.reply_qs, h.ticket_q) for name, h in handles.items()}
+
+    def task_settings() -> dict:
+        return worker_settings(
+            cfg, update, league.settings() if league else None, followed.version if followed else None
+        )
     stop_file = run_dir / "STOP"
     window = ReplayWindow(cfg.window_rows)
     rng = np.random.default_rng()
@@ -1875,19 +2318,18 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
     new_rows, new_fast_rows, gen_started, run_started = 0, 0, time.time(), time.time()
     # The version the learner's server serves, read by the workers at every search: a task's settings
     # carry the version at its submission, but the server reloads mid-task.
-    server_version = multiprocessing.get_context("spawn").Value("q", update, lock=False)
+    server_version = context.Value("q", update, lock=False)
+    value_reloaded, league_games = False, 0
     try:
         # Spawned: the learner holds the networks (on the GPU), which a forked worker must not inherit.
         executor = ProcessPoolExecutor(
             max_workers=cfg.workers,
-            mp_context=multiprocessing.get_context("spawn"),
+            mp_context=context,
             initializer=worker_init,
-            initargs=(queues, server_version),
+            initargs=(queues, server_version, league_versions),
         )
         try:
-            futures = {
-                executor.submit(generate, worker_settings(cfg, update), cfg.task_seconds) for _ in range(cfg.workers)
-            }
+            futures = {executor.submit(generate, task_settings(), cfg.task_seconds) for _ in range(cfg.workers)}
             while update < cfg.max_updates and not stop_file.exists():
                 done, futures = wait_checking_servers(futures, handles, executor, timeout=60)
                 for future in done:
@@ -1899,8 +2341,13 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
                         terminations[record["termination"]] += 1
                         starts[record["start_kind"]] += 1
                         gen["game_decisions"] += record["decisions"]
-                        for row in record["rows"]:
-                            window.add(row)
+                        if any(m != MAIN for m in record.get("seat_members") or ()):
+                            league_games += 1
+                            if league is not None and not league.record(record):
+                                gen["league_unscored_games"] += 1
+                        if not frozen:  # a frozen run trains nothing: its rows are only saved
+                            for row in record["rows"]:
+                                window.add(row)
                         fast_rows = sum(1 for row in record["rows"] if row.fast)
                         new_rows += len(record["rows"]) - fast_rows
                         new_fast_rows += fast_rows
@@ -1911,12 +2358,14 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
                         gen["root_value_rows"] += ce_rows
                         if saver is not None and "saved" in record:
                             saver.add(record["saved"])
-                    futures.add(executor.submit(generate, worker_settings(cfg, update), cfg.task_seconds))
-                if new_rows < cfg.rows_per_update or len(window) < cfg.min_window_rows:
+                    futures.add(executor.submit(generate, task_settings(), cfg.task_seconds))
+                if new_rows < cfg.rows_per_update or (not frozen and len(window) < cfg.min_window_rows):
                     continue
 
                 t0 = time.time()
-                if cfg.freeze_policy:
+                if frozen:
+                    stats = generation_only_stats(cfg)
+                elif cfg.freeze_policy:
                     stats = _update_value_only(learner, learner_opt, window, cfg, device, rng)
                 else:
                     stats = _update(learner, critic, anchor, learner_opt, critic_opt, window, cfg, kl_coef, device, rng)
@@ -1937,17 +2386,34 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
                 stats["row_age_mean"] = (update - 1) - stats.pop("row_version_mean")
                 new_rows = new_fast_rows = 0
 
+                # The followed value run's newest promoted value, if any: the next games' leaf values.
+                value_changed = followed is not None and followed.poll()
+                value_reloaded = value_reloaded or value_changed
                 previous = (current_learner,) if critic is None else (current_learner, current_critic)
                 current_learner = run_dir / "learner" / f"{update}.pth"
-                _save(learner, current_learner)
+                if frozen:
+                    _link(previous[0], current_learner)
+                else:
+                    _save(learner, current_learner)
                 if critic is not None:
                     current_critic = run_dir / "critic" / f"{update}.pth"
                     _save(critic, current_critic)
-                reply = handles["learner"].reload(spec(current_learner, current_critic))
-                if not (isinstance(reply, dict) and reply.get("ok")):
-                    raise RuntimeError(f"the inference server could not load update {update}: {reply}")
-                server_version.value = update
-                if cfg.anchor_every and update % cfg.anchor_every == 0:
+                if not frozen or value_changed:
+                    reply = handles["learner"].reload(spec(current_learner, value_now()))
+                    if not (isinstance(reply, dict) and reply.get("ok")):
+                        raise RuntimeError(f"the inference server could not load update {update}: {reply}")
+                    server_version.value = update  # kept trees searched by the old networks are dropped
+                if league is not None and league.snapshot_due(time.time()):
+                    name = f"{SNAPSHOT_PREFIX}u{update}" + (f"_v{followed.version}" if followed else "")
+                    member_spec = snapshot_spec(cfg, run_dir, name, current_learner, value_now(), frozen)
+                    server = league.add_snapshot(name, member_spec, time.time())
+                    reply = handles[server].reload(league.members[name]["spec"])
+                    if not (isinstance(reply, dict) and reply.get("ok")):
+                        raise RuntimeError(f"the league server {server} could not load {name}: {reply}")
+                    league_versions[server].value += 1  # games dealt to its previous member go unscored
+                    league.write(run_dir / "league.json")
+                    LOGGER.info(f"league: {name} joined on {server}")
+                if anchor is not None and cfg.anchor_every and update % cfg.anchor_every == 0:
                     anchor.load_state_dict(learner.state_dict(), strict=False)  # not the aux heads
                     anchor_update = update
                 for path in previous:
@@ -1974,6 +2440,7 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
                                 "kl_coef": kl_coef,
                                 "anchor_update": anchor_update,
                                 "totals": dict(totals),
+                                **({"league": league.state()} if league is not None else {}),
                             },
                             indent=2,
                         )
@@ -2034,6 +2501,23 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
                     ),
                     "skipped_starts": gen["skipped_starts"],
                     "dropped_games": gen["dropped_games"],
+                    # value_follow: the promoted value the games were searched with (and whether a newer
+                    # one was loaded since the last update).
+                    **(
+                        {"value_version": followed.version, "value_path": str(followed.path),
+                         "value_reloaded": value_reloaded}
+                        if followed is not None
+                        else {}
+                    ),
+                    # League seats: the share of the games with a member's seats, and per member the
+                    # main system's summed results (league_result / add_league_score).
+                    "league_share": league_games / max(gen["games"], 1),
+                    **(
+                        {"league": league.take_scores(), "league_unscored_games": gen["league_unscored_games"],
+                         "league_weights": league.settings()["weights"]}
+                        if league is not None
+                        else {}
+                    ),
                     "terminations": dict(terminations),
                     "starts": dict(starts),
                     "train_seconds": train_seconds,
@@ -2047,6 +2531,7 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
                     ),
                 }
                 gen, terminations, starts = Counter(), Counter(), Counter()
+                value_reloaded, league_games = False, 0
                 gen_started = time.time()
                 history.write(json.dumps(record) + "\n")
                 history.flush()

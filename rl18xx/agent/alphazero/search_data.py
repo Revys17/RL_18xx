@@ -88,9 +88,10 @@ COLUMNS = {
 # ---------------------------------------------------------------------------
 
 
-def pack_game(g, worth, win_share, fractions, score, aux_seat, aux_global) -> dict:
+def pack_game(g, worth, win_share, fractions, score, aux_seat, aux_global, value_version=None) -> dict:
     """A finished generator game (``search_learning._Game``, its rows' outcome filled in)
-    as a shard keeps it: ``{"meta", "actions" (JSON bytes), "columns"}``."""
+    as a shard keeps it: ``{"meta", "actions" (JSON bytes), "columns"}``; ``value_version``: the
+    followed value run's promoted version the game was searched with (``value_follow``)."""
     from rl18xx.agent.alphazero import price_pmf
     from rl18xx.agent.alphazero.start_positions import AUCTION_START
 
@@ -149,6 +150,7 @@ def pack_game(g, worth, win_share, fractions, score, aux_seat, aux_global) -> di
         "decisions": int(g.decisions),
         "searched": int(g.searched),
         "seat_servers": list(g.seat_servers),
+        "seat_members": list(getattr(g, "seat_members", None) or ["main"] * players),  # MAIN or a league member
         "actions": len(actions),
         "win_share": [float(x) for x in win_share],
         "fractions": [float(x) for x in fractions],
@@ -156,6 +158,7 @@ def pack_game(g, worth, win_share, fractions, score, aux_seat, aux_global) -> di
         "score_target": None if score is None else [float(x) for x in score],
         "aux_seat": np.asarray(aux_seat).tolist(),
         "aux_global": np.asarray(aux_global).tolist(),
+        "value_version": None if value_version is None else int(value_version),
     }
     return {"meta": meta, "actions": json.dumps(actions, separators=(",", ":")).encode(), "columns": columns}
 
@@ -305,7 +308,9 @@ class SavedGame:
         for a in actions:
             if a.get("id") is None:
                 a["id"], next_id = next_id, next_id + 1
-        keys = ("start", "termination", "decisions", "searched", "seat_servers", "win_share", "net_worth")
+        keys = (
+            "start", "termination", "decisions", "searched", "seat_servers", "seat_members", "win_share", "net_worth",
+        )  # fmt: skip
         meta = {"name": self.uid, **{k: self.meta.get(k) for k in keys}}
         meta["worth_share"] = self.meta.get("fractions")
         meta["description"] = f"search-learning {self.config.get('run_name') or ''} game {self.uid}".strip()

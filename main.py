@@ -218,12 +218,13 @@ def cmd_search_learning(args):
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     resuming = args.resume and not (args.policy or args.value)  # a resumed run keeps its checkpoints
-    if not resuming and not args.shared and not args.value:
-        raise SystemExit("--value (the critic) is needed unless --shared (the learner's own value heads)")
+    no_critic = (args.shared or args.value_follow) and not args.value
+    if not resuming and not args.shared and not args.value and not args.value_follow:
+        raise SystemExit("--value (the critic) is needed unless --shared (its own value heads) or --value-follow")
     config = SearchLearningConfig(
         policy_checkpoint="" if resuming else str(_resolve_checkpoint(args.policy, args.model_dir)),
         value_checkpoint=(
-            "" if resuming or (args.shared and not args.value) else str(_resolve_checkpoint(args.value, args.value_model_dir))
+            "" if resuming or no_critic else str(_resolve_checkpoint(args.value, args.value_model_dir))
         ),
         out_dir=args.out_dir,
         run_name=args.run_name,
@@ -305,6 +306,18 @@ def cmd_search_learning(args):
         save_data_shard_games=args.save_data_shard_games,
         freeze_policy=args.freeze_policy,
         policy_follow=args.policy_follow,
+        value_follow=args.value_follow,
+        population=args.population,
+        league_share=args.league_share,
+        league_seat_weights=(
+            {int(k): float(v) for k, v in (x.split(":") for x in args.league_seat_weights.split(","))}
+            if args.league_seat_weights
+            else None
+        ),
+        league_readouts=args.league_readouts,
+        pfsp_power=args.pfsp_power,
+        league_snapshot_hours=args.league_snapshot_hours,
+        league_snapshot_slots=args.league_snapshot_slots,
     )
     explicit = _resume_explicit(args, RESUME_SETTINGS)
     print(run(config, resume=args.resume, explicit=explicit))
@@ -821,7 +834,8 @@ def build_parser():
                    "departures from the policy's top move always shrink toward the policy (e.g. track)")
     p.add_argument("--freeze-policy", action="store_true",
                    help="--shared: train only the value side (value encoder + heads, trunk detached) on the search "
-                   "games -- the AlphaGo-style split's value learner")
+                   "games -- the AlphaGo-style split's value learner. --value-follow: train nothing (generation only: "
+                   "games, --save-data, the history)")
     p.add_argument("--policy-follow", type=str, default=None,
                    help="--freeze-policy: a policy-gradient run (--shared) training the policy path; before each "
                    "update the learner takes its latest policy path")
@@ -831,6 +845,24 @@ def build_parser():
                    "run's own directory unless given. Default: off")
     p.add_argument("--save-data-shard-games", type=int, default=_SL.save_data_shard_games,
                    help="Games per --save-data shard (the open shard's games are journaled until it is written)")
+    p.add_argument("--value-follow", type=str, default=_SL.value_follow,
+                   help="A value-train run directory: the search's value is its current promoted value (promoted.json), "
+                   "reloaded when it promotes a new one; no critic trains here (no --value needed)")
+    p.add_argument("--population", type=str, default=_SL.population,
+                   help="League seats: a JSON file of members ({\"members\": [{\"name\", \"spec\", \"mode\": search|policy, "
+                   "\"readouts\", \"prior_temperature\", \"temperature\", \"min_share\"}]}), drawn by PFSP")
+    p.add_argument("--league-share", type=float, default=_SL.league_share,
+                   help="--population: the share of games in which one member takes 1-2 seats")
+    p.add_argument("--league-seat-weights", type=str, default=None,
+                   help="--population: seats:weight pairs for a member's seat count (default 1:0.5,2:0.5)")
+    p.add_argument("--league-readouts", type=int, default=_SL.league_readouts,
+                   help="--population: a searching member's readouts per decision (the fast budget)")
+    p.add_argument("--pfsp-power", type=float, default=_SL.pfsp_power,
+                   help="--population: PFSP weight (1 - p) ** power, p the main system's pairwise rate against a member")
+    p.add_argument("--league-snapshot-hours", type=float, default=_SL.league_snapshot_hours,
+                   help="--population: the main system joins the league as a snapshot this often (wall-clock hours)")
+    p.add_argument("--league-snapshot-slots", type=int, default=_SL.league_snapshot_slots,
+                   help="--population: snapshot members kept (each an inference server; 0: no snapshots)")
 
     # convert (encode games to LMDB for pretraining)
     p = sub.add_parser("convert", help="Convert cleaned game JSONs to LMDB training data")
