@@ -323,6 +323,18 @@ def cmd_search_learning(args):
     print(run(config, resume=args.resume, explicit=explicit))
 
 
+def cmd_value_train(args):
+    from dataclasses import fields
+
+    from rl18xx.agent.alphazero.value_trainer import ValueTrainerConfig, serve
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    values = {f.name: getattr(args, f.name) for f in fields(ValueTrainerConfig) if hasattr(args, f.name)}
+    if args.no_fixed:
+        values["fixed_data"] = None
+    print(f"value-train: {serve(ValueTrainerConfig(**values), max_cycles=args.max_cycles)} cycles run")
+
+
 def cmd_convert(args):
     import logging
 
@@ -953,6 +965,77 @@ def build_parser():
         help="Also serve /debug: paste a game JSON and see the extension's panel for it",
     )
 
+    # value-train (the long run's value trainer)
+    from rl18xx.agent.alphazero.value_trainer import ValueTrainerConfig as V
+
+    p = sub.add_parser(
+        "value-train",
+        help="Train a separate value network offline over saved search-learning games, in gated cycles",
+        description="Long-lived: polls the --data shards, trains a candidate every cycle (warm start from the "
+        "current promoted value) and promotes it through the paired-CE gate; resumes an existing --run-dir. "
+        "rl18xx/agent/alphazero/value_trainer.py has the run directory's contract.",
+    )
+    p.add_argument("--run-dir", required=True, help="The trainer's run directory (resumed if it exists)")
+    p.add_argument(
+        "--data", nargs="+", action="extend", required=True,
+        help="search-learning --save-data directories (repeatable); rescanned every poll",
+    )
+    p.add_argument("--init", default=V.init, help=f"Start value, promoted version 0 on a new run (default: {V.init})")
+    p.add_argument(
+        "--fixed-data", default=V.fixed_data,
+        help=f"The value gate's positions; its test games are the fixed held-out set (default: {V.fixed_data})",
+    )
+    p.add_argument("--no-fixed", action="store_true", help="No fixed held-out set (tests)")
+    p.add_argument("--positions-per-game", type=int, default=V.positions_per_game,
+                   help=f"Training positions per game and pass (default: {V.positions_per_game})")
+    p.add_argument("--held-out-per-mille", type=int, default=V.held_out_per_mille,
+                   help=f"Games with crc32(uid) %% 1000 below this are held out (default: {V.held_out_per_mille})")
+    p.add_argument("--rolling-games", type=int, default=V.rolling_games,
+                   help=f"The rolling held-out set's games come from the newest N (default: {V.rolling_games})")
+    p.add_argument("--rolling-positions-per-game", type=int, default=V.rolling_positions_per_game,
+                   help=f"(default: {V.rolling_positions_per_game})")
+    p.add_argument("--rolling-max-positions", type=int, default=V.rolling_max_positions,
+                   help=f"(default: {V.rolling_max_positions})")
+    p.add_argument("--select-share", type=float, default=V.select_share,
+                   help="Share of the rolling games used for early stopping only, kept out of the gate (default: "
+                   f"{V.select_share}; 0 = early-stop on the gate's own rolling set, an optimistic gate)")
+    p.add_argument("--cycle-games", type=int, default=V.cycle_games,
+                   help=f"A cycle starts once this many new trainable games arrived (default: {V.cycle_games})")
+    p.add_argument("--cycle-hours", type=float, default=V.cycle_hours,
+                   help=f"... or this long after the last cycle with --min-new-games new (default: {V.cycle_hours})")
+    p.add_argument("--min-new-games", type=int, default=V.min_new_games, help=f"(default: {V.min_new_games})")
+    p.add_argument("--poll-seconds", type=float, default=V.poll_seconds, help=f"(default: {V.poll_seconds})")
+    p.add_argument("--recent-games", type=int, default=V.recent_games,
+                   help=f"Every trainable game of the newest N, plus as many older ones (default: {V.recent_games})")
+    p.add_argument("--sample-scale", type=float, default=V.sample_scale,
+                   help=f"Scales the sample (doubled after failed cycles) (default: {V.sample_scale})")
+    p.add_argument("--escalate-after", type=int, default=V.escalate_after,
+                   help=f"Failed cycles in a row before the interval and sample double (default: {V.escalate_after})")
+    p.add_argument("--lr", type=float, default=V.lr, help=f"AdamW learning rate (default: {V.lr})")
+    p.add_argument("--batch-size", type=int, default=V.batch_size, help=f"(default: {V.batch_size})")
+    p.add_argument("--score-weight", type=float, default=V.score_weight,
+                   help=f"Weight of the placement-points MSE (default: {V.score_weight})")
+    p.add_argument("--epochs", type=float, default=V.epochs, help=f"Passes over a cycle's sample (default: {V.epochs})")
+    p.add_argument("--eval-every", type=int, default=V.eval_every,
+                   help=f"Steps between rolling-set evaluations (default: {V.eval_every})")
+    p.add_argument("--patience", type=int, default=V.patience,
+                   help=f"Evaluations without a gain before stopping (default: {V.patience})")
+    p.add_argument("--min-improvement", type=float, default=V.min_improvement, help=f"(default: {V.min_improvement})")
+    p.add_argument("--max-steps", type=int, default=V.max_steps, help="Cap on a cycle's steps (default: 0 = none)")
+    p.add_argument("--promote-z", type=float, default=V.promote_z,
+                   help=f"Gate: rolling gain >= z paired SE, fixed set not worse by > z SE (default: {V.promote_z})")
+    p.add_argument("--diverge-ce", type=float, default=V.diverge_ce,
+                   help=f"Rolling CE above the current value's by more: diverged (default: {V.diverge_ce})")
+    p.add_argument("--workers", type=int, default=V.workers,
+                   help=f"Re-encoding processes (0: in the trainer's process) (default: {V.workers})")
+    p.add_argument("--task-games", type=int, default=V.task_games, help=f"Games per encoding task ({V.task_games})")
+    p.add_argument("--buffer-positions", type=int, default=V.buffer_positions,
+                   help=f"Shuffle buffer size, ~11 KB a position (default: {V.buffer_positions})")
+    p.add_argument("--eval-batch-size", type=int, default=V.eval_batch_size, help=f"(default: {V.eval_batch_size})")
+    p.add_argument("--device", default=V.device, help="cuda / cpu (default: cuda if available)")
+    p.add_argument("--seed", type=int, default=V.seed, help=f"(default: {V.seed})")
+    p.add_argument("--max-cycles", type=int, default=0, help="Exit after this many cycles (default: 0 = until STOP)")
+
     return parser
 
 
@@ -978,5 +1061,6 @@ if __name__ == "__main__":
         "dashboard": cmd_dashboard,
         "replay": cmd_replay,
         "advisor": cmd_advisor,
+        "value-train": cmd_value_train,
     }
     commands[args.command](args)
