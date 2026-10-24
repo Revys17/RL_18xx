@@ -254,6 +254,7 @@ def cmd_search_learning(args):
         gumbel_noise_scale=args.gumbel_noise_scale,
         full_move_temperature=args.full_move_temperature,
         explore_decisions=args.explore_decisions,
+        explore_from_game_start=args.explore_from_game_start,
         value_head=args.value_head,
         reuse_tree=args.reuse_tree,
         reuse_max_root_visits=args.reuse_max_root_visits,
@@ -762,6 +763,11 @@ def build_parser():
         "--explore-decisions", type=int, default=_SL.explore_decisions,
         help="--full-move-temperature only for each game's first N decisions (0: all; AlphaZero's first-30-moves "
         "temperature). Can change on --resume",
+    )
+    p.add_argument(
+        "--explore-from-game-start", action="store_true",
+        help="--explore-decisions counts from the game's first Stock Round (a mid-game start's recorded decisions "
+        "count), not from the start position",
     )
     p.add_argument("--value-head", type=str, default=_SL.value_head,
                    help="The value head the search reads its leaf values from: win, score or blend=<w> "

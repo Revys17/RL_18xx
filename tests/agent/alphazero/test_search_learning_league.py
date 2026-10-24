@@ -301,3 +301,48 @@ def test_a_frozen_run_with_a_followed_value_and_league_seats(tmp_path, start_fil
     games = list(search_data.iter_games(tmp_path / "saved"))
     assert games and all(g.meta["value_version"] in (0, 1) for g in games)
     assert all(sum(m != sl.MAIN for m in g.meta["seat_members"]) == 1 for g in games)
+
+
+# ----------------------------------------------------------------------------- explore_from_game_start
+
+
+def _midgame_start(start_file, moves=40, seed=0):
+    """A start like a mid-game one: a random auction ending, then ``moves`` random fixed-price legal moves."""
+    from rl18xx.agent.alphazero import start_positions as sp
+
+    rng = random.Random(seed)
+    start, game, _ = sp.replayed_start(4, start_file, 1.0, rng=rng)
+    rs = game._game
+    for _ in range(moves):
+        legal = list(rs.factored_legal_indices())
+        rng.shuffle(legal)
+        for idx in legal:
+            price = rs.price_range_for_index(idx)
+            if price is None or price[0] == price[1]:
+                rs.apply_action_index(idx, None if price is None else price[0])
+                break
+    return sp.StartPosition("midgame:test", tuple(dict(a) for a in rs.raw_actions)), len(start.actions)
+
+
+def test_exploration_counts_from_the_games_first_stock_round(start_file, monkeypatch):
+    from rl18xx.agent.alphazero import start_positions as sp
+
+    mid, auction_actions = _midgame_start(start_file)
+    n = sl.start_decisions(mid.actions, 4)
+    assert 0 < n <= len(mid.actions) - auction_actions
+    assert sl.start_decisions(mid.actions[:auction_actions], 4) == 0  # an SR1 start: nothing past the auction
+
+    def replayed(*args, **kwargs):
+        return mid, sp.apply_actions(sp.new_game(4), mid.actions), 0
+
+    monkeypatch.setattr(sp, "replayed_start", replayed)
+    explored = {}
+    for from_start in (False, True):
+        settings = _settings(start_file, target="visits", p_full=1.0, n_full=2, parallel_readouts=2,
+                             games_per_worker=2, max_decisions=30)  # fmt: skip
+        settings.update(full_move_temperature=1.0, explore_decisions=n, explore_from_game_start=from_start)
+        gen = sl.Generator(settings, {"learner": ModelEvaluator(HashNet())})
+        out = gen.run(5.0)
+        assert all(g.start_decisions == (n if from_start else 0) for g in gen.games.values())
+        explored[from_start] = out["stats"].get("explored_moves", 0)
+    assert explored[False] > 0 and explored[True] == 0  # the window was used up by the start's own decisions

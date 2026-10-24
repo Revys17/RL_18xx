@@ -194,6 +194,10 @@ class SearchLearningConfig:
     # each game's first explore_decisions decisions (0: every decision). The targets stay the
     # search's visits; only which move is played (and so which positions the games reach) changes.
     explore_decisions: int = 0
+    # Count those decisions from the game's first Stock Round, the start's recorded decisions past the
+    # auction included: a mid-game start (Stock Round 2-6 of a human game) then explores only what is
+    # left of the window, if anything (off: from the start position, as before 2026-10-23).
+    explore_from_game_start: bool = False
     # The search's leaf value: the critic's win head ("win") or score head ("score").
     value_head: str = "win"
     # Tree reuse (KataGo / the single-tree Rust path's advance_root): each game keeps
@@ -862,6 +866,7 @@ class _Game:
     league_version: Optional[int] = None
     league_mixed: bool = False
     member_search: bool = False  # the pending need is a league member's search (no row, no record)
+    start_decisions: int = 0  # explore_from_game_start: the start's recorded decisions past the auction
 
 
 def search_config(settings: dict, client=None):
@@ -974,6 +979,19 @@ def add_league_score(scores: dict, result: dict, kind: str) -> None:
     s["worth_excess_sq"] += (result["worth"] - fair) ** 2
 
 
+def start_decisions(actions, num_players: int) -> int:
+    """Decisions (positions with more than one legal move) past the auction in a start's actions."""
+    from rl18xx.agent.alphazero.start_positions import new_game
+
+    rs = new_game(num_players)._game
+    n = 0
+    for action in actions:
+        if rs.round.round_type != "Auction" and len(rs.factored_legal_indices()) > 1:
+            n += 1
+        rs.process_action(dict(action))
+    return n
+
+
 class Generator:
     """One worker's games: ``games_per_worker`` at once, searched in lockstep;
     :meth:`run` plays for a while and returns the games that ended (with their
@@ -991,6 +1009,7 @@ class Generator:
         self.next_slot = 0
         self.counts = Counter()
         self._member_configs: dict = {}
+        self._start_decision_counts: dict = {}
 
     # -- games -----------------------------------------------------------------
 
@@ -1017,6 +1036,7 @@ class Generator:
             start_actions=len(start.actions),
             searches=[] if s.get("save_data") else None,
             seat_members=members,
+            start_decisions=self._start_decisions(start) if s.get("explore_from_game_start") else 0,
         )
         league = s.get("league")
         server = next((x for x in servers if x != "learner"), None)
@@ -1027,6 +1047,16 @@ class Generator:
             g.league_version = version
             g.league_mixed = version != int(league["server_versions"][server])
         return g
+
+    def _start_decisions(self, start) -> int:
+        """The decisions a start's recorded actions hold past the auction (more than one legal move),
+        cached per start: what ``explore_from_game_start`` counts the exploration window from."""
+        n = self._start_decision_counts.get(start.label)
+        if n is None:
+            n = start_decisions(start.actions, NUM_PLAYERS)
+            if len(self._start_decision_counts) < 10_000:
+                self._start_decision_counts[start.label] = n
+        return n
 
     def _member(self, server: str) -> dict:
         """The league member a server plays (``settings["league"]``), or the older hook's opponent."""
@@ -1211,7 +1241,7 @@ class Generator:
                 move = int(tree.gumbel_action())
             else:
                 visits = np.asarray(tree.child_n_at_root(), dtype=np.float64)[legal]
-                move = self._visit_move(tree, legal, visits, g.decisions)
+                move = self._visit_move(tree, legal, visits, g.decisions + g.start_decisions)
                 target = search_target(tree, legal, s) if g.pending is not None else None
             price, price_target = self._searched_price(tree, rs, move)
             if g.pending is not None:
@@ -1774,6 +1804,7 @@ def worker_settings(
         "gumbel_noise_scale": cfg.gumbel_noise_scale,
         "full_move_temperature": cfg.full_move_temperature,
         "explore_decisions": cfg.explore_decisions,
+        "explore_from_game_start": cfg.explore_from_game_start,
         "visit_target": cfg.visit_target,
         "target_temperature": cfg.target_temperature,
         "cq_rescale": cfg.cq_rescale,
@@ -1925,6 +1956,7 @@ def server_spec(cfg: SearchLearningConfig, learner_path, critic_path=None) -> st
 RESUME_SETTINGS = (
     "full_move_temperature",
     "explore_decisions",
+    "explore_from_game_start",
     "max_updates",
     "microbatch",
     "workers",

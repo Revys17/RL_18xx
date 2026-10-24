@@ -202,6 +202,10 @@ def test_stall_is_red_only_when_all_three_agree(tmp_path):
     # P5 still rising: no stall.
     run.ladder(lambda ago: 80 - 15 * ago)
     assert "stall" not in rules(run.report())
+    # P1 still rising (the last 5 days above the 5 before): no stall either.
+    run.ladder(lambda ago: 50.0)
+    run.history(lambda k: 0.06 - 0.005 * k, snapshot=lambda k: 0.02)
+    assert "stall" not in rules(run.report())
 
 
 def test_decline_needs_p1_and_p5(tmp_path):

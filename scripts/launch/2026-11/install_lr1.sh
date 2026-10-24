@@ -34,7 +34,7 @@ bash "$INSTALL" lr1-gen --kind generator --deploy "$D" --workdir "$W" --run-dir 
     --start-args "--policy $CKPT10 --value-follow $VALUE_RUN --freeze-policy --league-snapshot-slots 6" \
     --train-args "--max-updates 10000000 --workers 40 --games-per-worker 32 --microbatch 1024 \
 --target cq --c-puct 0.05 --p-full 0.25 --n-full 200 --n-fast 48 --prior-temperature 1 \
---reuse-tree total --dedupe-maps --server-replicas 2 --full-move-temperature 1 --explore-decisions 120 \
+--reuse-tree total --dedupe-maps --server-replicas 2 --full-move-temperature 1 --explore-decisions 120 --explore-from-game-start \
 --midgame-positions human_games/midgame_positions_1830_4p_v2.jsonl --midgame-fraction 0.3 --auction-fraction 0 \
 --population $L/league_longrun.json --league-share 0.3 --league-readouts 48 --league-snapshot-hours 168 \
 --save-data $SAVE" \

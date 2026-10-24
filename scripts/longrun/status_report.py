@@ -486,12 +486,19 @@ class Report:
             self.rule(YELLOW, "drift (P2 up, P1 flat)", f"P2 rose {fmt(*d2, digits=4, signed=True)} in 3 days while "
                                                         f"P1 moved {fmt(*d1, digits=4, signed=True)}: raise the "
                                                         f"league share to 50% now (--league-share 0.5)")
+        # Stall's P1 condition (decided 2026-10-23; the draft's "5-day slope's upper 95% bound < +0.001/day"
+        # never fired on a flat series at real noise): the last 5 days' pooled score is not above the 5 days
+        # before by >= 1 SE.
         self.stall_p1 = None
+        last5, prev5 = block(windows, 0, 5, "fixed"), block(windows, 5, 5, "fixed")
+        d = diff(last5, prev5)
+        if d and d[1]:
+            self.stall_p1 = d[0] < d[1]
+            self.notes.append(f"P1 last 5 days {fmt(*last5, digits=4)} vs the 5 before {fmt(*prev5, digits=4)}: "
+                              f"{fmt(*d, digits=4, signed=True)} (stall below +1 SE)")
         fit = wls_slope([(-k, p1[k][0], p1[k][1]) for k in range(5) if p1.get(k)])
         if fit:
-            upper = fit[0] + 1.96 * fit[1]
-            self.stall_p1 = upper < 0.001
-            self.notes.append(f"P1 5-day slope {fit[0]:+.4f} ± {fit[1]:.4f} per day (upper 95% {upper:+.4f})")
+            self.notes.append(f"P1 5-day slope {fit[0]:+.4f} ± {fit[1]:.4f} per day")
         self.decline_p1 = None
         current = block(windows, 0, 5, "fixed")
         blocks = [b for b in (block(windows, k, 5, "fixed") for k in range(0, max(windows, default=0) + 1)) if b]
@@ -795,8 +802,9 @@ class Report:
         text = ", ".join(f"{k} {'yes' if v else 'n/a' if v is None else 'no'}" for k, v in parts.items())
         self.notes.append(f"stall conditions: {text}")
         if self.stall:
-            self.rule(RED, "stall", "P1 shows no gain over 5 days, P3's slope over the last 3 promotions is >= 0 and "
-                                    "P5 is flat over 6 days: review within a day (stop the main line?)")
+            self.rule(RED, "stall", "P1 (last 5 days) not above the 5 before by 1 SE, P3's slope over the last 3 "
+                                    "promotions is >= 0 and P5 is flat over 6 days: review within a day (stop the "
+                                    "main line?)")
         dec = {"P1": self.decline_p1, "P5": self.decline_p5}
         self.notes.append("decline conditions: " + ", ".join(
             f"{k} {'yes' if v else 'n/a' if v is None else 'no'}" for k, v in dec.items()))
