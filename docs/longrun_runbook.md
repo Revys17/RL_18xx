@@ -415,8 +415,8 @@ the recipe's daily alarms (P1 below its 5-day max by >= 2 SE; two promotions wit
 fixed-minus-rolling CE gap widening 3 cycles running; P2 up >= 2 SE in 3 days with P1 flat; P5's 3-day mean below
 the previous 3 days' by >= 2 SE; a drift flag; throughput < 80% of the 7-day median or > 3% of games at the length
 cap), 3 failed promotions in a row, one weekly value check < 0.47, a missed milestone (on its date), any WARN the
-watchdogs hold, a failed daily job, and the maintenance metrics' yellows; red for stall (P1's 5-day slope upper
-95% bound < +0.001/day **and** P3's slope over the last 3 promotions >= 0 **and** P5 not up by 2 SE over 6 days),
+watchdogs hold, a failed daily job, and the maintenance metrics' yellows; red for stall (P1's last 5 days not above the 5
+before by 1 SE **and** P3's slope over the last 3 promotions >= 0 **and** P5 not up by 2 SE over 6 days),
 decline (P1's 5-day mean below its best by >= 3 SE **and** P5's 3-day mean below its best by >= 2 SE), value
 divergence, 6 failed promotions, two value checks < 0.47 running, saved-data write errors, any CRIT a watchdog
 holds (crash loop, non-finite stop, Xid, disk), and the maintenance reds. A yellow report sends a WARN `status`
