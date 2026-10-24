@@ -989,6 +989,8 @@ class MCTSPlayer(Agent):
             node.price_child_N.clear()
         if hasattr(node, "price_child_W"):
             node.price_child_W.clear()
+        if hasattr(node, "price_child_VL"):
+            node.price_child_VL.clear()
 
         for child in children_to_visit:
             self._recursive_clear_references(child, stats)  # Recurse
@@ -1038,6 +1040,8 @@ class MCTSPlayer(Agent):
             parent_of_new_root.price_child_N.clear()
         if hasattr(parent_of_new_root, "price_child_W"):
             parent_of_new_root.price_child_W.clear()
+        if hasattr(parent_of_new_root, "price_child_VL"):
+            parent_of_new_root.price_child_VL.clear()
         if new_root_is_grandchild:
             parent_of_new_root.price_children[new_search_root.fmove] = {
                 new_search_root.sampled_price: new_search_root
@@ -1048,6 +1052,7 @@ class MCTSPlayer(Agent):
             parent_of_new_root.price_child_W[new_search_root.fmove] = {
                 new_search_root.sampled_price: saved_grandchild_W
             }
+            parent_of_new_root.price_child_VL[new_search_root.fmove] = {new_search_root.sampled_price: 0.0}
         else:
             parent_of_new_root.children[new_search_root.fmove] = new_search_root
         LOGGER.debug(f"Pruning: {parent_of_new_root} now only has child {new_search_root}.")

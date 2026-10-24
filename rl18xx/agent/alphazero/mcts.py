@@ -239,6 +239,7 @@ class DummyNode:
         self.legal_action_indices = [None]
         self.child_N_compressed = collections.defaultdict(float)
         self.child_W_compressed = collections.defaultdict(lambda: np.zeros([VALUE_SIZE], dtype=np.float32))
+        self.child_VL_compressed = collections.defaultdict(float)
 
 
 class MCTSNode:
@@ -303,6 +304,9 @@ class MCTSNode:
         self.num_legal_actions = len(self.legal_action_indices)
         self.child_N_compressed = np.zeros(self.num_legal_actions, dtype=np.float32)
         self.child_W_compressed = np.zeros([self.num_legal_actions, VALUE_SIZE], dtype=np.float32)
+        # Virtual losses in flight through each child (``mcts_mean_q`` counts
+        # an in-flight descent as a zero-value visit).
+        self.child_VL_compressed = np.zeros(self.num_legal_actions, dtype=np.float32)
         self.original_prior_compressed = np.zeros(self.num_legal_actions, dtype=np.float32)
         self.child_prior_compressed = np.zeros(self.num_legal_actions, dtype=np.float32)
 
@@ -326,6 +330,7 @@ class MCTSNode:
         # the parent's compressed arrays.
         self.price_child_N: dict[int, dict[int, float]] = {}
         self.price_child_W: dict[int, dict[int, np.ndarray]] = {}
+        self.price_child_VL: dict[int, dict[int, float]] = {}
         # Cached rng for PW price sampling — reusing one generator is
         # negligibly faster than ``np.random.default_rng()`` per call and
         # keeps any future deterministic-seed test wiring simple.
@@ -406,8 +411,25 @@ class MCTSNode:
 
     @property
     def child_action_score_compressed(self):
+        if self.config.mcts_mean_q:
+            return self._child_mean_q_compressed() + self.child_U_compressed
         q_values_for_current_player = self.child_Q_compressed[:, self.active_player_index]
         return q_values_for_current_player + self.child_U_compressed
+
+    def _child_mean_q_compressed(self) -> np.ndarray:
+        """Selection Q of each child for this node's mover under
+        ``config.mcts_mean_q`` (Rust ``argmax_action_score``): the mean value,
+        each in-flight virtual loss undone and counted as a zero-value visit;
+        an unvisited child at first-play urgency, this node's mean value minus
+        ``fpu_reduction * sqrt(prior mass of the visited children)``."""
+        ap = self.active_player_index
+        visits = self.child_N_compressed + self.child_VL_compressed
+        visited = visits > 0
+        visited_mass = float(self.child_prior_compressed[visited].sum())
+        fpu = self.mean_value(ap) - self.config.fpu_reduction * math.sqrt(visited_mass)
+        q = np.full(self.num_legal_actions, fpu, dtype=np.float64)
+        q[visited] = (self.child_W_compressed[visited, ap] + self.child_VL_compressed[visited]) / visits[visited]
+        return q
 
     @property
     def child_Q(self):
@@ -492,6 +514,25 @@ class MCTSNode:
         self.parent.child_W_compressed[self._parent_index] = value
 
     @property
+    def VL(self) -> float:
+        """Virtual losses in flight through this node (``add_virtual_loss``)."""
+        if self._is_price_grandchild:
+            return float(self.parent.price_child_VL.get(self.fmove, {}).get(self.sampled_price, 0.0))
+        return float(self.parent.child_VL_compressed[self._parent_index])
+
+    def mean_value(self, player: int) -> float:
+        """Mean backed-up value of this node for ``player`` (in-flight virtual
+        losses excluded); ``1 / num_players`` before any backup. A price
+        grandchild reads its own per-price stats (Rust ``node_mean_value``)."""
+        n = float(self.N)
+        if n <= 0:
+            return 1.0 / max(1, len(self.player_mapping))
+        w = float(self.W[player])
+        if isinstance(self.parent, MCTSNode) and player == self.parent.active_player_index:
+            w += self.VL
+        return w / n
+
+    @property
     def Q_perspective(self):
         """Return value of position, from perspective of player to play."""
         return self.Q[self.active_player_index]
@@ -570,9 +611,33 @@ class MCTSNode:
                 return self.maybe_add_child(action_index, price=price)
             # Every non-empty cell already has a grandchild: fall through.
 
-        # PW cap reached: PUCT among existing grandchildren using per-price
-        # stats, with each grandchild's prior the price head's probability of
-        # its cell, renormalized over the expanded grandchildren.
+        # PW cap reached: PUCT among existing grandchildren.
+        best_score = -np.inf
+        best_grandchild = None
+        for _, grandchild, q_sa, u_sa in self._price_child_terms(action_index, action_type, price_range):
+            score = q_sa + u_sa
+            if score > best_score:
+                best_score = score
+                best_grandchild = grandchild
+        return best_grandchild
+
+    def _price_child_terms(self, action_index: int, action_type: str, price_range: tuple) -> list:
+        """``(price, grandchild, q, u)`` for each existing price grandchild of
+        ``action_index`` (Rust ``price_child_terms``). A grandchild's prior is
+        the price head's probability of its cell, renormalized over the
+        expanded grandchildren; ``u`` is the categorical one with the slot's
+        visits as the parent's.
+
+        ``q`` follows the categorical rule: minigo's ``W / (1 + N)`` (a price
+        with no backed-up visit at 0), or with ``config.mcts_mean_q`` the mean
+        value with in-flight virtual losses as zero-value visits and a price
+        with neither at first-play urgency -- the slot's own mean value
+        lowered by ``fpu_reduction * sqrt(prior mass of the visited prices)``.
+        """
+        existing = self.price_children.get(action_index, {})
+        ap = self.active_player_index
+        slot = self._index_for(action_index)
+        slot_visits = int(self.child_N_compressed[slot])
         round_name = self.game_object.round.__class__.__name__
         c_puct_init = self.config.c_puct_by_round.get(round_name, self.config.c_puct_init)
         c_puct = 2.0 * (
@@ -583,17 +648,29 @@ class MCTSNode:
         cell_mass = {price: float(probs[cells.cell_of(price)]) for price in existing}
         total_mass = sum(cell_mass.values()) or 1.0
 
-        best_score = -np.inf
-        best_grandchild = None
+        mean_q = self.config.mcts_mean_q
+        if mean_q:
+            # The slot's mean value (virtual losses undone); this node's own
+            # before any of its prices was backed up.
+            if slot_visits > 0:
+                slot_vl = float(self.child_VL_compressed[slot])
+                slot_value = (float(self.child_W_compressed[slot, ap]) + slot_vl) / float(self.child_N_compressed[slot])
+            else:
+                slot_value = self.mean_value(ap)
+            visited_mass = sum(cell_mass[p] / total_mass for p, g in existing.items() if g.N + g.VL > 0)
+            fpu = slot_value - self.config.fpu_reduction * math.sqrt(visited_mass)
+
+        terms = []
         for price, grandchild in existing.items():
             n_sa = grandchild.N
-            q_sa = (grandchild.W[self.active_player_index] / (1 + n_sa)) if n_sa > 0 else 0.0
+            if mean_q:
+                vl = grandchild.VL
+                q_sa = (float(grandchild.W[ap]) + vl) / (n_sa + vl) if n_sa + vl > 0 else fpu
+            else:
+                q_sa = (grandchild.W[self.active_player_index] / (1 + n_sa)) if n_sa > 0 else 0.0
             u_sa = c_puct * (cell_mass[price] / total_mass) * math.sqrt(n_s) / (1 + n_sa)
-            score = q_sa + u_sa
-            if score > best_score:
-                best_score = score
-                best_grandchild = grandchild
-        return best_grandchild
+            terms.append((price, grandchild, q_sa, u_sa))
+        return terms
 
     def _index_for(self, action_index: int) -> int:
         """Translate a flat action index into its compressed-array slot.
@@ -737,8 +814,10 @@ class MCTSNode:
             self.price_children.setdefault(action_index, {})
             self.price_child_N.setdefault(action_index, {})
             self.price_child_W.setdefault(action_index, {})
+            self.price_child_VL.setdefault(action_index, {})
             self.price_child_N[action_index][sampled_price] = 0.0
             self.price_child_W[action_index][sampled_price] = np.zeros(VALUE_SIZE, dtype=np.float32)
+            self.price_child_VL[action_index][sampled_price] = 0.0
 
         child = MCTSNode(new_position, fmove=action_index, parent=self, config=self.config)
         child.forced_action_chain = forced_chain
@@ -884,6 +963,8 @@ class MCTSNode:
         # so PUCT at the categorical level sees the virtual loss too.
         if self._is_price_grandchild:
             self.parent.child_W_compressed[self._parent_index, prev_player] -= 1
+            self.parent.price_child_VL[self.fmove][self.sampled_price] += 1
+        self.parent.child_VL_compressed[self._parent_index] += 1
         self.parent.add_virtual_loss(up_to)
 
     def revert_virtual_loss(self, up_to):
@@ -894,6 +975,8 @@ class MCTSNode:
         self.W[prev_player] += 1
         if self._is_price_grandchild:
             self.parent.child_W_compressed[self._parent_index, prev_player] += 1
+            self.parent.price_child_VL[self.fmove][self.sampled_price] -= 1
+        self.parent.child_VL_compressed[self._parent_index] -= 1
         self.parent.revert_virtual_loss(up_to)
 
     def _unrotate_value(self, value: np.ndarray) -> np.ndarray:

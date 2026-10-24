@@ -85,11 +85,13 @@ pub struct RustMCTSNode {
     pub children: HashMap<u32, usize>,
 
     // PW / price-grandchild bookkeeping. Layered as: slot_idx -> price ->
-    // arena_idx / N / W. Only populated for price-bearing slots with a
+    // arena_idx / N / W / in-flight virtual losses (``child_vl``'s per-price
+    // counterpart). Only populated for price-bearing slots with a
     // non-degenerate price_range.
     pub price_children: HashMap<u32, HashMap<i64, usize>>,
     pub price_child_n: HashMap<u32, HashMap<i64, f32>>,
     pub price_child_w: HashMap<u32, HashMap<i64, [f32; VALUE_SIZE]>>,
+    pub price_child_vl: HashMap<u32, HashMap<i64, f32>>,
 
     pub forced_action_chain: Vec<u32>,
     pub active_player_index: usize,
@@ -252,6 +254,8 @@ pub struct RustMCTSPlayer {
     /// ``W / N``, an in-flight descent counted as a zero-value visit, and
     /// unvisited children at the node's own mean value minus
     /// ``fpu_reduction * sqrt(visited prior mass)`` (first-play urgency).
+    /// A PW slot's price grandchildren follow the same rule
+    /// (``price_child_terms``).
     pub mean_q: bool,
     pub fpu_reduction: f32,
     /// With ``mean_q``: PUCT reads each node's Q min-max normalized
@@ -362,6 +366,7 @@ impl RustMCTSPlayer {
             price_children: HashMap::new(),
             price_child_n: HashMap::new(),
             price_child_w: HashMap::new(),
+            price_child_vl: HashMap::new(),
             forced_action_chain: Vec::new(),
             active_player_index,
             num_players,
@@ -382,6 +387,50 @@ impl RustMCTSPlayer {
             Some(&(lo, hi)) => lo != hi,
             None => false,
         }
+    }
+
+    /// A fresh player searching from ``game`` (``new`` without Python; the
+    /// game's action log becomes the root log).
+    pub(crate) fn from_game(
+        mut game: BaseGame,
+        pw_c: Option<f32>,
+        pw_alpha: Option<f32>,
+        min_price_children: Option<usize>,
+        price_explore_eps: Option<f32>,
+    ) -> PyResult<Self> {
+        let root_log = std::mem::take(&mut game.action_log);
+        let mut player = RustMCTSPlayer {
+            arena: Vec::new(),
+            root_idx: 0,
+            num_players: 0,
+            c_puct_init: C_PUCT_INIT,
+            c_puct_base: C_PUCT_BASE,
+            backup_discount: 1.0,
+            root_n: 0.0,
+            root_w: [0.0; VALUE_SIZE],
+            pw_c: pw_c.unwrap_or(1.0),
+            pw_alpha: pw_alpha.unwrap_or(0.5),
+            min_price_children: min_price_children.unwrap_or(1),
+            price_explore_eps: price_explore_eps.unwrap_or(0.05),
+            c_puct_by_round: HashMap::new(),
+            max_game_length: 1000,
+            mean_q: false,
+            fpu_reduction: 0.0,
+            q_normalize: false,
+            terminal_score_weight: 0.0,
+            terminal_score_points: Vec::new(),
+            rng: rand::rngs::StdRng::from_entropy(),
+            pending: Vec::new(),
+            pending_dups: Vec::new(),
+            gumbel: None,
+            gumbel_search: None,
+            root_log,
+        };
+        let root = player.build_node(game, None, None)?;
+        player.num_players = root.num_players;
+        player.arena.push(root);
+        player.root_idx = 0;
+        Ok(player)
     }
 }
 
@@ -414,42 +463,9 @@ impl RustMCTSPlayer {
         // Python-side game keeps its state.
         let cloned = base_obj.call_method0("pickle_clone")?;
         let borrowed: PyRef<BaseGame> = cloned.extract()?;
-        let mut cloned_inner: BaseGame = borrowed.clone_for_search();
+        let cloned_inner: BaseGame = borrowed.clone_for_search();
         drop(borrowed);
-        let root_log = std::mem::take(&mut cloned_inner.action_log);
-
-        let mut player = RustMCTSPlayer {
-            arena: Vec::new(),
-            root_idx: 0,
-            num_players: 0,
-            c_puct_init: C_PUCT_INIT,
-            c_puct_base: C_PUCT_BASE,
-            backup_discount: 1.0,
-            root_n: 0.0,
-            root_w: [0.0; VALUE_SIZE],
-            pw_c: pw_c.unwrap_or(1.0),
-            pw_alpha: pw_alpha.unwrap_or(0.5),
-            min_price_children: min_price_children.unwrap_or(1),
-            price_explore_eps: price_explore_eps.unwrap_or(0.05),
-            c_puct_by_round: HashMap::new(),
-            max_game_length: 1000,
-            mean_q: false,
-            fpu_reduction: 0.0,
-            q_normalize: false,
-            terminal_score_weight: 0.0,
-            terminal_score_points: Vec::new(),
-            rng: rand::rngs::StdRng::from_entropy(),
-            pending: Vec::new(),
-            pending_dups: Vec::new(),
-            gumbel: None,
-            gumbel_search: None,
-            root_log,
-        };
-        let root = player.build_node(cloned_inner, None, None)?;
-        player.num_players = root.num_players;
-        player.arena.push(root);
-        player.root_idx = 0;
-        Ok(player)
+        Self::from_game(cloned_inner, pw_c, pw_alpha, min_price_children, price_explore_eps)
     }
 
     /// Set PW knobs after construction (mirrors a config update in Python).
@@ -732,52 +748,11 @@ impl RustMCTSPlayer {
             }
         }
 
-        // PW cap reached: PUCT among existing grandchildren, each with the
-        // price head's probability of its cell (renormalized over the
-        // expanded grandchildren) as its prior.
-        let ap = self.arena[arena_idx].active_player_index;
-        let cell_mass: HashMap<i64, f32> = match self.slot_cells(arena_idx, action_index, &action_type, price_range) {
-            Some((cells, probs)) => self.arena[arena_idx]
-                .price_children
-                .get(&action_index)
-                .map(|m| m.keys().map(|&p| (p, cells.cell_of(p).map_or(0.0, |c| probs[c] as f32))).collect())
-                .unwrap_or_default(),
-            None => HashMap::new(),
-        };
-        let total_mass: f32 = cell_mass.values().sum::<f32>();
-        let total_mass = if total_mass > 0.0 { total_mass } else { 1.0 };
-
-        let c_puct = 2.0
-            * ((1.0 + slot_visits + self.c_puct_base) / self.c_puct_base).ln()
-            + 2.0 * self.c_puct_init_for(arena_idx);
-        let n_s = (slot_visits - 1.0).max(1.0);
-        let sqrt_n_s = n_s.sqrt();
-
-        let grandchildren_clone: HashMap<i64, usize> = self
-            .arena[arena_idx]
-            .price_children
-            .get(&action_index)
-            .cloned()
-            .unwrap_or_default();
-        let nw_clone = self.arena[arena_idx]
-            .price_child_n
-            .get(&action_index)
-            .cloned()
-            .unwrap_or_default();
-        let ww_clone = self.arena[arena_idx]
-            .price_child_w
-            .get(&action_index)
-            .cloned()
-            .unwrap_or_default();
-
+        // PW cap reached: PUCT among existing grandchildren.
+        let terms = self.price_child_terms(arena_idx, action_index, &action_type, price_range);
         let mut best_score = f32::NEG_INFINITY;
-        let mut best_idx: usize = *grandchildren_clone.values().next().unwrap();
-        for (&price, &gc_idx) in grandchildren_clone.iter() {
-            let n_sa = *nw_clone.get(&price).unwrap_or(&0.0);
-            let w_vec = *ww_clone.get(&price).unwrap_or(&[0.0; VALUE_SIZE]);
-            let q_sa = if n_sa > 0.0 { w_vec[ap] / (1.0 + n_sa) } else { 0.0 };
-            let prior = cell_mass.get(&price).copied().unwrap_or(0.0) / total_mass;
-            let u_sa = c_puct * prior * sqrt_n_s / (1.0 + n_sa);
+        let mut best_idx: usize = terms[0].1;
+        for &(_, gc_idx, q_sa, u_sa) in &terms {
             let score = q_sa + u_sa;
             if score > best_score {
                 best_score = score;
@@ -785,6 +760,112 @@ impl RustMCTSPlayer {
             }
         }
         Ok(best_idx)
+    }
+
+    /// The PUCT terms ``(price, grandchild arena_idx, q, u)`` of each existing
+    /// price grandchild of PW slot ``action_index`` at ``arena_idx``, in the
+    /// slot's map order (``_select_or_expand_price_child`` takes the first
+    /// best ``q + u``). A grandchild's prior is the price head's probability
+    /// of its cell, renormalized over the expanded grandchildren; ``u`` is
+    /// the categorical level's with the slot's visits as the parent's.
+    ///
+    /// ``q`` follows the categorical rule (``argmax_action_score``). Minigo:
+    /// ``W / (1 + N)``, a price with no backed-up visit at 0. ``mean_q``: the
+    /// mean value with each in-flight virtual loss counted as a zero-value
+    /// visit; a price with neither at first-play urgency -- the slot's own
+    /// mean value (the move over all its prices so far) lowered by
+    /// ``fpu_reduction * sqrt(prior mass of the prices already visited)``;
+    /// with ``q_normalize``, min-max normalized over the slot's mean value and
+    /// its visited prices' (mctx's parent-and-siblings range, one level down).
+    /// Until 2026-10-21 this level always read minigo's Q, so under mean Q the
+    /// most-visited price (the price head's mode, proposed first) kept winning.
+    fn price_child_terms(
+        &self,
+        arena_idx: usize,
+        action_index: u32,
+        action_type: &str,
+        price_range: (i64, i64),
+    ) -> Vec<(i64, usize, f32, f32)> {
+        let node = &self.arena[arena_idx];
+        let ap = node.active_player_index;
+        let Some(grandchildren) = node.price_children.get(&action_index) else {
+            return Vec::new();
+        };
+        let empty_n = HashMap::new();
+        let empty_w = HashMap::new();
+        let price_n = node.price_child_n.get(&action_index).unwrap_or(&empty_n);
+        let price_w = node.price_child_w.get(&action_index).unwrap_or(&empty_w);
+        let price_vl = node.price_child_vl.get(&action_index).unwrap_or(&empty_n);
+        let n_of = |p: &i64| price_n.get(p).copied().unwrap_or(0.0);
+        let w_of = |p: &i64| price_w.get(p).map_or(0.0, |w| w[ap]);
+        let vl_of = |p: &i64| price_vl.get(p).copied().unwrap_or(0.0);
+
+        let cell_mass: HashMap<i64, f32> = match self.slot_cells(arena_idx, action_index, action_type, price_range) {
+            Some((cells, probs)) => grandchildren
+                .keys()
+                .map(|&p| (p, cells.cell_of(p).map_or(0.0, |c| probs[c] as f32)))
+                .collect(),
+            None => HashMap::new(),
+        };
+        let total_mass: f32 = cell_mass.values().sum::<f32>();
+        let total_mass = if total_mass > 0.0 { total_mass } else { 1.0 };
+        let prior_of = |p: &i64| cell_mass.get(p).copied().unwrap_or(0.0) / total_mass;
+
+        let slot = node.legal_index_in_compressed(action_index).expect("PW slot is legal");
+        let slot_visits = node.child_n[slot];
+        let c_puct = 2.0
+            * ((1.0 + slot_visits + self.c_puct_base) / self.c_puct_base).ln()
+            + 2.0 * self.c_puct_init_for(arena_idx);
+        let sqrt_n_s = (slot_visits - 1.0).max(1.0).sqrt();
+
+        let (fpu, qnorm) = if self.mean_q {
+            // The slot's mean value (virtual losses undone); the node's own
+            // before any of its prices was backed up.
+            let slot_value = if slot_visits > 0.0 {
+                (node.child_w[slot][ap] + node.child_vl[slot]) / slot_visits
+            } else {
+                self.node_mean_value(arena_idx, ap)
+            };
+            let visited_mass: f32 = grandchildren.keys().filter(|p| n_of(p) + vl_of(p) > 0.0).map(prior_of).sum();
+            let qnorm = self.q_normalize.then(|| {
+                let (mut lo, mut hi) = (slot_value, slot_value);
+                for p in grandchildren.keys().filter(|p| n_of(p) > 0.0) {
+                    let q = (w_of(p) + vl_of(p)) / n_of(p);
+                    lo = lo.min(q);
+                    hi = hi.max(q);
+                }
+                (lo, 1.0 / (hi - lo).max(Q_NORM_EPS))
+            });
+            (slot_value - self.fpu_reduction * visited_mass.sqrt(), qnorm)
+        } else {
+            (0.0, None)
+        };
+
+        grandchildren
+            .iter()
+            .map(|(&price, &gc_idx)| {
+                let n_sa = n_of(&price);
+                let q_sa = if self.mean_q {
+                    // Undo the -1 virtual losses and count each as a 0-value visit.
+                    let vl = vl_of(&price);
+                    if n_sa + vl > 0.0 {
+                        (w_of(&price) + vl) / (n_sa + vl)
+                    } else {
+                        fpu
+                    }
+                } else if n_sa > 0.0 {
+                    w_of(&price) / (1.0 + n_sa)
+                } else {
+                    0.0
+                };
+                let q_sa = match qnorm {
+                    Some((lo, scale)) => (q_sa - lo) * scale,
+                    None => q_sa,
+                };
+                let u_sa = c_puct * prior_of(&price) * sqrt_n_s / (1.0 + n_sa);
+                (price, gc_idx, q_sa, u_sa)
+            })
+            .collect()
     }
 
     /// Look up or create the child for `action_index` under `arena_idx`.
@@ -912,6 +993,11 @@ impl RustMCTSPlayer {
                 .entry(action_index)
                 .or_insert_with(HashMap::new)
                 .insert(p, [0.0; VALUE_SIZE]);
+            self.arena[arena_idx]
+                .price_child_vl
+                .entry(action_index)
+                .or_insert_with(HashMap::new)
+                .insert(p, 0.0);
         } else {
             self.arena[arena_idx].children.insert(action_index, child_idx);
         }
@@ -945,6 +1031,9 @@ impl RustMCTSPlayer {
                         w[prev_player] -= 1.0;
                     }
                 }
+                if let Some(vl) = self.arena[parent].price_child_vl.get_mut(&fmove).and_then(|m| m.get_mut(&sp)) {
+                    *vl += 1.0;
+                }
                 // Mirror into categorical compressed W.
                 self.arena[parent].child_w[pidx][prev_player] -= 1.0;
             } else {
@@ -976,6 +1065,9 @@ impl RustMCTSPlayer {
                     if let Some(w) = map.get_mut(&sp) {
                         w[prev_player] += 1.0;
                     }
+                }
+                if let Some(vl) = self.arena[parent].price_child_vl.get_mut(&fmove).and_then(|m| m.get_mut(&sp)) {
+                    *vl -= 1.0;
                 }
                 self.arena[parent].child_w[pidx][prev_player] += 1.0;
             } else {
@@ -1231,6 +1323,27 @@ impl RustMCTSPlayer {
         d.set_item("price_child_n", node.price_child_n.clone())?;
         d.set_item("expanded", node.is_expanded)?;
         Ok(d.into_any().unbind())
+    }
+
+    /// Diagnostics (tests): ``{price: (q, u)}``, the PUCT terms the search
+    /// scores each existing price grandchild of PW slot ``action_index`` at
+    /// ``arena_idx`` by once the slot's widening is capped
+    /// (``price_child_terms``).
+    pub fn price_child_scores(&self, arena_idx: usize, action_index: u32) -> PyResult<HashMap<i64, (f32, f32)>> {
+        let node = self
+            .arena
+            .get(arena_idx)
+            .ok_or_else(|| PyIndexError::new_err("arena_idx out of bounds"))?;
+        if !Self::is_pw_slot(node, action_index) {
+            return Err(PyValueError::new_err(format!("{} is not a PW slot at arena_idx {}", action_index, arena_idx)));
+        }
+        let action_type = node.action_types.get(&action_index).cloned().unwrap_or_default();
+        let price_range = node.price_ranges[&action_index];
+        Ok(self
+            .price_child_terms(arena_idx, action_index, &action_type, price_range)
+            .into_iter()
+            .map(|(price, _, q, u)| (price, (q, u)))
+            .collect())
     }
 
     /// What a policy target computed outside the tree needs from the root
@@ -1851,7 +1964,10 @@ impl RustMCTSPlayer {
     }
 
     /// Mean backed-up value of ``arena_idx`` for ``player`` (in-flight
-    /// virtual losses excluded); ``1 / num_players`` before any backup.
+    /// virtual losses excluded); ``1 / num_players`` before any backup. A PW
+    /// price grandchild reads its own per-price entries, as ``node_n`` does
+    /// (until 2026-10-21 it read the categorical slot, i.e. every price
+    /// sibling's values over the grandchild's own count).
     fn node_mean_value(&self, arena_idx: usize, player: usize) -> f32 {
         let fallback = 1.0 / self.num_players.max(1) as f32;
         if arena_idx == self.root_idx {
@@ -1860,9 +1976,20 @@ impl RustMCTSPlayer {
         let node = &self.arena[arena_idx];
         let parent = &self.arena[node.parent.unwrap()];
         let pidx = node.parent_compressed_idx;
-        let (n, mut w) = (parent.child_n[pidx], parent.child_w[pidx][player]);
+        let (n, mut w, vl) = if node.is_price_grandchild {
+            let fmove = node.fmove.unwrap();
+            let sp = node.sampled_price.unwrap();
+            let per_price = |m: &HashMap<u32, HashMap<i64, f32>>| m.get(&fmove).and_then(|m| m.get(&sp)).copied();
+            (
+                per_price(&parent.price_child_n).unwrap_or(0.0),
+                parent.price_child_w.get(&fmove).and_then(|m| m.get(&sp)).map_or(0.0, |w| w[player]),
+                per_price(&parent.price_child_vl).unwrap_or(0.0),
+            )
+        } else {
+            (parent.child_n[pidx], parent.child_w[pidx][player], parent.child_vl[pidx])
+        };
         if player == parent.active_player_index {
-            w += parent.child_vl[pidx];
+            w += vl;
         }
         if n > 0.0 {
             w / n
@@ -2143,4 +2270,182 @@ pub(crate) fn decode_slot_index(
         slot_index.insert((action_type, parts), slot);
     }
     Ok(slot_index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tree on a fresh 4-player 1830 game, its root expanded with uniform
+    /// priors and a price head confident in one cell of the first open-price
+    /// Bid slot. Two grandchildren of that slot: ``a`` in the head's modal
+    /// cell, ``b`` in another. Returns ``(player, slot, a, b)`` as
+    /// ``(slot, (price, arena_idx))``. PW is capped at one grandchild for the
+    /// visits used here, so selection is PUCT among what exists.
+    fn rigged_tree(mean_q: bool, fpu_reduction: f32) -> (RustMCTSPlayer, u32, (i64, usize), (i64, usize)) {
+        let names: HashMap<u32, String> = (1..=4).map(|i| (i, format!("Player {}", i))).collect();
+        let game = BaseGame::build(vec![1, 2, 3, 4], names);
+        let mut player = RustMCTSPlayer::from_game(game, Some(0.5), Some(0.25), Some(1), None).unwrap();
+        player.set_search_config(0.05, C_PUCT_BASE, HashMap::new(), 1000);
+        player.set_q_config(mean_q, fpu_reduction);
+
+        let root = player.root_idx;
+        let slot = *player.arena[root]
+            .legal_action_indices
+            .iter()
+            .find(|&&i| player.arena[root].action_types[&i] == "Bid" && RustMCTSPlayer::is_pw_slot(&player.arena[root], i))
+            .expect("an open-price Bid at the auction's start");
+        let range = player.arena[root].price_ranges[&slot];
+        let cells = PriceCells::new("Bid", range.0, range.1, bid_step()).unwrap();
+        let mode = (0..NUM_CELLS).find(|&c| cells.nonempty(c)).unwrap();
+        let mut logits = vec![0.0f32; NUM_CELLS];
+        logits[mode] = 5.0;
+        let key = price_head_entity_key(slot, "Bid").unwrap();
+        let pc = PriceComponents {
+            price_logits: logits,
+            slot_index: Arc::new(HashMap::from([(key, 0)])),
+            num_slots: 1,
+        };
+        let num_legal = player.arena[root].legal_action_indices.len();
+        player.incorporate(root, vec![1.0; num_legal], [0.25; VALUE_SIZE], Some(pc));
+
+        let price_in = |want_mode: bool| {
+            (range.0..=range.1)
+                .find(|&p| cells.cell_of(p).is_some_and(|c| (c == mode) == want_mode))
+                .unwrap()
+        };
+        let (pa, pb) = (price_in(true), price_in(false));
+        let a = player.maybe_add_child(root, slot, Some(pa)).unwrap();
+        let b = player.maybe_add_child(root, slot, Some(pb)).unwrap();
+        (player, slot, (pa, a), (pb, b))
+    }
+
+    /// A value worth ``x`` to seat ``mover`` and the rest split evenly.
+    fn value_for(mover: usize, x: f32) -> [f32; VALUE_SIZE] {
+        let mut v = [0.0; VALUE_SIZE];
+        for (i, s) in v.iter_mut().take(4).enumerate() {
+            *s = if i == mover { x } else { (1.0 - x) / 3.0 };
+        }
+        v
+    }
+
+    fn terms(player: &RustMCTSPlayer, slot: u32) -> HashMap<i64, (f32, f32)> {
+        let root = player.root_idx;
+        let range = player.arena[root].price_ranges[&slot];
+        player
+            .price_child_terms(root, slot, "Bid", range)
+            .into_iter()
+            .map(|(p, _, q, u)| (p, (q, u)))
+            .collect()
+    }
+
+    /// The modal price with 10 visits worth 0.25 and another with 1 visit
+    /// worth 0.40: the mean picks the better price; minigo's W / (1 + N)
+    /// (0.227 vs 0.20) keeps the most-visited one.
+    fn select_after_rigging(mean_q: bool) -> (usize, usize, usize) {
+        let (mut player, slot, (_, a), (_, b)) = rigged_tree(mean_q, 0.0);
+        let mover = player.arena[player.root_idx].active_player_index;
+        for _ in 0..10 {
+            player.backup(a, value_for(mover, 0.25));
+        }
+        player.backup(b, value_for(mover, 0.40));
+        let picked = player._select_or_expand_price_child(player.root_idx, slot).unwrap();
+        (picked, a, b)
+    }
+
+    #[test]
+    fn mean_q_selects_the_better_less_visited_price() {
+        let (picked, _, b) = select_after_rigging(true);
+        assert_eq!(picked, b);
+    }
+
+    #[test]
+    fn minigo_q_is_unchanged_at_the_price_level() {
+        let (picked, a, _) = select_after_rigging(false);
+        assert_eq!(picked, a);
+        let (mut player, slot, (pa, a), (pb, _)) = rigged_tree(false, 0.0);
+        let mover = player.arena[player.root_idx].active_player_index;
+        for _ in 0..10 {
+            player.backup(a, value_for(mover, 0.25));
+        }
+        let t = terms(&player, slot);
+        let w: f32 = (0..10).map(|_| 0.25f32).sum();
+        assert_eq!(t[&pa].0, w / (1.0 + 10.0));
+        assert_eq!(t[&pb].0, 0.0);
+    }
+
+    #[test]
+    fn virtual_loss_is_a_zero_value_visit_under_mean_q() {
+        let (mut player, slot, (pa, a), (pb, b)) = rigged_tree(true, 0.0);
+        let root = player.root_idx;
+        let mover = player.arena[root].active_player_index;
+        for _ in 0..4 {
+            player.backup(a, value_for(mover, 0.25));
+        }
+        player.backup(b, value_for(mover, 0.40));
+        player.add_virtual_loss(b);
+        assert_eq!(player.arena[root].price_child_vl[&slot][&pb], 1.0);
+        let t = terms(&player, slot);
+        assert!((t[&pb].0 - 0.40 / 2.0).abs() < 1e-6, "{:?}", t[&pb]);
+        assert!((t[&pa].0 - 0.25).abs() < 1e-6);
+        player.revert_virtual_loss(b);
+        assert_eq!(player.arena[root].price_child_vl[&slot][&pb], 0.0);
+        assert!((terms(&player, slot)[&pb].0 - 0.40).abs() < 1e-6);
+        // A price with only a descent in flight reads 0 (not -1, nor first-play).
+        let pc = fresh_price(&player, slot);
+        let c = player.maybe_add_child(root, slot, Some(pc)).unwrap();
+        player.add_virtual_loss(c);
+        assert_eq!(terms(&player, slot)[&pc].0, 0.0);
+    }
+
+    /// A legal price of ``slot`` in a cell no grandchild holds yet.
+    fn fresh_price(player: &RustMCTSPlayer, slot: u32) -> i64 {
+        let root = player.root_idx;
+        let range = player.arena[root].price_ranges[&slot];
+        let cells = PriceCells::new("Bid", range.0, range.1, bid_step()).unwrap();
+        let taken: Vec<usize> = player.arena[root].price_children[&slot]
+            .keys()
+            .filter_map(|&p| cells.cell_of(p))
+            .collect();
+        (range.0..=range.1)
+            .find(|&p| cells.cell_of(p).is_some_and(|c| !taken.contains(&c)))
+            .unwrap()
+    }
+
+    #[test]
+    fn an_unvisited_price_starts_at_the_slots_value() {
+        let fpu_reduction = 0.1;
+        let (mut player, slot, (pa, a), (pb, b)) = rigged_tree(true, fpu_reduction);
+        let mover = player.arena[player.root_idx].active_player_index;
+        for _ in 0..10 {
+            player.backup(a, value_for(mover, 0.25));
+        }
+        player.backup(b, value_for(mover, 0.40));
+        let pc = fresh_price(&player, slot);
+        player.maybe_add_child(player.root_idx, slot, Some(pc)).unwrap();
+        // Priors: the head's cell probabilities over the three grandchildren.
+        let root = player.root_idx;
+        let range = player.arena[root].price_ranges[&slot];
+        let (cells, probs) = player.slot_cells(root, slot, "Bid", range).unwrap();
+        let mass = |p: i64| probs[cells.cell_of(p).unwrap()] as f32;
+        let visited = (mass(pa) + mass(pb)) / (mass(pa) + mass(pb) + mass(pc));
+        let slot_value = (10.0 * 0.25 + 0.40) / 11.0;
+        let q = terms(&player, slot)[&pc].0;
+        assert!((q - (slot_value - fpu_reduction * visited.sqrt())).abs() < 1e-5, "{}", q);
+    }
+
+    #[test]
+    fn a_price_grandchilds_mean_value_is_its_own() {
+        let (mut player, _, (_, a), (_, b)) = rigged_tree(true, 0.0);
+        let mover = player.arena[player.root_idx].active_player_index;
+        for _ in 0..10 {
+            player.backup(a, value_for(mover, 0.25));
+        }
+        player.backup(b, value_for(mover, 0.40));
+        assert_eq!(player.node_n(b), 1.0);
+        assert!((player.node_mean_value(b, mover) - 0.40).abs() < 1e-6);
+        player.add_virtual_loss(b);
+        assert!((player.node_mean_value(b, mover) - 0.40).abs() < 1e-6);
+        player.revert_virtual_loss(b);
+    }
 }

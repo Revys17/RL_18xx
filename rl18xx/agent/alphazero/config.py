@@ -465,10 +465,13 @@ class SelfPlayHyperparams:
     random_start_max_price_multiple: float = 2.0
     c_puct_base: float = 19652
     c_puct_init: float = 1.25
-    # Rust MCTS selection Q (``RustMCTSPlayer.set_q_config``). False keeps
-    # minigo's W / (1 + N) with unvisited children at 0; True uses the mean
-    # value W / N and starts unvisited children at the node's mean value minus
-    # ``fpu_reduction * sqrt(prior mass of the visited children)``. Values
+    # MCTS selection Q (Rust: ``RustMCTSPlayer.set_q_config``; the Python
+    # ``MCTSNode`` reads it from its config). False keeps minigo's W / (1 + N)
+    # with unvisited children at 0; True uses the mean value W / N (an
+    # in-flight virtual loss a zero-value visit) and starts unvisited children
+    # at the node's mean value minus ``fpu_reduction * sqrt(prior mass of the
+    # visited children)``. A price-bearing move's price grandchildren follow
+    # the same rule, their first-play value the move's own mean value. Values
     # here are 0-1 win shares, where minigo's shrinkage toward 0 reads as
     # "certain loss".
     mcts_mean_q: bool = False
