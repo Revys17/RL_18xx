@@ -1557,3 +1557,59 @@ Tests: `tests/agent/alphazero/test_eval_ladder.py`, 17, all synthetic, with no G
 - the scheduler end to end with a fake `eval_head_to_head.py`: a mid-match crash set aside and retried, a
   match that keeps failing given up after `max_attempts` (pausing `retry_seconds` between tries), resume, and
   dry-run.
+
+## The long run's generator: league seats, a followed value, generation-only runs (2026-10-23)
+
+The long-run recipe (`docs/long_run_recipe.md`) needs three things search learning did not have: a value
+network trained elsewhere (offline, over all saved games: `main.py value-train`), a frozen prior for phase 1,
+and opponents other than the main system. All three are options, off by default; with none of them a run is
+unchanged.
+
+**`--value-follow <value run>`.** The search's leaf values come from the value-train run's current promoted
+value (`promoted.json`'s `current`; `ValueFollower`). Before every update the generator checks for a newer
+promotion; the server reloads `<learner>+<promoted value>` and the shared server version moves to the
+update number, so kept trees searched by the old value are dropped (as on a policy update). No critic is
+loaded or trained (`_update` skips the value loss: `critic` None without `--shared`). It excludes `--shared`.
+
+**`--freeze-policy` with `--value-follow`: generation only.** Nothing trains: an "update" is every
+`--rows-per-update` searched rows, a history line and (every `--snapshot-every`) a resumable snapshot; rows are
+saved (`--save-data`) but kept out of the replay window. The learner's per-update checkpoint is a hard link to
+the previous one (no disk), so the harness's snapshot check and resume work as for a training run; the
+server reloads only when the value is promoted. With `--shared` the option keeps its old meaning (train only
+the value side).
+
+**League seats (`--population <json>`).** Members are `{"name", "spec", "mode": "search"|"policy",
+"readouts", "prior_temperature", "temperature", "min_share"}`; a spec is anything the inference server
+loads (`<policy>+<value>[#score]` or one checkpoint). With probability `--league-share` a game gives 1-2 random
+seats (`--league-seat-weights`) to one member, drawn by PFSP (`policy_gradient.League`: weight (1 - p)^2, p the
+main system's decayed pairwise rate of finishing ahead of the member's seats by net worth; `min_share` pins).
+Each member has its own inference server (one process each, started with the run); a searching member's
+decisions are searched on a fresh tree at `--league-readouts` (default 48) with the generator's PUCT settings
+at the member's prior temperature, its most-visited move and price played; a policy member samples at its
+temperature. Member seats give no rows and no recorded searches (the n-step / lambda-return values stay the
+main system's); the whole game is saved, so the value trains on positions against other styles.
+
+Every `--league-snapshot-hours` (wall clock, kept across resumes) the main system joins as a snapshot member
+`self_u<update>[_v<value version>]`: its policy (a frozen run: the starting checkpoint; else the update's
+learner, linked under `<run>/league/`) and its value (the promoted value, or this run's critic, linked). There
+are `--league-snapshot-slots` snapshot servers (an empty one serves the main system, unused); a full set
+replaces the oldest. When a slot's server changes members, games dealt to the old member are played out but
+not scored: each league server has a shared counter of member changes, read when the game is dealt (against
+the task settings' copy, which lag up to a task) and when it ends (`league_mixed`, counted as
+`league_unscored_games`).
+
+**What the history gets.** `league_share`; with a population `league` -- per member `{kind: fixed|snapshot,
+games, main_seats, win, fair (main seats / 4), worth, win_excess_sq, worth_excess_sq}` summed over the update's
+scored games, so a day's score against a member is `(win - fair) / games` with its SE from the squares (the
+recipe's P1 for fixed members, P2 for snapshots) -- and `league_weights`; with `--value-follow` `value_version`,
+`value_path`, `value_reloaded`. `<run>/league.json` lists the members with their specs, PFSP weights and rates
+(the retention job keeps every checkpoint it names). Saved games carry `seat_members` and `value_version`.
+
+**Cost.** Each member is an inference-server process (a CUDA context and the model; ~2-3 GB of host RAM): six
+fixed members and six snapshot slots add twelve. Member seats are searched at 48 readouts against the main
+system's mix of 200 / 48, so league games cost less per decision than main-only ones.
+
+Tests: `tests/agent/alphazero/test_search_learning_league.py` -- dealing by weight, per-member scores, snapshot
+slots and state round trip, member searches on their own servers with no rows, unscored games after a slot
+change, the value follower, validation, and a tiny CPU run end to end (frozen prior as links, a promotion
+reaching the server mid-run, a snapshot joining, saved games with their seat members).
