@@ -144,7 +144,7 @@ Nothing else runs on the GPU during the run except forks under the fork policy b
 
 **Status (2026-10-23): merged and built on `claude/longrun-phase0`, not launched.** The six branches merged in
 order (conflicts: `from_game`'s initializer as planned, two doc sections kept side by side; the saved searches
-now record the server's live version); `pytest tests/` 1354 passed on the merge, `cargo test` 222. Built, each
+now record the server's live version); `pytest tests/` 1354 passed on the merge and 1425 on the build (one flaky test fixed), `cargo test` 222. Built, each
 with tests:
 
 | item | where | as built (where it differs from the text above) |
