@@ -142,6 +142,39 @@ Nothing else runs on the GPU during the run except forks under the fork policy b
 8. **Retention job** (`scripts/longrun/retention.py`): the retention table as a config file, dry-run mode,
    daily; and the watchdog additions (days to full, RSS growth, Xid scan, nightly integrity check).
 
+**Status (2026-10-23): merged and built on `claude/longrun-phase0`, not launched.** The six branches merged in
+order (conflicts: `from_game`'s initializer as planned, two doc sections kept side by side; the saved searches
+now record the server's live version); `pytest tests/` 1354 passed on the merge, `cargo test` 222. Built, each
+with tests:
+
+| item | where | as built (where it differs from the text above) |
+|---|---|---|
+| 1 value trainer | `main.py value-train`, `value_trainer.py` | rolling held-out set: the held-out games among the newest 200k, 8 positions each; **half of them choose the early-stopped state, the other half gate it** (else the gate judges the candidate on the positions that chose it); a cycle with no gain never promotes; divergence also when training ends above its start; escalation doubles the games trigger too (40k -> 80k), else 24-h cycles never happen |
+| 2 followed separate value, frozen prior | `search-learning --value-follow <value run> --freeze-policy` | the frozen prior's per-update checkpoints are hard links; the server reloads only on a promotion |
+| 3, 6 league seats, per-member scores | `search-learning --population --league-share ...` | one member per league game, PFSP on pairwise net-worth results; history `league` per member (sums and squares for the SE); snapshots in 6 server slots, games straddling a slot change unscored |
+| 4 style statistics | `scripts/longrun/style_stats.py` | replays the day's games (the log alone doesn't name presidents or OR numbers) |
+| 5 panel, ladder instance | `scripts/launch/2026-11/eval_ladder_longrun.json`, `eval_ladder.py` rotation keys | u0 plays the whole panel first (the day-0 baseline, ~3.8k games); then two members per candidate in rotation, a full panel + value check weekly |
+| 7 daily report | `scripts/longrun/status_report.py` (daily timer) | "days" are 24-h windows ending at the report |
+| 8 retention, watchdog additions | `scripts/longrun/retention.py` + `retention.json`, `maintenance.py`, `integrity_check.py` | dry run until `dry_run_until` (set to launch + 7 days when approved) |
+
+Instances: `scripts/launch/2026-11/install_lr1.sh <deployment> <workdir>` (generator, value trainer, ladder,
+daily jobs; memory caps 120 / 36 / 26 / 12 GB -- azl alone measured ~80 GB and the league adds up to 12
+inference servers; the pilot measures the real peaks). Runbook: `docs/longrun_runbook.md`, "The long run
+(2026-11)". The generator's settings are azl's (cq targets, c 0.05, 200 / 48, reuse total, exploration in the
+first 120 decisions, 30% mid-game starts) without auction starts.
+
+**Open before launch:**
+- **Gate power late in the run.** A 40k-game cycle on > 1M games adds a few % of data: at ~0.006 CE per
+  doubling, an expected gain below the gate's 2 SE. If the pilot and the first weeks show promotions drying
+  up, the rule needs a decision (a non-inferiority gate, longer cycles).
+- **The stall rule as written barely fires on a flat P1:** at ~0.0013/day SE on a 5-day slope, a flat series'
+  upper bound is ~+0.0025/day, so "upper bound < +0.001" catches only a falling P1.
+- `explore_decisions` counts from each game's start (mid-game starts explore 120 decisions mid-game).
+- Host: the driver/kernel holds (`host_hold.sh`, sudo) and the pending reboot; day-0 yellows until done.
+- Workdir: the panel and league checkpoints, `logs/value_gate/data` and the start value live in session
+  worktrees today; the runbook's setup copies them into the workdir.
+- Not built: the phase-2 prior factorial (P8), the off-disk backup itself (M9 only checks its age).
+
 **Baselines (day 0):** the start system against the full panel (2v2 + 1v3, 480 games), the start value's
 CE on both held-out sets, style statistics of the start system's games.
 
