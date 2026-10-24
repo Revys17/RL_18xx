@@ -1,0 +1,12 @@
+# Runs the long run's daily jobs every morning (docs/longrun_runbook.md). Persistent: a run missed while the
+# machine was off happens at the next boot. Enable with: systemctl --user enable --now rl18xx-longrun-daily@%i.timer
+[Unit]
+Description=rl18xx long run %i: daily jobs at 06:00
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+Persistent=true
+Unit=rl18xx-longrun-daily@%i.service
+
+[Install]
+WantedBy=timers.target

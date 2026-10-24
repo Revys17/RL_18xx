@@ -649,3 +649,152 @@ def test_a_match_that_keeps_failing_is_given_up(tmp_path, monkeypatch):
     assert len(list(root.glob("u300_vs_u0_1v3_oppA.failed_*"))) == 2  # three attempts, the last one left in place
     assert "gave up after 3 attempts: u300_vs_u0_1v3_oppA" in (root / "ladder.log").read_text()
     assert json.loads((root / "state.json").read_text()) == {"candidates": [300], "current": None}
+
+
+# ---------------------------------------------------------------------------
+# Schedules: rotation, the weekly full panel, the baseline first, the value check
+
+
+def _rotating(tmp_path, **overrides):
+    settings = {
+        "run": "vrun",
+        "checkpoint": "promoted/{update}.pth",
+        "spec": "ckpt10.pth+{checkpoint}@200/0.05:mean,ptemp=1",
+        "every": 1,
+        "games": 240,
+        "rotate": 2,
+        "rotate_games": 120,
+        "full_every_hours": 168,
+        "baseline_update": 0,
+        "value_check": {"games": 240, "modes": ["2v2"]},
+        "panel": [
+            {"name": "u0", "update": 0},
+            {"name": "gen4critic", "spec": "g.pth+c.pth@200"},
+            {"name": "az8", "spec": "a.pth@200"},
+            {"name": "azl", "spec": "l.pth@200"},
+            {"name": "sl10", "spec": "s.pth+c.pth@200"},
+        ],
+    }
+    return _config(tmp_path, **{**settings, **overrides})
+
+
+def test_rotation_cycles_through_the_panel_and_a_full_panel_comes_weekly(tmp_path):
+    cfg, _ = _rotating(tmp_path)
+    assert L.scheduled(cfg)
+    state, t0, hour = {"candidates": [], "current": None}, 1_000_000_000.0, 3600.0
+    # The baseline (update 0) plays the whole panel first.
+    base = L.choose_schedule(cfg, state, 0, now=t0)
+    assert base["kind"] == "full" and "value_check" not in base
+    L.commit_schedule(state, 0, base)
+    plan = L.plan_matches(cfg, 0, range(0, 1), base)
+    assert {m.opponent.name for m in plan} == {"gen4critic", "az8", "azl", "sl10"}  # not itself
+    assert {m.mode for m in plan} == {"2v2", "1v3"} and {m.games for m in plan} == {240}
+    assert all(m.schedule == "full" and m.purpose is None for m in plan)
+    # Then each candidate plays two members in turn, 2v2 only, 120 games per direction.
+    seen = []
+    for i, u in enumerate(range(1, 6)):
+        s = L.choose_schedule(cfg, state, u, now=t0 + (i + 1) * 12 * hour)
+        assert s["kind"] == "rotation"
+        L.commit_schedule(state, u, s)
+        seen.append(tuple(s["members"]))
+        plan = L.plan_matches(cfg, u, range(0, u + 1), s)
+        assert len(plan) == 4 and {m.mode for m in plan} == {"2v2"} and {m.games for m in plan} == {120}
+        assert {m.opponent.name for m in plan} == set(s["members"])
+        assert sorted(m.candidate_side for m in plan) == ["A", "A", "B", "B"]
+        assert all(m.schedule == "rotation" and m.fields()["schedule"] == "rotation" for m in plan)
+    assert seen == [("u0", "gen4critic"), ("az8", "azl"), ("sl10", "u0"), ("gen4critic", "az8"), ("azl", "sl10")]
+    # A week after the baseline: the whole panel again, plus the value check against the previous full candidate
+    # (u0, a panel member: its own 2v2 matches are tagged instead of adding a match).
+    full = L.choose_schedule(cfg, state, 14, now=t0 + 168 * hour + 1)
+    assert full["kind"] == "full" and full["value_check"] == 0
+    L.commit_schedule(state, 14, full)
+    plan = L.plan_matches(cfg, 14, range(0, 15), full)
+    assert {m.opponent.name for m in plan} == {"u0", "gen4critic", "az8", "azl", "sl10"}
+    tagged = [m for m in plan if m.purpose == "value_check"]
+    assert {(m.opponent.name, m.mode) for m in tagged} == {("u0", "2v2")} and len(tagged) == 2
+    # The next week's full schedule checks against u14: an extra self match, 2v2 at the value check's games.
+    later = L.choose_schedule(cfg, state, 30, now=t0 + 2 * 168 * hour + 2)
+    assert later["kind"] == "full" and later["value_check"] == 14
+    plan = L.plan_matches(cfg, 30, range(0, 31), later)
+    check = [m for m in plan if m.purpose == "value_check"]
+    assert {(m.opponent.name, m.opponent.role, m.mode, m.games) for m in check} == {("u14", "self", "2v2", 240)}
+    assert len(check) == 2
+    # The plan of a candidate taken earlier is the one state.json kept.
+    assert L.candidate_schedule(cfg, state, 3) == state["schedules"]["3"]
+
+
+def test_a_panel_without_schedules_plays_everything_as_before(tmp_path):
+    cfg, _ = _config(tmp_path)
+    assert not L.scheduled(cfg)
+    state = {"candidates": [], "current": None}
+    assert L.candidate_schedule(cfg, state, 600) is None and state == {"candidates": [], "current": None}
+    assert all(m.schedule == "full" for m in L.plan_matches(cfg, 600, range(0, 601, 300)))
+
+
+def test_decide_full_compares_full_schedules_only():
+    rng = np.random.default_rng(11)
+    strength = {"u0": 0.0, "ref": -0.5, "u600": 0.0, "u1200": 0.4, "u1800": -0.4}
+    records = ledger(rng, strength, {"u600": 600, "u1200": 1200, "u1800": 1800}, ["u0", "ref"], n_starts=60)
+    for r in records:
+        r["schedule"] = "rotation" if r["candidate"] == "u1800" else "full"
+    assert L.full_candidates(records) == {600, 1200}
+    full = {r["fit"]: r for r in L.decide(records, back=1, candidates=L.full_candidates(records))}
+    assert (full["2v2"]["latest"], full["2v2"]["earlier"]) == (1200, 600)
+    every = {r["fit"]: r for r in L.decide(records, back=1)}
+    assert (every["2v2"]["latest"], every["2v2"]["earlier"]) == (1800, 1200)
+    # Records written before schedules existed count as full.
+    assert L.full_candidates([{k: v for k, v in r.items() if k != "schedule"} for r in records]) == {600, 1200, 1800}
+
+
+def test_check_lists_every_checkpoint(tmp_path, monkeypatch):
+    cfg, _ = _rotating(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    for p in ("ckpt10.pth", "g.pth", "c.pth", "a.pth", "l.pth"):
+        (tmp_path / p).write_bytes(b"x")
+    rows = {(name, path): (role, ok) for name, path, role, ok in L.check_panel(cfg)}
+    assert rows[("u0", "vrun/promoted/0.pth")] == ("run", False)
+    assert rows[("sl10", "s.pth")] == ("panel", False) and rows[("sl10", "c.pth")] == ("panel", True)
+    assert rows[("gen4critic", "g.pth")] == ("panel", True)
+    assert L.spec_paths("p.pth+v.pth#blend=0.5@200/0.05:mean,ptemp=1") == ["p.pth", "v.pth"]
+
+
+def test_rotating_ladder_end_to_end(tmp_path, monkeypatch):
+    fake = tmp_path / "fake_python"
+    fake.write_text(FAKE_EVAL.format(python=sys.executable))
+    fake.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("FAKE_EVAL_FAIL", raising=False)
+    (tmp_path / "vrun" / "promoted").mkdir(parents=True)
+    for u in (0, 1, 2):
+        (tmp_path / "vrun" / "promoted" / f"{u}.pth").write_bytes(b"x")
+    cfg, panel = _rotating(
+        tmp_path, games=4, rotate_games=6, python=str(fake), eval_args=[], settle_seconds=0, retry_seconds=0,
+        panel=[{"name": "u0", "update": 0}, {"name": "ref", "spec": "ref.pth@200"},
+               {"name": "other", "spec": "o.pth@200"}],
+    )
+    args = argparse.Namespace(panel=panel, workers=2, start_update=0, once=True, dry_run=False, results_log=None)
+    root = tmp_path / "logs" / "eval" / "lad"
+    L.run_ladder(args)  # the baseline: u0 against the whole panel (ref, other; 2v2 + 1v3; both ways)
+    records = L.read_ledger(root / "ledger.jsonl")
+    assert len(records) == 8 and {r["candidate"] for r in records} == {"u0"}
+    assert all(r["schedule"] == "full" and r.get("time") for r in records)
+    assert (root / "heartbeat").exists()
+    L.run_ladder(args)  # then the newest promoted version, in rotation: two members, 2v2
+    records = L.read_ledger(root / "ledger.jsonl")[8:]
+    assert {r["candidate"] for r in records} == {"u2"} and {r["mode"] for r in records} == {"2v2"}
+    assert {r["opponent"] for r in records} == {"u0", "ref"} and {r["games"] for r in records} == {6}
+    assert all(r["schedule"] == "rotation" for r in records)
+    state = json.loads((root / "state.json").read_text())
+    assert state["candidates"] == [0, 2] and state["schedules"]["2"]["members"] == ["u0", "ref"]
+    assert state["rotation_next"] == 2 and state["last_full"] == state["schedules"]["0"]["started"]
+    ratings = json.loads((root / "ratings.json").read_text())
+    assert set(ratings["schedules"]) == {"0", "2"}
+    # A STOP file ends the ladder before its next match; the candidate resumes later.
+    (tmp_path / "vrun" / "promoted" / "3.pth").write_bytes(b"x")
+    (root / "STOP").touch()
+    L.run_ladder(args)
+    assert len(L.read_ledger(root / "ledger.jsonl")) == 12
+    (root / "STOP").unlink()
+    L.run_ladder(args)
+    last = L.read_ledger(root / "ledger.jsonl")[12:]
+    assert {r["candidate"] for r in last} == {"u3"} and {r["opponent"] for r in last} == {"other", "u0"}

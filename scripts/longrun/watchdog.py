@@ -12,7 +12,18 @@ modified, snapshot unreadable), the unit failing for any other reason (an OOM ki
 history.jsonl line for STALL_MINUTES while the run is up, free disk under DISK_MIN_GB, system MemAvailable
 under MEM_AVAILABLE_MIN_GB, the run's cgroup at its MemoryHigh, GPU temperature (GPU_TEMP_MAX_C, or less than
 GPU_TLIMIT_MIN_C below its slowdown limit), thermal / hardware throttling, nvidia-smi failing, and NVIDIA
-libraries upgraded under the loaded kernel module (the next CUDA process fails until a reboot).
+libraries upgraded under the loaded kernel module (the next CUDA process fails until a reboot), and (HOST_CHECKS=1,
+on one instance) NVIDIA Xid errors in the kernel log.
+
+The progress file depends on the instance's KIND (launch.sh): generator (search-learning) RUN_DIR/history.jsonl,
+value (main.py value-train) RUN_DIR/status.json (its heartbeat: every poll and evaluation), ladder
+(eval_ladder.py run) RUN_DIR/heartbeat; PROGRESS_FILE
+overrides it.
+
+Maintenance samples for the daily report (maintenance.py): every RSS_EVERY_MIN (60) the RSS of every process of the
+unit to $STATE_DIR/rss.jsonl; with HOST_CHECKS=1, every USAGE_EVERY_MIN (360) a usage sample to USAGE_LOG (free
+disk, sizes by category, worktrees, the lowest MemAvailable since the last sample, swap, GPU throttling per hour)
+and every XID_CHECK_MIN (5) a scan of the kernel log for Xid errors (a CRIT alert).
 
 Each alert is a line in $STATE_DIR/alerts.log and on stdout (the journal); warnings and worse also go to a
 desktop notification when a notification server is running (notify-send, else D-Bus) and to ALERT_COMMAND
@@ -33,12 +44,17 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import maintenance  # noqa: E402  (standard library only, beside this file)
+
 INFO, WARN, CRIT = "INFO", "WARN", "CRIT"
 EXIT_MEANINGS = {
     75: "the training stopped on a non-finite loss or gradient (not restarted: needs a decision)",
     76: "the frozen deployment changed since it was built, or the instance config is incomplete",
     77: "the snapshot to resume from is missing or unreadable",
 }
+# The progress file of each kind of instance: a line (or a touch) means the run is moving.
+PROGRESS_FILES = {"generator": "history.jsonl", "value": "status.json", "ladder": "heartbeat"}
 THROTTLE_FIELDS = (
     "clocks_event_reasons.sw_thermal_slowdown",
     "clocks_event_reasons.hw_thermal_slowdown",
@@ -86,6 +102,13 @@ class Settings:
         self.crash_loop_window = env_float("CRASH_LOOP_WINDOW_MIN", 60) * 60
         self.repeat = env_float("ALERT_REPEAT_MIN", 240) * 60
         self.alert_command = os.environ.get("ALERT_COMMAND", "").strip()
+        self.kind = os.environ.get("KIND", "generator").strip() or "generator"
+        progress = os.environ.get("PROGRESS_FILE", "").strip() or PROGRESS_FILES.get(self.kind, "history.jsonl")
+        self.progress = Path(progress) if Path(progress).is_absolute() else self.run_dir / progress
+        self.host_checks = os.environ.get("HOST_CHECKS", "0") == "1"
+        self.usage_every = env_float("USAGE_EVERY_MIN", 360) * 60
+        self.rss_every = env_float("RSS_EVERY_MIN", 60) * 60
+        self.xid_every = env_float("XID_CHECK_MIN", 5) * 60
 
 
 # ----------------------------------------------------------------------------- probes
@@ -150,6 +173,20 @@ def read_new_lines(path: Path, offset: int):
     return records, offset + end
 
 
+def progress_label(record, path=None):
+    """What the last progress record says: an update (generator), a cycle (value trainer), or the file's age."""
+    if record and "update" in record:
+        return f"update {record['update']} at {record.get('time')}"
+    if record and "cycle" in record:
+        return f"cycle {record['cycle']} at {record.get('time')}"
+    if path is not None:
+        try:
+            return f"{path.name} touched {datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec='seconds')}"
+        except OSError:
+            pass
+    return "nothing yet"
+
+
 def gpu_query():
     fields = ("index", "temperature.gpu", "temperature.gpu.tlimit") + THROTTLE_FIELDS
     code, out, err = run(["nvidia-smi", f"--query-gpu={','.join(fields)}", "--format=csv,noheader,nounits"])
@@ -201,6 +238,45 @@ def cgroup_memory(control_group):
     }
 
 
+def notify(title, body, critical=False):
+    """A desktop notification if a notification server is running; silently nothing otherwise."""
+    if shutil.which("notify-send"):
+        run(["notify-send", "-u", "critical" if critical else "normal", "-a", "rl18xx", title, body], timeout=5)
+        return
+    if shutil.which("gdbus"):
+        hints = "{'urgency': <byte 2>}" if critical else "{}"
+        run(["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
+             "--object-path", "/org/freedesktop/Notifications",
+             "--method", "org.freedesktop.Notifications.Notify",
+             "rl18xx", "0", "", title, body, "[]", hints, "0"], timeout=5)
+
+
+def send_alert(state_dir, instance, level, key, message, alert_command="", quiet=False):
+    """One alert: a line on stdout (the journal) and in <state_dir>/alerts.log; WARN and CRIT also a desktop
+    notification and ALERT_COMMAND (sh, with ALERT_LEVEL / ALERT_KEY / ALERT_MESSAGE / ALERT_INSTANCE set). The
+    daily jobs (status_report.py, integrity_check.py, retention.py) alert through this too."""
+    line = f"{datetime.now().astimezone().isoformat(timespec='seconds')} {level} [{instance}] {key}: {message}"
+    print(line, flush=True)
+    if quiet:
+        return line
+    state_dir = Path(state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with (state_dir / "alerts.log").open("a") as f:
+        f.write(line + "\n")
+    if level == INFO:
+        return line
+    notify(f"rl18xx {instance}: {level} {key}", message, critical=level == CRIT)
+    if alert_command:
+        env = {**os.environ, "ALERT_LEVEL": level, "ALERT_KEY": key, "ALERT_MESSAGE": message,
+               "ALERT_INSTANCE": instance}
+        try:
+            subprocess.run(["sh", "-c", alert_command], env=env, timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return line
+
+
 # ----------------------------------------------------------------------------- the watchdog
 
 
@@ -222,38 +298,9 @@ class Watchdog:
     # -- output
 
     def emit(self, level, key, message):
-        line = f"{datetime.now().astimezone().isoformat(timespec='seconds')} {level} [{self.s.instance}] {key}: {message}"
-        print(line, flush=True)
-        if self.quiet:
-            return
-        self.s.state_dir.mkdir(parents=True, exist_ok=True)
-        with (self.s.state_dir / "alerts.log").open("a") as f:
-            f.write(line + "\n")
-        if level == INFO:
-            return
-        title = f"rl18xx {self.s.instance}: {level} {key}"
-        self.notify(title, message, critical=level == CRIT)
-        if self.s.alert_command:
-            env = {**os.environ, "ALERT_LEVEL": level, "ALERT_KEY": key, "ALERT_MESSAGE": message,
-                   "ALERT_INSTANCE": self.s.instance}
-            try:
-                subprocess.run(["sh", "-c", self.s.alert_command], env=env, timeout=60,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+        send_alert(self.s.state_dir, self.s.instance, level, key, message, self.s.alert_command, self.quiet)
 
-    @staticmethod
-    def notify(title, body, critical=False):
-        """A desktop notification if a notification server is running; silently nothing otherwise."""
-        if shutil.which("notify-send"):
-            run(["notify-send", "-u", "critical" if critical else "normal", "-a", "rl18xx", title, body], timeout=5)
-            return
-        if shutil.which("gdbus"):
-            hints = "{'urgency': <byte 2>}" if critical else "{}"
-            run(["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
-                 "--object-path", "/org/freedesktop/Notifications",
-                 "--method", "org.freedesktop.Notifications.Notify",
-                 "rl18xx", "0", "", title, body, "[]", hints, "0"], timeout=5)
+    notify = staticmethod(notify)
 
     # -- one round
 
@@ -311,8 +358,9 @@ class Watchdog:
             conditions["crash_loop"] = (CRIT, f"{len(recent)} automatic restarts in the last "
                                               f"{s.crash_loop_window / 60:.0f} min")
 
-        # Progress: a new history.jsonl line every STALL_MINUTES while the run is up.
-        history = s.run_dir / "history.jsonl"
+        # Progress: a new progress-file line (history.jsonl) or rewrite / touch (status.json, heartbeat)
+        # every STALL_MINUTES while the run is up.
+        history = s.progress
         self.last = last_json_line(history)
         if unit.get("ActiveState") == "active":
             started = time.time() - (time.monotonic() - unit["ActiveEnterTimestampMonotonic"] / 1e6)
@@ -322,9 +370,9 @@ class Watchdog:
                 last_line = 0.0
             ref = max(last_line, started)
             if now - ref > s.stall_minutes * 60:
-                what = f"update {self.last['update']} at {self.last['time']}" if self.last else "no update yet"
-                conditions["stall"] = (WARN, f"no new history.jsonl line for {(now - ref) / 60:.0f} min "
-                                             f"(last: {what}; threshold {s.stall_minutes:.0f} min)")
+                conditions["stall"] = (WARN, f"no progress in {history.name} for {(now - ref) / 60:.0f} min "
+                                             f"(last: {progress_label(self.last)}; threshold "
+                                             f"{s.stall_minutes:.0f} min)")
             memory = cgroup_memory(unit.get("ControlGroup"))
             if memory:
                 key = unit.get("InvocationID")
@@ -352,6 +400,9 @@ class Watchdog:
                                              f"{free:.0f} GB free on the filesystem of {path} "
                                              f"(threshold {s.disk_min_gb:.0f} GB)")
         available = mem_available_gb()
+        if available is not None:
+            low = self.state.get("mem_min_gb")
+            self.state["mem_min_gb"] = available if low is None else min(low, available)
         if available is not None and available < s.mem_available_min_gb:
             conditions["mem_available"] = (WARN, f"MemAvailable {available:.1f} GiB "
                                                  f"(threshold {s.mem_available_min_gb:.0f} GiB)")
@@ -383,6 +434,8 @@ class Watchdog:
                         conditions[f"gpu{index}_throttle"] = (WARN, f"GPU {index} throttling: "
                                                                     f"{', '.join(active_reasons)}")
             self.state["throttle_seen"] = self.state["throttle_seen"] + 1 if throttled else 0
+            if gpus:
+                self.count_throttle(throttled)
         mismatch = nvidia_mismatch()
         if mismatch:
             conditions["nvidia_mismatch"] = (CRIT, f"NVIDIA libraries {mismatch[1]} are installed but kernel module "
@@ -390,12 +443,67 @@ class Watchdog:
                                                    f"until a reboot (docs/longrun_runbook.md, 'Host stability')")
         if Path("/var/run/reboot-required").exists():
             conditions["reboot_required"] = (INFO, "the host wants a reboot (/var/run/reboot-required)")
+        if s.host_checks:
+            events += self.check_xid(now)
+            if self.state.get("xid_error"):
+                conditions["xid_unreadable"] = (INFO, f"can't scan the kernel log for Xid errors: "
+                                                      f"{self.state['xid_error']}")
         return conditions, events
+
+    def count_throttle(self, throttled):
+        """GPU throttling per clock hour (the daily report's "throttling > 10% of the hour", M5)."""
+        hour = datetime.now().strftime("%Y-%m-%dT%H")
+        bucket = self.state.get("throttle_hour")
+        if bucket and bucket["hour"] != hour:
+            done = self.state.setdefault("throttle_hours", [])
+            done.append({"hour": bucket["hour"], "fraction": bucket["throttled"] / max(bucket["rounds"], 1)})
+            del done[:-48]
+            bucket = None
+        bucket = bucket or {"hour": hour, "rounds": 0, "throttled": 0}
+        bucket["rounds"] += 1
+        bucket["throttled"] += int(bool(throttled))
+        self.state["throttle_hour"] = bucket
+
+    def check_xid(self, now):
+        """NVIDIA Xid errors logged since the last scan (every XID_CHECK_MIN): one CRIT event each scan."""
+        last = self.state.get("xid_checked")
+        if last is not None and now - last < self.s.xid_every:
+            return []
+        since = last if last is not None else now - 600
+        lines, error = maintenance.xid_lines(since, now)
+        self.state["xid_checked"] = now
+        self.state["xid_error"] = error
+        if not lines:
+            return []
+        self.state["xid_total"] = self.state.get("xid_total", 0) + len(lines)
+        return [(CRIT, "xid", f"{len(lines)} NVIDIA Xid error(s) in the kernel log: {lines[-1][:200]} -- stop the "
+                              f"run and inspect the hardware / driver (docs/long_run_recipe.md M5)")]
+
+    def samples(self, now):
+        """The maintenance histories (module docstring): RSS per process of the unit, and the host's usage."""
+        unit = getattr(self, "unit", {}) or {}
+        if unit.get("ActiveState") == "active" and now - self.state.get("rss_sampled", 0) >= self.s.rss_every:
+            sample = maintenance.rss_sample(unit.get("ControlGroup"))
+            if sample:
+                maintenance.append_jsonl(self.s.state_dir / "rss.jsonl", sample)
+            self.state["rss_sampled"] = now
+        if self.s.host_checks and now - self.state.get("usage_sampled", 0) >= self.s.usage_every:
+            sampled = self.state.get("throttle_sampled", "")
+            hours = [h for h in self.state.get("throttle_hours", []) if h["hour"] > sampled]
+            extra = {"mem_available_min_gb": self.state.get("mem_min_gb"), "throttle_hours": hours,
+                     "instance": self.s.instance}
+            ms = maintenance.Settings()
+            maintenance.append_jsonl(ms.usage_log, maintenance.disk_sample(ms, extra))
+            self.state["usage_sampled"] = now
+            self.state["mem_min_gb"] = None
+            if hours:
+                self.state["throttle_sampled"] = hours[-1]["hour"]
 
     def describe_record(self, name, r):
         detail = f": {r['detail']}" if r.get("detail") else ""
         if name == "starts.jsonl":
-            how = f"resumed from snapshot {r.get('snapshot_update')}" if r.get("mode") == "resume" else "started fresh"
+            how = {"resume": f"resumed from snapshot {r.get('snapshot_update')}",
+                   "run": f"started ({r.get('kind')}: it resumes its own state)"}.get(r.get("mode"), "started fresh")
             return INFO, "start", f"{how} (pid {r.get('pid')}, deployment {str(r.get('commit', ''))[:10]})"
         event, rc = r.get("event"), r.get("rc")
         if event == "stop":
@@ -413,6 +521,10 @@ class Watchdog:
     def round(self):
         conditions, events = self.check()
         now = time.time()
+        try:
+            self.samples(now)
+        except Exception as e:  # noqa: BLE001 -- a sample must never stop the checks
+            events.append((WARN, "watchdog", f"maintenance sample failed: {e!r}"))
         for level, key, message in events:
             self.emit(level, key, message)
         active = self.state["active"]
@@ -447,11 +559,12 @@ class Watchdog:
             snap = json.loads((s.run_dir / "state.json").read_text())["snapshot_update"]
         except (OSError, ValueError, KeyError):
             snap = None
-        if self.last:
-            print(f"progress   update {self.last.get('update')} at {self.last.get('time')}, snapshot {snap}, "
-                  f"{self.last.get('games_per_hour', 0):.0f} games/h")
+        print(f"kind       {s.kind} (progress: {s.progress})")
+        if self.last or s.progress.exists():
+            rate = f", {self.last['games_per_hour']:.0f} games/h" if (self.last or {}).get("games_per_hour") else ""
+            print(f"progress   {progress_label(self.last, s.progress)}, snapshot {snap}{rate}")
         else:
-            print(f"progress   no history yet, snapshot {snap}")
+            print(f"progress   nothing yet, snapshot {snap}")
         print(f"log        {s.log}")
         print(f"alerts     {s.state_dir / 'alerts.log'}")
         for key, (level, message) in sorted(conditions.items()):

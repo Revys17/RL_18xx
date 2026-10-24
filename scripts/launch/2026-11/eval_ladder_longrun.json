@@ -1,0 +1,43 @@
+{
+  "name": "ladder_lr1",
+  "note": "The long run's eval ladder (docs/long_run_recipe.md, '5. Evaluation'). Candidates are the value trainer's promoted values searched under the frozen prior (checkpoint 10, ptemp 1): update v = promoted/v.pth, u0 = the start value v0. Day 0: u0 against the whole panel (baseline_update). Then every newly promoted value when the ladder is free: 2v2 against two panel members in rotation, 120 games per direction (240 per pairing); weekly (full_every_hours) the whole panel, 2v2 + 1v3, 240 per direction (480 per pairing), plus the weekly value check against the previous full candidate. Paths are relative to the run's workdir.",
+  "run": "model_checkpoints_value/lr1",
+  "checkpoint": "promoted/{update}.pth",
+  "spec": "model_checkpoints/AlphaZeroTransformer/20261004_134558_804974562/10.pth+{checkpoint}@200/0.05:mean,dedupe,par=8,ptemp=1,budget=total",
+  "every": 1,
+  "games": 240,
+  "modes": ["2v2", "1v3"],
+  "rotate": 2,
+  "rotate_modes": ["2v2"],
+  "rotate_games": 120,
+  "full_every_hours": 168,
+  "baseline_update": 0,
+  "value_check": {"games": 240, "modes": ["2v2"]},
+  "workers": 12,
+  "seed": 0,
+  "start_positions": "human_games/start_positions_1830_4p_v2.jsonl",
+  "softpick": 0,
+  "eval_args": ["--games-per-task", "8", "--dedupe-maps", "--server-replicas", "2"],
+  "anchor": "u0",
+  "back": 1,
+  "panel": [
+    {"name": "u0", "update": 0},
+    {
+      "name": "gen4critic",
+      "spec": "model_checkpoints_pg/rab_place_20261014/learner/1800.pth+model_checkpoints_pg/rab_place_20261014/critic/1800.pth@200/0.05:mean,dedupe,par=8,ptemp=0.5,budget=total"
+    },
+    {
+      "name": "az8_u170",
+      "spec": "model_checkpoints_search/az8_20261019/learner/170.pth@200/0.05:mean,dedupe,par=8,ptemp=0.5,budget=total"
+    },
+    {
+      "name": "azl_u2100",
+      "spec": "model_checkpoints_search/azl_20261019/learner/2100.pth@200/0.05:mean,dedupe,par=8,ptemp=1,budget=total"
+    },
+    {
+      "name": "sl10_gen4critic",
+      "spec": "model_checkpoints/AlphaZeroTransformer/20261004_134558_804974562/10.pth+model_checkpoints_pg/rab_place_20261014/critic/1800.pth@200/0.05:mean,dedupe,par=8,ptemp=1,budget=total"
+    }
+  ],
+  "self": {"every": 50, "count": 1, "modes": ["2v2"]}
+}

@@ -33,11 +33,38 @@ out) and on the panel members both faced, with each candidate's per-member exces
 ``import``: add existing single-match eval directories (e.g. the old ladder's ``logs/eval/azl_u*_vs_*``) to a
 ledger when their settings match the panel's; players are named by matching their specs to the panel file.
 
+``check``: every checkpoint a panel file names (members' specs, run checkpoints of members given by update), and
+whether it exists.
+
+**Schedules** (optional panel keys; a panel without them plays every candidate against the whole panel, as above):
+
+- ``"rotate": k`` -- a candidate plays only ``k`` panel members, in ``rotate_modes`` (default ``["2v2"]``) at
+  ``rotate_games`` games per match (default ``games``), the members taken in turn from the panel's order (those with
+  a rotate mode), so consecutive candidates cycle through the panel;
+- ``"full_every_hours": h`` -- with ``rotate``, a candidate gets the whole panel (every member and mode at its
+  ``games``, plus the ``self`` members) when no full schedule started in the last ``h`` hours;
+- ``"baseline_update": u`` -- before any other candidate, update ``u`` (the run's start) plays the whole panel: the
+  day-0 baseline (a panel member that is the same checkpoint is skipped, as for any candidate);
+- ``"value_check": {"games": n, "modes": ["2v2"]}`` -- each full schedule after the first also plays the previous full
+  candidate (a week older with ``full_every_hours`` 168; ``purpose`` "value_check" in the ledger; when that candidate
+  is a panel member, its own matches are tagged instead).
+
+A candidate's schedule is chosen when it is taken and kept in ``state.json`` (a resume plays the same plan); each
+ledger record says its ``schedule`` ("full" or "rotation") and finishing ``time``. ``decide --full`` (and the
+reports of a rotating panel) compares only candidates that played full schedules. With ``"every": 1`` over a run
+whose checkpoints are numbered versions (a value run's ``promoted/{update}.pth``), the ladder takes the newest one
+whenever it is free.
+
+A ``STOP`` file in the ladder's output directory ends ``run`` before its next match (exit 0; the current candidate
+resumes on the next start). ``heartbeat`` there is touched while the ladder makes progress (each poll, each finished
+game of a match): the long-run watchdog's stall check reads it.
+
     uv run python scripts/eval_ladder.py run --panel scripts/launch/2026-10/eval_ladder_azl.json --results-log logs/az1.log
     uv run python scripts/eval_ladder.py run --panel <panel.json> --dry-run      # the next candidate's commands
     uv run python scripts/eval_ladder.py report --panel <panel.json> --plot logs/eval/ladder_azl/ratings.png
     uv run python scripts/eval_ladder.py decide --panel <panel.json> --back 2
     uv run python scripts/eval_ladder.py import --panel <panel.json> logs/eval/azl_u*_vs_*
+    uv run python scripts/eval_ladder.py check --panel <panel.json>               # every checkpoint it names exists?
 
 Panel file (JSON; spec paths are relative to the directory the ladder runs in):
 
@@ -108,7 +135,15 @@ DEFAULTS = {
     "min_games_fraction": 0.9,  # a match that lost more games to crashes is a failure
     "anchor": "u0",
     "back": 1,
+    # Schedules (module docstring): off unless set.
+    "rotate": 0,
+    "rotate_modes": ["2v2"],
+    "rotate_games": None,
+    "full_every_hours": None,
+    "baseline_update": None,
+    "value_check": None,
 }
+HEARTBEAT_SECONDS = 30  # how often a running match is checked for finished games
 # Settings every match of a ledger must share for their ratings to be comparable.
 SHARED_SETTINGS = ("seed", "start_positions", "random_start_fraction", "softpick", "max_length", "stall")
 
@@ -136,7 +171,17 @@ def load_config(path) -> dict:
         for mode in member.get("modes", cfg["modes"]):
             if mode not in MODES:
                 raise SystemExit(f"{path}: unknown mode {mode!r} (one of {', '.join(MODES)})")
+    for mode in cfg["rotate_modes"] + list((cfg.get("value_check") or {}).get("modes", [])):
+        if mode not in MODES:
+            raise SystemExit(f"{path}: unknown mode {mode!r} (one of {', '.join(MODES)})")
+    if cfg["rotate"] and not any(set(m.get("modes", cfg["modes"])) & set(cfg["rotate_modes"]) for m in cfg["panel"]):
+        raise SystemExit(f"{path}: no panel member plays a rotate mode ({cfg['rotate_modes']})")
     return cfg
+
+
+def scheduled(cfg) -> bool:
+    """The panel uses schedules (rotation, a periodic full panel, a baseline first): state.json keeps them."""
+    return bool(cfg.get("rotate")) or cfg.get("full_every_hours") is not None or cfg.get("baseline_update") is not None
 
 
 def out_root(cfg) -> Path:
@@ -213,6 +258,8 @@ class Match:
     opponent: Member
     candidate_side: str  # "A": the candidate is side A (listed first)
     games: int
+    schedule: str = "full"  # "full" or "rotation" (the candidate's schedule)
+    purpose: Optional[str] = None  # "value_check": the weekly check against the previous full candidate
 
     @property
     def a(self) -> Member:
@@ -236,6 +283,8 @@ class Match:
             "opponent_role": self.opponent.role,
             "a": self.a.name,
             "b": self.b.name,
+            "schedule": self.schedule,
+            **({"purpose": self.purpose} if self.purpose else {}),
         }
 
 
@@ -249,24 +298,127 @@ def games_for(mode: str, games: int) -> int:
     return math.ceil(games / n) * n
 
 
-def plan_matches(cfg, candidate: int, available=()) -> list:
+def plan_matches(cfg, candidate: int, available=(), schedule: Optional[dict] = None) -> list:
     """Every match of ``candidate`` in play order: each panel member (then self member) in turn, each of its modes,
-    the candidate as side A and then as side B."""
+    the candidate as side A and then as side B. ``schedule`` (``choose_schedule``): a rotation plays only its
+    members in the rotate modes; a full schedule adds its value check."""
     cand = Member(run_name(candidate), run_spec(cfg, candidate), "candidate", candidate)
+    kind = (schedule or {}).get("kind", "full")
+    check, check_modes, tagged = (schedule or {}).get("value_check"), (), False
+    if kind == "rotation":
+        names = set(schedule["members"])
+        games = int(cfg.get("rotate_games") or cfg["games"])
+        opponents = [
+            Member(m.name, m.spec, m.role, m.update, tuple(x for x in m.modes if x in cfg["rotate_modes"]), games)
+            for m in panel_members(cfg)
+            if m.name in names
+        ]
+    else:
+        opponents = panel_members(cfg) + self_members(cfg, candidate, available)
+        if check is not None:
+            vc = cfg.get("value_check") or {}
+            check_modes = tuple(vc.get("modes", ["2v2"]))
+            tagged = any(m.update == check for m in opponents)
+            if not tagged:
+                opponents = [m for m in opponents if m.name != run_name(check)] + [
+                    Member(
+                        run_name(check), run_spec(cfg, check), "self", check, check_modes,
+                        int(vc.get("games", cfg["games"])),
+                    )
+                ]
     matches = []
-    for opp in panel_members(cfg) + self_members(cfg, candidate, available):
+    for opp in opponents:
         if opp.name == cand.name or opp.spec == cand.spec:
             continue
         for mode in opp.modes:
+            purpose = "value_check" if check is not None and opp.update == check and mode in check_modes else None
             for side in ("A", "B"):
                 a = cand.name if side == "A" else opp.name
                 name = f"{cand.name}_vs_{opp.name}_{mode}_{'candA' if side == 'A' else 'oppA'}"
                 matches.append(
                     Match(
-                        match_key(cand.name, opp.name, mode, a), name, mode, cand, opp, side, games_for(mode, opp.games)
+                        match_key(cand.name, opp.name, mode, a),
+                        name,
+                        mode,
+                        cand,
+                        opp,
+                        side,
+                        games_for(mode, opp.games),
+                        kind,
+                        purpose,
                     )
                 )
     return matches
+
+
+def _parse_time(text) -> Optional[float]:
+    try:
+        return datetime.fromisoformat(str(text)).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _now_iso(now: Optional[float] = None) -> str:
+    return datetime.fromtimestamp(time.time() if now is None else now).astimezone().isoformat(timespec="seconds")
+
+
+def choose_schedule(cfg, state: dict, candidate: int, now: Optional[float] = None) -> dict:
+    """The schedule a newly taken candidate plays (module docstring, "Schedules"): ``{"kind": "full" | "rotation",
+    "started", "members" (rotation), "rotation_index" (rotation), "value_check" (full: the previous full candidate)}``.
+    Pure: :func:`commit_schedule` records it in ``state``."""
+    now = time.time() if now is None else now
+    if not cfg.get("rotate") or candidate == cfg.get("baseline_update"):
+        kind = "full"
+    else:
+        every, last = cfg.get("full_every_hours"), _parse_time(state.get("last_full"))
+        kind = "full" if every is not None and (last is None or now - last >= float(every) * 3600) else "rotation"
+    schedule = {"kind": kind, "started": _now_iso(now)}
+    if kind == "rotation":
+        cand = Member(run_name(candidate), run_spec(cfg, candidate), "candidate", candidate)
+        eligible = [
+            m.name
+            for m in panel_members(cfg)
+            if set(m.modes) & set(cfg["rotate_modes"]) and m.name != cand.name and m.spec != cand.spec
+        ]
+        start = int(state.get("rotation_next", 0)) % len(eligible)
+        k = min(int(cfg["rotate"]), len(eligible))
+        schedule.update(members=[eligible[(start + i) % len(eligible)] for i in range(k)], rotation_index=start)
+    elif cfg.get("value_check"):
+        earlier = [
+            int(u) for u, s in (state.get("schedules") or {}).items() if s.get("kind") == "full" and int(u) < candidate
+        ]
+        if earlier:
+            schedule["value_check"] = max(earlier)
+    return schedule
+
+
+def commit_schedule(state: dict, candidate: int, schedule: dict) -> None:
+    state.setdefault("schedules", {})[str(candidate)] = schedule
+    if schedule["kind"] == "rotation":
+        state["rotation_next"] = schedule["rotation_index"] + len(schedule["members"])
+    else:
+        state["last_full"] = schedule["started"]
+
+
+def candidate_schedule(cfg, state: dict, candidate: int, dry_run: bool = False) -> Optional[dict]:
+    """The candidate's schedule: the one state.json kept, else a new one (recorded unless ``dry_run``); None for a
+    panel without schedules."""
+    if not scheduled(cfg):
+        return None
+    schedule = (state.get("schedules") or {}).get(str(candidate))
+    if schedule is None:
+        schedule = choose_schedule(cfg, state, candidate)
+        if not dry_run:
+            commit_schedule(state, candidate, schedule)
+    return schedule
+
+
+def baseline_due(cfg, state: dict, available) -> Optional[int]:
+    """``baseline_update`` when it has not been evaluated yet and its checkpoint exists."""
+    base = cfg.get("baseline_update")
+    if base is None or int(base) in state["candidates"] or int(base) not in set(available):
+        return None
+    return int(base)
 
 
 def available_updates(cfg, settle_seconds: float = 0.0) -> list:
@@ -346,6 +498,14 @@ class Log:
                 f.write(line + "\n")
 
 
+def heartbeat(root: Path) -> None:
+    """Touch the ladder's progress file (the long-run watchdog's stall check)."""
+    try:
+        (root / "heartbeat").touch()
+    except OSError:
+        pass
+
+
 def run_match(cfg, match: Match, root: Path, workers: int, log) -> Optional[dict]:
     """Play one match; its ledger record, or None if it failed."""
     out_dir = root / match.name
@@ -359,10 +519,25 @@ def run_match(cfg, match: Match, root: Path, workers: int, log) -> Optional[dict
     cmd = eval_command(cfg, match, out_dir, workers)
     log(f"start {match.name} ({match.games} games, {workers} workers)")
     env = {**os.environ, **{k: str(v) for k, v in cfg["env"].items()}}
+    heartbeat(root)
     with open(root / f"{match.name}.out", "w") as out, open(root / f"{match.name}.err", "w") as err:
         out.write(shlex.join(cmd) + "\n")
         out.flush()
-        code = subprocess.run(cmd, stdout=out, stderr=err, env=env).returncode
+        proc = subprocess.Popen(cmd, stdout=out, stderr=err, env=env)
+        size = None
+        while True:
+            try:
+                code = proc.wait(timeout=HEARTBEAT_SECONDS)
+                break
+            except subprocess.TimeoutExpired:
+                try:
+                    grown = (out_dir / "games.jsonl").stat().st_size
+                except OSError:
+                    grown = None
+                if grown is not None and grown != size:  # a game finished: progress
+                    size = grown
+                    heartbeat(root)
+    heartbeat(root)
     if code != 0:
         log(f"{match.name} failed (exit {code}); see {root / match.name}.err")
         return None
@@ -377,7 +552,7 @@ def run_match(cfg, match: Match, root: Path, workers: int, log) -> Optional[dict
     if record["games"] < cfg["min_games_fraction"] * match.games:
         log(f"{match.name}: only {record['games']} of {match.games} games finished")
         return None
-    return {"ladder": cfg["name"], "source": "ladder", **match.fields(), **record}
+    return {"ladder": cfg["name"], "source": "ladder", "time": _now_iso(), **match.fields(), **record}
 
 
 def run_ladder(args) -> None:
@@ -390,30 +565,51 @@ def run_ladder(args) -> None:
     attempts = defaultdict(int)
     if not args.dry_run:
         log(f"ladder {cfg['name']} started: run {cfg['run']}, every {cfg['every']} updates, ledger {ledger_path(cfg)}")
+    stop = root / "STOP"
     while True:
+        if stop.exists() and not args.dry_run:
+            log(f"{stop} exists: stopping (the current candidate resumes on the next start)")
+            return
+        if not args.dry_run:
+            heartbeat(root)
         cfg = load_config(args.panel)
         available = available_updates(cfg, cfg["settle_seconds"])
-        candidate = state.get("current") or next_candidate(cfg, state, available, args.start_update)
+        candidate = state.get("current")
+        if candidate is None:
+            candidate = baseline_due(cfg, state, available)
+        if candidate is None:
+            candidate = next_candidate(cfg, state, available, args.start_update)
         if candidate is None:
             if args.once or args.dry_run:
                 print("no candidate due", flush=True)
                 return
             time.sleep(cfg["poll_seconds"])
             continue
+        schedule = candidate_schedule(cfg, state, candidate, dry_run=args.dry_run)
         if args.dry_run:
             done = {r["key"] for r in read_ledger(ledger_path(cfg))}
-            for m in plan_matches(cfg, candidate, available):
+            if schedule:
+                print(f"# {run_name(candidate)}: {schedule['kind']} schedule"
+                      + (f" ({', '.join(schedule['members'])})" if schedule.get("members") else ""), flush=True)
+            for m in plan_matches(cfg, candidate, available, schedule):
                 if m.key not in done:
                     print(shlex.join(eval_command(cfg, m, root / m.name, args.workers or cfg["workers"])))
             return
         state["current"] = candidate
         save_state(root, state)
+        if schedule:
+            log(f"{run_name(candidate)}: {schedule['kind']} schedule"
+                + (f" against {', '.join(schedule['members'])}" if schedule.get("members") else "")
+                + (f", value check against {run_name(schedule['value_check'])}" if "value_check" in schedule else ""))
         while True:
             cfg = load_config(args.panel)  # re-read before every match
+            if stop.exists():
+                log(f"{stop} exists: stopping before the next match ({run_name(candidate)} resumes on the next start)")
+                return
             done = {r["key"] for r in read_ledger(ledger_path(cfg))}
             todo = [
                 m
-                for m in plan_matches(cfg, candidate, available)
+                for m in plan_matches(cfg, candidate, available, schedule)
                 if m.key not in done and attempts[m.key] < cfg["max_attempts"]
             ]
             if not todo:
@@ -431,14 +627,14 @@ def run_ladder(args) -> None:
                 result=True,
             )
         done = {r["key"] for r in read_ledger(ledger_path(cfg))}
-        given_up = [m.name for m in plan_matches(cfg, candidate, available) if m.key not in done]
+        given_up = [m.name for m in plan_matches(cfg, candidate, available, schedule) if m.key not in done]
         if given_up:
             log(f"gave up after {cfg['max_attempts']} attempts: {', '.join(given_up)}", result=True)
         state["candidates"].append(candidate)
         state["current"] = None
         save_state(root, state)
         try:
-            write_reports(cfg, root, log)
+            write_reports(cfg, root, log, state)
         except Exception as e:  # a report must never stop a months-long ladder
             log(f"report failed: {e!r}")
         if args.once:
@@ -1082,10 +1278,15 @@ def decide(
     anchor: Optional[str] = None,
     z_crit: float = 1.645,
     fits=FITS,
+    candidates=None,
 ) -> list:
     """Per rating: is the latest candidate significantly above the one ``back`` candidates earlier? Fit on the
-    matches against the fixed panel only, restricted to the panel members both candidates played."""
+    matches against the fixed panel only, restricted to the panel members both candidates played. ``candidates``:
+    only these candidate updates count (e.g. :func:`full_candidates`, the ones that played the whole panel)."""
     fixed = [r for r in records if r.get("opponent_role") == "panel"]
+    if candidates is not None:
+        keep = set(candidates)
+        fixed = [r for r in fixed if r["candidate_update"] in keep]
     results = []
     for label, modes, outcome in fits:
         recs = [r for r in fixed if r["mode"] in modes]
@@ -1157,6 +1358,11 @@ def decide(
     return results
 
 
+def full_candidates(records) -> set:
+    """Candidate updates that played a full schedule (records written before schedules existed count as full)."""
+    return {r["candidate_update"] for r in records if r.get("schedule", "full") == "full"}
+
+
 def format_decision(results) -> str:
     lines = ["Decision (fixed panel only): latest vs earlier, one-sided"]
     for r in results:
@@ -1191,17 +1397,40 @@ def decision_line(cfg, results) -> str:
     return f"{cfg['name']} {head} vs fixed panel: " + ("; ".join(parts) or "-")
 
 
-def write_reports(cfg, root: Path, log) -> None:
+def write_reports(cfg, root: Path, log, state: Optional[dict] = None) -> None:
     records = read_ledger(ledger_path(cfg))
     fits = fit_all(records, anchor=cfg["anchor"])
-    results = decide(records, back=cfg["back"], anchor=cfg["anchor"])
+    full = full_candidates(records) if scheduled(cfg) else None
+    results = decide(records, back=cfg["back"], anchor=cfg["anchor"], candidates=full)
     (root / "report.txt").write_text(format_report(records, fits) + "\n\n" + format_decision(results) + "\n")
-    (root / "ratings.json").write_text(json.dumps({"fits": fits_to_json(records, fits), "decision": results}, indent=1))
+    out = {"fits": fits_to_json(records, fits), "decision": results}
+    if state is not None and state.get("schedules"):
+        out["schedules"] = state["schedules"]
+    (root / "ratings.json").write_text(json.dumps(out, indent=1))
     try:
         plot_ratings(records, fits, root / "ratings.png")
     except Exception as e:  # the plot is a convenience; the ledger and report are what matter
         log(f"plot failed: {e!r}")
     log(decision_line(cfg, results), result=True)
+
+
+def spec_paths(spec: str) -> list:
+    """The checkpoint files of a player spec (``<policy>[+<value>][#head]@<readouts>/<c_puct>:<options>``)."""
+    checkpoint = spec.partition(":")[0].partition("@")[0].partition("#")[0]
+    return [p for p in checkpoint.split("+") if p]
+
+
+def check_panel(cfg) -> list:
+    """``(player, path, role, exists)`` for every checkpoint the panel file names: the members' specs, and the run
+    checkpoints of members given by update and of ``baseline_update``."""
+    rows = []
+    for m in panel_members(cfg):
+        role = "run" if m.update is not None else "panel"
+        rows += [(m.name, path, role, Path(path).exists()) for path in spec_paths(m.spec)]
+    base = cfg.get("baseline_update")
+    if base is not None and all(m.update != int(base) for m in panel_members(cfg)):
+        rows += [(run_name(base), path, "run", Path(path).exists()) for path in spec_paths(run_spec(cfg, base))]
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -1246,6 +1475,11 @@ def main():
             p.add_argument("--latest", type=int, default=None, help="latest candidate update (default: newest)")
             p.add_argument("--earlier", type=int, default=None, help="earlier candidate update (instead of --back)")
             p.add_argument("--z", type=float, default=1.645, help="one-sided critical z (1.645: 5%%)")
+            p.add_argument("--full", action="store_true", help="only candidates that played the whole panel")
+
+    p = sub.add_parser("check", help="does every checkpoint the panel file names exist?")
+    p.add_argument("--panel", type=Path, required=True)
+    p.add_argument("--strict", action="store_true", help="also fail on run checkpoints not written yet")
 
     p = sub.add_parser("import", help="add existing single-match eval directories to the ledger")
     p.add_argument("--panel", type=Path, required=True)
@@ -1256,6 +1490,15 @@ def main():
     args = parser.parse_args()
     if args.command == "run":
         run_ladder(args)
+        return
+    if args.command == "check":
+        cfg = load_config(args.panel)
+        missing = 0
+        for name, path, role, exists in check_panel(cfg):
+            print(f"{'ok     ' if exists else 'MISSING'} {name:<16} {role:<6} {path}")
+            missing += not exists and (role == "panel" or args.strict)
+        if missing:
+            raise SystemExit(f"{missing} checkpoint(s) missing")
         return
     if args.command == "import":
         cfg = load_config(args.panel)
@@ -1279,7 +1522,15 @@ def main():
             args.json.write_text(json.dumps(fits_to_json(records, fits), indent=1))
     else:
         back = args.back if args.back is not None else cfg["back"]
-        results = decide(records, back=back, latest=args.latest, earlier=args.earlier, anchor=anchor, z_crit=args.z)
+        results = decide(
+            records,
+            back=back,
+            latest=args.latest,
+            earlier=args.earlier,
+            anchor=anchor,
+            z_crit=args.z,
+            candidates=full_candidates(records) if args.full else None,
+        )
         print(format_decision(results))
         if args.json:
             args.json.write_text(json.dumps(results, indent=1))

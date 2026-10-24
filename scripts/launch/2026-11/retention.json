@@ -1,0 +1,32 @@
+{
+  "note": "The long run's retention policy (docs/long_run_recipe.md, 'Retention policy'), applied daily by scripts/longrun/retention.py from the workdir. A dry run (lists only) until dry_run_until -- set it to launch day + 7 when the policy is approved -- then for real. Saved games, promoted values, eval collections and the ladder ledger are never touched, whatever this file says (hard guards in retention.py). Names follow the lr1 example env files: change them together.",
+  "dry_run_until": "2026-11-08",
+  "protect": {
+    "save_data": ["saved_games/lr1"],
+    "panels": ["${DEPLOY}/scripts/launch/2026-11/eval_ladder_longrun.json"],
+    "league_files": ["model_checkpoints_search/lr1/league.json"],
+    "populations": ["${DEPLOY}/scripts/launch/2026-11/league_longrun.json"],
+    "generator_runs": ["model_checkpoints_search/lr1"],
+    "promoted_json": ["model_checkpoints_value/lr1/promoted.json"]
+  },
+  "snapshots": [
+    {
+      "dir": "model_checkpoints_search/lr1",
+      "files": ["learner/{n}.pth", "critic/{n}.pth"],
+      "keep": [{"hours": 48, "every": 10}, {"hours": 336, "every": 100}, {"every": 1000}]
+    }
+  ],
+  "unreferenced": [
+    {"glob": "model_checkpoints_search/lr1/league/**/*.pth", "min_age_days": 7}
+  ],
+  "value_candidates": [
+    {"dir": "model_checkpoints_value/lr1/candidates", "cycles": "model_checkpoints_value/lr1/cycles.jsonl", "days": 7}
+  ],
+  "optimizer_state": [
+    {"glob": "model_checkpoints_search/lr1/optimizer*.pth"}
+  ],
+  "logs": [
+    {"glob": "logs/*.log", "max_bytes": 1000000000, "rotations": 4},
+    {"glob": "longrun/*/*.log", "max_bytes": 1000000000, "rotations": 4}
+  ]
+}

@@ -3,6 +3,8 @@
 #
 #   host_hold.sh status          what is held, the loaded vs installed NVIDIA versions, pending upgrades
 #                                and reboots (no sudo)
+#   host_hold.sh check           exit 0 if every package hold would cover is held, else 1 and print the ones
+#                                that aren't (no sudo; the daily report's M7)
 #   sudo host_hold.sh hold       apt-mark hold the installed NVIDIA driver-series packages and the kernel
 #                                metapackages (unattended-upgrades respects holds)
 #   sudo host_hold.sh unhold     undo, after the run (then upgrade and reboot in one go)
@@ -38,10 +40,18 @@ status)
     [ -e /var/run/reboot-required ] && echo "REBOOT REQUIRED  $(cat /var/run/reboot-required.pkgs 2>/dev/null | tr '\n' ' ')"
     true
     ;;
+check)
+    held=$(apt-mark showhold) || exit 2
+    missing=$(comm -23 <(packages) <(echo "$held" | sort -u))
+    [ -z "$(packages)" ] && { echo "no driver or kernel packages found" >&2; exit 2; }
+    [ -z "$missing" ] && exit 0
+    echo "$missing"
+    exit 1
+    ;;
 hold|unhold)
     [ "$(id -u)" -eq 0 ] || { echo "run with sudo" >&2; exit 1; }
     mapfile -t pkgs < <(packages)
     apt-mark "$1" "${pkgs[@]}"
     ;;
-*) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+*) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

@@ -1,0 +1,23 @@
+# The long run's daily jobs (scripts/longrun/daily.sh; docs/longrun_runbook.md): retention, style statistics, the
+# saved-data integrity check, then the status report. Started by rl18xx-longrun-daily@%i.timer; installed by
+# install.sh --kind daily, which writes the jobs' settings to ~/.config/rl18xx-longrun/%i.env and the limits to
+# the drop-in rl18xx-longrun-daily@%i.service.d/10-limits.conf (the values below are the defaults it overrides).
+[Unit]
+Description=rl18xx long run %i: daily jobs (retention, style statistics, integrity check, status report)
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/rl18xx-longrun/%i.env
+Environment=LONGRUN_INSTANCE=%i
+Environment=OMP_NUM_THREADS=2
+Environment=CUDA_VISIBLE_DEVICES=
+ExecStart=/bin/bash ${DAILY}
+# The style statistics replay a few thousand games and the integrity check rebuilds 50 (CPU only); the status
+# report and retention are light. A run that takes longer than this is stuck.
+TimeoutStartSec=3h
+KillMode=control-group
+Nice=10
+MemoryAccounting=yes
+MemoryHigh=12G
+MemoryMax=16G
+MemorySwapMax=0

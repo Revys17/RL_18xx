@@ -10,6 +10,9 @@ can leave either unreadable; this catches that before a resume crashes on it, ag
 moves an unreadable ``optimizer.pth`` aside (the resume starts AdamW afresh) and rebuilds an unreadable
 ``state.json`` at the newest snapshot whose checkpoints exist, from ``config.json`` (the run's merged
 config, written at every start) and that update's ``history.jsonl`` line (``kl_coef``, ``anchor_update``).
+A run with ``value_follow`` (the long run's generator: it reloads a separate value run's promoted value)
+has no ``critic/``; a frozen one (``freeze_policy``) keeps ``learner/<n>.pth`` as hard links to its
+starting policy and never moves the anchor (the starting policy).
 """
 
 import json
@@ -44,7 +47,9 @@ def _workdir(run_dir: Path, config: dict) -> Path:
 
 def _needed(run_dir: Path, update: int, config: dict, anchor: int):
     needed = [run_dir / "learner" / f"{update}.pth"]
-    if not config.get("shared"):
+    # A run has its own critic unless one network holds both (shared) or it follows a separate value run
+    # (value_follow: the generator reloads the value trainer's promoted value; there is no critic/ directory).
+    if not config.get("shared") and not config.get("value_follow"):
         needed.append(run_dir / "critic" / f"{update}.pth")
     # The KL anchor: the learner at anchor_update, or the run's starting policy.
     needed.append(run_dir / "learner" / f"{anchor}.pth" if anchor else _workdir(run_dir, config) / config["policy_checkpoint"])
@@ -105,7 +110,7 @@ def repair(run_dir: Path) -> int:
                 state = {
                     "config": config,
                     "snapshot_update": update,
-                    "kl_coef": float(record["kl_coef"]),
+                    "kl_coef": float(record.get("kl_coef", config.get("kl_coef", 0.02))),
                     "anchor_update": anchor,
                     "totals": {"games": int(record.get("games_total", 0))},
                 }

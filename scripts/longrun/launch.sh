@@ -10,12 +10,25 @@
 #
 # Settings come from the instance's environment file (~/.config/rl18xx-longrun/<instance>.env, written by
 # install.sh): DEPLOY, WORKDIR, RUN_DIR, START_ARGS (first start only: --policy / --value), TRAIN_ARGS (every
-# start: every setting the run should keep), and optionally LOG, STATE_DIR, COMMAND, PYTHON.
+# start: every setting the run should keep), and optionally KIND, LOG, STATE_DIR, COMMAND, PYTHON.
+#
+# KIND (default generator) is what the instance runs:
+#   generator  main.py search-learning (COMMAND): fresh, then --resume from its snapshots (above)
+#   value      main.py value-train --run-dir $RUN_DIR $START_ARGS $TRAIN_ARGS on every start (the trainer resumes
+#              its run directory itself; a STOP file there ends it cleanly)
+#   ladder     scripts/eval_ladder.py run --panel $PANEL $START_ARGS $TRAIN_ARGS on every start (the ladder resumes
+#              its candidate from its state.json; RUN_DIR is its output directory, where a STOP file ends it)
 set -uo pipefail
 
 INSTANCE=${LONGRUN_INSTANCE:-manual}
 : "${DEPLOY:?DEPLOY (the frozen deployment) is not set}" "${WORKDIR:?WORKDIR is not set}" "${RUN_DIR:?RUN_DIR is not set}"
-COMMAND=${COMMAND:-search-learning}
+KIND=${KIND:-generator}
+case $KIND in
+    generator) COMMAND=${COMMAND:-search-learning} ;;
+    value) COMMAND=${COMMAND:-value-train} ;;
+    ladder) COMMAND=${COMMAND:-run} ;;
+    *) echo "launch.sh: unknown KIND $KIND (generator, value or ladder)" >&2; exit 76 ;;
+esac
 PYTHON=${PYTHON:-$DEPLOY/.venv/bin/python}
 cd "$WORKDIR" || exit 76
 LOG=${LOG:-logs/longrun_$INSTANCE.log}
@@ -55,8 +68,9 @@ snapshot_mtime_gap() {  # >0 while a snapshot write is in progress (optimizer.pt
 case ${1:-} in
 stop)
     # optimizer.pth and state.json are not written atomically (the checkpoints are): don't let the SIGTERM
-    # that follows land in the middle of a snapshot.
+    # that follows land in the middle of a snapshot. (The value trainer and the ladder write theirs atomically.)
     for _ in $(seq 120); do
+        [ "$KIND" = generator ] || break
         [ "$(snapshot_mtime_gap)" -gt 0 ] && [ $(( $(date +%s) - $(stat -c %Y "$RUN_DIR/optimizer.pth") )) -lt 120 ] || break
         sleep 1
     done
@@ -89,7 +103,20 @@ if [ -f "$RUN_DIR/STOP" ]; then
     rm -f "$RUN_DIR/STOP"
 fi
 
-if [ -f "$RUN_DIR/state.json" ]; then
+if [ "$KIND" = value ]; then
+    # The trainer resumes its run directory itself when started again with the same arguments.
+    mode=run
+    snapshot=""
+    cmd=("$PYTHON" -s "$DEPLOY/main.py" "$COMMAND" --run-dir "$RUN_DIR" "${start_args[@]}" "${train_args[@]}")
+    say "starting the value trainer on $RUN_DIR (deployment $commit; it resumes its own state)"
+elif [ "$KIND" = ladder ]; then
+    [ -n "${PANEL:-}" ] || { say "PANEL (the ladder's panel file) is not set"; exit 76; }
+    [ -f "$PANEL" ] || { say "the panel file $PANEL does not exist"; exit 76; }
+    mode=run
+    snapshot=""
+    cmd=("$PYTHON" -s "$DEPLOY/scripts/eval_ladder.py" "$COMMAND" --panel "$PANEL" "${start_args[@]}" "${train_args[@]}")
+    say "starting the eval ladder $PANEL into $RUN_DIR (deployment $commit; it resumes its own state)"
+elif [ -f "$RUN_DIR/state.json" ]; then
     if ! snapshot=$("$PYTHON" -s "$DEPLOY/scripts/longrun/snapshot_check.py" "$RUN_DIR" 2>&1); then
         say "refusing to resume: $snapshot -- repair: $PYTHON -s $DEPLOY/scripts/longrun/snapshot_check.py $WORKDIR/$RUN_DIR --repair (docs/longrun_runbook.md, 'Recovering a snapshot')"
         event exits.jsonl event=refused rc=77 reason=snapshot_invalid detail="$snapshot"
@@ -120,15 +147,16 @@ else
     args=(--out-dir "$(dirname "$RUN_DIR")" --run-name "$(basename "$RUN_DIR")" "${start_args[@]}" "${train_args[@]}")
     say "starting $RUN_DIR fresh (deployment $commit)"
 fi
+[ "$KIND" = generator ] && cmd=("$PYTHON" -s "$DEPLOY/main.py" "$COMMAND" "${args[@]}")
 
 # Only the deployment's code: no user site-packages, no inherited PYTHONPATH.
 unset PYTHONPATH PYTHONHOME PYTHONSTARTUP VIRTUAL_ENV
 export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1
-say "$PYTHON -s $DEPLOY/main.py $COMMAND ${args[*]}"
+say "${cmd[*]}"
 offset=$(stat -c %s "$LOG")
-"$PYTHON" -s "$DEPLOY/main.py" "$COMMAND" "${args[@]}" >> "$LOG" 2>&1 &
+"${cmd[@]}" >> "$LOG" 2>&1 &
 child=$!
-event starts.jsonl mode=$mode snapshot_update="$snapshot" pid=$child commit="$commit" \
+event starts.jsonl mode=$mode snapshot_update="$snapshot" kind="$KIND" pid=$child commit="$commit" \
     invocation="${INVOCATION_ID:-}"
 wait $child
 rc=$?
@@ -137,7 +165,7 @@ rc=$?
 trap '' TERM
 
 if [ $rc -eq 0 ]; then
-    say "main.py exited cleanly (max updates reached or a STOP file)"
+    say "$KIND exited cleanly (max updates reached, a STOP file, or a SIGTERM the trainer handled)"
     event exits.jsonl event=exit rc=0 reason=clean
     exit 0
 fi

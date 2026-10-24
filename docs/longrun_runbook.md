@@ -1,9 +1,11 @@
-# Long-run runbook (months-long `main.py search-learning` on the workstation)
+# Long-run runbook (months-long training on the workstation)
 
 How to run one training job for months on this machine (Threadripper PRO 9975WX, 64 threads, 251 GB RAM,
 one RTX PRO 6000 Blackwell 96 GB, shared with another project and with `claude-rc.service`) so that the
 failures of October 2026 can't recur. The harness is `scripts/longrun/`; nothing in it touches the training
-code.
+code. The 2026-11 run (docs/long_run_recipe.md: a generator, a value trainer and an eval ladder, plus daily
+jobs) is set up as in [The long run (2026-11)](#the-long-run-2026-11); the sections before it describe one
+instance, which is how each of its three long-lived processes runs.
 
 | Failure (2026-10) | What prevents it now |
 |---|---|
@@ -37,12 +39,19 @@ code.
 ```
 
 - `deploy.sh create|verify|in-use|update` -- the frozen deployment.
-- `launch.sh start|stop` -- the unit's `ExecStart` / `ExecStop` (runs from the deployment).
-- `install.sh` -- writes the instance's `.env`, the unit templates and the limits drop-in; starts nothing.
-- `watchdog.py` -- the watchdog service, and `status` for a read-only look at a run.
-- `snapshot_check.py` -- the launcher's check that a snapshot is resumable.
-- `host_hold.sh` -- apt holds for the NVIDIA driver and the kernel.
+- `launch.sh start|stop` -- the unit's `ExecStart` / `ExecStop` (runs from the deployment). `KIND` says what it
+  runs: `generator` (search-learning, the default: fresh, then `--resume`), `value` (`main.py value-train`) or
+  `ladder` (`scripts/eval_ladder.py run`); the last two get the same arguments on every start and resume themselves.
+- `install.sh` -- writes the instance's `.env`, the unit templates and the limits drop-in; starts nothing
+  (`--kind generator|value|ladder|daily`).
+- `watchdog.py` -- the watchdog service, and `status` for a read-only look at a run; with `HOST_CHECKS=1` (one
+  instance) also the host samples the daily report reads and the Xid scan.
+- `snapshot_check.py` -- the launcher's check that a snapshot is resumable (a `--value-follow` run has no critic).
+- `host_hold.sh` -- apt holds for the NVIDIA driver and the kernel (`check`: are they in place, for M7).
 - `dryrun.sh`, `make_tiny_start.py` -- the end-to-end check on a tiny CPU run.
+- Daily jobs (`daily.sh` under `rl18xx-longrun-daily@.service` + `.timer`): `retention.py`, `style_stats.py`,
+  `integrity_check.py`, `status_report.py`; `maintenance.py` holds the M1-M9 metrics (stdlib, shared with the
+  watchdog).
 
 ## Before the run
 
@@ -190,7 +199,7 @@ stops, so it can report why; stdlib only, system `python3`). Every `WATCH_INTERV
 | `failed` | CRIT | the unit is down: exit 75 / 76 / 77 with its meaning, or systemd's start limit stopped the restarts (the unit's `Result` then keeps the last failure's kind, e.g. `oom-kill`; `start-limit-hit` only appears for a refused manual start) | |
 | `nonfinite` | CRIT | the training stopped on a non-finite loss (not restarted) | |
 | `refused` | CRIT | the launcher refused to start (76 deployment modified, 77 snapshot) | |
-| `stall` | WARN | no new `history.jsonl` line for that long while the unit is up (counted from the later of the last line and the unit's start) | `STALL_MINUTES` (60) |
+| `stall` | WARN | no progress for that long while the unit is up (counted from the later of the last progress and the unit's start): a new `history.jsonl` line (generator), `status.json` rewritten (value trainer: every poll and evaluation), `heartbeat` touched (ladder: every poll and every finished game) | `STALL_MINUTES` (60), `PROGRESS_FILE` |
 | `disk:<path>` | WARN, CRIT < 1/4 | free space on the run's / workdir's filesystem | `DISK_MIN_GB` (100) |
 | `mem_available` | WARN | the machine's MemAvailable | `MEM_AVAILABLE_MIN_GB` (16) |
 | `memory_high` / `oom_kill` | WARN / CRIT | the run's cgroup above 95% of its MemoryHigh / an OOM kill in it | |
@@ -198,6 +207,7 @@ stops, so it can report why; stdlib only, system `python3`). Every `WATCH_INTERV
 | `gpu<i>_throttle` | WARN | thermal / hardware slowdown or power brake two checks running (the power cap, normal under load, is not alerted) | `GPU_CHECK` (1) |
 | `gpu` | CRIT | `nvidia-smi` fails (e.g. "Driver/library version mismatch") | |
 | `nvidia_mismatch` | CRIT | installed libnvidia-compute differs from the loaded module: the next CUDA start fails until a reboot | |
+| `xid` | CRIT | an NVIDIA Xid error in the kernel log (`journalctl -k`; `xid_unreadable` INFO if it can't be read) | `HOST_CHECKS` (0), `XID_CHECK_MIN` (5) |
 | `start` / `stop` / `exit` / `inactive` / `reboot_required` | INFO | log only | |
 
 Each alert goes to `<workdir>/longrun/<instance>/alerts.log` and the journal; WARN and CRIT also to a
@@ -207,7 +217,12 @@ with `ALERT_LEVEL`, `ALERT_KEY`, `ALERT_MESSAGE`, `ALERT_INSTANCE` in its enviro
 through a service you choose (`--set 'ALERT_COMMAND=curl -s -d "$ALERT_MESSAGE" https://ntfy.sh/<topic>'` --
 that sends the alert text to that service). A condition alerts when it starts, again every `ALERT_REPEAT_MIN`
 (240) while it lasts, and logs `cleared`. `watchdog.py --instance <i> status` prints the same checks without
-alerting.
+alerting. The daily jobs alert through the same path (`watchdog.send_alert`), into their own state dir.
+
+Samples for the daily report: every `RSS_EVERY_MIN` (60) the RSS of each process of the unit, to
+`<state dir>/rss.jsonl` (M4's leak check); with `HOST_CHECKS=1`, every `USAGE_EVERY_MIN` (360) a usage sample to
+`USAGE_LOG` -- free disk, sizes by category (`USAGE_PATHS`), the worktrees (`WORKTREES_DIR`), the lowest
+MemAvailable since the last sample, swap, GPU throttling per clock hour (M1-M5).
 
 ## Host stability
 
@@ -287,6 +302,144 @@ directory.
 Not covered: the GPU (CUDA was hidden; GPU memory is freed when the processes exit, which checks 2, 3 and 6
 show); `enable` and a reboot; a desktop notification on screen (no notification server was running: the
 D-Bus call is made and fails quietly); `host_hold.sh hold` (needs sudo; `status` was run).
+
+## The long run (2026-11)
+
+docs/long_run_recipe.md's run: three long-lived instances of `rl18xx-longrun@.service` and the daily jobs, all
+from one frozen deployment `D` in one workdir `W`. The settings live in `scripts/launch/2026-11/`
+(`install_lr1.sh` -- the install commands; `env-examples/` -- the `.env` files it writes; `eval_ladder_longrun.json`
+-- the ladder's panel; `league_longrun.json` -- the league's fixed members; `retention.json`). The names
+(`lr1`, `saved_games/lr1`, `model_checkpoints_value/lr1`, `logs/eval/ladder_lr1`) appear in all of them: change
+them together.
+
+| instance | kind | runs | resumes | progress (stall check) | memory (High / Max) |
+|---|---|---|---|---|---|
+| `lr1-gen` | generator | `main.py search-learning`: checkpoint 10 frozen, `--value-follow` the value run, league seats (`--population league_longrun.json`, 30%), every game saved (`--save-data saved_games/lr1`) | `--resume` from its snapshot | `history.jsonl`, 90 min | 120G / 135G |
+| `lr1-value` | value | `main.py value-train --run-dir model_checkpoints_value/lr1 --data saved_games/lr1 --init <v0>` | its own `state.json` | `status.json`, 120 min | 36G / 44G |
+| `lr1-ladder` | ladder | `eval_ladder.py run --panel eval_ladder_longrun.json` (12 workers) | its own `state.json` | `logs/eval/ladder_lr1/heartbeat`, 90 min | 26G / 32G |
+| `lr1-daily` | daily (timer, 06:00) | retention, style statistics, integrity check, status report | -- | -- | 12G / 16G |
+
+Memory: the recipe's budget table says ~60 / 30 / 20 GB, but azl alone held ~80 GB at 40 workers x 32 games
+(2026-10-22) and the generator now also serves up to 12 league servers; the caps are those numbers plus margin, 211
+GB together for the three. Measure the peaks in the G0 pilot (`systemctl --user status`, the watchdog's
+`rss.jsonl`) and re-run the installer with tighter caps. Only `lr1-gen`'s watchdog does the host checks
+(`HOST_CHECKS=1`: usage samples, Xid scan, GPU) -- three watchdogs would triple every GPU alert.
+
+### Setting it up
+
+1. **Deployment** as above (`deploy.sh create longrun-2026-11 ~/longrun/deploy/longrun-2026-11`), dry-run it.
+2. **Workdir.** Real directories for everything the run writes (never a symlink into `.claude/worktrees`: the
+   desktop app cleans those up, and retention refuses to delete through symlinks), and real copies of the panel's
+   and the league's checkpoints and of the value gate's files, at the paths the panel / league / install files
+   name (they live in session worktrees today):
+
+   ```bash
+   W=~/longrun/work/lr1; G=/home/revys/workspace/RL_18xx/.claude/worktrees/gpu-experiments-training-93d287
+   V=/home/revys/workspace/RL_18xx/.claude/worktrees/1830-rl-analysis-ea948b   # the value gate's outputs
+   mkdir -p $W/logs $W/longrun $W/saved_games $W/model_checkpoints_value $W/model_checkpoints_search
+   ln -s /home/revys/workspace/RL_18xx/human_games $W/human_games
+   S=model_checkpoints/AlphaZeroTransformer/20261004_134558_804974562
+   cd $G && cp --parents -a $S/10.pth $S/config.json \
+       model_checkpoints_pg/rab_place_20261014/{learner,critic}/1800.pth model_checkpoints_pg/rab_place_20261014/config.json \
+       model_checkpoints_pg/gx2_{bankrupt,rust}_20261013/learner/300.pth model_checkpoints_pg/gx2_{bankrupt,rust}_20261013/config.json \
+       model_checkpoints_search/az8_20261019/learner/170.pth model_checkpoints_search/azl_20261019/learner/2100.pth \
+       model_checkpoints_search/{az8,azl}_20261019/config.json $W/
+   cd $V && cp --parents -a logs/value_gate/data logs/value_gate/runs/base_36989/{learner/0.pth,config.json} $W/
+   cd $W && $D/.venv/bin/python -s $D/scripts/eval_ladder.py check --panel $D/scripts/launch/2026-11/eval_ladder_longrun.json
+   ```
+   (`check` lists every checkpoint the panel names; `model_checkpoints_value/lr1/promoted/0.pth` shows as missing
+   until the value trainer writes version 0. The runs' `config.json` files: loaders read a run's temperatures and
+   reward from them.) Every path in `league_longrun.json` must exist too (verified 2026-10-23 against `$G` and `$V`).
+3. **Install** (writes the four `.env` files, the unit templates, the timer and the limits; starts nothing):
+   `bash $D/scripts/launch/2026-11/install_lr1.sh $D $W` (set `ALERTS` in it, or `--set ALERT_COMMAND=...` per
+   instance, for phone alerts).
+4. **Start, in this order** -- the value trainer first: it writes `promoted/0.pth` (v0 = the start value, its
+   fixed-set CE measured), which the generator follows and the ladder's u0 is:
+
+   ```bash
+   systemctl --user start rl18xx-longrun@lr1-value
+   systemctl --user start rl18xx-longrun@lr1-gen
+   systemctl --user start rl18xx-longrun@lr1-ladder
+   systemctl --user enable --now rl18xx-longrun-daily@lr1-daily.timer
+   ```
+
+### Day 0: the baselines
+
+- **The ladder** evaluates u0 (checkpoint 10 + v0, update 0) against the whole panel first (`baseline_update`:
+  2v2 + 1v3, 240 games per direction, ~3,840 games, ~9 h at 12 workers); the ratings are anchored on u0 (0 Elo).
+- **The value**: v0's fixed-set CE is `promoted.json`'s version 0 (`fixed_ce`; ~0.920 expected).
+- **Style and everything else**: run the daily jobs once by hand at the end of the first day
+  (`systemctl --user start rl18xx-longrun-daily@lr1-daily.service`). The first style-statistics line is the drift
+  guard's baseline (`--baseline first`); the status report records each metric's baseline in
+  `longrun/lr1-daily/baseline.json` the first time it has a value (P1 / P2 / P7: the first day with data; P3: v0;
+  P5: u0 = 0 Elo). To re-record (e.g. after a bad first day): `cd $W && $D/.venv/bin/python -s
+  $D/scripts/longrun/status_report.py --set-baseline P1,P6` (with the daily `.env`'s variables exported) or
+  `--set-baseline` for all. `RUN_START` in the daily `.env` fixes day 0 for the milestones (default: when the
+  baseline file was created).
+
+### The ladder's schedule
+
+`eval_ladder_longrun.json`: candidates are the value trainer's promoted versions (`run` = the value run,
+`checkpoint` = `promoted/{update}.pth`, `every` 1: the newest version whenever the ladder is free), searched
+under checkpoint 10 at ptemp 1 (`<ckpt10>+{checkpoint}@200/0.05:mean,dedupe,par=8,ptemp=1,budget=total`). A
+candidate plays either a **rotation** -- two panel members taken in turn from the panel's order (u0, gen4critic,
+az8_u170, azl_u2100, sl10_gen4critic), 2v2 only, 120 games per direction (240 per pairing): the daily P5 -- or,
+when no full schedule started in the last 168 h, the **full panel**: every member, 2v2 + 1v3, 240 games per
+direction (480 per pairing), plus the weekly **value check** against the previous full candidate (2v2, 480 games;
+`purpose: value_check` in the ledger; against u0 in week 1, whose own panel matches are tagged). The schedule of
+each candidate is kept in `logs/eval/ladder_lr1/state.json`, and each ledger record says its `schedule` and `time`.
+`eval_ladder.py decide --panel ... --full --back 1` compares the last two full candidates (the weekly review);
+the ladder's own `report.txt` / `ratings.json` do the same. A `STOP` file in `logs/eval/ladder_lr1/` ends the
+ladder before its next match.
+
+### Daily jobs and where everything lands (under `W`)
+
+| output | written by | what |
+|---|---|---|
+| `long_run_log.md` | status report | the dated daily sections (P1-P8, M1-M9, rules, milestones); the weekly reviews go here too |
+| `longrun/lr1-daily/status.jsonl`, `baseline.json`, `alerts.log` | status report | each report as JSON; the baselines; the yellow / red alerts |
+| `longrun/lr1-daily/style_stats.jsonl` | style statistics | one line per day: par shares, par prices, first-train timing, withhold rate, bankruptcies, length; main seats and all seats; drift flags |
+| `longrun/lr1-daily/integrity.jsonl`, `shard_checksums.txt` | integrity check | 50 random games of the last day rebuilt twice bit for bit; every shard's sha256, 20 re-hashed a night |
+| `longrun/lr1-daily/retention.jsonl` | retention | what it deleted or would delete |
+| `longrun/lr1-daily/daily.log`, `daily_steps.json` | daily.sh | the jobs' output; their exit statuses |
+| `longrun/usage.jsonl` | lr1-gen's watchdog (6-hourly), the status report (daily) | disk, sizes by category, worktrees, memory, swap, throttling |
+| `longrun/lr1-{gen,value,ladder}/` | launcher, watchdog | starts / exits, alerts, `rss.jsonl`, watchdog state |
+| `logs/longrun_lr1-*.log` | launcher | each process's output |
+| `model_checkpoints_search/lr1/` | generator | `history.jsonl` (P1, P2, P7), snapshots, `league.json`, `league/` |
+| `model_checkpoints_value/lr1/` | value trainer | `promoted.json`, `promoted/`, `candidates/`, `cycles.jsonl` (P3, P4, M8), `status.json` |
+| `logs/eval/ladder_lr1/` | ladder | `ledger.jsonl`, `ratings.json`, `report.txt`, the matches (P5, P8) |
+| `saved_games/lr1/` | generator | every game (`.sld` shards) |
+
+**Status report rules** (`status_report.py`; "days" are 24-h windows ending at the report): yellow for each of
+the recipe's daily alarms (P1 below its 5-day max by >= 2 SE; two promotions without a fixed-set gain; the
+fixed-minus-rolling CE gap widening 3 cycles running; P2 up >= 2 SE in 3 days with P1 flat; P5's 3-day mean below
+the previous 3 days' by >= 2 SE; a drift flag; throughput < 80% of the 7-day median or > 3% of games at the length
+cap), 3 failed promotions in a row, one weekly value check < 0.47, a missed milestone (on its date), any WARN the
+watchdogs hold, a failed daily job, and the maintenance metrics' yellows; red for stall (P1's 5-day slope upper
+95% bound < +0.001/day **and** P3's slope over the last 3 promotions >= 0 **and** P5 not up by 2 SE over 6 days),
+decline (P1's 5-day mean below its best by >= 3 SE **and** P5's 3-day mean below its best by >= 2 SE), value
+divergence, 6 failed promotions, two value checks < 0.47 running, saved-data write errors, any CRIT a watchdog
+holds (crash loop, non-finite stop, Xid, disk), and the maintenance reds. A yellow report sends a WARN `status`
+alert, a red one CRIT. P5's SEs are the ratings' SEs against u0 (comparisons between candidates count u0's
+uncertainty twice: conservative).
+
+**Maintenance thresholds** (`.env` of the daily instance; recipe defaults): `M1_YELLOW_DAYS` 30, `M1_RED_DAYS` 14,
+`M1_RED_FREE_GB` 150; `M2_EXPECTED_GB_PER_DAY` (`saved=1.4,checkpoints=0.5,evals=0.06,logs=0.05`), `M2_FACTOR` 2;
+`M3_YELLOW_GB` 200, `M3_RED_GB` 300; `M4_LEAK_GB_PER_DAY` 2, `M4_SWAP_MIN_GB` 0.5, `M4_MEM_RED_GB` 30;
+`M5_THROTTLE_FRACTION` 0.10; `M7_HOLD_CHECK` 1 (`host_hold.sh check`); `M8_TARGET_HOURS` 1, `M8_FACTOR` 2;
+`BACKUP_DIR` / `M9_MAX_DAYS` 8 (M9 is n/a without a backup directory). On 2026-10-23 this host had 1.8 GB of swap
+in use and a pending reboot: both are yellows until fixed (or `M4_SWAP_MIN_GB` raised).
+
+**Retention** (`retention.py --config retention.json`, daily): a dry run until `dry_run_until` (set it to launch
+day + 7 once the policy is approved), listing what it would delete in `retention.jsonl` and the daily report; then
+for real. Generator snapshots thinned (every 10th update for 48 h, every 100th for 2 weeks, every 1000th
+forever; the resume snapshot, the anchor, every checkpoint the panel / ledger / ladder state / `league.json` /
+population names are kept), league snapshots no longer in `league.json` after 7 days, unpromoted value candidates
+after 7 days, optimizer state (latest + one per week), logs rotated at 1 GB (4 kept). Hard guards in the code:
+saved games, promoted values, eval collections, the ladder ledger and runs' metadata are never touched, nor
+anything outside the workdir or behind a symlink; a config that asks for one is refused and nothing is deleted
+that day (WARN `retention` alert). Test changes to the policy on a copy, never on the run's workdir:
+`retention.py --config <file> --workdir <copy> --dry-run`.
 
 ## Rules for agents (Claude sessions)
 

@@ -2,7 +2,7 @@
 # the instance's settings to ~/.config/rl18xx-longrun/%i.env and its limits (memory, CPUs, restart delay) to
 # the drop-in rl18xx-longrun@%i.service.d/10-limits.conf; the values below are the defaults those override.
 [Unit]
-Description=rl18xx long run %i (main.py search-learning)
+Description=rl18xx long run %i (scripts/longrun/launch.sh: the generator, value trainer or eval ladder)
 Wants=rl18xx-longrun-watchdog@%i.service
 # Five failures within two hours (a crash loop) stop the restarts: `systemctl --user reset-failed` clears it.
 StartLimitIntervalSec=2h
