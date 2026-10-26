@@ -59,7 +59,8 @@ bash "$INSTALL" lr1-ladder --kind ladder --deploy "$D" --workdir "$W" --run-dir 
     --memory-high 26G --memory-max 32G --restart-sec 120 \
     --set STALL_MINUTES=90 --set GPU_CHECK=0 --set HOST_CHECKS=0 "${ALERTS[@]}"
 
-# The daily jobs (CPU only).
+# The daily jobs (CPU only). M7_HOLD_CHECK=0: the driver and kernel are not held (the user's decision, 2026-10-26:
+# updates stay on; a driver upgrade shows as the watchdog's nvidia_mismatch and is fixed by a reboot).
 bash "$INSTALL" lr1-daily --kind daily --deploy "$D" --workdir "$W" --memory-high 12G --memory-max 16G --nice 10 \
     --set STATE_DIR=longrun/lr1-daily --set GEN_RUN_DIR="$GEN_RUN" --set VALUE_RUN_DIR="$VALUE_RUN" \
     --set LADDER_PANEL="$L/eval_ladder_longrun.json" --set SAVE_DATA="$SAVE" \
@@ -67,7 +68,7 @@ bash "$INSTALL" lr1-daily --kind daily --deploy "$D" --workdir "$W" --memory-hig
     --set RETENTION_CONFIG="$L/retention.json" --set REPORT_LOG=long_run_log.md \
     --set USAGE_LOG=longrun/usage.jsonl \
     --set "USAGE_PATHS=saved=$SAVE;checkpoints=$GEN_RUN:$VALUE_RUN;evals=logs/eval;logs=logs/*.log:longrun" \
-    --set WORKTREES_DIR=/home/revys/workspace/RL_18xx/.claude/worktrees "${ALERTS[@]}"
+    --set WORKTREES_DIR=/home/revys/workspace/RL_18xx/.claude/worktrees --set M7_HOLD_CHECK=0 "${ALERTS[@]}"
 
 cat <<'NEXT'
 
@@ -76,4 +77,5 @@ Next (docs/longrun_runbook.md, "The long run (2026-11)"):
   systemctl --user start rl18xx-longrun@lr1-gen
   systemctl --user start rl18xx-longrun@lr1-ladder     # day 0: u0 against the whole panel (the baseline)
   systemctl --user enable --now rl18xx-longrun-daily@lr1-daily.timer
+  systemctl --user enable rl18xx-longrun@lr1-gen rl18xx-longrun@lr1-value rl18xx-longrun@lr1-ladder  # back after a reboot
 NEXT

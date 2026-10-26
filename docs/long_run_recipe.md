@@ -182,7 +182,9 @@ first 120 decisions, 30% mid-game starts) without auction starts.
 - **GPU:** azl stopped for the pilot; azlc keeps running beside it, so the pilot's throughput and memory peaks
   are measured on a shared GPU and CPU (G0's throughput line is judged with that in mind).
 - **Host:** the driver/kernel holds (`host_hold.sh`, sudo) and the pending reboot are the user's; the reboot waits
-  for azlc. Until then the report shows them as yellow / red.
+  for azlc. Until then the report shows them as yellow / red. *2026-10-26:* the user chose not to hold: updates
+  stay on, a driver upgrade is handled by a reboot (the watchdog's `nvidia_mismatch` alert); M7's hold check is
+  off and the units start at boot (docs/longrun_runbook.md "Host stability").
 - Workdir: the panel and league checkpoints, `logs/value_gate/data` and the start value are copied from the
   session worktrees into the workdir (the runbook's setup).
 - Not built: the phase-2 prior factorial (P8), the off-disk backup itself (M9 only checks its age).

@@ -235,7 +235,15 @@ restarts after an ordinary crash loses the GPU. Kernel upgrades (also automatic)
 reboot, but a power cut would then boot a kernel the run was never tested on, with a freshly built DKMS
 module.
 
-**Hold both for the run** (needs sudo; run by the user):
+**lr1 (decided 2026-10-26): not held.** The user keeps automatic updates on (security fixes, no holds to
+undo). The cost: about one driver upgrade every two months, each breaking new GPU processes (the ladder's
+next match, a unit restarting after a crash) until a reboot; the generator and the value trainer keep the GPU
+they have. The watchdog raises `nvidia_mismatch` (CRIT) at once; the fix is a planned reboot (below). The
+daily report skips the hold check (`M7_HOLD_CHECK=0`: M7 is yellow while a reboot is pending), and the three
+units are enabled, so they start by themselves at boot. `unattended-upgrades` never reboots by itself here
+(no `Automatic-Reboot`).
+
+**Hold both for the run** (the original plan; needs sudo; run by the user):
 
 ```bash
 bash scripts/longrun/host_hold.sh status      # module vs libraries, what is held, pending upgrades / reboot
