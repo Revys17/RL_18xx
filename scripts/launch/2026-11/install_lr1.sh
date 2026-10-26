@@ -43,10 +43,13 @@ bash "$INSTALL" lr1-gen --kind generator --deploy "$D" --workdir "$W" --run-dir 
     --set "USAGE_PATHS=saved=$SAVE;checkpoints=$GEN_RUN:$VALUE_RUN;evals=logs/eval;logs=logs/*.log:longrun" \
     --set WORKTREES_DIR=/home/revys/workspace/RL_18xx/.claude/worktrees "${ALERTS[@]}"
 
-# The value trainer: the same arguments on every start (it resumes its run directory; v0 = --init).
+# The value trainer: the same arguments on every start (it resumes its run directory; v0 = --init). Since
+# 2026-10-26 half of every batch comes from the value gate's training games and the gain is required on the eval
+# ladder's games of u0 (logs/value_gate/ladder_lr1_u0: scripts/value_gate.py build --root logs/eval/ladder_lr1
+# --since "2026-10-23 00:00" --test "*"), not on the generator's held-out games (docs/long_run_recipe.md).
 bash "$INSTALL" lr1-value --kind value --deploy "$D" --workdir "$W" --run-dir "$VALUE_RUN" \
     --train-args "--data $SAVE --init logs/value_gate/runs/base_36989/learner/0.pth --fixed-data logs/value_gate/data \
---workers 8" \
+--anchor-data logs/value_gate/data --anchor-share 0.5 --gate-data logs/value_gate/ladder_lr1_u0 --workers 8" \
     --memory-high 36G --memory-max 44G --restart-sec 120 \
     --set STALL_MINUTES=120 --set GPU_CHECK=0 --set HOST_CHECKS=0 "${ALERTS[@]}"
 

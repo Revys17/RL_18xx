@@ -992,6 +992,17 @@ def build_parser():
         help=f"The value gate's positions; its test games are the fixed held-out set (default: {V.fixed_data})",
     )
     p.add_argument("--no-fixed", action="store_true", help="No fixed held-out set (tests)")
+    p.add_argument(
+        "--gate-data", nargs="+", action="extend", default=[],
+        help="Value-gate data directories of eval-style games (their test split): the gate requires the gain "
+        "there instead of on the rolling set, and a cycle trains without early stopping (default: none)",
+    )
+    p.add_argument(
+        "--anchor-data", default=V.anchor_data,
+        help="A value-gate data directory whose train split joins every batch (default: none)",
+    )
+    p.add_argument("--anchor-share", type=float, default=V.anchor_share,
+                   help=f"Share of each batch from --anchor-data (default: {V.anchor_share})")
     p.add_argument("--positions-per-game", type=int, default=V.positions_per_game,
                    help=f"Training positions per game and pass (default: {V.positions_per_game})")
     p.add_argument("--held-out-per-mille", type=int, default=V.held_out_per_mille,

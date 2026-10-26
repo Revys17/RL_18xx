@@ -34,7 +34,14 @@ A cycle
   ~``task_games`` (grouped by shard) into a bounded shuffle buffer (``buffer_positions``);
   ``epochs`` passes over the sample, each in a new order. Early stopping on the rolling
   held-out set every ``eval_every`` steps (the best state is kept, the start included;
-  ``patience`` evaluations without a gain > ``min_improvement`` end it).
+  ``patience`` evaluations without a gain > ``min_improvement`` end it) -- except with a gate
+  set (below): then the candidate is the state at the end of the passes.
+- **Anchor** (``anchor_data``, off by default): the train split of a value-gate data directory
+  (the eval games the start value learned from), ``anchor_share`` of every batch drawn from it
+  uniformly (a new order each cycle), the rest from the stream; the passes still count the
+  stream's positions. Without it a cycle fine-tunes on the generator's narrow self-play and
+  forgets the varied games (lr1 cycles 2-3: better on the generator's games, worse on the
+  fixed set, and cycle 2's candidate lost 0.44 in play; mixed, 0.506 and no forgetting).
 - **Held-out sets**: *fixed* -- the value gate's test games (``fixed_data``: 3,100 games,
   49,600 positions; comparable for the whole run); *rolling* -- the held-out games among the
   newest ``rolling_games``, ``rolling_positions_per_game`` positions each (the same positions
@@ -43,11 +50,15 @@ A cycle
   gate otherwise judges the candidate on the positions that chose it: a small optimistic bias).
 - **Gate** (:func:`gate_decision`; candidate and current on the same positions, differences
   paired, SE clustered by game): promote iff the rolling difference <= -``promote_z`` SE and
-  the fixed one <= +``promote_z`` SE. *Diverged* (the hard stop the report alerts on): the
-  candidate's rolling CE above the current's by > ``diverge_ce``, or training ending above its
-  start by that much; never promoted. ``escalate_after`` (3) failures in a row double the cycle
-  interval (hours and games) and the sample; twice that many add "review the data mix" to the
-  reason. A promotion resets both and the count.
+  the fixed one <= +``promote_z`` SE. With ``gate_data`` (value-gate data directories, their
+  test split: eval-style games such as the eval ladder's), the gain is required there instead
+  and the rolling set is only reported: CE on the generator's own games does not track playing
+  strength (docs/long_run_recipe.md "Value rules"), CE on eval games does. *Diverged* (the hard
+  stop the report alerts on): the candidate's rolling or gate CE above the current's by >
+  ``diverge_ce``, or training ending above its start on the rolling set by that much; never
+  promoted. ``escalate_after`` (3) failures in a row double the cycle interval (hours and
+  games) and the sample; twice that many add "review the data mix" to the reason. A promotion
+  resets both and the count, and so does a restart with other gate or anchor settings.
 
 Run directory (other components read these: keep the names)
 -----------------------------------------------------------
@@ -106,6 +117,8 @@ CYCLE_FIELDS = (
     "rolling_diff_se", "promoted", "version", "diverged", "reason", "consecutive_failures", "cycle_hours",
     "sample_scale", "encode_seconds", "train_seconds",
 )  # fmt: skip
+# A restart that changes these starts the failure count afresh: failures under another gate say nothing about this one.
+GATE_SETTINGS = ("gate_data", "anchor_data", "anchor_share")
 
 
 @dataclass
@@ -122,6 +135,11 @@ class ValueTrainerConfig:
     # Half the rolling games choose the early-stopped state, the other half judge it: the gate
     # stays an unbiased held-out test (~6k held-out games among the newest 200k).
     select_share: float = 0.5
+    # Eval-style held-out games (value-gate data directories, their test split): with any, the gate's gain is
+    # required on these instead of the rolling set, and there is no early stopping.
+    gate_data: list = field(default_factory=list)
+    anchor_data: Optional[str] = None  # a value-gate data directory whose train split joins every batch
+    anchor_share: float = 0.5  # of each batch, from the anchor
     cycle_games: int = 40_000
     cycle_hours: float = 12.0
     min_new_games: int = 2_000
@@ -713,6 +731,22 @@ def load_fixed(data_dir, split: str = "test") -> Optional[dict]:
     return {k: np.concatenate(v) for k, v in parts.items()}
 
 
+def load_sets(data_dirs, split: str = "test") -> Optional[dict]:
+    """:func:`load_fixed` of several directories, concatenated; ``game`` renumbered so that games
+    of different directories stay apart (the SE is clustered by it)."""
+    out, offset = [], 0
+    for d in data_dirs:
+        arrays = load_fixed(d, split)
+        if arrays is None:
+            continue
+        arrays["game"] = arrays["game"].astype(np.int64) + offset
+        offset = int(arrays["game"].max()) + 1
+        out.append(arrays)
+    if not out:
+        return None
+    return {k: np.concatenate([a[k] for a in out]) for k in out[0]}
+
+
 # ---------------------------------------------------------------------------
 # The gate
 # ---------------------------------------------------------------------------
@@ -738,20 +772,28 @@ def paired_stats(ce_new, ce_old, games) -> dict:
 
 
 def gate_decision(rolling: Optional[dict], fixed: Optional[dict], z: float = 2.0, diverge: float = 0.01,
-                  start_ce: Optional[float] = None, final_ce: Optional[float] = None) -> tuple:
+                  start_ce: Optional[float] = None, final_ce: Optional[float] = None,
+                  gate: Optional[dict] = None) -> tuple:
     """``(promoted, diverged, reason)`` from :func:`paired_stats` of the rolling and fixed sets
-    (``fixed`` None: no fixed set). ``start_ce`` / ``final_ce``: the early-stopping set's CE at
-    the start and at the end of training (the last state, not the best)."""
-    if rolling is None or not rolling["n"]:
+    (``fixed`` None: no fixed set). ``start_ce`` / ``final_ce``: the rolling set's CE at the
+    start and at the end of training (the last state, not the best). ``gate``: the gate set's
+    stats (``gate_data``): the gain is required there, the rolling set only checked for
+    divergence."""
+    has_rolling = rolling is not None and rolling["n"]
+    if gate is None and not has_rolling:
         return False, False, "no rolling held-out positions"
-    if rolling["ce"] > rolling["ce_current"] + diverge:
-        return False, True, f"diverged: rolling CE {rolling['ce']:.4f}, the current value's {rolling['ce_current']:.4f}"
+    if gate is not None and not gate["n"]:
+        return False, False, "no gate-set positions"
+    for name, s in (("rolling", rolling if has_rolling else None), ("gate", gate)):
+        if s is not None and s["ce"] > s["ce_current"] + diverge:
+            return False, True, f"diverged: {name} CE {s['ce']:.4f}, the current value's {s['ce_current']:.4f}"
     if start_ce is not None and final_ce is not None and final_ce > start_ce + diverge:
         return False, True, f"diverged: training ended at rolling CE {final_ce:.4f}, started at {start_ce:.4f}"
-    se = rolling["se"]
-    if se is None or not (rolling["diff"] < 0 and rolling["diff"] <= -z * se):
+    name, s = ("rolling", rolling) if gate is None else ("gate-set", gate)
+    se = s["se"]
+    if se is None or not (s["diff"] < 0 and s["diff"] <= -z * se):
         se_text = "n/a" if se is None else f"{se:.4f}"
-        return False, False, f"rolling gain too small: {rolling['diff']:+.4f} (SE {se_text}, needs <= -{z:g} SE)"
+        return False, False, f"{name} gain too small: {s['diff']:+.4f} (SE {se_text}, needs <= -{z:g} SE)"
     if fixed is not None and fixed["n"]:
         limit = 0.0 if fixed["se"] is None else z * fixed["se"]
         if fixed["diff"] > limit:
@@ -788,36 +830,53 @@ class ValueTrainer:
         self.shards: dict = {}  # key -> ShardIndex
         self.last_cycle: dict = {}  # the last cycle's games (tests, diagnostics)
         self._fixed_cache: dict = {}  # version -> per-position fixed CE
+        self._gate_cache: dict = {}  # version -> per-position gate-set CE
         self._device = None
         for sub in ("promoted", "candidates", "index"):
             (self.run_dir / sub).mkdir(parents=True, exist_ok=True)
         repair_jsonl(self.run_dir / "cycles.jsonl")
-        self._write_config()
+        changed = self._write_config()
         self.state = self._load_state()
+        reset = sorted(set(changed) & set(GATE_SETTINGS))
+        if reset and self.state["consecutive_failures"]:
+            LOGGER.warning(f"gate settings changed ({reset}): {self.state['consecutive_failures']} failures forgotten")
+            self.state["consecutive_failures"] = 0
+            self._write_state(self.state)
         self.fixed = load_fixed(cfg.fixed_data) if cfg.fixed_data else None
         if self.fixed is not None:
             LOGGER.info(f"fixed held-out set: {len(self.fixed['win'])} positions, "
                         f"{len(np.unique(self.fixed['game']))} games ({cfg.fixed_data})")
+        self.gate = load_sets(cfg.gate_data) if cfg.gate_data else None
+        if cfg.gate_data and self.gate is None:
+            raise ValueError(f"value trainer: no test positions in --gate-data {cfg.gate_data}")
+        if self.gate is not None:
+            LOGGER.info(f"gate set: {len(self.gate['win'])} positions, {len(np.unique(self.gate['game']))} games "
+                        f"({cfg.gate_data})")
         self.scan()
         if not (self.run_dir / "promoted.json").exists():
             self._create_version_zero()
 
     # -- run directory ---------------------------------------------------------------
 
-    def _write_config(self) -> None:
+    def _write_config(self) -> list:
+        """Write config.json; returns the settings that differ from the one there (a resume)."""
         path = self.run_dir / "config.json"
         new = asdict(self.cfg)
+        changed = []
         if path.exists():
             try:
                 old = json.loads(path.read_text())
             except ValueError:
                 old = {}
-            changed = sorted(k for k in new if old.get(k) != new[k])
+            # A setting the old file lacks counts as changed only if it differs from its default.
+            defaults = asdict(ValueTrainerConfig(run_dir=self.cfg.run_dir))
+            changed = sorted(k for k in new if old.get(k, defaults.get(k)) != new[k])
             if changed:
                 LOGGER.warning(f"resuming {self.run_dir} with changed settings: {changed}")
             else:
                 LOGGER.info(f"resuming {self.run_dir}")
         write_json_atomic(path, new)
+        return changed
 
     def _load_state(self) -> dict:
         state = {"cycle": 0, "data_cut": None, "last_cycle_started": None, "consecutive_failures": 0}
@@ -982,6 +1041,14 @@ class ValueTrainer:
             self._fixed_cache = {version: ce}
         return ce
 
+    def _gate_ce(self, model, version: Optional[int] = None) -> np.ndarray:
+        if version is not None and version in self._gate_cache:
+            return self._gate_cache[version]
+        ce = per_position_ce(model, self.gate, self.device(), self.cfg.eval_batch_size)
+        if version is not None:
+            self._gate_cache = {version: ce}
+        return ce
+
     def _pass_tasks(self, index: GameIndex, sample: np.ndarray, cycle: int, rng) -> Iterator:
         """Every pass's tasks: the sample in a new order each pass (a fractional last pass: its share)."""
         full, frac = divmod(float(self.cfg.epochs), 1.0)
@@ -1016,6 +1083,14 @@ class ValueTrainer:
         torch.manual_seed(cfg.seed + cycle)
         model = self._load_model(self.run_dir / "promoted" / f"{start_version}.pth")
         fixed_current = self._fixed_ce(model, start_version) if self.fixed is not None else None
+        gate_current = self._gate_ce(model, start_version) if self.gate is not None else None
+        anchor = None
+        if cfg.anchor_data and cfg.anchor_share > 0:
+            self.write_status("loading the anchor")
+            anchor = load_fixed(cfg.anchor_data, "train")
+            if anchor is None:
+                raise ValueError(f"value trainer: no train positions in --anchor-data {cfg.anchor_data}")
+            LOGGER.info(f"cycle {cycle}: anchor {len(anchor['win'])} positions ({cfg.anchor_data})")
         with make_pool(cfg.workers) as pool:
             t = time.time()
             tasks = make_tasks(index, rolling, cfg.rolling_positions_per_game, ROLLING_PASS, cfg.task_games)
@@ -1024,11 +1099,14 @@ class ValueTrainer:
             timers["encode"] += time.time() - t
             LOGGER.info(f"cycle {cycle}: rolling set {0 if roll is None else len(roll['win'])} positions "
                         f"({time.time() - t:.0f}s)")
-            trained = self._train(model, pool, index, sample, cycle, roll, rng, timers)
+            trained = self._train(model, pool, index, sample, cycle, roll, rng, timers, anchor)
+        anchor_n = 0 if anchor is None else len(anchor["win"])
+        del anchor
         model.load_state_dict(trained["best_state"])
         candidate = Path("candidates") / f"{cycle}.pth"
         self.write_status("gate", steps=trained["steps"])
         fixed_candidate = self._fixed_ce(model) if self.fixed is not None else None
+        gate_candidate = self._gate_ce(model) if self.gate is not None else None
         self._save(model, self.run_dir / candidate, cycle, trained)
 
         gate_mask = None
@@ -1041,8 +1119,12 @@ class ValueTrainer:
         fixed_stats = None
         if self.fixed is not None:
             fixed_stats = paired_stats(fixed_candidate, fixed_current, self.fixed["game"])
+        gate_stats = None
+        if self.gate is not None:
+            gate_stats = paired_stats(gate_candidate, gate_current, self.gate["game"])
         promoted, diverged, reason = gate_decision(
-            rolling_stats, fixed_stats, cfg.promote_z, cfg.diverge_ce, trained["start_select"], trained["final_select"]
+            rolling_stats, fixed_stats, cfg.promote_z, cfg.diverge_ce, trained["start_select"], trained["final_select"],
+            gate_stats,
         )
         if not diverged and trained["best_step"] == 0:
             promoted, reason = False, f"no improvement on the rolling set in training ({reason})"
@@ -1052,11 +1134,13 @@ class ValueTrainer:
             reason += "; review the data mix"
         version = start_version
         if promoted:
-            version = self._promote(candidate, cycle, start_version, index, fixed_stats, rolling_stats)
+            version = self._promote(candidate, cycle, start_version, index, fixed_stats, rolling_stats, gate_stats)
             if fixed_candidate is not None:
                 self._fixed_cache = {version: fixed_candidate}
+            if gate_candidate is not None:
+                self._gate_cache = {version: gate_candidate}
         empty = {"n": 0, "games": 0, "ce": None, "ce_current": None, "diff": None, "se": None}
-        fs, rs = fixed_stats or empty, rolling_stats or empty
+        fs, rs, gs = fixed_stats or empty, rolling_stats or empty, gate_stats or empty
         games_encoded = np.unique(np.concatenate(trained["games"])) if trained["games"] else np.zeros(0, np.int64)
         # Passes done: the game encodings asked for per sampled game, times the share of their positions trained.
         epochs = trained["attempted"] / max(1, len(sample)) * trained["positions"]
@@ -1082,30 +1166,53 @@ class ValueTrainer:
             "select_ce_start": trained["start_select"], "select_ce_best": trained["best_select"],
             "select_ce_final": trained["final_select"], "worker_encode_seconds": round(trained["worker_seconds"], 1),
             "history": trained["history"], "device": str(self.device()),
+            "gate_n": gs["n"], "gate_games": gs["games"], "gate_ce": gs["ce"], "gate_ce_current": gs["ce_current"],
+            "gate_diff": gs["diff"], "gate_diff_se": gs["se"], "gate_history": trained["gate_history"],
+            "anchor_positions": trained["anchor_positions"],
+            "anchor_passes": round(trained["anchor_positions"] / anchor_n, 4) if anchor_n else 0.0,
         }  # fmt: skip
         append_jsonl(self.run_dir / "cycles.jsonl", record)
         self.state.update(cycle=cycle, data_cut=data_cut, last_cycle_started=started, consecutive_failures=failures)
         self._write_state(self.state)
         self.last_cycle = {"trained_crc": index.crc[games_encoded], "rolling_crc": index.crc[rolling],
                            "record": record}  # fmt: skip
-        LOGGER.info(f"cycle {cycle}: {reason}; rolling {rs['diff']} (SE {rs['se']}), fixed {fs['diff']} "
-                    f"(SE {fs['se']}); version {version}; {record['seconds']:.0f}s")
+        LOGGER.info(f"cycle {cycle}: {reason}; rolling {rs['diff']} (SE {rs['se']}), gate {gs['diff']} "
+                    f"(SE {gs['se']}), fixed {fs['diff']} (SE {fs['se']}); version {version}; "
+                    f"{record['seconds']:.0f}s")
         return record
 
-    def _train(self, model, pool, index: GameIndex, sample, cycle: int, roll: Optional[dict], rng, timers) -> dict:
-        """Stream the sample's positions through the shuffle buffer into AdamW steps, early-stopped
-        on the rolling set; returns the best state with its per-position rolling CE."""
+    def _train(self, model, pool, index: GameIndex, sample, cycle: int, roll: Optional[dict], rng, timers,
+               anchor: Optional[dict] = None) -> dict:
+        """Stream the sample's positions through the shuffle buffer into AdamW steps (each batch
+        ``anchor_share`` from ``anchor`` when given), early-stopped on the rolling set -- or, with
+        a gate set, not at all; returns the chosen state with its per-position rolling CE."""
         import torch
 
         cfg = self.cfg
         device = self.device()
         opt = torch.optim.AdamW([{"params": list(model.parameters()), "lr": cfg.lr}], weight_decay=0.0)
         has_roll = roll is not None and len(roll["win"]) > 0
+        gate_mode = self.gate is not None
         select = None
         if has_roll:
             select = selection_games(index.crc[roll["game"]], cfg.select_share) if cfg.select_share > 0 else None
             if select is not None and not select.any():
                 select = None
+        k_anchor = 0 if anchor is None else min(cfg.batch_size - 1, int(round(cfg.batch_size * cfg.anchor_share)))
+        k_stream = cfg.batch_size - k_anchor
+        anchor_draw = {"order": np.zeros(0, np.int64), "at": 0, "positions": 0}
+
+        def anchor_rows(k: int) -> np.ndarray:
+            """``k`` anchor rows, uniformly without replacement until the anchor is used up, then a new order."""
+            out = []
+            while k > 0:
+                if anchor_draw["at"] >= len(anchor_draw["order"]):
+                    anchor_draw["order"], anchor_draw["at"] = rng.permutation(len(anchor["win"])), 0
+                take = anchor_draw["order"][anchor_draw["at"] : anchor_draw["at"] + k]
+                anchor_draw["at"] += len(take)
+                out.append(take)
+                k -= len(take)
+            return np.sort(np.concatenate(out)) if out else np.zeros(0, np.int64)
 
         def evaluate() -> tuple:
             t = time.time()
@@ -1113,13 +1220,23 @@ class ValueTrainer:
             timers["train"] += time.time() - t
             return ce, float(ce.mean() if select is None else ce[select].mean())
 
+        def gate_point(step: int) -> float:
+            t = time.time()
+            ce = float(self._gate_ce(model).mean())
+            timers["train"] += time.time() - t
+            gate_history.append([step, ce])
+            return ce
+
         def snapshot() -> dict:
             return {k: v.detach().clone() for k, v in model.state_dict().items()}
 
         start_ce, start_select = evaluate() if has_roll else (None, None)
         best = {"step": 0, "select": start_select, "ce": start_ce, "state": snapshot()}
         history = [[0, start_select]]
-        final_select, bad, step, positions = start_select, 0, 0, 0
+        gate_history: list = []
+        if gate_mode:
+            gate_point(0)
+        last_ce, final_select, bad, step, positions = start_ce, start_select, 0, 0, 0
         stream = Stream(pool, self._pass_tasks(index, sample, cycle, rng), 2 * max(1, cfg.workers), self.check)
         buffer: Optional[ShuffleBuffer] = None
         warm = True
@@ -1145,40 +1262,56 @@ class ValueTrainer:
             if n == 0:
                 break
             t = time.time()
-            batch = buffer.take(min(cfg.batch_size, n), rng)
+            batch = buffer.take(min(k_stream, n), rng)
+            positions += len(batch["win"])
+            if k_anchor:  # a short last batch keeps the share
+                rows = anchor_rows(int(round(len(batch["win"]) * k_anchor / k_stream)))
+                batch = {k: np.concatenate([batch[k], anchor[k][rows]]) for k in POSITION_KEYS}
+                anchor_draw["positions"] += len(rows)
             ce, mse = train_step(model, opt, batch, device, cfg.score_weight)
             timers["train"] += time.time() - t
             step += 1
-            positions += len(batch["win"])
-            if has_roll and step % cfg.eval_every == 0:
-                ce_all, sel = evaluate()
-                history.append([step, sel])
-                final_select = sel
-                if sel < best["select"] - cfg.min_improvement:
-                    best, bad = {"step": step, "select": sel, "ce": ce_all, "state": snapshot()}, 0
-                else:
-                    bad += 1
-                LOGGER.info(f"cycle {cycle}: step {step} rolling CE {sel:.4f} (start {start_select:.4f}, best "
-                            f"{best['select']:.4f} at {best['step']}) train CE {ce:.4f} MSE {mse:.4f}")
-                self.write_status("training", step=step, rolling_ce=sel, best_step=best["step"])
+            if (has_roll or gate_mode) and step % cfg.eval_every == 0:
+                text = ""
+                if has_roll:
+                    last_ce, sel = evaluate()
+                    history.append([step, sel])
+                    final_select = sel
+                    if not gate_mode:  # with a gate set, the rolling set is only reported
+                        if sel < best["select"] - cfg.min_improvement:
+                            best, bad = {"step": step, "select": sel, "ce": last_ce, "state": snapshot()}, 0
+                        else:
+                            bad += 1
+                    text += (f" rolling CE {sel:.4f} (start {start_select:.4f}, best {best['select']:.4f} at "
+                             f"{best['step']})")
+                if gate_mode:
+                    text += f" gate CE {gate_point(step):.4f} (start {gate_history[0][1]:.4f})"
+                LOGGER.info(f"cycle {cycle}: step {step}{text} train CE {ce:.4f} MSE {mse:.4f}")
+                self.write_status("training", step=step, rolling_ce=final_select, best_step=best["step"],
+                                  gate_ce=gate_history[-1][1] if gate_mode else None)
             elif time.time() - last_log > 300:
                 self.write_status("training", step=step)
                 last_log = time.time()
             if (cfg.max_steps and step >= cfg.max_steps) or bad >= cfg.patience:
                 break
         if has_roll and history[-1][0] != step:
-            ce_all, sel = evaluate()
+            last_ce, sel = evaluate()
             history.append([step, sel])
             final_select = sel
-            if sel < best["select"] - cfg.min_improvement:
-                best = {"step": step, "select": sel, "ce": ce_all, "state": snapshot()}
-        if not has_roll:  # nothing to choose by: the trained state
-            best = {"step": step, "select": None, "ce": None, "state": snapshot()}
-        LOGGER.info(f"cycle {cycle}: trained {step} steps, {positions} positions; best at step {best['step']}")
+            if not gate_mode and sel < best["select"] - cfg.min_improvement:
+                best = {"step": step, "select": sel, "ce": last_ce, "state": snapshot()}
+        if gate_mode and gate_history[-1][0] != step:
+            gate_point(step)
+        if gate_mode or not has_roll:  # nothing to choose by: the trained state
+            best = {"step": step, "select": final_select if has_roll else None, "ce": last_ce if has_roll else None,
+                    "state": snapshot()}
+        LOGGER.info(f"cycle {cycle}: trained {step} steps, {positions} positions (+ {anchor_draw['positions']} "
+                    f"from the anchor); best at step {best['step']}")
         return {
             "best_state": best["state"], "best_step": best["step"], "best_ce": best["ce"],
             "best_select": best["select"], "start_ce": start_ce, "start_select": start_select,
             "final_select": final_select, "steps": step, "positions": positions, "history": history,
+            "gate_history": gate_history, "anchor_positions": anchor_draw["positions"],
             "games": stream.games, "skipped": stream.skipped, "worker_seconds": stream.worker_seconds,
             "attempted": stream.attempted, "positions_encoded": stream.positions,
             "select_n": int(len(roll["win"]) if select is None else select.sum()) if has_roll else 0,
@@ -1191,7 +1324,8 @@ class ValueTrainer:
                                         "steps": trained["steps"], "positions": trained["positions"]}}
         write_model_checkpoint(model, self.cfg.init, path, provenance)
 
-    def _promote(self, candidate: Path, cycle: int, start_version: int, index: GameIndex, fixed, rolling) -> int:
+    def _promote(self, candidate: Path, cycle: int, start_version: int, index: GameIndex, fixed, rolling,
+                 gate=None) -> int:
         """``candidate`` as the next version: hard-linked (or copied) into ``promoted/``, then ``promoted.json``."""
         promoted = self.read_promoted()
         version = int(promoted["current"]) + 1
@@ -1208,7 +1342,9 @@ class ValueTrainer:
         entry = {"version": version, "path": f"promoted/{version}.pth", "cycle": cycle, "time": _now(),
                  "games_total": len(index), "fixed_ce": None if fixed is None else fixed["ce"],
                  "rolling_ce": None if rolling is None else rolling["ce"], "candidate": str(candidate)}
-        versions = [v for v in promoted["versions"] if v["version"] < version] + [entry]
+        if gate is not None:
+            entry["gate_ce"] = gate["ce"]
+        versions =[v for v in promoted["versions"] if v["version"] < version] + [entry]
         write_json_atomic(self.run_dir / "promoted.json", {"current": version, "versions": versions})
         LOGGER.info(f"cycle {cycle}: promoted version {version}")
         return version

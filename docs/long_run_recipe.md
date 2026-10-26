@@ -55,13 +55,17 @@ Nothing else runs on the GPU during the run except forks under the fork policy b
   - data: positions re-encoded from the saved games (`search_data.rebuild_rows`), 16-32 decision positions per
     game; every game of the last 200k, plus an equal-sized uniform sample of all older games (older games
     come from weaker systems -- keep them, at a lower share);
-  - warm start from the current promoted value; AdamW lr 3e-5, batch 256, 1-2 epochs over the cycle's sample,
-    early stopping on the rolling held-out set;
+  - **anchor** (since 2026-10-26): half of every batch from the value gate's training games (the 37k eval
+    games of ~40 systems the start value learned from, `--anchor-data`), the other half from the saved games;
+  - warm start from the current promoted value; AdamW lr 3e-5, batch 256, 1-2 epochs over the cycle's sample;
+    no early stopping (the candidate is the trained state);
   - **held-out sets:** a fixed one (the value gate's test collections, never trained on: comparable for the
-    whole run) and a rolling one (the newest ~3% of games by hash, refreshed each cycle).
-- **Promotion gate** (each cycle): promote only if paired test CE on the rolling set improves by >= 2 paired
-  SE and the fixed set is not worse by > 2 paired SE. Otherwise keep the current value and extend the next
-  cycle's training. **Weekly play check:** the newest promoted value vs the value promoted a week earlier,
+    whole run), a **gate set** of eval-style games (the eval ladder's games of the start system against the
+    panel, `--gate-data`, never trained on) and a rolling one (the newest ~3% of saved games by hash,
+    refreshed each cycle; reported, not gated on).
+- **Promotion gate** (each cycle): promote only if paired CE on the gate set improves by >= 2 paired SE and
+  the fixed set is not worse by > 2 paired SE. Otherwise keep the current value and extend the next cycle's
+  training. (Until 2026-10-26 the gain was required on the rolling set: see "Changed during the G0 pilot".) **Weekly play check:** the newest promoted value vs the value promoted a week earlier,
   same prior, 480 games (`<prior>+<value>` specs): see the stop rules.
 - The generator reloads the promoted value between updates; kept trees are dropped on a version change
   (version = value promotion number).
@@ -183,6 +187,25 @@ first 120 decisions, 30% mid-game starts) without auction starts.
   session worktrees into the workdir (the runbook's setup).
 - Not built: the phase-2 prior factorial (P8), the off-disk backup itself (M9 only checks its age).
 
+**Changed during the G0 pilot (2026-10-26):** the value trainer's data and gate (deployment `longrun-2026-11b`,
+the value unit and the daily jobs; the generator and ladder kept `longrun-2026-11`).
+- *Why:* cycles 1-3 never promoted: each candidate was better on the generator's held-out games (rolling
+  -0.022) and worse on the fixed set (+0.011, +0.017, +0.021). Played under the same prior (480 games 2v2),
+  cycle 2's candidate lost to the start value 0.440 +- 0.023. A value trained from the start value on the eval
+  games plus the generator's games mixed tied it, 0.506 +- 0.023, with the fixed set unchanged (+0.0007).
+- *Calibration* (paired CE vs the start value; gen4's critic, the start value's own predecessor, scores 0.335
+  against it in play): gen4's critic +0.098 fixed / +0.073 ladder games / +0.023 rolling; cycle 2 +0.017 /
+  +0.001 / -0.024; the mixed value +0.001 / -0.003 / -0.020. CE on eval-style games (fixed, ladder) tracks play
+  at ~2 points of score per nat; CE on the generator's own games does not (it rates cycle 2 as far above the
+  start value as the start value is above gen4's critic). A 480-game play test (SE 0.023) can't resolve a
+  per-cycle gain of ~0.003 nats (~0.007 score); CE on ~60k eval positions (SE 0.001) can.
+- *So:* `--anchor-data logs/value_gate/data --anchor-share 0.5`, `--gate-data logs/value_gate/ladder_lr1_u0`
+  (the ladder's 3,802 games of u0 vs the panel, 60,832 positions), no early stopping; a restart with changed
+  gate settings forgets the old gate's failures. Play stays the ladder's job (rotation and the weekly check).
+- *Open:* the gate set is static (u0's ladder games); refreshing it with each promoted value's ladder games
+  is not built. The anchor is re-used every cycle (~1 pass per cycle): the fixed guard is what would catch
+  the value memorizing it.
+
 **Baselines (day 0):** the start system against the full panel (2v2 + 1v3, 480 games), the start value's
 CE on both held-out sets, style statistics of the start system's games.
 
@@ -207,7 +230,7 @@ noisy series never ends the run -- the lesson of the 100-300-update restarts.
 | P1 | **score vs each fixed league member**: the main system's seats' win share minus their fair share, and net-worth share, in league games | training games (logged per update, aggregated daily) | continuous | ~2-4k games per member per day (30% of ~3k games/h, PFSP over ~11 members): ~0.01 per member per day, ~0.004 pooled over the 5 fixed members | the fastest strength signal: the same fixed opponents every day, thousands of games (policy-gradient's `score_vs_sl` played this role). Training conditions (exploration in the first 120 decisions, members at the fast budget), so read it as a trend against its own past, not against eval numbers |
 | P2 | **score vs past main-line snapshots** in league games | training games | continuous | as P1 | with P1, the drift detector: rising against past selves while flat against fixed members is azl's non-transitive drift |
 | P3 | **fixed-set value CE** (the value gate's test collections, never trained on) for every promoted value | value trainer | every cycle (~12 h) | paired ~0.001 | the run's premise, plotted against log2(saved games): the gate measured -0.006 per doubling; the slope must stay negative |
-| P4 | **rolling-set CE gain** of each candidate value (newest ~3% of games) and the gap between rolling and fixed CE | value trainer | every cycle | paired ~0.001 | promotion; a widening gap (rolling improves, fixed doesn't) = the value fitting the newest self-play only |
+| P4 | **gate-set CE gain** of each candidate value (eval ladder games; before 2026-10-26 the rolling set: the newest ~3% of games), the rolling-set gain, and the gap between rolling and fixed CE | value trainer | every cycle | paired ~0.001 | promotion; a widening gap (rolling improves, fixed doesn't) = the value fitting the newest self-play only |
 | P5 | **daily ladder**: the current system vs two panel members in rotation, 2v2, 240 games, both directions | eval ladder | daily | ~0.032 per pairing, ~0.023 per day (two pairings), ~0.013 over 3 days (~20 Elo) | the eval-conditions check of P1, start-clustered |
 | P6 | **style statistics**: par share per corporation, first 3-train / D timing, withhold rate, bankruptcies, game length | saved games | daily | -- | drift guard |
 | P7 | **generation health**: games/h, decisions/s, evaluations/s, max-length share, skipped starts, reuse share | generator history | continuous | -- | throughput and stuck-game detection |
@@ -248,8 +271,8 @@ games, held-out prediction, eval matches).
 mean by >= 3 SE **and** P5's 3-day rolling below its best by >= 2 SE.
 
 **Value rules**
-- Promotion (every cycle): paired rolling-set CE better by >= 2 paired SE and fixed-set CE not worse by
-  > 2 paired SE; else keep the current value.
+- Promotion (every cycle): paired gate-set CE (eval ladder games) better by >= 2 paired SE and fixed-set CE
+  not worse by > 2 paired SE; else keep the current value. (Before 2026-10-26: the rolling set.)
 - Promotion fails 3 cycles in a row: 24-h cycles, twice the sample; 3 more failures: review the data mix.
 - Weekly value play check < 0.47 twice in a row: stop promoting, revert to the best value by ladder rating,
   review (a value that predicts better but plays worse).

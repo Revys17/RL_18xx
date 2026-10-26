@@ -293,6 +293,33 @@ def test_the_gate_promotes_rejects_and_flags_divergence():
     assert gate(_stats(-0.003, 0.0012), None, z=3.0)[0] is False
 
 
+def test_with_a_gate_set_the_gain_is_required_there_and_the_rolling_set_only_checked_for_divergence():
+    gate = vt.gate_decision
+    # The rolling set no longer decides: a rolling gain is not enough, a rolling loss within diverge_ce doesn't block.
+    promoted, _, reason = gate(_stats(-0.02, 0.005), _stats(0.0, 0.001), gate=_stats(-0.001, 0.001))
+    assert not promoted and "gate-set gain too small" in reason
+    assert gate(_stats(0.005, 0.005), _stats(0.0, 0.001), gate=_stats(-0.003, 0.001)) == (True, False, "promoted")
+    assert gate(None, _stats(0.0, 0.001), gate=_stats(-0.003, 0.001))[0]  # no rolling positions yet
+    promoted, _, reason = gate(_stats(0.0, 0.005), _stats(0.0025, 0.001), gate=_stats(-0.003, 0.001))
+    assert not promoted and "fixed set worse" in reason  # the fixed guard stays
+    promoted, diverged, reason = gate(_stats(0.011, 0.005), None, gate=_stats(-0.003, 0.001))
+    assert not promoted and diverged and "rolling CE" in reason
+    promoted, diverged, reason = gate(_stats(0.0, 0.005), None, gate=_stats(0.011, 0.001))
+    assert not promoted and diverged and "gate CE" in reason
+    assert gate(_stats(-0.003, 0.001), None, gate=_stats(0.0, 0.0, n=0)) == (False, False, "no gate-set positions")
+
+
+def test_gate_sets_from_several_directories_keep_their_games_apart(fixed_dir):
+    one = vt.load_fixed(fixed_dir)
+    both = vt.load_sets([fixed_dir, fixed_dir])
+    assert len(both["win"]) == 2 * len(one["win"])
+    games = len(np.unique(one["game"]))
+    assert len(np.unique(both["game"])) == 2 * games
+    s = vt.paired_stats(np.ones(len(both["win"])), np.zeros(len(both["win"])), both["game"])
+    assert s["games"] == 2 * games
+    assert vt.load_sets([]) is None
+
+
 def test_failures_escalate_the_schedule_and_then_ask_for_a_review():
     cfg = vt.ValueTrainerConfig(run_dir="x", cycle_hours=12, cycle_games=40_000, sample_scale=1.0)
     schedule = [vt.escalation(cfg, f) for f in range(8)]
@@ -416,6 +443,49 @@ def test_failures_count_up_and_double_the_next_sample(tmp_path, generated, init_
     assert [x["cycle_hours"] for x in lines] == [12.0, 24.0, 24.0, 24.0, 24.0]
     assert [x["review"] for x in lines] == [False, False, False, True, True]
     assert "review the data mix" in lines[-1]["reason"] and all(x["version"] == 0 for x in lines)
+
+
+def test_a_cycle_with_an_anchor_and_a_gate_set(tmp_path, generated, init_checkpoint, fixed_dir):
+    # Gate set = the fixture's test games, anchor = its train games. patience 1 would stop a rolling-gated cycle
+    # at its first evaluation without a gain; with a gate set there is no early stopping.
+    cfg = _trainer_config(tmp_path, generated, init_checkpoint, fixed_dir, gate_data=[str(fixed_dir)],
+                          anchor_data=str(fixed_dir), anchor_share=0.5, patience=1, max_steps=0, epochs=1.0,
+                          diverge_ce=10.0)  # (a tiny net at lr 1e-3: noise, not a test)
+    trainer = vt.ValueTrainer(cfg)
+    gate_set = vt.load_fixed(fixed_dir, "test")
+    anchor = vt.load_fixed(fixed_dir, "train")
+    assert len(trainer.gate["win"]) == len(gate_set["win"])
+    line = trainer.run_cycle()
+    assert line["gate_n"] == len(gate_set["win"]) and line["gate_games"] == len(np.unique(gate_set["game"]))
+    assert line["gate_diff"] is not None and np.isclose(line["gate_diff"], line["gate_ce"] - line["gate_ce_current"])
+    # Half of each batch from the anchor (4 + 4 at batch 8), the passes counting the stream's positions only.
+    assert line["steps"] == -(-line["positions_trained"] // 4)
+    assert abs(line["anchor_positions"] - line["positions_trained"]) <= line["steps"]
+    assert np.isclose(line["anchor_passes"], line["anchor_positions"] / len(anchor["win"]), atol=1e-4)
+    assert line["epochs"] == 1.0
+    # No early stopping: the candidate is the last state; the gate set was tracked through training.
+    assert line["best_step"] == line["steps"] > cfg.eval_every
+    assert [s for s, _ in line["gate_history"]][0] == 0 and line["gate_history"][-1][0] == line["steps"]
+    assert np.isclose(line["gate_history"][0][1], line["gate_ce_current"])
+    assert np.isclose(line["gate_history"][-1][1], line["gate_ce"])
+    assert ("gate-set" in line["reason"]) or line["promoted"]
+
+
+def test_changed_gate_settings_forget_earlier_failures(tmp_path, generated, init_checkpoint, fixed_dir, monkeypatch):
+    cfg = _trainer_config(tmp_path, generated, init_checkpoint, max_steps=4, escalate_after=2)
+    trainer = vt.ValueTrainer(cfg)
+    monkeypatch.setattr(vt, "gate_decision", lambda *a, **k: (False, False, "rejected"))
+    for _ in range(3):
+        trainer.run_cycle()
+    assert vt.ValueTrainer(cfg).state["consecutive_failures"] == 3  # the same settings: kept
+    cfg.lr = 2e-3
+    assert vt.ValueTrainer(cfg).state["consecutive_failures"] == 3  # another setting: kept
+    cfg.gate_data = [str(fixed_dir)]
+    again = vt.ValueTrainer(cfg)
+    assert again.state["consecutive_failures"] == 0 and not again.state.get("review")
+    state = json.loads((tmp_path / "run" / "state.json").read_text())
+    assert state["consecutive_failures"] == 0 and state["cycle_hours"] == cfg.cycle_hours and state["cycle"] == 3
+    assert vt.ValueTrainer(cfg).state["consecutive_failures"] == 0
 
 
 def test_an_interrupted_cycle_is_redone_after_a_restart(tmp_path, generated, init_checkpoint, monkeypatch):

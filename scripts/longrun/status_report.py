@@ -600,7 +600,9 @@ class Report:
             gaps = [c["fixed_ce"] - c["rolling_ce"] for c in cycles
                     if c.get("fixed_ce") is not None and c.get("rolling_ce") is not None]
             detail = (f"cycle {last.get('cycle')}: candidate {last.get('candidate')}, promoted {last.get('promoted')}, "
-                      f"fixed diff {fmt(last.get('fixed_diff'), last.get('fixed_diff_se'), 4, True)}, "
+                      + (f"gate-set diff {fmt(last['gate_diff'], last.get('gate_diff_se'), 4, True)}, "
+                         if last.get("gate_diff") is not None else "")
+                      + f"fixed diff {fmt(last.get('fixed_diff'), last.get('fixed_diff_se'), 4, True)}, "
                       f"fixed-minus-rolling gap {fmt(gaps[-1], digits=4) if gaps else 'n/a'}, reason "
                       f"{last.get('reason') or '-'}")
             if len(gaps) >= 4 and all(gaps[-i] > gaps[-i - 1] for i in range(1, 4)):
