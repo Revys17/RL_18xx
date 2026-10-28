@@ -142,14 +142,23 @@ def run(args) -> dict:
         "rows": 0,
         "mismatches": [],
     }
-    games = []
+    games, total = [], 0  # a uniform sample (reservoir) of detached games: a day's shards don't fit in memory
     for path in shards:
         try:
-            games += [(path.name, g) for g in read_shard(path)]
+            shard = read_shard(path)
         except Exception as e:  # noqa: BLE001 -- an unreadable complete shard is a mismatch
             record["mismatches"].append({"shard": path.name, "error": f"unreadable: {e!r}"})
-    record["games_in_window"] = len(games)
-    for name, game in rng.sample(games, min(args.games, len(games))):
+            continue
+        for game in shard:
+            total += 1
+            if len(games) < args.games:
+                games.append((path.name, game.detached()))
+            else:
+                j = rng.randrange(total)
+                if j < args.games:
+                    games[j] = (path.name, game.detached())
+    record["games_in_window"] = total
+    for name, game in games:
         rows, problem = check_game(game)
         record["games"] += 1
         record["rows"] += rows

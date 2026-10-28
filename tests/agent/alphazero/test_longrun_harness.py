@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ case "$*" in *snapshot_check.py*) echo 10; exit 0 ;; esac
 echo "$@" >> "$STUB_LOG"
 [ -n "$STUB_OUT" ] && echo "$STUB_OUT"
 case "$*" in *"$STUB_FAIL"*) [ -n "$STUB_FAIL" ] && exit 3 ;; esac
+case "$*" in *"$STUB_HANG"*) [ -n "$STUB_HANG" ] && sleep 30 ;; esac
 exit ${STUB_RC:-0}
 """
 
@@ -190,6 +192,16 @@ def test_daily_runs_the_jobs_in_order(deployment, tmp_path):
     assert out.returncode == 1
     steps = json.loads((work / "longrun" / "lr1-daily" / "daily_steps.json").read_text())
     assert steps["steps"]["integrity"] == 3 and len(log.read_text().splitlines()) == 4
+    # A stuck job is stopped after STEP_TIMEOUT (exit 124); the jobs after it and the report still run.
+    log.unlink()
+    started = time.time()
+    out = subprocess.run(["bash", str(d / "scripts" / "longrun" / "daily.sh")],
+                         env=env(**settings, STUB_HANG="style_stats.py", STEP_TIMEOUT=1), capture_output=True, text=True)
+    assert out.returncode == 1 and time.time() - started < 20
+    steps = json.loads((work / "longrun" / "lr1-daily" / "daily_steps.json").read_text())
+    assert steps["steps"] == {"retention": 0, "style_stats": 124, "integrity": 0}
+    assert len(log.read_text().splitlines()) == 4
+    assert "style_stats: stopped after 1 s" in (work / "longrun" / "lr1-daily" / "daily.log").read_text()
     # Without SAVE_DATA / RETENTION_CONFIG only the report runs.
     log.unlink()
     out = subprocess.run(["bash", str(d / "scripts" / "longrun" / "daily.sh")],

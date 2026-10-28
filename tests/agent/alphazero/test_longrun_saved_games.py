@@ -11,6 +11,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 engine_rs = pytest.importorskip("engine_rs")
@@ -101,6 +102,21 @@ def test_style_stats_on_saved_games(saved, tmp_path):
     assert again["compare"]["withhold_rate"]["change"] == pytest.approx(0.0)
     assert again["drift"]["withhold"]["flag"] is False and again["drift"]["par_share"]["flag"] is False
     assert len(ST.read_jsonl(tmp_path / "style.jsonl")) == 2
+    # A sample smaller than the window: drawn while the shards stream past, the window still counted whole.
+    sampled = ST.run(_args(data, None, max_games=3))
+    assert sampled["games"] == 3 and sampled["games_in_window"] == len(packed)
+    uids = [g.uid for f in sd.shard_paths(data) for g in sd.read_shard(f)]
+    for seed in range(5):
+        summaries, _, total, bad = ST.collect(data, 0, time.time() + 1, max_games=3, seed=seed)
+        assert total == len(packed) and not bad and len({s["uid"] for s in summaries}) == 3
+        assert {s["uid"] for s in summaries} <= set(uids)
+    # What the sample keeps: detached games, equal to the shard's and sharing none of its memory.
+    game = sd.read_shard(sd.shard_paths(data)[0])[0]
+    copy = game.detached()
+    assert copy.uid == game.uid and copy.actions == game.actions
+    for name, column in game.columns.items():
+        assert copy.columns[name].dtype == column.dtype and np.array_equal(copy.columns[name], column)
+        assert not np.shares_memory(copy.columns[name], column)
     # The window: shards written before it are left out.
     old = time.time() - 3 * 86400
     for f in sd.shard_paths(data)[:1]:
@@ -185,7 +201,7 @@ def test_integrity_check(saved, tmp_path, monkeypatch):
     monkeypatch.setenv("ALERT_COMMAND", "")
     assert _integrity(data, tmp_path) == 0
     first = json.loads((tmp_path / "integrity.jsonl").read_text().splitlines()[-1])
-    assert first["ok"] and first["games"] == 4 and first["rows"] > 0
+    assert first["ok"] and first["games"] == 4 and first["rows"] > 0 and first["games_in_window"] == len(packed)
     assert first["checksums_listed"] == len(sd.shard_paths(data))
     assert _integrity(data, tmp_path) == 0  # every shard listed now: re-hashed, unchanged
     assert json.loads((tmp_path / "integrity.jsonl").read_text().splitlines()[-1])["checksums_verified"] > 0

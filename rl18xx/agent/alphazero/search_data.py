@@ -295,6 +295,12 @@ class SavedGame:
         ends = np.cumsum(self.columns["row_legal_count"])
         return [slice(int(e - n), int(e)) for e, n in zip(ends, self.columns["row_legal_count"])]
 
+    def detached(self) -> "SavedGame":
+        """A copy whose columns own their memory. A shard's games are views of its arrays, so keeping one game
+        keeps the whole shard (~90 MB) alive: keep detached copies when sampling a few games from many shards."""
+        columns = {name: np.array(c) for name, c in self.columns.items()}
+        return SavedGame(self.meta, self.config, self.actions_json, columns, self.commit)
+
     def packed(self) -> dict:
         """The game as :func:`pack_game` packed it (to write it into another shard)."""
         return {"meta": dict(self.meta), "actions": self.actions_json, "columns": dict(self.columns)}

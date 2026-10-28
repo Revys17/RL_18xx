@@ -305,19 +305,28 @@ def window_shards(data_dir, since, until):
 
 
 def collect(data_dir, since, until, max_games=5000, seed=0):
-    """(summaries, shards read, games in the window, unreadable shards)."""
+    """(summaries, shards read, games in the window, unreadable shards). The shards are streamed into a uniform
+    sample (reservoir) of detached games: a day's games don't fit in memory (~90 MB a shard of 256 games, ~400
+    shards a day), and a game still tied to its shard keeps all of it."""
     from rl18xx.agent.alphazero.search_data import read_shard
 
     shards = window_shards(data_dir, since, until)
-    games, bad = [], []
+    rng = random.Random(seed)
+    games, bad, total = [], [], 0
     for path in shards:
         try:
-            games += read_shard(path)
+            shard = read_shard(path)
         except Exception as e:  # noqa: BLE001 -- one bad shard must not hide the rest (integrity_check flags it)
             bad.append(f"{path.name}: {e!r}")
-    total = len(games)
-    if max_games and total > max_games:
-        games = random.Random(seed).sample(games, max_games)
+            continue
+        for game in shard:
+            total += 1
+            if not max_games or len(games) < max_games:
+                games.append(game.detached())
+            else:
+                j = rng.randrange(total)
+                if j < max_games:
+                    games[j] = game.detached()
     summaries, failed = [], 0
     for game in games:
         try:

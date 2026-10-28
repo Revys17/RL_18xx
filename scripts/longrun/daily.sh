@@ -8,8 +8,10 @@
 # (GEN_RUN_DIR, VALUE_RUN_DIR, LADDER_PANEL, WATCH_DIRS, REPORT_LOG, USAGE_LOG, USAGE_PATHS, WORKTREES_DIR, ...;
 # scripts/longrun/status_report.py). A job whose setting is empty is skipped; extra arguments per job:
 # RETENTION_ARGS, STYLE_ARGS, INTEGRITY_ARGS, REPORT_ARGS. Each job's output goes to $STATE_DIR/daily.log; their
-# exit statuses to $STATE_DIR/daily_steps.json, which the status report (last) reads. Exits non-zero if a job
-# failed, so systemd marks the run failed (an integrity mismatch exits 1).
+# exit statuses to $STATE_DIR/daily_steps.json, which the status report (last) reads. Each job gets at most
+# STEP_TIMEOUT seconds (default 2700; exit 124 when it is stopped), so one stuck job can't keep the status report
+# from running inside the unit's 3-h limit. Exits non-zero if a job failed, so systemd marks the run failed (an
+# integrity mismatch exits 1).
 set -uo pipefail
 
 INSTANCE=${LONGRUN_INSTANCE:-daily}
@@ -29,8 +31,9 @@ step() {  # step <name> <command...>
     local name=$1; shift
     order+=("$name")
     echo "$(date -Iseconds) daily[$INSTANCE] $name: $*" >> "$LOG"
-    "$@" >> "$LOG" 2>&1
+    timeout --kill-after=60 "${STEP_TIMEOUT:-2700}" "$@" >> "$LOG" 2>&1
     rc[$name]=$?
+    [ "${rc[$name]}" -eq 124 ] && echo "$(date -Iseconds) daily[$INSTANCE] $name: stopped after ${STEP_TIMEOUT:-2700} s" >> "$LOG"
     echo "$(date -Iseconds) daily[$INSTANCE] $name: exit ${rc[$name]}" >> "$LOG"
 }
 L=$DEPLOY/scripts/longrun
