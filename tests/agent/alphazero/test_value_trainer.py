@@ -486,6 +486,48 @@ def test_changed_gate_settings_forget_earlier_failures(tmp_path, generated, init
     state = json.loads((tmp_path / "run" / "state.json").read_text())
     assert state["consecutive_failures"] == 0 and state["cycle_hours"] == cfg.cycle_hours and state["cycle"] == 3
     assert vt.ValueTrainer(cfg).state["consecutive_failures"] == 0
+    for _ in range(2):
+        again.run_cycle()
+    assert vt.ValueTrainer(cfg).state["consecutive_failures"] == 2
+    cfg.ema_decay = 0.999  # candidates made another way: their failures start afresh too
+    assert vt.ValueTrainer(cfg).state["consecutive_failures"] == 0
+
+
+def test_with_a_weight_average_the_candidate_and_the_evaluations_are_the_average(
+    tmp_path, generated, init_checkpoint, fixed_dir, monkeypatch
+):
+    import torch
+
+    from rl18xx.agent.alphazero.policy_gradient import _load
+
+    decay = 0.7
+    cfg = _trainer_config(tmp_path, generated, init_checkpoint, fixed_dir, gate_data=[str(fixed_dir)], max_steps=12,
+                          ema_decay=decay, diverge_ce=10.0)  # (a tiny net at lr 1e-3: noise, not a test)
+    trainer = vt.ValueTrainer(cfg)
+    expected = {}  # the average, computed here from the raw weights after every step
+    step = vt.train_step
+
+    def recording_step(model, *args, **kwargs):
+        if not expected:
+            expected.update({k: p.detach().double().clone() for k, p in model.named_parameters()})
+        out = step(model, *args, **kwargs)
+        for k, p in model.named_parameters():
+            expected[k] = decay * expected[k] + (1 - decay) * p.detach().double()
+        recording_step.raw = {k: p.detach().clone() for k, p in model.named_parameters()}
+        return out
+
+    monkeypatch.setattr(vt, "train_step", recording_step)
+    line = trainer.run_cycle()
+    assert line["ema_decay"] == decay and line["best_step"] == line["steps"] > cfg.eval_every
+    candidate = _load(tmp_path / "run" / line["candidate"])
+    params = dict(candidate.named_parameters())
+    assert set(params) == set(expected)
+    for k, p in params.items():
+        assert torch.allclose(p.detach().double(), expected[k], atol=1e-6), k
+    assert any(not torch.allclose(params[k].detach(), recording_step.raw[k]) for k in params)  # not the raw weights
+    # The gate set was tracked on the average: its last point is the candidate's gate CE.
+    assert np.isclose(line["gate_history"][-1][1], line["gate_ce"])
+    assert np.isclose(line["gate_history"][0][1], line["gate_ce_current"])
 
 
 def test_an_interrupted_cycle_is_redone_after_a_restart(tmp_path, generated, init_checkpoint, monkeypatch):

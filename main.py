@@ -1033,6 +1033,9 @@ def build_parser():
     p.add_argument("--score-weight", type=float, default=V.score_weight,
                    help=f"Weight of the placement-points MSE (default: {V.score_weight})")
     p.add_argument("--epochs", type=float, default=V.epochs, help=f"Passes over a cycle's sample (default: {V.epochs})")
+    p.add_argument("--ema-decay", type=float, default=V.ema_decay,
+                   help="> 0: evaluations, early stopping and the candidate use an exponential moving average of "
+                   f"the weights with this decay per step, e.g. 0.9998 (default: {V.ema_decay} = the raw weights)")
     p.add_argument("--eval-every", type=int, default=V.eval_every,
                    help=f"Steps between rolling-set evaluations (default: {V.eval_every})")
     p.add_argument("--patience", type=int, default=V.patience,

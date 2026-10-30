@@ -36,6 +36,12 @@ A cycle
   held-out set every ``eval_every`` steps (the best state is kept, the start included;
   ``patience`` evaluations without a gain > ``min_improvement`` end it) -- except with a gate
   set (below): then the candidate is the state at the end of the passes.
+- **Weight average** (``ema_decay`` > 0, off by default): an exponential moving average of the
+  weights, updated after every step, is what every evaluation reads, what early stopping keeps
+  and what becomes the candidate. At lr 3e-5 the raw weights' eval CE jumps ~0.0008 nats from one
+  evaluation to the next, as much as the gain the gate asks for; in an offline lr1 cycle
+  (2026-10-29) the EMA at 0.9998 (~5k steps) beat the raw weights at every evaluation, by ~0.0012
+  on both the gate and the fixed set.
 - **Anchor** (``anchor_data``, off by default): the train split of a value-gate data directory
   (the eval games the start value learned from), ``anchor_share`` of every batch drawn from it
   uniformly (a new order each cycle), the rest from the stream; the passes still count the
@@ -58,7 +64,8 @@ A cycle
   ``diverge_ce``, or training ending above its start on the rolling set by that much; never
   promoted. ``escalate_after`` (3) failures in a row double the cycle interval (hours and
   games) and the sample; twice that many add "review the data mix" to the reason. A promotion
-  resets both and the count, and so does a restart with other gate or anchor settings.
+  resets both and the count, and so does a restart with other gate, anchor or weight-average
+  settings.
 
 Run directory (other components read these: keep the names)
 -----------------------------------------------------------
@@ -117,8 +124,9 @@ CYCLE_FIELDS = (
     "rolling_diff_se", "promoted", "version", "diverged", "reason", "consecutive_failures", "cycle_hours",
     "sample_scale", "encode_seconds", "train_seconds",
 )  # fmt: skip
-# A restart that changes these starts the failure count afresh: failures under another gate say nothing about this one.
-GATE_SETTINGS = ("gate_data", "anchor_data", "anchor_share")
+# A restart that changes these starts the failure count afresh: failures under another gate (or of candidates made
+# another way) say nothing about this one.
+GATE_SETTINGS = ("gate_data", "anchor_data", "anchor_share", "ema_decay")
 
 
 @dataclass
@@ -151,6 +159,7 @@ class ValueTrainerConfig:
     batch_size: int = 256
     score_weight: float = 1.0
     epochs: float = 1.0
+    ema_decay: float = 0.0  # > 0: evaluations, early stopping and the candidate use an EMA of the weights
     eval_every: int = 2_000
     patience: int = 4
     min_improvement: float = 1e-4
@@ -710,6 +719,36 @@ def train_step(model, opt, batch: dict, device, score_weight: float) -> tuple:
     return float(ce.detach()), float(mse.detach())
 
 
+class WeightAverage:
+    """An exponential moving average of ``model``'s weights (module docstring, "Weight average"):
+    :meth:`update` after every optimizer step; :meth:`averaged` is a network holding the average."""
+
+    def __init__(self, model, decay: float):
+        import copy
+
+        self.decay = float(decay)
+        self.source = model
+        self.model = copy.deepcopy(model)
+        self.model.eval()
+        for p in self.model.parameters():
+            p.requires_grad_(False)
+        self._average, self._live = list(self.model.parameters()), list(model.parameters())
+
+    def update(self) -> None:
+        import torch
+
+        with torch.no_grad():
+            torch._foreach_lerp_(self._average, self._live, 1.0 - self.decay)
+
+    def averaged(self):
+        import torch
+
+        with torch.no_grad():  # buffers are not trained: the source's, as they are
+            for mine, theirs in zip(self.model.buffers(), self.source.buffers()):
+                mine.copy_(theirs)
+        return self.model
+
+
 def load_fixed(data_dir, split: str = "test") -> Optional[dict]:
     """The value gate's positions of the ``split`` games (scripts/value_gate.py ``build``):
     ``POSITION_KEYS`` (already canonical; nodes float16) and ``game``; only those arrays read."""
@@ -1170,6 +1209,7 @@ class ValueTrainer:
             "gate_diff": gs["diff"], "gate_diff_se": gs["se"], "gate_history": trained["gate_history"],
             "anchor_positions": trained["anchor_positions"],
             "anchor_passes": round(trained["anchor_positions"] / anchor_n, 4) if anchor_n else 0.0,
+            "ema_decay": cfg.ema_decay,
         }  # fmt: skip
         append_jsonl(self.run_dir / "cycles.jsonl", record)
         self.state.update(cycle=cycle, data_cut=data_cut, last_cycle_started=started, consecutive_failures=failures)
@@ -1185,12 +1225,18 @@ class ValueTrainer:
                anchor: Optional[dict] = None) -> dict:
         """Stream the sample's positions through the shuffle buffer into AdamW steps (each batch
         ``anchor_share`` from ``anchor`` when given), early-stopped on the rolling set -- or, with
-        a gate set, not at all; returns the chosen state with its per-position rolling CE."""
+        a gate set, not at all; returns the chosen state with its per-position rolling CE. With
+        ``ema_decay``, the states evaluated and chosen are the weight average's."""
         import torch
 
         cfg = self.cfg
         device = self.device()
         opt = torch.optim.AdamW([{"params": list(model.parameters()), "lr": cfg.lr}], weight_decay=0.0)
+        average = WeightAverage(model, cfg.ema_decay) if cfg.ema_decay > 0 else None
+
+        def judged():
+            """The network evaluated, early-stopped on and returned."""
+            return model if average is None else average.averaged()
         has_roll = roll is not None and len(roll["win"]) > 0
         gate_mode = self.gate is not None
         select = None
@@ -1216,19 +1262,19 @@ class ValueTrainer:
 
         def evaluate() -> tuple:
             t = time.time()
-            ce = per_position_ce(model, roll, device, cfg.eval_batch_size)
+            ce = per_position_ce(judged(), roll, device, cfg.eval_batch_size)
             timers["train"] += time.time() - t
             return ce, float(ce.mean() if select is None else ce[select].mean())
 
         def gate_point(step: int) -> float:
             t = time.time()
-            ce = float(self._gate_ce(model).mean())
+            ce = float(self._gate_ce(judged()).mean())
             timers["train"] += time.time() - t
             gate_history.append([step, ce])
             return ce
 
         def snapshot() -> dict:
-            return {k: v.detach().clone() for k, v in model.state_dict().items()}
+            return {k: v.detach().clone() for k, v in judged().state_dict().items()}
 
         start_ce, start_select = evaluate() if has_roll else (None, None)
         best = {"step": 0, "select": start_select, "ce": start_ce, "state": snapshot()}
@@ -1269,6 +1315,8 @@ class ValueTrainer:
                 batch = {k: np.concatenate([batch[k], anchor[k][rows]]) for k in POSITION_KEYS}
                 anchor_draw["positions"] += len(rows)
             ce, mse = train_step(model, opt, batch, device, cfg.score_weight)
+            if average is not None:
+                average.update()
             timers["train"] += time.time() - t
             step += 1
             if (has_roll or gate_mode) and step % cfg.eval_every == 0:

@@ -208,6 +208,26 @@ the value unit and the daily jobs; the generator and ladder kept `longrun-2026-1
   is not built. The anchor is re-used every cycle (~1 pass per cycle): the fixed guard is what would catch
   the value memorizing it.
 
+**Changed at day 6 (2026-10-30):** the value trainer's candidate is a moving average of its weights
+(`--ema-decay 0.9998`, deployment `longrun-2026-11d`, the value unit only).
+- *Why:* after v3 (cycle 9) the cycles kept improving the fixed set (-0.0024, -0.0024, -0.0031 at 3-4 SE) but
+  not the gate set (-0.0002, -0.0001, +0.0002), and P3's slope was -0.0014 per doubling against the value
+  gate's -0.006. An offline cycle from v3 over all 349k games (the unit's own trainer, 4 passes, eval every
+  4k steps; docs/long_run_log.md 2026-10-29):
+  - *More passes don't help:* the gate set gets worse past ~1.5 passes (raw weights: +0.0015 at 4 passes),
+    and so does the fixed set, while the generator's own held-out games keep improving. Keep 1 pass.
+  - *The raw end state is noise against the gate:* the raw weights' gate CE jumps ~0.0008 between
+    evaluations (their mean over the first pass is about -0.0002, like the run's cycles), while an EMA
+    at 0.9998 (~5k steps) stayed at -0.0011 to -0.0016 through the first pass (-0.0016 +- 0.0005 at its
+    end, 3.2 SE) and beat the raw weights at every evaluation, by ~0.0012 on the gate and the fixed set.
+- *So:* the EMA is what every evaluation reads and what becomes the candidate; the gate is unchanged. A
+  change of `ema_decay` restarts the failure count, as a gate change does (a raw candidate's failures say
+  nothing about an averaged one's).
+- *Open:* the anchor is no longer ~1 pass per cycle: half of every batch over a stream that grows with the
+  saved games came to ~9 passes over its 592k positions in cycle 10. The fixed set (held-out games of the
+  same kind) is still the guard against memorizing it; if fixed-set gains turn into losses, cap the anchor's
+  passes per cycle.
+
 **Baselines (day 0):** the start system against the full panel (2v2 + 1v3, 480 games), the start value's
 CE on both held-out sets, style statistics of the start system's games.
 
