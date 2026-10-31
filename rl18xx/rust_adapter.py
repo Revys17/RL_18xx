@@ -847,6 +847,12 @@ class _StepProxy:
         corp_sym = entity.sym if hasattr(entity, 'sym') else str(entity)
         return self._game.president_may_contribute(corp_sym)
 
+    def room(self, entity, shell=None):
+        """Whether the corporation has room for another train (Ruby ``Step::Train#room?``)."""
+        corp_sym = entity.sym if hasattr(entity, 'sym') else str(entity)
+        corp = next((c for c in self._game.corporations if c.sym == corp_sym), None)
+        return corp is not None and len(corp.trains) < int(self._game.phase._train_limit)
+
     def buyable_trains(self, entity):
         """Returns list of buyable trains for a corporation."""
         corp_sym = entity.sym if hasattr(entity, 'sym') else str(entity)

@@ -395,6 +395,9 @@ class ActionHelper(metaclass=Singleton):
             return range(min_cash_spend, max_cash_spend + 1)
 
     def get_buy_train_actions(self, game, limited_price_options=False):
+        # No room for another train: only a trade-in (as FactoredActionHelper._buy_train_choices).
+        if not game.round.active_step().room(game.current_entity):
+            return self.get_exchange_train_actions(game)
         buyable_trains = game.round.active_step().buyable_trains(game.current_entity)
         LOGGER.debug(f"Buyable trains: {[train for train in buyable_trains]}")
         unique_trains = set()

@@ -1430,7 +1430,12 @@ impl BaseGame {
         let discarded_names: std::collections::HashSet<String> =
             self.depot.discarded.iter().map(|t| t.name.clone()).collect();
 
-        let mut trains = self.buyable_trains_for_factored(&corp_sym);
+        // A corporation with no room for another train buys only by trading one in (1830's
+        // discounted D, below): the site's buy view offers depot and other corporations' trains
+        // only with room (assets/app/view/game/buy_trains.rb), though Ruby's process_buy_train
+        // doesn't check -- a bot bought another corporation's 5 at the limit, then discarded a 4.
+        let room = self.corporations[ci].trains.len() < self.corp_train_limit(ci);
+        let mut trains = if room { self.buyable_trains_for_factored(&corp_sym) } else { Vec::new() };
         // Phase availability filter for depot (upcoming) trains, mirroring
         // Python's `Depot.depot_trains` exactly: the visible upcoming trains are
         //   [upcoming[0]] + [t for t in upcoming if phase.available(t.available_on)]

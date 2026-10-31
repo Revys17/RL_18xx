@@ -164,7 +164,7 @@ def _sweep(seed, max_steps=3000):
     return failures, gaps
 
 
-SWEEP_SEEDS = [35, 49]  # 49 exercises every gap below on its own (~17s); 35 is a short second trajectory
+SWEEP_SEEDS = [35, 2]  # 2 exercises every gap below on its own; 35 is a short second trajectory
 
 
 @pytest.mark.parametrize("seed", SWEEP_SEEDS)
@@ -181,7 +181,9 @@ def test_sweep_covers_known_gaps():
         "exchange_before_par",
         "emergency_sell",
         "d_trade_in_non_4_donor",
-        "discard_slot_trade_in",
+        # Not "discard_slot_trade_in" (a D traded for from the discard pool): a D reached the pool
+        # only by a corporation buying one at its train limit and discarding it, which the legal
+        # moves no longer offer (tests/test_buy_train_at_limit.py).
         "teleport_pass",
         "token_on_duplicate_tile",
     }

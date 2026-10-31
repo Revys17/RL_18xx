@@ -459,6 +459,12 @@ class FactoredActionHelper:
     def _buy_train_choices(self, game) -> List[LegalAction]:
         step = game.round.active_step()
         entity = game.current_entity
+        # A corporation with no room for another train buys only by trading one in (1830's
+        # discounted D): the site's buy view offers depot and other corporations' trains only
+        # with room (assets/app/view/game/buy_trains.rb), though Ruby's process_buy_train doesn't
+        # check -- a bot bought another corporation's 5 at the limit and then discarded a 4.
+        if not step.room(entity):
+            return self._exchange_train_choices(game)
         entity_desc = _entity_descriptor(entity)
         buyable_trains = step.buyable_trains(entity)
         unique = _unique_trains(buyable_trains)
