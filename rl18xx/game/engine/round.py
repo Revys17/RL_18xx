@@ -613,6 +613,8 @@ class Train(EmergencyMoney):
         )
 
         self.game.buy_train(entity, train, price)
+        if source in self.game.corporations and not source.trains:
+            self.game.no_buyback = [*self.game.no_buyback, (source.id, entity.id, False)]
         self.game.phase.buying_train(entity, train, source)
         if not self.can_buy_train(entity) and self.pass_if_cannot_buy_train(entity):
             self.pass_()
@@ -5688,6 +5690,12 @@ class Operating(BaseRound):
         self.current_operator_acted = False
         for train in entity.trains:
             train.operated = False
+        # no_buyback: a block armed at this corporation's previous turn start has had its turn.
+        self.game.no_buyback = [
+            (blocked, by, armed or blocked == entity.id)
+            for blocked, by, armed in self.game.no_buyback
+            if not (armed and blocked == entity.id)
+        ]
         if not self.finished():
             self.log.append(f"{self.game.acting_for_entity(entity).name} operates {entity.name}")
         self.game.place_home_token(entity)

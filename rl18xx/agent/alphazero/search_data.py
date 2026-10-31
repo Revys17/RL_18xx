@@ -145,6 +145,7 @@ def pack_game(g, worth, win_share, fractions, score, aux_seat, aux_global, value
         "start_kind": g.start.split(":")[0] if g.start else None,
         "start_actions": int(g.start_actions),
         "auction_unlock": g.start == AUCTION_START,
+        "no_buyback_rule": bool(g.game._game.no_buyback_rule),
         "num_players": players,
         "termination": g.termination,
         "decisions": int(g.decisions),
@@ -389,7 +390,9 @@ def replay(game: SavedGame, positions) -> Iterator:
     step) after the log's first ``positions[i]`` actions, replayed from a fresh game."""
     from rl18xx.agent.alphazero.start_positions import new_game
 
-    rs = new_game(int(game.meta["num_players"]), bool(game.meta["auction_unlock"]))._game
+    # Games saved before the rule against train shuffling were generated without it.
+    rule = bool(game.meta.get("no_buyback_rule", False))
+    rs = new_game(int(game.meta["num_players"]), bool(game.meta["auction_unlock"]), no_buyback_rule=rule)._game
     actions = game.actions
     done = 0
     for i, position in enumerate(positions):

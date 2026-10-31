@@ -209,6 +209,22 @@ class BaseGame:
     auction_unlock = False
     # Times the variant has discounted a private this game (diagnostic).
     auction_unlock_discounts = 0
+    # Self-play rule against train shuffling, off unless set (engine-rs BaseGame::no_buyback): a corporation whose
+    # last train another corporation bought may not, on its next turn, buy a train back from that buyer if the buyer
+    # would be left trainless. ``no_buyback``: (blocked seller, buyer, armed) syms, kept either way; armed when the
+    # seller's next turn starts, dropped when the turn after it starts. Read only by the legal-move helpers.
+    # Reassigned, never mutated (the default is shared).
+    no_buyback_rule = False
+    no_buyback = ()
+
+    def train_buyback_blocked(self, buyer, seller):
+        """Whether corporation ``buyer`` (a sym) may not buy a train from corporation ``seller`` now (``no_buyback``,
+        with the rule on)."""
+        return (
+            self.no_buyback_rule
+            and any(blocked == buyer and by == seller for blocked, by, _ in self.no_buyback)
+            and len(self.corporation_by_id(seller).trains) == 1
+        )
 
     @classmethod
     def load(

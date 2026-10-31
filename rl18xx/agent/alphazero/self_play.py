@@ -285,6 +285,7 @@ class MCTSPlayer(Agent):
         players = {i + 1: f"Player {i + 1}" for i in range(num_players)}
         game = RustGame(players)
         game.set_auction_unlock(bool(getattr(self.config, "auction_unlock", True)))
+        game.set_no_buyback_rule(True)  # the self-play rule against train shuffling
         return RustGameAdapter(game)
 
     def _sample_num_players(self) -> int:

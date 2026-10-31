@@ -257,6 +257,16 @@ pub struct BaseGame {
     /// reserve (Montreal L12) — consumed by `place_639_token` or by
     /// nationalization on that hex.
     pub(crate) national_reservations: Vec<String>,
+    /// Self-play rule against train shuffling (the project's, not Ruby's), off unless set
+    /// (`no_buyback_rule`; the generators' `start_positions.new_game` turns it on): a corporation whose last
+    /// train another corporation bought may not, on its next turn, buy a train back from that buyer if the
+    /// buyer would be left trainless -- two corporations of one president passing one train back and forth
+    /// at $1 never buy a train or go bankrupt. Entries are (blocked seller, buyer, armed), kept whether or
+    /// not the rule is on: armed when the seller's next turn starts, dropped when the turn after it starts.
+    /// Only the legal-move lists read them (1830's factored enumeration, Python's helpers);
+    /// `process_action` accepts the move either way, so recorded games replay.
+    pub(crate) no_buyback: Vec<(String, String, bool)>,
+    pub(crate) no_buyback_rule: bool,
     /// Self-play rule variant, off unless set: an all-pass waterfall round
     /// discounts the next private by $5 like the SV (taken free at $0) when
     /// nobody has bid on it. Under the real rules only the SV is discounted,
@@ -334,6 +344,13 @@ impl BaseGame {
         corp_sym: &str,
     ) -> Vec<(String, String, i32, String)> {
         self.buyable_trains_for(corp_sym)
+    }
+    /// Whether `buyer` may not buy a train from `seller` now (`no_buyback`, with the rule on): `seller`
+    /// bought `buyer`'s last train and would be left trainless.
+    pub(crate) fn train_buyback_blocked(&self, buyer: &str, seller: &str) -> bool {
+        self.no_buyback_rule
+            && self.no_buyback.iter().any(|(blocked, by, _)| blocked == buyer && by == seller)
+            && self.corp_idx.get(seller).is_some_and(|&i| self.corporations[i].trains.len() == 1)
     }
     pub(crate) fn president_may_contribute_pub(&mut self, corp_sym: &str) -> bool {
         self.president_may_contribute(corp_sym)
@@ -553,6 +570,8 @@ impl BaseGame {
             trainless_nationalization_pending: self.trainless_nationalization_pending,
             trainless_major: self.trainless_major.clone(),
             national_reservations: self.national_reservations.clone(),
+            no_buyback: self.no_buyback.clone(),
+            no_buyback_rule: self.no_buyback_rule,
             auction_unlock: self.auction_unlock,
             auction_unlock_discounts: self.auction_unlock_discounts,
             optional_rules: self.optional_rules.clone(),
@@ -2951,6 +2970,8 @@ impl BaseGame {
             events_fired: Vec::new(),
             trainless_nationalization_pending: false,
             trainless_major: Vec::new(),
+            no_buyback: Vec::new(),
+            no_buyback_rule: false,
             national_reservations: title
                 .national_setup()
                 .map(|ns| ns.reservations.iter().map(|s| s.to_string()).collect())
@@ -4456,6 +4477,30 @@ impl BaseGame {
     #[getter(auction_unlock_discounts)]
     fn get_auction_unlock_discounts(&self) -> u32 {
         self.auction_unlock_discounts
+    }
+
+    /// Turn the self-play rule against train shuffling on or off (the `no_buyback` field). Clones keep
+    /// the setting.
+    fn set_no_buyback_rule(&mut self, on: bool) {
+        self.no_buyback_rule = on;
+    }
+
+    #[getter(no_buyback_rule)]
+    fn get_no_buyback_rule(&self) -> bool {
+        self.no_buyback_rule
+    }
+
+    /// The rule against train shuffling (`no_buyback`): whether corporation `buyer` may not buy a train
+    /// from corporation `seller` now (always false with the rule off).
+    #[pyo3(name = "train_buyback_blocked")]
+    fn train_buyback_blocked_py(&self, buyer: &str, seller: &str) -> bool {
+        self.train_buyback_blocked(buyer, seller)
+    }
+
+    /// `no_buyback`'s entries: (blocked seller, buyer, armed).
+    #[getter(no_buyback)]
+    fn get_no_buyback(&self) -> Vec<(String, String, bool)> {
+        self.no_buyback.clone()
     }
 
     /// Get all valid par prices for the stock market.

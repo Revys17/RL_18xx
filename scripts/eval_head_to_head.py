@@ -335,6 +335,7 @@ def _setup_game(game_idx: int, seat_names: tuple, settings: dict) -> tuple:
     else:
         rust_game = RustBaseGame({i + 1: f"Player {i + 1}" for i in range(NUM_PLAYERS)})
         rust_game.set_auction_unlock(True)
+        rust_game.set_no_buyback_rule(True)
         game = RustGameAdapter(rust_game)
 
     players = {}

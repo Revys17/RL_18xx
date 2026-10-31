@@ -29,7 +29,9 @@ class Arena:
     def get_fresh_game_state(self):
         # Rust engine: MCTSPlayer's encoder only supports RustGameAdapter.
         players = {1: "Player 1", 2: "Player 2", 3: "Player 3", 4: "Player 4"}
-        return RustGameAdapter(RustGame(players))
+        game = RustGame(players)
+        game.set_no_buyback_rule(True)  # the self-play rule against train shuffling
+        return RustGameAdapter(game)
 
     def play(self):
         game_state = self.get_fresh_game_state()

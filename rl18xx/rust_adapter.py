@@ -2482,6 +2482,14 @@ class RustGameAdapter:
         """Returns corporations wrapped with callable floated()."""
         return [_CorpProxy(c, self._game) for c in self._game.corporations]
 
+    def train_buyback_blocked(self, buyer, seller):
+        """The rule against train shuffling (Rust ``BaseGame::no_buyback``)."""
+        return self._game.train_buyback_blocked(buyer, seller)
+
+    @property
+    def no_buyback(self):
+        return tuple(self._game.no_buyback)
+
     def corporation_by_id(self, sym):
         if sym is None:
             return None

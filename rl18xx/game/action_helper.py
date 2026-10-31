@@ -447,6 +447,8 @@ class ActionHelper(metaclass=Singleton):
                     options.append((train, train.min_price()))
             else:
                 LOGGER.debug(f"Train {train.name} not from depot")
+                if game.train_buyback_blocked(game.current_entity.id, train.owner.id):
+                    continue  # no buying back the train just sold (BaseGame.no_buyback)
                 # Use the engine's spend_minmax for BOTH limited and full price
                 # enumeration so every offered price satisfies the legal window.
                 # The limited path previously used [1, cash], which in an

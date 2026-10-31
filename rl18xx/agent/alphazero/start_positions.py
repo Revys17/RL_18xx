@@ -62,12 +62,14 @@ class StartPosition:
     actions: tuple
 
 
-def new_game(num_players: int, auction_unlock: bool = False) -> RustGameAdapter:
-    """An empty Rust game with players "Player 1".."Player N" (self-play's naming)."""
+def new_game(num_players: int, auction_unlock: bool = False, no_buyback_rule: bool = True) -> RustGameAdapter:
+    """An empty Rust game with players "Player 1".."Player N" (self-play's naming), with the self-play rule
+    against train shuffling on (``BaseGame.no_buyback``) unless ``no_buyback_rule`` is False."""
     from engine_rs import BaseGame as RustGame
 
     game = RustGame({i + 1: f"Player {i + 1}" for i in range(num_players)})
     game.set_auction_unlock(auction_unlock)
+    game.set_no_buyback_rule(no_buyback_rule)
     return RustGameAdapter(game)
 
 

@@ -510,6 +510,7 @@ def _create_fresh_game(num_players: int = 4, auction_unlock: bool = False):
     players = {i + 1: f"Player {i + 1}" for i in range(num_players)}
     game = RustGame(players)
     game.set_auction_unlock(auction_unlock)
+    game.set_no_buyback_rule(True)  # the self-play rule against train shuffling
     return RustGameAdapter(game)
 
 
