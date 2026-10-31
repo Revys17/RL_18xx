@@ -259,10 +259,12 @@ pub struct BaseGame {
     pub(crate) national_reservations: Vec<String>,
     /// Self-play rule against train shuffling (the project's, not Ruby's), off unless set
     /// (`no_buyback_rule`; the generators' `start_positions.new_game` turns it on): a corporation whose last
-    /// train another corporation bought may not, on its next turn, buy a train back from that buyer if the
-    /// buyer would be left trainless -- two corporations of one president passing one train back and forth
-    /// at $1 never buy a train or go bankrupt. Entries are (blocked seller, buyer, armed), kept whether or
-    /// not the rule is on: armed when the seller's next turn starts, dropped when the turn after it starts.
+    /// train another corporation bought may not, on its next turn, buy a train from any corporation -- it
+    /// buys from the depot or goes bankrupt. Corporations of one president passing trains around at $1
+    /// never buy a train or go bankrupt; blocking only the buyback (or only another corporation's last
+    /// train) still lets three of them rotate one or two trains forever. Entries are (blocked seller,
+    /// buyer, armed), kept whether or not the rule is on: armed when the seller's next turn starts,
+    /// dropped when the turn after it starts.
     /// Only the legal-move lists read them (1830's factored enumeration, Python's helpers);
     /// `process_action` accepts the move either way, so recorded games replay.
     pub(crate) no_buyback: Vec<(String, String, bool)>,
@@ -345,12 +347,12 @@ impl BaseGame {
     ) -> Vec<(String, String, i32, String)> {
         self.buyable_trains_for(corp_sym)
     }
-    /// Whether `buyer` may not buy a train from `seller` now (`no_buyback`, with the rule on): `seller`
-    /// bought `buyer`'s last train and would be left trainless.
+    /// Whether `buyer` may not buy a train from `seller` now (`no_buyback`, with the rule on): `seller` is a
+    /// corporation and another corporation bought `buyer`'s last train before this turn of `buyer`'s.
     pub(crate) fn train_buyback_blocked(&self, buyer: &str, seller: &str) -> bool {
         self.no_buyback_rule
-            && self.no_buyback.iter().any(|(blocked, by, _)| blocked == buyer && by == seller)
-            && self.corp_idx.get(seller).is_some_and(|&i| self.corporations[i].trains.len() == 1)
+            && self.corp_idx.contains_key(seller)
+            && self.no_buyback.iter().any(|(blocked, _, _)| blocked == buyer)
     }
     pub(crate) fn president_may_contribute_pub(&mut self, corp_sym: &str) -> bool {
         self.president_may_contribute(corp_sym)

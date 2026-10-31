@@ -1,12 +1,14 @@
 """The rule against train shuffling (``BaseGame.no_buyback``, the project's, not Ruby's).
 
-A corporation whose last train another corporation bought may not, on its next turn, buy a train back
-from that buyer if the buyer would be left trainless. A self-play rule: off unless set
+A corporation whose last train another corporation bought may not, on its next turn, buy a train from
+any corporation: it buys from the depot or goes bankrupt. A self-play rule: off unless set
 (``set_no_buyback_rule``; ``start_positions.new_game`` sets it), so human games import and the advisor
 follows them under the real rules. Without it two corporations of one president pass
 one train back and forth at $1 and neither ever buys a train or goes bankrupt: 76% of lr1's generator
-games did (40,480 buybacks in 4,096 games). The fixture is the worst of them, 174 buybacks; the rule is
-on the legal-move lists only, so the game still replays as played.
+games did (40,480 buybacks in 4,096 games). Blocking only the buyback, or only another corporation's last
+train, still lets three corporations rotate trains forever (85% of 13,056 lr1 games had purchases only
+the strict rule refuses). The fixtures are lr1 games: 174 buybacks, and three corporations rotating one
+train 73 times. The rule is on the legal-move lists only, so the games still replay as played.
 """
 
 import json
@@ -27,12 +29,22 @@ from rl18xx.rust_adapter import RustGameAdapter  # noqa: E402
 
 from tests.test_factored_action_helper_rust_parity import _canonical_key  # noqa: E402
 
-FIXTURE = Path(__file__).parent / "fixtures" / "1830" / "train_shuffle_game.json"
+FIXTURES = Path(__file__).parent / "fixtures" / "1830"
 
 
 @pytest.fixture(scope="module")
 def shuffle_game():
-    return json.loads(FIXTURE.read_text())
+    return json.loads((FIXTURES / "train_shuffle_game.json").read_text())
+
+
+@pytest.fixture(scope="module")
+def rotation_game():
+    return json.loads((FIXTURES / "train_rotation_game.json").read_text())
+
+
+@pytest.fixture(scope="module", params=["shuffle_game", "rotation_game"])
+def any_game(request):
+    return request.getfixturevalue(request.param)
 
 
 def _players(data):
@@ -83,40 +95,57 @@ def _offers(choices, seller, price=None):
     )
 
 
-def test_the_game_replays_as_played(shuffle_game):
-    game = _rust(shuffle_game)
-    for action in shuffle_game["actions"]:
+def test_the_game_replays_as_played(any_game):
+    game = _rust(any_game)
+    for action in any_game["actions"]:
         game.process_action(dict(action))
     assert game.finished
 
 
-def test_every_buyback_is_refused_and_every_other_purchase_still_offered(shuffle_game):
-    buys = _cross_corp_buys(shuffle_game)
-    buybacks = set(shuffle_game["buyback_indices"])
-    assert buybacks <= set(buys) and len(buybacks) == 174
-    game = _rust(shuffle_game)
-    refused, offered = 0, 0
-    for i, action in enumerate(shuffle_game["actions"]):
+def _refused_and_offered(data):
+    """Replays ``data`` with the rule on and checks every purchase from another corporation: refused, with
+    no purchase from any corporation offered, when another corporation bought the buyer's last train before
+    this turn; otherwise offered as played. Returns the refused indices and the number offered."""
+    buys = _cross_corp_buys(data)
+    game = _rust(data)
+    corporations = {c.id for c in game.corporations}
+    refused, offered = set(), 0
+    for i, action in enumerate(data["actions"]):
         if i in buys:
             choices = game.get_factored_choices()
-            if i in buybacks:
-                assert not _offers(choices, buys[i]), (i, action)
+            if any(blocked == action["entity"] for blocked, _, _ in game.no_buyback):
+                assert not any(
+                    c.type == "BuyTrain" and c.entity.get("source") in corporations for c in choices
+                ), (i, action)
                 assert game.train_buyback_blocked(action["entity"], buys[i])
-                refused += 1
+                refused.add(i)
             else:
                 assert _offers(choices, buys[i], action["price"]), (i, action, game.no_buyback)
                 offered += 1
         game.process_action(dict(action))
-    assert refused == 174 and offered == len(buys) - 174
+    assert refused and offered
+    return refused, offered
 
 
-def test_both_engines_agree_through_the_game(shuffle_game):
+def test_every_buyback_is_refused(shuffle_game):
+    refused, _ = _refused_and_offered(shuffle_game)
+    assert set(shuffle_game["buyback_indices"]) == refused and len(refused) == 174
+
+
+def test_a_rotation_through_a_third_corporation_is_refused(rotation_game):
+    """No corporation in the rotation buys back from the corporation that bought its train, so a buyback-only
+    rule never fires; each takes a third corporation's last train, which the rule refuses too."""
+    refused, _ = _refused_and_offered(rotation_game)
+    assert set(rotation_game["rotation_indices"]) <= refused and len(rotation_game["rotation_indices"]) == 73
+
+
+def test_both_engines_agree_through_the_game(any_game):
     """The Python engine keeps the same blocks (bookkeeping on each sale, arming at each turn start) and
     both legal-move lists agree at every position of the game -- with every block in play."""
-    rust = _rust(shuffle_game)
-    python = _python(shuffle_game)
+    rust = _rust(any_game)
+    python = _python(any_game)
     helper = FactoredActionHelper()
-    for i, action in enumerate(shuffle_game["actions"]):
+    for i, action in enumerate(any_game["actions"]):
         assert sorted(rust.no_buyback) == sorted(python.no_buyback), i
         r = {_canonical_key(c) for c in rust.get_factored_choices()}
         p = {_canonical_key(c) for c in helper.get_choices(python)}

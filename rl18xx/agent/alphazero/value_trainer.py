@@ -442,7 +442,9 @@ def game_positions(meta: dict, actions: list, k: int, pass_id: int) -> dict:
     n = len(actions)
     drawn = np.sort(rng.choice(n, size=min(n, DRAWS_PER_POSITION * k), replace=False)) if n and k > 0 else []
     wanted, last = set(int(i) for i in drawn), int(drawn[-1]) if len(drawn) else -1
-    rs = new_game(int(meta["num_players"]), bool(meta["auction_unlock"]))._game
+    # The game's own rules: which positions are decisions depends on the rule against train shuffling.
+    rule = bool(meta.get("no_buyback_rule", False))
+    rs = new_game(int(meta["num_players"]), bool(meta["auction_unlock"]), no_buyback_rule=rule)._game
     rows = []
     for i in range(last + 1):
         if i in wanted and rs.round.round_type != "Auction" and len(rs.factored_legal_indices()) > 1:

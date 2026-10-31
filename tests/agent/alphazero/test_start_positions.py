@@ -353,26 +353,31 @@ def test_loop_passes_start_position_keys_to_self_play(tmp_path, monkeypatch):
 # ------------------------------------------------------------- mid-game starts
 def _randomly_played_game(tmp_path, stock_rounds: int = 3, seed: int = 0) -> dict:
     """A game played by random legal moves from a random auction ending until its
-    ``stock_rounds``-th Stock Round, as a cleaned export (players 1..4)."""
+    ``stock_rounds``-th Stock Round, as a cleaned export (players 1..4). A random game
+    that ends first (a bankruptcy) is replaced by the next seed's."""
     rng = random.Random(seed)
     empty = tmp_path / f"starts_{seed}.jsonl"
     empty.write_text("")
-    start = sp.sample_start_position(4, str(empty), 1.0, rng=rng)
-    game = sp.apply_actions(sp.new_game(4), start.actions)
-    seen, previous = 0, None
-    for _ in range(3000):
-        round_type = game._game.round.round_type
-        if round_type == "Stock" and previous != "Stock":
-            seen += 1
-            if seen > stock_rounds:
+    while True:
+        start = sp.sample_start_position(4, str(empty), 1.0, rng=rng)
+        game = sp.apply_actions(sp.new_game(4), start.actions)
+        seen, previous = 0, None
+        for _ in range(3000):
+            if game.finished:
                 break
-        previous = round_type
-        legal = [int(i) for i in game._game.factored_legal_indices()]
-        index = rng.choice(legal)
-        price_range = game._game.price_range_for_index(index)
-        game._game.apply_action_index(index, None if price_range is None else int(price_range[0]))
-    return {"id": f"random{seed}", "players": [{"id": i, "name": f"Player {i}"} for i in range(1, 5)],
-            "actions": list(game.raw_actions)}
+            round_type = game._game.round.round_type
+            if round_type == "Stock" and previous != "Stock":
+                seen += 1
+                if seen > stock_rounds:
+                    break
+            previous = round_type
+            legal = [int(i) for i in game._game.factored_legal_indices()]
+            index = rng.choice(legal)
+            price_range = game._game.price_range_for_index(index)
+            game._game.apply_action_index(index, None if price_range is None else int(price_range[0]))
+        if seen > stock_rounds:
+            return {"id": f"random{seed}", "players": [{"id": i, "name": f"Player {i}"} for i in range(1, 5)],
+                    "actions": list(game.raw_actions)}
 
 
 def test_midgame_cuts_stop_where_each_later_stock_round_begins(tmp_path):
