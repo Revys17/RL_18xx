@@ -32,9 +32,12 @@ def test_the_build_writes_a_chrome_and_a_firefox_extension(tmp_path):
             "http://127.0.0.1/*",
         }
         assert manifest["optional_host_permissions"] == ["http://*/*"]
-        script = manifest["content_scripts"][0]
+        script, bridge = manifest["content_scripts"]
         assert script["matches"] == ["https://18xx.games/*", "http://localhost/*"]
-        for name in script["js"] + [manifest["options_ui"]["page"]]:
+        assert "world" not in script and "autoplay.js" in script["js"]
+        # The page bridge (hotseat autoplay) runs beside the site's own engine, on the same pages.
+        assert bridge == {"matches": script["matches"], "js": ["bridge.js"], "run_at": "document_idle", "world": "MAIN"}
+        for name in script["js"] + bridge["js"] + [manifest["options_ui"]["page"]]:
             assert (target / name).is_file()
     chrome = json.loads((tmp_path / "chrome" / "manifest.json").read_text())
     firefox = json.loads((tmp_path / "firefox" / "manifest.json").read_text())

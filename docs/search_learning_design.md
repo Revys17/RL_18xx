@@ -1613,3 +1613,43 @@ Tests: `tests/agent/alphazero/test_search_learning_league.py` -- dealing by weig
 slots and state round trip, member searches on their own servers with no rows, unscored games after a slot
 change, the value follower, validation, and a tiny CPU run end to end (frozen prior as links, a promotion
 reaching the server mid-run, a snapshot joining, saved games with their seat members).
+
+## Auction learning (2026-10-30)
+
+**Why.** Nothing we have plays the waterfall auction well. lr1 never plays it (every game starts
+after it). The supervised policy picks sensible openings, but its bid-or-pass choice can't see the
+price (the price is a separate head over the legal range), so its argmax raised the M&H to $410.
+gen4 trained on auctions in 15% of its games, against copies of itself and under `auction_unlock`;
+searched with its critic, all three bots in a hotseat game pile onto the D&H and bid it to $150-155
+(humans, 1,945 4-player games: median $80, never above $130) and let the C&A go at face (human
+median $210). Searching the auction with lr1's value bid $315 on the B&O: its mid-auction positions
+are out of distribution.
+
+**What the value does know.** lr1's v3 judges *finished* auctions well: with everything else fixed,
+the D&H at $155 instead of $80 costs its owner 9.4 points of win chance (28.4% -> 19.1%, sd 0.1 over
+B&O pars), and each private's curve falls smoothly and monotonically out to 3x face or the owner's
+cash (`price_curves` check; lr1's random auction endings only reach 2x face).
+
+**The mode.** `search-learning --auction-only --terminal-value <v3>`: an episode is a new game under
+the real rules (no `auction_unlock`) played to its first Stock Round, every decision searched as
+usual (rows, cq targets, price targets). Its outcome is the terminal value's per-seat win estimate
+of that position, which the trainer computes as games arrive (`auction_outcomes`: one value-only
+forward per batch, unrotated to player order) and writes as every row's win target -- so the critic
+(started from v3 itself) learns auction positions from a scorer that knows post-auction ones, and the
+policy (started from checkpoint 10, KL-anchored to it) learns the search's choices. Stalled auctions
+(> `--auction-max-decisions`, all-pass rounds can repeat under the real rules) are dropped.
+`--auction-prefix-decisions N` opens each episode with 0..N sampled moves for varied openings. The
+history adds `auction_prices` (mean sale price per private) and `auction_stalls`; league members'
+scores are their v3 win shares.
+
+**Evaluating.** `scripts/eval_auction.py`: auction-only head-to-heads (`--seats` for the candidate,
+the baseline searching or sampling its policy), each opened by 0..`--prefix` moves sampled from the
+supervised policy so deterministic systems play distinct games, scored by v3 at the first Stock
+Round, with each side's prices. v3 is also the candidate's training scorer, so this favours
+v3-guided players; full games from the auction (with the main system after it) are the unbiased
+check. First reading (CPU, 16 readouts, 40 auctions): SL10 + v3 in one seat vs three gen4 + critic
++0.053 +- 0.011 over its fair share; gen4 + critic paid $124 for the D&H.
+
+**First run.** `scripts/launch/2026-10/auction_train.sh auc1` (lr1 paused for it): 40 workers x 32
+auctions, 200 readouts every decision, PUCT c 0.05 mean Q, cq targets, half the games with league
+seats (`auction_league.json`: gen4 + critic searching, SL10 sampled, gen4 sampled).

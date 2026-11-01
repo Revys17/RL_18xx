@@ -6,6 +6,8 @@
 //   {type: 'advise', game}                      -> POST /api/advise
 //   {type: 'think', game_id, position, readouts} -> POST /api/think
 //   {type: 'think_status', job}                 -> POST /api/think/<job>
+//   {type: 'move', game, seats, site, readouts}  -> POST /api/move (autoplay)
+//   {type: 'move_status', job}                  -> POST /api/move/<job>
 //   {type: 'health'}                            -> POST /api/health
 // and answers {ok: true, data} or {ok: false, error, status?, unreachable?, data?}.
 (function (root) {
@@ -61,6 +63,14 @@
         );
       case 'think_status':
         return call(`/api/think/${encodeURIComponent(message.job)}`, {}, deps);
+      case 'move':
+        return call(
+          '/api/move',
+          { game: message.game, seats: message.seats, site: message.site, readouts: message.readouts },
+          deps,
+        );
+      case 'move_status':
+        return call(`/api/move/${encodeURIComponent(message.job)}`, {}, deps);
       case 'health':
         return call('/api/health', {}, deps);
       default:

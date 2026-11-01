@@ -25,6 +25,14 @@ first ``num_players`` real) in seat order, normalised to sum to one.
 current position with the policy (auction policy in auction positions) for
 priors and the value net at the leaves, one search at a time on a background
 thread.
+
+In a hotseat game the model can also play seats itself (:meth:`Advisor.start_move`,
+``autoplay``): every decision is searched and the most visited move played, as the
+head-to-head evals play (no sampling), with the *play* systems -- by default the
+advice search's networks, or others (``main.py advisor --play-policy / --play-value``,
+and ``--play-auction-policy / --play-auction-value`` for searches from the private
+auction: most runs start after it, and searching it with their value nets bid $315 on
+the B&O, while the supervised policy alone kept raising one private to $410).
 """
 
 from __future__ import annotations
@@ -42,6 +50,7 @@ from typing import Optional
 import numpy as np
 import torch
 
+from rl18xx.agent.advisor.autoplay import AutoplayError, match_train_ids, plan_move, to_site_action
 from rl18xx.agent.advisor.describe import DescribeContext, describe_action, describe_actor, map_positions
 
 LOGGER = logging.getLogger(__name__)
@@ -100,10 +109,33 @@ class AdvisorModels:
     auction_policy_temperature: float = 1.0
     # The search's leaf value (None: ``value``, which also gives the win estimates).
     search_value: object = None
+    # The systems that play seats (autoplay), each a policy and its search's leaf value
+    # (None: the advice ones above): one from the first stock round on, one for the
+    # private auction -- which most runs never played (they start after it).
+    play_policy: object = None
+    play_value: object = None
+    play_auction_policy: object = None
+    play_auction_value: object = None
+    play_policy_temperature: float = 1.0
+    play_auction_policy_temperature: float = 1.0
 
     @classmethod
-    def load(cls, policy, auction_policy, value, device, search_value=None) -> "AdvisorModels":
-        """Load the three checkpoints (a path given twice is loaded once)."""
+    def load(
+        cls,
+        policy,
+        auction_policy,
+        value,
+        device,
+        search_value=None,
+        play_policy=None,
+        play_value=None,
+        play_auction_policy=None,
+        play_auction_value=None,
+    ) -> "AdvisorModels":
+        """Load the checkpoints (a path given twice is loaded once). The play systems
+        default to the advice search's: ``play_policy`` to ``policy``, ``play_value`` to
+        the search's value, ``play_auction_policy`` to ``auction_policy`` and
+        ``play_auction_value`` to ``play_value``."""
         loaded: dict = {}
 
         def get(path):
@@ -113,6 +145,10 @@ class AdvisorModels:
                 loaded[key] = load_model(path, device)
             return loaded[key]
 
+        play_policy = play_policy or policy
+        play_value = play_value or search_value or value
+        play_auction_policy = play_auction_policy or auction_policy
+        play_auction_value = play_auction_value or play_value
         return cls(
             policy=get(policy),
             auction_policy=get(auction_policy),
@@ -122,11 +158,42 @@ class AdvisorModels:
                 "auction_policy": checkpoint_label(auction_policy),
                 "value": checkpoint_label(value),
                 "search_value": checkpoint_label(search_value or value),
+                "play_policy": checkpoint_label(play_policy),
+                "play_value": checkpoint_label(play_value),
+                "play_auction_policy": checkpoint_label(play_auction_policy),
+                "play_auction_value": checkpoint_label(play_auction_value),
             },
             search_value=get(search_value) if search_value else None,
             policy_temperature=training_temperature(policy),
             auction_policy_temperature=training_temperature(auction_policy),
+            play_policy=get(play_policy),
+            play_value=get(play_value),
+            play_auction_policy=get(play_auction_policy),
+            play_auction_value=get(play_auction_value),
+            play_policy_temperature=training_temperature(play_policy),
+            play_auction_policy_temperature=training_temperature(play_auction_policy),
         )
+
+    def search_network(self, play: Optional[str] = None):
+        """``(policy for priors, leaf value)`` of the advice search, or of a play system:
+        ``play="main"`` (from the first stock round on) or ``"auction"`` (a search from a
+        private-auction position: its whole tree, the stock round after included)."""
+        if play == "auction" and self.play_auction_policy is not None:
+            t = self.play_auction_policy_temperature
+            policy = _RoundPolicy(self.play_auction_policy, self.play_auction_policy, t, t)
+            return policy, self.play_auction_value or self.play_value or self.value
+        if play == "main" and self.play_policy is not None:
+            policy = _RoundPolicy(
+                self.play_policy,
+                self.play_auction_policy or self.play_policy,
+                self.play_policy_temperature,
+                self.play_auction_policy_temperature,
+            )
+            return policy, self.play_value or self.search_value or self.value
+        policy = _RoundPolicy(
+            self.policy, self.auction_policy, self.policy_temperature, self.auction_policy_temperature
+        )
+        return policy, self.search_value or self.value
 
 
 def training_temperature(path) -> float:
@@ -233,10 +300,12 @@ class SearchJob:
     error: Optional[str] = None
     started: float = field(default_factory=time.time)
     finished: Optional[float] = None
+    kind: str = "think"  # think ("Think harder") / move (the model playing a seat)
 
     def to_dict(self) -> dict:
         return {
             "job": self.id,
+            "kind": self.kind,
             "game_id": self.game_id,
             "position": self.position,
             "readouts": self.readouts,
@@ -365,6 +434,7 @@ class Advisor:
         self._jobs: OrderedDict = OrderedDict()
         self._jobs_lock = threading.Lock()
         self._running: Optional[SearchJob] = None
+        self._moves: OrderedDict = OrderedDict()  # (game id, position, site's last action, seats, readouts) -> job
 
     # -------------------------------------------------------------- inference
     def _policy_role(self, game) -> str:
@@ -595,25 +665,17 @@ class Advisor:
         finally:
             job.finished = time.time()
 
-    def _run_search(self, job: SearchJob, game, names: dict) -> dict:
+    def _grow_tree(self, job: SearchJob, game, play: Optional[str] = None, search: bool = True):
+        """A ``RustMCTSPlayer`` at ``game`` with its root evaluated and, with ``search``,
+        ``job.readouts`` readouts run (progress in ``job.visits``); the advice search's
+        networks, or a play system's (``play``: see ``AdvisorModels.search_network``). The
+        player picks the most visited move (no sampling), as the head-to-head evals play."""
         from rl18xx.agent.alphazero.composite_model import PolicyValueComposite
         from rl18xx.agent.alphazero.config import SelfPlayConfig
         from rl18xx.agent.alphazero.rust_mcts_player import RustMCTSPlayer
         from rl18xx.agent.alphazero.self_play import _slice_price_components
-        from rl18xx.rust_adapter import RustGameAdapter
 
-        network = _Locked(
-            PolicyValueComposite(
-                _RoundPolicy(
-                    self.models.policy,
-                    self.models.auction_policy,
-                    self.models.policy_temperature,
-                    self.models.auction_policy_temperature,
-                ),
-                self.models.search_value or self.models.value,
-            ),
-            self._lock,
-        )
+        network = _Locked(PolicyValueComposite(*self.models.search_network(play=play)), self._lock)
         num_players = len(game.players)
         config = SelfPlayConfig(
             network=network,
@@ -624,6 +686,7 @@ class Advisor:
             noresign_holdout_rate=0.0,
             player_count_distribution={num_players: 1.0},
             auction_unlock=False,
+            softpick_move_cutoff=0,
             **SEARCH_OVERRIDES,
         )
         player = RustMCTSPlayer(config)
@@ -636,13 +699,20 @@ class Advisor:
             probs, _, value = network.run_encoded(leaf.encoded_game_state)
             components = _slice_price_components(network.last_price_components, 0)
             leaf.incorporate_results(probs, value, leaf, price_components=components)
-        while tree.n_at_root() < job.readouts:
+        while search and tree.n_at_root() < job.readouts:
             before = tree.n_at_root()
             player.tree_search()
             job.visits = tree.n_at_root()
             if job.visits <= before:  # nothing left to expand (e.g. every line ends the game)
                 break
+        return player
 
+    def _run_search(self, job: SearchJob, game, names: dict) -> dict:
+        from rl18xx.rust_adapter import RustGameAdapter
+
+        num_players = len(game.players)
+        player = self._grow_tree(job, game)
+        tree = player._rust_player
         legal = [int(i) for i in tree.legal_action_indices_at_root()]
         visits = np.asarray(tree.child_n_at_root(), dtype=np.float64)[legal]
         total = float(visits.sum()) or 1.0
@@ -670,3 +740,126 @@ class Advisor:
             "moves": moves,
             "win": [{"seat": i + 1, "name": names[i + 1], "probability": p} for i, p in enumerate(_normalised(q))],
         }
+
+    # -------------------------------------------------------------- autoplay
+    def start_move(self, live, site, seats, readouts: int = DEFAULT_READOUTS) -> SearchJob:
+        """The model's move for one of ``seats`` in ``live``'s current position, given
+        the site's view of it (``autoplay.SiteView``): a job whose result's ``action``
+        is the move in the site's format. An implicit pass is done at once; a decision
+        is searched with ``readouts`` on a background thread (one search at a time:
+        :class:`SearchBusy` while another runs). Asking again for the same position
+        returns the same job. Raises :class:`~rl18xx.agent.advisor.autoplay.AutoplayError`
+        when the model has no move to make."""
+        readouts = max(1, min(int(readouts), MAX_READOUTS))
+        seats = sorted({int(s) for s in seats})
+        plan = plan_move(live, site, seats)
+        key = (
+            live.game_id,
+            live.position_key,
+            site.last_id,
+            site.entity_type,
+            str(site.entity_id),
+            tuple(seats),
+            readouts,
+        )
+        with self._jobs_lock:
+            existing = self._moves.get(key)
+            if existing is not None and existing.status != "error":
+                return existing
+            if plan.kind == "search" and self._running is not None and self._running.status == "running":
+                raise SearchBusy(self._running)
+            job = SearchJob(uuid.uuid4().hex[:12], live.game_id, live.position_key, readouts, kind="move")
+            self._jobs[job.id] = job
+            self._moves[key] = job
+            while len(self._jobs) > 20:
+                self._jobs.popitem(last=False)
+            while len(self._moves) > 20:
+                self._moves.popitem(last=False)
+            if plan.kind == "search":
+                self._running = job
+        base = {
+            "seat": plan.seat,
+            "player": live.names.get(plan.seat),
+            "last_id": site.last_id,
+            "position": live.position_key,
+        }
+        if plan.kind == "pass":
+            acting = {"kind": site.entity_type, "id": site.entity_id}
+            job.result = {
+                **base,
+                "kind": "implicit_pass",
+                "action": plan.action,
+                "actor": (
+                    f"{site.entity_id} ({live.names.get(plan.seat)})"
+                    if site.entity_type != "player"
+                    else live.names.get(plan.seat)
+                ),
+                "description": "Pass",
+                "reason": plan.reason,
+                "acting": acting,
+            }
+            job.status = "done"
+            job.finished = time.time()
+            return job
+        game = live.rust.pickle_clone()
+        names = dict(live.names)
+        threading.Thread(
+            target=self._move, args=(job, game, names, live, base, site), name="advisor-move", daemon=True
+        ).start()
+        return job
+
+    def _move(self, job: SearchJob, game, names: dict, live, base: dict, site=None) -> None:
+        try:
+            job.result = {**base, **self._run_move(job, game, names, live, site)}
+            job.status = "done"
+        except Exception as e:  # reported to the page
+            LOGGER.warning("move %s failed: %s: %s", job.id, type(e).__name__, e)
+            job.error = f"{type(e).__name__}: {e}"
+            job.status = "error"
+        finally:
+            job.finished = time.time()
+
+    def _run_move(self, job: SearchJob, game, names: dict, live, site=None) -> dict:
+        from rl18xx.rust_adapter import RustGameAdapter
+
+        rs = game._game
+        legal = [int(i) for i in rs.factored_legal_indices()]
+        system = "auction" if rs.round.round_type == "Auction" else "main"
+        searched = is_decision(rs, legal) and len(legal) > 1
+        player = self._grow_tree(job, game, play=system, search=searched)
+        tree = player._rust_player
+        root = RustGameAdapter(tree.root_game_object())
+        ctx = DescribeContext.from_game(root, names)
+        index = player.pick_move() if searched else legal[0]
+        visits = np.asarray(tree.child_n_at_root(), dtype=np.float64)
+        total = float(visits[legal].sum()) or 1.0
+        root_visits = int(tree.n_at_root())
+        num_players = len(game.players)
+        q = [float(x) for x in tree.root_q_vector()][:num_players]
+        price_range = root._game.price_range_for_index(index)
+        raw_before = len(root.raw_actions)
+        player.play_move(index)  # the root's most visited price for an open-price move
+        logged = list(tree.root_game_object().raw_actions)
+        if len(logged) <= raw_before:
+            raise RuntimeError(f"the engine logged no action for move {index}")
+        action = dict(logged[raw_before])
+        price = action.get("price")
+        fixed = price_range is not None and int(price_range[0]) == int(price_range[1])
+        described = describe_index(root, index, None if price is None else int(price), ctx, fixed)
+        out = {
+            "kind": "search" if searched else ("priced" if price_range is not None and not fixed else "forced"),
+            "system": system,
+            # The site's ids for the trains it names (its engine may number two trains the other way).
+            "action": match_train_ids(to_site_action(action, live, logged[:raw_before]), root, site),
+            "index": index,
+            "visits": root_visits if searched else 0,
+            "share": float(visits[index] / total) if searched else 1.0,
+            "num_legal": len(legal),
+            "actor": described["actor"],
+            "description": described["description"],
+            "win": [{"seat": i + 1, "name": names[i + 1], "probability": p} for i, p in enumerate(_normalised(q))],
+        }
+        for key in ("hex", "tile", "rotation", "map"):
+            if key in described:
+                out[key] = described[key]
+        return out

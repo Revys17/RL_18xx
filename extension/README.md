@@ -4,8 +4,11 @@ A panel on 18xx.games game pages with the model's view of the game: each
 player's chance of winning, the top five moves for whoever is to move (with
 prices for bids and other open-price moves, and the hex outlined on the map),
 an optional deeper search ("Think harder"), and how likely the model found the
-last few moves actually played. You still make every move on the site
-yourself; the extension never acts in a game.
+last few moves actually played. In a game on the site you make every move
+yourself. In a **hotseat** game (one that lives in your browser) you can also
+let the model play chosen seats by itself -- see "Play against the model"
+below. In live games it acts only in a browser set up for a bot account
+(`autoplayLive`, off by default; see `bot/README.md`).
 
 It has two parts:
 
@@ -35,6 +38,23 @@ policy `model_checkpoints/AlphaZeroTransformer/20261004_134558_804974562/10.pth`
 (the policy-gradient runs never trained on the waterfall auction), value
 `model_checkpoints_value/AlphaZeroTransformer/20261004_134558_804974562/26.pth`.
 `--port` changes the port (then set the same URL in the extension's options).
+
+To play against the strongest system measured so far (2026-10-30: the long run
+lr1's eval ladder -- the supervised policy, checkpoint 10, searched with lr1's
+promoted value at 200 readouts, about 55 Elo above gen4 + its critic in 2v2 and
+1v3), with gen4 + its critic for the private auction (lr1 never plays it; gen4's
+run started 15% of its games there), run from a checkout with gen4's checkpoints
+and point at the long run's directory (`LR1`):
+
+```bash
+uv run python main.py advisor --device cpu \
+  --play-policy $LR1/model_checkpoints/AlphaZeroTransformer/20261004_134558_804974562/10.pth \
+  --play-value $LR1/model_checkpoints_value/lr1/promoted/3.pth \
+  --play-auction-policy model_checkpoints_pg/rab_place_20261014/learner/1800.pth \
+  --play-auction-value model_checkpoints_pg/rab_place_20261014/critic/1800.pth
+```
+
+A 200-readout search takes about 2 s on 4 CPU threads.
 The debug page takes a pasted or uploaded game JSON (as `/api/game/<id>`
 returns it) and shows the same panel, without the extension.
 
@@ -67,6 +87,42 @@ readouts for "Think harder", and the panel's corner. Drag the panel by its
 title bar; ↻ refetches the game (at most once every 10 s), – collapses it to
 one line with the top move.
 
+## Play against the model (hotseat games)
+
+Create a hotseat 1830 game on 18xx.games (*Create a new game* -> *Hotseat*, four
+players), open it, and in the panel's **Model plays** box tick the seats the
+model should play (by default every seat but the first), pick the readouts per
+move and press **Start**. On the model's turns it plays by itself: every
+decision is searched by the backend (the most visited move is played, as in the
+head-to-head evals; a move with a single option is just played), and the page
+updates in place. On your seats it waits for you. **Pause** stops it (do that
+before undoing its moves, or it plays them again); it also waits while the
+site's history view is open. While it plays, the panel hides the model's
+suggestions (moves, search, last moves) unless *show hints* is ticked.
+
+How a move gets into the game: the page bridge (`src/bridge.js`, which runs in
+the page's own JavaScript world beside the site's Ruby engine) reads the game
+from localStorage and tells the backend who the site's engine waits for; the
+backend replies with the move in the site's format; the bridge runs it through
+the site's engine (exactly as the site's UI does), stores it only if Ruby
+accepts it and nothing changed meanwhile, and shows the page the new game
+through the site's own back/forward handler (no reload). Where our engine
+deliberately forbids what Ruby offers -- buying a train from another player's
+corporation, or a private from another player -- Ruby waits for a "pass" our
+engine never asks for; the model plays that pass for its own seats, and you
+pass yourself on yours (buying across players makes the backend's engine stop:
+undo that move). Anything else unexpected stops autoplay with the reason in the
+panel.
+
+**Live games** work the same way when the options' `autoplayLive` is on (only the
+live bot in `bot/` sets it): the bridge reads the game from the site, checks each
+move with the page's engine and posts it as the page itself would (the server checks
+it again); `autoplayDryRun` only shows the moves. See `bot/README.md`.
+
+Which networks play comes from the backend (`main.py advisor --play-policy /
+--play-value / --play-auction-policy / --play-auction-value`, by default the
+advice networks); "Run the backend" above has the strongest set measured.
+
 ## What the panel shows
 
 - Status lines: backend unreachable, unsupported game (another title, or an
@@ -87,7 +143,7 @@ one line with the top move.
 ## Permissions
 
 `storage`; host access to `https://18xx.games/*` (and any `--extra-origin`) for
-the content script and the game fetch; `http://127.0.0.1/*` and
+the content scripts (the page bridge among them) and the game fetch; `http://127.0.0.1/*` and
 `http://localhost/*` for the backend (match patterns can't name a port). No
 remote code, no other sites.
 

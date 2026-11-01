@@ -388,7 +388,7 @@ def filter_actions(actions: list[dict]) -> list[dict]:
     return filtered_actions
 
 
-def check_action_in_all_actions(action, all_actions) -> Optional[dict]:
+def check_action_in_all_actions(action, all_actions, keep_train_ids: bool = False) -> Optional[dict]:
     """Verify ``action`` is among the legal ``all_actions`` and decide whether
     to substitute a replacement.
 
@@ -492,6 +492,16 @@ def check_action_in_all_actions(action, all_actions) -> Optional[dict]:
                 return False
             return True
 
+        # Following a live game (``keep_train_ids``), the site's very train is kept whenever a
+        # same-named train from the same seller is legal (the legal list keeps one train per name
+        # and seller): a substitute would swap two physical trains, and from then on the engines
+        # disagree about which corporation owns which -- a later run_routes names another
+        # corporation's train and the site refuses it.
+        if keep_train_ids and action.train is not None:
+            seller = _train_owner_key(action.train)
+            for a in all_actions:
+                if _candidate_matches(a) and _train_owner_key(a.train) == seller:
+                    return None
         # Pass 1: exact train ID match.
         if action_train_id is not None:
             for a in all_actions:
@@ -505,11 +515,20 @@ def check_action_in_all_actions(action, all_actions) -> Optional[dict]:
     return None
 
 
-def check_action_in_action_helper(action_dict, game_state):
+def _train_owner_key(train):
+    """Who sells a train: ``("corporation", id)`` or ``("depot",)`` (upcoming or discarded)."""
+    owner = getattr(train, "owner", None)
+    is_corporation = getattr(owner, "is_corporation", None)
+    if callable(is_corporation) and is_corporation():
+        return ("corporation", owner.id)
+    return ("depot",)
+
+
+def check_action_in_action_helper(action_dict, game_state, keep_train_ids: bool = False):
     action_helper = ActionHelper()
     stored_action = BaseAction.action_from_dict(action_dict, game_state)
     action_helper_actions = action_helper.get_all_choices(game_state)
-    updated_action = check_action_in_all_actions(stored_action, action_helper_actions)
+    updated_action = check_action_in_all_actions(stored_action, action_helper_actions, keep_train_ids=keep_train_ids)
     return updated_action
 
     # if not present:
@@ -1474,7 +1493,7 @@ def replay_human_action(
         # is needed (either matched cleanly or no acceptable replacement
         # was found) and a serialized action dict when the caller should
         # swap in the replacement.
-        replacement_action = check_action_in_action_helper(action, game_state)
+        replacement_action = check_action_in_action_helper(action, game_state, keep_train_ids=not drop_rules)
         if replacement_action is not None:
             LOGGER.debug(f"Substituting action based on action helper actions.")
             LOGGER.debug(f"Original action: {action}")

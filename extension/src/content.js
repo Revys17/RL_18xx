@@ -6,7 +6,8 @@
 // a new line (seen by a debounced MutationObserver, no network), and when the
 // panel's refresh button is pressed; a hidden tab waits until it is shown. A
 // hotseat game is read from the page's localStorage instead (where the site keeps
-// it), so it needs no spacing. The
+// it), so it needs no spacing; there the model can also play chosen seats itself
+// (autoplay.js, through the page bridge bridge.js). The
 // game goes to the background worker, which asks the local advisor backend; the
 // answer is drawn in the panel (panel.js), and the recommended hex is outlined
 // on the site's map when it can be found. The site is a single-page app, so the
@@ -17,14 +18,16 @@
   const R =
     root.RL18XX && root.RL18XX.Panel
       ? root.RL18XX
-      : Object.assign({}, require('./common.js'), require('./panel.js'));
+      : Object.assign({}, require('./common.js'), require('./panel.js'), require('./autoplay.js'));
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const THINK_POLL_MS = 1000;
+  const BRIDGE_TIMEOUT_MS = 20000;
 
   /** The page logic, with its browser surroundings passed in (``env``) so the unit
    * tests can drive it: ``location``, ``document``, ``fetchGame(id)``,
    * ``send(message)`` (to the background worker), ``makePanel(callbacks, placement)``,
-   * ``now()``, ``setTimeout`` / ``clearTimeout``, ``options`` and ``saveOptions(partial)``. */
+   * ``now()``, ``setTimeout`` / ``clearTimeout``, ``options`` and ``saveOptions(partial)``;
+   * for autoplay also ``bridge(op, args)`` (the page bridge) -- without it there is no autoplay. */
   function createController(env) {
     const gate = new R.FetchGate(R.MIN_FETCH_INTERVAL_MS, env.now);
     const state = {
@@ -43,9 +46,26 @@
       waitingForVisible: false,
       timer: null,
       mutationTimer: null,
+      mutationSince: null, // when the current burst of page changes began
       thinkTimer: null,
       highlight: null,
     };
+    const autoplay =
+      env.bridge
+        ? R.createAutoplay({
+            bridge: env.bridge,
+            send: (message) => env.send(message),
+            now: env.now,
+            setTimeout: env.setTimeout,
+            clearTimeout: env.clearTimeout,
+            onChange: () => render(),
+            onStopped: (id) => {
+              if (id === state.gameId) saveAutoplay({ enabled: false });
+            },
+            onPlayed: () => requestFetch(), // a hotseat game: read at once, no spacing
+          })
+        : null;
+    state.autoplay = autoplay;
 
     function render() {
       if (!state.panel) return;
@@ -55,7 +75,85 @@
         think: state.think,
         readouts: state.options.readouts,
         busy: state.fetching,
+        autoplay: autoplayView(),
       });
+    }
+
+    // ------------------------------------------------------------- autoplay
+    /** Autoplay is offered in hotseat games, and in live games only when the options allow it
+     * (``autoplayLive``: a browser logged in as the account the model plays, e.g. extension/bot). */
+    function autoplayOn() {
+      if (!autoplay || state.gameId === null) return false;
+      return R.isHotseat(state.gameId) || !!state.options.autoplayLive;
+    }
+
+    /** The game's saved autoplay settings: ``{enabled, seats}`` (seats null: none saved). */
+    function savedAutoplay(id = state.gameId) {
+      const saved = (state.options.autoplay || {})[String(id)] || {};
+      return { enabled: !!saved.enabled, seats: Array.isArray(saved.seats) ? saved.seats.map(Number) : null };
+    }
+
+    function saveAutoplay(partial) {
+      const id = state.gameId;
+      if (id === null) return;
+      const current = savedAutoplay(id);
+      const next = {
+        enabled: partial.enabled !== undefined ? partial.enabled : current.enabled,
+        seats: partial.seats !== undefined ? partial.seats : current.seats || autoplay.state.seats,
+      };
+      state.options.autoplay = R.withAutoplaySettings(state.options.autoplay, id, next);
+      if (env.saveOptions) env.saveOptions({ autoplay: state.options.autoplay });
+    }
+
+    function playersOf(game) {
+      return ((game && game.players) || []).map((p, i) => ({ seat: i + 1, name: String(p.name || `Seat ${i + 1}`) }));
+    }
+
+    function autoplayView() {
+      if (!autoplayOn()) return null;
+      return Object.assign(autoplay.view(), { players: playersOf(state.game), hints: !!state.options.autoplayHints });
+    }
+
+    /** A hotseat game was read: until seats are chosen, offer every seat but the first (a live
+     * game's seat is never guessed). */
+    function defaultSeats(game) {
+      if (!autoplayOn() || !R.isHotseat(state.gameId)) return;
+      if (savedAutoplay().seats !== null || autoplay.state.seats.length) return;
+      const seats = playersOf(game).map((p) => p.seat).filter((seat) => seat > 1);
+      autoplay.configure({ seats });
+    }
+
+    function toggleAutoplay() {
+      if (!autoplayOn()) return;
+      const enabled = !autoplay.state.enabled;
+      saveAutoplay({ enabled, seats: autoplay.state.seats });
+      autoplay.configure({ enabled, readouts: state.options.autoplayReadouts, dryRun: !!state.options.autoplayDryRun });
+      render();
+    }
+
+    function setAutoplaySeat(seat, checked) {
+      if (!autoplayOn() || autoplay.state.enabled) return;
+      const seats = new Set(autoplay.state.seats);
+      if (checked) seats.add(seat);
+      else seats.delete(seat);
+      const list = Array.from(seats).sort();
+      saveAutoplay({ seats: list });
+      autoplay.configure({ seats: list });
+      render();
+    }
+
+    function setAutoplayReadouts(readouts) {
+      if (!autoplay || !(readouts > 0)) return;
+      state.options.autoplayReadouts = readouts;
+      if (env.saveOptions) env.saveOptions({ autoplayReadouts: readouts });
+      autoplay.configure({ readouts });
+      render();
+    }
+
+    function setAutoplayHints(hints) {
+      state.options.autoplayHints = hints;
+      if (env.saveOptions) env.saveOptions({ autoplayHints: hints });
+      render();
     }
 
     function setStatus(kind, text) {
@@ -65,6 +163,7 @@
 
     // ------------------------------------------------------------- the game
     function teardown() {
+      if (autoplay) autoplay.setGame(null);
       for (const timer of [state.timer, state.mutationTimer, state.thinkTimer]) if (timer) env.clearTimeout(timer);
       state.timer = state.mutationTimer = state.thinkTimer = null;
       clearHighlight();
@@ -90,6 +189,7 @@
       if (id === state.gameId) {
         if (id !== null && view !== state.viewAction) {
           state.viewAction = view;
+          if (autoplayOn()) autoplay.setPaused(view !== null);
           if (state.game) adviseCached();
           if (view === null || !state.game) requestFetch();
         }
@@ -106,9 +206,23 @@
           onHoverMove: (move) => highlightMove(move || topMapMove()),
           onPlace: (place) => savePanel(place),
           onCollapse: (collapsed) => savePanel({ collapsed }),
+          onAutoplayToggle: toggleAutoplay,
+          onAutoplaySeat: setAutoplaySeat,
+          onAutoplayReadouts: setAutoplayReadouts,
+          onAutoplayHints: setAutoplayHints,
         },
         state.options.panel,
       );
+      if (autoplayOn()) {
+        const saved = savedAutoplay(id);
+        autoplay.setPaused(view !== null);
+        autoplay.setGame(id, {
+          enabled: saved.enabled,
+          seats: saved.seats || [],
+          readouts: state.options.autoplayReadouts,
+          dryRun: !!state.options.autoplayDryRun,
+        });
+      }
       setStatus('info', 'Reading the game…');
       state.signature = R.logSignature(env.document);
       requestFetch();
@@ -122,6 +236,11 @@
     /** Fetch the game now, or as soon as the 10 s spacing (and a hidden tab) allows. */
     function requestFetch() {
       if (state.gameId === null) return;
+      if (state.options.autoplayLive && !R.isHotseat(state.gameId)) {
+        // A live bot's page (extension/bot): nobody reads the advice, and the bridge reads the game.
+        if (state.statuses.length) setStatus('info', '');
+        return;
+      }
       if (env.document.hidden) {
         state.waitingForVisible = true;
         return;
@@ -159,6 +278,7 @@
         }
         if (id !== state.gameId) return;
         state.game = game;
+        defaultSeats(game);
         await advise(id, game);
       } catch (e) {
         if (id === state.gameId) setStatus('error', `The advisor failed: ${e.message || e}`);
@@ -223,13 +343,20 @@
         ensureHighlight(); // the history view's log changes as it steps; nothing to read
         return;
       }
-      if (state.mutationTimer) env.clearTimeout(state.mutationTimer);
+      // Debounced, but a page that never settles (the model moving every second) is
+      // still looked at every MUTATION_MAX_WAIT_MS.
+      const now = env.now();
+      if (state.mutationTimer) {
+        if (now - state.mutationSince >= R.MUTATION_MAX_WAIT_MS) return;
+        env.clearTimeout(state.mutationTimer);
+      } else state.mutationSince = now;
       state.mutationTimer = env.setTimeout(() => {
         state.mutationTimer = null;
         const signature = R.logSignature(env.document);
         if (signature !== null && signature !== state.signature) {
           state.signature = signature;
           requestFetch();
+          if (autoplayOn()) autoplay.poke();
         }
         ensureHighlight();
       }, R.MUTATION_DEBOUNCE_MS);
@@ -248,6 +375,20 @@
       if (wasEnabled !== options.enabled) checkLocation();
       else if (state.panel) {
         state.panel.setPlacement(options.panel);
+        if (autoplayOn()) {
+          // Another tab may have changed this game's settings.
+          const saved = savedAutoplay();
+          const settings = { readouts: options.autoplayReadouts, dryRun: !!options.autoplayDryRun };
+          if (saved.enabled !== autoplay.state.enabled) settings.enabled = saved.enabled;
+          if (saved.seats && saved.seats.join() !== autoplay.state.seats.join()) settings.seats = saved.seats;
+          if (
+            Object.keys(settings).length > 2 ||
+            settings.readouts !== autoplay.state.readouts ||
+            settings.dryRun !== autoplay.state.dryRun
+          ) {
+            autoplay.configure(settings);
+          }
+        }
         render();
       }
     }
@@ -346,7 +487,48 @@
       if (current && (!current.element || current.element.isConnected === false)) highlightMove(current.move);
     }
 
-    return { state, checkLocation, requestFetch, refresh, onMutations, onVisibility, setOptions, think, highlightMove };
+    return {
+      state,
+      checkLocation,
+      requestFetch,
+      refresh,
+      onMutations,
+      onVisibility,
+      setOptions,
+      think,
+      highlightMove,
+      toggleAutoplay,
+      setAutoplaySeat,
+      setAutoplayReadouts,
+      setAutoplayHints,
+    };
+  }
+
+  /** Requests to the page bridge (bridge.js, in the page's world) over window.postMessage. */
+  function makeBridge(win, timeoutMs = BRIDGE_TIMEOUT_MS) {
+    let seq = 0;
+    const pending = new Map();
+    win.addEventListener('message', (event) => {
+      const data = event.data;
+      if (event.source !== win || !data || data.source !== 'rl18xx-bridge') return;
+      const resolve = pending.get(data.id);
+      if (!resolve) return;
+      pending.delete(data.id);
+      resolve(data);
+    });
+    return (op, args) =>
+      new Promise((resolve) => {
+        seq += 1;
+        const id = `rq${Date.now()}_${seq}`;
+        const timer = win.setTimeout(() => {
+          if (pending.delete(id)) resolve({ ok: false, error: "the page didn't answer (reload it)" });
+        }, timeoutMs);
+        pending.set(id, (data) => {
+          win.clearTimeout(timer);
+          resolve(data);
+        });
+        win.postMessage(Object.assign({ source: 'rl18xx-advisor', id, op }, args), win.location.origin);
+      });
   }
 
   function mergeOptions(stored) {
@@ -386,6 +568,7 @@
       clearTimeout: (timer) => root.clearTimeout(timer),
       options,
       saveOptions: (partial) => api.storage.local.set(partial),
+      bridge: makeBridge(root),
     });
     new root.MutationObserver(() => controller.onMutations()).observe(root.document.body, {
       childList: true,
@@ -402,6 +585,6 @@
     controller.checkLocation();
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { createController, mergeOptions };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { createController, mergeOptions, makeBridge };
   else bootstrap();
 })(typeof globalThis !== 'undefined' ? globalThis : this);

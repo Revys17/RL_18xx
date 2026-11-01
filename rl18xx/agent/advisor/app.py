@@ -19,6 +19,12 @@ files or logs).
   search from the game's current position (one at a time; 409 while one runs or
   when ``position`` is no longer current).
 - ``GET`` / ``POST /api/think/<job>``: its ``status``, ``progress`` and ``result``.
+- ``POST /api/move``: ``{"game", "seats", "site", "readouts"}`` -- a hotseat (or live) game,
+  the seats (1-based) the model plays, and the page bridge's view of who the
+  site's Ruby engine waits for (``autoplay.SiteView``): starts the model's move
+  (``Advisor.start_move``; 409 with ``busy`` while another search runs, with
+  ``autoplay`` when it has no move to make). ``GET`` / ``POST /api/move/<job>``:
+  its status; the result's ``action`` is the move in the site's format.
 - ``GET`` / ``POST /api/health``: the loaded checkpoints.
 - ``GET /debug`` (``--debug-page`` only): paste or upload a game JSON and see
   the extension's panel for it.
@@ -45,6 +51,7 @@ from urllib.parse import urlsplit
 from flask import Flask, jsonify, request, send_from_directory
 
 from rl18xx.agent.advisor.advisor import DEFAULT_READOUTS, Advisor, SearchBusy
+from rl18xx.agent.advisor.autoplay import AutoplayError, SiteView
 from rl18xx.agent.advisor.live_game import LiveGame, UnsupportedGame, support_problem
 
 LOGGER = logging.getLogger(__name__)
@@ -219,6 +226,51 @@ def create_app(advisor: Advisor, *, port: int, debug_page: bool = False) -> Flas
             return jsonify({"error": f"No search {job_id}"}), 404
         return jsonify(job.to_dict())
 
+    @app.route("/api/move", methods=["POST"])
+    def move():
+        body = request.get_json(silent=True) or {}
+        game = body.get("game")
+        if not isinstance(game, dict) or not isinstance(game.get("actions"), list) or game.get("id") is None:
+            return jsonify({"error": "Expected {game, seats, site, readouts}"}), 400
+        try:
+            seats = [int(s) for s in body.get("seats") or []]
+            readouts = int(body.get("readouts") or DEFAULT_READOUTS)
+            site = SiteView.parse(body.get("site"))
+        except (TypeError, ValueError) as e:
+            return jsonify({"error": f"Bad request: {e}"}), 400
+        if not seats:
+            return jsonify({"error": "No seats for the model to play"}), 400
+        game_id = game["id"]
+        problem = support_problem(game)
+        if problem:
+            return jsonify({"error": problem}), 400
+        followed = games.entry(game_id)
+        with followed.lock:
+            try:
+                if followed.live is None:
+                    followed.live = LiveGame(game)
+                else:
+                    followed.live.update(game)
+                job = advisor.start_move(followed.live, site, seats, readouts)
+            except SearchBusy as busy:
+                return jsonify({"error": "A search is already running", "busy": True, "job": busy.job.to_dict()}), 409
+            except AutoplayError as e:
+                return jsonify({"error": str(e), "autoplay": True}), 409
+            except UnsupportedGame as e:
+                followed.live = None
+                return jsonify({"error": str(e)}), 400
+            except Exception as e:  # a bug: start over next time
+                followed.live = None
+                return _failure("move", game_id, e)
+        return jsonify(job.to_dict())
+
+    @app.route("/api/move/<job_id>", methods=["GET", "POST"])
+    def move_status(job_id):
+        job = advisor.job(job_id)
+        if job is None:
+            return jsonify({"error": f"No move {job_id}"}), 404
+        return jsonify(job.to_dict())
+
     if debug_page:
 
         @app.route("/debug")
@@ -241,12 +293,33 @@ def run(args) -> None:
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     if device == "cpu" and args.cpu_threads:
         torch.set_num_threads(args.cpu_threads)
-    models = AdvisorModels.load(args.policy, args.auction_policy, args.value, device, getattr(args, "search_value", None))
-    app = create_app(Advisor(models), port=args.port, debug_page=args.debug_page)
+    models = AdvisorModels.load(
+        args.policy,
+        args.auction_policy,
+        args.value,
+        device,
+        getattr(args, "search_value", None),
+        play_policy=getattr(args, "play_policy", None),
+        play_value=getattr(args, "play_value", None),
+        play_auction_policy=getattr(args, "play_auction_policy", None),
+        play_auction_value=getattr(args, "play_auction_value", None),
+    )
+    labels = models.labels
+    LOGGER.info(
+        "The model plays seats with %s + value %s (private auction: %s + %s)",
+        labels["play_policy"],
+        labels["play_value"],
+        labels["play_auction_policy"],
+        labels["play_auction_value"],
+    )
+    advisor = Advisor(models)
+    app = create_app(advisor, port=args.port, debug_page=args.debug_page)
     host = getattr(args, "host", "127.0.0.1")
     LOGGER.info("Advisor backend on http://%s:%d (device %s)", host, args.port, device)
     if host not in ("127.0.0.1", "localhost", "::1"):
-        LOGGER.info("Reachable from other machines: set the extension's backend URL to http://<this machine>:%d", args.port)
+        LOGGER.info(
+            "Reachable from other machines: set the extension's backend URL to http://<this machine>:%d", args.port
+        )
     if args.debug_page:
         LOGGER.info("Debug page: http://127.0.0.1:%d/debug", args.port)
     app.run(host=host, port=args.port, threaded=True, use_reloader=False)

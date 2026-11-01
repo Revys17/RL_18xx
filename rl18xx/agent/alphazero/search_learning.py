@@ -345,6 +345,22 @@ class SearchLearningConfig:
     pfsp_power: float = 2.0
     league_snapshot_hours: float = 168.0
     league_snapshot_slots: int = 6
+    # -- Auction learning (docs/search_learning_design.md, "Auction learning") --
+    # Episodes are the waterfall auction alone: a new game under the real rules (no auction_unlock)
+    # played to its first Stock Round, every decision searched as usual. Their outcome is not a
+    # finished game's but ``terminal_value``'s per-seat win estimate of that first Stock Round
+    # position (a frozen network the trainer evaluates as the games arrive): every row's win
+    # target, so the critic learns auction positions from a network that knows post-auction ones
+    # (lr1's value: 80% of its games start from human auction endings). An auction still running
+    # after ``auction_max_decisions`` decisions (all-pass rounds can repeat) is dropped.
+    auction_only: bool = False
+    terminal_value: Optional[str] = None
+    auction_max_decisions: int = 80
+    # Each auction episode opens with a uniform 0..auction_prefix_decisions decisions, every seat's,
+    # sampled from ``auction_prefix_server``'s policy at temperature 1 (no rows): varied openings.
+    # The server is "learner" in training; scripts/eval_auction.py serves the supervised policy.
+    auction_prefix_decisions: int = 0
+    auction_prefix_server: str = "learner"
 
 
 AUX_SEAT_TARGETS = 2  # final net-worth share, final cash share
@@ -867,6 +883,7 @@ class _Game:
     league_mixed: bool = False
     member_search: bool = False  # the pending need is a league member's search (no row, no record)
     start_decisions: int = 0  # explore_from_game_start: the start's recorded decisions past the auction
+    prefix: int = 0  # auction_only: the opening decisions sampled from the prefix server's policy
 
 
 def search_config(settings: dict, client=None):
@@ -945,8 +962,8 @@ def league_result(record: dict) -> Optional[dict]:
     by net worth, averaged) that PFSP records."""
     members = record.get("seat_members") or []
     others = {m for m in members if m != MAIN}
-    if len(others) != 1 or record.get("league_mixed"):
-        return None
+    if len(others) != 1 or record.get("league_mixed") or record.get("fractions") is None:
+        return None  # (no outcome: a stalled auction episode)
     member = others.pop()
     main = [s for s, m in enumerate(members) if m == MAIN]
     theirs = [s for s, m in enumerate(members) if m == member]
@@ -992,6 +1009,64 @@ def start_decisions(actions, num_players: int) -> int:
     return n
 
 
+AUCTION_FACE = {"SV": 20, "CS": 40, "DH": 70, "MH": 110, "CA": 160, "BO": 220}
+
+
+def auction_sales(actions) -> dict:
+    """``{private: [buyer (player id), price]}`` of an auction's action log: each private goes to
+    its highest bid (the waterfall's rule); one nobody bid on (an SV handed over at $0) is absent."""
+    sales = {}
+    for action in actions:
+        if action.get("type") == "bid":
+            company, price = action.get("company"), int(action.get("price", 0))
+            if company not in sales or price > sales[company][1]:
+                sales[company] = [int(action["entity"]), price]
+    return sales
+
+
+def auction_outcomes(records: list, net, device) -> None:
+    """Score auction episodes (``auction_only``) in place: ``net``'s per-seat win estimate of each
+    record's final position (player-id order, normalised) becomes its outcome -- ``win_share``,
+    ``fractions``, and every row's ``win_target`` / ``fractions`` -- and its rows' search root
+    values are scored against it (``root_value_ce``). One batched value-only forward."""
+    import torch
+
+    from rl18xx.agent.alphazero.mcts import unrotate_value
+
+    todo = [r for r in records if r.get("terminal") is not None]
+    if not todo:
+        return
+    states = torch.from_numpy(np.stack([r["terminal"][0] for r in todo])).float().to(device)
+    nodes = torch.from_numpy(np.stack([r["terminal"][1] for r in todo])).float().to(device)
+    with torch.no_grad():
+        _, win_logits, _, _ = net(states, nodes, value_only=True)
+        probs = torch.softmax(win_logits.float(), dim=1).cpu().numpy()
+    for record, p in zip(todo, probs):
+        _, _, rotation, players = record["terminal"]
+        v = np.clip(np.asarray(unrotate_value(p, rotation, players), dtype=np.float64)[:players], 0.0, None)
+        v = (v / v.sum() if v.sum() > 0 else np.full(players, 1.0 / players)).astype(np.float32)
+        record["win_share"] = v.tolist()
+        record["fractions"] = v.tolist()
+        for row in record["rows"]:
+            row.fractions, row.win_target, row.score_target = v, v, None
+        record["root_value_ce"] = root_value_ce(record["rows"], v)
+
+
+def add_auction_stats(gen: Counter, records: list) -> None:
+    """Accumulate auction episodes' sale prices (all seats) into the generation counters."""
+    for record in records:
+        for company, (_, price) in (record.get("auction") or {}).items():
+            gen[f"auction_price_sum_{company}"] += price
+            gen[f"auction_sales_{company}"] += 1
+
+
+def auction_prices(gen: Counter) -> dict:
+    """``{private: mean sale price}`` since the last update (``add_auction_stats``)."""
+    return {
+        c: gen[f"auction_price_sum_{c}"] / gen[f"auction_sales_{c}"] for c in AUCTION_FACE if gen[f"auction_sales_{c}"]
+    }
+
+
 class Generator:
     """One worker's games: ``games_per_worker`` at once, searched in lockstep;
     :meth:`run` plays for a while and returns the games that ended (with their
@@ -1014,9 +1089,15 @@ class Generator:
     # -- games -----------------------------------------------------------------
 
     def _new_game(self) -> _Game:
-        from rl18xx.agent.alphazero.start_positions import replayed_start
+        from rl18xx.agent.alphazero.start_positions import new_game, replayed_start
 
         s = self.settings
+        if s.get("auction_only"):
+            # The real rules: an all-pass round discounts only the SV (no auction_unlock).
+            servers, members = deal_seats(s, self.py_rng)
+            prefix = self.py_rng.randint(0, int(s.get("auction_prefix_decisions", 0) or 0))
+            return _Game(game=new_game(NUM_PLAYERS), uid=uuid.uuid4().hex, start="auction:new",
+                         seat_servers=servers, seat_members=members, prefix=prefix)  # fmt: skip
         start, game, skipped = replayed_start(
             NUM_PLAYERS,
             s["start_positions"],
@@ -1107,6 +1188,17 @@ class Generator:
         if legal is None:
             return None
         rs = g.game._game
+        if s.get("auction_only"):
+            if rs.round.round_type != "Auction":
+                g.termination = "auction_end"
+                return None
+            if g.decisions >= int(s.get("auction_max_decisions", 80)):
+                g.termination, g.rows = "auction_stall", []
+                return None
+            if g.decisions < g.prefix:  # the sampled opening: every seat, no rows
+                g.member_search, g.pending = False, 1.0
+                self.counts["auction_prefix_decisions"] += 1
+                return PolicyRequest(rs, legal, key=s.get("auction_prefix_server", "learner"))
         if len(legal) == 1:
             self.counts["single_move_decisions"] += 1  # an open price: the price head plays it
         mover = rs.encode_canonical_py()  # (state, nodes, round type, rotation, players)
@@ -1362,6 +1454,8 @@ class Generator:
         from rl18xx.agent.alphazero.self_play import _compute_net_worth
 
         s = self.settings
+        if s.get("auction_only"):
+            return self._finish_auction(g)
         win_share, fractions = outcome(g.game)
         net_worth = _compute_net_worth(g.game)
         worth = np.array([float(net_worth[pid]) for pid in sorted(net_worth)])
@@ -1408,6 +1502,40 @@ class Generator:
                 LOGGER.warning(f"search self-play: game {g.uid} not saved: {e!r}")
                 self.counts["save_errors"] += 1
         return record
+
+    def _finish_auction(self, g: _Game) -> dict:
+        """An auction episode's record: its rows (every one a value row) and its final position,
+        the first Stock Round's (``terminal``: the encoder's canonical state, nodes, the mover's
+        seat, the player count), which the trainer scores (``auction_outcomes``); a stalled
+        auction has no rows and no terminal."""
+        rs = g.game._game
+        terminal = None
+        if g.termination == "auction_end":
+            state, nodes, _, rotation, players = rs.encode_canonical_py()
+            state, nodes = np.asarray(state, dtype=np.float32), np.asarray(nodes, dtype=np.float32)
+            terminal = (state, nodes, int(rotation), int(players))
+        for row in g.rows:
+            row.critic = True
+        self.counts["games"] += 1
+        if g.termination == "auction_stall":
+            self.counts["auction_stalls"] += 1
+        return {
+            "uid": g.uid,
+            "start_kind": "auction",
+            "termination": g.termination,
+            "decisions": g.decisions,
+            "searched": g.searched,
+            "seat_servers": list(g.seat_servers),
+            "seat_members": list(g.seat_members),
+            "league_mixed": g.league_mixed
+            or (g.league_version is not None and league_server_version(self._league_server(g)) != g.league_version),
+            "win_share": None,
+            "fractions": None,
+            "rows": g.rows if terminal is not None else [],
+            "root_value_ce": (0.0, 0),
+            "terminal": terminal,
+            "auction": auction_sales(g.game.raw_actions),
+        }
 
     @staticmethod
     def _league_server(g: _Game) -> Optional[str]:
@@ -1840,6 +1968,10 @@ def worker_settings(
         "save_data": bool(cfg.save_data),
         "league": league,
         "value_version": value_version,
+        "auction_only": cfg.auction_only,
+        "auction_max_decisions": cfg.auction_max_decisions,
+        "auction_prefix_decisions": cfg.auction_prefix_decisions,
+        "auction_prefix_server": cfg.auction_prefix_server,
     }
 
 
@@ -1939,6 +2071,14 @@ def _validate(cfg: SearchLearningConfig) -> None:
         raise SystemExit("--anchor-every must be a multiple of --snapshot-every (the anchor's checkpoint is kept)")
     if cfg.save_data_shard_games < 1:
         raise SystemExit("--save-data-shard-games must be >= 1")
+    if cfg.auction_only:
+        if not cfg.terminal_value:
+            raise SystemExit("--auction-only needs --terminal-value (what scores a finished auction)")
+        if cfg.shared or cfg.value_follow or cfg.freeze_policy or cfg.save_data:
+            raise SystemExit("--auction-only trains a policy and its own critic: no --shared, --value-follow, "
+                             "--freeze-policy or --save-data")
+        if cfg.auction_max_decisions < 1 or cfg.max_decisions < cfg.auction_max_decisions:
+            raise SystemExit("--auction-max-decisions must be >= 1 and <= --max-decisions")
 
 
 def server_spec(cfg: SearchLearningConfig, learner_path, critic_path=None) -> str:
@@ -2262,6 +2402,12 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
     anchor_path = run_dir / "learner" / f"{anchor_update}.pth" if anchor_update else Path(cfg.policy_checkpoint)
     learner = _load(learner_path)
     anchor = None if frozen else _load(anchor_path)
+    terminal_net = None
+    if cfg.auction_only:  # a frozen scorer of finished auctions (auction_outcomes)
+        terminal_net = _load(Path(cfg.terminal_value))
+        terminal_net.eval()
+        for param in terminal_net.parameters():
+            param.requires_grad_(False)
     critic = _load(critic_path) if critic_path is not None else None
     if anchor is not None:
         anchor.eval()
@@ -2368,6 +2514,9 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
                 done, futures = wait_checking_servers(futures, handles, executor, timeout=60)
                 for future in done:
                     result = future.result()
+                    if terminal_net is not None:
+                        auction_outcomes(result["games"], terminal_net, device)
+                        add_auction_stats(gen, result["games"])
                     for key, value in result["stats"].items():
                         if key not in ("games_in_progress",):
                             gen[key] += value
@@ -2554,6 +2703,9 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
                     ),
                     "terminations": dict(terminations),
                     "starts": dict(starts),
+                    # auction_only: the mean sale price of each private in the new episodes.
+                    **({"auction_prices": auction_prices(gen), "auction_stalls": gen["auction_stalls"]}
+                       if cfg.auction_only else {}),  # fmt: skip
                     "train_seconds": train_seconds,
                     # save_data: games kept so far, games not packed since the last update, and failed
                     # journal / shard writes so far (a failed shard's games stay in its journal, which

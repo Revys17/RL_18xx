@@ -1,0 +1,25 @@
+{
+  "note": "Opponents for auction learning (auction_train.sh): the auction system the bots play today (gen4 + its critic, searched), the supervised policy sampled as people bid, and gen4's policy sampled. Absolute paths: gen4's checkout and the long run's workdir.",
+  "members": [
+    {
+      "name": "gen4critic",
+      "spec": "/home/revys/workspace/RL_18xx/.claude/worktrees/gpu-experiments-training-93d287/model_checkpoints_pg/rab_place_20261014/learner/1800.pth+/home/revys/workspace/RL_18xx/.claude/worktrees/gpu-experiments-training-93d287/model_checkpoints_pg/rab_place_20261014/critic/1800.pth",
+      "mode": "search",
+      "readouts": 100,
+      "prior_temperature": 0.5
+    },
+    {
+      "name": "sl10_sampled",
+      "spec": "/home/revys/longrun/work/lr1/model_checkpoints/AlphaZeroTransformer/20261004_134558_804974562/10.pth",
+      "mode": "policy",
+      "temperature": 1.0,
+      "min_share": 0.2
+    },
+    {
+      "name": "gen4_sampled",
+      "spec": "/home/revys/workspace/RL_18xx/.claude/worktrees/gpu-experiments-training-93d287/model_checkpoints_pg/rab_place_20261014/learner/1800.pth",
+      "mode": "policy",
+      "temperature": 0.5
+    }
+  ]
+}

@@ -11,11 +11,24 @@
     readouts: 200,
     // Panel placement: a corner, or a dragged-to position (left/top in px).
     panel: { corner: 'top-right', left: null, top: null, collapsed: false },
+    // Autoplay (hotseat games): per game id {enabled, seats}; the model's readouts per
+    // move; whether the panel still shows the model's suggestions while it plays.
+    autoplay: {},
+    autoplayReadouts: 200,
+    autoplayHints: false,
+    // Live games (18xx.games/game/<id>): off unless this browser is logged in as the account the
+    // model plays (extension/bot sets it); dry run: check and show its moves, never post them.
+    autoplayLive: false,
+    autoplayDryRun: false,
   };
+  // Remember autoplay settings for at most this many hotseat games.
+  const AUTOPLAY_GAMES_KEPT = 20;
   // Never fetch a game from the site more often than this.
   const MIN_FETCH_INTERVAL_MS = 10000;
   // Wait for the page to settle after DOM changes before looking for a new action.
   const MUTATION_DEBOUNCE_MS = 1500;
+  // ... but look at a page that keeps changing at least this often.
+  const MUTATION_MAX_WAIT_MS = 5000;
   // The hex outline of the 18xx.games map (upstream assets/app/lib/hex.rb POINTS).
   const HEX_POINTS = '100,0 50,87 -50,87 -100,0 -50,-87 50,-87';
 
@@ -148,10 +161,24 @@
     );
   }
 
+  /** ``autoplay`` settings with game ``id``'s replaced by ``settings`` (most recent
+   * last, at most AUTOPLAY_GAMES_KEPT games). */
+  function withAutoplaySettings(autoplay, id, settings) {
+    const out = {};
+    for (const [key, value] of Object.entries(autoplay || {})) if (key !== String(id)) out[key] = value;
+    out[String(id)] = settings;
+    const keys = Object.keys(out);
+    for (const key of keys.slice(0, Math.max(0, keys.length - AUTOPLAY_GAMES_KEPT))) delete out[key];
+    return out;
+  }
+
   const RL18XX = {
     DEFAULTS,
+    AUTOPLAY_GAMES_KEPT,
+    withAutoplaySettings,
     MIN_FETCH_INTERVAL_MS,
     MUTATION_DEBOUNCE_MS,
+    MUTATION_MAX_WAIT_MS,
     HEX_POINTS,
     parseGameId,
     isHotseat,

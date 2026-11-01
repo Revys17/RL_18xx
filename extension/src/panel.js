@@ -46,7 +46,16 @@
     .recent div { margin: 2px 0; }
     .progress { height: 6px; background: #374151; border-radius: 3px; overflow: hidden; margin-top: 4px; }
     .progress > div { height: 100%; background: #34d399; }
+    .auto { border: 1px solid #374151; border-radius: 6px; padding: 5px 6px; margin-top: 6px; }
+    .seats { display: flex; flex-wrap: wrap; gap: 2px 10px; margin: 2px 0 4px; }
+    .seats label, .hints { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+    .controls { display: flex; align-items: center; gap: 6px; }
+    select { font: inherit; color: #e5e7eb; background: #374151; border: 1px solid #4b5563; border-radius: 4px; }
+    .autostatus { margin-top: 4px; }
+    .automoves div { margin: 1px 0; }
   `;
+  // Readouts per move the panel offers for the model's seats (the advisor's default: 200).
+  const AUTOPLAY_READOUTS = [100, 200, 400, 800, 1600];
 
   function priceText(price) {
     if (!price || price.fixed || !price.options || !price.options.length) return '';
@@ -129,32 +138,92 @@
     return `<div class="sec recent"><div class="h">Last moves <span class="note">the model's probability for each</span></div>${rows}</div>`;
   }
 
+  function automoveText(m) {
+    const how =
+      m.kind === 'search'
+        ? `${m.visits} visits, ${pct(m.share)}`
+        : m.kind === 'implicit_pass'
+          ? 'a pass the site waits for'
+          : m.kind === 'priced'
+            ? 'only move, priced by the model'
+            : 'only move';
+    const id = m.id ? `<span class="note">${esc(m.id)}.</span> ` : '';
+    return `<div>${id}${esc(m.actor || '')}: ${esc(m.description || '')} <span class="note">(${esc(how)})</span></div>`;
+  }
+
+  /** The hotseat autoplay controls: ``view.autoplay`` = the autoplay view plus
+   * ``players`` [{seat, name}] and ``hints``. */
+  function autoplaySection(view) {
+    const a = view.autoplay;
+    if (!a) return '';
+    const seats = (a.players || [])
+      .map(
+        (p) =>
+          `<label><input type="checkbox" data-act="seat" data-seat="${esc(p.seat)}" ${a.seats.includes(p.seat) ? 'checked' : ''} ${a.enabled ? 'disabled' : ''}>${esc(p.name)}</label>`,
+      )
+      .join('');
+    const choices = AUTOPLAY_READOUTS.includes(a.readouts) ? AUTOPLAY_READOUTS : [...AUTOPLAY_READOUTS, a.readouts].sort((x, y) => x - y);
+    const options = choices.map((n) => `<option value="${n}" ${n === a.readouts ? 'selected' : ''}>${n}</option>`).join('');
+    const button = a.enabled
+      ? '<button data-act="autoplay">Pause</button>'
+      : `<button data-act="autoplay" ${a.seats.length ? '' : 'disabled'}>Start</button>`;
+    let out = `<div class="sec auto"><div class="h">Model plays <span class="note">every move searched, the most visited played</span></div>`;
+    if (a.live) {
+      out += a.dryRun
+        ? '<div class="status info">Live game, dry run: moves are checked and shown, never posted.</div>'
+        : '<div class="status warn">Live game: the model posts moves as this browser\'s login.</div>';
+    }
+    out += `<div class="seats">${seats}</div>`;
+    out += `<div class="controls">${button}<label class="note">readouts <select data-act="readouts" ${a.enabled ? 'disabled' : ''}>${options}</select></label>`;
+    out += `<label class="hints note"><input type="checkbox" data-act="hints" ${a.hints ? 'checked' : ''}>show hints</label></div>`;
+    if (a.text) {
+      const kind = a.phase === 'error' ? 'status error' : a.phase === 'over' ? 'status info' : 'autostatus';
+      out += `<div class="${kind}">${esc(a.text)}</div>`;
+    }
+    if (a.phase === 'thinking' && a.progress !== null && a.progress !== undefined) {
+      out += `<div class="progress"><div style="width:${(100 * a.progress).toFixed(1)}%"></div></div>`;
+    }
+    if (a.moves && a.moves.length) out += `<div class="automoves" style="margin-top:4px">${a.moves.slice(0, 8).map(automoveText).join('')}</div>`;
+    return `${out}</div>`;
+  }
+
   /** The panel's body HTML for a view: ``{statuses: [{kind, text}], advice, think,
-   * readouts, busy}``. Pure: the unit tests check it directly. */
+   * readouts, busy, autoplay}``. While the model plays seats, its suggestions (moves,
+   * search, last moves) stay hidden unless ``autoplay.hints``. Pure: the unit tests
+   * check it directly. */
   function renderBody(view) {
     const parts = (view.statuses || []).map((s) => `<div class="status ${esc(s.kind || 'info')}">${esc(s.text)}</div>`);
     const advice = view.advice;
+    const autoplay = view.autoplay;
+    const hideHints = !!(autoplay && autoplay.enabled && !autoplay.hints);
     if (advice && advice.supported && advice.started !== false) {
       for (const warning of advice.warnings || []) parts.push(`<div class="status warn">${esc(warning)}</div>`);
+      parts.push(autoplaySection(view));
       if (advice.finished) parts.push('<div class="sec">The game is over.</div>');
       else if (advice.acting) parts.push(`<div class="sec">${actingText(advice)}</div>`);
-      parts.push(winRows(advice), movesSection(advice), thinkSection(view, advice), recentSection(advice));
+      parts.push(winRows(advice));
+      if (!hideHints) parts.push(movesSection(advice), thinkSection(view, advice), recentSection(advice));
     }
     return parts.join('');
   }
 
   /** A one-line summary for the collapsed panel. */
   function summary(view) {
+    const autoplay = view.autoplay;
+    if (autoplay && (autoplay.enabled || autoplay.phase === 'error') && autoplay.text) return autoplay.text;
     const advice = view.advice;
     if (view.statuses && view.statuses.length && (!advice || !advice.supported)) return view.statuses[0].text;
     if (!advice || !advice.moves || !advice.moves.length) return '';
+    if (autoplay && autoplay.enabled && !autoplay.hints) return '';
     const top = advice.moves[0];
     return `${pct(top.probability)} ${top.description}`;
   }
 
   class Panel {
     /** ``callbacks``: ``onRefresh()``, ``onThink()``, ``onHoverMove(move)`` (null when
-     * the pointer leaves), ``onPlace({left, top})`` after a drag, ``onCollapse(bool)``. */
+     * the pointer leaves), ``onPlace({left, top})`` after a drag, ``onCollapse(bool)``;
+     * autoplay: ``onAutoplayToggle()``, ``onAutoplaySeat(seat, checked)``,
+     * ``onAutoplayReadouts(n)``, ``onAutoplayHints(bool)``. */
     constructor(doc, callbacks = {}, placement = {}) {
       this.doc = doc;
       this.callbacks = callbacks;
@@ -167,6 +236,7 @@
       this.body = this.shadow.querySelector('.body');
       this.summaryEl = this.shadow.querySelector('.summary');
       this.shadow.addEventListener('click', (event) => this._click(event));
+      this.shadow.addEventListener('change', (event) => this._change(event));
       this.shadow.addEventListener('mouseover', (event) => this._hover(event));
       this.shadow.querySelector('.panel').addEventListener('mouseleave', () => this._emit('onHoverMove', null));
       this.shadow.querySelector('.hdr').addEventListener('mousedown', (event) => this._dragStart(event));
@@ -207,11 +277,20 @@
       const act = button.getAttribute('data-act');
       if (act === 'refresh') this._emit('onRefresh');
       else if (act === 'think') this._emit('onThink');
+      else if (act === 'autoplay') this._emit('onAutoplayToggle');
       else if (act === 'collapse') {
         this.placement.collapsed = !this.placement.collapsed;
         this.update(this.view);
         this._emit('onCollapse', this.placement.collapsed);
       }
+    }
+
+    _change(event) {
+      const input = event.target;
+      const act = input && input.getAttribute ? input.getAttribute('data-act') : null;
+      if (act === 'seat') this._emit('onAutoplaySeat', Number(input.getAttribute('data-seat')), !!input.checked);
+      else if (act === 'readouts') this._emit('onAutoplayReadouts', Number(input.value));
+      else if (act === 'hints') this._emit('onAutoplayHints', !!input.checked);
     }
 
     _hover(event) {
@@ -248,6 +327,11 @@
 
     update(view) {
       this.view = view;
+      // Autoplay's state on the host element, for a supervisor outside the closed shadow root
+      // (extension/bot/run.js): "<phase>: <text>".
+      const a = view.autoplay;
+      if (a && (a.enabled || a.phase === 'error' || a.phase === 'over')) this.host.setAttribute('data-autoplay', `${a.phase}: ${a.text || ''}`);
+      else this.host.removeAttribute('data-autoplay');
       this.summaryEl.textContent = this.placement.collapsed ? summary(view) : '';
       this.body.style.display = this.placement.collapsed ? 'none' : '';
       this.shadow.querySelector('[data-act="collapse"]').textContent = this.placement.collapsed ? '+' : '–';
@@ -259,7 +343,7 @@
     }
   }
 
-  const exported = { Panel, renderBody, summary, priceText };
+  const exported = { Panel, renderBody, summary, priceText, autoplaySection, AUTOPLAY_READOUTS };
   root.RL18XX = Object.assign(root.RL18XX || {}, exported);
   if (typeof module !== 'undefined' && module.exports) module.exports = exported;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

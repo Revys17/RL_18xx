@@ -126,6 +126,19 @@ test('a hotseat game is read again on every new log line, with no 10 s spacing',
   assert.equal(t.fetches.length, 3);
 });
 
+test('a page that never settles is still read every few seconds', async () => {
+  const t = setup({ pathname: '/hotseat/hs_abcdefgh_1' });
+  t.controller.checkLocation();
+  await settle();
+  for (let i = 0; i < 30; i += 1) {
+    // The model moving faster than the debounce: the log changes every 700 ms.
+    t.document.log.push(`line ${i}`);
+    t.controller.onMutations();
+    await t.clock.advance(700);
+  }
+  assert.ok(t.fetches.length >= 4, `read ${t.fetches.length} times in 21 s`);
+});
+
 test('a burst of triggers still means at most one fetch per 10 s', async () => {
   const t = setup();
   t.controller.checkLocation();

@@ -23,8 +23,8 @@ from urllib.parse import urlparse
 
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "src"
-FILES = ("common.js", "panel.js", "content.js", "background.js", "options.html", "options.js")
-VERSION = "0.1.0"
+FILES = ("common.js", "panel.js", "autoplay.js", "content.js", "bridge.js", "background.js", "options.html", "options.js")
+VERSION = "0.3.0"
 SITE = "https://18xx.games/*"
 BACKEND = ("http://127.0.0.1/*", "http://localhost/*")
 REMOTE_BACKEND = "http://*/*"  # a backend on another machine (--host 0.0.0.0), granted from the options page
@@ -46,12 +46,15 @@ def manifest(browser: str, extra_origins=()) -> dict:
         "manifest_version": 3,
         "name": "RL18xx 1830 advisor",
         "version": VERSION,
-        "description": "Shows a local 1830 model's win estimates and suggested moves on 18xx.games game pages.",
+        "description": "Shows a local 1830 model's win estimates and suggested moves on 18xx.games game pages, and lets it play seats of hotseat games.",
         "permissions": ["storage"],
         "host_permissions": list(dict.fromkeys(sites + list(BACKEND))),
         "optional_host_permissions": [REMOTE_BACKEND],
         "content_scripts": [
-            {"matches": sites, "js": ["common.js", "panel.js", "content.js"], "run_at": "document_idle"}
+            {"matches": sites, "js": ["common.js", "panel.js", "autoplay.js", "content.js"], "run_at": "document_idle"},
+            # The page bridge runs in the page's own world, beside the site's Ruby engine
+            # (autoplay in hotseat games: who the engine waits for; play a move it accepts).
+            {"matches": sites, "js": ["bridge.js"], "run_at": "document_idle", "world": "MAIN"},
         ],
         "options_ui": {"page": "options.html", "open_in_tab": False},
     }

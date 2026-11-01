@@ -162,8 +162,11 @@ class LiveGame:
         if [p.get("id") for p in game["players"]] != [p["id"] for p in self.players]:
             self._set_players(game)
             self._reset()
+        from rl18xx.agent.advisor.autoplay import swap_city_refs_in_log
+
         actions = game.get("actions") or []
-        filtered = filter_actions(actions)
+        # Ruby's city numbering -> ours (G19's preprinted cities are numbered the other way round).
+        filtered = swap_city_refs_in_log(filter_actions(actions))
         keys = [_key(a) for a in filtered]
         if self.rust is not None and keys == self._keys:
             return False
@@ -202,7 +205,7 @@ class LiveGame:
             tip = self._new_rust_game()
             self.records = {}
             try:
-                self._replay_range(tip, filter_actions(actions), 0, stopped.index, window)
+                self._replay_range(tip, swap_city_refs_in_log(filter_actions(actions)), 0, stopped.index, window)
             except _Stopped:  # can't happen: the same actions went through before
                 tip = self._new_rust_game()
             self._settled = None

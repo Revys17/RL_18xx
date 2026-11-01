@@ -258,6 +258,10 @@ def cmd_search_learning(args):
         value_head=args.value_head,
         reuse_tree=args.reuse_tree,
         reuse_max_root_visits=args.reuse_max_root_visits,
+        auction_only=args.auction_only,
+        terminal_value=args.terminal_value,
+        auction_max_decisions=args.auction_max_decisions,
+        auction_prefix_decisions=args.auction_prefix_decisions,
         dedupe_maps=args.dedupe_maps,
         server_pipeline=args.server_pipeline,
         server_replicas=args.server_replicas,
@@ -712,6 +716,20 @@ def build_parser():
     p.add_argument("--value", type=str, default=None, help="The search's value network (critic) <session>/<num> or .pth")
     p.add_argument("--value-model-dir", type=str, default="model_checkpoints_pg")
     p.add_argument("--out-dir", type=str, default=_SL.out_dir)
+    p.add_argument(
+        "--auction-only", action="store_true",
+        help="Episodes are the waterfall auction alone (real rules), scored by --terminal-value's win "
+        "estimate of the first Stock Round position (docs/search_learning_design.md 'Auction learning')",
+    )
+    p.add_argument("--terminal-value", type=str, default=None, help="--auction-only: the frozen scorer (.pth)")
+    p.add_argument(
+        "--auction-max-decisions", type=int, default=_SL.auction_max_decisions,
+        help="--auction-only: an auction still running after this many decisions is dropped",
+    )
+    p.add_argument(
+        "--auction-prefix-decisions", type=int, default=_SL.auction_prefix_decisions,
+        help="--auction-only: each episode opens with 0..N decisions sampled from the policy (varied openings)",
+    )
     p.add_argument("--run-name", type=str, default=None)
     p.add_argument("--resume", type=str, default=None, help="Run directory to continue from its last snapshot")
     p.add_argument(
@@ -963,6 +981,22 @@ def build_parser():
     p.add_argument(
         "--search-value", type=str, default=DEFAULT_SEARCH_VALUE,
         help="Value checkpoint the 'think harder' search uses (gen4's critic searches better than value_v2)",
+    )
+    p.add_argument(
+        "--play-policy", type=str, default=None,
+        help="Policy the model plays hotseat seats with (default: --policy); every decision is searched",
+    )
+    p.add_argument(
+        "--play-value", type=str, default=None, help="Leaf value of its searches (default: --search-value)"
+    )
+    p.add_argument(
+        "--play-auction-policy", type=str, default=None,
+        help="Policy its private-auction searches use (default: --auction-policy)",
+    )
+    p.add_argument(
+        "--play-auction-value", type=str, default=None,
+        help="Leaf value of its private-auction searches (default: --play-value); most value nets never "
+        "saw an auction position (gen4's critic did: its run started 15%% of games at the auction)",
     )
     p.add_argument("--device", type=str, default=None, help="cuda / cpu (default: cuda if available)")
     p.add_argument("--cpu-threads", type=int, default=4, help="Torch threads when on CPU (default: 4)")
