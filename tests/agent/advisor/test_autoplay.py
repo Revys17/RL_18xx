@@ -13,6 +13,7 @@ from rl18xx.agent.advisor.app import create_app
 from rl18xx.agent.advisor.autoplay import (
     AutoplayError,
     SiteView,
+    bot_position,
     match_train_ids,
     plan_move,
     swap_city_refs,
@@ -243,3 +244,33 @@ def test_the_sites_train_ids_go_into_the_models_moves(train_ids_live):
         match_train_ids(route, rust, _site(**{"B&M": [], "NYC": ["4-1", "4-2"]}))
     # An older page that doesn't report trains: the move as it is.
     assert match_train_ids(route, rust, SiteView.parse({"entity": {"id": "B&M", "type": "corporation"}})) == route
+
+
+# ------------------------------------------------------------ train shuffling
+SHUFFLE = Path(__file__).resolve().parents[2] / "fixtures" / "1830" / "train_shuffle_game.json"
+
+
+def test_the_bots_obey_the_rule_against_train_shuffling_and_the_humans_dont(advisor):
+    """At a purchase of a sister corporation's last train in a third OR in a row (BaseGame.shuffle_runs): the
+    followed game and the advice offer it at the price played (the real rules); the model's seat isn't
+    offered it and doesn't make it; the followed game never gets the rule."""
+    from tests.test_train_shuffle_rule import _expected, _first_refused, _offers
+
+    data = json.loads(SHUFFLE.read_text())
+    i = _first_refused(data)
+    buyer, seller, _ = _expected(data)[i]
+    live = LiveGame({"id": "hs_shuffle", "title": "1830", "players": data["players"], "actions": data["actions"][:i]})
+    assert live.error is None and live.acting()["id"] == buyer
+    assert not live.rust._game.no_buyback_rule
+    assert _offers(live.rust.get_factored_choices(), seller, data["actions"][i]["price"])
+    assert not _offers(bot_position(live).get_factored_choices(), seller)
+    assert not live.rust._game.no_buyback_rule
+
+    site = site_view(live, last_id=i, step="BuyTrain", actions=["buy_train", "pass"])
+    job = wait(advisor.start_move(live, site, seats=[live.acting()["player_id"]], readouts=8))
+    assert job.status == "done", job.error
+    action = job.result["action"]
+    if action["type"] == "buy_train":
+        assert live.rust.train_by_id(action["train"]).owner.id != seller, action
+    assert not live.rust._game.no_buyback_rule
+    assert _offers(live.rust.get_factored_choices(), seller, data["actions"][i]["price"])

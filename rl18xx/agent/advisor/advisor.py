@@ -50,7 +50,7 @@ from typing import Optional
 import numpy as np
 import torch
 
-from rl18xx.agent.advisor.autoplay import AutoplayError, match_train_ids, plan_move, to_site_action
+from rl18xx.agent.advisor.autoplay import AutoplayError, bot_position, match_train_ids, plan_move, to_site_action
 from rl18xx.agent.advisor.describe import DescribeContext, describe_action, describe_actor, map_positions
 
 LOGGER = logging.getLogger(__name__)
@@ -801,7 +801,7 @@ class Advisor:
             job.status = "done"
             job.finished = time.time()
             return job
-        game = live.rust.pickle_clone()
+        game = bot_position(live)  # the bots don't shuffle trains; the followed game keeps the real rules
         names = dict(live.names)
         threading.Thread(
             target=self._move, args=(job, game, names, live, base, site), name="advisor-move", daemon=True

@@ -15,6 +15,9 @@ Moves go back in the site's format: the Rust engine's action log is
 18xx.games' export format with players numbered 1..N, so only a player entity
 needs mapping to the site's player id. The bridge numbers the action, runs it
 through Ruby before storing it, and refuses it if Ruby does.
+
+The model's seats play under the rule against train shuffling, which the humans'
+seats don't (:func:`bot_position`).
 """
 
 from __future__ import annotations
@@ -82,6 +85,17 @@ class Plan:
     seat: int
     action: Optional[dict] = None
     reason: str = ""
+
+
+def bot_position(live):
+    """A copy of ``live``'s position for the model to search a seat's move from, under the rule against
+    train shuffling (``BaseGame.shuffle_runs``): the model's corporations don't keep passing a last train
+    around -- at a blocked purchase they buy from the depot or go bankrupt. The humans aren't held to it:
+    the followed game, its advice and the humans' searches keep the real rules. The engines keep the rule's
+    bookkeeping with the rule off, so turning it on in the copy is enough; ``live`` is never changed."""
+    game = live.rust.pickle_clone()
+    game._game.set_no_buyback_rule(True)
+    return game
 
 
 def _engine_entity(live) -> Optional[tuple]:
