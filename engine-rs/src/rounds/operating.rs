@@ -1639,7 +1639,7 @@ impl BaseGame {
             train.operated = true;
             self.corporations[corp_idx].trains.push(train);
             if self.corporations[from_corp_idx].trains.is_empty() {
-                self.no_buyback.push((actual_from.clone(), corp_sym.clone(), false));
+                self.note_last_train_purchase(corp_idx, from_corp_idx);
             }
         }
 
@@ -2415,14 +2415,6 @@ impl BaseGame {
         // Reset train operated flags
         for train in &mut self.corporations[ci].trains {
             train.operated = false;
-        }
-
-        // `no_buyback`: a block armed at this corporation's previous turn start has had its turn.
-        self.no_buyback.retain(|(blocked, _, armed)| !(*armed && blocked == &sym));
-        for (blocked, _, armed) in self.no_buyback.iter_mut() {
-            if blocked == &sym {
-                *armed = true;
-            }
         }
 
         // Clear graph cache (tile/token state may have changed since last corp)

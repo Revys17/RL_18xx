@@ -2483,12 +2483,16 @@ class RustGameAdapter:
         return [_CorpProxy(c, self._game) for c in self._game.corporations]
 
     def train_buyback_blocked(self, buyer, seller):
-        """The rule against train shuffling (Rust ``BaseGame::no_buyback``)."""
+        """The rule against train shuffling (Rust ``BaseGame::shuffle_runs``)."""
         return self._game.train_buyback_blocked(buyer, seller)
 
     @property
-    def no_buyback(self):
-        return tuple(self._game.no_buyback)
+    def shuffle_runs(self):
+        return dict(self._game.shuffle_runs)
+
+    @property
+    def or_serial(self):
+        return self._game.or_serial
 
     def corporation_by_id(self, sym):
         if sym is None:

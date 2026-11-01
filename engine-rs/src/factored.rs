@@ -1436,8 +1436,8 @@ impl BaseGame {
         // doesn't check -- a bot bought another corporation's 5 at the limit, then discarded a 4.
         let room = self.corporations[ci].trains.len() < self.corp_train_limit(ci);
         let mut trains = if room { self.buyable_trains_for_factored(&corp_sym) } else { Vec::new() };
-        // No train from another corporation on the turn after another corporation bought this one's last
-        // (`BaseGame::no_buyback`, the project's rule against shuffling trains between corporations).
+        // No sister corporation's last train in a third OR in a row of such purchases
+        // (`BaseGame::shuffle_runs`, the project's rule against shuffling trains between corporations).
         trains.retain(|(_id, _name, _price, source)| !self.train_buyback_blocked(&corp_sym, source));
         // Phase availability filter for depot (upcoming) trains, mirroring
         // Python's `Depot.depot_trains` exactly: the visible upcoming trains are

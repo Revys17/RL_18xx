@@ -209,22 +209,37 @@ class BaseGame:
     auction_unlock = False
     # Times the variant has discounted a private this game (diagnostic).
     auction_unlock_discounts = 0
-    # Self-play rule against train shuffling, off unless set (engine-rs BaseGame::no_buyback): a corporation whose
-    # last train another corporation bought may not, on its next turn, buy a train from any corporation (the depot or
-    # bankruptcy). ``no_buyback``: (blocked seller, buyer, armed) syms, kept either way; armed when the
-    # seller's next turn starts, dropped when the turn after it starts. Read only by the legal-move helpers.
-    # Reassigned, never mutated (the default is shared).
+    # Self-play rule against train shuffling, off unless set (engine-rs BaseGame::shuffle_runs): one president's
+    # corporations may buy each other's last train in at most SHUFFLE_MAX_ORS ORs in a row; in the next OR a
+    # corporation that needs a train buys it from the depot or goes bankrupt. Purchases within an OR and of spare
+    # trains are never limited. ``shuffle_runs``: president id -> (``or_serial`` of the last OR with such a purchase,
+    # ORs in a row), kept either way; ``or_serial`` counts operating rounds. Read only by the legal-move helpers.
+    # Reassigned, never mutated (the defaults are shared).
+    SHUFFLE_MAX_ORS = 2
     no_buyback_rule = False
-    no_buyback = ()
+    shuffle_runs = {}
+    or_serial = 0
 
     def train_buyback_blocked(self, buyer, seller):
-        """Whether corporation ``buyer`` (a sym) may not buy a train from corporation ``seller`` now (``no_buyback``,
-        with the rule on)."""
-        return (
-            self.no_buyback_rule
-            and self.corporation_by_id(seller) is not None
-            and any(blocked == buyer for blocked, _, _ in self.no_buyback)
-        )
+        """Whether corporation ``buyer`` (a sym) may not buy a train from corporation ``seller`` now (``shuffle_runs``,
+        with the rule on): it is the seller's last train, both have the same president, and that president's
+        corporations bought each other's last trains in each of the last SHUFFLE_MAX_ORS ORs."""
+        if not self.no_buyback_rule:
+            return False
+        b, s = self.corporation_by_id(buyer), self.corporation_by_id(seller)
+        if b is None or s is None or b.owner is None or s.owner is None or b.owner.id != s.owner.id:
+            return False
+        last, run = self.shuffle_runs.get(b.owner.id, (0, 0))
+        return len(s.trains) == 1 and last + 1 == self.or_serial and run >= self.SHUFFLE_MAX_ORS
+
+    def note_last_train_purchase(self, buyer, seller):
+        """``shuffle_runs`` bookkeeping: corporation ``buyer`` has just bought corporation ``seller``'s last train."""
+        if buyer.owner is None or seller.owner is None or buyer.owner.id != seller.owner.id:
+            return
+        last, run = self.shuffle_runs.get(buyer.owner.id, (0, 0))
+        if last != self.or_serial:
+            run = run + 1 if last + 1 == self.or_serial else 1
+            self.shuffle_runs = {**self.shuffle_runs, buyer.owner.id: (self.or_serial, run)}
 
     @classmethod
     def load(
@@ -3196,6 +3211,7 @@ class BaseGame:
     def new_operating_round(self, round_num=1):
         self.log.append(f"-- {self.round_description(self.OPERATING_ROUND_NAME, round_num)} --")
         self.round_counter += 1
+        self.or_serial += 1
         return self.operating_round(round_num)
 
     def operating_round(self, round_num):

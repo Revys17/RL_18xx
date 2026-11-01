@@ -1,14 +1,14 @@
-"""The rule against train shuffling (``BaseGame.no_buyback``, the project's, not Ruby's).
+"""The rule against train shuffling (``BaseGame.shuffle_runs``, the project's, not Ruby's).
 
-A corporation whose last train another corporation bought may not, on its next turn, buy a train from
-any corporation: it buys from the depot or goes bankrupt. A self-play rule: off unless set
+One president's corporations may buy each other's last train in at most two ORs in a row
+(``SHUFFLE_MAX_ORS``); in the next OR a corporation that needs a train buys it from the depot or goes
+bankrupt. Purchases within an OR and of spare trains are never limited. A self-play rule: off unless set
 (``set_no_buyback_rule``; ``start_positions.new_game`` sets it), so human games import and the advisor
-follows them under the real rules. Without it two corporations of one president pass
-one train back and forth at $1 and neither ever buys a train or goes bankrupt: 76% of lr1's generator
-games did (40,480 buybacks in 4,096 games). Blocking only the buyback, or only another corporation's last
-train, still lets three corporations rotate trains forever (85% of 13,056 lr1 games had purchases only
-the strict rule refuses). The fixtures are lr1 games: 174 buybacks, and three corporations rotating one
-train 73 times. The rule is on the legal-move lists only, so the games still replay as played.
+follows them under the real rules. Without it corporations of one president passed trains around at $1 and
+kept lost positions alive: every bot system ran such purchases 3+ ORs in a row in 65-77% of its games, humans
+in 6.9% (lr1's ladder games vs 3,612 human games). The fixtures are lr1 games: two corporations passing one
+train back and forth (174 buybacks) and three corporations rotating one (73 rotations). The rule is on the
+legal-move lists only, so the games still replay as played.
 """
 
 import json
@@ -30,6 +30,7 @@ from rl18xx.rust_adapter import RustGameAdapter  # noqa: E402
 from tests.test_factored_action_helper_rust_parity import _canonical_key  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures" / "1830"
+MAX_ORS = 2
 
 
 @pytest.fixture(scope="module")
@@ -65,23 +66,31 @@ def _python(data, rule=True):
     return game
 
 
-def _seller(game, action):
-    """The corporation that owns the train ``action`` buys, or None (the depot)."""
-    for corp in game.corporations:
-        if any(t.id == action["train"] for t in corp.trains):
-            return corp.id
-    return None
+def _president(corp):
+    owner = (corp.owner_id_str or "").split(":")[-1]
+    return int(owner) if owner.isdigit() else None
 
 
-def _cross_corp_buys(data):
-    """Index -> seller of every purchase from another corporation, replayed in the Rust engine."""
-    game = _rust(data)
-    out = {}
+def _expected(data):
+    """Index -> (buyer, seller, refused) for every purchase of a sister corporation's last train, from bookkeeping
+    of the rule's own (ORs counted by their (set, number), presidents read from the share register)."""
+    game = _rust(data, rule=False)
+    raw = game._game
+    ors, runs, out = [], {}, {}
     for i, action in enumerate(data["actions"]):
+        if raw.round.round_type == "Operating" and (not ors or ors[-1] != (raw.turn, raw.round.round_num)):
+            ors.append((raw.turn, raw.round.round_num))
         if action["type"] == "buy_train" and not action.get("exchange"):
-            seller = _seller(game, action)
-            if seller is not None and seller != action["entity"]:
-                out[i] = seller
+            corps = {c.sym: c for c in raw.corporations}
+            seller = next((c for c in corps.values() if any(t.id == action["train"] for t in c.trains)), None)
+            buyer = corps[action["entity"]]
+            pres = _president(buyer)
+            if seller is not None and seller.sym != buyer.sym and len(seller.trains) == 1 and pres == _president(seller):
+                serial = len(ors)
+                last, run = runs.get(pres, (0, 0))
+                out[i] = (buyer.sym, seller.sym, last + 1 == serial and run >= MAX_ORS)
+                if last != serial:
+                    runs[pres] = (serial, run + 1 if last + 1 == serial else 1)
         game.process_action(dict(action))
     return out
 
@@ -102,51 +111,40 @@ def test_the_game_replays_as_played(any_game):
     assert game.finished
 
 
-def _refused_and_offered(data):
-    """Replays ``data`` with the rule on and checks every purchase from another corporation: refused, with
-    no purchase from any corporation offered, when another corporation bought the buyer's last train before
-    this turn; otherwise offered as played. Returns the refused indices and the number offered."""
-    buys = _cross_corp_buys(data)
-    game = _rust(data)
-    corporations = {c.id for c in game.corporations}
-    refused, offered = set(), 0
-    for i, action in enumerate(data["actions"]):
-        if i in buys:
+def test_a_third_or_in_a_row_of_last_train_purchases_is_refused(any_game):
+    """Every purchase of a sister's last train in a third OR in a row is refused, with no train of that seller
+    offered; every other one is offered at the price played."""
+    expected = _expected(any_game)
+    game = _rust(any_game)
+    refused = offered = 0
+    for i, action in enumerate(any_game["actions"]):
+        if i in expected:
+            buyer, seller, blocked = expected[i]
             choices = game.get_factored_choices()
-            if any(blocked == action["entity"] for blocked, _, _ in game.no_buyback):
-                assert not any(
-                    c.type == "BuyTrain" and c.entity.get("source") in corporations for c in choices
-                ), (i, action)
-                assert game.train_buyback_blocked(action["entity"], buys[i])
-                refused.add(i)
+            assert game.train_buyback_blocked(buyer, seller) == blocked, (i, action, game.shuffle_runs)
+            if blocked:
+                assert not _offers(choices, seller), (i, action)
+                refused += 1
             else:
-                assert _offers(choices, buys[i], action["price"]), (i, action, game.no_buyback)
+                assert _offers(choices, seller, action["price"]), (i, action, game.shuffle_runs)
                 offered += 1
         game.process_action(dict(action))
-    assert refused and offered
-    return refused, offered
-
-
-def test_every_buyback_is_refused(shuffle_game):
-    refused, _ = _refused_and_offered(shuffle_game)
-    assert set(shuffle_game["buyback_indices"]) == refused and len(refused) == 174
-
-
-def test_a_rotation_through_a_third_corporation_is_refused(rotation_game):
-    """No corporation in the rotation buys back from the corporation that bought its train, so a buyback-only
-    rule never fires; each takes a third corporation's last train, which the rule refuses too."""
-    refused, _ = _refused_and_offered(rotation_game)
-    assert set(rotation_game["rotation_indices"]) <= refused and len(rotation_game["rotation_indices"]) == 73
+    # The recorded games go on after a refused purchase, so a later one in the same OR counts as that OR's
+    # second (never limited): about half of a continuous shuffle's purchases show as refused here; in play the
+    # first refusal ends it. The lr1 games' buybacks / rotations are all such purchases.
+    marked = set(any_game.get("buyback_indices") or any_game.get("rotation_indices"))
+    assert marked <= set(expected)
+    assert (refused, offered) == {174: (88, 90), 73: (25, 63)}[len(marked)]
 
 
 def test_both_engines_agree_through_the_game(any_game):
-    """The Python engine keeps the same blocks (bookkeeping on each sale, arming at each turn start) and
-    both legal-move lists agree at every position of the game -- with every block in play."""
+    """The Python engine keeps the same bookkeeping (each sister last-train purchase, the OR count) and both
+    legal-move lists agree at every position of the game -- with the rule biting."""
     rust = _rust(any_game)
     python = _python(any_game)
     helper = FactoredActionHelper()
     for i, action in enumerate(any_game["actions"]):
-        assert sorted(rust.no_buyback) == sorted(python.no_buyback), i
+        assert rust.shuffle_runs == python.shuffle_runs and rust.or_serial == python.or_serial, i
         r = {_canonical_key(c) for c in rust.get_factored_choices()}
         p = {_canonical_key(c) for c in helper.get_choices(python)}
         assert r == p, (i, action, r ^ p)
@@ -154,35 +152,38 @@ def test_both_engines_agree_through_the_game(any_game):
         python.process_action(dict(action))
 
 
-def test_action_helper_refuses_a_buyback(shuffle_game):
+def _first_refused(data):
+    return next(i for i, (_, _, blocked) in sorted(_expected(data).items()) if blocked)
+
+
+def test_action_helper_refuses_it(shuffle_game):
     """The non-factored ActionHelper (Python search, the importer's matching) applies the rule too."""
-    i = shuffle_game["buyback_indices"][0]
+    i = _first_refused(shuffle_game)
     python = _python(shuffle_game)
     for action in shuffle_game["actions"][:i]:
         python.process_action(dict(action))
-    buyback = shuffle_game["actions"][i]
-    seller = _seller(python, buyback)
+    buyer, seller, _ = _expected(shuffle_game)[i]
     entity = python.current_entity
     assert any(getattr(t.owner, "id", None) == seller for t in python.round.active_step().buyable_trains(entity))
     actions = ActionHelper().get_buy_train_actions(python)
     assert not any(type(a).__name__ == "BuyTrain" and getattr(a.train.owner, "id", None) == seller for a in actions)
-    assert python.train_buyback_blocked(buyback["entity"], seller)
+    assert python.train_buyback_blocked(buyer, seller)
 
 
 def test_off_by_default_and_on_in_generator_games(shuffle_game):
-    """Human-game import and the advisor build engines directly: the real rules, buybacks offered."""
+    """Human-game import and the advisor build engines directly: the real rules, the purchase offered."""
     from rl18xx.agent.alphazero.start_positions import new_game
 
     assert not RustGame(_players(shuffle_game)).no_buyback_rule
     assert not GameMap().game_by_title("1830")(_players(shuffle_game)).no_buyback_rule
     assert new_game(4)._game.no_buyback_rule and not new_game(4, no_buyback_rule=False)._game.no_buyback_rule
-    i = shuffle_game["buyback_indices"][0]
+    i = _first_refused(shuffle_game)
+    buyer, seller, _ = _expected(shuffle_game)[i]
     for game in (_rust(shuffle_game, rule=False), _python(shuffle_game, rule=False)):
         for action in shuffle_game["actions"][:i]:
             game.process_action(dict(action))
-        seller = _seller(game, shuffle_game["actions"][i])
-        assert not game.train_buyback_blocked(shuffle_game["actions"][i]["entity"], seller)
+        assert not game.train_buyback_blocked(buyer, seller)
     rust = _rust(shuffle_game, rule=False)
     for action in shuffle_game["actions"][:i]:
         rust.process_action(dict(action))
-    assert _offers(rust.get_factored_choices(), _seller(rust, shuffle_game["actions"][i]), 1)
+    assert _offers(rust.get_factored_choices(), seller, shuffle_game["actions"][i]["price"])

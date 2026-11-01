@@ -511,7 +511,7 @@ class FactoredActionHelper:
                 )
             else:
                 if game.train_buyback_blocked(entity.id, train.owner.id):
-                    continue  # no train from a corporation the turn after selling its last (BaseGame.no_buyback)
+                    continue  # a sister's last train in a 3rd OR in a row of such buys (BaseGame.shuffle_runs)
                 min_p, max_p = step.spend_minmax(entity, train)
                 if not pres_may_contribute:
                     entity_buying_power = game.buying_power(entity)

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+
 use std::sync::Arc;
 
 use pyo3::prelude::*;
@@ -14,6 +15,10 @@ use crate::map::{GraphCache, NodeId, NodeType};
 use crate::rounds::Round;
 use crate::tiles::{self, TileColor, TileDef};
 use crate::title::{GameTitle, HexDef, HexType};
+
+/// The rule against train shuffling (`BaseGame::shuffle_runs`): ORs in a row in which one president's corporations
+/// may buy each other's last trains.
+pub(crate) const SHUFFLE_MAX_ORS: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // Python <-> serde_json conversion helpers
@@ -258,16 +263,17 @@ pub struct BaseGame {
     /// nationalization on that hex.
     pub(crate) national_reservations: Vec<String>,
     /// Self-play rule against train shuffling (the project's, not Ruby's), off unless set
-    /// (`no_buyback_rule`; the generators' `start_positions.new_game` turns it on): a corporation whose last
-    /// train another corporation bought may not, on its next turn, buy a train from any corporation -- it
-    /// buys from the depot or goes bankrupt. Corporations of one president passing trains around at $1
-    /// never buy a train or go bankrupt; blocking only the buyback (or only another corporation's last
-    /// train) still lets three of them rotate one or two trains forever. Entries are (blocked seller,
-    /// buyer, armed), kept whether or not the rule is on: armed when the seller's next turn starts,
-    /// dropped when the turn after it starts.
-    /// Only the legal-move lists read them (1830's factored enumeration, Python's helpers);
-    /// `process_action` accepts the move either way, so recorded games replay.
-    pub(crate) no_buyback: Vec<(String, String, bool)>,
+    /// (`no_buyback_rule`; the generators' `start_positions.new_game` turns it on): one president's
+    /// corporations may buy each other's last train in at most `SHUFFLE_MAX_ORS` ORs in a row; in the next
+    /// OR a corporation that needs a train buys it from the depot or goes bankrupt. Purchases within an OR
+    /// and of spare trains are never limited. Without it corporations of one president passed trains around
+    /// at $1 and kept lost positions alive (every bot did; 6.9% of human games ran 3+ ORs in a row).
+    /// `shuffle_runs`: president -> (`or_serial` of the last OR with such a purchase, ORs in a row), kept
+    /// whether or not the rule is on; `or_serial` counts operating rounds. Only the legal-move lists read
+    /// them (1830's factored enumeration, Python's helpers); `process_action` accepts the move either way,
+    /// so recorded games replay.
+    pub(crate) shuffle_runs: HashMap<u32, (u32, u32)>,
+    pub(crate) or_serial: u32,
     pub(crate) no_buyback_rule: bool,
     /// Self-play rule variant, off unless set: an all-pass waterfall round
     /// discounts the next private by $5 like the SV (taken free at $0) when
@@ -347,12 +353,35 @@ impl BaseGame {
     ) -> Vec<(String, String, i32, String)> {
         self.buyable_trains_for(corp_sym)
     }
-    /// Whether `buyer` may not buy a train from `seller` now (`no_buyback`, with the rule on): `seller` is a
-    /// corporation and another corporation bought `buyer`'s last train before this turn of `buyer`'s.
+    /// Whether corporation `buyer` may not buy a train from corporation `seller` now (`shuffle_runs`, with
+    /// the rule on): it is `seller`'s last train, both have the same president, and that president's
+    /// corporations bought each other's last trains in each of the last `SHUFFLE_MAX_ORS` ORs.
     pub(crate) fn train_buyback_blocked(&self, buyer: &str, seller: &str) -> bool {
+        let (Some(&bi), Some(&si)) = (self.corp_idx.get(buyer), self.corp_idx.get(seller)) else {
+            return false;
+        };
+        let Some(pres) = self.corporations[bi].president_id() else {
+            return false;
+        };
         self.no_buyback_rule
-            && self.corp_idx.contains_key(seller)
-            && self.no_buyback.iter().any(|(blocked, _, _)| blocked == buyer)
+            && self.corporations[si].president_id() == Some(pres)
+            && self.corporations[si].trains.len() == 1
+            && self
+                .shuffle_runs
+                .get(&pres)
+                .is_some_and(|&(last, run)| last + 1 == self.or_serial && run >= SHUFFLE_MAX_ORS)
+    }
+    /// `shuffle_runs` bookkeeping: corporation `buyer` has just bought corporation `seller`'s last train.
+    pub(crate) fn note_last_train_purchase(&mut self, buyer: usize, seller: usize) {
+        let pres = self.corporations[buyer].president_id();
+        let Some(pres) = pres.filter(|&p| self.corporations[seller].president_id() == Some(p)) else {
+            return;
+        };
+        let serial = self.or_serial;
+        let entry = self.shuffle_runs.entry(pres).or_insert((0, 0));
+        if entry.0 != serial {
+            *entry = (serial, if entry.0 + 1 == serial { entry.1 + 1 } else { 1 });
+        }
     }
     pub(crate) fn president_may_contribute_pub(&mut self, corp_sym: &str) -> bool {
         self.president_may_contribute(corp_sym)
@@ -572,7 +601,8 @@ impl BaseGame {
             trainless_nationalization_pending: self.trainless_nationalization_pending,
             trainless_major: self.trainless_major.clone(),
             national_reservations: self.national_reservations.clone(),
-            no_buyback: self.no_buyback.clone(),
+            shuffle_runs: self.shuffle_runs.clone(),
+            or_serial: self.or_serial,
             no_buyback_rule: self.no_buyback_rule,
             auction_unlock: self.auction_unlock,
             auction_unlock_discounts: self.auction_unlock_discounts,
@@ -1163,6 +1193,7 @@ impl BaseGame {
                 self.stock_start_entity();
             }
             crate::steps::RoundStart::Operating { round_num, total_ors } => {
+                self.or_serial += 1;
                 let mut state = crate::rounds::OperatingState::new(
                     round_num,
                     total_ors,
@@ -2972,7 +3003,8 @@ impl BaseGame {
             events_fired: Vec::new(),
             trainless_nationalization_pending: false,
             trainless_major: Vec::new(),
-            no_buyback: Vec::new(),
+            shuffle_runs: HashMap::new(),
+            or_serial: 0,
             no_buyback_rule: false,
             national_reservations: title
                 .national_setup()
@@ -4481,7 +4513,7 @@ impl BaseGame {
         self.auction_unlock_discounts
     }
 
-    /// Turn the self-play rule against train shuffling on or off (the `no_buyback` field). Clones keep
+    /// Turn the self-play rule against train shuffling on or off (the `shuffle_runs` field). Clones keep
     /// the setting.
     fn set_no_buyback_rule(&mut self, on: bool) {
         self.no_buyback_rule = on;
@@ -4492,17 +4524,24 @@ impl BaseGame {
         self.no_buyback_rule
     }
 
-    /// The rule against train shuffling (`no_buyback`): whether corporation `buyer` may not buy a train
+    /// The rule against train shuffling (`shuffle_runs`): whether corporation `buyer` may not buy a train
     /// from corporation `seller` now (always false with the rule off).
     #[pyo3(name = "train_buyback_blocked")]
     fn train_buyback_blocked_py(&self, buyer: &str, seller: &str) -> bool {
         self.train_buyback_blocked(buyer, seller)
     }
 
-    /// `no_buyback`'s entries: (blocked seller, buyer, armed).
-    #[getter(no_buyback)]
-    fn get_no_buyback(&self) -> Vec<(String, String, bool)> {
-        self.no_buyback.clone()
+    /// `shuffle_runs`: president (player id) -> (OR serial of the last OR in which their corporations bought
+    /// each other's last train, ORs in a row).
+    #[getter(shuffle_runs)]
+    fn get_shuffle_runs(&self) -> HashMap<u32, (u32, u32)> {
+        self.shuffle_runs.clone()
+    }
+
+    /// Operating rounds started so far (`shuffle_runs`' clock).
+    #[getter(or_serial)]
+    fn get_or_serial(&self) -> u32 {
+        self.or_serial
     }
 
     /// Get all valid par prices for the stock market.
