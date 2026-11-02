@@ -990,6 +990,45 @@ def cmd_report(args):
         Path(args.out).with_suffix(".json").write_text(json.dumps(report, indent=1))
 
 
+def cmd_noise(args):
+    """Target noise of a rollout set, per seat (canonical frame), overall and by stage: the variance of a single
+    game outcome across positions, a single rollout's within-position variance, the K-mean's noise variance, the
+    rollout value's signal variance, and the game outcome's squared distance from the rollout value (its noise +
+    the search-vs-rollout gap), each corrected for the K-mean's own noise."""
+    a = load_rollouts(args.data)
+    keep = (~np.isnan(a["r_win"]).any(-1)).all(1)
+    a = {k: v[keep] for k, v in a.items()}
+    rot = a["rotation"]
+    idx = (np.arange(NUM_PLAYERS)[None, :] + rot[:, None]) % NUM_PLAYERS
+    z = np.take_along_axis(a["win"], idx, 1).astype(np.float64)
+    rw = np.take_along_axis(a["r_win"], idx[:, None, :], 2).astype(np.float64)
+    K = rw.shape[1]
+    stage = np.minimum(2, 3 * a["index"] // a["n_actions"])
+    term = a["r_term"]
+    out, lines = {}, []
+    lines.append(f"{len(z)} positions, K={K}; rollout length {a['r_len'].mean():.0f} decisions; terminations "
+                 f"{ {int(t): int((term == t).sum()) for t in np.unique(term)} }")
+    lines.append(f"{'subset':8s} {'n':>6s} {'Var(z)':>8s} {'s2_w':>8s} {'s2_w/K':>8s} {'signal':>8s} "
+                 f"{'E(z-V)^2':>9s} {'noise ratio z/Kmean':>20s} {'SNR 1-roll':>10s} {'SNR K-mean':>10s} {'SNR outcome':>11s}")
+    for name, sm in (("all", np.ones(len(z), bool)), ("early", stage == 0), ("mid", stage == 1), ("late", stage == 2)):
+        m = rw[sm].mean(1)
+        s2w = rw[sm].var(1, ddof=1).mean()
+        signal = m.var(0).mean() - s2w / K
+        gap = ((z[sm] - m) ** 2).mean() - (rw[sm].var(1, ddof=1) / K).mean()  # E[(z - V_roll)^2] per seat
+        row = {"n": int(sm.sum()), "var_outcome": float(z[sm].var(0).mean()), "s2_within": float(s2w),
+               "s2_kmean": float(s2w / K), "signal": float(signal), "outcome_gap": float(gap),
+               "noise_ratio_outcome_vs_kmean": float(gap / (s2w / K))}
+        out[name] = row
+        lines.append(f"{name:8s} {row['n']:6d} {row['var_outcome']:8.4f} {s2w:8.4f} {s2w / K:8.4f} {signal:8.4f} "
+                     f"{gap:9.4f} {gap / (s2w / K):20.1f} {signal / s2w:10.3f} {signal / (s2w / K):10.3f} "
+                     f"{signal / gap:11.3f}")
+    text = "\n".join(lines)
+    print(text)
+    if args.out:
+        Path(args.out).write_text(text + "\n")
+        Path(args.out).with_suffix(".json").write_text(json.dumps(out, indent=1))
+
+
 def load_siblings(d: Path) -> dict:
     files = [f for f in sorted((d / "tasks").glob("*.npz")) if not f.name.endswith(".tmp.npz")]
     parts = [dict(np.load(f)) for f in files]
@@ -1156,6 +1195,10 @@ def main():
     t.add_argument("--sets", nargs="+", default=["newrule", "fixed", "ladder", "rval"])
     t.add_argument("--out", default=None)
 
+    t = sub.add_parser("noise")
+    t.add_argument("--data", required=True)
+    t.add_argument("--out", default=None)
+
     t = sub.add_parser("sib-report")
     t.add_argument("--exp", required=True)
     t.add_argument("--siblings", required=True)
@@ -1165,7 +1208,7 @@ def main():
     args = p.parse_args()
     {"rollouts": cmd_rollouts, "sib-roots": cmd_sib_roots, "siblings": cmd_siblings, "testset": cmd_testset,
      "free": cmd_free, "anchor": cmd_anchor, "train": cmd_train, "preds": cmd_preds, "report": cmd_report,
-     "sib-report": cmd_sib_report}[args.cmd](args)
+     "sib-report": cmd_sib_report, "noise": cmd_noise}[args.cmd](args)
 
 
 if __name__ == "__main__":
