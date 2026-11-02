@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const R = require('../src/common.js');
-const { createController, mergeOptions } = require('../src/content.js');
+const { createController, mergeOptions, makeBridge } = require('../src/content.js');
 const { fakeDocument, fakeClock, settle } = require('./fakes.js');
 const { sampleAdvice } = require('./samples.js');
 
@@ -297,4 +297,21 @@ test('opening a game straight into its history view advises that position', asyn
   t.controller.checkLocation();
   await settle();
   assert.deepEqual(t.sent[0].game.actions.map((a) => a.id), [1]);
+});
+
+test('the page bridge waits longer for an apply (its POST may queue in the live bot) than for other requests', () => {
+  const timeouts = [];
+  const win = {
+    location: { origin: 'https://18xx.games' },
+    addEventListener: () => {},
+    postMessage: () => {},
+    setTimeout: (fn, ms) => timeouts.push(ms),
+    clearTimeout: () => {},
+  };
+  const bridge = makeBridge(win);
+  bridge('inspect', { game: 1 });
+  bridge('apply', { game: 1, action: { type: 'pass' }, last_id: 3 });
+  assert.equal(timeouts.length, 2);
+  assert.ok(timeouts[1] >= 120000, `apply waits ${timeouts[1]} ms`);
+  assert.ok(timeouts[0] < timeouts[1]);
 });

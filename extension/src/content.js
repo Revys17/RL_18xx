@@ -22,6 +22,10 @@
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const THINK_POLL_MS = 1000;
   const BRIDGE_TIMEOUT_MS = 20000;
+  // An "apply" waits for the move's POST, which the live bot's runner queues behind its other
+  // requests to the site (8 s after every page load): cut short, a move the site accepted reads
+  // as refused and autoplay stops.
+  const BRIDGE_APPLY_TIMEOUT_MS = 180000;
 
   /** The page logic, with its browser surroundings passed in (``env``) so the unit
    * tests can drive it: ``location``, ``document``, ``fetchGame(id)``,
@@ -505,7 +509,7 @@
   }
 
   /** Requests to the page bridge (bridge.js, in the page's world) over window.postMessage. */
-  function makeBridge(win, timeoutMs = BRIDGE_TIMEOUT_MS) {
+  function makeBridge(win, timeoutMs = BRIDGE_TIMEOUT_MS, applyTimeoutMs = BRIDGE_APPLY_TIMEOUT_MS) {
     let seq = 0;
     const pending = new Map();
     win.addEventListener('message', (event) => {
@@ -522,7 +526,7 @@
         const id = `rq${Date.now()}_${seq}`;
         const timer = win.setTimeout(() => {
           if (pending.delete(id)) resolve({ ok: false, error: "the page didn't answer (reload it)" });
-        }, timeoutMs);
+        }, op === 'apply' ? applyTimeoutMs : timeoutMs);
         pending.set(id, (data) => {
           win.clearTimeout(timer);
           resolve(data);

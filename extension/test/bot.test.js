@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { Pacer, Games, takeJoinRequests, accountsOf } = require('../bot/run.js');
+const { Pacer, Games, takeJoinRequests, accountsOf, autoplayStopped } = require('../bot/run.js');
 
 test('the pacer spaces requests at least its interval apart, in order', async () => {
   const pacer = new Pacer(1000);
@@ -78,4 +78,13 @@ test('the join file is read once and emptied; accounts come from <name>.token fi
   const accounts = accountsOf({ player: null, accountsDir: dir });
   assert.deepEqual(accounts.map((a) => a.name), ['Bot One', 'Bot2']);
   assert.deepEqual(accountsOf({ player: 'Solo', cookieFile: '/c' }), [{ name: 'Solo', cookieFile: '/c' }]);
+});
+
+test("a stuck game's autoplay counts as stopped when it is off or stopped on an error", () => {
+  assert.equal(autoplayStopped(null), true); // off: the panel shows no status
+  assert.equal(autoplayStopped('error: The site refused the model\'s move "Bot: Pass": the page didn\'t answer'), true);
+  assert.equal(autoplayStopped('off: Choose the seats the model plays.'), true);
+  assert.equal(autoplayStopped('waiting: nesyt to move.'), false);
+  assert.equal(autoplayStopped('thinking: Bot is thinking…'), false);
+  assert.equal(autoplayStopped('over: the game is over'), false);
 });

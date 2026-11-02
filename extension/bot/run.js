@@ -50,6 +50,13 @@ const DISCOVER_MS = 2 * 60_000;
 const STUCK_MS = 5 * 60_000;
 const MONITOR_MAX_AGE_MS = 30_000; // the runner's own once-a-minute look may reuse a read this recent
 const PAGE_SPACING_MS = 8_000; // a page load is a handful of requests: keep the queue clear after one
+const MAX_AUTOPLAY_RESTARTS = 3; // per stuck turn: a stop that keeps coming back needs a person
+
+/** Whether the panel's autoplay status (``data-autoplay``: "<phase>: <text>", absent while it is
+ * off) says autoplay has stopped: off, or stopped on an error. */
+function autoplayStopped(status) {
+  return !status || /^(error|off)\b/.test(status);
+}
 
 function parseArgs(argv) {
   const args = {
@@ -238,6 +245,7 @@ class GameWatch {
     this.page = null;
     this.lastStatus = null;
     this.waitLogged = false;
+    this.restarts = 0; // autoplay switched back on since the game last moved
   }
 
   async open() {
@@ -328,11 +336,24 @@ class GameWatch {
     const moved = actions.length !== this.turnLength;
     this.turnLength = actions.length;
     if (!botTurn || moved) this.turnSince = botTurn ? Date.now() : null;
+    if (moved) this.restarts = 0;
     if (botTurn && !this.bot.args.dryRun && this.turnSince && Date.now() - this.turnSince > STUCK_MS) {
       const shot = path.join(this.bot.args.logDir, `stuck_${this.id}_${Date.now()}.png`);
       await this.page.screenshot({ path: shot }).catch(() => {});
       log(`game ${this.id}: a bot's turn has waited ${Math.round((Date.now() - this.turnSince) / 60000)} min ` +
           `(autoplay: ${status || 'no status'}); screenshot ${shot}. Reloading the page.`);  // prettier-ignore
+      // Autoplay switches itself off on an error (the extension saves it off for this game), and
+      // a reload doesn't switch it back on: do, a few times while the game doesn't move.
+      if (autoplayStopped(status)) {
+        if (this.restarts < MAX_AUTOPLAY_RESTARTS) {
+          this.restarts += 1;
+          log(`game ${this.id}: autoplay is off; switching it back on (${this.restarts} of ${MAX_AUTOPLAY_RESTARTS})`);
+          await this.bot.setOptions({ autoplay: { [this.id]: { enabled: true, seats: this.seats } } });
+        } else if (this.restarts === MAX_AUTOPLAY_RESTARTS) {
+          this.restarts += 1;
+          log(`game ${this.id}: autoplay keeps stopping without a move; left off (fix or undo, then restart the runner)`);
+        }
+      }
       this.turnSince = Date.now();
       await this.bot.pacer.turn(PAGE_SPACING_MS);
       await this.page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
@@ -543,5 +564,5 @@ if (require.main === module) {
     process.exit(1);
   });
 } else {
-  module.exports = { Pacer, Games, takeJoinRequests, accountsOf };
+  module.exports = { Pacer, Games, takeJoinRequests, accountsOf, autoplayStopped };
 }
