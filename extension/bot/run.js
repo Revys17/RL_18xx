@@ -387,6 +387,9 @@ class Bot {
     fs.mkdirSync(this.args.profile, { recursive: true });
     this.viewer = await playwright().chromium.launchPersistentContext(this.args.profile, {
       channel: 'chromium',
+      // Playwright turns Chromium's sandbox off by default. On Ubuntu 24.04 it needs the AppArmor
+      // profile /etc/apparmor.d/playwright-chromium, or the browser fails with "No usable sandbox".
+      chromiumSandbox: true,
       headless: !this.args.headed,
       viewport: { width: 1400, height: 900 },
       args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`],
