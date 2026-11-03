@@ -20,7 +20,7 @@ from rl18xx.agent.advisor.autoplay import (
     swap_city_refs_in_log,
     to_site_action,
 )
-from rl18xx.agent.advisor.live_game import LiveGame
+from rl18xx.agent.advisor.live_game import LiveGame, position_key
 
 from .conftest import truncated
 
@@ -277,34 +277,95 @@ def test_the_bots_obey_the_rule_against_train_shuffling_and_the_humans_dont(advi
 
 
 # ------------------------------------------------------------- kept trees
-def test_the_models_next_move_goes_on_with_its_kept_tree(advisor_models, game):
-    """The model plays every seat, each move posted to the "site" and followed back as the live bot's
-    games are: a move from the position the model's last move led to goes on with that tree (the root
-    topped up to the budget), and a position the tree doesn't lead to (another player moved) starts
-    a fresh one."""
-    advisor = Advisor(advisor_models)
-    live = LiveGame(game)
-    readouts = 12
+def play(advisors: dict, live, game: dict, readouts: dict, searches: int) -> list:
+    """Play ``game`` on with ``advisors[seat]`` choosing each seat's move (posted to the "site" and
+    followed back as the live bot's games are) until ``searches`` searched moves: their
+    ``(seat, result)``."""
     searched = []
-    while len(searched) < 6:
+    while len(searched) < searches:
+        seat = live.acting()["player_id"]
         view = site_view(live, last_id=len(game["actions"]))
-        job = wait(advisor.start_move(live, view, seats=[1, 2, 3, 4], readouts=readouts))
+        job = wait(advisors[seat].start_move(live, view, seats=[seat], readouts=readouts[seat]))
         assert job.status == "done", job.error
         result = job.result
         if result["kind"] == "search":
-            searched.append(result)
-            assert result["visits"] >= readouts and 0 <= result["inherited"] <= result["visits"]
-        game["actions"].append({**result["action"], "id": len(game["actions"]) + 1, "user": 101})
+            searched.append((seat, result))
+            assert result["visits"] >= readouts[seat] and 0 <= result["inherited"] <= result["visits"]
+        game["actions"].append({**result["action"], "id": len(game["actions"]) + 1, "user": 100 + seat})
         assert live.update(game) and live.error is None
-    assert searched[0]["inherited"] == 0
-    assert any(r["inherited"] > 0 for r in searched[1:]), [r["inherited"] for r in searched]
+    return searched
 
-    # Another player's move in between: the position isn't the kept tree's root.
-    kept = advisor._trees[live.game_id]
-    assert kept[0] == live.position_key
-    other = Advisor(advisor_models)
-    other._trees[live.game_id] = ("not this position", kept[1], kept[2])
-    view = site_view(live, last_id=len(game["actions"]))
-    job = wait(other.start_move(live, view, seats=[1, 2, 3, 4], readouts=readouts))
+
+def test_the_models_next_move_goes_on_with_its_kept_tree(advisor_models, game):
+    """The model plays every seat: a move from the position its last move led to (past any forced moves
+    the tree applied) goes on with that tree, the root topped up to the budget."""
+    advisor = Advisor(advisor_models)
+    live = LiveGame(game)
+    searched = play({s: advisor for s in (1, 2, 3, 4)}, live, game, {s: 12 for s in (1, 2, 3, 4)}, 6)
+    assert searched[0][1]["inherited"] == 0
+    assert any(r["inherited"] > 0 for _, r in searched[1:]), [r["inherited"] for _, r in searched]
+    assert advisor._trees[live.game_id][0] == position_key(
+        list(advisor._trees[live.game_id][2]._rust_player.root_game_object().raw_actions)
+    )
+
+
+def kept_decision(model, live, game: dict, enough) -> tuple:
+    """Play on (the model at every seat) until the model's kept tree is at the game's position with
+    ``enough(explored, unexplored)`` -- its root's moves without an open price, split by whether the
+    search visited them: ``(tree, root, visits, explored, unexplored)``."""
+    from rl18xx.rust_adapter import RustGameAdapter
+
+    for _ in range(60):
+        play({s: model for s in (1, 2, 3, 4)}, live, game, {s: 24 for s in (1, 2, 3, 4)}, 1)
+        kept = model._trees.get(live.game_id)
+        if kept is None or kept[0] != live.position_key:
+            continue
+        tree = kept[2]._rust_player
+        visits = tree.child_n_at_root()
+        root = RustGameAdapter(tree.root_game_object())
+        moves = [
+            int(i) for i in tree.legal_action_indices_at_root() if root._game.price_range_for_index(int(i)) is None
+        ]
+        explored = [i for i in moves if visits[i] > 0]
+        unexplored = [i for i in moves if visits[i] == 0]
+        if enough(explored, unexplored):
+            return tree, root, visits, explored, unexplored
+    pytest.fail("no kept tree at such a decision")
+
+
+def engine_action(root, index: int) -> tuple:
+    """``(action dict, the log before it)``: ``index`` played at ``root`` (a copy)."""
+    probe = root.pickle_clone()
+    before = len(probe.raw_actions)
+    probe._game.apply_action_index(index, None)
+    logged = list(probe.raw_actions)
+    return dict(logged[before]), logged[:before]
+
+
+def test_the_kept_tree_follows_another_players_move_its_search_explored(advisor_models, game, caplog):
+    """A move from outside (a "human" playing one of the moves the model's search explored there) is
+    followed down the kept tree: the model's next search goes on with that child's subtree."""
+    model = Advisor(advisor_models)
+    live = LiveGame(game)
+    tree, root, visits, explored, _ = kept_decision(model, live, game, lambda e, u: len(e) >= 2)
+    index = min(explored, key=lambda i: visits[i])  # the explored move the model liked least
+    action, before = engine_action(root, index)
+    game["actions"].append({**to_site_action(action, live, before), "id": len(game["actions"]) + 1, "user": 999})
+    assert live.update(game) and live.error is None
+
+    with caplog.at_level("INFO", logger="rl18xx.agent.advisor.advisor"):
+        seat = live.acting()["player_id"]
+        view = site_view(live, last_id=len(game["actions"]))
+        job = wait(model.start_move(live, view, seats=[seat], readouts=24))
     assert job.status == "done", job.error
-    assert job.result["inherited"] == 0
+    assert job.result["kind"] == "search", job.result
+    assert any("the kept tree followed 1 move(s)" in r.getMessage() for r in caplog.records)
+    assert job.result["inherited"] == int(visits[index])
+
+
+def test_a_move_the_search_never_explored_is_not_followed(advisor_models, game):
+    model = Advisor(advisor_models)
+    live = LiveGame(game)
+    tree, root, _, explored, unexplored = kept_decision(model, live, game, lambda e, u: e and u)
+    assert Advisor._explored_move(tree, engine_action(root, explored[0])[0]) == (explored[0], None)
+    assert Advisor._explored_move(tree, engine_action(root, unexplored[0])[0]) is None

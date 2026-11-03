@@ -69,10 +69,11 @@ SEARCH_OVERRIDES = dict(
     mcts_mean_q=True, fpu_reduction=0.0, c_puct_init=0.05, c_puct_by_round={}, dedupe_leaves=True, parallel_readouts=8
 )
 # Autoplay keeps a game's search tree after the model's move (the chosen move's subtree) and goes on
-# with it when the model moves next from the position the tree leads to -- the same seat again or
-# another of its seats -- as the head-to-head evals do with ``budget=total``: the root is topped up to
-# 1 + readouts visits, inherited ones included, so the model plays as those evals measured it, with
-# fewer evaluations. Anything else in between (a human's move) starts a fresh tree. Trees kept, LRU:
+# with it at the model's next move, as the training generator does: the tree follows the moves played
+# in between (another of its seats, a human) down the children its search explored, and the root is
+# topped up to the budget, inherited visits included (the head-to-head evals' ``budget=total``), so
+# the model plays as those evals measured it, with fewer evaluations. A move the search never explored
+# (the tree has nothing below it) starts a fresh tree. Trees kept, LRU:
 KEPT_TREES = 8
 # A played move the policy gave less than this is "surprising"; at least
 # EXPECTED (or its top choice) "expected"; in between "plausible".
@@ -715,16 +716,70 @@ class Advisor:
                 break
         return player
 
-    def _kept_tree(self, job: SearchJob, system: str):
-        """The tree kept after the model's last move in ``job``'s game, if ``job``'s position is its
-        root (``KEPT_TREES``); a tree the game has moved away from is dropped."""
+    def _kept_tree(self, job: SearchJob, system: str, game):
+        """The tree kept after the model's last move in ``job``'s game, moved along the moves played
+        since then to ``game``'s position (``KEPT_TREES``), or None (dropped) where it can't follow."""
+        from rl18xx.agent.advisor.live_game import action_key, position_key
+
         with self._trees_lock:
             kept = self._trees.pop(job.game_id, None)
-        if kept is None or kept[0] != job.position or kept[1] != system:
+        if kept is None or kept[1] != system:
             return None
         player = kept[2]
-        LOGGER.info("game %s: going on with the kept tree (%d visits)", job.game_id, player._rust_player.n_at_root())
+        tree = player._rust_player
+        if kept[0] != job.position:
+            actions = list(game.raw_actions)
+            log = [action_key(a) for a in actions]
+            followed = 0
+            while True:
+                root_log = [action_key(a) for a in tree.root_game_object().raw_actions]
+                if len(root_log) >= len(log) or root_log != log[: len(root_log)]:
+                    break
+                move = self._explored_move(tree, actions[len(root_log)])
+                if move is None:
+                    LOGGER.info(
+                        "game %s: the kept tree never explored %s; a fresh tree",
+                        job.game_id,
+                        action_key(actions[len(root_log)]),
+                    )
+                    return None
+                try:
+                    tree.advance_root_to(*move)
+                except Exception:
+                    return None
+                followed += 1
+            if position_key(tree.root_game_object().raw_actions) != job.position:
+                return None
+            LOGGER.info("game %s: the kept tree followed %d move(s) played since", job.game_id, followed)
+        LOGGER.info("game %s: going on with the kept tree (%d visits)", job.game_id, tree.n_at_root())
         return player
+
+    @staticmethod
+    def _explored_move(tree, action: dict):
+        """``(index, price)`` of the move the tree's search explored at its root that plays ``action``
+        (an engine action dict), or None."""
+        from rl18xx.agent.advisor.live_game import action_key
+        from rl18xx.rust_adapter import RustGameAdapter
+
+        wanted = action_key(action)
+        visits = np.asarray(tree.child_n_at_root(), dtype=np.float64)
+        root = RustGameAdapter(tree.root_game_object())
+        for index in tree.legal_action_indices_at_root():
+            index = int(index)
+            if visits[index] <= 0:
+                continue
+            probe = root.pickle_clone()
+            price_range = probe._game.price_range_for_index(index)
+            price = int(action["price"]) if price_range is not None and action.get("price") is not None else None
+            before = len(probe.raw_actions)
+            try:
+                probe._game.apply_action_index(index, price)
+            except Exception:  # e.g. a price outside this move's range: not this move
+                continue
+            logged = list(probe.raw_actions)
+            if len(logged) > before and action_key(logged[before]) == wanted:
+                return index, price
+        return None
 
     def _top_up(self, job: SearchJob, player) -> None:
         """Search a kept tree until its root has ``job.readouts`` visits, inherited ones included."""
@@ -866,7 +921,7 @@ class Advisor:
         legal = [int(i) for i in rs.factored_legal_indices()]
         system = "auction" if rs.round.round_type == "Auction" else "main"
         searched = is_decision(rs, legal) and len(legal) > 1
-        player = self._kept_tree(job, system) if searched else None
+        player = self._kept_tree(job, system, game) if searched else None
         inherited = 0
         if player is not None:
             inherited = int(player._rust_player.n_at_root())

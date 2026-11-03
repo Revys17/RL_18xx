@@ -71,12 +71,15 @@ def _key(action: dict, drop_id: bool = False) -> str:
     return json.dumps(action, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def action_key(action: dict) -> str:
+    """An action as positions compare it: who sent it and when don't count, so the followed game (the
+    site's ``user`` on every action) and a search tree's own log (none) agree."""
+    return _key({k: v for k, v in action.items() if k not in ("user", "created_at")}, drop_id=True)
+
+
 def position_key(raw_actions) -> str:
-    """A digest of an engine's action log: equal keys, equal positions. Who sent an action and when
-    don't count, so the followed game (the site's ``user`` on every action) and a search tree's own
-    log (none) agree on a position."""
-    keys = [_key({k: v for k, v in a.items() if k not in ("user", "created_at")}, drop_id=True) for a in raw_actions]
-    return hashlib.sha1("\n".join(keys).encode()).hexdigest()
+    """A digest of an engine's action log: equal keys, equal positions."""
+    return hashlib.sha1("\n".join(action_key(a) for a in raw_actions).encode()).hexdigest()
 
 
 @dataclass
