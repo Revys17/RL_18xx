@@ -28,7 +28,6 @@ from pathlib import Path
 
 LOGGER = logging.getLogger(__name__)
 SELF_PLAY_GAMES_STATUS_PATH = Path("self_play_games_status")
-SELF_PLAY_GAMES_STATUS_PATH.mkdir(parents=True, exist_ok=True)
 
 
 def _slice_price_components(batched: Optional[dict], leaf_index: int) -> Optional[dict]:
