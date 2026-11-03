@@ -71,6 +71,14 @@ def _key(action: dict, drop_id: bool = False) -> str:
     return json.dumps(action, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def position_key(raw_actions) -> str:
+    """A digest of an engine's action log: equal keys, equal positions. Who sent an action and when
+    don't count, so the followed game (the site's ``user`` on every action) and a search tree's own
+    log (none) agree on a position."""
+    keys = [_key({k: v for k, v in a.items() if k not in ("user", "created_at")}, drop_id=True) for a in raw_actions]
+    return hashlib.sha1("\n".join(keys).encode()).hexdigest()
+
+
 @dataclass
 class MoveRecord:
     """A recorded action as the engine got it, and the position it was played in."""
@@ -240,9 +248,7 @@ class LiveGame:
                 self.records[i] = MoveRecord(i, captured["before"], captured["action"], applied=applied)
 
     def _update_position_key(self) -> None:
-        """A digest of the engine's action log: equal keys, equal positions."""
-        keys = [_key(a, drop_id=True) for a in self.rust.raw_actions]
-        self.position_key = hashlib.sha1("\n".join(keys).encode()).hexdigest()
+        self.position_key = position_key(self.rust.raw_actions)
 
     # -------------------------------------------------------------- reading
     @property

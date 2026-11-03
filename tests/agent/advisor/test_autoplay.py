@@ -274,3 +274,37 @@ def test_the_bots_obey_the_rule_against_train_shuffling_and_the_humans_dont(advi
         assert live.rust.train_by_id(action["train"]).owner.id != seller, action
     assert not live.rust._game.no_buyback_rule
     assert _offers(live.rust.get_factored_choices(), seller, data["actions"][i]["price"])
+
+
+# ------------------------------------------------------------- kept trees
+def test_the_models_next_move_goes_on_with_its_kept_tree(advisor_models, game):
+    """The model plays every seat, each move posted to the "site" and followed back as the live bot's
+    games are: a move from the position the model's last move led to goes on with that tree (the root
+    topped up to the budget), and a position the tree doesn't lead to (another player moved) starts
+    a fresh one."""
+    advisor = Advisor(advisor_models)
+    live = LiveGame(game)
+    readouts = 12
+    searched = []
+    while len(searched) < 6:
+        view = site_view(live, last_id=len(game["actions"]))
+        job = wait(advisor.start_move(live, view, seats=[1, 2, 3, 4], readouts=readouts))
+        assert job.status == "done", job.error
+        result = job.result
+        if result["kind"] == "search":
+            searched.append(result)
+            assert result["visits"] >= readouts and 0 <= result["inherited"] <= result["visits"]
+        game["actions"].append({**result["action"], "id": len(game["actions"]) + 1, "user": 101})
+        assert live.update(game) and live.error is None
+    assert searched[0]["inherited"] == 0
+    assert any(r["inherited"] > 0 for r in searched[1:]), [r["inherited"] for r in searched]
+
+    # Another player's move in between: the position isn't the kept tree's root.
+    kept = advisor._trees[live.game_id]
+    assert kept[0] == live.position_key
+    other = Advisor(advisor_models)
+    other._trees[live.game_id] = ("not this position", kept[1], kept[2])
+    view = site_view(live, last_id=len(game["actions"]))
+    job = wait(other.start_move(live, view, seats=[1, 2, 3, 4], readouts=readouts))
+    assert job.status == "done", job.error
+    assert job.result["inherited"] == 0

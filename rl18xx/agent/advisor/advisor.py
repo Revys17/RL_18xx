@@ -68,6 +68,12 @@ MAX_READOUTS = 5000
 SEARCH_OVERRIDES = dict(
     mcts_mean_q=True, fpu_reduction=0.0, c_puct_init=0.05, c_puct_by_round={}, dedupe_leaves=True, parallel_readouts=8
 )
+# Autoplay keeps a game's search tree after the model's move (the chosen move's subtree) and goes on
+# with it when the model moves next from the position the tree leads to -- the same seat again or
+# another of its seats -- as the head-to-head evals do with ``budget=total``: the root is topped up to
+# 1 + readouts visits, inherited ones included, so the model plays as those evals measured it, with
+# fewer evaluations. Anything else in between (a human's move) starts a fresh tree. Trees kept, LRU:
+KEPT_TREES = 8
 # A played move the policy gave less than this is "surprising"; at least
 # EXPECTED (or its top choice) "expected"; in between "plausible".
 SURPRISING = 0.05
@@ -435,6 +441,8 @@ class Advisor:
         self._jobs_lock = threading.Lock()
         self._running: Optional[SearchJob] = None
         self._moves: OrderedDict = OrderedDict()  # (game id, position, site's last action, seats, readouts) -> job
+        self._trees: OrderedDict = OrderedDict()  # game id -> (root's position key, system, RustMCTSPlayer)
+        self._trees_lock = threading.Lock()
 
     # -------------------------------------------------------------- inference
     def _policy_role(self, game) -> str:
@@ -707,6 +715,38 @@ class Advisor:
                 break
         return player
 
+    def _kept_tree(self, job: SearchJob, system: str):
+        """The tree kept after the model's last move in ``job``'s game, if ``job``'s position is its
+        root (``KEPT_TREES``); a tree the game has moved away from is dropped."""
+        with self._trees_lock:
+            kept = self._trees.pop(job.game_id, None)
+        if kept is None or kept[0] != job.position or kept[1] != system:
+            return None
+        player = kept[2]
+        LOGGER.info("game %s: going on with the kept tree (%d visits)", job.game_id, player._rust_player.n_at_root())
+        return player
+
+    def _top_up(self, job: SearchJob, player) -> None:
+        """Search a kept tree until its root has ``job.readouts`` visits, inherited ones included."""
+        tree = player._rust_player
+        job.visits = tree.n_at_root()
+        while tree.n_at_root() < job.readouts:
+            before = tree.n_at_root()
+            player.tree_search()
+            job.visits = tree.n_at_root()
+            if job.visits <= before:
+                break
+
+    def _keep_tree(self, game_id, system: str, player, raw_actions: list) -> None:
+        """Keep ``player``'s tree, advanced past the model's move, for its next move in the game."""
+        from rl18xx.agent.advisor.live_game import position_key
+
+        with self._trees_lock:
+            self._trees[game_id] = (position_key(raw_actions), system, player)
+            self._trees.move_to_end(game_id)
+            while len(self._trees) > KEPT_TREES:
+                self._trees.popitem(last=False)
+
     def _run_search(self, job: SearchJob, game, names: dict) -> dict:
         from rl18xx.rust_adapter import RustGameAdapter
 
@@ -826,7 +866,13 @@ class Advisor:
         legal = [int(i) for i in rs.factored_legal_indices()]
         system = "auction" if rs.round.round_type == "Auction" else "main"
         searched = is_decision(rs, legal) and len(legal) > 1
-        player = self._grow_tree(job, game, play=system, search=searched)
+        player = self._kept_tree(job, system) if searched else None
+        inherited = 0
+        if player is not None:
+            inherited = int(player._rust_player.n_at_root())
+            self._top_up(job, player)
+        else:
+            player = self._grow_tree(job, game, play=system, search=searched)
         tree = player._rust_player
         root = RustGameAdapter(tree.root_game_object())
         ctx = DescribeContext.from_game(root, names)
@@ -842,6 +888,8 @@ class Advisor:
         logged = list(tree.root_game_object().raw_actions)
         if len(logged) <= raw_before:
             raise RuntimeError(f"the engine logged no action for move {index}")
+        if searched:
+            self._keep_tree(job.game_id, system, player, logged)
         action = dict(logged[raw_before])
         price = action.get("price")
         fixed = price_range is not None and int(price_range[0]) == int(price_range[1])
@@ -853,6 +901,7 @@ class Advisor:
             "action": match_train_ids(to_site_action(action, live, logged[:raw_before]), root, site),
             "index": index,
             "visits": root_visits if searched else 0,
+            "inherited": inherited,  # of those, from the tree kept after the model's last move
             "share": float(visits[index] / total) if searched else 1.0,
             "num_legal": len(legal),
             "actor": described["actor"],
