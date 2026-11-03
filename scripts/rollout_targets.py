@@ -12,6 +12,9 @@ train shuffling on, the evals' 1000-decision limit). Subcommands:
     siblings   each root's children (all legal moves, or the top-8 by prior + 4 random), each child rolled
                out K times with common random numbers (rollout r of every child draws from seed (s, root, r))
     testset    eval collections -> 16 decision positions per game (fixed seed), canonical encodings + outcome
+    games      whole policy-only games from the generators' starts (auction / mid-game / Stock Round 1 mix, the
+               first decisions explored at T 1, as the search generators play them), saved as search_data shards
+               (no searches) for ``free``; stops at a budget of policy decisions
     free       outcome-labelled positions of every saved game (16 per game), as memory-mappable .npy files
     train      a value arm: warm start, AdamW, the value trainer's loss (win CE + placement MSE), a share of
                every batch from the anchor, a weight average; at most ~1.5 passes
@@ -144,8 +147,9 @@ def _new_rollout(rs, decisions: int, rng, uid: str):
 
 def play_out(games: list, settings: dict) -> None:
     """Play every game to its end in lockstep through the worker's policy server: moves sampled from the
-    policy at ``settings['temperature']``, prices from its price head; ``g.termination`` is set (finished,
-    max_length, error)."""
+    policy at ``settings['temperature']`` (at ``g.explore_temperature`` while ``g.decisions`` is below
+    ``g.explore_until``, for games that have them), prices from its price head; ``g.termination`` is set
+    (finished, max_length, error)."""
     from rl18xx.agent.alphazero import policy_gradient as pg
     from rl18xx.agent.alphazero.mcts import _rust_encode
     from rl18xx.agent.alphazero.policy_selfplay import _advance
@@ -173,8 +177,9 @@ def play_out(games: list, settings: dict) -> None:
         price_logits = price["price_logits"].numpy() if price is not None else None
         for j, (g, legal) in enumerate(pending):
             p = probs[j].numpy()[legal].astype(np.float64)
-            if temperature != 1.0:
-                p = np.power(np.clip(p, 1e-12, None), 1.0 / temperature)
+            t = g.explore_temperature if g.decisions < getattr(g, "explore_until", 0) else temperature
+            if t != 1.0:
+                p = np.power(np.clip(p, 1e-12, None), 1.0 / t)
             p = p / p.sum() if p.sum() > 0 else np.full(len(legal), 1.0 / len(legal))
             choice = legal[int(g.rng.choice(len(legal), p=p))]
             g.price_row = price_logits[j] if price_logits is not None else None
@@ -372,9 +377,11 @@ def sibling_task(task: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def run_pool(fn, tasks: list, out_dir: Path, policy: str, workers: int, replicas: int, deadline: float | None):
+def run_pool(fn, tasks: list, out_dir: Path, policy: str, workers: int, replicas: int, deadline: float | None,
+             budget: int | None = None):
     """Run ``fn`` over ``tasks`` (dicts with an ``id``), each result's arrays saved to
-    ``out_dir/tasks/<id>.npz`` (tasks already there are skipped); stops submitting at ``deadline``."""
+    ``out_dir/tasks/<id>.npz`` (tasks already there are skipped); stops submitting at ``deadline``, or once this
+    run's finished tasks hold ``budget`` decisions."""
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
 
@@ -412,7 +419,7 @@ def run_pool(fn, tasks: list, out_dir: Path, policy: str, workers: int, replicas
                     rollouts += res["rollouts"]
                     decisions += res["decisions"]
                     worker_s += res["seconds"]
-                    if deadline is None or time.time() < deadline:
+                    if (deadline is None or time.time() < deadline) and (budget is None or decisions < budget):
                         nxt = next(it, None)
                         if nxt is not None:
                             futures[pool.submit(fn, nxt)] = nxt
@@ -451,6 +458,87 @@ def cmd_rollouts(args):
     (out / "config.json").write_text(json.dumps({**vars(args), "games_total": len(index), "tasks": len(tasks)}, indent=1))
     deadline = time.time() + args.hours * 3600 if args.hours else None
     run_pool(rollout_task, tasks, out, args.policy, args.workers, args.replicas, deadline)
+
+
+def games_task(task: dict) -> dict:
+    """Pool task: whole policy-only games ``task['games']`` (game numbers), each from the start a generator would
+    draw -- ``replayed_start`` with the task's mix, seeded by ``(seed, game number)``, so every policy given the
+    same seed plays the same starts -- the first ``explore_decisions`` decisions counted from the real game start
+    at ``explore_temperature`` (as ``search_learning --explore-from-game-start``), the rest at ``temperature``;
+    written as one search_data shard ``task['shards']/<id>.sld`` (no searches, no rows: ``free`` reads them)."""
+    import random
+
+    from rl18xx.agent.alphazero import policy_gradient as pg
+    from rl18xx.agent.alphazero import search_data as sd
+    from rl18xx.agent.alphazero.search_learning import start_decisions
+    from rl18xx.agent.alphazero.self_play import _compute_net_worth
+    from rl18xx.agent.alphazero.start_positions import AUCTION_START, replayed_start
+
+    t0 = time.time()
+    seed = int(task["seed"])
+    settings = {"temperature": task["temperature"], "max_decisions": task["max_decisions"], "price_eps": 0.0}
+    games = []
+    for i in task["games"]:
+        start, game, _ = replayed_start(
+            NUM_PLAYERS, task["start_positions"], task["random_start_fraction"], rng=random.Random(f"{seed}:{i}"),
+            midgame_path=task["midgame_positions"], midgame_fraction=task["midgame_fraction"],
+            auction_fraction=task["auction_fraction"])
+        explored = start_decisions(start.actions, NUM_PLAYERS)
+        games.append(SimpleNamespace(
+            game=game, uid=f"{seed}-{i:07d}", decisions=0, start_decisions=0, price_row=None, termination=None,
+            rng=np.random.default_rng([seed, i]), start=start.label, start_actions=len(start.actions),
+            explore_until=int(task["explore_decisions"]) - explored, explore_temperature=task["explore_temperature"]))
+    play_out(games, settings)
+    empty = {name: np.zeros(0, dtype=dtype) for name, (dtype, _) in sd.COLUMNS.items()}
+    empty["search_value"] = np.zeros((0, NUM_PLAYERS), dtype=np.float32)
+    empty["price_cells"] = np.zeros((0, task["price_cells"]), dtype=np.float32)
+    packed = []
+    for g in games:
+        if g.termination == "error":
+            continue
+        win, _ = pg.outcome(g.game)
+        nw = _compute_net_worth(g.game)
+        worth = np.array([float(nw[pid]) for pid in sorted(nw)], dtype=np.float64)
+        total = float(worth.clip(min=0).sum())
+        fractions = worth.clip(min=0) / total if total > 0 else np.full(NUM_PLAYERS, 1.0 / NUM_PLAYERS)
+        actions = list(g.game._game.raw_actions)
+        meta = {
+            "uid": g.uid, "start": g.start, "start_kind": g.start.split(":")[0] if g.start else None,
+            "start_actions": g.start_actions, "auction_unlock": g.start == AUCTION_START,
+            "no_buyback_rule": bool(g.game._game.no_buyback_rule), "num_players": NUM_PLAYERS,
+            "termination": g.termination, "decisions": int(g.decisions), "searched": 0,
+            "seat_servers": ["policy"] * NUM_PLAYERS, "seat_members": ["main"] * NUM_PLAYERS, "actions": len(actions),
+            "win_share": [float(x) for x in win], "fractions": [float(x) for x in fractions],
+            "net_worth": [float(x) for x in worth], "score_target": None, "aux_seat": [], "aux_global": [],
+            "value_version": None,
+        }  # fmt: skip
+        packed.append({"meta": meta, "actions": json.dumps(actions, separators=(",", ":")).encode(),
+                       "columns": dict(empty)})
+    if packed:
+        sd.write_shard(Path(task["shards"]) / f"{task['id']:06d}{sd.SHARD_SUFFIX}", packed, task["config"])
+    decisions = int(sum(g.decisions for g in games))
+    return {"arrays": {"games": np.array([len(packed)]), "decisions": np.array([decisions])},
+            "seconds": time.time() - t0, "decisions": decisions, "rollouts": len(packed)}
+
+
+def cmd_games(args):
+    from rl18xx.agent.alphazero import price_pmf
+
+    out = Path(args.out)
+    (out / "shards").mkdir(parents=True, exist_ok=True)
+    config = {**vars(args), "kind": "policy_games"}
+    (out / "config.json").write_text(json.dumps(config, indent=1))
+    common = {key: getattr(args, key) for key in (
+        "seed", "temperature", "max_decisions", "explore_decisions", "explore_temperature", "start_positions",
+        "random_start_fraction", "midgame_positions", "midgame_fraction", "auction_fraction")}  # fmt: skip
+    common.update(shards=str(out / "shards"), config=config, price_cells=price_pmf.NUM_CELLS)
+    tasks = [{"id": b // args.games_per_task, "games": list(range(b, min(args.games, b + args.games_per_task))),
+              **common} for b in range(0, args.games, args.games_per_task)]  # in game order: a prefix is paired
+    done = [np.load(f) for f in sorted((out / "tasks").glob("*.npz")) if not f.name.endswith(".tmp.npz")]
+    spent = int(sum(int(z["decisions"][0]) for z in done))
+    LOGGER.info(f"{len(done)} tasks done before ({spent} decisions of the {args.decisions} budget)")
+    if spent < args.decisions:
+        run_pool(games_task, tasks, out, args.policy, args.workers, args.replicas, None, args.decisions - spent)
 
 
 def cmd_sib_roots(args):
@@ -761,6 +849,9 @@ def arm_data(args) -> tuple:
                  "placement": np.asarray(d["placement"]), "rows": rows}
         return train, None
     a = load_rollouts(args.data)
+    if args.pos_ids:  # only these positions (e.g. the ones two rollout sets share)
+        keep = np.isin(a["pos_id"], np.load(args.pos_ids))
+        a = {k: v[keep] for k, v in a.items()}
     is_val = np.array([val_game(u) for u in a["uid"]])
     train = rollout_arrays({k: v[~is_val] for k, v in a.items()}, args.target)
     train["rows"] = np.arange(len(train["win"]))
@@ -1125,6 +1216,25 @@ def main():
     r.add_argument("--seed", type=int, default=20261101)
     r.add_argument("--hours", type=float, default=0.0, help="stop submitting after this long (0: no limit)")
 
+    g = sub.add_parser("games")
+    g.add_argument("--out", required=True)
+    g.add_argument("--policy", required=True)
+    g.add_argument("--decisions", type=int, required=True, help="budget: policy decisions over all games")
+    g.add_argument("--games", type=int, default=2_000_000, help="game numbers available (the budget ends first)")
+    g.add_argument("--games-per-task", type=int, default=32)
+    g.add_argument("--temperature", type=float, default=0.7)
+    g.add_argument("--explore-decisions", type=int, default=120, help="from the real game start, at T explore")
+    g.add_argument("--explore-temperature", type=float, default=1.0)
+    g.add_argument("--start-positions", default="human_games/start_positions_1830_4p_v2.jsonl")
+    g.add_argument("--random-start-fraction", type=float, default=0.2)
+    g.add_argument("--midgame-positions", default="human_games/midgame_positions_1830_4p_v2.jsonl")
+    g.add_argument("--midgame-fraction", type=float, default=0.25)
+    g.add_argument("--auction-fraction", type=float, default=0.35)
+    g.add_argument("--max-decisions", type=int, default=1000)
+    g.add_argument("--workers", type=int, default=24)
+    g.add_argument("--replicas", type=int, default=1)
+    g.add_argument("--seed", type=int, default=20261103)
+
     s = sub.add_parser("sib-roots")
     s.add_argument("--collection", action="append", required=True)
     s.add_argument("--positions", type=int, default=300)
@@ -1168,6 +1278,7 @@ def main():
     t.add_argument("--source", choices=("rollouts", "free"), required=True)
     t.add_argument("--data", required=True)
     t.add_argument("--target", default="outcome", help="outcome | rollout | rollout<k> (rollouts source)")
+    t.add_argument("--pos-ids", default=None, help="(rollouts source) a .npy of the positions to keep")
     t.add_argument("--out", required=True)
     t.add_argument("--init", default=V4)
     t.add_argument("--anchor", default=None)
@@ -1206,7 +1317,7 @@ def main():
     t.add_argument("--out", default=None)
 
     args = p.parse_args()
-    {"rollouts": cmd_rollouts, "sib-roots": cmd_sib_roots, "siblings": cmd_siblings, "testset": cmd_testset,
+    {"rollouts": cmd_rollouts, "games": cmd_games, "sib-roots": cmd_sib_roots, "siblings": cmd_siblings, "testset": cmd_testset,
      "free": cmd_free, "anchor": cmd_anchor, "train": cmd_train, "preds": cmd_preds, "report": cmd_report,
      "sib-report": cmd_sib_report, "noise": cmd_noise}[args.cmd](args)
 
