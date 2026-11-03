@@ -238,10 +238,14 @@
     const move = Object.assign({}, action);
     delete move.created_at;
     move.id = expectedLastId + 1;
-    const next = opal.$process_action(Opal.Hash.$new(move));
+    // As the site's page plays a move (View::Game::Actionable): the moves other players' programmed
+    // actions (e.g. an auto-pass) make right after it ride along as its ``auto_actions``, which the
+    // server recomputes and requires to match ("Auto actions do not match").
+    const next = opal.$process_action(Opal.Hash.$new(move), Opal.Hash.$new({ add_auto_actions: true }));
     cache = null; // whatever happens next, the stored or posted game is read afresh
     if (broken(next)) return { ok: false, invalid: true, error: String(next.$exception()) };
     const stored = next.$raw_actions().$last().$to_n();
+    if (stored.auto_actions) move.auto_actions = stored.auto_actions;
     if (game.live) {
       if (dryRun) return { ok: false, dry_run: true, action: stored };
       const refused = await post(game, move, acting && acting.player, stored);
