@@ -8,9 +8,14 @@ server; every worker holds a client for each server, and a seat searches
 with its own checkpoint's tree (rebuilt from the current position whenever
 the other checkpoint moved in between, kept across its own consecutive moves).
 
+``--num-players 2`` plays 1830's two-player game instead: 1v1 (``--a-seats`` 1, the
+default there), each start played in both seatings, A first and B first
+(``--start-positions default`` names the player count's start file,
+``human_games/start_positions_1830_<N>p_v2.jsonl``).
+
 A game scores share-of-winners per seat (1/k for each of k tied leaders on
 net worth), so a side's expected score is 0.5 when the checkpoints are equally
-strong. Games use the self-play ``auction_unlock`` variant both checkpoints
+strong (a_seats / players in general). Games use the self-play ``auction_unlock`` variant both checkpoints
 were trained under; moves are sampled from visit counts before
 ``--softpick`` decisions and argmax after, with no Dirichlet noise and no
 resignation. With ``--start-positions`` games start at the first Stock Round
@@ -101,14 +106,17 @@ sys.path.insert(0, str(REPO_ROOT))
 
 LOGGER = logging.getLogger("eval_head_to_head")
 CHECKPOINT_DIR = REPO_ROOT / "model_checkpoints"
-NUM_PLAYERS = 4
+NUM_PLAYERS = 4  # the default player count (--num-players)
 
 
-def arrangements(a_seats: int = 2) -> list:
-    """Every way to give side A ``a_seats`` of the four seats (side B the rest)."""
+def arrangements(a_seats: int = 2, num_players: int = NUM_PLAYERS) -> list:
+    """Every way to give side A ``a_seats`` of the ``num_players`` seats (side B the rest): 4 players
+    2v2 in six, 1v3 / 3v1 in four; 2 players 1v1 in two (A first, then B first)."""
+    if not 1 <= a_seats <= num_players - 1:
+        raise ValueError(f"side A needs 1-{num_players - 1} of {num_players} seats, got {a_seats}")
     return [
-        tuple("A" if seat in chosen else "B" for seat in range(NUM_PLAYERS))
-        for chosen in itertools.combinations(range(NUM_PLAYERS), a_seats)
+        tuple("A" if seat in chosen else "B" for seat in range(num_players))
+        for chosen in itertools.combinations(range(num_players), a_seats)
     ]
 
 
@@ -139,7 +147,7 @@ def resolve_checkpoint(spec: str) -> Path:
     return matches[0].resolve()
 
 
-def parse_player(spec: str, default_readouts: int) -> tuple:
+def parse_player(spec: str, default_readouts: int, num_players: int = NUM_PLAYERS) -> tuple:
     """``(checkpoint path, SelfPlayConfig overrides)`` of a player spec (see the module docstring)."""
     spec, _, options = spec.partition(":")
     checkpoint, _, search = spec.partition("@")
@@ -200,7 +208,7 @@ def parse_player(spec: str, default_readouts: int) -> tuple:
         if reward is None:
             LOGGER.warning(f"{spec}: no run reward recorded for the score head; finished games back up the win share")
         else:
-            weight, points = terminal_utility(value_head, reward)
+            weight, points = terminal_utility(value_head, reward, num_players)
             overrides.update(terminal_score_weight=weight, terminal_score_points=points)
     return paths + (hash_ + value_head if hash_ else ""), overrides
 
@@ -319,6 +327,7 @@ def _setup_game(game_idx: int, seat_names: tuple, settings: dict) -> tuple:
     from rl18xx.rust_adapter import RustGameAdapter
 
     start_label = None
+    num_players = int(settings.get("num_players", NUM_PLAYERS))
     if settings.get("start_positions"):
         # Self-play's starts (first Stock Round). Seeded by the start index so
         # all six seat arrangements of a start play from the same position.
@@ -327,13 +336,13 @@ def _setup_game(game_idx: int, seat_names: tuple, settings: dict) -> tuple:
         n_arrangements = len(settings.get("arrangements", ARRANGEMENTS))
         start_rng = random.Random(f"{settings['seed']}:{(game_idx % MATCH_STRIDE) // n_arrangements}")
         start_position = sample_start_position(
-            NUM_PLAYERS, settings["start_positions"], settings["random_start_fraction"], rng=start_rng
+            num_players, settings["start_positions"], settings["random_start_fraction"], rng=start_rng
         )
-        game = new_game(NUM_PLAYERS)
+        game = new_game(num_players)
         apply_actions(game, start_position.actions)
         start_label = start_position.label
     else:
-        rust_game = RustBaseGame({i + 1: f"Player {i + 1}" for i in range(NUM_PLAYERS)})
+        rust_game = RustBaseGame({i + 1: f"Player {i + 1}" for i in range(num_players)})
         rust_game.set_auction_unlock(True)
         rust_game.set_no_buyback_rule(True)
         game = RustGameAdapter(rust_game)
@@ -354,7 +363,7 @@ def _setup_game(game_idx: int, seat_names: tuple, settings: dict) -> tuple:
             enable_resign=False,
             noresign_holdout_rate=0.0,
             max_game_length=settings["max_length"],
-            player_count_distribution={NUM_PLAYERS: 1.0},
+            player_count_distribution={num_players: 1.0},
             auction_unlock=True,
             # A forced move with an open price is priced at its own position (as the generator does).
             stop_chain_at_open_price=True,
@@ -371,6 +380,7 @@ def _game_record(game_idx, seat_names, game, start_label, decision_count, decisi
     best = max(net_worth.values())
     winners = [seat for seat, v in net_worth.items() if v >= best - 1e-6]
     total = sum(max(v, 0.0) for v in net_worth.values()) or 1.0
+    players = len(seat_names)
     return {
         "game_idx": game_idx,
         "seats": list(seat_names),
@@ -379,9 +389,9 @@ def _game_record(game_idx, seat_names, game, start_label, decision_count, decisi
         "decision_count": decision_count,
         "start": start_label,
         "decisions": dict(decisions),
-        "net_worth": [net_worth[s] for s in range(NUM_PLAYERS)],
-        "worth_share": [max(net_worth[s], 0.0) / total for s in range(NUM_PLAYERS)],
-        "win_share": [(1.0 / len(winners) if s in winners else 0.0) for s in range(NUM_PLAYERS)],
+        "net_worth": [net_worth[s] for s in range(players)],
+        "worth_share": [max(net_worth[s], 0.0) / total for s in range(players)],
+        "win_share": [(1.0 / len(winners) if s in winners else 0.0) for s in range(players)],
         "auction_unlock_discounts": _auction_unlock_discounts(game),
         "seconds": round(time.time() - start, 1),
         "raw_actions": list(game.raw_actions),
@@ -615,6 +625,7 @@ def summarize(match_label: str, names: dict, results: list) -> dict:
             seat_scores[(side, s)].append(r["win_share"][s])
     n = len(side_scores)
     a_seat_count = results[0]["seats"].count("A") if results else 2
+    players = len(results[0]["seats"]) if results else NUM_PLAYERS
     mean = float(np.mean(side_scores)) if n else float("nan")
     se = float(np.std(side_scores, ddof=1) / math.sqrt(n)) if n > 1 else float("nan")
     terminations = Counter(r["termination"] for r in results)
@@ -625,7 +636,7 @@ def summarize(match_label: str, names: dict, results: list) -> dict:
         "games": n,
         "A_score": mean,
         "A_score_se": se,
-        "A_score_equal": a_seat_count / NUM_PLAYERS,
+        "A_score_equal": a_seat_count / players,
         "A_worth_share": float(np.mean(side_worth)) if n else float("nan"),
         "by_arrangement": {k: round(float(np.mean(v)), 3) for k, v in sorted(by_arrangement.items())},
         "seat_win_rate": {f"{side}{s}": round(float(np.mean(v)), 3) for (side, s), v in sorted(seat_scores.items())},
@@ -666,15 +677,33 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--start-positions", default=None,
-        help="Start games at the first Stock Round from this start-position file, as self-play does",
+        help="Start games at the first Stock Round from this start-position file, as self-play does "
+        "('default': human_games/start_positions_1830_<N>p_v2.jsonl for --num-players N)",
     )
     parser.add_argument("--random-start-fraction", type=float, default=0.2)
     parser.add_argument(
-        "--a-seats", type=int, default=2, choices=(1, 2, 3),
-        help="Seats side A holds (2: 2v2 in six arrangements; 1 / 3: 1v3 / 3v1 in four); equal strength scores a_seats/4",
+        "--num-players", type=int, default=NUM_PLAYERS,
+        help="Players per game (default 4; 2: 1830's two-player game, 1v1)",
+    )
+    parser.add_argument(
+        "--a-seats", type=int, default=None,
+        help="Seats side A holds (default half the table; 4 players: 2 = 2v2 in six arrangements, 1 / 3 = 1v3 / "
+        "3v1 in four; 2 players: 1 = 1v1 in two); equal strength scores a_seats / players",
     )
     parser.add_argument("--out", type=Path, default=None, help="Output directory (default logs/eval/<timestamp>)")
     args = parser.parse_args()
+    if args.a_seats is None:
+        args.a_seats = args.num_players // 2
+    if not 2 <= args.num_players <= 6 or not 1 <= args.a_seats <= args.num_players - 1:
+        parser.error(
+            f"--num-players must be 2-6 and --a-seats 1 to players - 1 (got {args.num_players}, {args.a_seats})"
+        )
+    if args.start_positions:
+        from rl18xx.agent.alphazero.start_positions import check_start_files, default_start_positions
+
+        if args.start_positions == "default":
+            args.start_positions = default_start_positions(args.num_players)
+        check_start_files(args.num_players, args.start_positions, args.random_start_fraction)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     out_dir = args.out or REPO_ROOT / "logs" / "eval" / datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -685,10 +714,10 @@ def main():
     players = {}
     for a, b in args.match:
         for spec in (a, b):
-            path, overrides = parse_player(spec, args.readouts)
+            path, overrides = parse_player(spec, args.readouts, args.num_players)
             players[spec] = {"server": str(path), "overrides": overrides}
     paths = sorted({p["server"] for p in players.values()})
-    seatings = arrangements(args.a_seats)
+    seatings = arrangements(args.a_seats, args.num_players)
     games_per_match = math.ceil(args.games / len(seatings)) * len(seatings)
     settings = {
         "readouts": args.readouts,
@@ -701,6 +730,7 @@ def main():
         "random_start_fraction": args.random_start_fraction,
         "arrangements": seatings,
         "dedupe_maps": args.dedupe_maps,
+        "num_players": args.num_players,
     }
     (out_dir / "settings.json").write_text(
         json.dumps({**settings, "matches": args.match, "games_per_match": games_per_match}, indent=2)

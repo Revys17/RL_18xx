@@ -23,6 +23,13 @@ auction and starts at Stock Round 1 from either
   against humans' 38%, and bankruptcies were ~9x rarer); mid-game starts put the
   agents into such positions without rewarding any strategy.
 
+Start files hold one player count's games (``human_games/start_positions_1830_<N>p_v2.jsonl``,
+``human_games/midgame_positions_1830_<N>p_v2.jsonl``: :func:`default_start_positions` /
+:func:`default_midgame_positions`); a game draws only starts of its own count, so the generators
+check that a file they will draw from has some (:func:`check_start_files`) -- a 4-player file in a
+2-player run would otherwise silently give random starts only. Random auction endings work for any
+count.
+
 A start is a list of action dicts applied to a fresh game, so both engines and
 the game's action log stay valid, and ``RustMCTSPlayer.extract_data`` rebuilds
 the positions by replaying it on an empty game. The auction is real 1830 in
@@ -34,6 +41,8 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -52,6 +61,56 @@ MIDGAME_PREFIX = "midgame:"
 # dropped from start positions.
 ACTION_KEYS = ("type", "entity", "entity_type", "company", "price", "corporation", "share_price")
 START_ACTION_TYPES = ("bid", "pass", "par")
+
+
+def default_start_positions(num_players: int) -> str:
+    """The post-auction start file of a ``num_players`` game (relative to the working directory)."""
+    return f"human_games/start_positions_1830_{int(num_players)}p_v2.jsonl"
+
+
+def default_midgame_positions(num_players: int) -> str:
+    """The mid-game start file of a ``num_players`` game (relative to the working directory)."""
+    return f"human_games/midgame_positions_1830_{int(num_players)}p_v2.jsonl"
+
+
+_PLAYERS_FIELD = re.compile(r'"num_players"\s*:\s*(\d+)')
+
+
+def file_player_counts(path) -> Counter:
+    """``{num_players: games}`` of a start or mid-game JSONL file, read from each line's
+    ``num_players`` field without parsing the actions (the mid-game file is ~70 MB)."""
+    counts: Counter = Counter()
+    with open(path) as f:
+        for line in f:
+            match = _PLAYERS_FIELD.search(line)
+            if match:
+                counts[int(match.group(1))] += 1
+    return counts
+
+
+def check_start_files(
+    num_players: int, path, random_fraction: float = 0.2, midgame_path=None, midgame_fraction: float = 0.0
+) -> None:
+    """Raise SystemExit if a start file a ``num_players`` generator will draw from has no game of
+    that count: ``path`` when ``random_fraction`` < 1, ``midgame_path`` when ``midgame_fraction`` > 0.
+    (:func:`sample_start_position` falls back to random starts / Stock Round 1 starts without games of
+    the count, which is right for a count no human file covers but silently wrong for a wrong file.)"""
+    checks = (
+        (path, random_fraction < 1.0, "--start-positions", default_start_positions),
+        (midgame_path, midgame_fraction > 0, "--midgame-positions", default_midgame_positions),
+    )
+    for file, used, flag, default in checks:
+        if not file or not used:
+            continue
+        try:
+            counts = file_player_counts(file)
+        except OSError as e:
+            raise SystemExit(f"{flag} {file}: {e}") from None
+        if not counts.get(int(num_players)):
+            raise SystemExit(
+                f"{flag} {file} has no {num_players}-player games ({dict(sorted(counts.items()))}); "
+                f"the {num_players}-player file is {default(num_players)}"
+            )
 
 
 @dataclass(frozen=True)

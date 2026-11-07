@@ -5,7 +5,9 @@ AlphaGo went supervised policy -> policy improved by self-play policy gradient
 trained on that policy's games -> search. This module is the second step for
 1830, with a few later improvements:
 
-- **Games**: 4-player games from the first Stock Round (``start_positions``).
+- **Games**: ``num_players``-player games (4 by default; 2 with
+  ``--num-players 2``: the learner then holds one seat of two) from the first
+  Stock Round (``start_positions``).
   The learner holds ``learner_seats`` random seats; the others go to one
   opponent: the supervised policy, or (``1 - sl_opponent_fraction`` of the
   games, once snapshots exist) a snapshot of the learner from the pool.
@@ -95,7 +97,7 @@ import torch.nn.functional as F
 
 LOGGER = logging.getLogger(__name__)
 
-NUM_PLAYERS = 4
+NUM_PLAYERS = 4  # the default player count (``PGConfig.num_players``)
 
 
 @dataclass
@@ -104,6 +106,10 @@ class PGConfig:
     value_checkpoint: str
     out_dir: str = "model_checkpoints_pg"
     run_name: Optional[str] = None
+    # Players per game (2-6; the network's value head has 6 seats). 4 is the main line; 2 is
+    # 1830's two-player game (each seat its own policy: the learner holds 1 of 2 seats). The
+    # start files, learner seats and league seat weights default by it (main.py).
+    num_players: int = NUM_PLAYERS
     # Generation
     workers: int = 48
     games_per_task: int = 32
@@ -239,7 +245,10 @@ class _PGGame:
 GOAL_BONUS = 0.5  # "bankrupt", "president:<CORP>"
 RUSH_BONUS, RUSH_MAX = 0.15, 4  # "rusher": per phase change its own purchase caused
 RUST_BONUS, RUST_MAX = 0.1, 6  # "rust": per opponent's train its own purchase rusted
-PLACEMENT_POINTS = (1.0, 0.5, 0.2, 0.0)
+PLACEMENT_POINTS = (1.0, 0.5, 0.2, 0.0)  # 4 players (1st..4th); the default
+# Placement points by player count where they aren't PLACEMENT_POINTS cut to the count: with two
+# players the place is the win (1st 1, 2nd 0). Other counts keep PLACEMENT_POINTS (padded with 0).
+PLACEMENT_POINTS_BY_PLAYERS = {2: (1.0, 0.0), 4: PLACEMENT_POINTS}
 CORPORATIONS = ("PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M")
 REWARDS = ("win", "placement", "bankrupt", "president", "rusher", "rust")
 
@@ -269,10 +278,19 @@ def parse_reward(spec: Optional[str]) -> tuple:
     return kind, None
 
 
-def placement_points(worth, points: tuple = PLACEMENT_POINTS) -> np.ndarray:
-    """Per seat the points of its place by net worth (default 1st 1, 2nd 0.5, 3rd 0.2,
-    4th 0); tied seats share their places' points."""
+def default_placement_points(num_players: int) -> tuple:
+    """The placement points of a ``num_players`` game: 4 players 1 / 0.5 / 0.2 / 0, 2 players
+    1 / 0 (``PLACEMENT_POINTS_BY_PLAYERS``; other counts PLACEMENT_POINTS)."""
+    return PLACEMENT_POINTS_BY_PLAYERS.get(int(num_players), PLACEMENT_POINTS)
+
+
+def placement_points(worth, points: Optional[tuple] = None) -> np.ndarray:
+    """Per seat the points of its place by net worth (default: the player count's,
+    :func:`default_placement_points` -- 4 players 1st 1, 2nd 0.5, 3rd 0.2, 4th 0; 2 players
+    1 / 0); tied seats share their places' points."""
     worth = np.asarray(worth, dtype=np.float64)
+    if points is None:
+        points = default_placement_points(len(worth))
     points = np.array(tuple(points)[: len(worth)] + (0.0,) * max(0, len(worth) - len(points)))
     order = np.argsort(-worth, kind="stable")
     out = np.zeros(len(worth))
@@ -301,7 +319,7 @@ def shaped_reward(spec, win_share, worth, bankrupt, presidents, triggers, learne
     if kind == "win":
         return win_share
     if kind == "placement":
-        return placement_points(worth, corporation or PLACEMENT_POINTS)
+        return placement_points(worth, corporation)
     seats = range(len(win_share))
     if kind == "bankrupt":
         learner = set(learner_seats)
@@ -401,7 +419,40 @@ def outcome(game) -> tuple:
     return win_share.astype(np.float32), fractions.astype(np.float32)
 
 
-DEFAULT_LEARNER_SEAT_WEIGHTS = {1: 0.4, 2: 0.4, 3: 0.2}
+DEFAULT_LEARNER_SEAT_WEIGHTS = {1: 0.4, 2: 0.4, 3: 0.2}  # 4 players
+# League mode's learner seats by player count (DEFAULT_LEARNER_SEAT_WEIGHTS elsewhere): with two
+# players the learner holds one seat, the league member the other.
+LEARNER_SEAT_WEIGHTS_BY_PLAYERS = {2: {1: 1.0}}
+
+
+def default_learner_seats(num_players: int) -> int:
+    """Learner seats per game outside league mode: half the table (4 players: 2, 2 players: 1)."""
+    return max(1, int(num_players) // 2)
+
+
+def default_learner_seat_weights(num_players: int) -> dict:
+    """League mode's ``{learner seats: weight}`` for a ``num_players`` game."""
+    return dict(LEARNER_SEAT_WEIGHTS_BY_PLAYERS.get(int(num_players), DEFAULT_LEARNER_SEAT_WEIGHTS))
+
+
+def check_players(cfg) -> None:
+    """Fail fast on settings that don't fit ``cfg.num_players``: the learner's seats (1 to N - 1, so
+    every game has an opponent), league seat weights, and start files without games of that count
+    (``start_positions.check_start_files``)."""
+    from rl18xx.agent.alphazero.start_positions import check_start_files
+
+    n = int(cfg.num_players)
+    if not 2 <= n <= 6:
+        raise SystemExit(f"--num-players must be 2-6, got {n}")
+    if not 1 <= int(cfg.learner_seats) <= n - 1:
+        raise SystemExit(f"--learner-seats must be 1-{n - 1} with {n} players, got {cfg.learner_seats}")
+    if cfg.population:
+        weights = cfg.learner_seat_weights or default_learner_seat_weights(n)
+        if not weights or any(not 1 <= int(k) <= n - 1 or float(v) < 0 for k, v in weights.items()):
+            raise SystemExit(f"--learner-seat-weights: {{seats (1-{n - 1}): weight >= 0}} with {n} players")
+    check_start_files(
+        n, cfg.start_positions, cfg.random_start_fraction, cfg.midgame_positions, cfg.midgame_fraction
+    )
 
 
 def load_population(path) -> list:
@@ -511,18 +562,20 @@ def league_for_run(cfg, league_state: Optional[dict]) -> Optional[League]:
 
 
 def _deal_seats(settings: dict, py_rng: random.Random) -> tuple:
-    """``(learner seats, seat -> server name, seat -> member label)`` for a new game."""
+    """``(learner seats, seat -> server name, seat -> member label)`` for a new game of
+    ``settings["num_players"]`` seats (default 4). League mode draws an opponent per seat."""
+    n = int(settings.get("num_players", NUM_PLAYERS))
     league = settings.get("league")
     if not league:
         opponent = "pool" if settings["pool_ready"] and py_rng.random() >= settings["sl_opponent_fraction"] else "sl"
-        learner = set(py_rng.sample(range(NUM_PLAYERS), settings["learner_seats"]))
-        models = ["learner" if seat in learner else opponent for seat in range(NUM_PLAYERS)]
+        learner = set(py_rng.sample(range(n), settings["learner_seats"]))
+        models = ["learner" if seat in learner else opponent for seat in range(n)]
         return learner, models, {}
     counts, weights = zip(*sorted((int(k), float(v)) for k, v in league["learner_seat_weights"].items()))
     count = py_rng.choices(counts, weights=weights)[0]
-    learner = set(py_rng.sample(range(NUM_PLAYERS), count))
-    models = ["learner" if seat in learner else py_rng.choice(league["slots"]) for seat in range(NUM_PLAYERS)]
-    labels = {seat: league["slot_labels"][models[seat]] for seat in range(NUM_PLAYERS) if seat not in learner}
+    learner = set(py_rng.sample(range(n), count))
+    models = ["learner" if seat in learner else py_rng.choice(league["slots"]) for seat in range(n)]
+    labels = {seat: league["slot_labels"][models[seat]] for seat in range(n) if seat not in learner}
     return learner, models, labels
 
 
@@ -539,13 +592,14 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
     track_phases = parse_reward(reward_spec)[0] == "rusher"
     track_rust = parse_reward(reward_spec)[0] == "rust"
     k = settings["positions_per_seat"]
+    n_players = int(settings.get("num_players", NUM_PLAYERS))
     start_time = time.time()
 
     games, skipped_starts = [], 0
     for _ in range(num_games):
         # A recorded start the engine no longer replays is skipped (and counted), not raised.
         start, game, skipped = replayed_start(
-            NUM_PLAYERS,
+            n_players,
             settings["start_positions"],
             settings["random_start_fraction"],
             rng=py_rng,
@@ -555,7 +609,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
         )
         skipped_starts += skipped
         learner, seat_models, seat_members = _deal_seats(settings, py_rng)
-        opponent = "league" if settings.get("league") else seat_models[min(set(range(NUM_PLAYERS)) - learner)]
+        opponent = "league" if settings.get("league") else seat_models[min(set(range(n_players)) - learner)]
         g = _PGGame(game=game, uid=uuid.uuid4().hex, opponent=opponent, seat_models=seat_models, start=start.label)
         g.seat_members = seat_members
         for seat in learner:
@@ -635,7 +689,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
         if reward_spec != "win":
             worth, bankrupt, presidents = game_facts(g.game)
             counts = g.rusted if parse_reward(reward_spec)[0] == "rust" else g.phase_triggers
-            triggers = [counts.get(s, 0) for s in range(NUM_PLAYERS)]
+            triggers = [counts.get(s, 0) for s in range(n_players)]
             reward = shaped_reward(reward_spec, win_share, worth, bankrupt, presidents, triggers, g.values)
             score_target = reward.astype(np.float32)  # the critic's score head learns the reward
         rows = []
@@ -701,6 +755,7 @@ def save_game(run_dir: Path, record: dict, update: int, learner_checkpoint: str,
     from rl18xx.agent.alphazero.game_records import append_index, make_game_record, save_game_record
 
     saved = record["saved_game"]
+    n_players = len(record["win_share"])
     learner = set(int(seat) for seat in record["learner_seats"])
     name = f"u{update}_{record['uid'][:8]}"
     opponent = {"pool": "pool snapshot", "league": "league member"}.get(record["opponent"], "fixed opponent")
@@ -714,10 +769,10 @@ def save_game(run_dir: Path, record: dict, update: int, learner_checkpoint: str,
         "learner_seats": sorted(learner),
         "opponent": record["opponent"],
         "opponent_checkpoint": opponent_checkpoint,
-        "sides": ["A" if seat in learner else "B" for seat in range(NUM_PLAYERS)],
+        "sides": ["A" if seat in learner else "B" for seat in range(n_players)],
         "seat_labels": [
             f"learner (update {update})" if seat in learner else members.get(seat, f"{opponent} {opponent_checkpoint}")
-            for seat in range(NUM_PLAYERS)
+            for seat in range(n_players)
         ],
         "learner_temperature": cfg.learner_temperature,
         "opponent_temperature": cfg.opponent_temperature,
@@ -729,7 +784,7 @@ def save_game(run_dir: Path, record: dict, update: int, learner_checkpoint: str,
         "worth_share": saved["worth_share"],
     }
     meta = {**entry, "description": f"policy-gradient {run_dir.name} update {update}: learner vs {opponent}"}
-    entry["game_file"] = save_game_record(run_dir, name, make_game_record(saved["raw_actions"], NUM_PLAYERS, meta=meta))
+    entry["game_file"] = save_game_record(run_dir, name, make_game_record(saved["raw_actions"], n_players, meta=meta))
     append_index(run_dir, entry)
     return name
 
@@ -946,8 +1001,8 @@ class _Scores:
     def add(self, record: dict):
         score = sum(record["win_share"][s] for s in record["learner_seats"])
         if record["opponent"] == "league":
-            # The learner holds 1-3 seats: its win share as a multiple of a fair one (1.0 = even).
-            score /= len(record["learner_seats"]) / NUM_PLAYERS
+            # The learner holds 1-3 seats (of 4; 1 of 2): its win share as a multiple of a fair one (1.0 = even).
+            score /= len(record["learner_seats"]) / len(record["win_share"])
         self.window[record["opponent"]].append(score)
         self.recent[record["opponent"]].append(score)
 
@@ -1019,6 +1074,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
         state = json.loads((run_dir / "state.json").read_text())
         overrides = resume_overrides(cfg, state["config"], RESUME_SETTINGS, explicit)
         cfg = PGConfig(**{**state["config"], **overrides})
+        check_players(cfg)
         update = int(state["snapshot_update"])
         pool = list(state["pool"])
         kl_coef = float(state["kl_coef"])
@@ -1032,6 +1088,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
         run_dir = Path(cfg.out_dir) / name
         if run_dir.exists():
             raise SystemExit(f"{run_dir} exists; pass --resume to continue it")
+        check_players(cfg)
         run_dir.mkdir(parents=True)
         update, kl_coef, anchor_update = 0, cfg.kl_coef, 0
         pool = [str(cfg.policy_checkpoint)] if cfg.seed_pool else []
@@ -1119,6 +1176,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
 
     def settings() -> dict:
         return {
+            "num_players": cfg.num_players,
             "positions_per_seat": cfg.positions_per_seat,
             "learner_seats": cfg.learner_seats,
             "sl_opponent_fraction": cfg.sl_opponent_fraction,
@@ -1142,7 +1200,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                 {
                     "slots": sorted(slot_labels),
                     "slot_labels": dict(slot_labels),
-                    "learner_seat_weights": cfg.learner_seat_weights or DEFAULT_LEARNER_SEAT_WEIGHTS,
+                    "learner_seat_weights": cfg.learner_seat_weights or default_learner_seat_weights(cfg.num_players),
                 }
                 if league
                 else None

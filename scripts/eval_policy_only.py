@@ -16,6 +16,11 @@ sharpens a policy, which by itself beats the same policy at temperature 1, so
 compare a trained policy against its starting point at several temperatures to
 tell learning from sharpening.
 
+``--num-players 2`` plays 1830's two-player game: 1v1 (``--a-seats`` 1, its
+default), each start in both seatings, from
+``human_games/start_positions_1830_2p_v2.jsonl`` unless ``--start-positions``
+says otherwise; equal strength scores 0.5.
+
     uv run python scripts/eval_policy_only.py --match model_checkpoints_pg/<run>/learner/20.pth 10 \\
         --match 10@0.5 10 --games 1200
 
@@ -45,14 +50,19 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-NUM_PLAYERS = 4
+NUM_PLAYERS = 4  # the default player count (--num-players)
+# The 4-player default start file (the older one, kept so 4-player runs without --start-positions are
+# unchanged); other counts default to start_positions.default_start_positions.
+DEFAULT_START_POSITIONS_4P = "human_games/start_positions_1830_4p.jsonl"
 
 
-def arrangements(a_seats: int) -> list:
-    """Every way to give side A ``a_seats`` of the four seats (B the rest)."""
+def arrangements(a_seats: int, num_players: int = NUM_PLAYERS) -> list:
+    """Every way to give side A ``a_seats`` of the ``num_players`` seats (B the rest)."""
+    if not 1 <= a_seats <= num_players - 1:
+        raise ValueError(f"side A needs 1-{num_players - 1} of {num_players} seats, got {a_seats}")
     return [
-        tuple("A" if seat in chosen else "B" for seat in range(NUM_PLAYERS))
-        for chosen in itertools.combinations(range(NUM_PLAYERS), a_seats)
+        tuple("A" if seat in chosen else "B" for seat in range(num_players))
+        for chosen in itertools.combinations(range(num_players), a_seats)
     ]
 
 
@@ -164,14 +174,15 @@ def play_games(game_indices: list, settings: dict) -> list:
 
     rng = np.random.default_rng()
     seatings = [tuple(a) for a in settings.get("arrangements", ARRANGEMENTS)]
+    num_players = len(seatings[0])
     games = []
     for idx in game_indices:
         # Seeded by the start index, so all arrangements of a start share it.
         start_rng = random.Random(f"{settings['seed']}:{idx // len(seatings)}")
         start = sample_start_position(
-            NUM_PLAYERS, settings["start_positions"], settings["random_start_fraction"], rng=start_rng
+            num_players, settings["start_positions"], settings["random_start_fraction"], rng=start_rng
         )
-        game = apply_actions(new_game(NUM_PLAYERS), start.actions)
+        game = apply_actions(new_game(num_players), start.actions)
         games.append(
             SimpleNamespace(
                 game=game, uid=str(idx), idx=idx, seats=seatings[idx % len(seatings)],
@@ -253,14 +264,16 @@ def summarize(a: str, b: str, records: list) -> dict:
         by_arrangement["".join(r["seats"])].append(score)
     n = len(scores)
     a_seats = records[0]["seats"].count("A") if records else 2
+    players = len(records[0]["seats"]) if records else NUM_PLAYERS
     return {
         "A": a,
         "B": b,
         "games": n,
         "a_seats": a_seats,
-        # Side A's summed win share; equally strong sides score a_seats / 4.
+        "players": players,
+        # Side A's summed win share; equally strong sides score a_seats / players.
         "A_score": float(np.mean(scores)),
-        "A_score_equal": a_seats / NUM_PLAYERS,
+        "A_score_equal": a_seats / players,
         "A_score_se": float(np.std(scores, ddof=1) / math.sqrt(n)) if n > 1 else float("nan"),
         "A_worth_share": float(np.mean(worth)),
         "by_arrangement": {k: round(float(np.mean(v)), 3) for k, v in sorted(by_arrangement.items())},
@@ -295,7 +308,7 @@ def run_match(a_spec: str, b_spec: str, args) -> dict:
         "max_decisions": args.max_decisions,
         "price_eps": args.price_eps,
         "save_games": getattr(args, "save_games", 0),
-        "arrangements": arrangements(getattr(args, "a_seats", 2)),
+        "arrangements": arrangements(getattr(args, "a_seats", 2), getattr(args, "num_players", NUM_PLAYERS)),
     }
     seatings = settings["arrangements"]
     num_games = math.ceil(args.games / len(seatings)) * len(seatings)
@@ -337,7 +350,7 @@ def save_game_logs(out: Path, match_index: int, a: str, b: str, records: list) -
             "sides": list(r["seats"]),
             **{k: v for k, v in r.items() if k != "seats"},
         }
-        r["game_file"] = save_game_record(out, name, make_game_record(actions, NUM_PLAYERS, meta=meta))
+        r["game_file"] = save_game_record(out, name, make_game_record(actions, len(r["seats"]), meta=meta))
 
 
 def main():
@@ -347,14 +360,23 @@ def main():
         "--games", type=int, default=1200, help="Games per match (rounded up to a multiple of the arrangements)"
     )
     parser.add_argument(
-        "--a-seats", type=int, default=2, choices=(1, 2, 3),
-        help="Seats side A holds (2: 2v2 in six arrangements; 1 / 3: 1v3 / 3v1 in four); equal strength scores a_seats/4",
+        "--num-players", type=int, default=NUM_PLAYERS,
+        help="Players per game (default 4; 2: 1830's two-player game, 1v1)",
+    )
+    parser.add_argument(
+        "--a-seats", type=int, default=None,
+        help="Seats side A holds (default half the table; 4 players: 2 = 2v2 in six arrangements, 1 / 3 = 1v3 / "
+        "3v1 in four; 2 players: 1 = 1v1 in two); equal strength scores a_seats / players",
     )
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--games-per-task", type=int, default=30)
     parser.add_argument("--max-decisions", type=int, default=1000)
     parser.add_argument("--price-eps", type=float, default=0.0, help="Uniform mixing into both sides' price draws")
-    parser.add_argument("--start-positions", type=str, default="human_games/start_positions_1830_4p.jsonl")
+    parser.add_argument(
+        "--start-positions", type=str, default=None,
+        help=f"default: {DEFAULT_START_POSITIONS_4P} with 4 players, "
+        "else human_games/start_positions_1830_<N>p_v2.jsonl",
+    )
     parser.add_argument("--random-start-fraction", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=str, default=None, help="Directory for summary.json and games.jsonl")
@@ -365,6 +387,19 @@ def main():
     args = parser.parse_args()
     if args.save_games and not args.out:
         parser.error("--save-games needs --out")
+    if args.a_seats is None:
+        args.a_seats = args.num_players // 2
+    if not 2 <= args.num_players <= 6 or not 1 <= args.a_seats <= args.num_players - 1:
+        parser.error(
+            f"--num-players must be 2-6 and --a-seats 1 to players - 1 (got {args.num_players}, {args.a_seats})"
+        )
+    from rl18xx.agent.alphazero.start_positions import check_start_files, default_start_positions
+
+    if args.start_positions is None:
+        args.start_positions = (
+            DEFAULT_START_POSITIONS_4P if args.num_players == NUM_PLAYERS else default_start_positions(args.num_players)
+        )
+    check_start_files(args.num_players, args.start_positions, args.random_start_fraction)
 
     import multiprocessing
 
@@ -379,7 +414,12 @@ def main():
         all_records.extend({"match": f"{a} vs {b}", **r} for r in records)
         print(
             f"{a} vs {b}: {summary['A_score']:.3f} ± {summary['A_score_se']:.3f} over {summary['games']} games "
-            + (f"[{summary['a_seats']}v{NUM_PLAYERS - summary['a_seats']}, equal = {summary['A_score_equal']:.2f}] " if summary["a_seats"] != 2 else "")
+            + (
+                f"[{summary['a_seats']}v{summary['players'] - summary['a_seats']}, "
+                f"equal = {summary['A_score_equal']:.2f}] "
+                if 2 * summary["a_seats"] != summary["players"]
+                else ""
+            )
             + f"(worth share {summary['A_worth_share']:.3f}, {summary['seconds']:.0f}s)",
             flush=True,
         )

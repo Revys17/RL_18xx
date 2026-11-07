@@ -146,9 +146,10 @@ def cmd_policy_gradient(args):
     import multiprocessing
 
     multiprocessing.set_start_method("spawn", force=True)
-    from rl18xx.agent.alphazero.policy_gradient import RESUME_SETTINGS, PGConfig, run
+    from rl18xx.agent.alphazero.policy_gradient import RESUME_SETTINGS, PGConfig, default_learner_seats, run
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    _player_count_defaults(args)
     config = PGConfig(
         policy_checkpoint=str(_resolve_checkpoint(args.policy, args.model_dir)),
         value_checkpoint=(
@@ -161,7 +162,8 @@ def cmd_policy_gradient(args):
         run_name=args.run_name,
         workers=args.workers,
         games_per_task=args.games_per_task,
-        learner_seats=args.learner_seats,
+        num_players=args.num_players,
+        learner_seats=args.learner_seats if args.learner_seats is not None else default_learner_seats(args.num_players),
         positions_per_seat=args.positions_per_seat,
         sl_opponent_fraction=args.sl_opponent_fraction,
         opponent_checkpoint=(
@@ -217,6 +219,7 @@ def cmd_search_learning(args):
     from rl18xx.agent.alphazero.search_learning import RESUME_SETTINGS, SearchLearningConfig, run
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    _player_count_defaults(args)
     resuming = args.resume and not (args.policy or args.value)  # a resumed run keeps its checkpoints
     no_critic = (args.shared or args.value_follow) and not args.value
     if not resuming and not args.shared and not args.value and not args.value_follow:
@@ -269,6 +272,7 @@ def cmd_search_learning(args):
         games_per_worker=args.games_per_worker,
         task_seconds=args.task_seconds,
         max_decisions=args.max_decisions,
+        num_players=args.num_players,
         start_positions=args.start_positions,
         random_start_fraction=args.random_start_fraction,
         midgame_positions=args.midgame_positions if args.midgame_fraction > 0 or args.resume else None,
@@ -467,6 +471,17 @@ def explicit_options(argv=None) -> set:
     return set(vars(quiet.parse_args(argv))) - {"command"}
 
 
+def _player_count_defaults(args) -> None:
+    """``--start-positions`` / ``--midgame-positions`` left out: the ``--num-players`` count's files
+    (``human_games/{start,midgame}_positions_1830_<N>p_v2.jsonl``; 4 players: the files used so far)."""
+    from rl18xx.agent.alphazero.start_positions import default_midgame_positions, default_start_positions
+
+    if args.start_positions is None:
+        args.start_positions = default_start_positions(args.num_players)
+    if args.midgame_positions is None:
+        args.midgame_positions = default_midgame_positions(args.num_players)
+
+
 def _resume_explicit(args, settings) -> set | None:
     """A resume's explicitly passed options (None outside the command line), warning about the ones a
     resume ignores (the run keeps its own value)."""
@@ -616,7 +631,12 @@ def build_parser():
     p.add_argument("--resume", type=str, default=None, help="Run directory to continue from its last snapshot")
     p.add_argument("--workers", type=int, default=48)
     p.add_argument("--games-per-task", type=int, default=32)
-    p.add_argument("--learner-seats", type=int, default=2)
+    p.add_argument(
+        "--num-players", type=int, default=4,
+        help="Players per game (default 4; 2: 1830's two-player game -- the learner holds 1 of 2 seats, the start "
+        "files default to the 2-player ones; placement points 1/0)",
+    )
+    p.add_argument("--learner-seats", type=int, default=None, help="Learner seats per game (default: half the table)")
     p.add_argument("--positions-per-seat", type=int, default=32, help="Learner decisions kept per seat per game")
     p.add_argument("--sl-opponent-fraction", type=float, default=0.5, help="Games against the fixed opponent")
     p.add_argument(
@@ -627,7 +647,10 @@ def build_parser():
         "--midgame-fraction", type=float, default=0.0,
         help="Share of games starting at a later Stock Round of a recorded human game (with --resume: from now on)",
     )
-    p.add_argument("--midgame-positions", type=str, default="human_games/midgame_positions_1830_4p_v2.jsonl")
+    p.add_argument(
+        "--midgame-positions", type=str, default=None,
+        help="default: human_games/midgame_positions_1830_<N>p_v2.jsonl for --num-players N",
+    )
     p.add_argument(
         "--auction-fraction", type=float, default=0.0,
         help="Share of games starting at the waterfall auction, the learner's bids trained too (with --resume: from now on)",
@@ -639,7 +662,7 @@ def build_parser():
     p.add_argument("--opponent-slots", type=int, default=3, help="League mode: opponent servers (members at once)")
     p.add_argument(
         "--learner-seat-weights", type=str, default=None,
-        help="League mode: seats the learner holds per game, e.g. 1:0.4,2:0.4,3:0.2 (the default)",
+        help="League mode: seats the learner holds per game, e.g. 1:0.4,2:0.4,3:0.2 (the default; 2 players: 1:1)",
     )
     p.add_argument("--pfsp-power", type=float, default=2.0, help="League mode: weight (1 - win rate) ** power")
     p.add_argument("--slot-refresh-every", type=int, default=2, help="League mode: reload one slot every N updates")
@@ -683,7 +706,10 @@ def build_parser():
     p.add_argument("--snapshot-every", type=int, default=10)
     p.add_argument("--pool-refresh-every", type=int, default=5)
     p.add_argument("--max-decisions", type=int, default=1000)
-    p.add_argument("--start-positions", type=str, default="human_games/start_positions_1830_4p_v2.jsonl")
+    p.add_argument(
+        "--start-positions", type=str, default=None,
+        help="default: human_games/start_positions_1830_<N>p_v2.jsonl for --num-players N",
+    )
     p.add_argument("--random-start-fraction", type=float, default=0.2)
     p.add_argument(
         "--save-game-every", type=int, default=0,
@@ -808,10 +834,21 @@ def build_parser():
     p.add_argument("--games-per-worker", type=int, default=_SL.games_per_worker, help="Games each worker plays at once")
     p.add_argument("--task-seconds", type=float, default=_SL.task_seconds, help="A worker reports its finished games this often")
     p.add_argument("--max-decisions", type=int, default=_SL.max_decisions)
-    p.add_argument("--start-positions", type=str, default=_SL.start_positions)
+    p.add_argument(
+        "--num-players", type=int, default=_SL.num_players,
+        help="Players per game (default 4; 2: 1830's two-player game -- the start files default to the 2-player "
+        "ones, a league member takes 1 of 2 seats, placement points 1/0). A resume keeps the run's",
+    )
+    p.add_argument(
+        "--start-positions", type=str, default=None,
+        help="default: human_games/start_positions_1830_<N>p_v2.jsonl for --num-players N",
+    )
     p.add_argument("--random-start-fraction", type=float, default=_SL.random_start_fraction)
     p.add_argument("--midgame-fraction", type=float, default=_SL.midgame_fraction)
-    p.add_argument("--midgame-positions", type=str, default="human_games/midgame_positions_1830_4p_v2.jsonl")
+    p.add_argument(
+        "--midgame-positions", type=str, default=None,
+        help="default: human_games/midgame_positions_1830_<N>p_v2.jsonl for --num-players N",
+    )
     p.add_argument("--auction-fraction", type=float, default=_SL.auction_fraction)
     p.add_argument("--inference-batch-size", type=int, default=_SL.inference_batch_size)
     p.add_argument("--critic-positions-per-game", type=int, default=_SL.critic_positions_per_game,
@@ -890,7 +927,8 @@ def build_parser():
     p.add_argument("--league-share", type=float, default=_SL.league_share,
                    help="--population: the share of games in which one member takes 1-2 seats")
     p.add_argument("--league-seat-weights", type=str, default=None,
-                   help="--population: seats:weight pairs for a member's seat count (default 1:0.5,2:0.5)")
+                   help="--population: seats:weight pairs for a member's seat count "
+                   "(default 1:0.5,2:0.5; 2 players: 1:1)")
     p.add_argument("--league-readouts", type=int, default=_SL.league_readouts,
                    help="--population: a searching member's readouts per decision (the fast budget)")
     p.add_argument("--pfsp-power", type=float, default=_SL.pfsp_power,
@@ -1039,6 +1077,8 @@ def build_parser():
                    help=f"Share of each batch from --anchor-data (default: {V.anchor_share})")
     p.add_argument("--positions-per-game", type=int, default=V.positions_per_game,
                    help=f"Training positions per game and pass (default: {V.positions_per_game})")
+    p.add_argument("--num-players", type=int, default=V.num_players,
+                   help=f"Train and hold out only games of this many players (default: {V.num_players})")
     p.add_argument("--held-out-per-mille", type=int, default=V.held_out_per_mille,
                    help=f"Games with crc32(uid) %% 1000 below this are held out (default: {V.held_out_per_mille})")
     p.add_argument("--rolling-games", type=int, default=V.rolling_games,

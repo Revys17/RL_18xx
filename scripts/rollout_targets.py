@@ -14,8 +14,10 @@ train shuffling on, the evals' 1000-decision limit). Subcommands:
     testset    eval collections -> 16 decision positions per game (fixed seed), canonical encodings + outcome
     games      whole policy-only games from the generators' starts (auction / mid-game / Stock Round 1 mix, the
                first decisions explored at T 1, as the search generators play them), saved as search_data shards
-               (no searches) for ``free``; stops at a budget of policy decisions
-    free       outcome-labelled positions of every saved game (16 per game), as memory-mappable .npy files
+               (no searches) for ``free``; stops at a budget of policy decisions. ``--num-players`` (default 4;
+               2 for 1830's two-player game) picks the start files too (human_games/*_1830_<N>p_v2.jsonl)
+    free       outcome-labelled positions of every saved game (16 per game), as memory-mappable .npy files (one
+               player count per directory: the targets have a column per seat)
     train      a value arm: warm start, AdamW, the value trainer's loss (win CE + placement MSE), a share of
                every batch from the anchor, a weight average; at most ~1.5 passes
     preds      value predictions of models on the test sets (and sibling children)
@@ -43,7 +45,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 LOGGER = logging.getLogger("rollout_targets")
-NUM_PLAYERS = 4
+NUM_PLAYERS = 4  # the default player count; everything else follows each game's own count
 SERVER = "policy"
 DEFAULT_POLICY = "/home/revys/longrun/work/lr1/model_checkpoints_search/azf/learner/600.pth"
 DEFAULT_DATA = "/home/revys/longrun/work/lr1/saved_games/azf"
@@ -103,17 +105,18 @@ def saved_game_root(game, seed: int):
     return rs, i, d, len(actions)
 
 
-def eval_game_roots(actions: list, game_id: str, k: int, seed: int, unlock: bool = False):
+def eval_game_roots(actions: list, game_id: str, k: int, seed: int, unlock: bool = False,
+                    num_players: int = NUM_PLAYERS):
     """``[(index, decisions_before, encoding)]`` for ``k`` decision positions of an eval game (from game start,
     the rule on), drawn by ``(crc32(game_id), seed)``; plus the number of actions."""
     from rl18xx.agent.alphazero.start_positions import new_game
 
-    rs = new_game(NUM_PLAYERS, unlock)._game
+    rs = new_game(num_players, unlock)._game
     cands = [(i, d) for i, dec, d in walk_decisions(rs, actions) if dec]
     rng = np.random.default_rng([zlib.crc32(game_id.encode()), int(seed)])
     picked = sorted(rng.choice(len(cands), size=min(k, len(cands)), replace=False).tolist()) if cands else []
     wanted = {cands[j][0]: cands[j][1] for j in picked}
-    rs = new_game(NUM_PLAYERS, unlock)._game
+    rs = new_game(num_players, unlock)._game
     out = []
     for i, action in enumerate(actions):
         if i in wanted:
@@ -127,9 +130,11 @@ def eval_game_roots(actions: list, game_id: str, k: int, seed: int, unlock: bool
 
 
 def canon(x: np.ndarray, rotation: int) -> np.ndarray:
-    """Absolute seat order -> canonical frame (the mover first): ``out[j] = x[(j + rotation) % 4]``."""
+    """Absolute seat order -> canonical frame (the mover first): ``out[j] = x[(j + rotation) % n]``, ``n`` the
+    seats (the last axis)."""
     x = np.asarray(x)
-    idx = (np.arange(NUM_PLAYERS) + int(rotation)) % NUM_PLAYERS
+    n = x.shape[-1]
+    idx = (np.arange(n) + int(rotation)) % n
     return x[..., idx]
 
 
@@ -201,7 +206,8 @@ def rollout_result(g) -> tuple:
 
     codes = {"finished": 0, "max_length": 1, "error": 2}
     if g.termination == "error":
-        return np.full(NUM_PLAYERS, np.nan), np.full(NUM_PLAYERS, np.nan), g.decisions - g.start_decisions, 2
+        n = len(g.game._game.players)
+        return np.full(n, np.nan), np.full(n, np.nan), g.decisions - g.start_decisions, 2
     win, _ = pg.outcome(g.game)
     nw = _compute_net_worth(g.game)
     worth = np.array([float(nw[pid]) for pid in sorted(nw)], dtype=np.float64)
@@ -279,10 +285,12 @@ def sibling_task(task: dict) -> dict:
     settings = {"temperature": task["temperature"], "max_decisions": task["max_decisions"], "price_eps": 0.0}
     client = pg._CLIENTS[SERVER]
     parents = []
-    for pos_id, game_file, index, game_id in task["items"]:
+    for item in task["items"]:
+        pos_id, game_file, index, game_id = item[:4]
+        players = int(item[4]) if len(item) > 4 else NUM_PLAYERS  # roots files before 2p support: 4
         actions = json.loads(Path(game_file).read_text())
         actions = actions.get("actions", []) if isinstance(actions, dict) else actions
-        rs = new_game(NUM_PLAYERS)._game
+        rs = new_game(players)._game
         decisions = 0
         for i, dec, d in walk_decisions(rs, actions, stop=index):
             decisions = d
@@ -476,21 +484,22 @@ def games_task(task: dict) -> dict:
 
     t0 = time.time()
     seed = int(task["seed"])
+    players = int(task.get("num_players", NUM_PLAYERS))
     settings = {"temperature": task["temperature"], "max_decisions": task["max_decisions"], "price_eps": 0.0}
     games = []
     for i in task["games"]:
         start, game, _ = replayed_start(
-            NUM_PLAYERS, task["start_positions"], task["random_start_fraction"], rng=random.Random(f"{seed}:{i}"),
+            players, task["start_positions"], task["random_start_fraction"], rng=random.Random(f"{seed}:{i}"),
             midgame_path=task["midgame_positions"], midgame_fraction=task["midgame_fraction"],
             auction_fraction=task["auction_fraction"])
-        explored = start_decisions(start.actions, NUM_PLAYERS)
+        explored = start_decisions(start.actions, players)
         games.append(SimpleNamespace(
             game=game, uid=f"{seed}-{i:07d}", decisions=0, start_decisions=0, price_row=None, termination=None,
             rng=np.random.default_rng([seed, i]), start=start.label, start_actions=len(start.actions),
             explore_until=int(task["explore_decisions"]) - explored, explore_temperature=task["explore_temperature"]))
     play_out(games, settings)
     empty = {name: np.zeros(0, dtype=dtype) for name, (dtype, _) in sd.COLUMNS.items()}
-    empty["search_value"] = np.zeros((0, NUM_PLAYERS), dtype=np.float32)
+    empty["search_value"] = np.zeros((0, players), dtype=np.float32)
     empty["price_cells"] = np.zeros((0, task["price_cells"]), dtype=np.float32)
     packed = []
     for g in games:
@@ -500,14 +509,14 @@ def games_task(task: dict) -> dict:
         nw = _compute_net_worth(g.game)
         worth = np.array([float(nw[pid]) for pid in sorted(nw)], dtype=np.float64)
         total = float(worth.clip(min=0).sum())
-        fractions = worth.clip(min=0) / total if total > 0 else np.full(NUM_PLAYERS, 1.0 / NUM_PLAYERS)
+        fractions = worth.clip(min=0) / total if total > 0 else np.full(players, 1.0 / players)
         actions = list(g.game._game.raw_actions)
         meta = {
             "uid": g.uid, "start": g.start, "start_kind": g.start.split(":")[0] if g.start else None,
             "start_actions": g.start_actions, "auction_unlock": g.start == AUCTION_START,
-            "no_buyback_rule": bool(g.game._game.no_buyback_rule), "num_players": NUM_PLAYERS,
+            "no_buyback_rule": bool(g.game._game.no_buyback_rule), "num_players": players,
             "termination": g.termination, "decisions": int(g.decisions), "searched": 0,
-            "seat_servers": ["policy"] * NUM_PLAYERS, "seat_members": ["main"] * NUM_PLAYERS, "actions": len(actions),
+            "seat_servers": ["policy"] * players, "seat_members": ["main"] * players, "actions": len(actions),
             "win_share": [float(x) for x in win], "fractions": [float(x) for x in fractions],
             "net_worth": [float(x) for x in worth], "score_target": None, "aux_seat": [], "aux_global": [],
             "value_version": None,
@@ -523,14 +532,27 @@ def games_task(task: dict) -> dict:
 
 def cmd_games(args):
     from rl18xx.agent.alphazero import price_pmf
+    from rl18xx.agent.alphazero.start_positions import (
+        check_start_files,
+        default_midgame_positions,
+        default_start_positions,
+    )
 
+    # The player count's start files unless given (4 players: the files the loop has always used).
+    args.start_positions = args.start_positions or default_start_positions(args.num_players)
+    args.midgame_positions = args.midgame_positions or default_midgame_positions(args.num_players)
+    if not 2 <= args.num_players <= 6:
+        raise SystemExit(f"--num-players must be 2-6, got {args.num_players}")
+    check_start_files(args.num_players, args.start_positions, args.random_start_fraction, args.midgame_positions,
+                      args.midgame_fraction)
     out = Path(args.out)
     (out / "shards").mkdir(parents=True, exist_ok=True)
     config = {**vars(args), "kind": "policy_games"}
     (out / "config.json").write_text(json.dumps(config, indent=1))
     common = {key: getattr(args, key) for key in (
         "seed", "temperature", "max_decisions", "explore_decisions", "explore_temperature", "start_positions",
-        "random_start_fraction", "midgame_positions", "midgame_fraction", "auction_fraction")}  # fmt: skip
+        "random_start_fraction", "midgame_positions", "midgame_fraction", "auction_fraction",
+        "num_players")}  # fmt: skip
     common.update(shards=str(out / "shards"), config=config, price_cells=price_pmf.NUM_CELLS)
     tasks = [{"id": b // args.games_per_task, "games": list(range(b, min(args.games, b + args.games_per_task))),
               **common} for b in range(0, args.games, args.games_per_task)]  # in game order: a prefix is paired
@@ -549,21 +571,23 @@ def cmd_sib_roots(args):
     games = []
     for c in args.collection:
         for gid, actions, record in vr.collection_games(Path(c)):
-            games.append((gid, str(Path(c) / "games" / f"{record['game_idx']}.json"), len(actions)))
+            games.append((gid, str(Path(c) / "games" / f"{record['game_idx']}.json"), len(actions),
+                          len(record["win_share"])))
     pick = sorted(rng.choice(len(games), size=min(args.positions, len(games)), replace=False).tolist())
     roots = []
     for j, g in enumerate(pick):
-        gid, path, n = games[g]
+        gid, path, n, players = games[g]
         actions = json.loads(Path(path).read_text())
         actions = actions.get("actions", []) if isinstance(actions, dict) else actions
         from rl18xx.agent.alphazero.start_positions import new_game
 
-        rs = new_game(NUM_PLAYERS)._game
+        rs = new_game(players)._game
         cands = [i for i, dec, _ in walk_decisions(rs, actions) if dec]
         if not cands:
             continue
         i = int(np.random.default_rng([zlib.crc32(gid.encode()), args.seed]).choice(cands))
-        roots.append({"pos_id": j, "game_id": gid, "game_file": path, "index": i, "n_actions": n})
+        roots.append({"pos_id": j, "game_id": gid, "game_file": path, "index": i, "n_actions": n,
+                      "num_players": players})
     Path(args.out).write_text(json.dumps(roots))
     LOGGER.info(f"{len(roots)} roots -> {args.out}")
 
@@ -575,7 +599,8 @@ def cmd_siblings(args):
         chunk = roots[b : b + args.positions_per_task]
         tasks.append({"id": b // args.positions_per_task, "K": args.K, "seed": args.seed, "temperature": args.temperature,
                       "max_decisions": args.max_decisions, "max_children": args.max_children,
-                      "items": [(r["pos_id"], r["game_file"], r["index"], r["game_id"]) for r in chunk]})
+                      "items": [(r["pos_id"], r["game_file"], r["index"], r["game_id"],
+                                 r.get("num_players", NUM_PLAYERS)) for r in chunk]})
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.json").write_text(json.dumps(vars(args), indent=1))
@@ -595,7 +620,7 @@ def _testset_task(job: tuple) -> dict:
     actions = json.loads(Path(game_file).read_text())
     actions = actions.get("actions", []) if isinstance(actions, dict) else actions
     try:
-        rows, n = eval_game_roots(actions, gid, k, seed)
+        rows, n = eval_game_roots(actions, gid, k, seed, num_players=len(record["win_share"]))
     except Exception as e:
         return {"gid": gid, "error": repr(e)}
     win = np.asarray(record["win_share"], np.float32)
@@ -697,15 +722,22 @@ def cmd_free(args):
             jobs.append((str(p), list(range(b, min(n, b + 32))), args.per_game, args.pass_id))
     est = len(jobs) * 32 * args.per_game
     LOGGER.info(f"{len(jobs)} jobs, <= {est} positions")
-    mm = {
-        "game_states": np.lib.format.open_memmap(out / "game_states.npy", "w+", np.float32, (est, 394)),
-        "nodes": np.lib.format.open_memmap(out / "nodes.npy", "w+", np.float16, (est, 93, 50)),
-    }
+    # Allocated at the first game: a state's width is its player count's encoder layout (394 with 4 players).
+    mm = {}
     small = {k: [] for k in ("rotation", "index", "stage", "win", "placement", "game")}
     uids, at, t0 = [], 0, time.time()
     with get_context("spawn").Pool(args.workers) as pool:
         for j, res in enumerate(pool.imap(_free_task, jobs, chunksize=1)):
             for g in res["games"]:
+                if not mm:
+                    mm = {
+                        "game_states": np.lib.format.open_memmap(
+                            out / "game_states.npy", "w+", np.float32, (est, g["game_states"].shape[1])),
+                        "nodes": np.lib.format.open_memmap(out / "nodes.npy", "w+", np.float16, (est, 93, 50)),
+                    }
+                if g["game_states"].shape[1] != mm["game_states"].shape[1]:
+                    raise SystemExit(f"{g['uid']}: {g['win'].shape[1]}-player positions among others; one player "
+                                     "count per directory")
                 n = len(g["index"])
                 mm["game_states"][at : at + n] = g["game_states"]
                 mm["nodes"][at : at + n] = g["nodes"]
@@ -749,10 +781,10 @@ def load_rollouts(d) -> dict:
 
 
 def placement_rows(worth: np.ndarray) -> np.ndarray:
-    """Placement points per row of net worths (..., 4); NaN rows stay NaN."""
+    """Placement points per row of net worths (..., players); NaN rows stay NaN."""
     from rl18xx.agent.alphazero.policy_gradient import placement_points
 
-    flat = worth.reshape(-1, NUM_PLAYERS)
+    flat = worth.reshape(-1, worth.shape[-1])
     out = np.full(flat.shape, np.nan)
     for i, w in enumerate(flat):
         if not np.isnan(w).any():
@@ -761,7 +793,8 @@ def placement_rows(worth: np.ndarray) -> np.ndarray:
 
 
 def canon_rows(x: np.ndarray, rotation: np.ndarray) -> np.ndarray:
-    idx = (np.arange(NUM_PLAYERS)[None, :] + rotation.astype(np.int64)[:, None]) % NUM_PLAYERS
+    n = x.shape[1]
+    idx = (np.arange(n)[None, :] + rotation.astype(np.int64)[:, None]) % n
     return np.take_along_axis(x, idx, axis=1)
 
 
@@ -981,8 +1014,8 @@ def eval_sets(exp: Path) -> dict:
             "rval": rval}
 
 
-def predict(model, gs, nodes, device, bs=1024) -> np.ndarray:
-    """(n, 8): win probabilities (4, canonical) and score head (4)."""
+def predict(model, gs, nodes, device, bs=1024, players: int = NUM_PLAYERS) -> np.ndarray:
+    """(n, 2 * players): win probabilities (``players``, canonical) and score head (``players``)."""
     import torch
 
     out = []
@@ -991,8 +1024,8 @@ def predict(model, gs, nodes, device, bs=1024) -> np.ndarray:
             g = torch.from_numpy(np.ascontiguousarray(gs[b : b + bs])).to(device).float()
             n = torch.from_numpy(np.ascontiguousarray(nodes[b : b + bs])).to(device).float()
             _, logits, score, _ = model(g, n, value_only=True)
-            p = torch.softmax(logits.float()[:, :NUM_PLAYERS], 1)
-            out.append(torch.cat([p, score.float()[:, :NUM_PLAYERS]], 1).cpu().numpy())
+            p = torch.softmax(logits.float()[:, :players], 1)
+            out.append(torch.cat([p, score.float()[:, :players]], 1).cpu().numpy())
     return np.concatenate(out)
 
 
@@ -1022,13 +1055,16 @@ def cmd_preds(args):
             if s not in data:
                 if s == "sib":
                     sib = load_siblings(Path(args.siblings))
-                    data[s] = {"game_states": sib["c_states"], "nodes": sib["c_nodes"]}
+                    data[s] = {"game_states": sib["c_states"], "nodes": sib["c_nodes"],
+                               "players": sib["c_win"].shape[-1]}
                 else:
                     data[s] = loaders[s]()
                     if not (pdir / f"{s}.meta.npz").exists():
                         np.savez(pdir / f"{s}.meta.npz", **{k: v for k, v in data[s].items()
                                                               if k not in ("game_states", "nodes")})
-            np.save(pdir / f"{s}.{name}.npy", predict(model, data[s]["game_states"], data[s]["nodes"], device))
+            players = data[s]["win"].shape[1] if "win" in data[s] else data[s].get("players", NUM_PLAYERS)
+            np.save(pdir / f"{s}.{name}.npy",
+                    predict(model, data[s]["game_states"], data[s]["nodes"], device, players=players))
         LOGGER.info(f"preds {name}: {todo[name]}")
         del model
         torch.cuda.empty_cache()
@@ -1060,7 +1096,8 @@ def cmd_report(args):
                          f"CE (paired diff vs {ref} +- SE clustered by game); hit = winner hit")
             lines.append(f"{'model':16s} {'CE all':>24s} {'early':>24s} {'mid':>24s} {'late':>24s} "
                          f"{'hit':>6s} {'e':>6s} {'m':>6s} {'l':>6s}")
-            ce = {n: -(tgt * np.log(np.clip(p[:, :4], 1e-9, 1))).sum(1) for n, p in preds.items()}
+            k = tgt.shape[1]  # the seats
+            ce = {n: -(tgt * np.log(np.clip(p[:, :k], 1e-9, 1))).sum(1) for n, p in preds.items()}
             for n, p in preds.items():
                 cells, rec = [], {}
                 for st, sm in (("all", np.ones(len(win), bool)), ("early", stage == 0), ("mid", stage == 1),
@@ -1068,7 +1105,7 @@ def cmd_report(args):
                     d, se = clustered(ce[n][sm] - ce[ref][sm], game[sm])
                     rec[st] = {"ce": float(ce[n][sm].mean()), "diff": d, "se": se}
                     cells.append(f"{ce[n][sm].mean():.4f}({d:+.4f}+-{se:.4f})")
-                hit = (np.take_along_axis(win, p[:, :4].argmax(1)[:, None], 1)[:, 0] > 0).astype(float)
+                hit = (np.take_along_axis(win, p[:, :k].argmax(1)[:, None], 1)[:, 0] > 0).astype(float)
                 hits = [hit[sm].mean() for sm in (np.ones(len(win), bool), stage == 0, stage == 1, stage == 2)]
                 rec["hit"] = [float(h) for h in hits]
                 report.setdefault(f"{s}/{tname}", {})[n] = rec
@@ -1090,7 +1127,8 @@ def cmd_noise(args):
     keep = (~np.isnan(a["r_win"]).any(-1)).all(1)
     a = {k: v[keep] for k, v in a.items()}
     rot = a["rotation"]
-    idx = (np.arange(NUM_PLAYERS)[None, :] + rot[:, None]) % NUM_PLAYERS
+    players = a["win"].shape[1]
+    idx = (np.arange(players)[None, :] + rot[:, None]) % players
     z = np.take_along_axis(a["win"], idx, 1).astype(np.float64)
     rw = np.take_along_axis(a["r_win"], idx[:, None, :], 2).astype(np.float64)
     K = rw.shape[1]
@@ -1146,9 +1184,10 @@ def cmd_sib_report(args):
     rot = sib["c_rotation"]
     terminal = sib["c_terminal"].astype(bool)
     sources = {}
+    players = sib["c_win"].shape[-1]
     for n in args.names:
-        p = np.load(exp / "preds" / f"sib.{n}.npy")[:, :4]
-        v = p[np.arange(len(pos)), (m - rot) % NUM_PLAYERS].astype(np.float64)
+        p = np.load(exp / "preds" / f"sib.{n}.npy")[:, :players]
+        v = p[np.arange(len(pos)), (m - rot) % players].astype(np.float64)
         v[terminal] = truth[terminal]
         sources[n] = v
     sources["prior"] = sib["c_prior"].astype(np.float64)
@@ -1225,9 +1264,12 @@ def main():
     g.add_argument("--temperature", type=float, default=0.7)
     g.add_argument("--explore-decisions", type=int, default=120, help="from the real game start, at T explore")
     g.add_argument("--explore-temperature", type=float, default=1.0)
-    g.add_argument("--start-positions", default="human_games/start_positions_1830_4p_v2.jsonl")
+    g.add_argument("--num-players", type=int, default=NUM_PLAYERS, help="players per game (2-6)")
+    g.add_argument("--start-positions", default=None,
+                   help="default: human_games/start_positions_1830_<N>p_v2.jsonl for --num-players N")
     g.add_argument("--random-start-fraction", type=float, default=0.2)
-    g.add_argument("--midgame-positions", default="human_games/midgame_positions_1830_4p_v2.jsonl")
+    g.add_argument("--midgame-positions", default=None,
+                   help="default: human_games/midgame_positions_1830_<N>p_v2.jsonl for --num-players N")
     g.add_argument("--midgame-fraction", type=float, default=0.25)
     g.add_argument("--auction-fraction", type=float, default=0.35)
     g.add_argument("--max-decisions", type=int, default=1000)

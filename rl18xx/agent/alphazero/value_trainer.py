@@ -108,7 +108,7 @@ import numpy as np
 
 LOGGER = logging.getLogger(__name__)
 
-NUM_PLAYERS = 4
+NUM_PLAYERS = 4  # the default player count (``ValueTrainerConfig.num_players``)
 DEFAULT_INIT = "logs/value_gate/runs/base_36989/learner/0.pth"
 DEFAULT_FIXED = "logs/value_gate/data"
 ROLLING_PASS = 2**31 - 1  # the rolling set's "pass": a held-out game gives the same positions every cycle
@@ -136,6 +136,8 @@ class ValueTrainerConfig:
     init: str = DEFAULT_INIT  # the start value (promoted version 0; first run only)
     fixed_data: Optional[str] = DEFAULT_FIXED  # the value gate's position shards (test split); None: no fixed set
     positions_per_game: int = 16
+    # Only games of this many players are trained on and held out (the data may hold others).
+    num_players: int = NUM_PLAYERS
     held_out_per_mille: int = 30
     rolling_games: int = 200_000
     rolling_positions_per_game: int = 8
@@ -299,8 +301,8 @@ class ShardIndex:
     actions: np.ndarray
     players: np.ndarray
 
-    def trainable(self, per_mille: int) -> int:
-        return int(np.count_nonzero((self.crc % 1000 >= per_mille) & (self.players == NUM_PLAYERS)))
+    def trainable(self, per_mille: int, players: int = NUM_PLAYERS) -> int:
+        return int(np.count_nonzero((self.crc % 1000 >= per_mille) & (self.players == players)))
 
 
 def _index_dir(run_dir: Path, data_dir: Path) -> Path:
@@ -369,15 +371,17 @@ class GameIndex:
     def held_out(self, per_mille: int) -> np.ndarray:
         return self.crc % 1000 < per_mille
 
-    def trainable(self, per_mille: int) -> np.ndarray:
-        """Games that may be trained on, oldest first."""
-        return np.flatnonzero(~self.held_out(per_mille) & (self.players == NUM_PLAYERS))
+    def trainable(self, per_mille: int, players: int = NUM_PLAYERS) -> np.ndarray:
+        """Games (of ``players`` players) that may be trained on, oldest first."""
+        return np.flatnonzero(~self.held_out(per_mille) & (self.players == players))
 
 
-def choose_sample(index: GameIndex, per_mille: int, recent_games: int, scale: float, rng) -> tuple:
+def choose_sample(
+    index: GameIndex, per_mille: int, recent_games: int, scale: float, rng, players: int = NUM_PLAYERS
+) -> tuple:
     """``(recent, old)``: every trainable game among the newest ``recent_games * scale``, and as
     many (at most all) drawn uniformly from the older trainable games, each oldest first."""
-    trainable = index.trainable(per_mille)
+    trainable = index.trainable(per_mille, players)
     r = max(0, int(round(recent_games * scale)))
     cut = max(0, len(trainable) - r)
     recent, older = trainable[cut:], trainable[:cut]
@@ -389,7 +393,7 @@ def rolling_games(index: GameIndex, cfg: ValueTrainerConfig) -> np.ndarray:
     """The rolling held-out games: held out, among the newest ``rolling_games``, at most
     ``rolling_max_positions / rolling_positions_per_game`` of them (the newest), oldest first."""
     newest = np.arange(max(0, len(index) - cfg.rolling_games), len(index))
-    held = newest[index.held_out(cfg.held_out_per_mille)[newest] & (index.players[newest] == NUM_PLAYERS)]
+    held = newest[index.held_out(cfg.held_out_per_mille)[newest] & (index.players[newest] == cfg.num_players)]
     cap = cfg.rolling_max_positions // max(1, cfg.rolling_positions_per_game)
     return held[max(0, len(held) - cap) :]
 
@@ -682,7 +686,8 @@ class ShuffleBuffer:
 
 
 def per_position_ce(model, arrays: dict, device, batch_size: int = 1024) -> np.ndarray:
-    """Win CE of ``model`` (fp32, no autocast) at each position (canonical frame, first 4 seats)."""
+    """Win CE of ``model`` (fp32, no autocast) at each position (canonical frame, the targets' seats:
+    the game's players)."""
     import torch
 
     out = []
@@ -692,13 +697,14 @@ def per_position_ce(model, arrays: dict, device, batch_size: int = 1024) -> np.n
             nodes = torch.from_numpy(np.ascontiguousarray(arrays["nodes"][b : b + batch_size])).to(device).float()
             win = torch.from_numpy(np.ascontiguousarray(arrays["win"][b : b + batch_size])).to(device).float()
             _, logits, _, _ = model(gs, nodes, value_only=True)
-            logp = torch.log_softmax(logits.float()[:, :NUM_PLAYERS], dim=1)
+            logp = torch.log_softmax(logits.float()[:, : win.shape[1]], dim=1)
             out.append((-(win * logp).sum(1)).double().cpu().numpy())
     return np.concatenate(out) if out else np.zeros(0)
 
 
 def train_step(model, opt, batch: dict, device, score_weight: float) -> tuple:
-    """One AdamW step on win CE + ``score_weight`` x placement MSE (scripts/value_gate.py ``train``)."""
+    """One AdamW step on win CE + ``score_weight`` x placement MSE (scripts/value_gate.py ``train``), over
+    the targets' seats (the batch's player count: its positions share one)."""
     import torch
     import torch.nn.functional as F
 
@@ -707,9 +713,10 @@ def train_step(model, opt, batch: dict, device, score_weight: float) -> tuple:
 
     with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
         _, win_logits, score, _ = model(t("game_states"), t("nodes"), value_only=True)
-    logp = torch.log_softmax(win_logits.float()[:, :NUM_PLAYERS], dim=1)
+    players = batch["win"].shape[1]
+    logp = torch.log_softmax(win_logits.float()[:, :players], dim=1)
     ce = -(t("win") * logp).sum(1).mean()
-    mse = F.mse_loss(score.float()[:, :NUM_PLAYERS], t("placement"))
+    mse = F.mse_loss(score.float()[:, :players], t("placement"))
     loss = ce + score_weight * mse
     if not torch.isfinite(loss):
         raise RuntimeError("value trainer: non-finite loss")
@@ -770,6 +777,14 @@ def load_fixed(data_dir, split: str = "test") -> Optional[dict]:
     if not parts["game"]:
         return None
     return {k: np.concatenate(v) for k, v in parts.items()}
+
+
+def check_players(arrays: Optional[dict], players: int, name: str) -> None:
+    """Raise if position arrays (``load_fixed``) are of another player count than the run's: their
+    targets have one column per seat."""
+    if arrays is not None and arrays["win"].shape[1] != players:
+        raise ValueError(f"value trainer: {name} holds {arrays['win'].shape[1]}-player positions, the run "
+                         f"{players}-player games (--num-players)")
 
 
 def load_sets(data_dirs, split: str = "test") -> Optional[dict]:
@@ -890,6 +905,8 @@ class ValueTrainer:
         self.gate = load_sets(cfg.gate_data) if cfg.gate_data else None
         if cfg.gate_data and self.gate is None:
             raise ValueError(f"value trainer: no test positions in --gate-data {cfg.gate_data}")
+        for name, arrays in (("--fixed-data", self.fixed), ("--gate-data", self.gate)):
+            check_players(arrays, cfg.num_players, name)
         if self.gate is not None:
             LOGGER.info(f"gate set: {len(self.gate['win'])} positions, {len(np.unique(self.gate['game']))} games "
                         f"({cfg.gate_data})")
@@ -991,7 +1008,8 @@ class ValueTrainer:
     def new_games(self) -> int:
         cut = self.state["data_cut"]
         per_mille = self.cfg.held_out_per_mille
-        return sum(s.trainable(per_mille) for s in self.shards.values() if cut is None or s.first_seen > cut)
+        players = self.cfg.num_players
+        return sum(s.trainable(per_mille, players) for s in self.shards.values() if cut is None or s.first_seen > cut)
 
     def due(self, now: Optional[float] = None) -> tuple:
         """``(due, why)``: the cycle trigger (module docstring)."""
@@ -1109,7 +1127,7 @@ class ValueTrainer:
         failures = self.state["consecutive_failures"]
         scale = escalation(cfg, failures)["sample_scale"]
         rng = np.random.default_rng([cfg.seed, cycle])
-        recent, old = choose_sample(index, cfg.held_out_per_mille, cfg.recent_games, scale, rng)
+        recent, old = choose_sample(index, cfg.held_out_per_mille, cfg.recent_games, scale, rng, cfg.num_players)
         sample = np.concatenate([recent, old])
         rolling = rolling_games(index, cfg)
         new = self.new_games()
@@ -1131,6 +1149,7 @@ class ValueTrainer:
             anchor = load_fixed(cfg.anchor_data, "train")
             if anchor is None:
                 raise ValueError(f"value trainer: no train positions in --anchor-data {cfg.anchor_data}")
+            check_players(anchor, cfg.num_players, "--anchor-data")
             LOGGER.info(f"cycle {cycle}: anchor {len(anchor['win'])} positions ({cfg.anchor_data})")
         with make_pool(cfg.workers) as pool:
             t = time.time()

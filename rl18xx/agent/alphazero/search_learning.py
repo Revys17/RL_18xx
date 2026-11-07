@@ -126,7 +126,7 @@ from rl18xx.agent.alphazero.search_targets import (
 
 LOGGER = logging.getLogger(__name__)
 
-NUM_PLAYERS = 4
+NUM_PLAYERS = 4  # the default player count (``SearchLearningConfig.num_players``)
 TARGETS = ("visits", "gumbel", "cq", "rpo")
 
 
@@ -230,6 +230,9 @@ class SearchLearningConfig:
     games_per_worker: int = 24
     task_seconds: float = 30.0
     max_decisions: int = 1000
+    # Players per game (2-6): 4 is the main line, 2 is 1830's two-player game. The start files and
+    # the league's seat weights default by it (main.py); a run keeps it on --resume.
+    num_players: int = NUM_PLAYERS
     start_positions: str = "human_games/start_positions_1830_4p_v2.jsonl"
     random_start_fraction: float = 0.2
     midgame_positions: Optional[str] = None
@@ -238,8 +241,8 @@ class SearchLearningConfig:
     inference_batch_size: int = 512
     # Critic rows: this many of each game's rows (0: all), each trained on once.
     critic_positions_per_game: int = 32
-    # The critic's score-head target: "placement" (gen4's, 1/0.5/0.2/0 by place;
-    # "placement:<points>") or "win" (the net-worth shares).
+    # The critic's score-head target: "placement" (gen4's, 1/0.5/0.2/0 by place; with
+    # 2 players 1/0; "placement:<points>") or "win" (the net-worth shares).
     reward: str = "placement"
     # Training
     window_rows: int = 131072
@@ -340,7 +343,7 @@ class SearchLearningConfig:
     # (its current policy + value), the oldest dropped beyond ``league_snapshot_slots``.
     population: Optional[str] = None
     league_share: float = 0.3
-    league_seat_weights: Optional[dict] = None  # {seats: weight}; None: {1: 0.5, 2: 0.5}
+    league_seat_weights: Optional[dict] = None  # {seats: weight}; None: {1: 0.5, 2: 0.5} (2 players: {1: 1})
     league_readouts: int = 48
     pfsp_power: float = 2.0
     league_snapshot_hours: float = 168.0
@@ -509,13 +512,14 @@ def win_targets(win, search_values: list, settings: dict):
 
 def score_target(worth, reward: str) -> Optional[np.ndarray]:
     """The score head's target for the final net worths ``worth`` (player-id order): placement
-    points under a ``placement[:<points>]`` reward, else None (the score head learns the shares)."""
+    points under a ``placement[:<points>]`` reward (a bare ``placement``: the player count's,
+    ``policy_gradient.default_placement_points``), else None (the score head learns the shares)."""
     from rl18xx.agent.alphazero.policy_gradient import parse_reward, placement_points
 
     kind, points = parse_reward(reward)
     if kind != "placement":
         return None
-    return placement_points(worth, points or (1.0, 0.5, 0.2, 0.0)).astype(np.float32)
+    return placement_points(worth, points).astype(np.float32)  # no points: the player count's
 
 
 def root_value_ce(rows: list, win: np.ndarray) -> tuple:
@@ -894,8 +898,9 @@ def search_config(settings: dict, client=None):
 
     gumbel = settings["target"] == "gumbel"
     # A finished game backs up the utility the leaves' value head reads (score / blend=<w>).
+    num_players = int(settings.get("num_players", NUM_PLAYERS))
     terminal_weight, terminal_points = terminal_utility(
-        settings.get("value_head", "win"), settings.get("reward", "placement")
+        settings.get("value_head", "win"), settings.get("reward", "placement"), num_players
     )
     return SelfPlayConfig(
         network=None,
@@ -920,38 +925,48 @@ def search_config(settings: dict, client=None):
         noresign_holdout_rate=0.0,
         softpick_move_cutoff=0,
         max_game_length=settings["max_decisions"],
-        player_count_distribution={NUM_PLAYERS: 1.0},
+        player_count_distribution={num_players: 1.0},
         terminal_score_weight=terminal_weight,
         terminal_score_points=terminal_points,
     )
 
 
-DEFAULT_LEAGUE_SEAT_WEIGHTS = {1: 0.5, 2: 0.5}
+DEFAULT_LEAGUE_SEAT_WEIGHTS = {1: 0.5, 2: 0.5}  # 4 players
+# A league member's seats by player count (DEFAULT_LEAGUE_SEAT_WEIGHTS elsewhere): with two players
+# the member takes one seat and the main system keeps the other.
+LEAGUE_SEAT_WEIGHTS_BY_PLAYERS = {2: {1: 1.0}}
 MAIN = "main"  # seat_members' name for the main system's seats
 
 
+def default_league_seat_weights(num_players: int) -> dict:
+    """``{member seats: weight}`` of a ``num_players`` game's league seats."""
+    return dict(LEAGUE_SEAT_WEIGHTS_BY_PLAYERS.get(int(num_players), DEFAULT_LEAGUE_SEAT_WEIGHTS))
+
+
 def deal_seats(settings: dict, rng: random.Random) -> tuple:
-    """``(seat -> server, seat -> member name)`` for a new game. All the learner's, unless
-    ``settings["league"]`` (league seats: with probability ``share`` one member, drawn by its
-    ``weights``, takes 1-2 random seats -- ``seat_weights``) or ``settings["opponent_servers"]``
-    (the older hook: the learner holds ``learner_seats`` random seats, default 2, and each other
-    seat plays one of those servers' policy) say otherwise. Other seats give no rows."""
+    """``(seat -> server, seat -> member name)`` for a new game of ``settings["num_players"]``
+    seats (default 4). All the learner's, unless ``settings["league"]`` (league seats: with
+    probability ``share`` one member, drawn by its ``weights``, takes 1-2 random seats -- with two
+    players one -- ``seat_weights``) or ``settings["opponent_servers"]`` (the older hook: the learner
+    holds ``learner_seats`` random seats, default half the table, and each other seat plays one of
+    those servers' policy) say otherwise. Other seats give no rows."""
+    n = int(settings.get("num_players", NUM_PLAYERS))
     league = settings.get("league")
     if league and league["members"] and rng.random() < float(league["share"]):
         names = sorted(league["members"])
-        name = rng.choices(names, weights=[float(league["weights"].get(n, 0.0)) for n in names])[0]
+        name = rng.choices(names, weights=[float(league["weights"].get(m, 0.0)) for m in names])[0]
         counts, weights = zip(*sorted((int(k), float(v)) for k, v in league["seat_weights"].items()))
-        seats = set(rng.sample(range(NUM_PLAYERS), rng.choices(counts, weights=weights)[0]))
+        seats = set(rng.sample(range(n), rng.choices(counts, weights=weights)[0]))
         server = league["members"][name]["server"]
         return (
-            [server if seat in seats else "learner" for seat in range(NUM_PLAYERS)],
-            [name if seat in seats else MAIN for seat in range(NUM_PLAYERS)],
+            [server if seat in seats else "learner" for seat in range(n)],
+            [name if seat in seats else MAIN for seat in range(n)],
         )
     opponents = settings.get("opponent_servers") or []
     if not opponents:
-        return ["learner"] * NUM_PLAYERS, [MAIN] * NUM_PLAYERS
-    learner = set(rng.sample(range(NUM_PLAYERS), int(settings.get("learner_seats", 2))))
-    servers = ["learner" if seat in learner else rng.choice(opponents) for seat in range(NUM_PLAYERS)]
+        return ["learner"] * n, [MAIN] * n
+    learner = set(rng.sample(range(n), int(settings.get("learner_seats", max(1, n // 2)))))
+    servers = ["learner" if seat in learner else rng.choice(opponents) for seat in range(n)]
     return servers, [MAIN if s == "learner" else s for s in servers]
 
 
@@ -971,6 +986,7 @@ def league_result(record: dict) -> Optional[dict]:
     pairs = [1.0 if worth[a] > worth[b] else 0.5 if worth[a] == worth[b] else 0.0 for a in main for b in theirs]
     return {
         "member": member,
+        "players": len(members),
         "main_seats": len(main),
         "win": float(sum(record["win_share"][s] for s in main)),
         "worth": float(sum(worth[s] for s in main)),
@@ -980,13 +996,13 @@ def league_result(record: dict) -> Optional[dict]:
 
 def add_league_score(scores: dict, result: dict, kind: str) -> None:
     """Accumulate ``league_result`` into the history's per-member sums (``fair``: the main
-    system's fair win share, its seats / 4; the squares give the daily report its SE)."""
+    system's fair win share, its seats / the players (4); the squares give the daily report its SE)."""
     s = scores.setdefault(
         result["member"],
         {"kind": kind, "games": 0, "main_seats": 0, "win": 0.0, "fair": 0.0, "worth": 0.0,
          "win_excess_sq": 0.0, "worth_excess_sq": 0.0},
     )  # fmt: skip
-    fair = result["main_seats"] / NUM_PLAYERS
+    fair = result["main_seats"] / int(result.get("players", NUM_PLAYERS))
     s["games"] += 1
     s["main_seats"] += result["main_seats"]
     s["win"] += result["win"]
@@ -1076,6 +1092,7 @@ class Generator:
         from rl18xx.agent.alphazero.lockstep import LockstepSearcher
 
         self.settings = settings
+        self.num_players = int(settings.get("num_players", NUM_PLAYERS))
         self.searcher = LockstepSearcher(evaluators, dedupe_maps=bool(settings.get("dedupe_maps", False)))
         self.games: dict = {}
         self.config = search_config(settings)
@@ -1096,10 +1113,10 @@ class Generator:
             # The real rules: an all-pass round discounts only the SV (no auction_unlock).
             servers, members = deal_seats(s, self.py_rng)
             prefix = self.py_rng.randint(0, int(s.get("auction_prefix_decisions", 0) or 0))
-            return _Game(game=new_game(NUM_PLAYERS), uid=uuid.uuid4().hex, start="auction:new",
+            return _Game(game=new_game(self.num_players), uid=uuid.uuid4().hex, start="auction:new",
                          seat_servers=servers, seat_members=members, prefix=prefix)  # fmt: skip
         start, game, skipped = replayed_start(
-            NUM_PLAYERS,
+            self.num_players,
             s["start_positions"],
             s["random_start_fraction"],
             rng=self.py_rng,
@@ -1134,7 +1151,7 @@ class Generator:
         cached per start: what ``explore_from_game_start`` counts the exploration window from."""
         n = self._start_decision_counts.get(start.label)
         if n is None:
-            n = start_decisions(start.actions, NUM_PLAYERS)
+            n = start_decisions(start.actions, self.num_players)
             if len(self._start_decision_counts) < 10_000:
                 self._start_decision_counts[start.label] = n
         return n
@@ -1945,6 +1962,7 @@ def worker_settings(
         "games_per_worker": cfg.games_per_worker,
         "max_decisions": cfg.max_decisions,
         "price_eps": 0.0,
+        "num_players": cfg.num_players,
         "start_positions": cfg.start_positions,
         "random_start_fraction": cfg.random_start_fraction,
         "midgame_positions": cfg.midgame_positions if cfg.midgame_fraction > 0 else None,
@@ -2014,7 +2032,18 @@ def snapshot_spec(cfg, run_dir: Path, name: str, current_learner: Path, value: P
 def _validate(cfg: SearchLearningConfig) -> None:
     from rl18xx.agent.alphazero.composite_model import parse_value_head
     from rl18xx.agent.alphazero.policy_gradient import parse_reward
+    from rl18xx.agent.alphazero.start_positions import check_start_files
 
+    if not 2 <= int(cfg.num_players) <= 6:
+        raise SystemExit(f"--num-players must be 2-6, got {cfg.num_players}")
+    if not cfg.auction_only:  # (auction episodes start from a new game)
+        check_start_files(
+            cfg.num_players,
+            cfg.start_positions,
+            cfg.random_start_fraction,
+            cfg.midgame_positions,
+            cfg.midgame_fraction,
+        )
     if cfg.target not in TARGETS:
         raise SystemExit(f"--target must be one of {TARGETS}, got {cfg.target!r}")
     if cfg.visit_target not in ("pruned", "raw"):
@@ -2048,9 +2077,10 @@ def _validate(cfg: SearchLearningConfig) -> None:
     if cfg.population:
         if not 0.0 <= cfg.league_share <= 1.0 or cfg.league_readouts < 1 or cfg.league_snapshot_slots < 0:
             raise SystemExit("--league-share must be in [0, 1], --league-readouts >= 1, --league-snapshot-slots >= 0")
-        weights = cfg.league_seat_weights or DEFAULT_LEAGUE_SEAT_WEIGHTS
-        if not weights or any(int(k) not in (1, 2, 3) or float(v) < 0 for k, v in weights.items()):
-            raise SystemExit("--league-seat-weights: {seats (1-3): weight >= 0}")
+        weights = cfg.league_seat_weights or default_league_seat_weights(cfg.num_players)
+        top = cfg.num_players - 1
+        if not weights or any(not 1 <= int(k) <= top or float(v) < 0 for k, v in weights.items()):
+            raise SystemExit(f"--league-seat-weights: {{seats (1-{top}): weight >= 0}} with {cfg.num_players} players")
     if cfg.policy_follow and not cfg.freeze_policy:
         raise SystemExit("--policy-follow needs --freeze-policy (the followed run trains the policy path)")
     if cfg.target_confidence_mode not in CONFIDENCE_MODES:
@@ -2233,7 +2263,7 @@ class LeagueSeats:
     def settings(self) -> dict:
         members = self.members
         weights = dict(zip(self.league.members, (float(w) for w in self.league.weights())))
-        seat_weights = self.cfg.league_seat_weights or DEFAULT_LEAGUE_SEAT_WEIGHTS
+        seat_weights = self.cfg.league_seat_weights or default_league_seat_weights(self.cfg.num_players)
         return {
             "share": float(self.cfg.league_share),
             "seat_weights": {int(k): float(v) for k, v in seat_weights.items()},
