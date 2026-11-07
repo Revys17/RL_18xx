@@ -94,18 +94,16 @@ def check_start_files(
     """Raise SystemExit if a start file a ``num_players`` generator will draw from has no game of
     that count: ``path`` when ``random_fraction`` < 1, ``midgame_path`` when ``midgame_fraction`` > 0.
     (:func:`sample_start_position` falls back to random starts / Stock Round 1 starts without games of
-    the count, which is right for a count no human file covers but silently wrong for a wrong file.)"""
+    the count, which is right for a count no human file covers but silently wrong for a wrong file.)
+    A file that isn't there isn't checked: the generator fails on it as it always did."""
     checks = (
         (path, random_fraction < 1.0, "--start-positions", default_start_positions),
         (midgame_path, midgame_fraction > 0, "--midgame-positions", default_midgame_positions),
     )
     for file, used, flag, default in checks:
-        if not file or not used:
+        if not file or not used or not Path(file).is_file():
             continue
-        try:
-            counts = file_player_counts(file)
-        except OSError as e:
-            raise SystemExit(f"{flag} {file}: {e}") from None
+        counts = file_player_counts(file)
         if not counts.get(int(num_players)):
             raise SystemExit(
                 f"{flag} {file} has no {num_players}-player games ({dict(sorted(counts.items()))}); "
