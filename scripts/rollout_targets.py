@@ -909,6 +909,9 @@ def cmd_train(args):
     train, vals = arm_data(args)
     rows = train.pop("rows")
     anchor = load_npy_dir(args.anchor) if args.anchor_share > 0 else None
+    if anchor is not None and anchor["win"].shape[1] != train["win"].shape[1]:
+        raise SystemExit(f"--anchor {args.anchor} holds {anchor['win'].shape[1]}-player positions, --data "
+                         f"{train['win'].shape[1]}-player ones (one player count per batch)")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = _load(args.init).to(device)
     model.eval()
