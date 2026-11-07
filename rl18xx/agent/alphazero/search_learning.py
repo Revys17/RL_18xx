@@ -2410,6 +2410,7 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
         run_dir = Path(cfg.out_dir) / name
         if run_dir.exists():
             raise SystemExit(f"{run_dir} exists; pass --resume to continue it")
+        _validate(cfg)  # before the run directory exists: a rejected setting leaves nothing behind
         run_dir.mkdir(parents=True)
         update, kl_coef, anchor_update = 0, cfg.kl_coef, 0
         learner_path = Path(cfg.policy_checkpoint)
@@ -2417,7 +2418,8 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
         league_state = None
     if save_data:
         cfg.save_data = save_data
-    _validate(cfg)
+    if resume:
+        _validate(cfg)
     (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
     LOGGER.info(f"Search-learning run {run_dir} from update {update}: {asdict(cfg)}")
 
