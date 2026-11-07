@@ -784,7 +784,13 @@ def save_game(run_dir: Path, record: dict, update: int, learner_checkpoint: str,
         "worth_share": saved["worth_share"],
     }
     meta = {**entry, "description": f"policy-gradient {run_dir.name} update {update}: learner vs {opponent}"}
-    entry["game_file"] = save_game_record(run_dir, name, make_game_record(saved["raw_actions"], n_players, meta=meta))
+    from rl18xx.agent.alphazero.start_positions import AUCTION_START
+
+    # A game started at the auction plays it with the auction_unlock variant (start_positions.replayed_start).
+    record_file = make_game_record(
+        saved["raw_actions"], n_players, auction_unlock=saved["start"] == AUCTION_START, meta=meta
+    )
+    entry["game_file"] = save_game_record(run_dir, name, record_file)
     append_index(run_dir, entry)
     return name
 

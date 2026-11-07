@@ -111,6 +111,22 @@ def test_games_keep_their_action_logs_only_with_save_game_every(monkeypatch, sta
         assert saved["raw_actions"][0]["type"] in ("bid", "pass")  # from the start's auction on
 
 
+def test_saved_game_files_record_the_auction_unlock_of_auction_starts(monkeypatch, start_file, tmp_path):
+    """A game started at the auction played it with auction_unlock (start_positions.replayed_start): its
+    viewer file says so, so it replays (and the Ruby replay check skips it)."""
+    monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Client(), "sl": _Client(), "pool": _Client()})
+    cfg = pg.PGConfig(policy_checkpoint="p", value_checkpoint="v")
+    games = []
+    for auction_fraction in (1.0, 0.0):
+        settings = _settings(start_file, max_decisions=30, save_game_every=1, auction_fraction=auction_fraction)
+        games += pg.play_pg_games(1, settings)["games"]
+    assert [g["saved_game"]["start"] for g in games] == ["auction", "random"]
+    for game in games:
+        name = pg.save_game(tmp_path, game, 0, "learner.pth", "sl.pth", cfg)
+        record = json.loads((tmp_path / "games" / f"{name}.json").read_text())
+        assert record["rl18xx"]["auction_unlock"] == (game["saved_game"]["start"] == "auction")
+
+
 def test_a_tempered_learner_records_the_probability_it_sampled_with(monkeypatch, start_file):
     """At learner temperature 0.5 a move's recorded probability is its prior
     squared, renormalized over the legal moves."""
