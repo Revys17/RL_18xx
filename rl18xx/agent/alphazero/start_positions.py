@@ -522,10 +522,12 @@ def replayed_start(
     midgame_fraction: float = 0.0,
     auction_fraction: float = 0.0,
     max_draws: int = 100,
+    auction_unlock: bool = True,
 ) -> tuple:
     """``(start, game, skipped)``: a :func:`sample_start_position` start applied to a
     new game, with ``auction_unlock`` on for an auction start (as the generators play
-    those).
+    those) unless ``auction_unlock`` is False: the real rules, where an all-pass round
+    after the SV is sold pays the privates out and the auction goes on.
 
     A recorded start whose actions the engine now rejects -- a position file built
     before a rules fix (2026-10-19: one stale mid-game position killed a
@@ -556,7 +558,7 @@ def replayed_start(
                     e,
                 )
             continue
-        if start.label == AUCTION_START:
+        if start.label == AUCTION_START and auction_unlock:
             game._game.set_auction_unlock(True)
         return start, game, skipped
     raise RuntimeError(f"no start position replayed in {max_draws} draws ({path}, {midgame_path})")

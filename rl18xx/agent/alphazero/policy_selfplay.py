@@ -118,6 +118,13 @@ def _advance(g: _Game, settings: dict, rng: np.random.Generator) -> Optional[lis
             g.game.end_game()
             g.termination = "max_length"
             return None
+        stall = settings.get("auction_stall_decisions", 0)
+        if stall and g.decisions >= stall and rs.round.round_type == "Auction":
+            # A real-rules auction still running (all-pass rounds pay out and repeat): scored on net worth as it
+            # stands, so the seats that didn't buy pay for the stall.
+            g.game.end_game()
+            g.termination = "auction_stall"
+            return None
         legal = [int(i) for i in rs.factored_legal_indices()]
         if len(legal) > 1 or (len(legal) == 1 and has_price_choice(rs, legal[0])):
             return legal

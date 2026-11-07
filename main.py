@@ -207,6 +207,8 @@ def cmd_policy_gradient(args):
         midgame_positions=args.midgame_positions if args.midgame_fraction > 0 or args.resume else None,
         midgame_fraction=args.midgame_fraction,
         auction_fraction=args.auction_fraction,
+        auction_unlock=args.auction_unlock,
+        auction_stall_decisions=args.auction_stall_decisions,
     )
     explicit = _resume_explicit(args, RESUME_SETTINGS)
     print(run(config, resume=args.resume, explicit=explicit))
@@ -654,6 +656,15 @@ def build_parser():
     p.add_argument(
         "--auction-fraction", type=float, default=0.0,
         help="Share of games starting at the waterfall auction, the learner's bids trained too (with --resume: from now on)",
+    )
+    p.add_argument(
+        "--no-auction-unlock", dest="auction_unlock", action="store_false",
+        help="Auction starts play the real rules: no auction_unlock variant (after the SV is sold an all-pass round "
+        "pays the privates out and the auction goes on)",
+    )
+    p.add_argument(
+        "--auction-stall-decisions", type=int, default=0,
+        help="End a game still in the auction after this many decisions, scored on net worth as it stands (0: off)",
     )
     p.add_argument(
         "--population", type=str, default=None,

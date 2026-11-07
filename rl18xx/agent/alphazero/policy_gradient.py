@@ -155,6 +155,14 @@ class PGConfig:
     # Share of games that start at the waterfall auction (with the auction_unlock
     # variant, so all-pass rounds can't stall it): the learner's bids are trained too.
     auction_fraction: float = 0.0
+    # False: auction starts play the real rules (no auction_unlock): after the SV is
+    # sold an all-pass round pays the privates out and the auction goes on, so a player
+    # who keeps passing falls behind the owners. auction_stall_decisions > 0 ends a game
+    # still in the auction after that many decisions, scored on net worth as it stands
+    # (like the max_decisions cap): a stall costs the seats that didn't buy, and can't
+    # run to the cap.
+    auction_unlock: bool = True
+    auction_stall_decisions: int = 0
     inference_batch_size: int = 512
     # Updates
     rows_per_update: int = 65536
@@ -405,6 +413,18 @@ def seat_advantages(values: list, reward: float, lam: float) -> np.ndarray:
     return advantages
 
 
+def auction_prices(g) -> Optional[dict]:
+    """``{private: price}`` paid in a game that started at the auction and got past it (None otherwise): each
+    private's highest bid (``search_learning.auction_sales``); one handed over unbid (an SV at $0) is absent."""
+    from rl18xx.agent.alphazero.start_positions import AUCTION_START
+
+    if g.start != AUCTION_START or g.termination == "auction_stall":
+        return None
+    from rl18xx.agent.alphazero.search_learning import auction_sales
+
+    return {company: int(price) for company, (_, price) in auction_sales(g.game.raw_actions).items()}
+
+
 def outcome(game) -> tuple:
     """``(win share, net-worth fractions)`` per seat (player-id order)."""
     from rl18xx.agent.alphazero.self_play import _compute_net_worth
@@ -606,6 +626,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             midgame_path=settings.get("midgame_positions"),
             midgame_fraction=settings.get("midgame_fraction", 0.0),
             auction_fraction=settings.get("auction_fraction", 0.0),
+            auction_unlock=settings.get("auction_unlock", True),
         )
         skipped_starts += skipped
         learner, seat_models, seat_members = _deal_seats(settings, py_rng)
@@ -715,6 +736,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             "seat_decisions": {seat: len(v) for seat, v in g.values.items()},
             "termination": g.termination,
             "start_kind": g.start.split(":")[0] if g.start else None,
+            "auction_prices": auction_prices(g),
             "first_values": {} if baseline_at_update else {seat: v[0] for seat, v in g.values.items() if v},
             "rows": rows,
         }
@@ -738,6 +760,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
                 "net_worth": [float(net_worth[pid]) for pid in sorted(net_worth)],
                 "worth_share": fractions.tolist(),
                 "raw_actions": list(g.game.raw_actions),
+                "auction_unlock": bool(settings.get("auction_unlock", True)),
             }
         records.append(record)
     return {
@@ -786,10 +809,10 @@ def save_game(run_dir: Path, record: dict, update: int, learner_checkpoint: str,
     meta = {**entry, "description": f"policy-gradient {run_dir.name} update {update}: learner vs {opponent}"}
     from rl18xx.agent.alphazero.start_positions import AUCTION_START
 
-    # A game started at the auction plays it with the auction_unlock variant (start_positions.replayed_start).
-    record_file = make_game_record(
-        saved["raw_actions"], n_players, auction_unlock=saved["start"] == AUCTION_START, meta=meta
-    )
+    # A game started at the auction plays it with the auction_unlock variant unless the run plays the real
+    # rules (start_positions.replayed_start).
+    unlock = saved["start"] == AUCTION_START and saved.get("auction_unlock", True)
+    record_file = make_game_record(saved["raw_actions"], n_players, auction_unlock=unlock, meta=meta)
     entry["game_file"] = save_game_record(run_dir, name, record_file)
     append_index(run_dir, entry)
     return name
@@ -1038,6 +1061,8 @@ RESUME_SETTINGS = (
     "midgame_positions",
     "midgame_fraction",
     "auction_fraction",
+    "auction_unlock",
+    "auction_stall_decisions",
     "population",
     "value_follow",
 )
@@ -1198,6 +1223,8 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
             "midgame_positions": cfg.midgame_positions,
             "midgame_fraction": cfg.midgame_fraction,
             "auction_fraction": cfg.auction_fraction,
+            "auction_unlock": cfg.auction_unlock,
+            "auction_stall_decisions": cfg.auction_stall_decisions,
             "gae_lambda": cfg.gae_lambda,
             "baseline_at_update": baseline_at_update,
             "save_game_every": cfg.save_game_every,
@@ -1216,6 +1243,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
     buffer, gen, total_games = [], Counter(), 0
     gen_started = run_started = time.time()
     terminations, lengths, starts = Counter(), [], Counter()
+    prices = defaultdict(list)  # private -> prices paid in this update's auction games
     critic_first_values = []
     try:
         executor = ProcessPoolExecutor(max_workers=cfg.workers, initializer=worker_init, initargs=(queues,))
@@ -1238,6 +1266,8 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                                 league.record(member, pairwise)
                         terminations[record["termination"]] += 1
                         starts[record.get("start_kind")] += 1
+                        for company, price in (record.get("auction_prices") or {}).items():
+                            prices[company].append(price)
                         lengths.append(record["decisions"])
                         for seat, value in record["first_values"].items():
                             critic_first_values.append((value, record["win_share"][int(seat)]))
@@ -1355,6 +1385,11 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                     "mean_decisions": float(np.mean(lengths)) if lengths else 0.0,
                     "terminations": dict(terminations),
                     "starts": dict(starts),
+                    # Auction starts that got past the auction: mean price paid per private (face: SV 20, CS 40,
+                    # DH 70, MH 110, CA 160, BO 220), and how many games ended stalled in the auction.
+                    "auction_games": max((len(v) for v in prices.values()), default=0),
+                    **{f"auction_price_{c}": float(np.mean(v)) for c, v in sorted(prices.items())},
+                    "auction_stalls": terminations.get("auction_stall", 0),
                     # Recorded starts the engine no longer replays (a stale position file), redrawn.
                     "skipped_starts": gen["skipped_starts"],
                     "train_seconds": train_seconds,
@@ -1372,6 +1407,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                 gen.clear()
                 gen_started = time.time()
                 terminations, lengths, critic_first_values, starts = Counter(), [], [], Counter()
+                prices = defaultdict(list)
                 history.write(json.dumps(record) + "\n")
                 history.flush()
                 for key, value in record.items():
