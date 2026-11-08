@@ -56,6 +56,9 @@ What the runner logs: the seats it plays, every new move in the game (once a min
 autoplay's state when it changes. If the bot's turn waits more than 5 minutes it saves a
 screenshot under `~/.cache/rl18xx-bot/logs/` and reloads the page. If autoplay stops on an
 error (e.g. the engines disagree), the reason is in the log; fix or undo, then restart the runner.
+A move that gets no answer (a dropped connection) is not an error: the move may have landed, so the
+bridge reads the game afresh and plays on from there (the server would take a resent move as a
+second one); only 3 such moves in a row stop autoplay.
 
 ## How a move is made
 
