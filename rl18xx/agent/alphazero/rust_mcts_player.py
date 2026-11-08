@@ -252,6 +252,8 @@ class RustMCTSPlayer:
                 self._rust_player.set_q_normalize(True)
         elif bool(getattr(self.config, "mcts_q_normalize", False)):
             raise ValueError("mcts_q_normalize needs mcts_mean_q")
+        if not bool(getattr(self.config, "mcts_move_widening", True)):
+            self._rust_player.set_move_widening(False)
         if float(getattr(self.config, "terminal_score_weight", 0.0)) > 0:
             self._rust_player.set_terminal_utility(
                 float(self.config.terminal_score_weight), [float(p) for p in self.config.terminal_score_points]

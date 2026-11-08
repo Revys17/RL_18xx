@@ -544,7 +544,7 @@ class MCTSNode:
         while current.is_expanded:
             scores = current.child_action_score_compressed
             # Progressive widening (Phase 6.3): only apply when many legal actions
-            if current.num_legal_actions > 20:
+            if current.num_legal_actions > 20 and getattr(current.config, "mcts_move_widening", True):
                 k = max(1, int(current.config.pw_c * (current.N ** current.config.pw_alpha)))
                 if k < current.num_legal_actions:
                     top_k_indices = np.argpartition(current.child_prior_compressed, -k)[-k:]

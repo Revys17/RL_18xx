@@ -483,6 +483,11 @@ class SelfPlayHyperparams:
     # full scale -- c_puct_init is then sized for a 0-1 range (MuZero's 1.25 is
     # c_puct_init 0.625 here). Off by default; needs mcts_mean_q.
     mcts_q_normalize: bool = False
+    # Top-k move widening (both engines): at a node with more than 20 legal moves the
+    # search selects among only the k = max(1, pw_c * N^pw_alpha) moves with the highest
+    # prior (~14 at a 200-visit root, 2-3 at small inner nodes). False: every legal move
+    # competes, as in AlphaZero (``RustMCTSPlayer.set_move_widening``).
+    mcts_move_widening: bool = True
     # Rust MCTS: value leaves with a heuristic instead of (weight 1) or mixed
     # into (0 < weight < 1) the network's value, like AlphaGo's rollout mix.
     # "net_worth": softmax over players of net worth / leaf_value_heuristic_scale

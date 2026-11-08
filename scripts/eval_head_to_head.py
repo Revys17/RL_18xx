@@ -49,6 +49,8 @@ round: it replaces SelfPlayConfig's per-round c_puct_by_round table) and
   the node's value and its visited children's (MuZero;
   SelfPlayConfig.mcts_q_normalize) -- size ``/<c_puct_init>`` for a 0-1 range
   (MuZero's 1.25 is ``/0.625``)
+- ``nowiden``: every legal move competes at nodes with > 20 of them, as in
+  AlphaZero (SelfPlayConfig.mcts_move_widening; default: the top-k by prior)
 - ``par=<n>``: leaves selected per batch (SelfPlayConfig.parallel_readouts)
 - ``value=networth``: leaf values from a net-worth heuristic instead of the
   network (SelfPlayConfig.leaf_value_heuristic), to test the search alone;
@@ -178,6 +180,8 @@ def parse_player(spec: str, default_readouts: int, num_players: int = NUM_PLAYER
             overrides["dedupe_leaves"] = True
         elif key == "qnorm":
             overrides["mcts_q_normalize"] = True
+        elif key == "nowiden":
+            overrides["mcts_move_widening"] = False
         elif key == "gumbel":
             overrides["gumbel_k"] = int(value) if value else 16
         elif key == "gscale":

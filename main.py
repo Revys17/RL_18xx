@@ -242,6 +242,7 @@ def cmd_search_learning(args):
         rpo_unvisited=args.rpo_unvisited,
         rpo_qnorm=args.rpo_qnorm,
         q_normalize=args.q_normalize,
+        move_widening=not args.no_move_widening,
         fast_row_weight=args.fast_row_weight,
         fast_row_value=not args.no_fast_row_value,
         p_full=args.p_full,
@@ -792,6 +793,8 @@ def build_parser():
                    help="--target rpo: q min-max normalized over the root's value and visited children first")
     p.add_argument("--q-normalize", action="store_true",
                    help="PUCT selection on min-max normalized Q (MuZero); size --c-puct for a 0-1 range")
+    p.add_argument("--no-move-widening", action="store_true",
+                   help="Every legal move competes at nodes with > 20 of them (AlphaZero), not the top-k by prior")
     p.add_argument("--fast-row-weight", type=float, default=_SL.fast_row_weight,
                    help="Fast searches (--n-fast) also become rows with this weight in the policy loss (0: no rows)")
     p.add_argument("--no-fast-row-value", action="store_true",

@@ -266,6 +266,12 @@ pub struct RustMCTSPlayer {
     /// exploration term at full scale (c_puct is to be sized for a 0-1
     /// range). Off by default; ignored without ``mean_q``.
     pub q_normalize: bool,
+    /// Top-k move widening (``argmax_action_score``): at a node with more than
+    /// 20 legal moves, PUCT selects among only the k = max(1, pw_c * N^pw_alpha)
+    /// moves with the highest (possibly noised) prior -- ~14 at a 200-visit
+    /// root, 2-3 at small inner nodes. true (default): as always. false
+    /// (``set_move_widening(False)``): every legal move competes, as in AlphaZero.
+    pub move_widening: bool,
     /// The utility a finished game backs up (``set_terminal_utility``): with a
     /// weight w > 0, (1 - w) * the share of winners + w * placement points by
     /// net worth -- the scale of a search whose network values come from the
@@ -417,6 +423,7 @@ impl RustMCTSPlayer {
             mean_q: false,
             fpu_reduction: 0.0,
             q_normalize: false,
+            move_widening: true,
             terminal_score_weight: 0.0,
             terminal_score_points: Vec::new(),
             rng: rand::rngs::StdRng::from_entropy(),
@@ -511,6 +518,19 @@ impl RustMCTSPlayer {
     #[getter]
     pub fn q_normalize_enabled(&self) -> bool {
         self.q_normalize
+    }
+
+    /// Top-k move widening at nodes with more than 20 legal moves (see the
+    /// ``move_widening`` field; on by default).
+    pub fn set_move_widening(&mut self, on: bool) {
+        self.move_widening = on;
+    }
+
+    /// Whether wide nodes select among their top-k prior moves only
+    /// (``set_move_widening``).
+    #[getter]
+    pub fn move_widening_enabled(&self) -> bool {
+        self.move_widening
     }
 
     /// The utility finished games back up (see the ``terminal_score_weight``
@@ -1415,6 +1435,7 @@ impl RustMCTSPlayer {
         d.set_item("c_puct", c_puct)?;
         d.set_item("mean_q", self.mean_q)?;
         d.set_item("q_normalize", self.q_normalize)?;
+        d.set_item("move_widening", self.move_widening)?;
         d.set_item("expanded", root.is_expanded)?;
         Ok(d.into_any().unbind())
     }
@@ -2019,7 +2040,7 @@ impl RustMCTSPlayer {
     /// Score: Q + U for each child compressed slot, with Python's top-k
     /// categorical progressive widening at wide nodes (``select_leaf``:
     /// when >20 legal actions, restrict to the k = max(1, pw_c * N^pw_alpha)
-    /// highest-prior slots).
+    /// highest-prior slots) unless ``move_widening`` is off.
     fn argmax_action_score(&self, arena_idx: usize) -> usize {
         let node = &self.arena[arena_idx];
         let n_this = self.node_n(arena_idx);
@@ -2032,7 +2053,7 @@ impl RustMCTSPlayer {
         let num_legal = node.legal_action_indices.len();
 
         // Top-k categorical PW mask (by current — possibly noised — prior).
-        let allowed: Option<Vec<bool>> = if num_legal > 20 {
+        let allowed: Option<Vec<bool>> = if self.move_widening && num_legal > 20 {
             let k = ((self.pw_c * n_this.powf(self.pw_alpha)) as usize).max(1);
             if k < num_legal {
                 let mut order: Vec<usize> = (0..num_legal).collect();

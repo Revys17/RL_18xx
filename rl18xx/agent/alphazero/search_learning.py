@@ -165,6 +165,9 @@ class SearchLearningConfig:
     # PUCT selection on min-max normalized Q (needs mean_q; size c_puct_init for a
     # 0-1 range). Off: the tree is bit for bit the default one.
     q_normalize: bool = False
+    # Top-k move widening at nodes with more than 20 legal moves (the engines' default).
+    # False: every legal move competes, as in AlphaZero (SelfPlayConfig.mcts_move_widening).
+    move_widening: bool = True
     # Fast searches (n_fast) as training rows too: their target (the same kind as the
     # full searches'), weighted w in the policy loss (0: no rows, as before). They
     # don't count toward rows_per_update (the cadence stays per full row) but fill
@@ -927,6 +930,7 @@ def search_config(settings: dict, client=None):
         mcts_mean_q=settings["mean_q"],
         fpu_reduction=settings["fpu_reduction"],
         mcts_q_normalize=bool(settings.get("q_normalize", False)),
+        mcts_move_widening=bool(settings.get("move_widening", True)),
         dedupe_leaves=settings["dedupe_leaves"],
         prior_temperature=settings["prior_temperature"],
         gumbel_k=settings["gumbel_k"] if gumbel else 0,
@@ -1204,6 +1208,8 @@ class Generator:
             tree.set_q_config(True, c.fpu_reduction)
             if c.mcts_q_normalize:
                 tree.set_q_normalize(True)
+        if not c.mcts_move_widening:
+            tree.set_move_widening(False)
         if c.terminal_score_weight > 0:
             tree.set_terminal_utility(c.terminal_score_weight, [float(p) for p in c.terminal_score_points])
         if c.gumbel_k > 0:
@@ -1980,6 +1986,7 @@ def worker_settings(
         "rpo_unvisited": cfg.rpo_unvisited,
         "rpo_qnorm": cfg.rpo_qnorm,
         "q_normalize": cfg.q_normalize,
+        "move_widening": cfg.move_widening,
         "fast_row_weight": cfg.fast_row_weight,
         "fast_row_value": cfg.fast_row_value,
         "games_per_worker": cfg.games_per_worker,
