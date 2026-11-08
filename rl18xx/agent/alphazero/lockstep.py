@@ -183,9 +183,18 @@ class TreeSearch:
     the inherited ones included -- none at all if it already has them. On a
     fresh tree the two are the same search. A Gumbel root's sequential halving
     always spends ``readouts`` of its own (``gumbel.rs``: inherited visits
-    count for q, not toward the schedule)."""
+    count for q, not toward the schedule).
 
-    def __init__(self, player, readouts: int, key: Hashable = None, budget: str = "additional"):
+    ``root_noise`` -- AlphaZero's exploration noise: once the root is expanded
+    (at once for a kept subtree), its priors are blended with Dirichlet noise at
+    the player's ``config.dirichlet_noise_weight`` (the Rust tree's ``inject_noise``;
+    alpha = ``dirichlet_noise_concentration`` / legal moves) before the search's
+    own visits. Off by default (an eval's search never), and never on a Gumbel
+    root (its Gumbel noise replaces it)."""
+
+    def __init__(
+        self, player, readouts: int, key: Hashable = None, budget: str = "additional", root_noise: bool = False
+    ):
         config = player.config
         if config.leaf_value_heuristic is not None:
             raise NotImplementedError("lockstep search does not support leaf_value_heuristic (use suggest_move)")
@@ -202,6 +211,8 @@ class TreeSearch:
         self.use_score_values = bool(config.use_score_values)
         self.prior_temperature = float(config.prior_temperature)
         self.num_players = int(self.tree.num_players)
+        self.root_noise = bool(root_noise)
+        self.noised = False  # the root's priors carry this search's noise
         self.target: Optional[float] = None
         # Root visits the search started from (a kept subtree's; 0 for a fresh root).
         self.inherited = float(self.tree.n_at_root()) if self.tree.is_expanded(self.tree.root_idx) else 0.0
@@ -211,6 +222,12 @@ class TreeSearch:
     def _begin_if_expanded(self) -> None:
         if self.target is not None or not self.tree.is_expanded(self.tree.root_idx):
             return
+        if self.root_noise and not self.gumbel:
+            config = self.player.config
+            weight = float(getattr(config, "dirichlet_noise_weight", 0.0) or 0.0)
+            if weight > 0:
+                self.tree.inject_noise(weight, float(getattr(config, "dirichlet_noise_concentration", 10.0)))
+                self.noised = True
         if self.gumbel:
             self.tree.begin_gumbel_search(self.readouts)
             self.target = 0.0

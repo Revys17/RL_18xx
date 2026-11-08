@@ -455,3 +455,67 @@ def test_generation_explores_the_early_decisions(start_file):
     stats = out["stats"]
     games = stats.get("games_in_progress", 0) + len(out["games"])
     assert 0 < stats.get("explored_moves", 0) <= 5 * max(games, 1)
+
+
+def test_root_noise_goes_on_the_full_searches_only(start_file):
+    # dirichlet_weight > 0: every full search (a row's) starts with the root noise; fast searches never.
+    settings = _settings(
+        start_file, target="visits", p_full=0.25, n_full=2, parallel_readouts=2, games_per_worker=4, max_decisions=60
+    )
+    settings["n_fast"] = 2
+    plain = _generate(dict(settings), seconds=6.0)[1]["stats"]
+    assert plain.get("noised_searches", 0) == 0
+    settings["dirichlet_weight"] = 0.25
+    stats = _generate(settings, seconds=6.0)[1]["stats"]
+    # Counted as each full search starts; searched_decisions as it is played (a search still running when
+    # the generation stops is in the first only: at most one per game slot).
+    assert 0 < stats["searched_decisions"] <= stats["noised_searches"] <= stats["searched_decisions"] + 4
+    assert stats.get("fast_search_decisions", 0) > 0
+
+
+def test_root_noise_settings_are_checked(start_file):
+    cfg = sl.SearchLearningConfig(
+        policy_checkpoint="p", value_checkpoint="v", start_positions=start_file, random_start_fraction=1.0
+    )
+    cfg.dirichlet_weight, cfg.target = 0.25, "gumbel"
+    with pytest.raises(SystemExit, match="Gumbel"):
+        sl._validate(cfg)
+    cfg.target = "visits"
+    sl._validate(cfg)
+    assert sl.worker_settings(cfg, version=0)["dirichlet_weight"] == 0.25
+    assert sl.search_config(sl.worker_settings(cfg, version=0)).dirichlet_noise_weight == 0.25
+    cfg.dirichlet_weight = 1.0
+    with pytest.raises(SystemExit, match="dirichlet"):
+        sl._validate(cfg)
+
+
+def test_a_two_player_run_trains_its_own_critic(tmp_path, start_file, monkeypatch):
+    """AlphaZero in 2-player 1830 (experiments az2p): no followed value -- the run's own critic learns the
+    searched games' outcomes as it goes (2 seats, the padded seats masked), with root noise on the full
+    searches; its checkpoints move."""
+    from rl18xx.agent.alphazero.policy_gradient import _load
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+    policy, value = _save_checkpoints(tmp_path)
+    cfg = sl.SearchLearningConfig(
+        policy_checkpoint=str(policy), value_checkpoint=str(value), out_dir=str(tmp_path / "runs"), run_name="az2p",
+        num_players=2, target="visits", dirichlet_weight=0.25, full_move_temperature=1.0, explore_decisions=10,
+        p_full=0.5, n_full=4, n_fast=2, parallel_readouts=2, workers=2, games_per_worker=2, task_seconds=2.0,
+        max_decisions=16, start_positions=start_file, random_start_fraction=1.0, inference_batch_size=64,
+        window_rows=400, rows_per_update=10, min_window_rows=10, steps_per_update=2, minibatch=8, microbatch=4,
+        max_updates=2, snapshot_every=1, kl_coef=0.0, kl_target=None, anchor_every=0, critic_positions_per_game=0,
+    )
+    run_dir = sl.run(cfg)
+    history = [json.loads(line) for line in (run_dir / "history.jsonl").read_text().splitlines()]
+    assert [h["update"] for h in history] == [1, 2]
+    assert sum(h["critic_rows_trained"] for h in history) > 0
+    for h in history:
+        assert math.isfinite(h["ce"]) and math.isfinite(h["critic_ce"]) and math.isfinite(h["critic_outcome_ce"])
+        # 2 seats: the win head's CE against the outcome is at most a little above ln 2 for these tiny nets,
+        # far below ln 6 (the padded seats taking probability).
+        assert h["critic_outcome_ce"] < 1.2
+    assert json.loads((run_dir / "config.json").read_text())["num_players"] == 2
+    first, last = _load(run_dir / "critic" / "0.pth"), _load(run_dir / "critic" / "2.pth")
+    moved = max(float((a - b).detach().abs().max()) for a, b in zip(first.parameters(), last.parameters()))
+    assert moved > 0
+

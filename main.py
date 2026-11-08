@@ -260,6 +260,8 @@ def cmd_search_learning(args):
         full_move_temperature=args.full_move_temperature,
         explore_decisions=args.explore_decisions,
         explore_from_game_start=args.explore_from_game_start,
+        dirichlet_weight=args.dirichlet_weight,
+        dirichlet_concentration=args.dirichlet_concentration,
         value_head=args.value_head,
         reuse_tree=args.reuse_tree,
         reuse_max_root_visits=args.reuse_max_root_visits,
@@ -823,6 +825,16 @@ def build_parser():
         "--explore-from-game-start", action="store_true",
         help="--explore-decisions counts from the game's first Stock Round (a mid-game start's recorded decisions "
         "count), not from the start position",
+    )
+    p.add_argument(
+        "--dirichlet-weight", type=float, default=_SL.dirichlet_weight,
+        help="AlphaZero's root noise on the full searches (0.25 in AlphaZero; 0: off; not with --target gumbel). "
+        "Can change on --resume",
+    )
+    p.add_argument(
+        "--dirichlet-concentration", type=float, default=_SL.dirichlet_concentration,
+        help="The noise's alpha is this / the legal moves (10: ~AlphaZero's alpha for its games). "
+        "Can change on --resume",
     )
     p.add_argument("--value-head", type=str, default=_SL.value_head,
                    help="The value head the search reads its leaf values from: win, score or blend=<w> "

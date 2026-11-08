@@ -103,6 +103,40 @@ def test_lockstep_play_continues_on_the_reused_subtree():
             break
 
 
+def _root_priors(player) -> np.ndarray:
+    return np.asarray(player._rust_player.root_target_stats()["child_prior"], dtype=np.float64)
+
+
+def test_root_noise_blends_the_root_priors_only_when_asked():
+    """``TreeSearch(root_noise=True)`` (search learning's full searches) blends the expanded root's
+    priors with Dirichlet noise at the config's weight; without it, or at weight 0, the search is the
+    one ``suggest_move`` runs."""
+    from rl18xx.agent.alphazero.lockstep import TreeSearch
+
+    net = HashNet()
+    game = random_positions(4, 2, steps=120, every=40)[-1]
+    noisy = dict(VALUE_DRIVEN, dirichlet_noise_weight=0.25)
+    plain = make_player(net, game, seed=5, **noisy)  # weight set, but no root_noise: no noise
+    zero = make_player(net, game, seed=5, **dict(VALUE_DRIVEN, dirichlet_noise_weight=0.0))
+    noised = make_player(net, game, seed=5, **noisy)
+    searches = [TreeSearch(plain, 40), TreeSearch(zero, 40, root_noise=True), TreeSearch(noised, 40, root_noise=True)]
+    LockstepSearcher({None: ModelEvaluator(net)}).run(searches)
+    assert [s.noised for s in searches] == [False, False, True]
+    _assert_same_tree(plain, zero)
+    assert np.array_equal(_root_priors(plain), _root_priors(zero))
+    a, b = _root_priors(plain), _root_priors(noised)
+    assert len(a) == len(b) > 1 and not np.allclose(a, b)
+    assert b.sum() == pytest.approx(a.sum(), abs=1e-4)  # a blend of two distributions over the same moves
+    # 0.75 of the prior plus 0.25 of a noise distribution: never below 0.75 of the prior.
+    assert (b >= 0.75 * a - 1e-6).all()
+    # A kept subtree (an expanded root) is noised when its search starts.
+    kept = make_player(net, game, seed=6, **noisy)
+    expand_root(kept)
+    before = _root_priors(kept)
+    search = TreeSearch(kept, 40, budget="total", root_noise=True)
+    assert search.noised and not np.allclose(_root_priors(kept), before)
+
+
 def test_policy_requests_get_the_networks_outputs():
     net = HashNet()
     games = random_positions(4, 4, steps=100, every=20)

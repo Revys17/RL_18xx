@@ -198,6 +198,13 @@ class SearchLearningConfig:
     # auction included: a mid-game start (Stock Round 2-6 of a human game) then explores only what is
     # left of the window, if anything (off: from the start position, as before 2026-10-23).
     explore_from_game_start: bool = False
+    # AlphaZero's root noise, on the main system's full searches only (the searches that give rows; a
+    # fast search never, as KataGo's cheap searches): once the root is expanded its priors are blended
+    # with Dirichlet(dirichlet_concentration / legal moves) at dirichlet_weight (AlphaZero 0.25;
+    # concentration 10 ~ AlphaZero's alpha for its games' move counts). With reuse_tree a kept subtree's
+    # earlier visits stay as they were; the noise steers the search's own. 0: off. Not with Gumbel.
+    dirichlet_weight: float = 0.0
+    dirichlet_concentration: float = 10.0
     # The search's leaf value: the critic's win head ("win") or score head ("score").
     value_head: str = "win"
     # Tree reuse (KataGo / the single-tree Rust path's advance_root): each game keeps
@@ -920,7 +927,9 @@ def search_config(settings: dict, client=None):
         gumbel_c_visit=settings["gumbel_c_visit"],
         gumbel_c_scale=settings["gumbel_c_scale"],
         gumbel_noise_scale=settings["gumbel_noise_scale"],
-        dirichlet_noise_weight=0.0,
+        # Applied only by a search started with root_noise (Generator._search: the full searches).
+        dirichlet_noise_weight=float(settings.get("dirichlet_weight", 0.0)),
+        dirichlet_noise_concentration=float(settings.get("dirichlet_concentration", 10.0)),
         enable_resign=False,
         noresign_holdout_rate=0.0,
         softpick_move_cutoff=0,
@@ -1231,7 +1240,7 @@ class Generator:
             return PolicyRequest(rs, legal, key=server)
         if len(legal) > 1 and self.rng.random() < s["p_full"]:
             g.pending, g.fast = mover, False
-            return self._search(g, rs, s["n_full"], server)
+            return self._search(g, rs, s["n_full"], server, noise=float(s.get("dirichlet_weight", 0.0)) > 0)
         if len(legal) > 1 and s.get("n_fast", 0) > 0:
             # A fast search: played; a row only with fast_row_weight (else no row).
             g.pending = mover if float(s.get("fast_row_weight", 0.0)) > 0 else None
@@ -1249,18 +1258,21 @@ class Generator:
             return int(_SERVER_VERSION.value)
         return int(self.settings.get("version", 0))
 
-    def _search(self, g: _Game, rs, readouts: int, key):
+    def _search(self, g: _Game, rs, readouts: int, key, noise: bool = False):
         """The decision's search: on the game's kept tree with ``reuse_tree``
         (when it still matches the position and was searched by the network
-        version the server serves now), else on a fresh tree."""
+        version the server serves now), else on a fresh tree. ``noise``: the
+        root's priors get ``dirichlet_weight`` of Dirichlet noise (``TreeSearch(root_noise=)``)."""
         from rl18xx.agent.alphazero.lockstep import TreeSearch
 
         s = self.settings
         version = self.network_version()
         g.search_version = version
         reuse = s.get("reuse_tree", "off")
+        if noise:
+            self.counts["noised_searches"] += 1
         if reuse == "off":
-            return TreeSearch(self._tree(rs), readouts, key=key)
+            return TreeSearch(self._tree(rs), readouts, key=key, root_noise=noise)
         handle = g.tree if self._tree_in_sync(g, rs) else None
         if handle is not None:
             tree = handle._rust_player
@@ -1277,7 +1289,9 @@ class Generator:
         else:
             self.counts["reused_searches"] += 1
         g.tree = handle
-        search = TreeSearch(handle, readouts, key=key, budget="total" if reuse == "total" else "additional")
+        search = TreeSearch(
+            handle, readouts, key=key, budget="total" if reuse == "total" else "additional", root_noise=noise
+        )
         self.counts["searches"] += 1
         self.counts["inherited_visits"] += search.inherited
         return search
@@ -1950,6 +1964,8 @@ def worker_settings(
         "full_move_temperature": cfg.full_move_temperature,
         "explore_decisions": cfg.explore_decisions,
         "explore_from_game_start": cfg.explore_from_game_start,
+        "dirichlet_weight": cfg.dirichlet_weight,
+        "dirichlet_concentration": cfg.dirichlet_concentration,
         "visit_target": cfg.visit_target,
         "target_temperature": cfg.target_temperature,
         "cq_rescale": cfg.cq_rescale,
@@ -2036,6 +2052,10 @@ def _validate(cfg: SearchLearningConfig) -> None:
 
     if not 2 <= int(cfg.num_players) <= 6:
         raise SystemExit(f"--num-players must be 2-6, got {cfg.num_players}")
+    if not 0.0 <= float(cfg.dirichlet_weight) < 1.0 or float(cfg.dirichlet_concentration) <= 0:
+        raise SystemExit("--dirichlet-weight must be in [0, 1) and --dirichlet-concentration > 0")
+    if cfg.dirichlet_weight > 0 and cfg.target == "gumbel":
+        raise SystemExit("--dirichlet-weight: a Gumbel root has its own noise (use --target visits, cq or rpo)")
     if not cfg.auction_only:  # (auction episodes start from a new game)
         check_start_files(
             cfg.num_players,
@@ -2127,6 +2147,8 @@ RESUME_SETTINGS = (
     "full_move_temperature",
     "explore_decisions",
     "explore_from_game_start",
+    "dirichlet_weight",
+    "dirichlet_concentration",
     "max_updates",
     "microbatch",
     "workers",
