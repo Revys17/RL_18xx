@@ -314,6 +314,18 @@ def run(args) -> None:
     )
     advisor = Advisor(models)
     app = create_app(advisor, port=args.port, debug_page=args.debug_page)
+    if getattr(args, "bots", False):
+        from rl18xx.agent.advisor import admin
+        from rl18xx.agent.advisor.bot_hub import BotHub
+
+        hub = BotHub(advisor, args.bot_settings)
+        admin.register(app, hub, admin.read_password(args.admin_password_file))
+        hub.start()
+        LOGGER.info(
+            "Bots: settings %s; admin page /admin (user admin, password in %s)",
+            hub.settings_path,
+            args.admin_password_file,
+        )
     host = getattr(args, "host", "127.0.0.1")
     LOGGER.info("Advisor backend on http://%s:%d (device %s)", host, args.port, device)
     if host not in ("127.0.0.1", "localhost", "::1"):

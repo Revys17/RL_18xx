@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot Admin</title>
+<style>
+  :root {
+    --bg: #f6f6f3; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e1dc;
+    --accent: #2f6fdf; --ok: #23855a; --warn: #b7791f; --err: #c0392b; --chip: #efeee9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1f1f1d; --text: #ecebe6; --muted: #9b9a94; --line: #33332f;
+      --accent: #6c9cf0; --ok: #4fbf8a; --warn: #e0a84a; --err: #ef7364; --chip: #2a2a27;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1200px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
+  .grid .panel { margin-bottom: 0; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; background: var(--chip); }
+  .badge.running, .badge.move { color: var(--ok); }
+  .badge.paused, .badge.warning { color: var(--warn); }
+  .badge.error { color: var(--err); }
+  .badge.off, .badge.info { color: var(--muted); }
+  label { color: var(--muted); }
+  input[type=number] { width: 80px; }
+  input[type=number], input[type=text] { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; font: inherit; }
+  button { background: var(--chip); color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 4px 10px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  .switch { position: relative; width: 40px; height: 22px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch span { position: absolute; inset: 0; border-radius: 11px; background: var(--line); transition: background .15s; cursor: pointer; }
+  .switch span::before { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .switch input:checked + span { background: var(--ok); }
+  .switch input:checked + span::before { transform: translateX(18px); }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .bar div { height: 100%; background: var(--accent); }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; }
+  td.problem { color: var(--err); max-width: 320px; }
+  .bot { font-weight: 600; }
+  .turn { color: var(--accent); }
+  a { color: var(--accent); }
+  .events { max-height: 420px; overflow-y: auto; }
+  .event { display: grid; grid-template-columns: 70px 90px 60px 1fr; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .event .msg { word-break: break-word; }
+  .filters { display: flex; gap: 6px; }
+  .filters button.on { border-color: var(--accent); color: var(--accent); }
+  #flash { color: var(--err); min-height: 1.2em; }
+  @media (max-width: 600px) { .event { grid-template-columns: 60px 1fr; } .event .site, .event .game { display: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Bot Admin</h1>
+    <span class="muted small" id="uptime"></span>
+    <span class="muted small" id="checkpoints"></span>
+  </header>
+  <div id="flash"></div>
+  <div class="grid" id="sites"></div>
+  <section class="panel">
+    <h2>Search</h2>
+    <div id="search" class="muted">Idle</div>
+  </section>
+  <section class="panel">
+    <h2>Games <span class="muted small" id="game-counts"></span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Site</th><th>Game</th><th>Status</th><th>Players</th><th>Waiting on</th><th>Last bot move</th><th>Problem</th></tr></thead>
+        <tbody id="games"></tbody>
+      </table>
+    </div>
+  </section>
+  <section class="panel">
+    <div class="row" style="justify-content: space-between">
+      <h2 style="margin: 0">Events</h2>
+      <div class="filters">
+        <button data-filter="all" class="on">All</button>
+        <button data-filter="problems">Problems</button>
+        <button data-filter="move">Moves</button>
+      </div>
+    </div>
+    <div class="events" id="events"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const SITES = { "local": "Local site", "18xx.games": "18xx.games" };
+let filter = "all";
+let last = null;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const clock = (t) => t ? new Date(t * 1000).toLocaleTimeString([], { hour12: false }) : "";
+function ago(t, now) {
+  if (!t) return "never";
+  const s = Math.max(0, Math.round(now - t));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+async function post(path, body) {
+  const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Admin": "1" }, body: JSON.stringify(body) });
+  const data = await response.json().catch(() => ({}));
+  document.getElementById("flash").textContent = response.ok ? "" : (data.error || `HTTP ${response.status}`);
+  refresh();
+  return response.ok;
+}
+
+function field(site, key, label, value, attrs) {
+  return `<label>${label} <input type="number" data-site="${esc(site)}" data-key="${key}" value="${esc(value)}" ${attrs}></label>`;
+}
+
+function renderSites(state) {
+  const box = document.getElementById("sites");
+  if (box.contains(document.activeElement) && document.activeElement.tagName === "INPUT" && document.activeElement.type !== "checkbox") return;
+  box.innerHTML = Object.entries(state.sites).map(([site, s]) => {
+    const st = s.settings;
+    const stateName = st.enabled ? s.state : "off";
+    let extra = "";
+    if (site === "18xx.games") {
+      const r = s.requests || {};
+      extra = `
+        <div class="row">${field(site, "min_interval", "Seconds between requests", st.min_interval, 'min="1" max="60" step="0.5"')}
+          ${field(site, "poll_seconds", "Look every (s)", st.poll_seconds, 'min="10" max="3600" step="5"')}</div>
+        <div class="row small muted">Requests: ${r.last_minute ?? 0} last minute, ${r.last_hour ?? 0} last hour${r.paused_until ? ` · paused until ${clock(r.paused_until)}` : ""}</div>
+        <div class="row small muted">Accounts: ${(s.accounts || []).map(esc).join(", ") || "none"}</div>
+        <div class="row"><input type="text" id="join-id" placeholder="Game id" size="10">
+          <input type="number" id="join-bots" placeholder="Bots" min="1" max="5" style="width: 70px">
+          <button id="join">Join game</button></div>`;
+    }
+    return `<section class="panel">
+      <div class="row" style="justify-content: space-between">
+        <h2 style="margin: 0">${esc(SITES[site] || site)} <span class="badge ${esc(stateName)}">${esc(stateName)}</span></h2>
+        <label class="switch" title="Switch the bots on this site on or off"><input type="checkbox" data-toggle="${esc(site)}" ${st.enabled ? "checked" : ""}><span></span></label>
+      </div>
+      <div class="row small muted"><a href="${esc(st.url)}" target="_blank" rel="noopener">${esc(st.url)}</a> · last look ${ago(s.last_look, state.now)}</div>
+      ${s.detail ? `<div class="row small" style="color: var(--err)">${esc(s.detail)}</div>` : ""}
+      <div class="row">${field(site, "readouts", "Readouts", st.readouts, 'min="1" max="5000" step="50"')}</div>
+      ${extra}
+    </section>`;
+  }).join("");
+}
+
+function renderSearch(state) {
+  const s = state.search;
+  const box = document.getElementById("search");
+  if (!s) { box.className = "muted"; box.textContent = "Idle"; return; }
+  box.className = "";
+  box.innerHTML = `${esc(s.kind === "move" ? "Bot move" : "Think harder")} in game ${esc(s.game_id)} · ${s.visits}/${s.readouts} readouts · ${s.seconds}s
+    <div class="bar"><div style="width: ${Math.round(100 * s.progress)}%"></div></div>`;
+}
+
+function renderGames(state) {
+  const counts = {};
+  for (const g of state.games) counts[g.status] = (counts[g.status] || 0) + 1;
+  document.getElementById("game-counts").textContent =
+    [["active", "in progress"], ["new", "waiting to start"], ["finished", "finished"]]
+      .filter(([k]) => counts[k]).map(([k, label]) => `${counts[k]} ${label}`).join(" · ");
+  const rows = state.games.map((g) => {
+    const players = g.players.map((p) => p.bot ? `<span class="bot">${esc(p.name)}</span>` : esc(p.name)).join(", ");
+    const move = g.last_move ? `${esc(g.last_move.actor)}: ${esc(g.last_move.description)} <span class="muted small">${ago(g.last_move.at, state.now)}</span>` : '<span class="muted">-</span>';
+    const problem = g.stuck ? `${esc(g.stuck)} <button data-retry="${esc(g.site)}|${esc(g.game_id)}">Retry</button>` : "";
+    const waiting = g.status === "active" ? `<span class="${g.bot_turn ? "turn" : ""}">${esc(g.waiting_on) || "-"}</span>` : "";
+    return `<tr><td>${esc(SITES[g.site] || g.site)}</td><td><a href="${esc(g.url)}" target="_blank" rel="noopener">${esc(g.game_id)}</a> <span class="muted small">${esc(g.title)}</span></td>
+      <td>${esc(g.status)} <span class="muted small">${esc(g.round)}</span></td><td>${players}</td><td>${waiting}</td><td>${move}</td><td class="problem">${problem}</td></tr>`;
+  });
+  document.getElementById("games").innerHTML = rows.join("") || '<tr><td colspan="7" class="muted">No games with bots</td></tr>';
+}
+
+function renderEvents(state) {
+  const keep = (e) => filter === "all" || (filter === "problems" ? ["error", "warning"].includes(e.level) : e.level === filter);
+  document.getElementById("events").innerHTML = state.events.filter(keep).map((e) => `<div class="event">
+      <span class="muted">${clock(e.at)}</span><span class="site muted">${esc(SITES[e.site] || e.site)}</span>
+      <span class="game">${e.game != null ? esc(e.game) : ""}</span>
+      <span class="msg"><span class="badge ${esc(e.level)}">${esc(e.level)}</span> ${esc(e.message)}</span></div>`).join("")
+    || '<div class="muted">Nothing yet</div>';
+}
+
+function render(state) {
+  last = state;
+  const up = Math.round(state.now - state.started);
+  document.getElementById("uptime").textContent = `up ${up < 3600 ? Math.round(up / 60) + "m" : (up / 3600).toFixed(1) + "h"}`;
+  const c = state.checkpoints || {};
+  document.getElementById("checkpoints").textContent = c.play_policy ? `plays with ${c.play_policy} + ${c.play_value}` : "";
+  renderSites(state);
+  renderSearch(state);
+  renderGames(state);
+  renderEvents(state);
+}
+
+async function refresh() {
+  try {
+    const response = await fetch("/admin/api/state", { cache: "no-store" });
+    if (response.ok) render(await response.json());
+  } catch (e) { /* the next refresh tries again */ }
+}
+
+document.addEventListener("change", (event) => {
+  const t = event.target;
+  if (t.dataset.toggle) post(`/admin/api/site/${encodeURIComponent(t.dataset.toggle)}`, { enabled: t.checked });
+  else if (t.dataset.key) post(`/admin/api/site/${encodeURIComponent(t.dataset.site)}`, { [t.dataset.key]: Number(t.value) });
+});
+document.addEventListener("click", (event) => {
+  const t = event.target;
+  if (t.dataset.retry) {
+    const [site, id] = t.dataset.retry.split("|");
+    post("/admin/api/retry", { site, game_id: Number(id) });
+  } else if (t.id === "join") {
+    const id = document.getElementById("join-id").value.trim();
+    const bots = document.getElementById("join-bots").value.trim();
+    if (id) post("/admin/api/join", { game_id: id, bots: bots || null });
+  } else if (t.dataset.filter) {
+    filter = t.dataset.filter;
+    document.querySelectorAll(".filters button").forEach((b) => b.classList.toggle("on", b === t));
+    if (last) renderEvents(last);
+  }
+});
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
