@@ -298,11 +298,10 @@ class PolicyPlayer:
     def choose(self, legal: list, priors, price_row) -> int:
         """Sample a move from the network's priors of ``legal``; ``price_row`` (the
         price head's output at this position) prices it in :meth:`play_move`."""
+        from rl18xx.agent.alphazero.policy_selfplay import tempered
+
         self.price_row = price_row
-        p = np.asarray(priors).astype(np.float64)
-        if self.temperature != 1.0:
-            p = np.power(np.clip(p, 1e-12, None), 1.0 / self.temperature)
-        p = p / p.sum() if p.sum() > 0 else np.full(len(legal), 1.0 / len(legal))
+        p = tempered(priors, self.temperature)
         return legal[int(self.rng.choice(len(legal), p=p))]
 
     def play_move(self, move: int) -> None:

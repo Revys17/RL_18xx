@@ -157,7 +157,7 @@ def play_out(games: list, settings: dict) -> None:
     (finished, max_length, error)."""
     from rl18xx.agent.alphazero import policy_gradient as pg
     from rl18xx.agent.alphazero.mcts import _rust_encode
-    from rl18xx.agent.alphazero.policy_selfplay import _advance
+    from rl18xx.agent.alphazero.policy_selfplay import _advance, tempered
 
     client = pg._CLIENTS[SERVER]
     temperature = float(settings["temperature"])
@@ -183,9 +183,7 @@ def play_out(games: list, settings: dict) -> None:
         for j, (g, legal) in enumerate(pending):
             p = probs[j].numpy()[legal].astype(np.float64)
             t = g.explore_temperature if g.decisions < getattr(g, "explore_until", 0) else temperature
-            if t != 1.0:
-                p = np.power(np.clip(p, 1e-12, None), 1.0 / t)
-            p = p / p.sum() if p.sum() > 0 else np.full(len(legal), 1.0 / len(legal))
+            p = tempered(p, t)
             choice = legal[int(g.rng.choice(len(legal), p=p))]
             g.price_row = price_logits[j] if price_logits is not None else None
             try:

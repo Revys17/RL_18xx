@@ -477,10 +477,15 @@ def test_root_noise_settings_are_checked(start_file):
     cfg = sl.SearchLearningConfig(
         policy_checkpoint="p", value_checkpoint="v", start_positions=start_file, random_start_fraction=1.0
     )
-    cfg.dirichlet_weight, cfg.target = 0.25, "gumbel"
-    with pytest.raises(SystemExit, match="Gumbel"):
+    cfg.dirichlet_weight = 0.25
+    for target in ("gumbel", "cq", "rpo"):  # these read the root's priors, which the noise replaced
+        cfg.target = target
+        with pytest.raises(SystemExit, match="only with --target visits"):
+            sl._validate(cfg)
+    cfg.target, cfg.target_confidence = "visits", 2.0
+    with pytest.raises(SystemExit, match="target-confidence"):
         sl._validate(cfg)
-    cfg.target = "visits"
+    cfg.target_confidence = None
     sl._validate(cfg)
     assert sl.worker_settings(cfg, version=0)["dirichlet_weight"] == 0.25
     assert sl.search_config(sl.worker_settings(cfg, version=0)).dirichlet_noise_weight == 0.25

@@ -423,6 +423,38 @@ def test_league_games_deal_seats_from_the_opponent_slots(monkeypatch, start_file
     assert "score_vs_league" in scores.summary() or len(result["games"]) < 2
 
 
+
+def test_league_games_whose_slot_changed_members_go_unscored(monkeypatch, start_file):
+    """An opponent slot's server reloads another member while tasks are in flight: a game dealt
+    after the change (the task's settings name the old member) or one the change reached mid-game
+    gives PFSP no result; the others credit the member the label names."""
+    import multiprocessing
+
+    league = {
+        "slots": ["opp0"],
+        "slot_labels": {"opp0": "m0"},
+        "slot_versions": {"opp0": 0},
+        "learner_seat_weights": {"2": 1.0},
+    }
+    version = multiprocessing.Value("q", 0, lock=False)
+    monkeypatch.setattr(pg, "_SLOT_VERSIONS", {"opp0": version})
+
+    class _Reloading(_Client):  # the trainer reloads the slot after the opponent's first move
+        def run_many_encoded(self, states, legal_indices=None):
+            version.value = 1
+            return super().run_many_encoded(states, legal_indices)
+
+    for opponent, start, mixed in ((_Client(), 0, False), (_Client(), 1, True), (_Reloading(), 0, True)):
+        version.value = start
+        monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Client(), "opp0": opponent})
+        games = pg.play_pg_games(2, _settings(start_file, league=league, max_decisions=40))["games"]
+        assert games
+        for g in games:
+            assert g["league_mixed"] is mixed
+            assert (g["pairwise"] == []) is mixed
+            assert set(g["seat_members"].values()) == {"m0"}
+
+
 def test_population_files_list_paths_or_objects(tmp_path):
     (tmp_path / "a.json").write_text(json.dumps(["x.pth", {"path": "y.pth", "label": "y"}]))
     (tmp_path / "b.json").write_text(json.dumps({"members": [{"path": "z.pth"}]}))

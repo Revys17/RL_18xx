@@ -30,7 +30,7 @@ FIRST_USER_ID = 101
 def play(policy_path: str, decisions: int, temperature: float, seed: int, num_players: int):
     from rl18xx.agent.alphazero import policy_gradient as pg
     from rl18xx.agent.alphazero.mcts import _rust_encode
-    from rl18xx.agent.alphazero.policy_selfplay import has_price_choice, load_checkpoint_model
+    from rl18xx.agent.alphazero.policy_selfplay import has_price_choice, load_checkpoint_model, tempered
     from rl18xx.agent.alphazero.start_positions import apply_actions, new_game, random_start_actions
 
     torch.manual_seed(seed)
@@ -50,8 +50,8 @@ def play(policy_path: str, decisions: int, temperature: float, seed: int, num_pl
         with torch.no_grad():
             probs, _, _ = model.run_many_encoded([_rust_encode(game)])
         price_row = model.last_price_components["price_logits"][0].float().numpy()
-        p = np.power(np.clip(probs[0].float().numpy()[legal].astype(np.float64), 1e-12, None), 1.0 / temperature)
-        index = legal[int(rng.choice(len(legal), p=p / p.sum()))]
+        p = tempered(probs[0].float().numpy()[legal], temperature)
+        index = legal[int(rng.choice(len(legal), p=p))]
         rs.apply_action_index(index, pg.choose_price(game, index, price_row, rng, 0.0)[0])
         made += 1
     return game

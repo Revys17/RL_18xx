@@ -63,6 +63,28 @@ class _Game:
     termination: Optional[str] = None
 
 
+def tempered(p, temperature: float) -> np.ndarray:
+    """softmax(log p / temperature) over the legal moves: what a policy at ``temperature``
+    samples from, and what training's log_softmax(logits / temperature) over the legal moves
+    reads. ``p``: the network's probabilities of the legal moves -- a softmax over every
+    action, so they sum to the legal mass, which for a sharp policy can be ~1e-6 or less
+    (gen4's Stock Round median 5e-6). Renormalized over the legal moves before tempering, in
+    log space: clipping the raw probabilities at 1e-12 first (every sampler before
+    2026-11-08) flattened the choice among the legal moves below the floor and made PPO's
+    behaviour log-probability disagree with training's. All zero (or not finite): uniform."""
+    p = np.asarray(p, dtype=np.float64)
+    total = p.sum()
+    if not (np.isfinite(total) and total > 0):
+        return np.full(len(p), 1.0 / len(p))
+    if temperature == 1.0:
+        return p / total
+    with np.errstate(divide="ignore"):
+        logp = np.log(p / total) / temperature
+    logp -= logp.max()
+    q = np.exp(logp)
+    return q / q.sum()
+
+
 def _sample_price(game, index: int, price_row: Optional[np.ndarray], rng: np.random.Generator, eps: float):
     """Price for a legal ``index``: None for categorical moves, the engine price for
     fixed-price ones, and for price-head slots a cell drawn from the head (mixed
@@ -194,9 +216,7 @@ def play_policy_games(num_games: int, settings: dict) -> dict:
             p = probs[i].numpy()[legal].astype(np.float64)
             opening = g.decisions < settings.get("opening_decisions", 0)
             temperature = settings.get("opening_temperature", 1.0) if opening else settings["temperature"]
-            if temperature != 1.0:
-                p = np.power(np.clip(p, 1e-12, None), 1.0 / temperature)
-            p = p / p.sum() if p.sum() > 0 else np.full(len(legal), 1.0 / len(legal))
+            p = tempered(p, temperature)
             choice = legal[int(rng.choice(len(legal), p=p))]
             # Uniform reservoir sample of the game's decisions.
             g.seen += 1

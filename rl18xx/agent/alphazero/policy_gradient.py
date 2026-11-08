@@ -220,10 +220,23 @@ class PGConfig:
 _CLIENTS: dict = {}
 
 
-def worker_init(server_queues: dict):
-    """Pool initializer: take one slot on every inference server ("learner", "sl", "pool")."""
+_SLOT_VERSIONS: dict = {}  # league opponent slot -> a shared Value: how many times it changed members
+
+
+def slot_version(slot: str) -> Optional[int]:
+    """How many times a league opponent slot has changed members (the trainer's shared counter;
+    None: no counter, e.g. games played in-process)."""
+    value = _SLOT_VERSIONS.get(slot)
+    return None if value is None else int(value.value)
+
+
+def worker_init(server_queues: dict, slot_versions: Optional[dict] = None):
+    """Pool initializer: take one slot on every inference server ("learner", "sl", "pool", or
+    the league's "opp<i>"); ``slot_versions``: per league slot, its shared count of member changes."""
     from rl18xx.agent.alphazero.inference_server import InferenceClient
 
+    _SLOT_VERSIONS.clear()
+    _SLOT_VERSIONS.update(slot_versions or {})
     for name, (request_q, reply_qs, ticket_q) in server_queues.items():
         worker_id = ticket_q.get()
         _CLIENTS[name] = InferenceClient(request_q=request_q, reply_q=reply_qs[worker_id], worker_id=worker_id)
@@ -243,6 +256,10 @@ class _PGGame:
     seen: dict = field(default_factory=dict)  # learner seat -> decisions so far
     reservoir: dict = field(default_factory=dict)  # learner seat -> [(decision number, row)]
     seat_members: dict = field(default_factory=dict)  # league mode: opponent seat -> member label
+    # League mode: each opponent slot's member-change count when the game was dealt, and whether a
+    # slot named another member than the task's settings say (the settings lag the trainer).
+    slot_versions: dict = field(default_factory=dict)
+    league_mixed: bool = False
     start: Optional[str] = None  # the start position's label
     phase_triggers: dict = field(default_factory=dict)  # "rusher": seat -> phase changes its moves caused
     rusted: dict = field(default_factory=dict)  # "rust": seat -> opponents' trains its moves rusted
@@ -603,7 +620,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
     """Pool task: play ``num_games`` concurrent games and return the learner's
     sampled decisions (with advantages) and each game's result."""
     from rl18xx.agent.alphazero.mcts import _rust_encode
-    from rl18xx.agent.alphazero.policy_selfplay import _advance
+    from rl18xx.agent.alphazero.policy_selfplay import _advance, tempered
     from rl18xx.agent.alphazero.start_positions import replayed_start
 
     rng = np.random.default_rng()
@@ -633,6 +650,10 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
         opponent = "league" if settings.get("league") else seat_models[min(set(range(n_players)) - learner)]
         g = _PGGame(game=game, uid=uuid.uuid4().hex, opponent=opponent, seat_models=seat_models, start=start.label)
         g.seat_members = seat_members
+        if seat_members:
+            dealt = settings["league"].get("slot_versions") or {}
+            g.slot_versions = {seat_models[seat]: slot_version(seat_models[seat]) for seat in seat_members}
+            g.league_mixed = any(v is not None and v != dealt.get(slot, v) for slot, v in g.slot_versions.items())
         for seat in learner:
             g.values[seat], g.seen[seat], g.reservoir[seat] = [], 0, []
         games.append(g)
@@ -670,9 +691,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
                 g, legal = pending[i]
                 seat = int(encoded[i][6])
                 p = probs[j].numpy()[legal].astype(np.float64)
-                if temperature != 1.0:
-                    p = np.power(np.clip(p, 1e-12, None), 1.0 / temperature)
-                p = p / p.sum() if p.sum() > 0 else np.full(len(legal), 1.0 / len(legal))
+                p = tempered(p, temperature)
                 pos = int(rng.choice(len(legal), p=p))
                 choice = legal[pos]
                 g.price_row = price_logits[j] if price_logits is not None else None
@@ -747,7 +766,14 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             # members look beaten (pg4/750 at 0.74 while it won 2v2 0.76) and starved them.
             mine = [float(fractions[seat]) for seat in g.values]
             record["seat_members"] = g.seat_members
-            record["pairwise"] = [
+            # A slot that changed members before or during the game (its server reloads every
+            # slot_refresh_every updates while tasks are in flight): its seats were played by another
+            # member than the label says, so PFSP gets no result from the game (before 2026-11-08 it
+            # credited the label: per-member rates blurred together).
+            record["league_mixed"] = g.league_mixed or any(
+                v is not None and slot_version(slot) != v for slot, v in g.slot_versions.items()
+            )
+            record["pairwise"] = [] if record["league_mixed"] else [
                 (member, float(np.mean([1.0 if m > float(fractions[seat]) else 0.5 if m == float(fractions[seat]) else 0.0 for m in mine])))
                 for seat, member in g.seat_members.items()
             ]
@@ -1190,6 +1216,9 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
             "pool": pool[-1] if pool else str(cfg.policy_checkpoint),
         }
     slot_labels = {name: path for name, path in servers.items() if name.startswith("opp")}
+    import multiprocessing
+
+    slot_versions = {slot: multiprocessing.Value("q", 0, lock=False) for slot in slot_labels}
     handles = {
         name: start_inference_server(
             num_workers=cfg.workers,
@@ -1233,6 +1262,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                 {
                     "slots": sorted(slot_labels),
                     "slot_labels": dict(slot_labels),
+                    "slot_versions": {slot: int(v.value) for slot, v in slot_versions.items()},
                     "learner_seat_weights": cfg.learner_seat_weights or default_learner_seat_weights(cfg.num_players),
                 }
                 if league
@@ -1246,7 +1276,9 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
     prices = defaultdict(list)  # private -> prices paid in this update's auction games
     critic_first_values = []
     try:
-        executor = ProcessPoolExecutor(max_workers=cfg.workers, initializer=worker_init, initargs=(queues,))
+        executor = ProcessPoolExecutor(
+            max_workers=cfg.workers, initializer=worker_init, initargs=(queues, slot_versions)
+        )
         try:
             futures = {
                 executor.submit(play_pg_games, cfg.games_per_task, settings())
@@ -1262,6 +1294,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                         gen["games"] += 1
                         scores.add(record)
                         if league:
+                            gen["league_mixed"] += bool(record.get("league_mixed"))
                             for member, pairwise in record.get("pairwise", []):
                                 league.record(member, pairwise)
                         terminations[record["termination"]] += 1
@@ -1354,6 +1387,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                 if league and update % cfg.slot_refresh_every == 0:
                     slot = f"opp{(update // cfg.slot_refresh_every) % cfg.opponent_slots}"
                     member = league.sample(rng)
+                    slot_versions[slot].value += 1  # games dealt to its previous member go unscored
                     handles[slot].reload(member)
                     slot_labels[slot] = member
 
@@ -1401,6 +1435,8 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                     record["league_size"] = len(league.members)
                     record["league_hardest"] = [[member, round(league.win_rate(member), 3)] for member in hardest]
                     record["league_slots"] = dict(slot_labels)
+                    # Games PFSP didn't score: an opponent slot changed members before or during them.
+                    record["league_mixed_games"] = gen["league_mixed"]
                 if critic_first_values:
                     v, r = np.array(critic_first_values).T
                     record["critic_start_brier"] = float(np.mean((v - r) ** 2))

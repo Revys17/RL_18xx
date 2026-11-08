@@ -180,7 +180,7 @@ def play_games(game_indices: list, settings: dict) -> list:
     """Pool task: play the given games concurrently; returns one record per game."""
     from rl18xx.agent.alphazero import policy_gradient as pg
     from rl18xx.agent.alphazero.mcts import _rust_encode
-    from rl18xx.agent.alphazero.policy_selfplay import _advance
+    from rl18xx.agent.alphazero.policy_selfplay import _advance, tempered
     from rl18xx.agent.alphazero.start_positions import apply_actions, new_game, sample_start_position
 
     rng = np.random.default_rng()
@@ -244,9 +244,7 @@ def play_games(game_indices: list, settings: dict) -> list:
             for j, i in enumerate(rows):
                 g, legal = pending[i]
                 p = probs[j].numpy()[legal].astype(np.float64)
-                if temperature != 1.0:
-                    p = np.power(np.clip(p, 1e-12, None), 1.0 / temperature)
-                p = p / p.sum() if p.sum() > 0 else np.full(len(legal), 1.0 / len(legal))
+                p = tempered(p, temperature)
                 rules = settings.get("rules", {}).get(side, ())
                 choice = scripted_choice(g.game, legal, rules) if rules else None
                 if choice is None:

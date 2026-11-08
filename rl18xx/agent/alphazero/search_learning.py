@@ -205,7 +205,8 @@ class SearchLearningConfig:
     # fast search never, as KataGo's cheap searches): once the root is expanded its priors are blended
     # with Dirichlet(dirichlet_concentration / legal moves) at dirichlet_weight (AlphaZero 0.25;
     # concentration 10 ~ AlphaZero's alpha for its games' move counts). With reuse_tree a kept subtree's
-    # earlier visits stay as they were; the noise steers the search's own. 0: off. Not with Gumbel.
+    # earlier visits stay as they were; the noise steers the search's own. 0: off. Only with the visits
+    # target, without target_confidence (cq / rpo and the departure test read the root's noised priors).
     dirichlet_weight: float = 0.0
     dirichlet_concentration: float = 10.0
     # The search's leaf value: the critic's win head ("win") or score head ("score").
@@ -1340,15 +1341,14 @@ class Generator:
         """Play the move the finished need gives (and keep a searched one's row)."""
         from rl18xx.agent.alphazero.lockstep import PolicyRequest
         from rl18xx.agent.alphazero.policy_gradient import choose_price
+        from rl18xx.agent.alphazero.policy_selfplay import tempered
 
         s, need = self.settings, g.need
         rs = g.game._game
         if isinstance(need, PolicyRequest):
             p = np.asarray(need.priors, dtype=np.float64)
             temperature = float(g.pending)
-            if temperature != 1.0:
-                p = np.power(np.clip(p, 1e-12, None), 1.0 / temperature)
-            p = p / p.sum() if p.sum() > 0 else np.full(len(p), 1.0 / len(p))
+            p = tempered(p, temperature)
             move = int(need.legal[int(self.rng.choice(len(p), p=p))])
             g.price_row = need.price_row
             price, _, _ = choose_price(g.game, move, need.price_row, self.rng, 0.0)
@@ -2072,8 +2072,12 @@ def _validate(cfg: SearchLearningConfig) -> None:
         raise SystemExit("--auction-stall-decisions must be >= 0")
     if not 0.0 <= float(cfg.dirichlet_weight) < 1.0 or float(cfg.dirichlet_concentration) <= 0:
         raise SystemExit("--dirichlet-weight must be in [0, 1) and --dirichlet-concentration > 0")
-    if cfg.dirichlet_weight > 0 and cfg.target == "gumbel":
-        raise SystemExit("--dirichlet-weight: a Gumbel root has its own noise (use --target visits, cq or rpo)")
+    if cfg.dirichlet_weight > 0 and cfg.target != "visits":
+        # cq / rpo read the root's priors, which the noise has replaced (audit 2026-11-08); a Gumbel
+        # root has its own noise.
+        raise SystemExit("--dirichlet-weight: only with --target visits (cq / rpo would read the noised priors)")
+    if cfg.dirichlet_weight > 0 and cfg.target_confidence is not None:
+        raise SystemExit("--dirichlet-weight with --target-confidence: the departure test would read the noised priors")
     if not cfg.auction_only:  # (auction episodes start from a new game)
         check_start_files(
             cfg.num_players,

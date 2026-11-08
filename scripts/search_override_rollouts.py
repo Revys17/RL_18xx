@@ -79,7 +79,7 @@ def fingerprint(actions: list) -> tuple:
 def play_out(job) -> dict:
     """``rollouts`` games from (position, move): the mover's win shares."""
     from rl18xx.agent.alphazero.policy_gradient import outcome
-    from rl18xx.agent.alphazero.policy_selfplay import _Game, _advance, _sample_price
+    from rl18xx.agent.alphazero.policy_selfplay import _Game, _advance, _sample_price, tempered
     from rl18xx.agent.alphazero.start_positions import apply_actions, new_game
 
     pos_id, actions, move, seed = job
@@ -101,8 +101,7 @@ def play_out(job) -> dict:
             break
         outs, _ = _forward([(g.game, legal) for g, legal in batch])
         for (g, legal), (p, row) in zip(batch, outs):
-            p = np.power(np.clip(p, 1e-12, None), 1.0 / _SETTINGS["temperature"])
-            choice = legal[int(rng.choice(len(legal), p=p / p.sum()))]
+            choice = legal[int(rng.choice(len(legal), p=tempered(p, _SETTINGS["temperature"])))]
             g.game._game.apply_action_index(choice, _sample_price(g.game, choice, row, rng, 0.0))
             g.decisions += 1
     return {

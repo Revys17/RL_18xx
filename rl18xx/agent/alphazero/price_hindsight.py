@@ -593,7 +593,7 @@ class BranchRunner:
         from rl18xx.agent.alphazero import price_pmf
         from rl18xx.agent.alphazero.lockstep import PolicyRequest
         from rl18xx.agent.alphazero.policy_gradient import choose_price
-        from rl18xx.agent.alphazero.policy_selfplay import _advance
+        from rl18xx.agent.alphazero.policy_selfplay import _advance, tempered
         from rl18xx.rust_adapter import RustGameAdapter
 
         s = self.settings
@@ -685,9 +685,7 @@ class BranchRunner:
                 ro.values[ro.decisions] = round(value_for_seat(req.value, mover_seat(ro.game._game), seat), 5)
             for ro, legal, req in stepping:
                 p = np.asarray(req.priors, dtype=np.float64)
-                if temperature != 1.0:
-                    p = np.power(np.clip(p, 1e-12, None), 1.0 / temperature)
-                p = p / p.sum() if p.sum() > 0 else np.full(len(legal), 1.0 / len(legal))
+                p = tempered(p, temperature)
                 move = int(legal[int(ro.rng.choice(len(legal), p=p))])
                 ro.price_row = req.price_row
                 price, _, _ = choose_price(ro.game, move, req.price_row, ro.rng, 0.0)
