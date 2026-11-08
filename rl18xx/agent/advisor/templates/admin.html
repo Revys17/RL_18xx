@@ -103,6 +103,14 @@ let filter = "all";
 let last = null;
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// A site this machine reaches as localhost is the same host as this page for the browser reading it.
+function siteLink(url) {
+  try {
+    const u = new URL(url);
+    if (["127.0.0.1", "localhost", "[::1]"].includes(u.hostname)) u.hostname = location.hostname;
+    return u.href.replace(/\/$/, "");
+  } catch (e) { return url; }
+}
 const clock = (t) => t ? new Date(t * 1000).toLocaleTimeString([], { hour12: false }) : "";
 function ago(t, now) {
   if (!t) return "never";
@@ -148,7 +156,7 @@ function renderSites(state) {
         <h2 style="margin: 0">${esc(SITES[site] || site)} <span class="badge ${esc(stateName)}">${esc(stateName)}</span></h2>
         <label class="switch" title="Switch the bots on this site on or off"><input type="checkbox" data-toggle="${esc(site)}" ${st.enabled ? "checked" : ""}><span></span></label>
       </div>
-      <div class="row small muted"><a href="${esc(st.url)}" target="_blank" rel="noopener">${esc(st.url)}</a> · last look ${ago(s.last_look, state.now)}</div>
+      <div class="row small muted"><a href="${esc(siteLink(st.url))}" target="_blank" rel="noopener">${esc(siteLink(st.url))}</a> · last look ${ago(s.last_look, state.now)}</div>
       ${s.detail ? `<div class="row small" style="color: var(--err)">${esc(s.detail)}</div>` : ""}
       <div class="row">${field(site, "readouts", "Readouts", st.readouts, 'min="1" max="5000" step="50"')}</div>
       ${extra}
@@ -176,7 +184,7 @@ function renderGames(state) {
     const move = g.last_move ? `${esc(g.last_move.actor)}: ${esc(g.last_move.description)} <span class="muted small">${ago(g.last_move.at, state.now)}</span>` : '<span class="muted">-</span>';
     const problem = g.stuck ? `${esc(g.stuck)} <button data-retry="${esc(g.site)}|${esc(g.game_id)}">Retry</button>` : "";
     const waiting = g.status === "active" ? `<span class="${g.bot_turn ? "turn" : ""}">${esc(g.waiting_on) || "-"}</span>` : "";
-    return `<tr><td>${esc(SITES[g.site] || g.site)}</td><td><a href="${esc(g.url)}" target="_blank" rel="noopener">${esc(g.game_id)}</a> <span class="muted small">${esc(g.title)}</span></td>
+    return `<tr><td>${esc(SITES[g.site] || g.site)}</td><td><a href="${esc(siteLink(g.url))}" target="_blank" rel="noopener">${esc(g.game_id)}</a> <span class="muted small">${esc(g.title)}</span></td>
       <td>${esc(g.status)} <span class="muted small">${esc(g.round)}</span></td><td>${players}</td><td>${waiting}</td><td>${move}</td><td class="problem">${problem}</td></tr>`;
   });
   document.getElementById("games").innerHTML = rows.join("") || '<tr><td colspan="7" class="muted">No games with bots</td></tr>';
