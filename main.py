@@ -282,6 +282,8 @@ def cmd_search_learning(args):
         midgame_positions=args.midgame_positions if args.midgame_fraction > 0 or args.resume else None,
         midgame_fraction=args.midgame_fraction,
         auction_fraction=args.auction_fraction,
+        auction_unlock=args.auction_unlock,
+        auction_stall_decisions=args.auction_stall_decisions,
         inference_batch_size=args.inference_batch_size,
         critic_positions_per_game=args.critic_positions_per_game,
         reward=args.reward,
@@ -873,6 +875,15 @@ def build_parser():
         help="default: human_games/midgame_positions_1830_<N>p_v2.jsonl for --num-players N",
     )
     p.add_argument("--auction-fraction", type=float, default=_SL.auction_fraction)
+    p.add_argument(
+        "--no-auction-unlock", dest="auction_unlock", action="store_false",
+        help="Auction starts play the real rules: an all-pass round after the SV is sold pays the privates out "
+        "and the auction goes on (default: the auction_unlock variant)",
+    )
+    p.add_argument(
+        "--auction-stall-decisions", type=int, default=_SL.auction_stall_decisions,
+        help="End a game still in the auction after this many decisions, scored on net worth (0: never)",
+    )
     p.add_argument("--inference-batch-size", type=int, default=_SL.inference_batch_size)
     p.add_argument("--critic-positions-per-game", type=int, default=_SL.critic_positions_per_game,
                    help="Rows of each game the critic trains on (once each; 0 = all)")

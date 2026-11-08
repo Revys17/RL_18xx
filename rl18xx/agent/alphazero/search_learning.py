@@ -245,6 +245,12 @@ class SearchLearningConfig:
     midgame_positions: Optional[str] = None
     midgame_fraction: float = 0.0
     auction_fraction: float = 0.0
+    # Auction starts play the auction_unlock variant (an all-pass round discounts the next private) unless
+    # False: the real rules, where an all-pass round after the SV is sold pays the privates out and the
+    # auction goes on. auction_stall_decisions > 0 ends a game still in the auction after that many
+    # decisions (policy_selfplay._advance), scored on net worth as it stands like a capped game.
+    auction_unlock: bool = True
+    auction_stall_decisions: int = 0
     inference_batch_size: int = 512
     # Critic rows: this many of each game's rows (0: all), each trained on once.
     critic_positions_per_game: int = 32
@@ -1132,6 +1138,7 @@ class Generator:
             midgame_path=s.get("midgame_positions"),
             midgame_fraction=s.get("midgame_fraction", 0.0),
             auction_fraction=s.get("auction_fraction", 0.0),
+            auction_unlock=s.get("auction_unlock", True),
         )
         self.counts["skipped_starts"] += skipped  # recorded before an engine rules change
         servers, members = deal_seats(s, self.py_rng)
@@ -1984,6 +1991,8 @@ def worker_settings(
         "midgame_positions": cfg.midgame_positions if cfg.midgame_fraction > 0 else None,
         "midgame_fraction": cfg.midgame_fraction,
         "auction_fraction": cfg.auction_fraction,
+        "auction_unlock": cfg.auction_unlock,
+        "auction_stall_decisions": cfg.auction_stall_decisions,
         "critic_positions_per_game": cfg.critic_positions_per_game,
         "reward": cfg.reward,
         "value_head": cfg.value_head,
@@ -2052,6 +2061,8 @@ def _validate(cfg: SearchLearningConfig) -> None:
 
     if not 2 <= int(cfg.num_players) <= 6:
         raise SystemExit(f"--num-players must be 2-6, got {cfg.num_players}")
+    if int(cfg.auction_stall_decisions) < 0:
+        raise SystemExit("--auction-stall-decisions must be >= 0")
     if not 0.0 <= float(cfg.dirichlet_weight) < 1.0 or float(cfg.dirichlet_concentration) <= 0:
         raise SystemExit("--dirichlet-weight must be in [0, 1) and --dirichlet-concentration > 0")
     if cfg.dirichlet_weight > 0 and cfg.target == "gumbel":

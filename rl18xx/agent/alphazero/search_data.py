@@ -93,7 +93,6 @@ def pack_game(g, worth, win_share, fractions, score, aux_seat, aux_global, value
     as a shard keeps it: ``{"meta", "actions" (JSON bytes), "columns"}``; ``value_version``: the
     followed value run's promoted version the game was searched with (``value_follow``)."""
     from rl18xx.agent.alphazero import price_pmf
-    from rl18xx.agent.alphazero.start_positions import AUCTION_START
 
     actions = list(g.game._game.raw_actions)
     rows, searches = g.rows, g.searches
@@ -144,7 +143,8 @@ def pack_game(g, worth, win_share, fractions, score, aux_seat, aux_global, value
         "start": g.start,
         "start_kind": g.start.split(":")[0] if g.start else None,
         "start_actions": int(g.start_actions),
-        "auction_unlock": g.start == AUCTION_START,
+        # The game's own rule (an auction start plays the variant unless the run plays the real rules).
+        "auction_unlock": bool(g.game._game.auction_unlock),
         "no_buyback_rule": bool(g.game._game.no_buyback_rule),
         "num_players": players,
         "termination": g.termination,

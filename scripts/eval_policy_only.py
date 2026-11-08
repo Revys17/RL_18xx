@@ -21,6 +21,14 @@ default), each start in both seatings, from
 ``human_games/start_positions_1830_2p_v2.jsonl`` unless ``--start-positions``
 says otherwise; equal strength scores 0.5.
 
+``--auction-start`` plays every game from the very beginning instead, the
+waterfall auction under the real rules (no ``auction_unlock``: an all-pass round
+after the SV is sold pays the privates out and the auction goes on), no start
+file read; a game still in the auction after ``--auction-stall-decisions`` is
+scored on net worth, like one capped at ``--max-decisions``. A player ``random``
+plays uniformly at random: every legal move equally likely, prices uniform over
+the price head's cells (a sign-of-life opponent; it needs no network).
+
     uv run python scripts/eval_policy_only.py --match model_checkpoints_pg/<run>/learner/20.pth 10 \\
         --match 10@0.5 10 --games 1200
 
@@ -70,6 +78,7 @@ ARRANGEMENTS = arrangements(2)
 
 
 RUSH_RULES = {"rush": ("bo", "trains", "withhold"), "trains": ("trains", "withhold"), "bo": ("bo",)}
+RANDOM_PLAYER = "random"  # a player spec: uniform over the legal moves and the price cells, no network
 # 1830 train limits by phase.
 TRAIN_LIMIT = {"2": 4, "3": 4, "4": 3, "5": 2, "6": 2, "D": 2}
 
@@ -79,6 +88,8 @@ def parse_player(spec: str) -> tuple:
     ``<checkpoint>[+<value>][@<temperature>][:rush|:trains|:bo]``."""
     from eval_head_to_head import resolve_checkpoint
 
+    if spec == RANDOM_PLAYER:
+        return RANDOM_PLAYER, 1.0, ()
     spec, _, option = spec.partition(":")
     checkpoint, _, temperature = spec.partition("@")
     if option and option not in RUSH_RULES:
@@ -178,11 +189,15 @@ def play_games(game_indices: list, settings: dict) -> list:
     games = []
     for idx in game_indices:
         # Seeded by the start index, so all arrangements of a start share it.
-        start_rng = random.Random(f"{settings['seed']}:{idx // len(seatings)}")
-        start = sample_start_position(
-            num_players, settings["start_positions"], settings["random_start_fraction"], rng=start_rng
-        )
-        game = apply_actions(new_game(num_players), start.actions)
+        if settings.get("auction_start"):
+            # The very beginning, under the real rules (new_game: no auction_unlock).
+            start, game = SimpleNamespace(label="auction:new"), new_game(num_players)
+        else:
+            start_rng = random.Random(f"{settings['seed']}:{idx // len(seatings)}")
+            start = sample_start_position(
+                num_players, settings["start_positions"], settings["random_start_fraction"], rng=start_rng
+            )
+            game = apply_actions(new_game(num_players), start.actions)
         games.append(
             SimpleNamespace(
                 game=game, uid=str(idx), idx=idx, seats=seatings[idx % len(seatings)],
@@ -206,6 +221,14 @@ def play_games(game_indices: list, settings: dict) -> list:
         by_side = defaultdict(list)
         for i, (g, _) in enumerate(pending):
             by_side[g.seats[int(encoded[i][6])]].append(i)
+        for side in [side for side in by_side if settings["servers"][side] == RANDOM_PLAYER]:
+            for i in by_side.pop(side):
+                g, legal = pending[i]
+                choice = legal[int(rng.integers(len(legal)))]
+                g.price_row = None
+                price_value, _, _ = pg.choose_price(g.game, choice, None, rng, 1.0)
+                g.game._game.apply_action_index(choice, price_value)
+                g.decisions += 1
         sent = {
             side: pg._CLIENTS[settings["servers"][side]].send(
                 [encoded[i] for i in rows], legal_indices=[pending[i][1] for i in rows]
@@ -287,7 +310,7 @@ def run_match(a_spec: str, b_spec: str, args) -> dict:
     from rl18xx.agent.alphazero.inference_server import start_inference_server, wait_checking_servers
 
     players = {"A": parse_player(a_spec), "B": parse_player(b_spec)}
-    paths = sorted({path for path, _, _ in players.values()})
+    paths = sorted({path for path, _, _ in players.values() if path != RANDOM_PLAYER})
     handles = {
         path: start_inference_server(
             num_workers=args.workers,
@@ -306,6 +329,8 @@ def run_match(a_spec: str, b_spec: str, args) -> dict:
         "start_positions": args.start_positions,
         "random_start_fraction": args.random_start_fraction,
         "max_decisions": args.max_decisions,
+        "auction_start": getattr(args, "auction_start", False),
+        "auction_stall_decisions": getattr(args, "auction_stall_decisions", 0),
         "price_eps": args.price_eps,
         "save_games": getattr(args, "save_games", 0),
         "arrangements": arrangements(getattr(args, "a_seats", 2), getattr(args, "num_players", NUM_PLAYERS)),
@@ -378,6 +403,14 @@ def main():
         "else human_games/start_positions_1830_<N>p_v2.jsonl",
     )
     parser.add_argument("--random-start-fraction", type=float, default=0.2)
+    parser.add_argument(
+        "--auction-start", action="store_true",
+        help="Every game from the beginning: the waterfall auction under the real rules (no start file read)",
+    )
+    parser.add_argument(
+        "--auction-stall-decisions", type=int, default=150,
+        help="--auction-start: end a game still in the auction after this many decisions, scored on net worth",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=str, default=None, help="Directory for summary.json and games.jsonl")
     parser.add_argument(
@@ -399,7 +432,8 @@ def main():
         args.start_positions = (
             DEFAULT_START_POSITIONS_4P if args.num_players == NUM_PLAYERS else default_start_positions(args.num_players)
         )
-    check_start_files(args.num_players, args.start_positions, args.random_start_fraction)
+    if not args.auction_start:
+        check_start_files(args.num_players, args.start_positions, args.random_start_fraction)
 
     import multiprocessing
 

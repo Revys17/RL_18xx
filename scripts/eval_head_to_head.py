@@ -16,7 +16,7 @@ default there), each start played in both seatings, A first and B first
 A game scores share-of-winners per seat (1/k for each of k tied leaders on
 net worth), so a side's expected score is 0.5 when the checkpoints are equally
 strong (a_seats / players in general). Games use the self-play ``auction_unlock`` variant both checkpoints
-were trained under; moves are sampled from visit counts before
+were trained under (``--no-auction-unlock``: the real rules); moves are sampled from visit counts before
 ``--softpick`` decisions and argmax after, with no Dirichlet noise and no
 resignation. With ``--start-positions`` games start at the first Stock Round
 from self-play's start positions (human auction endings, plus
@@ -343,7 +343,9 @@ def _setup_game(game_idx: int, seat_names: tuple, settings: dict) -> tuple:
         start_label = start_position.label
     else:
         rust_game = RustBaseGame({i + 1: f"Player {i + 1}" for i in range(num_players)})
-        rust_game.set_auction_unlock(True)
+        # The self-play variant, or (--no-auction-unlock) the real rules: an all-pass round after the SV is sold
+        # pays the privates out and the auction goes on. The search trees take the game's own rule.
+        rust_game.set_auction_unlock(bool(settings.get("auction_unlock", True)))
         rust_game.set_no_buyback_rule(True)
         game = RustGameAdapter(rust_game)
 
@@ -658,6 +660,11 @@ def main():
     parser.add_argument(
         "--stall", type=int, default=400, help="End a game still in the auction after this many decisions"
     )
+    parser.add_argument(
+        "--no-auction-unlock", dest="auction_unlock", action="store_false",
+        help="Without --start-positions: games start at the auction under the real rules (default: the self-play "
+        "auction_unlock variant)",
+    )
     parser.add_argument("--workers", type=int, default=48)
     parser.add_argument(
         "--games-per-task", type=int, default=1,
@@ -724,6 +731,7 @@ def main():
         "softpick": args.softpick,
         "max_length": args.max_length,
         "stall": args.stall,
+        "auction_unlock": args.auction_unlock,
         "seed": args.seed,
         "players": players,
         "start_positions": args.start_positions,
