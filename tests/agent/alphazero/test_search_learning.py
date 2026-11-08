@@ -515,6 +515,7 @@ def test_a_two_player_run_trains_its_own_critic(tmp_path, start_file, monkeypatc
         # far below ln 6 (the padded seats taking probability).
         assert h["critic_outcome_ce"] < 1.2
     assert json.loads((run_dir / "config.json").read_text())["num_players"] == 2
+    assert all(0.5 < h["noised_share"] < 2.0 for h in history)  # every full search noised
     first, last = _load(run_dir / "critic" / "0.pth"), _load(run_dir / "critic" / "2.pth")
     moved = max(float((a - b).detach().abs().max()) for a, b in zip(first.parameters(), last.parameters()))
     assert moved > 0

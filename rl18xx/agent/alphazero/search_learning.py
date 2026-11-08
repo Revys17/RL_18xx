@@ -2709,6 +2709,8 @@ def run(cfg: SearchLearningConfig, resume: Optional[str] = None, explicit: Optio
                     / max(gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"], 1),
                     "fast_search_share": gen["fast_search_decisions"]
                     / max(gen["searched_decisions"] + gen["fast_decisions"] + gen["fast_search_decisions"], 1),
+                    # Full searches started with root noise per full search played (~1 with --dirichlet-weight).
+                    "noised_share": gen["noised_searches"] / max(gen["searched_decisions"], 1),
                     "mean_decisions": gen["game_decisions"] / max(gen["games"], 1),
                     # The search's root values on the new games' rows vs their outcomes (win CE).
                     "search_value_ce": gen["root_value_ce_sum"] / max(gen["root_value_rows"], 1),
