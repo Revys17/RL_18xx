@@ -64,6 +64,50 @@ def test_a_fresh_network_is_a_run_start(tmp_path):
     assert float(p[:2].sum()) == pytest.approx(1.0, abs=1e-4)
 
 
+
+def test_a_fresh_network_starts_uniform_within_each_policy_block():
+    """The policy's output layers start at zero (2026-11-08 audit: Kaiming output layers gave
+    Pass a prior of 1 - 1e-8 at track decisions): each block -- lay track, place a token,
+    everything else -- starts uniform, so a legal move's prior is one over its block's size."""
+    import random
+
+    import torch
+
+    from rl18xx.agent.alphazero.action_mapper import ActionMapper
+    from rl18xx.agent.alphazero.mcts import _native_encode
+    from rl18xx.agent.alphazero.policy_selfplay import _sample_price
+    from rl18xx.rust_adapter import RustGameAdapter
+
+    model = _script("make_fresh_network").fresh_network(seed=5)
+    model.eval()
+    head = model.policy_head
+    lay_start = ActionMapper().action_offsets["LayTile"]
+    lay = range(lay_start, lay_start + head.num_lay_tile)
+    rng, np_rng = random.Random(0), np.random.default_rng(0)
+    game = engine_rs.BaseGame({1: "Player 1", 2: "Player 2"})
+    adapter = RustGameAdapter(game)
+    found = {}
+    for _ in range(3000):  # a random walk to a stock round choice and a track lay against a pass
+        legal = [int(i) for i in game.factored_legal_indices()]
+        lays = [i for i in legal if i in lay]
+        if len(legal) > 2 and not lays and "stock" not in found and game.round.round_type == "Stock":
+            found["stock"] = (game.pickle_clone(), legal)
+        if len(lays) >= 5 and len(legal) > len(lays):
+            found["lay"] = (game.pickle_clone(), legal)
+            break
+        index = rng.choice(legal)
+        game.apply_action_index(index, _sample_price(adapter, index, None, np_rng, 0.0))
+    assert set(found) == {"stock", "lay"}
+    with torch.no_grad():
+        logits = model._forward_encoded_batch([_native_encode(g) for g, _ in found.values()])[0].double()
+    for row, (_, legal) in zip(logits, found.values()):
+        prior = torch.softmax(row[legal], 0)
+        lays = torch.tensor([i in lay for i in legal])
+        expected = torch.where(lays, 1.0 / head.num_lay_tile, 1.0 / head.num_other).double()  # no token moves here
+        assert torch.allclose(prior, expected / expected.sum(), rtol=1e-6)
+        assert float(prior.max()) < 0.9
+
+
 def _real_rules_games(tmp_path, **overrides):
     missing = str(tmp_path / "no_such_start_file.jsonl")  # never read: every game starts at the auction
     settings = dict(

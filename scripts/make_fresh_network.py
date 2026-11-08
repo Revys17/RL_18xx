@@ -5,8 +5,9 @@
 writes ``<dir>/learner/0.pth`` -- an ``AlphaZeroTransformer`` with the default
 ``ModelTransformerConfig`` (the architecture of the supervised checkpoints: ~8.0M
 parameters with the plain shared trunk, ~8.3M with ``--value-entity-encoder``), its
-weights as the model's own initialization draws them (``torch.manual_seed(seed)``),
-saved as policy-gradient / search-learning checkpoints are (``policy_gradient._save``)
+weights as the model's own initialization draws them (``torch.manual_seed(seed)``)
+with the policy's output layers zeroed (``zero_policy_outputs``), saved as
+policy-gradient / search-learning checkpoints are (``policy_gradient._save``)
 -- and ``<dir>/config.json`` with ``learner_temperature`` 1, where
 ``search_learning.run_temperature`` reads a policy's temperature. Start a one-network
 search-learning run from it: ``main.py search-learning --shared --policy
@@ -30,7 +31,31 @@ def fresh_network(seed: int = 0, value_entity_encoder: bool = False):
 
     torch.manual_seed(seed)
     config = ModelTransformerConfig(seed=seed, value_entity_encoder=value_entity_encoder, device=torch.device("cpu"))
-    return AlphaZeroTransformerModel(config)
+    model = AlphaZeroTransformerModel(config)
+    zero_policy_outputs(model)
+    return model
+
+
+def zero_policy_outputs(model) -> None:
+    """Zero the policy's output layers, as the model's own initialization already does for
+    its value, score and price heads. The trunk isn't normalized, so a Kaiming output layer
+    starts with logits of std ~4: a confident random policy (2026-11-08 audit: Pass at
+    1 - 1e-8 or more at track and token decisions, so a search put 3-6% of its visits on
+    tile lays). Zeroed, every sub-head starts uniform: over the other moves, over hexes,
+    tiles given a hex, rotations, token hexes and slots. The three blocks (lay track, place
+    a token, everything else) are each log-softmaxed on their own, so between blocks a
+    move's prior is one over its block's size: Pass ~60% against 20 legal lays (1/841
+    against 20 x 1/25,668), a token 30x Pass (1/28). Search and root noise spread visits from
+    there. The weights below the output layers get gradient from the first update on."""
+    import torch
+
+    head = model.policy_head
+    with torch.no_grad():
+        outputs = (head.hex_scorer, head.tile_head, head.rotation_head, head.place_token_slot_head)
+        for layer in [module[-1] for module in outputs] + [head.other_head]:
+            layer.weight.zero_()
+            if layer.bias is not None:
+                layer.bias.zero_()
 
 
 def write_fresh(out, seed: int = 0, value_entity_encoder: bool = False) -> Path:
@@ -50,6 +75,7 @@ def write_fresh(out, seed: int = 0, value_entity_encoder: bool = False) -> Path:
                 "source": "random initialization (scripts/make_fresh_network.py)",
                 "seed": seed,
                 "value_entity_encoder": value_entity_encoder,
+                "policy_outputs": "zeroed",
                 "parameters": params,
             },
             indent=1,
