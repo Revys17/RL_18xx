@@ -150,3 +150,27 @@ def test_the_debug_page_is_off_unless_asked_for(advisor, client, game):
     own = {"Origin": f"http://localhost:{PORT}"}
     assert advise(debug, copy.deepcopy(game), own).status_code == 200
     assert advise(debug, game, {"Origin": "http://localhost:5003"}).status_code == 403
+
+
+def test_a_local_sites_pages_may_ask_for_advice_only(advisor, client, game):
+    """--web-site-port 9292: the local 18xx.games copy's game page (its engine panel) gets advice and the
+    health check, from this machine's addresses on that port only, and nothing that searches or plays."""
+    site = create_app(advisor, port=PORT, web_site_ports=[9292]).test_client()
+    for origin in ("http://192.168.0.186:9292", "http://localhost:9292", "http://127.0.0.1:9292"):
+        page = {"Origin": origin}
+        response = advise(site, copy.deepcopy(game), page)
+        assert response.status_code == 200 and response.get_json()["supported"], origin
+        assert response.headers["Access-Control-Allow-Origin"] == origin
+        assert site.get("/api/health", headers=page).status_code == 200
+        preflight = site.options("/api/advise", headers={**page, "Access-Control-Request-Method": "POST"})
+        assert preflight.status_code == 200 and preflight.headers["Access-Control-Allow-Origin"] == origin
+        for refused in (
+            site.post("/api/think", json={"game_id": game["id"]}, headers=page),
+            site.get("/api/think/abc", headers=page),
+            site.post("/api/move", json={}, headers=page),
+        ):
+            assert refused.status_code == 403
+    for origin in ("http://192.168.0.186:9293", "http://attacker.example:9292", "https://18xx.games", "null"):
+        assert advise(site, game, {"Origin": origin}).status_code == 403, origin
+    # Without the option no web page may ask.
+    assert advise(client, game, {"Origin": "http://localhost:9292"}).status_code == 403

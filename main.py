@@ -1005,6 +1005,11 @@ def build_parser():
         help="Also serve /debug: paste a game JSON and see the extension's panel for it",
     )
     p.add_argument(
+        "--web-site-port", type=int, action="append", default=[],
+        help="Let the pages of a site on this machine served on this port ask for advice (/api/advise, "
+        "/api/health): the local copy of 18xx.games (9292) has an engine panel. Repeatable",
+    )
+    p.add_argument(
         "--bots", action="store_true",
         help="Also play bot seats: on the local copy of 18xx.games and/or 18xx.games, each switched on and off "
         "on the admin page /admin (rl18xx/agent/advisor/bot_hub.py)",
