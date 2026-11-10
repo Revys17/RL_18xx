@@ -110,6 +110,15 @@ class PGConfig:
     # 1830's two-player game (each seat its own policy: the learner holds 1 of 2 seats). The
     # start files, learner seats and league seat weights default by it (main.py).
     num_players: int = NUM_PLAYERS
+    # Mixed player counts (gen6): ``{players: weight}``, each worker task's games drawn at one count
+    # (a task's requests must share a layout) by a deficit schedule, so the games come in these shares.
+    # None: every game has ``num_players``. With a mix the start files are templates with ``{n}``
+    # (``count_path``), the learner's league seats come from LEARNER_SEAT_WEIGHTS_BY_PLAYERS (or
+    # ``learner_seats`` = half the table outside league mode), and these give per-count limits (the
+    # single ``max_decisions`` / ``auction_stall_decisions`` otherwise).
+    player_mix: Optional[dict] = None
+    max_decisions_by_players: Optional[dict] = None
+    auction_stall_by_players: Optional[dict] = None
     # Generation
     workers: int = 48
     games_per_task: int = 32
@@ -212,6 +221,44 @@ class PGConfig:
     # weight, at critic_lr. 0: the value side is not trained here.
     value_pg_weight: float = 0.0
 
+    def __post_init__(self):
+        # JSON (state.json, config.json) keeps dict keys as strings: back to player counts.
+        for name in ("player_mix", "max_decisions_by_players", "auction_stall_by_players"):
+            value = getattr(self, name)
+            if value is not None:
+                setattr(self, name, {int(k): v for k, v in value.items()})
+        if self.learner_seat_weights is not None:
+            self.learner_seat_weights = {int(k): float(v) for k, v in self.learner_seat_weights.items()}
+
+
+def player_counts(cfg) -> dict:
+    """``{players: share}`` of a run's games (``player_mix`` normalized; ``{num_players: 1}`` without one)."""
+    if not cfg.player_mix:
+        return {int(cfg.num_players): 1.0}
+    total = float(sum(cfg.player_mix.values()))
+    return {int(n): float(w) / total for n, w in sorted(cfg.player_mix.items()) if float(w) > 0}
+
+
+def count_path(path: Optional[str], num_players: int) -> Optional[str]:
+    """A start file for ``num_players``: ``path`` with ``{n}`` filled in (as it is without one)."""
+    return path.replace("{n}", str(int(num_players))) if path else path
+
+
+class CountSchedule:
+    """The player count of each new worker task: the count furthest below its share of the tasks
+    handed out so far (largest weight first on ties), so every update's games come close to the mix
+    and the rare counts aren't left to chance."""
+
+    def __init__(self, shares: dict):
+        self.shares = dict(shares)
+        self.handed = Counter()
+
+    def next(self) -> int:
+        total = sum(self.handed.values()) + 1
+        n = max(self.shares, key=lambda k: (self.shares[k] * total - self.handed[k], self.shares[k], -k))
+        self.handed[n] += 1
+        return n
+
 
 # ---------------------------------------------------------------------------
 # Worker side: games
@@ -271,9 +318,16 @@ GOAL_BONUS = 0.5  # "bankrupt", "president:<CORP>"
 RUSH_BONUS, RUSH_MAX = 0.15, 4  # "rusher": per phase change its own purchase caused
 RUST_BONUS, RUST_MAX = 0.1, 6  # "rust": per opponent's train its own purchase rusted
 PLACEMENT_POINTS = (1.0, 0.5, 0.2, 0.0)  # 4 players (1st..4th); the default
-# Placement points by player count where they aren't PLACEMENT_POINTS cut to the count: with two
-# players the place is the win (1st 1, 2nd 0). Other counts keep PLACEMENT_POINTS (padded with 0).
-PLACEMENT_POINTS_BY_PLAYERS = {2: (1.0, 0.0), 4: PLACEMENT_POINTS}
+# Placement points by player count: with two players the place is the win (1st 1, 2nd 0); 3, 5 and 6
+# players (gen6, 2026-11-10) keep 4 players' shape -- 1st 1, last 0, second about half -- so finishing a
+# place higher is always worth something. A count not listed keeps PLACEMENT_POINTS (padded with 0).
+PLACEMENT_POINTS_BY_PLAYERS = {
+    2: (1.0, 0.0),
+    3: (1.0, 0.4, 0.0),
+    4: PLACEMENT_POINTS,
+    5: (1.0, 0.5, 0.25, 0.1, 0.0),
+    6: (1.0, 0.5, 0.3, 0.15, 0.05, 0.0),
+}
 CORPORATIONS = ("PRR", "NYC", "CPR", "B&O", "C&O", "ERIE", "NYNH", "B&M")
 REWARDS = ("win", "placement", "bankrupt", "president", "rusher", "rust")
 
@@ -458,8 +512,16 @@ def outcome(game) -> tuple:
 
 DEFAULT_LEARNER_SEAT_WEIGHTS = {1: 0.4, 2: 0.4, 3: 0.2}  # 4 players
 # League mode's learner seats by player count (DEFAULT_LEARNER_SEAT_WEIGHTS elsewhere): with two
-# players the learner holds one seat, the league member the other.
-LEARNER_SEAT_WEIGHTS_BY_PLAYERS = {2: {1: 1.0}}
+# players the learner holds one seat, the league member the other. 3, 5 and 6 players (gen6) keep
+# 4 players' idea: the learner holds at most about half the table and often a single seat (alone
+# against the league is where its mistakes cost it).
+LEARNER_SEAT_WEIGHTS_BY_PLAYERS = {
+    2: {1: 1.0},
+    3: {1: 0.6, 2: 0.4},
+    4: DEFAULT_LEARNER_SEAT_WEIGHTS,
+    5: {1: 0.3, 2: 0.4, 3: 0.3},
+    6: {1: 0.25, 2: 0.3, 3: 0.3, 4: 0.15},
+}
 
 
 def default_learner_seats(num_players: int) -> int:
@@ -478,18 +540,49 @@ def check_players(cfg) -> None:
     (``start_positions.check_start_files``)."""
     from rl18xx.agent.alphazero.start_positions import check_start_files
 
-    n = int(cfg.num_players)
-    if not 2 <= n <= 6:
-        raise SystemExit(f"--num-players must be 2-6, got {n}")
-    if not 1 <= int(cfg.learner_seats) <= n - 1:
-        raise SystemExit(f"--learner-seats must be 1-{n - 1} with {n} players, got {cfg.learner_seats}")
-    if cfg.population:
-        weights = cfg.learner_seat_weights or default_learner_seat_weights(n)
-        if not weights or any(not 1 <= int(k) <= n - 1 or float(v) < 0 for k, v in weights.items()):
-            raise SystemExit(f"--learner-seat-weights: {{seats (1-{n - 1}): weight >= 0}} with {n} players")
-    check_start_files(
-        n, cfg.start_positions, cfg.random_start_fraction, cfg.midgame_positions, cfg.midgame_fraction
-    )
+    if cfg.player_mix:
+        if not player_counts(cfg) or any(float(w) < 0 for w in cfg.player_mix.values()):
+            raise SystemExit(f"--player-mix: {{players: weight >= 0}} with a positive weight, got {cfg.player_mix}")
+        if cfg.learner_seat_weights:
+            raise SystemExit(
+                "--learner-seat-weights fits one player count; a --player-mix run uses the per-count defaults"
+            )
+        for path, flag, used in (
+            (cfg.start_positions, "--start-positions", cfg.random_start_fraction < 1.0),
+            (cfg.midgame_positions, "--midgame-positions", cfg.midgame_fraction > 0),
+        ):
+            if used and path and "{n}" not in path:
+                raise SystemExit(f"{flag} {path}: a --player-mix run needs a template with {{n}} (the player count)")
+    for n in player_counts(cfg):
+        if not 2 <= n <= 6:
+            raise SystemExit(f"player counts must be 2-6, got {n}")
+        seats = learner_seats_for(cfg, n)
+        if not 1 <= seats <= n - 1:
+            raise SystemExit(f"--learner-seats must be 1-{n - 1} with {n} players, got {seats}")
+        if cfg.population:
+            weights = cfg.learner_seat_weights or default_learner_seat_weights(n)
+            if not weights or any(not 1 <= int(k) <= n - 1 or float(v) < 0 for k, v in weights.items()):
+                raise SystemExit(f"--learner-seat-weights: {{seats (1-{n - 1}): weight >= 0}} with {n} players")
+        check_start_files(
+            n,
+            count_path(cfg.start_positions, n),
+            cfg.random_start_fraction,
+            count_path(cfg.midgame_positions, n),
+            cfg.midgame_fraction,
+        )
+
+
+def learner_seats_for(cfg, num_players: int) -> int:
+    """Outside league mode, the learner's seats in a ``num_players`` game: ``learner_seats``, or half
+    the table in a mixed-count run."""
+    return default_learner_seats(num_players) if cfg.player_mix else int(cfg.learner_seats)
+
+
+def count_limits(cfg, num_players: int) -> tuple:
+    """``(max_decisions, auction_stall_decisions)`` of a ``num_players`` game."""
+    max_decisions = (cfg.max_decisions_by_players or {}).get(int(num_players), cfg.max_decisions)
+    stall = (cfg.auction_stall_by_players or {}).get(int(num_players), cfg.auction_stall_decisions)
+    return int(max_decisions), int(stall)
 
 
 def load_population(path) -> list:
@@ -744,6 +837,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
                 rows.append((enc, legal, choice, logp, price_info, float(advantages[t]), fractions, score_target))
         record = {
             "uid": g.uid,
+            "num_players": n_players,
             "opponent": g.opponent,
             "pool_label": settings.get("pool_label"),
             "learner_seats": sorted(g.values),
@@ -865,7 +959,8 @@ def batch_tensors(rows: list, device) -> dict:
     from rl18xx.agent.alphazero.mcts import POLICY_SIZE
 
     n = len(rows)
-    game_state = torch.stack([r[0][0].reshape(-1) for r in rows]).float().to(device, non_blocking=True)
+    game_state, num_players = _stacked_states(rows)
+    game_state = game_state.to(device, non_blocking=True)
     nodes = torch.stack([r[0][1] for r in rows]).float().to(device, non_blocking=True)
     lengths = torch.tensor([len(r[1]) for r in rows])
     row_ids = torch.repeat_interleave(torch.arange(n), lengths)
@@ -884,18 +979,23 @@ def batch_tensors(rows: list, device) -> dict:
             price_slots.append(slot)
             price_cells.append(cell)
             price_masks.append(price_pmf.price_cells(price_pmf.SLOT_TYPES[slot], lo, hi).nonempty)
-    # Value targets rotated into the encoder's frame (the mover first).
-    fractions = torch.stack(
-        [torch.roll(torch.as_tensor(r[6]), shifts=-int(r[0][6]), dims=0) for r in rows]
-    ).float()
+    # Value targets rotated into the encoder's frame (the mover first). Rows of several player
+    # counts: each padded with zeros to the value head's seats, as critic_losses pads a one-count
+    # batch (the same targets: a padded seat is never a winner).
+    def frame(target, rotation):
+        t = torch.roll(torch.as_tensor(target), shifts=-int(rotation), dims=0).float()
+        return t if num_players is None else F.pad(t, (0, VALUE_SEATS - t.shape[0]))
+
+    fractions = torch.stack([frame(r[6], r[0][6]) for r in rows])
     # Exploiter runs: the critic's score head learns the shaped reward (same frame).
     score_target = None
     if len(rows[0]) > 7 and rows[0][7] is not None:
-        score_target = torch.stack(
-            [torch.roll(torch.as_tensor(r[7]), shifts=-int(r[0][6]), dims=0) for r in rows]
-        ).float()
+        score_target = torch.stack([frame(r[7], r[0][6]) for r in rows])
     out = {
         "game_state": game_state,
+        # (n,) player counts when the rows mix counts (their states padded to 6 players' layout), else
+        # None: the network pads a one-count batch itself (the same values; earlier runs bit for bit).
+        "num_players": num_players.to(device, non_blocking=True) if num_players is not None else None,
         "nodes": nodes,
         "legal": legal.to(device, non_blocking=True),
         "lay_tile_rows": lay_tile_rows,
@@ -914,6 +1014,43 @@ def batch_tensors(rows: list, device) -> dict:
         ),
     }
     return out
+
+
+VALUE_SEATS = 6  # the value heads' seats (the network's max players)
+
+
+def _row_players(row) -> int:
+    """A training row's player count: the encoding's own (index 7), else its state's width."""
+    from rl18xx.agent.alphazero.model_transformer import _layout_for
+
+    enc = row[0]
+    if len(enc) > 7:
+        return int(enc[7])
+    width = int(np.prod(enc[0].shape))
+    for n in range(2, 7):
+        if _layout_for(n)[2] == width:
+            return n
+    raise ValueError(f"no player count has a {width}-wide state")
+
+
+def _stacked_states(rows: list) -> tuple:
+    """``(game_state (n, D), num_players (n,) or None)`` of training rows: one player count stacks as
+    it is; several are each padded to the 6-player layout (``pad_states_numpy``), as the inference
+    server pads a mixed batch, with their counts for the network's attention masks."""
+    from rl18xx.agent.alphazero.model_transformer import MAX_PLAYERS, pad_states_numpy
+
+    states = [np.asarray(r[0][0], dtype=np.float32).reshape(-1) for r in rows]
+    if len({s.shape[0] for s in states}) == 1:
+        return torch.from_numpy(np.stack(states)), None
+    counts = [_row_players(r) for r in rows]
+    padded = np.stack([pad_states_numpy(s[None, :], n, MAX_PLAYERS)[0] for s, n in zip(states, counts)])
+    return torch.from_numpy(padded), torch.tensor(counts, dtype=torch.long)
+
+
+def _counts(batch: dict) -> dict:
+    """The forward's ``num_players`` for a batch that mixes player counts (nothing otherwise: a
+    one-count batch is called as before)."""
+    return {} if batch.get("num_players") is None else {"num_players": batch["num_players"]}
 
 
 def _masked_log_softmax(logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -1081,6 +1218,9 @@ class _Scores:
 # file -- a new file's members join -- and the value run it follows.
 RESUME_SETTINGS = (
     "max_updates",
+    "player_mix",
+    "max_decisions_by_players",
+    "auction_stall_by_players",
     "microbatch",
     "games_per_task",
     "save_game_every",
@@ -1234,11 +1374,17 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
     scores = _Scores(cfg.score_window)
     stop_file = run_dir / "STOP"
 
+    shares = player_counts(cfg)
+    mixed = bool(cfg.player_mix)
+    schedule = CountSchedule(shares)
+
     def settings() -> dict:
+        n = schedule.next()  # this task's player count
+        max_decisions, stall = count_limits(cfg, n)
         return {
-            "num_players": cfg.num_players,
+            "num_players": n,
             "positions_per_seat": cfg.positions_per_seat,
-            "learner_seats": cfg.learner_seats,
+            "learner_seats": learner_seats_for(cfg, n),
             "sl_opponent_fraction": cfg.sl_opponent_fraction,
             "pool_ready": bool(pool),
             "pool_label": pool_label,
@@ -1246,14 +1392,14 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
             "opponent_temperature": cfg.opponent_temperature,
             "opponent_price_eps": cfg.opponent_price_eps,
             "price_eps": 0.0,  # forced moves (fixed prices only; open-price moves are decisions)
-            "max_decisions": cfg.max_decisions,
-            "start_positions": cfg.start_positions,
+            "max_decisions": max_decisions,
+            "start_positions": count_path(cfg.start_positions, n),
             "random_start_fraction": cfg.random_start_fraction,
-            "midgame_positions": cfg.midgame_positions,
+            "midgame_positions": count_path(cfg.midgame_positions, n),
             "midgame_fraction": cfg.midgame_fraction,
             "auction_fraction": cfg.auction_fraction,
             "auction_unlock": cfg.auction_unlock,
-            "auction_stall_decisions": cfg.auction_stall_decisions,
+            "auction_stall_decisions": stall,
             "gae_lambda": cfg.gae_lambda,
             "baseline_at_update": baseline_at_update,
             "save_game_every": cfg.save_game_every,
@@ -1263,7 +1409,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                     "slots": sorted(slot_labels),
                     "slot_labels": dict(slot_labels),
                     "slot_versions": {slot: int(v.value) for slot, v in slot_versions.items()},
-                    "learner_seat_weights": cfg.learner_seat_weights or default_learner_seat_weights(cfg.num_players),
+                    "learner_seat_weights": cfg.learner_seat_weights or default_learner_seat_weights(n),
                 }
                 if league
                 else None
@@ -1274,6 +1420,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
     gen_started = run_started = time.time()
     terminations, lengths, starts = Counter(), [], Counter()
     prices = defaultdict(list)  # private -> prices paid in this update's auction games
+    by_count = defaultdict(lambda: defaultdict(list))  # mixed runs: players -> stat -> values this update
     critic_first_values = []
     try:
         executor = ProcessPoolExecutor(
@@ -1302,6 +1449,17 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                         for company, price in (record.get("auction_prices") or {}).items():
                             prices[company].append(price)
                         lengths.append(record["decisions"])
+                        if mixed:
+                            c = by_count[int(record.get("num_players", len(record["win_share"])))]
+                            c["decisions"].append(record["decisions"])
+                            c["max_length"].append(record["termination"] == "max_length")
+                            c["auction_stall"].append(record["termination"] == "auction_stall")
+                            if record["opponent"] == "league":
+                                seats = record["learner_seats"]
+                                won = sum(record["win_share"][x] for x in seats)
+                                c["score"].append(won / (len(seats) / len(record["win_share"])))
+                            for company, price in (record.get("auction_prices") or {}).items():
+                                c[f"auction_price_{company}"].append(price)
                         for seat, value in record["first_values"].items():
                             critic_first_values.append((value, record["win_share"][int(seat)]))
                         buffer.extend(record["rows"])
@@ -1440,10 +1598,23 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                 if critic_first_values:
                     v, r = np.array(critic_first_values).T
                     record["critic_start_brier"] = float(np.mean((v - r) ** 2))
+                for n, c in sorted(by_count.items()):
+                    # Per player count (flat keys, so TensorBoard plots them): games, the learner's
+                    # score vs the league as a multiple of a fair share, length, caps, prices paid.
+                    record[f"p{n}_games"] = len(c["decisions"])
+                    record[f"p{n}_mean_decisions"] = float(np.mean(c["decisions"]))
+                    record[f"p{n}_max_length"] = int(sum(c["max_length"]))
+                    record[f"p{n}_auction_stalls"] = int(sum(c["auction_stall"]))
+                    if c["score"]:
+                        record[f"p{n}_score_vs_league_update"] = float(np.mean(c["score"]))
+                    for key, values in c.items():
+                        if key.startswith("auction_price_"):
+                            record[f"p{n}_{key}"] = float(np.mean(values))
                 gen.clear()
                 gen_started = time.time()
                 terminations, lengths, critic_first_values, starts = Counter(), [], [], Counter()
                 prices = defaultdict(list)
+                by_count = defaultdict(lambda: defaultdict(list))
                 history.write(json.dumps(record) + "\n")
                 history.flush()
                 for key, value in record.items():
@@ -1496,7 +1667,9 @@ def subtract_baselines(critic, rows: list, cfg: PGConfig, device, chunk: int = 1
     with torch.no_grad():
         for start in range(0, len(rows), chunk):
             batch = batch_tensors(rows[start : start + chunk], device)
-            _, win_loss_logits, score_pred, _ = critic(batch["game_state"], batch["nodes"], value_only=True)
+            _, win_loss_logits, score_pred, _ = critic(
+                batch["game_state"], batch["nodes"], **_counts(batch), value_only=True
+            )
             mover = score_pred[:, 0] if shaped else torch.softmax(win_loss_logits.float(), dim=-1)[:, 0]
             values.append(mover.float().cpu().numpy())
     values = np.concatenate(values) if values else np.zeros(0, dtype=np.float32)
@@ -1543,10 +1716,12 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfi
                 # masked out of these losses there, so its logits never matter.
                 tile_rows = batch.get("lay_tile_rows")
                 with torch.no_grad():
-                    sl_logits, _, _, _ = anchor(batch["game_state"], batch["nodes"], lay_tile_rows=tile_rows)
+                    sl_logits, _, _, _ = anchor(
+                        batch["game_state"], batch["nodes"], **_counts(batch), lay_tile_rows=tile_rows
+                    )
                     sl_price = anchor.last_price_components["price_logits"]
                 policy_logits, win_logits, score_pred, _ = learner(
-                    batch["game_state"], batch["nodes"], lay_tile_rows=tile_rows
+                    batch["game_state"], batch["nodes"], **_counts(batch), lay_tile_rows=tile_rows
                 )
                 price = learner.last_price_components["price_logits"]
                 losses = pg_losses(
@@ -1574,7 +1749,9 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfi
                         sums[key] += float(value) * n
 
                 if epoch == 0 and critic is not None:
-                    _, win_loss_logits, score_pred, _ = critic(batch["game_state"], batch["nodes"], value_only=True)
+                    _, win_loss_logits, score_pred, _ = critic(
+                        batch["game_state"], batch["nodes"], **_counts(batch), value_only=True
+                    )
                     c = critic_losses(win_loss_logits, score_pred, batch["fractions"], batch["score_target"])
                     loss = c["ce"] + cfg.score_loss_weight * c["mse"]
                     if not torch.isfinite(loss):

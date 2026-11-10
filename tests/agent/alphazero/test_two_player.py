@@ -69,8 +69,8 @@ def test_placement_points_by_player_count():
     assert pg.placement_points([800, 800]).tolist() == [0.5, 0.5]
     # Explicit points are cut to the seats, as before.
     assert pg.placement_points([900, 1200], (1.0, 0.3, 0.1, 0.0)).tolist() == [0.3, 1.0]
-    # Other counts keep the four-player points (padded / cut).
-    assert pg.placement_points([3, 2, 1]).tolist() == [1.0, 0.5, 0.2]
+    # Three players (gen6's table, test_mixed_players): 1st 1, 2nd 0.4, last 0.
+    assert pg.placement_points([3, 2, 1]).tolist() == [1.0, 0.4, 0.0]
 
 
 def test_rewards_and_score_targets_use_the_player_counts_points():

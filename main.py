@@ -149,6 +149,10 @@ def cmd_policy_gradient(args):
     from rl18xx.agent.alphazero.policy_gradient import RESUME_SETTINGS, PGConfig, default_learner_seats, run
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    player_mix = _by_players(args.player_mix, float, "--player-mix")
+    if player_mix:  # the start files of every count: templates with {n}
+        args.start_positions = args.start_positions or "human_games/start_positions_1830_{n}p_v2.jsonl"
+        args.midgame_positions = args.midgame_positions or "human_games/midgame_positions_1830_{n}p_v2.jsonl"
     _player_count_defaults(args)
     config = PGConfig(
         policy_checkpoint=str(_resolve_checkpoint(args.policy, args.model_dir)),
@@ -163,6 +167,9 @@ def cmd_policy_gradient(args):
         workers=args.workers,
         games_per_task=args.games_per_task,
         num_players=args.num_players,
+        player_mix=player_mix,
+        max_decisions_by_players=_by_players(args.max_decisions_by_players, int, "--max-decisions-by-players"),
+        auction_stall_by_players=_by_players(args.auction_stall_by_players, int, "--auction-stall-by-players"),
         learner_seats=args.learner_seats if args.learner_seats is not None else default_learner_seats(args.num_players),
         positions_per_seat=args.positions_per_seat,
         sl_opponent_fraction=args.sl_opponent_fraction,
@@ -478,6 +485,19 @@ def explicit_options(argv=None) -> set:
     return set(vars(quiet.parse_args(argv))) - {"command"}
 
 
+def _by_players(spec, kind, flag) -> dict | None:
+    """``"2:1500,6:1800"`` -> ``{2: 1500, 6: 1800}`` (player count -> value); None or "" -> None."""
+    if not spec:
+        return None
+    try:
+        out = {int(k): kind(v) for k, v in (part.split(":") for part in spec.split(","))}
+    except ValueError:
+        raise SystemExit(f"{flag}: <players>:<value>,... e.g. 2:1,4:4,6:1, got {spec!r}") from None
+    if any(not 2 <= k <= 6 for k in out):
+        raise SystemExit(f"{flag}: player counts are 2-6, got {spec!r}")
+    return out
+
+
 def _player_count_defaults(args) -> None:
     """``--start-positions`` / ``--midgame-positions`` left out: the ``--num-players`` count's files
     (``human_games/{start,midgame}_positions_1830_<N>p_v2.jsonl``; 4 players: the files used so far)."""
@@ -642,6 +662,20 @@ def build_parser():
         "--num-players", type=int, default=4,
         help="Players per game (default 4; 2: 1830's two-player game -- the learner holds 1 of 2 seats, the start "
         "files default to the 2-player ones; placement points 1/0)",
+    )
+    p.add_argument(
+        "--player-mix", type=str, default=None,
+        help="Mixed player counts, <players>:<weight>,... e.g. 2:1,3:2,4:4,5:2,6:1 (each worker task plays one count; "
+        "the games come in these shares). The start files default to the per-count ones ({n} in a path is the count); "
+        "the learner's league seats and placement points are the count's (policy_gradient's *_BY_PLAYERS tables)",
+    )
+    p.add_argument(
+        "--max-decisions-by-players", type=str, default=None,
+        help="Per-count --max-decisions, e.g. 2:1500,6:1500 (other counts: --max-decisions)",
+    )
+    p.add_argument(
+        "--auction-stall-by-players", type=str, default=None,
+        help="Per-count --auction-stall-decisions, e.g. 6:200 (other counts: --auction-stall-decisions)",
     )
     p.add_argument("--learner-seats", type=int, default=None, help="Learner seats per game (default: half the table)")
     p.add_argument("--positions-per-seat", type=int, default=32, help="Learner decisions kept per seat per game")
