@@ -709,13 +709,13 @@ def build_parser():
         "--population", type=str, default=None,
         help="League mode: JSON list of checkpoint paths (or {\"path\", \"min_share\"} objects: drawn at least that often); opponents are drawn per seat from it (prioritized by how often they beat the learner) instead of --opponent and the pool",
     )
-    p.add_argument("--opponent-slots", type=int, default=3, help="League mode: opponent servers (members at once)")
+    p.add_argument("--opponent-slots", type=int, default=3, help="League mode: opponent servers (members at once) per player count; a --player-mix run has this many for each count, drawn by PFSP on the learner's results at that count")
     p.add_argument(
         "--learner-seat-weights", type=str, default=None,
         help="League mode: seats the learner holds per game, e.g. 1:0.4,2:0.4,3:0.2 (the default; 2 players: 1:1)",
     )
     p.add_argument("--pfsp-power", type=float, default=2.0, help="League mode: weight (1 - win rate) ** power")
-    p.add_argument("--slot-refresh-every", type=int, default=2, help="League mode: reload one slot every N updates")
+    p.add_argument("--slot-refresh-every", type=int, default=2, help="League mode: reload one slot (per player count) every N updates")
     p.add_argument(
         "--league-snapshot-every", type=int, default=50,
         help="League mode: add the learner's snapshot to the league every N updates (a multiple of the snapshot interval)",

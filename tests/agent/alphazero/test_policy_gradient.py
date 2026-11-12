@@ -556,13 +556,13 @@ def test_a_resumed_league_keeps_its_win_rates_and_takes_new_members(tmp_path):
     first.write_text(json.dumps(["a", "b"]))
     league = pg.league_for_run(pg.PGConfig(policy_checkpoint="p", value_checkpoint="v", population=str(first)), None)
     for _ in range(20):
-        league.record("a", 1.0)
+        league.record(4, "a", 1.0)
     second = tmp_path / "v2.json"
     second.write_text(json.dumps({"members": ["a", "b", {"path": "c", "note": "new"}]}))
     cfg = pg.PGConfig(policy_checkpoint="p", value_checkpoint="v", population=str(second))
     resumed = pg.league_for_run(cfg, league.state())
     assert resumed.members == ["a", "b", "c"]
-    assert resumed.win_rate("a") == pytest.approx(league.win_rate("a")) and resumed.win_rate("c") == 0.5
+    assert resumed.win_rate(4, "a") == pytest.approx(league.win_rate(4, "a")) and resumed.win_rate(4, "c") == 0.5
     assert pg.league_for_run(pg.PGConfig(policy_checkpoint="p", value_checkpoint="v"), None) is None
 
 

@@ -137,7 +137,8 @@ class PGConfig:
     # rather than the fixed opponent + pool. Each game deals the learner 1-3 seats
     # (learner_seat_weights) and every other seat one of opponent_slots servers, each
     # holding a population member; every slot_refresh_every updates one slot reloads a
-    # member sampled by prioritized fictitious self-play (League).
+    # member sampled by prioritized fictitious self-play (League). With a player_mix every
+    # count has its own opponent_slots servers and its own PFSP rates (CountLeague, 2026-11-12).
     population: Optional[str] = None
     opponent_slots: int = 3
     learner_seat_weights: Optional[dict] = None
@@ -672,19 +673,114 @@ class League:
         return league
 
 
-def league_for_run(cfg, league_state: Optional[dict]) -> Optional[League]:
-    """A league-mode run's league: restored from its saved state on a resume (members
-    its population file has gained since join at an even win rate), else built from
-    the file; None outside league mode."""
+class CountLeague:
+    """A league run's PFSP per player count (2026-11-12): one :class:`League` per count of the run
+    over the same members, each credited only with its own count's games, so each count's opponent
+    slots are drawn by the learner's results at that count. Pooled over counts, a member's rate mixed
+    counts it plays very differently: gen6 beat pg2p (a 2-player specialist) at 3-6 players, so pg2p's
+    pooled rate (0.59) drew it for ~2.5% of gen6's 2-player games while it won 98% of their 2-player
+    evals; gen5, beaten at 2-3 players, sat in ~3.5% of the 4-player games. With one count this is
+    that count's League."""
+
+    def __init__(self, counts, members=(), **kwargs):
+        self.by_count = {int(n): League(members, **kwargs) for n in counts}
+
+    @property
+    def counts(self) -> list:
+        return sorted(self.by_count)
+
+    def league(self, num_players: int) -> League:
+        return self.by_count[int(num_players)]
+
+    @property
+    def members(self) -> list:
+        return self.league(self.counts[0]).members
+
+    @property
+    def min_shares(self) -> dict:
+        return self.league(self.counts[0]).min_shares
+
+    @min_shares.setter
+    def min_shares(self, value: dict) -> None:
+        for league in self.by_count.values():
+            league.min_shares = dict(value)
+
+    def add(self, member: str) -> None:
+        for league in self.by_count.values():
+            league.add(member)
+
+    def remove(self, member: str) -> None:
+        for league in self.by_count.values():
+            league.remove(member)
+
+    def record(self, num_players: int, member: str, learner_result: float) -> None:
+        """One comparison from a ``num_players`` game (a count the run doesn't play is ignored)."""
+        league = self.by_count.get(int(num_players))
+        if league is not None:
+            league.record(member, learner_result)
+
+    def win_rate(self, num_players: int, member: str) -> float:
+        return self.league(num_players).win_rate(member)
+
+    def sample(self, num_players: int, rng: np.random.Generator) -> str:
+        return self.league(num_players).sample(rng)
+
+    def state(self) -> dict:
+        return {"by_count": {str(n): league.state() for n, league in sorted(self.by_count.items())}}
+
+    @classmethod
+    def from_state(cls, state: dict, counts, **kwargs) -> "CountLeague":
+        """Restored per count. A pooled state (a League's: runs before 2026-11-12) is a one-count run's
+        own league; with several counts it seeds every count at the pooled rates, weighted as the
+        League's ``prior`` pseudo-games, so each count's own games soon outweigh it. A count the state
+        lacks starts the members at an even rate."""
+        counts = sorted(int(n) for n in counts)
+        league = cls(counts, **kwargs)
+        if "by_count" in state:
+            saved = {int(n): s for n, s in state["by_count"].items()}
+            members = list(next(iter(saved.values()))["stats"]) if saved else []
+            for n in counts:
+                if n in saved:
+                    league.by_count[n] = League.from_state(saved[n], **kwargs)
+                else:
+                    league.by_count[n] = League(members, **kwargs)
+            return league
+        pooled = League.from_state(state, **kwargs)
+        if len(counts) == 1:
+            league.by_count[counts[0]] = pooled
+            return league
+        for n in counts:
+            seeded = League(**kwargs)
+            seeded.stats = {m: [pooled.win_rate(m) * seeded.prior, seeded.prior] for m in pooled.members}
+            seeded.min_shares = dict(pooled.min_shares)
+            league.by_count[n] = seeded
+        return league
+
+
+def league_slots(cfg) -> dict:
+    """``{players: [opponent server names]}`` of a league run: ``opponent_slots`` servers per player
+    count, each count's games seated from its own (``opp<i>`` with one count, ``opp<n>p<i>`` with a
+    mix), every count's slots refreshed from its own PFSP."""
+    counts = sorted(player_counts(cfg))
+    if len(counts) == 1:
+        return {counts[0]: [f"opp{i}" for i in range(cfg.opponent_slots)]}
+    return {n: [f"opp{n}p{i}" for i in range(cfg.opponent_slots)] for n in counts}
+
+
+def league_for_run(cfg, league_state: Optional[dict]) -> Optional[CountLeague]:
+    """A league-mode run's league (PFSP per player count): restored from its saved state on a
+    resume (members its population file has gained since join at an even win rate), else built
+    from the file; None outside league mode."""
     if not cfg.population:
         return None
     kw = {"power": cfg.pfsp_power}
+    counts = player_counts(cfg)
     if league_state:
-        league = League.from_state(league_state, **kw)
+        league = CountLeague.from_state(league_state, counts, **kw)
         for member in load_population(cfg.population):
             league.add(member)
     else:
-        league = League(load_population(cfg.population), **kw)
+        league = CountLeague(counts, load_population(cfg.population), **kw)
     league.min_shares = load_min_shares(cfg.population)  # the file's pins, also on a resume
     if not league.members:
         raise SystemExit(f"population {cfg.population} has no members")
@@ -1344,10 +1440,11 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
         return f"{policy}+{critic}{value_head}"
 
     league = league_for_run(cfg, league_state)
+    slot_names = league_slots(cfg) if league else {}  # players -> that count's opponent servers
     if league:
         servers = {
             "learner": learner_spec(current_learner, current_critic),
-            **{f"opp{i}": league.sample(rng) for i in range(cfg.opponent_slots)},
+            **{slot: league.sample(n, rng) for n, slots in slot_names.items() for slot in slots},
         }
     else:
         servers = {
@@ -1406,9 +1503,9 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
             "reward": cfg.reward,
             "league": (
                 {
-                    "slots": sorted(slot_labels),
-                    "slot_labels": dict(slot_labels),
-                    "slot_versions": {slot: int(v.value) for slot, v in slot_versions.items()},
+                    "slots": list(slot_names[n]),  # this count's opponent servers
+                    "slot_labels": {slot: slot_labels[slot] for slot in slot_names[n]},
+                    "slot_versions": {slot: int(slot_versions[slot].value) for slot in slot_names[n]},
                     "learner_seat_weights": cfg.learner_seat_weights or default_learner_seat_weights(n),
                 }
                 if league
@@ -1442,8 +1539,9 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                         scores.add(record)
                         if league:
                             gen["league_mixed"] += bool(record.get("league_mixed"))
+                            players = int(record.get("num_players", len(record["win_share"])))
                             for member, pairwise in record.get("pairwise", []):
-                                league.record(member, pairwise)
+                                league.record(players, member, pairwise)
                         terminations[record["termination"]] += 1
                         starts[record.get("start_kind")] += 1
                         for company, price in (record.get("auction_prices") or {}).items():
@@ -1543,11 +1641,12 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                     pool_label = pool[int(rng.integers(0, len(pool)))]
                     handles["pool"].reload(pool_label)
                 if league and update % cfg.slot_refresh_every == 0:
-                    slot = f"opp{(update // cfg.slot_refresh_every) % cfg.opponent_slots}"
-                    member = league.sample(rng)
-                    slot_versions[slot].value += 1  # games dealt to its previous member go unscored
-                    handles[slot].reload(member)
-                    slot_labels[slot] = member
+                    for n, slots in slot_names.items():  # one slot per player count, by that count's PFSP
+                        slot = slots[(update // cfg.slot_refresh_every) % len(slots)]
+                        member = league.sample(n, rng)
+                        slot_versions[slot].value += 1  # games dealt to its previous member go unscored
+                        handles[slot].reload(member)
+                        slot_labels[slot] = member
 
                 if cfg.kl_target is not None:
                     if stats["kl_anchor"] > 1.5 * cfg.kl_target:
@@ -1589,9 +1688,11 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                     "pool_opponent": pool_label if pool else None,
                 }
                 if league:
-                    hardest = sorted(league.members, key=league.win_rate)[:3]
                     record["league_size"] = len(league.members)
-                    record["league_hardest"] = [[member, round(league.win_rate(member), 3)] for member in hardest]
+                    for n in league.counts:  # a mix: per count (p<n>_league_hardest)
+                        hardest = sorted(league.members, key=lambda m: league.win_rate(n, m))[:3]
+                        key = "league_hardest" if len(league.counts) == 1 else f"p{n}_league_hardest"
+                        record[key] = [[m, round(league.win_rate(n, m), 3)] for m in hardest]
                     record["league_slots"] = dict(slot_labels)
                     # Games PFSP didn't score: an opponent slot changed members before or during them.
                     record["league_mixed_games"] = gen["league_mixed"]

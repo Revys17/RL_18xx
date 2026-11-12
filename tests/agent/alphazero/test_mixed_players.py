@@ -153,3 +153,65 @@ def test_row_players_from_width():
     for n in range(2, 7):
         state = np.zeros(_layout_for(n)[2], dtype=np.float32)
         assert pg._row_players(((state, None, None, None, 0, 0, 0),)) == n
+
+
+# ------------------------------------------------------------------ PFSP per player count (2026-11-12)
+def test_count_league_rates_are_per_player_count():
+    league = pg.CountLeague([2, 4], ["a", "b", "c"], power=2.0, prior=4.0)
+    for _ in range(100):
+        league.record(2, "a", 0.0)  # a beats the learner at 2 players
+        league.record(4, "a", 1.0)  # and loses to it at 4
+    league.record(3, "a", 0.0)  # a count the run doesn't play: ignored
+    assert league.win_rate(2, "a") < 0.05 and league.win_rate(4, "a") > 0.95
+    assert league.win_rate(2, "b") == league.win_rate(4, "b") == 0.5
+    w2 = dict(zip(league.members, league.league(2).weights()))
+    w4 = dict(zip(league.members, league.league(4).weights()))
+    assert w2["a"] > w2["b"] and w4["a"] < w4["b"]
+    rng = np.random.default_rng(0)
+    draws = [league.sample(2, rng) for _ in range(600)]
+    assert draws.count("a") > 300
+    league.add("d")
+    assert all(league.win_rate(n, "d") == 0.5 for n in (2, 4))
+    league.remove("b")
+    assert league.members == ["a", "c", "d"] and all("b" not in league.league(n).members for n in (2, 4))
+    league.min_shares = {"c": 0.2}
+    assert league.league(2).min_shares == league.league(4).min_shares == {"c": 0.2}
+    restored = pg.CountLeague.from_state(json.loads(json.dumps(league.state())), [2, 4], power=2.0)
+    for n in (2, 4):
+        assert restored.league(n).weights() == pytest.approx(league.league(n).weights())
+    widened = pg.CountLeague.from_state(league.state(), [2, 4, 6], power=2.0)  # a count the state lacks
+    assert widened.members == league.members and widened.win_rate(6, "a") == 0.5
+
+
+def test_a_pooled_league_state_seeds_each_count_of_a_mix_lightly():
+    pooled = pg.League(["a", "b"], power=2.0, prior=4.0, min_shares={"b": 0.1})
+    for _ in range(300):
+        pooled.record("a", 1.0)
+    one = pg.CountLeague.from_state(pooled.state(), [4], power=2.0)
+    assert one.league(4).stats == pooled.stats  # one count: the run's own league, as it was
+    mixed = pg.CountLeague.from_state(pooled.state(), [2, 4], power=2.0, prior=4.0)
+    for n in (2, 4):
+        assert mixed.win_rate(n, "a") == pytest.approx(pooled.win_rate("a"))
+        assert mixed.league(n).stats["a"][1] == pytest.approx(4.0)  # worth `prior` games, not ~200
+        assert mixed.league(n).min_shares == {"b": 0.1}
+    for _ in range(12):
+        mixed.record(2, "a", 0.0)  # a few 2-player games outweigh the pooled seed
+    assert mixed.win_rate(2, "a") < 0.3 and mixed.win_rate(4, "a") > 0.95
+
+
+def test_league_slots_per_player_count():
+    cfg = pg.PGConfig(policy_checkpoint="p", value_checkpoint="v", player_mix={2: 1, 4: 3}, opponent_slots=2)
+    assert pg.league_slots(cfg) == {2: ["opp2p0", "opp2p1"], 4: ["opp4p0", "opp4p1"]}
+    one = pg.PGConfig(policy_checkpoint="p", value_checkpoint="v", opponent_slots=3)
+    assert pg.league_slots(one) == {4: ["opp0", "opp1", "opp2"]}
+
+
+def test_league_for_a_mixed_run(tmp_path):
+    pop = tmp_path / "pop.json"
+    pop.write_text(json.dumps({"members": ["a", {"path": "b", "min_share": 0.1}]}))
+    cfg = pg.PGConfig(policy_checkpoint="p", value_checkpoint="v", population=str(pop), player_mix={2: 1, 5: 1})
+    league = pg.league_for_run(cfg, None)
+    assert league.counts == [2, 5] and league.members == ["a", "b"] and league.min_shares == {"b": 0.1}
+    league.record(5, "a", 1.0)
+    resumed = pg.league_for_run(cfg, league.state())
+    assert resumed.win_rate(5, "a") == pytest.approx(league.win_rate(5, "a")) and resumed.win_rate(2, "a") == 0.5
