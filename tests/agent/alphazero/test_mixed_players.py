@@ -215,3 +215,36 @@ def test_league_for_a_mixed_run(tmp_path):
     league.record(5, "a", 1.0)
     resumed = pg.league_for_run(cfg, league.state())
     assert resumed.win_rate(5, "a") == pytest.approx(league.win_rate(5, "a")) and resumed.win_rate(2, "a") == 0.5
+
+
+def test_a_pin_limited_to_some_player_counts(tmp_path):
+    pop = tmp_path / "pop.json"
+    pop.write_text(
+        json.dumps(
+            {
+                "members": [
+                    "a",
+                    {"path": "b", "min_share": 0.1, "min_share_players": [4]},
+                    {"path": "c", "min_share": 0.05},
+                ]
+            }
+        )
+    )
+    assert pg.load_min_shares(pop) == {"b": 0.1, "c": 0.05}
+    assert pg.load_min_shares(pop, 4) == {"b": 0.1, "c": 0.05}
+    assert pg.load_min_shares(pop, 2) == {"c": 0.05}
+    cfg = pg.PGConfig(policy_checkpoint="p", value_checkpoint="v", population=str(pop), player_mix={2: 1, 4: 1})
+    league = pg.league_for_run(cfg, None)
+    assert league.league(4).min_shares == {"b": 0.1, "c": 0.05} and league.league(2).min_shares == {"c": 0.05}
+    league.record(2, "a", 1.0)
+    # A resume takes the file's pins per count (a state saved with every pin at every count included).
+    state = league.state()
+    state["by_count"]["2"]["min_shares"] = {"b": 0.1, "c": 0.05}
+    resumed = pg.league_for_run(cfg, state)
+    assert resumed.league(2).min_shares == {"c": 0.05} and resumed.league(4).min_shares == {"b": 0.1, "c": 0.05}
+    assert resumed.win_rate(2, "a") == pytest.approx(league.win_rate(2, "a"))
+    w2 = dict(zip(resumed.league(2).members, resumed.league(2).weights()))
+    w4 = dict(zip(resumed.league(4).members, resumed.league(4).weights()))
+    assert w4["b"] >= 0.1 and w2["b"] < w4["b"]
+    two_only = pg.PGConfig(policy_checkpoint="p", value_checkpoint="v", population=str(pop), num_players=2)
+    assert pg.league_for_run(two_only, None).min_shares == {"c": 0.05}

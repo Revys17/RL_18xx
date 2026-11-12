@@ -594,13 +594,25 @@ def load_population(path) -> list:
     return [m["path"] if isinstance(m, dict) else str(m) for m in members]
 
 
-def load_min_shares(path) -> dict:
+def load_min_shares(path, num_players: Optional[int] = None) -> dict:
     """Path -> ``min_share`` of the population file's members that set one: the
     least share of games they get whatever their win rate (a style the learner should
-    keep meeting even once it beats it, e.g. a rusher or a bankruptcy hunter)."""
+    keep meeting even once it beats it, e.g. a rusher or a bankruptcy hunter). A member's
+    ``min_share_players`` (e.g. ``[4]``) limits its pin to those player counts: with
+    ``num_players`` only the pins that apply at that count (2026-11-12: gen6's 4-player
+    exploiters held 40% of the draws at every count, where it beat them 70-89%)."""
     data = json.loads(Path(path).read_text())
     members = data["members"] if isinstance(data, dict) else data
-    return {m["path"]: float(m["min_share"]) for m in members if isinstance(m, dict) and m.get("min_share")}
+
+    def applies(m) -> bool:
+        counts = m.get("min_share_players")
+        return num_players is None or not counts or int(num_players) in {int(n) for n in counts}
+
+    return {
+        m["path"]: float(m["min_share"])
+        for m in members
+        if isinstance(m, dict) and m.get("min_share") and applies(m)
+    }
 
 
 class League:
@@ -698,6 +710,8 @@ class CountLeague:
 
     @property
     def min_shares(self) -> dict:
+        """The lowest count's pins (every count's unless a pin is limited to some counts:
+        ``league(n).min_shares``); setting it pins every count alike."""
         return self.league(self.counts[0]).min_shares
 
     @min_shares.setter
@@ -781,7 +795,8 @@ def league_for_run(cfg, league_state: Optional[dict]) -> Optional[CountLeague]:
             league.add(member)
     else:
         league = CountLeague(counts, load_population(cfg.population), **kw)
-    league.min_shares = load_min_shares(cfg.population)  # the file's pins, also on a resume
+    for n in league.counts:  # the file's pins at each count, also on a resume
+        league.league(n).min_shares = load_min_shares(cfg.population, n)
     if not league.members:
         raise SystemExit(f"population {cfg.population} has no members")
     return league
