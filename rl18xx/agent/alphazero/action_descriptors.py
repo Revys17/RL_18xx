@@ -47,6 +47,9 @@ class ActionDescriptors:
     vocab: Dict[str, Tuple[str, ...]]
     #: The layout's blocks: name, family, family_id, offset, size, price_kind, flags, axes.
     blocks: Tuple[dict, ...]
+    #: How legal indices are computed: "factored" (1830: ``factored_legal_indices``) or "generator"
+    #: (1867: ``rl_legal_indices`` over the title's legal-move generator).
+    kind: str = "factored"
 
     def col(self, field: str) -> int:
         return self.fields.index(field)
@@ -96,7 +99,8 @@ class ActionDescriptors:
 @lru_cache(maxsize=None)
 def action_descriptors(title: str) -> ActionDescriptors:
     """The descriptor table of ``title``'s RL layout. RuntimeError "not bridge-ready" for a title
-    without one (1867 and the 1822 family until their layouts land)."""
+    without one (the 1822 family until its layout lands). 1867's layout (``1867-v1``, kind
+    "generator") indexes its legal-move generator's moves: ``game.rl_legal_indices()``."""
     import engine_rs
 
     info = engine_rs.rl_layout_info(title)
@@ -119,6 +123,7 @@ def action_descriptors(title: str) -> ActionDescriptors:
         flags=dict(info["flags"]),
         vocab=vocab,
         blocks=tuple(dict(b) for b in info["blocks"]),
+        kind=str(info["kind"]),
     )
 
 

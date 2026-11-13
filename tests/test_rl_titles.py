@@ -6,7 +6,7 @@ import pytest
 
 import engine_rs
 from rl18xx.agent.alphazero import start_positions
-from rl18xx.agent.alphazero.titles import TITLE_SPECS, TitleSpec, new_game, title_spec, titles
+from rl18xx.agent.alphazero.titles import TITLE_SPECS, TitleSpec, layout_metadata, new_game, title_spec, titles
 from rl18xx.rust_adapter import RustGameAdapter
 
 NEW_TITLES = ("1867", "1822", "1822PNW", "1822MX", "1822CA")
@@ -102,9 +102,13 @@ def test_new_titles_build_raw_rust_games(title, n):
         new_game(title, n, auction_unlock=True)
     with pytest.raises(ValueError, match="1830 rule variants"):
         new_game(title, n, no_buyback_rule=True)
-    # The pipeline knows the title has no layout yet.
-    assert not spec.layout_ready()
-    assert spec.status()["layout_kind"] == "none"
+    # 1867 has its generator layout; the 1822 family has none yet.
+    if title == "1867":
+        assert spec.layout_ready()
+        assert spec.status() == {"title": "1867", "layout_ready": True, "layout_kind": "generator", "encoder_ready": False}
+    else:
+        assert not spec.layout_ready()
+        assert spec.status()["layout_kind"] == "none"
 
 
 @pytest.mark.parametrize("title", NEW_TITLES)
@@ -126,3 +130,35 @@ def test_1830_status():
     assert spec.layout_ready()
     assert spec.status() == {"title": "1830", "layout_ready": True, "layout_kind": "factored", "encoder_ready": True}
     assert set(TITLE_SPECS) == set(titles())
+
+
+def test_layout_metadata():
+    """The layout a title's records are indexed with (design S1: written, not enforced)."""
+    assert layout_metadata("1830") == {
+        "title": "1830",
+        "layout_kind": "factored",
+        "layout_version": "1830-v1",
+        "layout_fingerprint": "e721aa6520116e2a",
+    }
+    meta = layout_metadata("1867")
+    assert meta["layout_kind"] == "generator" and meta["layout_version"] == "1867-v1"
+    assert meta["layout_fingerprint"] == engine_rs.rl_layout_info("1867")["fingerprint"]
+    for title in ("1822", "1822PNW", "1822MX", "1822CA"):
+        assert layout_metadata(title) is None
+    with pytest.raises(ValueError):
+        layout_metadata("1899")
+
+
+def test_game_records_carry_the_title_and_layout():
+    from rl18xx.agent.alphazero.game_records import make_game_record
+
+    # 1830 records are unchanged: no layout key, the 1830 title.
+    r30 = make_game_record([{"type": "pass", "entity": 1}], 4, meta={"name": "x"})
+    assert r30["title"] == "1830" and "layout" not in r30["rl18xx"]
+    assert [p["id"] for p in r30["players"]] == [1, 2, 3, 4] and r30["settings"]["seed"] == 0
+    r67 = make_game_record([], 5, title="1867", seed=9)
+    assert r67["title"] == "1867" and r67["settings"]["seed"] == 9
+    assert r67["rl18xx"]["layout"] == layout_metadata("1867")
+    assert [p["name"] for p in r67["players"]] == [f"Player {i}" for i in range(1, 6)]
+    r22 = make_game_record([], 3, title="1822")
+    assert r22["rl18xx"]["layout"] is None and r22["players"][0]["id"] == 1001

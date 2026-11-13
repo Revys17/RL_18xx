@@ -10,9 +10,11 @@ its eval defaults. :func:`new_game` builds an empty game of any registered title
 * **1867 and the 1822 family** (1822, 1822PNW, 1822MX, 1822CA) get the raw ``engine_rs.BaseGame``
   (``BaseGame.new_titled``): new titles bypass the adapter, whose proxies are 1830's (design §5.3).
   Their legal moves come from the title's own generator (``g1867_legal_moves_json`` /
-  ``g1822_legal_moves_json``); their action layout is not built yet, so every 1830 index path
-  (``factored_legal_indices``, ``apply_action_index``, the Rust MCTS, ``engine_rs.rl_layout_info``)
-  raises "not bridge-ready" on them (:meth:`TitleSpec.layout_ready`).
+  ``g1822_legal_moves_json``). 1867's moves have indices in its RL layout ``1867-v1`` (layout kind
+  "generator": ``rl_legal_moves_json``, ``rl_legal_indices``, ``rl_decode_index``, ``rl_apply_index``,
+  ``rl_price_range``; ``docs/rl_descriptors.md``); the 1822 family's layout is not built yet. The
+  1830 index path (``factored_legal_indices``, ``apply_action_index``, the Rust MCTS) refuses both
+  (:meth:`TitleSpec.layout_ready`, :func:`layout_metadata`).
 
 Player counts follow the user's decisions (``docs/rl_bridge_design.md``, 2026-10-16 / 2026-11-13):
 3-6 for every new title, 2-6 for 1830 (its 2-player game is trained since 2026-11-07).
@@ -24,6 +26,7 @@ policy gradient, evals) is package C's (``docs/rl_bridge_work_packages.md``).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Optional, Sequence, Tuple
 
 # 1830's optional rules that both engines implement (= ``pretraining.ENGINE_OPTIONAL_RULES``, which
@@ -178,6 +181,34 @@ TITLE_SPECS = {
         ),
     )
 }
+
+
+@lru_cache(maxsize=None)
+def _layout_metadata(title: str) -> Optional[Tuple[Tuple[str, str], ...]]:
+    import engine_rs
+
+    status = engine_rs.rl_title_status(title)
+    if not status["layout_ready"]:
+        return None
+    from rl18xx.agent.alphazero.action_descriptors import action_descriptors
+
+    d = action_descriptors(title)
+    return (
+        ("title", title),
+        ("layout_kind", str(status["layout_kind"])),
+        ("layout_version", d.version),
+        ("layout_fingerprint", d.fingerprint),
+    )
+
+
+def layout_metadata(title: str) -> Optional[dict]:
+    """The RL action layout a title's games, data and checkpoints are indexed with:
+    ``{"title", "layout_kind", "layout_version", "layout_fingerprint"}`` (None for a title without a
+    layout). Design step S1: written into records so a reader can tell which index space they use, not
+    yet enforced by any reader."""
+    title_spec(title)  # ValueError for an unknown title
+    meta = _layout_metadata(str(title))
+    return dict(meta) if meta is not None else None
 
 
 def titles() -> Tuple[str, ...]:

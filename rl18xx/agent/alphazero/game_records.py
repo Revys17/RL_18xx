@@ -52,23 +52,40 @@ def make_game_record(
     auction_unlock: bool = False,
     meta: Optional[dict] = None,
     game_id: Optional[str] = None,
+    title: str = "1830",
+    seed: int = 0,
 ) -> dict:
     """An 18xx.games-style export of a game's ``actions`` (what ``BaseGame.load``
     and a self-hosted 18xx server's import read) carrying ``meta`` -- who held
     which seat, the result, where the game came from -- under ``"rl18xx"``.
-    Players are "Player 1".."Player N" with ids 1..N, as every engine game in
-    this repo is built; seat ``i`` is player ``i + 1``."""
+    Players are "Player 1".."Player N" with ids 1..N (from the title's
+    ``first_player_id``), as every engine game in this repo is built; seat ``i``
+    is player ``i + 1``.
+
+    A title other than 1830 also records the RL layout its game was indexed
+    with under ``rl18xx.layout`` (:func:`titles.layout_metadata`: title, layout
+    kind, version and fingerprint; None for a title without a layout) and the
+    engine seed under ``settings.seed``. Written, not yet enforced by readers.
+    1830 records are unchanged."""
     meta = dict(meta or {})
+    title = str(title)
+    first = 1
+    rl18xx = {"version": GAME_RECORD_VERSION, "auction_unlock": bool(auction_unlock), **meta}
+    if title != "1830":
+        from rl18xx.agent.alphazero.titles import layout_metadata, title_spec
+
+        first = title_spec(title).first_player_id
+        rl18xx["layout"] = layout_metadata(title)
     return {
         "id": game_id or meta.get("name") or "rl18xx",
-        "title": "1830",
+        "title": title,
         "description": str(meta.get("description") or ""),
-        "players": [{"id": i, "name": f"Player {i}"} for i in range(1, num_players + 1)],
+        "players": [{"id": first + i, "name": f"Player {i + 1}"} for i in range(num_players)],
         "min_players": num_players,
         "max_players": num_players,
-        "settings": {"optional_rules": [], "seed": 0},
+        "settings": {"optional_rules": [], "seed": int(seed)},
         "actions": [dict(action) for action in actions],
-        "rl18xx": {"version": GAME_RECORD_VERSION, "auction_unlock": bool(auction_unlock), **meta},
+        "rl18xx": rl18xx,
     }
 
 

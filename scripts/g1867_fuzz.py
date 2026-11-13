@@ -30,6 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import engine_rs  # noqa: E402
 
+from rl18xx.agent.alphazero.titles import layout_metadata  # noqa: E402
+
 PRICE_FIELD = {"bid": "price", "buy_train": "price", "buy_company": "price"}
 
 
@@ -137,7 +139,12 @@ def walk(players: int, seed: int, max_moves: int, policy: str | None = None, avo
             # The first action after which Ruby HEAD cannot go on (see
             # g1867_ruby_dead_end_choice); scripts/g1867_fuzz_ruby_check.py
             # expects Ruby's rejection there or later.
-            "rl18xx": {"ruby_dead_end_at": dead_end_at, "ruby_orphan_trains_at": orphan_at},
+            "rl18xx": {
+                "ruby_dead_end_at": dead_end_at,
+                "ruby_orphan_trains_at": orphan_at,
+                # The RL layout the game's moves are indexed in (design S1; written, not enforced).
+                "layout": layout_metadata("1867"),
+            },
         },
         "error": error,
         "finished": bool(g.finished),

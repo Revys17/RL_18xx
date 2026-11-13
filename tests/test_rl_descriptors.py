@@ -19,7 +19,7 @@ from rl18xx.rust_adapter import RustGameAdapter
 logging.disable(logging.CRITICAL)
 
 FINGERPRINT_1830 = "e721aa6520116e2a"  # pinned in engine-rs/src/rl/tests.rs too
-NOT_READY = ("1867", "1822", "1822PNW", "1822MX", "1822CA")
+NOT_READY = ("1822", "1822PNW", "1822MX", "1822CA")  # 1867: tests/test_rl_g1867_index.py
 
 
 @pytest.fixture(scope="module")
