@@ -185,6 +185,25 @@ def test_spawned_server_round_trip(positions, checkpoint):
     assert not handle.process.is_alive()
 
 
+def test_served_outputs_equal_the_in_process_policy(positions, checkpoint):
+    """``eval_policy_only.py --generic-server``: a server reply read back as ``PolicyOutput`` equals
+    ``GenericPolicy.evaluate`` on the same positions."""
+    from rl18xx.agent.alphazero.generic_policy import GenericPolicy, served_outputs, served_request
+
+    games = positions[10:26]
+    indices = [[int(i) for i in g.factored_legal_indices()] for g in games]
+    policy = GenericPolicy(checkpoint)
+    direct = policy.evaluate(games, indices)
+    arrays, legal = served_request(games, indices)
+    reply = gi.LocalGenericServer(policy.model).run(arrays, want_price_logp=True)
+    for a, b in zip(direct, served_outputs(arrays, legal, reply)):
+        np.testing.assert_allclose(a.probs, b.probs, rtol=1e-4, atol=1e-7)
+        np.testing.assert_allclose(a.win, b.win, atol=1e-6)
+        assert a.price_logp.keys() == b.price_logp.keys()
+        for k in a.price_logp:
+            np.testing.assert_allclose(a.price_logp[k], b.price_logp[k], atol=1e-5)
+
+
 # ---------------------------------------------------------------------------------------------------
 # Games and updates
 # ---------------------------------------------------------------------------------------------------
@@ -371,6 +390,28 @@ def test_start_records_from_a_replayed_game(tmp_path):
     assert len(m.actions) == cuts[k]
     with pytest.raises(ValueError):
         gp.load_start_file(str(sfile), "1867")
+
+
+def test_eval_generic_plays_every_arrangement(checkpoint, start_file):
+    """``scripts/eval_generic.py``'s pool task in-process: each start in every seat arrangement, finished or
+    capped games, side A's seats as dealt."""
+    from scripts import eval_generic as eg
+    from scripts.eval_policy_only import arrangements
+
+    settings = {
+        "title": "1830", "paths": {"A": checkpoint, "B": checkpoint}, "temperatures": {"A": 0.5, "B": 1.0},
+        "server": False, "seed": 0, "start_positions": start_file, "random_start_fraction": 1.0,
+        "auction_start": False, "max_decisions": 40, "auction_stall_decisions": 150, "price_eps": 0.0,
+        "save_games": 2, "arrangements": arrangements(1, 3),
+    }  # fmt: skip
+    records = eg.play_games(list(range(6)), settings)
+    assert sorted(r["idx"] for r in records) == list(range(6))
+    for r in records:
+        assert r["seats"].count("A") == 1 and len(r["seats"]) == 3
+        assert r["termination"] in ("finished", "max_length")
+        assert ("raw_actions" in r) == (r["idx"] < 2)
+    starts = {r["idx"]: r["start"] for r in records}
+    assert starts[0] == starts[1] == starts[2] == "random"
 
 
 # ---------------------------------------------------------------------------------------------------

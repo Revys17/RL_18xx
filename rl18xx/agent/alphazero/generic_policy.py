@@ -90,10 +90,58 @@ class GenericPolicy:
         price_eps: float = 0.0,
     ) -> tuple:
         """``(layout index, price or None)`` sampled from ``output`` at ``temperature``."""
-        p = _tempered(output.probs, temperature)
-        k = int(rng.choice(len(p), p=p))
-        index = int(output.legal.indices[k])
-        return index, sample_price(game, output, k, rng, price_eps)
+        return choose(game, output, temperature, rng, price_eps)
+
+
+def choose(game, output: PolicyOutput, temperature: float, rng: np.random.Generator, price_eps: float = 0.0) -> tuple:
+    """``(layout index, price or None)`` sampled from ``output`` at ``temperature`` (:meth:`GenericPolicy.choose`)."""
+    p = _tempered(output.probs, temperature)
+    k = int(rng.choice(len(p), p=p))
+    index = int(output.legal.indices[k])
+    return index, sample_price(game, output, k, rng, price_eps)
+
+
+# ---------------------------------------------------------------------------------------------------
+# Served by a generic inference server (``generic_inference``; eval_policy_only.py --generic-server)
+# ---------------------------------------------------------------------------------------------------
+
+_SERVED_CLIENTS: dict = {}
+
+
+def served_client(name: str, client):
+    """A ``GenericInferenceClient`` on the queues of a pool worker's server client (``policy_gradient.worker_init``
+    connects every server with a legacy ``InferenceClient``; the generic one shares its worker slot)."""
+    if name not in _SERVED_CLIENTS:
+        from rl18xx.agent.alphazero.generic_inference import GenericInferenceClient
+
+        _SERVED_CLIENTS[name] = GenericInferenceClient(
+            request_q=client.request_q, reply_q=client.reply_q, worker_id=client.worker_id
+        )
+    return _SERVED_CLIENTS[name]
+
+
+def served_request(games: Sequence, legal_indices: Sequence[Sequence[int]]) -> tuple:
+    """``(arrays, legal)``: the inputs of a server request for positions with these legal indices."""
+    legal = [mg.legal_actions(g, idx) for g, idx in zip(games, legal_indices)]
+    return mg.build_inputs(list(games), legal), legal
+
+
+def served_outputs(arrays: dict, legal: Sequence[mg.LegalActions], reply) -> List[PolicyOutput]:
+    """:class:`PolicyOutput` per position from a server's ``GenericReply`` (asked ``want_price_logp``)."""
+    offsets = arrays["legal_offsets"]
+    per_price: List[Dict[int, np.ndarray]] = [dict() for _ in legal]
+    for j, row in enumerate(arrays["price_rows"]):
+        b = int(arrays["legal_pos"][row])
+        per_price[b][int(row - offsets[b])] = reply.price_logp[j]
+    return [
+        PolicyOutput(
+            legal=legal[b],
+            probs=np.exp(reply.logp[offsets[b] : offsets[b + 1]].astype(np.float64)),
+            price_logp=per_price[b],
+            win=reply.win[b],
+        )
+        for b in range(len(legal))
+    ]
 
 
 def sample_price(game, output: PolicyOutput, k: int, rng: np.random.Generator, eps: float = 0.0) -> Optional[int]:
@@ -136,4 +184,15 @@ def is_generic_spec(spec: str) -> bool:
     return str(spec).startswith(GENERIC_PREFIX)
 
 
-__all__ = ["GENERIC_PREFIX", "GenericPolicy", "PolicyOutput", "cached_policy", "is_generic_spec", "sample_price"]
+__all__ = [
+    "GENERIC_PREFIX",
+    "GenericPolicy",
+    "PolicyOutput",
+    "cached_policy",
+    "choose",
+    "is_generic_spec",
+    "sample_price",
+    "served_client",
+    "served_outputs",
+    "served_request",
+]

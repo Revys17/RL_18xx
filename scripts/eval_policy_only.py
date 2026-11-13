@@ -40,6 +40,9 @@ so it plays legacy checkpoints under exactly these rules and starts, e.g.
     uv run python scripts/eval_policy_only.py --match generic:<run>/final.pth@0.5 <ckpt 10>@0.5 \\
         --auction-start --games 800
 
+With ``--generic-server`` the generic players are hosted on generic inference servers instead
+(``generic_inference``: the GPU when there is one, one server per generic checkpoint), as legacy players are.
+
 ``--save-games N`` (with ``--out``) also keeps the action logs of each match's
 first N games (game indices 0..N-1: every seat arrangement of the first N/6
 starts) as ``<out>/games/m<match>_<idx>.json`` (``game_records``), each named
@@ -250,6 +253,17 @@ def play_games(game_indices: list, settings: dict) -> list:
                 g.decisions += 1
         generic_sides = [side for side in by_side if is_generic_spec(settings["servers"][side])]
         generic_rows = {side: by_side.pop(side) for side in generic_sides}
+        served = {}
+        if settings.get("generic_server"):
+            # --generic-server: generic sides on their generic inference servers, sent with the legacy requests.
+            from rl18xx.agent.alphazero.generic_policy import served_client, served_request
+
+            for side in list(generic_rows):
+                name = settings["servers"][side]
+                rows = generic_rows.pop(side)
+                arrays, legal = served_request([pending[i][0].game for i in rows], [pending[i][1] for i in rows])
+                client = served_client(name, pg._CLIENTS[name])
+                served[side] = (client, client.send_inputs(arrays, want_price_logp=True), arrays, legal, rows)
         sent = {
             side: pg._CLIENTS[settings["servers"][side]].send(
                 [encoded[i] for i in rows], legal_indices=[pending[i][1] for i in rows]
@@ -271,6 +285,23 @@ def play_games(game_indices: list, settings: dict) -> list:
                     )
                 else:
                     price_value = sample_price(g.game, output, legal.index(choice), rng, settings["price_eps"])
+                g.price_row = None
+                g.game._game.apply_action_index(choice, price_value)
+                g.decisions += 1
+        for side, (client, request, arrays, legal, rows) in served.items():
+            from rl18xx.agent.alphazero.generic_policy import choose, served_outputs
+
+            outputs = served_outputs(arrays, legal, client.receive_outputs(request))
+            rules = settings.get("rules", {}).get(side, ())
+            for i, output in zip(rows, outputs):
+                g, legal_indices = pending[i]
+                choice = scripted_choice(g.game, legal_indices, rules) if rules else None
+                if choice is None:
+                    choice, price_value = choose(
+                        g.game, output, settings["temperatures"][side], rng, settings["price_eps"]
+                    )
+                else:
+                    price_value = sample_price(g.game, output, legal_indices.index(choice), rng, settings["price_eps"])
                 g.price_row = None
                 g.game._game.apply_action_index(choice, price_value)
                 g.decisions += 1
@@ -360,6 +391,15 @@ def run_match(a_spec: str, b_spec: str, args) -> dict:
         )
         for path in paths
     }
+    generic_server = bool(getattr(args, "generic_server", False))
+    if generic_server:
+        from rl18xx.agent.alphazero.generic_inference import start_generic_inference_server
+        from rl18xx.agent.alphazero.generic_policy import GENERIC_PREFIX
+
+        for spec in sorted({path for path, _, _ in players.values() if is_generic_spec(path)}):
+            handles[spec] = start_generic_inference_server(
+                num_workers=args.workers, checkpoint_path=spec[len(GENERIC_PREFIX) :], batch_size=1024
+            )
     settings = {
         "servers": {side: path for side, (path, _, _) in players.items()},
         "temperatures": {side: t for side, (_, t, _) in players.items()},
@@ -372,6 +412,7 @@ def run_match(a_spec: str, b_spec: str, args) -> dict:
         "auction_stall_decisions": getattr(args, "auction_stall_decisions", 0),
         "price_eps": args.price_eps,
         "generic_device": getattr(args, "generic_device", "cpu"),
+        "generic_server": generic_server,
         "save_games": getattr(args, "save_games", 0),
         "arrangements": arrangements(getattr(args, "a_seats", 2), getattr(args, "num_players", NUM_PLAYERS)),
     }
@@ -455,6 +496,11 @@ def main():
     parser.add_argument(
         "--generic-device", type=str, default="cpu",
         help="Device of generic:<checkpoint> players in each pool worker (default cpu; cuda shares one GPU)",
+    )
+    parser.add_argument(
+        "--generic-server", action="store_true",
+        help="Host generic:<checkpoint> players on generic inference servers (the GPU when there is one; "
+        "generic_inference) instead of in each pool worker",
     )
     parser.add_argument("--out", type=str, default=None, help="Directory for summary.json and games.jsonl")
     parser.add_argument(
