@@ -844,3 +844,15 @@ n: gain = mean CE(a) - mean CE(X); noise = the larger of the two spreads. X **pa
 
 The harness writes the per-cell runs under `<out>/runs/`, `report.md` / `report.json` (the table per arm x size with
 mean and half the seed range, per-family top-1, the 1830 interference rows, each pass / fail and the verdict).
+
+#### Harness validation on 1830 alone (2026-11-13)
+
+Before the 1867 data existed the harness ran end to end with 1830 as both target and source (`plan --target
+1830=<d> --source 1830=<d> --pseudo-target-games 40`: disjoint games -- a 40-game pseudo-target + 4 dev games and
+half the validation games against the other 3,834 training games), sizes 10 and 40 games, 2 seeds, tiny budgets
+(arm a and c's fine-tuning 100 steps, arm b 200 -- that plumbing run predates the equal step caps --, `c_pre` 100;
+6 validation games): 14 cells in 9.3 minutes at 4 at a time; every cell wrote its summary, the report built its
+tables and applied the rule. Target validation policy CE (mean +- half the seed range): a 1.005 +- 0.010 / 1.012 +-
+0.004 (10 / 40 games), b 0.965 +- 0.009 / 0.965 +- 0.005, c 0.971 +- 0.002 / 0.971 +- 0.002; b and c "pass" at 40
+games. Every cell was budget-bound (best = last evaluation) and b had twice the steps, so these numbers check the
+plumbing only, not transfer.
