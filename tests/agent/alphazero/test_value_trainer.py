@@ -501,8 +501,10 @@ def test_with_a_weight_average_the_candidate_and_the_evaluations_are_the_average
     from rl18xx.agent.alphazero.policy_gradient import _load
 
     decay = 0.7
+    # eval_every 1: the generated fixture plays for a fixed 8 s, so on a loaded machine a cycle may get only
+    # 2 steps of data; evaluating every step still checks several evaluations of the average.
     cfg = _trainer_config(tmp_path, generated, init_checkpoint, fixed_dir, gate_data=[str(fixed_dir)], max_steps=12,
-                          ema_decay=decay, diverge_ce=10.0)  # (a tiny net at lr 1e-3: noise, not a test)
+                          ema_decay=decay, diverge_ce=10.0, eval_every=1)  # (a tiny net at lr 1e-3: noise, not a test)
     trainer = vt.ValueTrainer(cfg)
     expected = {}  # the average, computed here from the raw weights after every step
     step = vt.train_step
