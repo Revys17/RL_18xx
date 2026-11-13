@@ -187,8 +187,8 @@ def test_the_generator_searches_kept_trees_only_at_the_games_position(start_file
     original = sl.Generator._search
     checked = {"reused": 0}
 
-    def checked_search(self, g, rs, readouts, key):
-        search = original(self, g, rs, readouts, key)
+    def checked_search(self, g, rs, readouts, key, *args, **kwargs):  # e.g. noise= (full searches)
+        search = original(self, g, rs, readouts, key, *args, **kwargs)
         if search.inherited > 0:
             checked["reused"] += 1
             root = engine_rs.encode_games([search.tree.root_game_object()])
@@ -201,6 +201,8 @@ def test_the_generator_searches_kept_trees_only_at_the_games_position(start_file
     monkeypatch.setattr(sl.Generator, "_search", checked_search)
     out = gen.run(10.0)
     stats = out["stats"]
+    # The generator drops a game that raises (logged, counted): an error in checked_search shows up here.
+    assert stats.get("dropped_games", 0) == 0
     assert checked["reused"] > 0 and stats.get("reused_searches", 0) == checked["reused"]
     assert stats["inherited_visits"] > 0 and stats["final_visits"] > stats["inherited_visits"]
     assert out["games"] and all(g["searched"] == len(g["rows"]) for g in out["games"])
