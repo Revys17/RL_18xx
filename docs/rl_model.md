@@ -790,37 +790,42 @@ training on 1830 as well help an 1867 model, against 1867 alone? Arms, at each 1
 * **c**: 1830 alone first (`c_pre`, one run per seed, shared by the sizes), then 1867 alone from its best checkpoint.
 
 Data: 1867 = A3's `generic_1867_v1` (965 games of 3-6 players, 915 training / 50 validation, 540,775 / 30,938
-positions); 50 of its training games are a fixed **dev** split (early stopping and the value refit's selection); the
-other 865 form the pool from which the sizes are nested subsets (`nested_subset`, seed 0): **100, 300 and all 865
-games** (55,745 / 176,771 / 510,565 positions; dev: 30,210). Results are on 1867's **validation** split (all 50
-games, never used for any choice). 1830 = `generic_1830_clean_all_v1` (3,878 training games, 2.38M positions, 2-6
-players; 30 validation games for the interference check).
+positions; every record replays and encodes on this branch: 571,713 positions); 30 of its training games are a fixed
+**dev** split (18,081 positions: early stopping and the value refit's selection); the other 885 form the pool from
+which the sizes are nested subsets (`nested_subset`, seed 0): **100, 300 and all 885 games** (55,954 / 175,887 /
+522,694 positions). Results are on 1867's **validation** split (all 50 games, 30,938 positions, never used for any
+choice). 1830 = `generic_1830_clean_all_v1` (3,878 training games, 2.38M positions, 2-6 players; 30 validation games
+for the interference check).
 
 Recipe (every arm the same; `sharing_probe.py plan` defaults): the probe model `PROBE_MODEL` (d_model 64, 4 heads,
 2 map layers, 1 entity layer, 1 fusion round, d_trunk 128, d_head 64: **538,550 parameters**, 1/16 of the default),
 fp32 on the CPU, batch 128, C1's losses and AdamW at lr 1e-3 with cosine decay over the step cap. **Equal compute
-per arm**: every arm's 1867 phase is capped at **7,812 steps** (1M positions; arm b's are half 1830); `c_pre` runs
-3,906 steps (500k 1830 positions = arm b's 1830 share at the cap), selected on 1830 validation, no value refit.
-Evaluation on dev every min(max(the size's training positions, 32k), 100k) 1867 positions (arm b: twice as many
-steps apart), early stop after 3 evaluations without improvement of the dev total loss; then the value refit (at
-most 1,600 steps, evaluated every 400, patience 2, on dev win CE), then the final evaluation on validation. Seeds
-0, 1, 2 vary the initialization, the game orders and the shuffle draws; the dev / validation games and the subsets
-are fixed, so arms are compared on the same positions.
+per arm**: every arm's 1867 phase is capped at **5,000 steps** (640k positions; arm b's are half 1830, so it sees
+at most 320k 1867 positions); `c_pre` runs 2,500 steps (320k 1830 positions = arm b's 1830 share at the cap),
+selected on 1830 validation, no value refit. Evaluation on dev every min(max(the size's training positions, 32k),
+100k) 1867 positions (arm b: twice as many steps apart), early stop after 3 evaluations without improvement of the
+dev total loss; then the value refit (at most 800 steps, evaluated every 400, patience 2, on dev win CE), then the
+final evaluation on validation. Seeds 0, 1, 2 at 100 and 885 games, 0 and 1 at 300 (budget); they vary the
+initialization, the game orders and the shuffle draws; the dev / validation games and the subsets are fixed, so
+arms are compared on the same positions. 27 cells.
 
 CPU throughput behind these numbers (2026-11-13, cores 24-31,56-63 shared with other jobs, 1830 positions, batch
-128, stage 1): probe model 300 positions/s on 1 thread + 1 loader worker (434 on 2 threads), the 150k smoke config
-444 (719 on 2 threads); bf16 autocast was 1-11% faster in paired runs and is not used (training and evaluation
-stay in one precision). A cell is ~1.1 GB (trainer)
-+ ~0.6 GB (loader worker); the probe runs 7 cells at a time with 1 thread each.
+128, stage 1): alone, the probe model trains at 300 positions/s on 1 thread + 1 loader worker (434 on 2 threads), the
+150k smoke config at 444 (719 on 2 threads); bf16 autocast was 1-11% faster in paired runs and is not used (training
+and evaluation stay in one precision). A cell is ~1.1 GB (trainer) + ~0.6 GB (loader worker). With 7 cells at a time
+(1 thread each) next to the other agents' jobs on the same cores, each cell trained at **~107 positions/s** (1867,
+measured on the first launch): a first plan (cap 7,812 steps, `c_pre` 3,906, 50 dev games, refit 1,600, three seeds
+everywhere) would have taken ~10 hours, so it was stopped after ~8 minutes (before any 1867 evaluation) and cut to
+the above (~5-6 hours).
 
 #### Decision rule (fixed 2026-11-13, before any 1867 cell ran)
 
 Metric: 1867 validation **policy CE** (mean NLL of the human move over the legal moves) of each run's final
-checkpoint. Per (arm, size), the **seed spread** is the range (max - min) over the 3 seeds. For X in {b, c} at size
+checkpoint. Per (arm, size), the **seed spread** is the range (max - min) over its seeds (3; 2 at 300 games). For X in {b, c} at size
 n: gain = mean CE(a) - mean CE(X); noise = the larger of the two spreads. X **passes** at n iff gain > 2 x noise
 **and** X's win CE (after the value refit) is not worse than a's by more than 2 x the larger win-CE spread.
 
-* **Adopt sharing for 1867 only if some X passes at the full size (865 games).** These are 0.5M-parameter CPU
+* **Adopt sharing for 1867 only if some X passes at the full size (885 games).** These are 0.5M-parameter CPU
   models: a signal, not proof for the full-size models. So "adopt" means: run the full-size comparison (E1: the
   default model, 1867-only against X, plus a policy-only 1867 head-to-head) on the GPU next, and start 1867's
   supervised stage from X only if it holds there. If both pass, prefer c (per-title weights, releases decoupled)

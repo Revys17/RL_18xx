@@ -145,7 +145,14 @@ def make_plan(args) -> dict:
         every = min(max(positions, args.min_eval_positions), args.eval_positions)
         return max(1, int(round(every / per_step)))
 
-    for seed_k in [int(s) for s in args.seeds.split(",")]:
+    seeds = [int(s) for s in args.seeds.split(",")]
+    size_seeds = {}
+    for part in (args.size_seeds or "").split(";"):
+        if part.strip():
+            size, _, listed = part.partition(":")
+            n = len(pool) if size == "all" else int(size)
+            size_seeds[n] = [int(s) for s in listed.split(",")]
+    for seed_k in seeds:
         pre = f"c_pre_s{seed_k}"
         pre_steps = int(args.pretrain_steps)
         cells.append(
@@ -160,6 +167,8 @@ def make_plan(args) -> dict:
             }
         )
         for n in sizes:
+            if seed_k not in size_seeds.get(n, seeds):
+                continue
             split = ["--splits", f"target:{files[f'target_{n}']}"]
             target_eval = ["--select-title", "target", "--select-split", "dev", "--eval-titles", "target"]
             steps_a = steps_b = int(args.steps)
@@ -200,7 +209,8 @@ def make_plan(args) -> dict:
         "source": {"title": s_name, "path": s_path, "titles": source.titles},
         "pseudo_target": pseudo,
         "sizes": sizes,
-        "seeds": [int(s) for s in args.seeds.split(",")],
+        "seeds": seeds,
+        "size_seeds": {str(k): v for k, v in size_seeds.items()},
         "settings": {k: v for k, v in vars(args).items() if k not in ("func", "force")},
         "model": json.loads(model_json),
         "counts": {
@@ -564,12 +574,13 @@ def main() -> None:
     p.add_argument("--out", required=True)
     p.add_argument("--sizes", default="100,300,all", help="Target training-set sizes in games ('all' = the pool)")
     p.add_argument("--seeds", default="0,1,2")
-    p.add_argument("--dev-games", type=int, default=50, help="Target training games held out for early stopping")
+    p.add_argument("--size-seeds", default=None, help="Fewer seeds at some sizes, e.g. '300:0,1' (';'-separated)")
+    p.add_argument("--dev-games", type=int, default=30, help="Target training games held out for early stopping")
     p.add_argument("--subset-seed", type=int, default=0, help="Order of the nested target subsets and the dev games")
     p.add_argument("--pseudo-target-games", type=int, default=None, help="Same dataset as both: the target's games")
     p.add_argument("--target-val-games", type=int, default=None, help="Cap on target validation games (default all)")
-    p.add_argument("--steps", type=int, default=7812, help="Step cap of every arm's target phase (1M positions at 128)")
-    p.add_argument("--pretrain-steps", type=int, default=3906, help="Arm c's source phase (= arm b's source share at the cap)")
+    p.add_argument("--steps", type=int, default=5000, help="Step cap of every arm's target phase (640k positions at 128)")
+    p.add_argument("--pretrain-steps", type=int, default=2500, help="Arm c's source phase (= arm b's source share at the cap)")
     p.add_argument("--pretrain-evals", type=int, default=8, help="Evaluations during arm c's source phase")
     p.add_argument("--eval-positions", type=int, default=100_000, help="Target positions between evaluations")
     p.add_argument("--min-eval-positions", type=int, default=32_000)
@@ -582,7 +593,7 @@ def main() -> None:
     p.add_argument("--buffer-positions", type=int, default=16384)
     p.add_argument("--refit-eval-steps", type=int, default=400)
     p.add_argument("--refit-patience", type=int, default=2)
-    p.add_argument("--refit-max-steps", type=int, default=1600)
+    p.add_argument("--refit-max-steps", type=int, default=800)
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=make_plan)
     p = sub.add_parser("run", help="Run the plan's pending cells")
