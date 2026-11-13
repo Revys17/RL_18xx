@@ -310,8 +310,10 @@ its open points foresee additions; stored arrays would need a re-conversion per 
 serves 1867 and mixed-title runs.
 
 A dataset directory: LMDB `g:<game id>` -> lz4(pickle(record)), `meta.json` (titles, layout version and
-fingerprint, the encoder version at conversion, sources, split rule, counts, match / skip statistics) and
-`games.jsonl` (id, split, players, decisions, actions, finished). A **record** (`generic_data.convert_game`):
+fingerprint, the encoder version at conversion, sources, split rule, `finished_only`, counts -- by split, player
+count and source, dropped games by reason and player count --, match / skip statistics), `games.jsonl` (id,
+source, split, players, decisions, actions, finished, skipped labels) and `dropped.jsonl` (id, source, players,
+reason of every dropped game; since A3). A **record** (`generic_data.convert_game`):
 the action log as the engine replays it (JSON), players in seating order, optional rules, rule variants (off for
 human games), the layout version and fingerprint, and per decision:
 
@@ -704,9 +706,9 @@ the mix) -> ~55 s of generation per update, plus the update itself (the legacy's
    `start_positions_1867_{3..6}p.jsonl` / `midgame_positions_1867_{3..6}p.jsonl` (the `TitleSpec` templates point
    there).
 3. **Supervised**: `convert-generic --title 1867 --data-dir human_games/1867 human_games/scrape_2026_10/1867`
-   (965 games, 571,713 positions), `pretrain-generic` (default preset on the GPU), the value refit; no legacy model
-   to compare with, so judge by per-family top-1 against chance and the win CE against equal odds (A3's CPU smoke:
-   below).
+   (finished games only: 840 games, 537,362 positions), `pretrain-generic` (default preset on the GPU), the value
+   refit; no legacy model to compare with, so judge by per-family top-1 against chance and the win CE against equal
+   odds (A3's CPU smoke: below).
 4. **Policy gradient**: `policy-gradient-generic --title 1867 --policy <1867 final.pth>` with the 1830 recipe at
    3-6 players (`--player-mix 3:25,4:40,5:25,6:10`, no 2-player game), `--auction-fraction 0.2 --midgame-fraction
    0.3 --random-start-fraction 0.2` (design §5.6: ~80% from human SR1 starts), placement reward, the decision caps
@@ -768,18 +770,45 @@ Code: `generic_import_1867.py` (the importer and the matching, shared with `scri
   checked on the grid.
 * **Outcomes**: `result()` in seating order -> win share (ties split) and placement points
   (`policy_gradient.default_placement_points` of the player count), as 1830's records.
-* **Replay rejections** (old records the current rules refuse part-way): the game is kept up to the rejected
-  action (`finished` False, `stopped` = the action and the engine's message); its value targets are net worth at
-  that point, as 1830's unfinished games.
+* **Unfinished games are dropped** (the user's decision, "just for correctness": `convert-generic
+  --finished-only`, 1867's default through `titles.TitleSpec.supervised_finished_only`; `--keep-unfinished`
+  turns it off, 1830's default is off so its conversions and the 1830 GPU check are unchanged). A game is kept only
+  when its log reaches the game's end in our engine; dropped and counted by reason: `unfinished_replay_rejected`
+  (an old record the current rules refuse part-way) and `unfinished_record_ends` (the record stops before the end:
+  a manual end on the site, an archived or abandoned game). `Importer1867.unfinished_reason` decides right after
+  the replay, before any matching; for other importers `convert_game` checks `finished` at the end. Without the
+  option a rejected game is kept up to the rejection (`finished` False, `stopped` = the action and the engine's
+  message) with net worth there as its value target, as 1830's unfinished games.
 
 ### The dataset (both corpora, one conversion)
 
 ```bash
 CUDA_VISIBLE_DEVICES= taskset -c 24-31,56-63 nice -19 uv run python main.py convert-generic --title 1867 \
-    --data-dir human_games/1867 human_games/scrape_2026_10/1867 --output <dir> --workers 8      # ~12 min
+    --data-dir human_games/1867 human_games/scrape_2026_10/1867 --output <dir> --workers 8      # ~12-30 min
+# finished games only by default for 1867; --keep-unfinished converts every in-scope game (below: "All games")
 ```
 
-1,394 files -> **965 games, 571,713 positions** (train 915 games / 540,775 positions, validation 50 / 30,938;
+**The 1867 dataset (finished games only, the default):** 1,394 files -> **840 games, 537,362 positions** (train
+794 games / 508,051 positions, validation 46 / 29,311; 38 MB): `human_games/1867` 565 games / 362,065 positions,
+the 2026-10 scrape 275 / 175,297. Dropped: `unfinished_record_ends` 101 (3p 33, 4p 51, 5p 16, 6p 1),
+`unfinished_replay_rejected` 24 (3p 4, 4p 15, 5p 4, 6p 1) -- 125 games, 34,351 positions of the all-games
+conversion --, plus the scope drops below (165 `grid_market`, 103 `players_2`, 79 `status_active`, 4 `status_new`,
+78 `no_actions`); every dropped game is in `dropped.jsonl`. The kept games' records equal the all-games
+conversion's.
+
+| players | games (train / validation) | positions (train / validation) |
+|---|---|---|
+| 3 | 205 (191 / 14) | 125,540 (117,052 / 8,488) |
+| 4 | 509 (487 / 22) | 326,325 (312,587 / 13,738) |
+| 5 | 109 (100 / 9) | 73,209 (66,889 / 6,320) |
+| 6 | 17 (16 / 1) | 12,288 (11,523 / 765) |
+
+Skipped labels: `policy` 36, `replay_only` 798 (pre-#9655 merger order 623, trainless out of order 167, dealing
+out of turn 8), `unmatched` 13 (place_token 10, buy_shares 3: the 3 unexplained lay_tile misses were in rejected
+games); forced positions 108,035; price targets 40,968.
+
+**All games** (`--keep-unfinished`, the first A3 conversion; the numbers the A2 comparison below uses): 1,394 files
+-> **965 games, 571,713 positions** (train 915 games / 540,775 positions, validation 50 / 30,938;
 `in_validation_split(game id, 0.05)`; 40 MB): `human_games/1867` 664 games / 389,776 positions, the 2026-10 scrape
 301 / 181,937. Dropped: 165 `grid_market`, 103 `players_2`, 79 `status_active`, 4 `status_new`, 78 `no_actions`
 (in A2's scope but without a game action: 50 files with none, 28 with only `end_game` / messages / programs). 840
@@ -820,22 +849,23 @@ CUDA_VISIBLE_DEVICES= taskset -c 24-31,56-63 nice -19 uv run python scripts/buil
     --title 1867 --source human_games/1867 --source human_games/scrape_2026_10/1867 --out-dir human_games --jobs 8
 ```
 
-(~6 min.) The builder's scope is wider than the importer's: abandoned (`active`) games give starts too, and since
-A3 a game the replay rejects part-way gives the Stock Rounds before the rejection (`generic_play._load_titled`
-keeps the prefix). Excluded: 172 optional rules, 106 player count, 80 without actions, 46 without a Stock Round, 4
-`new`.
+(~6 min.) Starts use no outcome, so the builder's scope is wider than the importer's: abandoned (`active`) games
+and records that end early give starts too. A game the engine's replay rejects anywhere gives none (C2's rule; a
+first A3 build had taken the Stock Rounds before the rejection and was rebuilt after the user's "for
+correctness" call: 24 games, 24 SR1 starts and 24 mid-game games fewer). Excluded: 172 optional rules, 106 player
+count, 80 without actions, 46 without a Stock Round, 24 replay failed, 4 `new`.
 
 | players | SR1 starts | mid-game games | mid-game cuts SR2 / SR3 / SR4 / SR5 / SR6 |
 |---|---|---|---|
-| 3 | 246 | 237 | 237 / 231 / 223 / 219 / 208 |
-| 4 | 590 | 582 | 582 / 579 / 568 / 544 / 519 |
-| 5 | 128 | 125 | 125 / 122 / 119 / 116 / 114 |
-| 6 | 22 | 20 | 20 / 20 / 20 / 19 / 19 |
+| 3 | 242 | 233 | 233 / 227 / 220 / 217 / 208 |
+| 4 | 575 | 567 | 567 / 564 / 554 / 537 / 514 |
+| 5 | 124 | 121 | 121 / 118 / 116 / 114 / 112 |
+| 6 | 21 | 19 | 19 / 19 / 19 / 19 / 19 |
 
 Every line was replayed again: each SR1 start and each cut ends at an unfinished Stock Round; starts of every
 kind (human, mid-game, auction, random) sample and replay through `generic_play.replayed_start`. 6 players is
-thin (22 games): the 1830 recipe's random openings (`--random-start-fraction`) and auction starts carry most 6p
-games.
+thin (21 games): the 1830 recipe's random openings (`--random-start-fraction`) and auction starts carry most 6p
+games. (The CPU smoke below ran on the first build, 24 starts more.)
 
 ### Ruby HEAD check of A2's 17 unexplained old-corpus misses
 
@@ -885,8 +915,8 @@ prices; the trainer recomputes the sampling log-probabilities of 1867 PG rows wi
 ### CPU smoke (2026-11-13, `CUDA_VISIBLE_DEVICES=`, cores 24-31,56-63 shared with other jobs at load ~30)
 
 **Supervised.** `pretrain-generic --model-preset small` (151,742 parameters), batch 64, 3 loader workers, shuffle
-buffer 8,192, all 915 training games, validation on the first 20 validation games (12,285 positions; chance top-1
-0.411):
+buffer 8,192, all 915 training games of the all-games conversion, validation on the first 20 validation games
+(12,285 positions; chance top-1 0.411):
 
 | run | steps (positions) | stage-1 time | train loss (first -> last 50) | val top-1 / top-5 | val policy CE | val price NLL | val win CE (equal odds 1.388) / winner |
 |---|---|---|---|---|---|---|---|
@@ -1024,12 +1054,11 @@ wants a stall line in the history anyway: four times the measured maximum).
 2. **Legal lists of the supervised data** are the title's cross-player policy's (what self-play is offered); the
    38 human moves it excludes are skipped. The alternative is the rules' lists (then the model also scores moves
    it will never be offered).
-3. **Old records the replay rejects part-way** (24 games, 3.5% of the old corpus's in-scope games with actions) are kept up to
-   the rejection with net worth there as the value target, like 1830's unfinished games; 1830's importer drops a
-   game whose replay fails. The 101 games ended early on the site are kept as 1830's are (`finished` False in both
-   cases; `stopped` marks the first kind).
-4. **6 players is thin**: 19 games / 12,865 positions, 22 SR1 starts (3p 242 games, 4p 575, 5p 129). A 6-player
-   share in the PG mix leans on random openings and auction starts.
+3. **Unfinished human games**: decided (the user, 2026-11-13, "just for correctness") -- 1867's supervised data
+   keeps finished games only (`--finished-only`, 1867's default; above). 1830's conversions keep theirs (C1's open
+   question 2 stands for 1830).
+4. **6 players is thin**: 17 finished games / 12,288 positions, 21 SR1 starts (3p 205 games, 4p 509, 5p 109). A
+   6-player share in the PG mix leans on random openings and auction starts.
 5. **1867 generation speed**: the generator, not the network, will bound 1867 policy gradient on the GPU (~20-25k
    games/h estimated vs gen6's ~125k for 1830); worth the graph-walk caching of `g1867_remaining_work.md` item 2
    before a long run?
