@@ -87,11 +87,14 @@ impl BaseGame {
     /// matches `idx` at the current state, re-running the factored enumeration.
     /// Shared by `decode_index`, `price_range_for_index`, and
     /// `price_head_slot_for_index` (after dedup there is at most one entry per
-    /// index, so the first match is the only match).
-    pub(crate) fn legal_action_for_index(&mut self, idx: u32) -> Option<LegalAction> {
-        self.get_factored_choices_impl()
+    /// index, so the first match is the only match). Indexed with the game's
+    /// own title layout; a title without one is "not bridge-ready".
+    pub(crate) fn legal_action_for_index(&mut self, idx: u32) -> Result<Option<LegalAction>, GameError> {
+        let lo = self.factored_layout()?;
+        Ok(self
+            .get_factored_choices_impl()
             .into_iter()
-            .find(|c| crate::action_index::legal_action_to_index(c) == Some(idx))
+            .find(|c| crate::action_index::legal_action_to_index_in(lo, c) == Some(idx)))
     }
 
     /// Decode a flat policy index into a concrete [`Action`] at the current
@@ -102,7 +105,8 @@ impl BaseGame {
         idx: u32,
         sampled_price: Option<i64>,
     ) -> Result<Action, GameError> {
-        let total = crate::action_index::POLICY_SIZE;
+        let lo = self.factored_layout()?;
+        let total = lo.total;
         if idx >= total {
             return Err(GameError::new(format!(
                 "Action index {} out of bounds (0-{})",
@@ -114,11 +118,11 @@ impl BaseGame {
         // Find the factored LegalAction whose flat index matches. (After dedup
         // there is at most one categorical entry per index; price-bearing slots
         // collapse the price dimension to a single entry carrying a range.)
-        let la = self.legal_action_for_index(idx).ok_or_else(|| {
+        let la = self.legal_action_for_index(idx)?.ok_or_else(|| {
             GameError::new(format!("index {} is not legal at the current state", idx))
         })?;
 
-        let company_offset = crate::action_index::layout().action_offsets["CompanyBuyShares"];
+        let company_offset = lo.action_offsets["CompanyBuyShares"];
         let is_company = idx >= company_offset;
 
         self.build_action(&la, idx, is_company, sampled_price)
@@ -857,8 +861,8 @@ impl BaseGame {
     /// The legal `(price_min, price_max)` range for a flat index, or `None` if
     /// the index is illegal or categorical (no price). Native replacement for
     /// reading `ActionMapper.get_legal_actions_factored(...)[1][idx]`.
-    fn price_range_for_index(&mut self, idx: u32) -> Option<(i64, i64)> {
-        self.legal_action_for_index(idx).and_then(|c| c.price_range)
+    fn price_range_for_index(&mut self, idx: u32) -> PyResult<Option<(i64, i64)>> {
+        Ok(self.legal_action_for_index(idx)?.and_then(|c| c.price_range))
     }
 
     /// Resolve the `ContinuousPriceHead` slot for a flat index:
@@ -866,15 +870,27 @@ impl BaseGame {
     /// fixed-price slots that don't reach the head. Native replacement for
     /// `ActionMapper.price_head_slot_for_action`. The slot layout matches the
     /// Python head: [Bid×6 companies][BuyTrain×(8 corps·6 train types)]
-    /// [BuyCompany×6 companies].
-    fn price_head_slot_for_index(&mut self, idx: u32) -> Option<(u32, i64, i64)> {
-        // The price head's slot layout reuses the action layout's title lists
-        // (company / corporation / train-type order).
-        let lo = crate::action_index::layout();
+    /// [BuyCompany×6 companies]. A title without a layout raises "not
+    /// bridge-ready" instead of reading 1830's slot lists.
+    fn price_head_slot_for_index(&mut self, idx: u32) -> PyResult<Option<(u32, i64, i64)>> {
+        let lo = self.factored_layout()?;
+        let Some(la) = self.legal_action_for_index(idx)? else { return Ok(None) };
+        Ok(Self::legacy_price_head_slot(lo, &la))
+    }
+}
+
+impl BaseGame {
+    /// The legacy price head's slot of a factored action, over the layout's
+    /// title lists (company / corporation / train-type order):
+    /// `(slot_index, price_min, price_max)`, `None` for categorical /
+    /// fixed-price actions.
+    fn legacy_price_head_slot(
+        lo: &crate::action_index::SlotLayout,
+        la: &LegalAction,
+    ) -> Option<(u32, i64, i64)> {
         let companies = &lo.company_offsets;
         let corps = &lo.corporation_offsets;
         let trains = &lo.train_type_offsets;
-        let la = self.legal_action_for_index(idx)?;
         // Any price-bearing slot maps to the head; a degenerate (min == max)
         // range still yields a slot with price_min == price_max, matching
         // Python's `price_head_slot_for_action`. (The sole caller,

@@ -1807,20 +1807,22 @@ impl BaseGame {
     /// the search tree. Mirrors Python
     /// `ActionMapper.get_legal_actions_factored(game)[0]`, so the two can be
     /// compared directly to verify training-target (Python) vs. search (Rust)
-    /// index alignment.
-    fn factored_legal_indices(&mut self) -> Vec<u32> {
+    /// index alignment. Indexed with the game's own title layout; a title
+    /// without one raises "not bridge-ready".
+    fn factored_legal_indices(&mut self) -> PyResult<Vec<u32>> {
+        let lo = self.factored_layout()?;
         let choices = self.get_factored_choices_impl();
         let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
         let mut out: Vec<u32> = Vec::new();
         for la in &choices {
-            if let Some(idx) = crate::action_index::legal_action_to_index(la) {
+            if let Some(idx) = crate::action_index::legal_action_to_index_in(lo, la) {
                 if seen.insert(idx) {
                     out.push(idx);
                 }
             }
         }
         out.sort_unstable();
-        out
+        Ok(out)
     }
 }
 

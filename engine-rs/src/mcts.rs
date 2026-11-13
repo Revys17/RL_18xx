@@ -133,15 +133,15 @@ impl RustMCTSNode {
 ///
 /// Only the head-modelled slots return ``Some``; depot trains and exchange
 /// trains return ``None`` (they are fixed-price and never reach the sampler).
-fn price_head_entity_key(action_index: u32, action_type: &str) -> Option<(String, Vec<String>)> {
+fn price_head_entity_key(
+    lo: &crate::action_index::SlotLayout,
+    action_index: u32,
+    action_type: &str,
+) -> Option<(String, Vec<String>)> {
     // We mirror the layout from `model_transformer.py::ContinuousPriceHead`
     // and `action_mapper.py::_PRICE_HEAD_*`. Order matches Python; the title
-    // lists (company / corporation / train-type order) come from the shared
-    // action layout rather than duplicated literals.
-    //
-    // Re-fetch the layout offsets via the Rust action_index module. The
-    // layout is global (memoized once); the lookup is cheap.
-    let lo = crate::action_index::layout();
+    // lists (company / corporation / train-type order) come from the tree's
+    // action layout (the root game's title) rather than duplicated literals.
     let companies = &lo.company_offsets;
     let corporations = &lo.corporation_offsets;
     let train_types = &lo.train_type_offsets;
@@ -204,11 +204,10 @@ fn price_head_entity_key(action_index: u32, action_type: &str) -> Option<(String
 // Price helpers
 // ----------------------------------------------------------------------------
 
-/// The auction bid ladder step for the price cells, from the title data
-/// (1830: $5). The MCTS runs against the global 1830 layout today; a
-/// per-title MCTS threads its own layout here.
-fn bid_step() -> i64 {
-    crate::title::resolve(crate::action_index::layout().title_name).bid_price_step()
+/// The auction bid ladder step for the price cells, from the title data of
+/// the tree's layout (1830: $5).
+fn bid_step(lo: &crate::action_index::SlotLayout) -> i64 {
+    crate::title::resolve(lo.title_name).bid_price_step()
 }
 
 fn pw_target_children(visits: f32, pw_c: f32, pw_alpha: f32, min_children: usize) -> usize {
@@ -299,6 +298,11 @@ pub struct RustMCTSPlayer {
     /// rest of an expansion late in a game. Games handed to Python get the
     /// whole log back (``full_game``).
     pub root_log: Vec<serde_json::Value>,
+    /// The action layout of the root game's title (every node of a tree is
+    /// one game, so one title): flat indices, dense policy vectors and the
+    /// legacy price-head keys all read it. A title without a layout is
+    /// refused at construction ("not bridge-ready").
+    pub layout: &'static crate::action_index::SlotLayout,
 }
 
 impl RustMCTSPlayer {
@@ -318,7 +322,7 @@ impl RustMCTSPlayer {
         let mut action_types: HashMap<u32, String> = HashMap::new();
         let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for la in &choices {
-            let idx = match crate::action_index::legal_action_to_index(la) {
+            let idx = match crate::action_index::legal_action_to_index_in(self.layout, la) {
                 Some(i) => i,
                 None => continue,
             };
@@ -404,6 +408,7 @@ impl RustMCTSPlayer {
         min_price_children: Option<usize>,
         price_explore_eps: Option<f32>,
     ) -> PyResult<Self> {
+        let layout = game.factored_layout()?;
         let root_log = std::mem::take(&mut game.action_log);
         let mut player = RustMCTSPlayer {
             arena: Vec::new(),
@@ -432,6 +437,7 @@ impl RustMCTSPlayer {
             gumbel: None,
             gumbel_search: None,
             root_log,
+            layout,
         };
         let root = player.build_node(game, None, None)?;
         player.num_players = root.num_players;
@@ -588,7 +594,7 @@ impl RustMCTSPlayer {
     /// policy size). Non-legal slots stay 0.
     fn child_n_at_root(&self) -> Vec<f32> {
         let root = &self.arena[self.root_idx];
-        let mut out = vec![0.0f32; crate::action_index::layout().total as usize];
+        let mut out = vec![0.0f32; self.layout.total as usize];
         for (i, &flat) in root.legal_action_indices.iter().enumerate() {
             out[flat as usize] = root.child_n[i];
         }
@@ -968,7 +974,7 @@ impl RustMCTSPlayer {
             if new_game.is_finished_pub() || self.root_log.len() + new_game.action_log.len() >= self.max_game_length {
                 break;
             }
-            let Some((forced_idx, forced_range, forced_type)) = single_legal_move(&mut new_game) else {
+            let Some((forced_idx, forced_range, forced_type)) = single_legal_move(self.layout, &mut new_game) else {
                 break;
             };
             // Python's forced loop draws a price from the price head for
@@ -1137,7 +1143,7 @@ impl RustMCTSPlayer {
         price_components: Option<PyObject>,
     ) -> PyResult<()> {
         let probs_slice = probs.as_slice()?;
-        let policy_size = crate::action_index::layout().total;
+        let policy_size = self.layout.total;
         if probs_slice.len() != policy_size as usize {
             return Err(PyValueError::new_err(format!(
                 "probs length {} != policy size {}",
@@ -1455,7 +1461,7 @@ impl RustMCTSPlayer {
         let mut game = self.arena[self.root_idx].game.clone_for_search();
         apply_action(&mut game, action, child.sampled_price)?;
         for &recorded in &child.forced_action_chain {
-            let (forced_idx, range, _) = single_legal_move(&mut game)
+            let (forced_idx, range, _) = single_legal_move(self.layout, &mut game)
                 .ok_or_else(|| PyRuntimeError::new_err("forced chain replay: no single legal move"))?;
             if forced_idx != recorded {
                 return Err(PyRuntimeError::new_err("forced chain replay diverged"));
@@ -1551,7 +1557,7 @@ impl RustMCTSPlayer {
     /// c_puct, priors), as ``argmax_action_score`` scores them after the search.
     pub fn pruned_child_n_at_root(&self) -> Vec<f32> {
         let root = &self.arena[self.root_idx];
-        let mut out = vec![0.0f32; crate::action_index::layout().total as usize];
+        let mut out = vec![0.0f32; self.layout.total as usize];
         let num_legal = root.legal_action_indices.len();
         if num_legal == 0 {
             return out;
@@ -1602,7 +1608,7 @@ impl RustMCTSPlayer {
     /// temperature scaling. Mirrors Python ``MCTSNode.children_as_pi``.
     pub fn pi_at_root(&self, temperature: f32) -> Vec<f32> {
         let root = &self.arena[self.root_idx];
-        let mut out = vec![0.0f32; crate::action_index::layout().total as usize];
+        let mut out = vec![0.0f32; self.layout.total as usize];
         let num_legal = root.legal_action_indices.len();
         if num_legal == 0 {
             return out;
@@ -1873,7 +1879,7 @@ impl RustMCTSPlayer {
     /// ``arena_idx``, if the node has price components and the slot maps.
     fn slot_logits(&self, arena_idx: usize, action_index: u32, action_type: &str) -> Option<&[f32]> {
         let pc = self.arena[arena_idx].price_components.as_ref()?;
-        let key = price_head_entity_key(action_index, action_type)?;
+        let key = price_head_entity_key(self.layout, action_index, action_type)?;
         let &slot = pc.slot_index.get(&key)?;
         pc.price_logits.get(slot * NUM_CELLS..(slot + 1) * NUM_CELLS)
     }
@@ -1888,7 +1894,7 @@ impl RustMCTSPlayer {
         action_type: &str,
         price_range: (i64, i64),
     ) -> Option<(PriceCells, [f64; NUM_CELLS])> {
-        let cells = PriceCells::new(action_type, price_range.0, price_range.1, bid_step())?;
+        let cells = PriceCells::new(action_type, price_range.0, price_range.1, bid_step(self.layout))?;
         let probs = cells.cell_probs(self.slot_logits(arena_idx, action_index, action_type));
         Some((cells, probs))
     }
@@ -2154,15 +2160,19 @@ impl RustMCTSPlayer {
 
 /// ``(index, price range, action type)`` of `game`'s one legal move (the
 /// factored choices deduplicated to flat indices, a price range merged over
-/// the choices of that index), or None when there isn't exactly one.
-fn single_legal_move(game: &mut BaseGame) -> Option<(u32, Option<(i64, i64)>, String)> {
+/// the choices of that index), or None when there isn't exactly one. `lo`
+/// is the tree's layout.
+fn single_legal_move(
+    lo: &crate::action_index::SlotLayout,
+    game: &mut BaseGame,
+) -> Option<(u32, Option<(i64, i64)>, String)> {
     let choices = game.get_factored_choices_impl();
     let mut flat_indices: Vec<u32> = Vec::new();
     let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut price_ranges: HashMap<u32, (i64, i64)> = HashMap::new();
     let mut action_types: HashMap<u32, String> = HashMap::new();
     for la in &choices {
-        if let Some(idx) = crate::action_index::legal_action_to_index(la) {
+        if let Some(idx) = crate::action_index::legal_action_to_index_in(lo, la) {
             if seen.insert(idx) {
                 flat_indices.push(idx);
             }
@@ -2317,11 +2327,11 @@ mod tests {
             .find(|&&i| player.arena[root].action_types[&i] == "Bid" && RustMCTSPlayer::is_pw_slot(&player.arena[root], i))
             .expect("an open-price Bid at the auction's start");
         let range = player.arena[root].price_ranges[&slot];
-        let cells = PriceCells::new("Bid", range.0, range.1, bid_step()).unwrap();
+        let cells = PriceCells::new("Bid", range.0, range.1, bid_step(crate::action_index::layout())).unwrap();
         let mode = (0..NUM_CELLS).find(|&c| cells.nonempty(c)).unwrap();
         let mut logits = vec![0.0f32; NUM_CELLS];
         logits[mode] = 5.0;
-        let key = price_head_entity_key(slot, "Bid").unwrap();
+        let key = price_head_entity_key(crate::action_index::layout(), slot, "Bid").unwrap();
         let pc = PriceComponents {
             price_logits: logits,
             slot_index: Arc::new(HashMap::from([(key, 0)])),
@@ -2423,7 +2433,7 @@ mod tests {
     fn fresh_price(player: &RustMCTSPlayer, slot: u32) -> i64 {
         let root = player.root_idx;
         let range = player.arena[root].price_ranges[&slot];
-        let cells = PriceCells::new("Bid", range.0, range.1, bid_step()).unwrap();
+        let cells = PriceCells::new("Bid", range.0, range.1, bid_step(crate::action_index::layout())).unwrap();
         let taken: Vec<usize> = player.arena[root].price_children[&slot]
             .keys()
             .filter_map(|&p| cells.cell_of(p))
