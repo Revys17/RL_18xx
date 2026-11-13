@@ -349,7 +349,9 @@ positions kept: 311,771 / 325,314 (12.5%). Price targets (open ranges): 101,285 
 family (`1830_clean_all`): Pass 987,430; BuyShares 315,395; RunRoutes 284,904; Dividend 284,633; LayTile 272,865;
 SellShares 82,196; BuyTrain.depot 81,424; Bid.company 66,504; PlaceToken 38,703; Par 29,828; BuyTrain.corp
 27,166; BuyCompany 16,181; BuyTrain.exchange 2,734; DiscardTrain 1,594; ExchangeShares 746; BuyTrain.pool 602;
-Bankrupt 169. 856 of the 4,076 games (254,558 positions) end before the game's end (the log stops; the site
+Bankrupt 169. Legal lists: mean 11.5 rows, median 6, p99 77, max 185 over the 2.49M positions (design §2.6 and
+open question 4 above expected tile-lay states of "a few thousand"; 1830's human games never come near). 856 of
+the 4,076 games (254,558 positions) end before the game's end (the log stops; the site
 scored them on `result()`): their value targets are net worth at that point, as in the legacy data.
 
 **Loader.** `PositionBatches` (a `torch` `IterableDataset`; `DataLoader(..., batch_size=None, num_workers=W)`,
