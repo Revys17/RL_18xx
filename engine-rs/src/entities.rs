@@ -122,7 +122,7 @@ impl Train {
 
 /// A corporation token (placed on cities).
 #[pyclass]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Token {
     #[pyo3(get)]
     pub price: i32,

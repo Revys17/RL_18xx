@@ -7,7 +7,7 @@ use crate::tiles::{PathDef, TileColor};
 
 /// A city on a tile (provides revenue, has token slots).
 #[pyclass]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct City {
     #[pyo3(get)]
     pub revenue: i32,
@@ -49,7 +49,7 @@ impl City {
 
 /// A town on a tile (provides revenue, no token slots).
 #[pyclass]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Town {
     #[pyo3(get)]
     pub revenue: i32,
@@ -65,7 +65,7 @@ impl Town {
 
 /// An offboard location (red hex, phase-dependent revenue).
 #[pyclass]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Offboard {
     #[pyo3(get)]
     pub revenue: i32,
@@ -127,7 +127,7 @@ impl Offboard {
 
 /// A tile edge (direction 0-5).
 #[pyclass]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Edge {
     #[pyo3(get)]
     pub num: u8,
@@ -143,7 +143,7 @@ impl Edge {
 
 /// A tile upgrade option.
 #[pyclass]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Upgrade {
     #[pyo3(get)]
     pub cost: i32,
@@ -161,7 +161,7 @@ impl Upgrade {
 
 /// A tile placed on the map.
 #[pyclass]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Tile {
     #[pyo3(get)]
     pub id: String,
@@ -241,7 +241,7 @@ impl Tile {
 
 /// A hex on the game map.
 #[pyclass]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Hex {
     #[pyo3(get)]
     pub id: String,

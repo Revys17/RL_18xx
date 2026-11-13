@@ -106,7 +106,7 @@ fn endpoints_match_lenient(a: &PathEndpoint, b: &PathEndpoint) -> bool {
 // Tile definition structs
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PathDef {
     pub a: PathEndpoint,
     pub b: PathEndpoint,

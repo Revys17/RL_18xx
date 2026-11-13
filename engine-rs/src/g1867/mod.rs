@@ -17,6 +17,7 @@
 //! Everything here is 1867-only: shared code reaches it through
 //! title-gated calls, so 1830 and 1822 never take these paths.
 
+pub mod fastwalk;
 pub mod fuzz;
 pub mod graph;
 pub mod legal;

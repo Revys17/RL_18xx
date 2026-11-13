@@ -299,7 +299,31 @@ fn path_walk_reaches_node(ctx: &Ctx, p: PathRef, skip: Option<u8>, jskip: Option
     false
 }
 
+/// The flat neighbour table: `table[hex][edge]` = the neighbour across the
+/// edge (`u32::MAX`: none) — `g1867_neighbors()` as an array (the fast
+/// walk's, `fastwalk.rs`).
+pub(crate) type NeighborTable = Vec<[u32; 6]>;
+
 impl BaseGame {
+    /// `g1867_neighbors()` as a flat table (static title data, built once).
+    pub(crate) fn g1867_neighbor_table(&self) -> &'static NeighborTable {
+        static CACHE: std::sync::OnceLock<NeighborTable> = std::sync::OnceLock::new();
+        CACHE.get_or_init(|| {
+            let nbs = self.g1867_neighbors();
+            (0..self.hexes.len())
+                .map(|h| {
+                    let mut row = [u32::MAX; 6];
+                    if let Some(m) = nbs.get(&h) {
+                        for (&e, &n) in m {
+                            row[e as usize] = n as u32;
+                        }
+                    }
+                    row
+                })
+                .collect()
+        })
+    }
+
     /// Negation of a hex's membership in G1867 `unconnected_hexes`: some
     /// city path's Ruby `path.walk` reaches a path touching a node.
     pub(crate) fn g1867_city_track_reaches_node(&self, hi: usize) -> bool {

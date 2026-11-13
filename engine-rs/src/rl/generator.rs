@@ -118,10 +118,12 @@ impl BaseGame {
     pub fn rl_indexed_moves(&mut self, policy: CrossPlayerPolicy) -> Result<Vec<IndexedMove>, GameError> {
         self.rl_generator_layout()?;
         let moves = self.rl_generator_moves(policy)?;
+        let t = crate::g1867::legal::stats::start();
         let mut out = Vec::with_capacity(moves.len());
         for mv in moves {
             out.push(IndexedMove { index: self.rl_index_of_move(&mv)?, mv });
         }
+        crate::g1867::legal::stats::stop(t, || "rl:index".into());
         out.sort_by_key(|x| x.index);
         if let Some(w) = out.windows(2).find(|w| w[0].index == w[1].index) {
             return Err(GameError::new(format!(
@@ -205,11 +207,13 @@ impl BaseGame {
     /// "step": <step kind>}]`, ascending by index. A ranged move's dict
     /// holds `lo`; any price on the range's step is legal.
     #[pyo3(signature = (policy=None))]
-    fn rl_legal_moves_json(&mut self, policy: Option<&str>) -> PyResult<String> {
+    pub(crate) fn rl_legal_moves_json(&mut self, policy: Option<&str>) -> PyResult<String> {
         let p = self::policy(self, policy)?;
         let lo = self.rl_generator_layout()?;
         let mut out: Vec<Value> = Vec::new();
-        for x in self.rl_indexed_moves(p)? {
+        let moves = self.rl_indexed_moves(p)?;
+        let t = crate::g1867::legal::stats::start();
+        for x in moves {
             out.push(json!({
                 "index": x.index,
                 "block": lo.block_of(x.index).map(|b| b.spec.name.as_str()),
@@ -218,7 +222,9 @@ impl BaseGame {
                 "step": format!("{:?}", x.mv.step),
             }));
         }
-        Ok(serde_json::to_string(&out).unwrap_or_default())
+        let json = serde_json::to_string(&out).unwrap_or_default();
+        crate::g1867::legal::stats::stop(t, || "rl:wire_json".into());
+        Ok(json)
     }
 
     /// The move of a legal index as an 18xx.games action dict (JSON), with

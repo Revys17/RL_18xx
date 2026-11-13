@@ -149,6 +149,92 @@ impl BaseGame {
         (parts[0].to_string(), ci)
     }
 
+    /// The legal moves (`g1867_legal_moves_json`'s list) as one string per
+    /// move — step, action, price range, certificate ids — for exact
+    /// comparisons; `reference=True` runs the generator's reference paths
+    /// (the code before the 2026-11-13 speed-ups: the differential test's
+    /// oracle, `scripts/g1867_generator_diff.py`).
+    #[pyo3(signature = (policy=None, reference=false))]
+    pub(crate) fn g1867_moves_debug(&mut self, policy: Option<&str>, reference: bool) -> PyResult<Vec<String>> {
+        let policy = policy_of(self, policy)?;
+        let moves = super::legal::reference::with(reference, || self.g1867_legal_moves_with(policy));
+        Ok(BaseGame::g1867_moves_strings(&moves))
+    }
+
+    /// `rl_legal_moves_json` through the generator's reference paths (or
+    /// not): indices, blocks, wire dicts and ranges of the oracle's list.
+    #[pyo3(signature = (policy=None, reference=false))]
+    pub(crate) fn rl_legal_moves_json_with(&mut self, policy: Option<&str>, reference: bool) -> PyResult<String> {
+        super::legal::reference::with(reference, || self.rl_legal_moves_json(policy))
+    }
+
+    /// The differential check of one state under `policy`: the generator's
+    /// move list against the reference generator's, (1) move for move
+    /// ([`BaseGame::g1867_moves_strings`], in list order) and (2) at the RL
+    /// index level (each move's `1867-v1` index, wire dict and price range,
+    /// ascending by index). Returns `(moves compared, None)` when both
+    /// agree, else a description of the first difference.
+    #[pyo3(signature = (policy=None))]
+    pub(crate) fn g1867_reference_diff(&mut self, policy: Option<&str>) -> PyResult<(usize, Option<String>)> {
+        let p = policy_of(self, policy)?;
+        let fast = self.g1867_legal_moves_with(p);
+        let slow = self.g1867_legal_moves_reference(p);
+        let (a, b) = (BaseGame::g1867_moves_strings(&fast), BaseGame::g1867_moves_strings(&slow));
+        if a != b {
+            let only_new: Vec<&String> = a.iter().filter(|x| !b.contains(x)).collect();
+            let only_ref: Vec<&String> = b.iter().filter(|x| !a.contains(x)).collect();
+            return Ok((
+                a.len(),
+                Some(format!(
+                    "moves differ ({} new vs {} reference); only new: {only_new:?}; only reference: {only_ref:?}; \
+                     same set, other order: {}",
+                    a.len(),
+                    b.len(),
+                    only_new.is_empty() && only_ref.is_empty()
+                )),
+            ));
+        }
+        let rows = |g: &BaseGame, ms: &[super::legal::Move]| -> PyResult<Vec<(u32, String)>> {
+            let mut v = Vec::with_capacity(ms.len());
+            for m in ms {
+                let range = m.price.map(|r| (r.lo, r.hi, r.step));
+                v.push((g.rl_index_of_move(m)?, format!("{}|{range:?}", g.rl_move_wire(m)?)));
+            }
+            v.sort();
+            Ok(v)
+        };
+        let (ia, ib) = (rows(self, &fast)?, rows(self, &slow)?);
+        if ia != ib {
+            return Ok((a.len(), Some(format!("index rows differ: new {ia:?} reference {ib:?}"))));
+        }
+        if let Some(w) = ia.windows(2).find(|w| w[0].0 == w[1].0) {
+            return Ok((a.len(), Some(format!("index {} names two moves: {} / {}", w[0].0, w[0].1, w[1].1))));
+        }
+        Ok((a.len(), None))
+    }
+
+    /// Run every later 1867 generator call on this thread through the
+    /// reference paths (True) or the fast ones (False, the default) — for
+    /// timing whole pipelines before / after (`scripts/bench_generic_server.py
+    /// worker --title 1867 --reference`). Returns the previous setting.
+    #[staticmethod]
+    pub(crate) fn g1867_set_reference_generator(on: bool) -> bool {
+        super::legal::reference::set(on)
+    }
+
+    /// Turn the generator's per-section profile on or off (diagnostics:
+    /// `scripts/g1867_generator_profile.py`).
+    #[staticmethod]
+    pub(crate) fn g1867_profile(on: bool) {
+        super::legal::stats::set_profiling(on);
+    }
+
+    /// The profile since the last call: `[(section, count, ns)]`; cleared.
+    #[staticmethod]
+    pub(crate) fn g1867_profile_take() -> Vec<(String, u64, u64)> {
+        super::legal::stats::take()
+    }
+
     /// The RL-readiness table: `{step: {action type: "generated" |
     /// "replay-only: <reason>"}}` for every 1867 step kind × action type.
     #[staticmethod]
