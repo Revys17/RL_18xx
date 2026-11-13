@@ -18,6 +18,29 @@ more titles, can be trained, and in what order.
 > - Moving 1830 onto the generic path: yes, as follow-up work once the bridge exists.
 > - First 1867 run: base rules, 3-6 players (no 2-player variant, no `grid_market`).
 > - Model sharing and GPU budget: decided later, with the bridge.
+>
+> **User decisions (2026-11-13): the bridge starts, scoped to what 1830 taught us.**
+> - **Off hold.** 1830 ends at gen6 (bots on gen6 u2400); 1867 is next.
+> - **Policy-gradient path only for the first runs**: human import -> supervised pretraining ->
+>   policy-only policy gradient with a league -> policy-only evals and an out-of-family panel.
+>   On 1830 the strongest bots came from that path (gen4 -> gen6); search, search learning and the
+>   offline value trainer added little. So MCTS / lockstep / search-learning / value-train
+>   wiring for new titles, and the E0 sharing probe, are out of the first pass.
+> - **Title-generic layer, not a 1867-only one**: four 1822-family titles already have Ruby-verified
+>   engines and legal-move generators, so they are the next users.
+> - **Since this design was written, every title's rules side gained its own legal-move generator**
+>   (1867: `g1867/legal.rs`, 2026-10-18; the 1822 family likewise). T1-T6 and most of T7a are done.
+>   The bridge maps a generator's moves to indices and descriptors; a second, step-driven
+>   enumerator (S5) is only needed where a title has no generator. 1830 keeps its frozen layout,
+>   `factored.rs` and legacy model/encoder.
+> - **`MAX_SEATS` stays 6** (3-6 players per title), so S3 is dropped.
+> - **Check the generic model on 1830 first** (§4.4, cheap supervised run vs SL ckpt 10) before
+>   trusting 1867 results; it needs the GPU, which is on another project for now, so build the
+>   CPU-testable parts first.
+> - **Carry over the 1830 recipe**: mixed player counts with per-count PFSP (`CountLeague`), the
+>   placement reward, price heads (never fixed price menus), forced positions kept in supervised
+>   data, start positions from human post-auction states plus random and mid-game cuts, and an
+>   out-of-family panel to call a plateau.
 
 ## 0. Summary
 
