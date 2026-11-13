@@ -19,8 +19,9 @@ descriptor rows of the position's **legal** actions, and returns
 Milestone C1 (2026-11-13, below: "Supervised data and pretraining", "The 1830 GPU check") gives it a supervised
 dataset, a two-stage training loop, a comparison with legacy checkpoints and a policy-only player for
 `eval_policy_only.py`. Milestone C2 (below: "Policy gradient for the generic model") trains it by policy-only
-policy gradient against a league, on generic inference servers. The frozen 1830 model (`model_transformer.py`)
-is untouched.
+policy gradient against a league, on generic inference servers. Milestone A3 (the last section: "1867: data,
+starts, caps and the CPU smoke") gives 1867 its human importer, a supervised dataset, start files, legal prices on
+every sampling path and an end-to-end CPU smoke. The frozen 1830 model (`model_transformer.py`) is untouched.
 
 ## API
 
@@ -335,8 +336,9 @@ counted by action type (`unmatched`, `ambiguous`, `not_legal`) and the action st
 the legacy converter's own matching (`pretraining._action_dict_to_factored_index` on the replayed
 `RustGameAdapter`), so labels, legal lists and price targets equal the legacy converter's index for index
 (`test_matches_legacy_converter`). Forced positions (one legal index) are kept. A title without an importer
-raises `UnsupportedTitle` (`generic_data.register_importer`: 1867's comes with milestone A2's
-`match_human_action`, design §5.2).
+raises `UnsupportedTitle` (`generic_data.register_importer`; 1867's came with milestone A3, below: "1867: data,
+starts, caps and the CPU smoke"; there is no engine-side `match_human_action` -- the matching is
+`generic_import_1867.matching_indexed` over `rl_legal_moves_json`).
 
 **Conversions (2026-11-13, current engine, 7 processes, ~70-110 s each):**
 
@@ -461,7 +463,7 @@ worker through the shuffle buffer, 6 workers).
    legacy data. A `finished` flag is in each record if the value loss should skip them.
 3. **Mixed titles** (E0 / E1, 1830 + 1867): `PositionBatches` reads one dataset; a mixed run needs a loader over
    several (each game already carries its title, and batches can mix titles).
-4. **1867 import**: waits for A2's layout and `match_human_action` (`generic_data.register_importer`).
+4. **1867 import**: done (A3, `generic_import_1867`; below).
 5. **No resume** of a pretraining run (the legacy one has none either).
 
 ## Policy gradient for the generic model (milestone C2, 2026-11-13)
@@ -574,8 +576,10 @@ start files with a `title` (and `seed`) field; random openings play the opening 
 legal-move generator (`g1867_legal_moves_json` / `g1822_legal_moves_json`: uniform over moves, prices uniform
 multiples of the step in `[lo, 2 lo]` -- intentionally un-human, as 1830's) or its layout; the 1822 family opens
 with a Stock Round, so its random opening is the empty game. `TitlePlay` (legal rows, decisions, fixed prices,
-applying a row) reads the title's layout (`mg.legal_actions`, `apply_action_index`, `price_range_for_index`);
-`register_title_play` is the hook if 1867's layout serves its legal rows another way (A2).
+applying a row) reads the title's layout (`mg.legal_actions`; 1830 through `apply_action_index` /
+`price_range_for_index`, a generator layout -- 1867 -- through `rl_apply_index` / `rl_price_range` since A3: before
+that 1867 could not be played, `apply_action_index` refuses a generator layout); `register_title_play` is the hook
+for a title that needs something else.
 
 The builder replays each usable human game (1830: cleaned exports as the generic importer replays them, the raw
 exports consulted for optional rules as the legacy builders do; 1867 / the 1822 family: raw exports through
@@ -688,22 +692,26 @@ and the outside panel (SL ckpt 10 4p 2v2 / 1v3; gen6 u2400 at 2-6 players). Expe
 the mix) -> ~55 s of generation per update, plus the update itself (the legacy's, + ~10 s of collate); gen6 ran
 ~60 s per update, so expect ~80-90 s: ~1,000 updates a day.
 
-### 1867 outline (after A2 / A3)
+### 1867 outline (status after A3)
 
-1. **Layout and import** (package A2): `rl_layout_info("1867")`, `factored_legal_indices` / `apply_action_index` /
-   `price_range_for_index` serving 1867 (else a `register_title_play("1867", ...)` adapter over its legal path) and
-   `generic_data.register_importer("1867", ...)` on `match_human_action`. Nothing else in `generic_pg` /
-   `generic_inference` is title-specific.
-2. **Start files**: `scripts/build_generic_start_positions.py --title 1867 --source human_games/1867 --source
-   human_games/scrape_2026_10/1867 --out-dir human_games --jobs 8` -> `start_positions_1867_{3..6}p.jsonl` and
-   `midgame_positions_1867_{3..6}p.jsonl` (the `TitleSpec` templates point there; works today, see above).
-3. **Supervised**: `convert-generic --title 1867`, `pretrain-generic` (default preset), the value refit; no legacy
-   model to compare with, so judge by per-family top-1 against chance and the win CE against equal odds.
+1. **Layout and import**: done. A2's layout `1867-v1` and index API (`rl_legal_moves_json`, `rl_apply_index`,
+   `rl_price_range`); `TitlePlay` plays a generator layout through them (A3: before, `apply_action_index` /
+   `price_range_for_index` refused 1867, so no 1867 game could be played); the importer
+   `generic_data.register_importer("1867", ...)` = `generic_import_1867.Importer1867` (A3, below). Nothing else in
+   `generic_pg` / `generic_inference` is title-specific.
+2. **Start files**: built (A3, below) with `scripts/build_generic_start_positions.py --title 1867 --source
+   human_games/1867 --source human_games/scrape_2026_10/1867 --out-dir human_games --jobs 8` ->
+   `start_positions_1867_{3..6}p.jsonl` / `midgame_positions_1867_{3..6}p.jsonl` (the `TitleSpec` templates point
+   there).
+3. **Supervised**: `convert-generic --title 1867 --data-dir human_games/1867 human_games/scrape_2026_10/1867`
+   (965 games, 571,713 positions), `pretrain-generic` (default preset on the GPU), the value refit; no legacy model
+   to compare with, so judge by per-family top-1 against chance and the win CE against equal odds (A3's CPU smoke:
+   below).
 4. **Policy gradient**: `policy-gradient-generic --title 1867 --policy <1867 final.pth>` with the 1830 recipe at
    3-6 players (`--player-mix 3:25,4:40,5:25,6:10`, no 2-player game), `--auction-fraction 0.2 --midgame-fraction
-   0.3 --random-start-fraction 0.2` (design §5.6: ~80% from human SR1 starts; 1867's auction cannot lock, so no
-   `auction_unlock` and the stall cap is only a backstop), decision caps measured from 1867 games first (longer than
-   1830's: mergers, loans), placement reward.
+   0.3 --random-start-fraction 0.2` (design §5.6: ~80% from human SR1 starts), placement reward, the decision caps
+   and auction-stall setting proposed below ("Decision caps and auction stalls"). 1867's auction cannot lock, so no
+   `auction_unlock` (an 1830 variant, ignored for 1867).
 5. **Evals**: `scripts/eval_generic.py --title 1867` (generic vs generic: the SL start, older snapshots); an
    out-of-family panel has to be built from 1867 checkpoints of other runs (no legacy 1867 bots exist).
 
@@ -719,8 +727,8 @@ the mix) -> ~55 s of generation per update, plus the update itself (the legacy's
    `fusion_layers=1` model would be faster but needs its own supervised run.
 4. **`--server-pipeline` on the GPU**: faster on the CPU transport benchmark (52k vs 36k/s), but the legacy
    collector thread was slower on the GPU (GIL); measure with the profile on the first GPU run.
-5. **1867 decision caps and stall policy**: unknown until 1867 games are played by a policy (random-walk games are
-   no guide).
+5. **1867 decision caps and stall policy**: measured and proposed in A3 (below, "Decision caps and auction
+   stalls"); the user decides.
 
 ### Notes on the design documents (found during C2)
 
@@ -730,3 +738,315 @@ the mix) -> ~55 s of generation per update, plus the update itself (the legacy's
 * §5.3 lists the acting seat among the native getters the loop needs; the generic workers read it from the
   encoder's `meta[:, 5]` (one native call encodes every pending position and routes it).
 * `docs/rl_bridge_work_packages.md` says to start each package from branch `gen6-mixed-count`; master has it all.
+
+## 1867: data, starts, caps and the CPU smoke (milestone A3, 2026-11-13)
+
+Code: `generic_import_1867.py` (the importer and the matching, shared with `scripts/g1867_completeness.py`),
+`generic_data.py` (importer hooks), `generic_play.py` (`TitlePlay` on a generator layout), the price-grid fix in
+`model_generic.LegalActions.price_cells` and its callers. Tests: `tests/agent/alphazero/test_generic_1867.py` (21,
+~75 s on the CPU).
+
+### The importer (`generic_import_1867.Importer1867`)
+
+* **Input**: raw 18xx.games exports (`human_games/1867`, `human_games/scrape_2026_10/1867`), replayed as the corpus
+  audits replay them (`replay_export`: Ruby's filtered actions, each recorded auto-action processed right after
+  its parent, seats renumbered 1..N as "Player k" -- no names kept -- and the engine seed of `settings.seed` / the
+  game id). The record's log is the engine's own (`raw_actions`, one entry per processed action).
+* **Scope** (A2's completeness scope): finished or archived games, 3-6 players, base rules. Dropped and counted:
+  `players_<n>` (2-player games), `grid_market`, `optional_rules` (any other rule), `status_<s>` (abandoned
+  `active` / `new` games), `no_actions`.
+* **Decisions**: every logged action except recorded auto-actions (programmed passes, the BuyCompanyPreloan
+  auto-pass: `not_decision.auto`) and actions after the game's end.
+* **Labels**: the human action is matched against the **rules'** indexed moves (`rl_legal_moves_json("rules")`)
+  with `matching_indexed` -- type, entity and the outcome-relevant parameters, ranged prices by range *and step*,
+  `run_routes` by type (the RunRoutes index is the router's optimum; the record replays the human's own routes).
+  Exactly one hit is the label; none is `unmatched` (or `replay_only:<class>` for the documented replay-only
+  classes: `pre_9655_merger_order`, `trainless_out_of_order`, `dealing_out_of_turn`), several `ambiguous`. The
+  legal list stored with the position is the **title's cross-player policy**'s (`model_generic.legal_actions`, what
+  self-play and the evals are offered), so a human move the policy excludes is skipped as `policy`.
+* **Prices**: the chosen row's human price with its `(lo, hi, step)` (step units: `docs/rl_descriptors.md` §6),
+  checked on the grid.
+* **Outcomes**: `result()` in seating order -> win share (ties split) and placement points
+  (`policy_gradient.default_placement_points` of the player count), as 1830's records.
+* **Replay rejections** (old records the current rules refuse part-way): the game is kept up to the rejected
+  action (`finished` False, `stopped` = the action and the engine's message); its value targets are net worth at
+  that point, as 1830's unfinished games.
+
+### The dataset (both corpora, one conversion)
+
+```bash
+CUDA_VISIBLE_DEVICES= taskset -c 24-31,56-63 nice -19 uv run python main.py convert-generic --title 1867 \
+    --data-dir human_games/1867 human_games/scrape_2026_10/1867 --output <dir> --workers 8      # ~12 min
+```
+
+1,394 files -> **965 games, 571,713 positions** (train 915 games / 540,775 positions, validation 50 / 30,938;
+`in_validation_split(game id, 0.05)`; 40 MB): `human_games/1867` 664 games / 389,776 positions, the 2026-10 scrape
+301 / 181,937. Dropped: 165 `grid_market`, 103 `players_2`, 79 `status_active`, 4 `status_new`, 78 `no_actions`
+(in A2's scope but without a game action: 50 files with none, 28 with only `end_game` / messages / programs). 840
+games end by the rules, 101 end early on the site (a manual end: `result()` as it stands), 24 old records stop at
+a rejected action. `meta.json` holds the counts by source and player count; `games.jsonl` each game's source and
+skipped labels.
+
+| players | games | positions (train / validation) | human decisions per game (median, p99, max) |
+|---|---|---|---|
+| 3 | 242 | 123,822 / 8,659 | 488, 624, 656 |
+| 4 | 575 | 333,572 / 14,245 | 503, 628, 707 |
+| 5 | 129 | 71,281 / 7,269 | 512, 622, 658 |
+| 6 | 19 | 12,100 / 765 | 546, 627, 631 |
+
+("Decisions" as the PG workers count them: several legal rows, or one with an open price; positions include the
+forced ones, 20.1%.) Legal lists: mean 19.4 rows, median 3, p90 52, p99 206, max 336 (LayTile positions mean 72,
+max 336; 1830's corpus: mean 11.5, max 185). Price targets (open ranges): 45,051. Matched positions by family:
+Pass 231,767; LayTile 86,844; RunRoutes 72,535; Dividend 36,248; BuyShares 35,808; BuyTrain.depot 27,005;
+PlaceToken 19,306; Bid.corporation 18,148; Bid.company 16,871; Merge 7,915; BuyTrain.corp 6,792; BuyCompany
+4,074; SellShares 2,358; Convert 1,860; BuyTrain.exchange 1,456; Par 1,055; RedeemShares 724; RemoveToken 379;
+BuyTrain.pool 273; Choose 218; DiscardTrain 77.
+
+Skipped labels (never guessed): `policy` 38 (merge 30, buy_train 5, buy_company 3), `replay_only` 865
+(pre-#9655 merger order 686: buy_shares 428 + pass 258; trainless out of order 170: pass 107 + choose 63;
+dealing out of turn 9), `unmatched` 17 (place_token 11, lay_tile 3, buy_shares 3), `ambiguous` 0, `not_legal` 0;
+30,098 recorded auto-actions applied as non-decisions.
+
+**Against A2's index completeness** (`docs/rl_descriptors.md` §8), decision for decision: A2's exactly-one-index
+decisions 181,944 (scrape) + 389,807 (old) = 571,751, minus the 7 + 31 the title's policy excludes = **571,713 =
+the dataset's positions**; replay-only 3 + 862 = 865; A2's 40 old-corpus misses = these 17 + the 23 actions the
+replay stops at (not decisions here: the log ends before them). The test
+`test_counts_equal_index_completeness` pins the equality per game on the Ruby fixtures.
+
+### Start files
+
+```bash
+CUDA_VISIBLE_DEVICES= taskset -c 24-31,56-63 nice -19 uv run python scripts/build_generic_start_positions.py \
+    --title 1867 --source human_games/1867 --source human_games/scrape_2026_10/1867 --out-dir human_games --jobs 8
+```
+
+(~6 min.) The builder's scope is wider than the importer's: abandoned (`active`) games give starts too, and since
+A3 a game the replay rejects part-way gives the Stock Rounds before the rejection (`generic_play._load_titled`
+keeps the prefix). Excluded: 172 optional rules, 106 player count, 80 without actions, 46 without a Stock Round, 4
+`new`.
+
+| players | SR1 starts | mid-game games | mid-game cuts SR2 / SR3 / SR4 / SR5 / SR6 |
+|---|---|---|---|
+| 3 | 246 | 237 | 237 / 231 / 223 / 219 / 208 |
+| 4 | 590 | 582 | 582 / 579 / 568 / 544 / 519 |
+| 5 | 128 | 125 | 125 / 122 / 119 / 116 / 114 |
+| 6 | 22 | 20 | 20 / 20 / 20 / 19 / 19 |
+
+Every line was replayed again: each SR1 start and each cut ends at an unfinished Stock Round; starts of every
+kind (human, mid-game, auction, random) sample and replay through `generic_play.replayed_start`. 6 players is
+thin (22 games): the 1830 recipe's random openings (`--random-start-fraction`) and auction starts carry most 6p
+games.
+
+### Ruby HEAD check of A2's 17 unexplained old-corpus misses
+
+Ruby HEAD 849c522 in docker (`scripts/g1867_ruby_probe.rb`): each game processed to the file action before the
+miss, then the recorded action processed **as a live player** (`@loading` off, so Ruby's player-time checks run).
+None is a generator bug:
+
+* **11 are illegal at Ruby HEAD in the same state** (same round, step and entity): 9 home tokens a minor or major
+  may no longer place there -- Toronto F16 (28418@641, 39631@631, 42964@581, 48185@477, 67332@710), Montreal L12
+  (21494@776, 29292@510, 81411@536) and N12 (31586@669): "Cannot place token on <hex> as the hex is not available"
+  (Ruby's `home_token_locations` changed since these games); 2 tile lays on M11 with rotations Ruby HEAD refuses
+  (24437@899 "M11 is not legally rotated for 8", 45921@503 "9 is not legally rotated for 26").
+* **6 lie beyond Ruby HEAD's replay horizon**: Ruby's replay of the same game stops earlier -- on the pre-#9655
+  merger order in 32894, 42154, 41062 and 72923 (place_token 2, buy_shares 1, lay_tile 1), or on the refused home
+  token above in 39631 (its buy_shares @693 / @702 come after 39631@631).
+
+Our record replay accepts these old records (the SR home-token handler only checks for a free slot; tile rotations
+are a player-time check), so the games replay on; the generator, like a live player at Ruby HEAD, does not offer
+the moves.
+
+### Legal prices: the layout's grid on every path
+
+A2 put 1867's legal prices on the move's step grid and its cells in step units (`price_grid`), but four places
+rebuilt cells without the grid -- in price space, where a $5-step range's bins hold every integer, so a sampled
+price could be off the grid (`rl_apply_index` refuses it: "price 27 is outside the move's range [25, 315] step 5")
+and the trainer's cell probabilities differed from the server's:
+
+| where | before | now |
+|---|---|---|
+| `generic_policy.sample_price` (`eval_policy_only.py` generic players) | `price_range_for_index` (raises on 1867), cells without the grid | `legal.price_cells(k)`; no-price moves through `TitlePlay.fixed_price` |
+| `generic_pg.play_generic_pg_games` (PG worker) | `price_cells_for(kind, lo, hi, step)` | `legal.price_cells(k)` |
+| `scripts/eval_generic.py` | same | same fix |
+| `generic_pg.collate_rows` (trainer) | `LegalActions` without the grid, so 1867 cell masks and log-probabilities in price space | `PGRow.price_grid` carried from the worker |
+| `generic_data.collate` (supervised) | same: 1867 price targets in price-space cells | items carry `price_grid` (`ActionDescriptors.price_grid`) |
+
+`LegalActions.price_cells(k)` (`model_generic`) is now the one place a legal row's cells are built for sampling
+or scoring. 1830 is unchanged (`price_grid` False: the legacy cells, same draws; tested). Also fixed: `TitlePlay`
+applied and priced moves through `apply_action_index` / `price_range_for_index`, which refuse a generator layout,
+so no 1867 game could be played by the generic pipeline (PG workers, `eval_generic.py`) before A3; a generator
+layout now goes through `rl_apply_index` / `rl_price_range`. Tests (`test_generic_1867.py`): prices sampled from a
+random small model on up to 30 positions per priced block (all four, random walks at 3-6 players), through the PG worker's path
+(server cell + `price_cells(k).sample_price`) and the policy player's (`sample_price`, eps 0.2), every one on the
+grid inside its range and applied by `rl_apply_index`; without the grid the same ranges' cells hold off-grid
+prices; the trainer recomputes the sampling log-probabilities of 1867 PG rows with price cells exactly
+(`log_ratio_abs_mean` < 1e-4).
+
+### CPU smoke (2026-11-13, `CUDA_VISIBLE_DEVICES=`, cores 24-31,56-63 shared with other jobs at load ~30)
+
+**Supervised.** `pretrain-generic --model-preset small` (151,742 parameters), batch 64, 3 loader workers, shuffle
+buffer 8,192, all 915 training games, validation on the first 20 validation games (12,285 positions; chance top-1
+0.411):
+
+| run | steps (positions) | stage-1 time | train loss (first -> last 50) | val top-1 / top-5 | val policy CE | val price NLL | val win CE (equal odds 1.388) / winner |
+|---|---|---|---|---|---|---|---|
+| 600 steps | 600 (38k) | 2.5 min | 1.668 -> 1.301 | 0.691 / 0.917 | 1.008 | 1.458 | 0.932 / 0.587 |
+| 4k steps | 4,000 (256k, ~0.5 epoch) | 15 min (cores shared) | 1.668 -> 1.154 | 0.729 / 0.928 | 0.892 | 1.421 | 0.807 / 0.614 |
+
+Validation top-1 by player count (4k steps; chance in brackets): 3p 0.711 (0.380), 4p 0.744 (0.398), 5p 0.736
+(0.453), 6p 0.710 (0.434).
+
+Per family on validation (top-1 vs chance, mean 1 / legal count):
+
+| family | n | chance | 600 steps | 4k steps |
+|---|---|---|---|---|
+| Pass | 5,122 | 0.459 | 0.905 | 0.942 |
+| LayTile | 1,824 | 0.050 | 0.070 | 0.225 |
+| RunRoutes | 1,552 | 0.927 | 1.000 | 1.000 |
+| Dividend | 798 | 0.326 | 0.885 | 0.885 |
+| BuyShares | 680 | 0.173 | 0.591 | 0.616 |
+| BuyTrain.depot | 552 | 0.451 | 0.993 | 0.989 |
+| Bid.company | 412 | 0.500 | 0.869 | 0.643 |
+| PlaceToken | 405 | 0.153 | 0.131 | 0.200 |
+| Bid.corporation | 366 | 0.289 | 0.191 | 0.270 |
+| Merge | 177 | 0.285 | 0.130 | 0.153 |
+| BuyTrain.corp | 116 | 0.346 | 0 | 0 |
+| BuyCompany | 83 | 0.384 | 0 | 0 |
+| SellShares | 54 | 0.134 | 0 | 0 |
+| BuyTrain.exchange | 45 | 0.184 | 0 | 0.289 |
+| Convert | 29 | 0.452 | 0 | 0.172 |
+| Par | 23 | 0.033 | 0 | 0 |
+| RedeemShares | 21 | 0.452 | 0 | 0 |
+| RemoveToken / Choose / BuyTrain.pool / DiscardTrain | 12 / 7 / 5 / 2 | | | |
+
+The supervised path works on 1867: losses fall, the value head learns (win CE 1.388 -> 0.81, the refit 0.844),
+and every family with at least 400 validation positions (eight of them) plus BuyTrain.exchange is above chance
+after 4k steps. A 150k-parameter model after half an epoch does not yet beat chance on Bid.corporation (0.270 vs
+0.289), Merge, Convert and the rare families: there it picks the state's common alternative (mostly Pass; Par's
+chance is 0.033 with ~43 legal pars). That is the GPU run's job (default preset, 10 epochs); judge it by this
+table.
+
+Stage 2 (value refit, 400 steps): val win CE 0.942 (600 steps) / 0.844 (4k), winner accuracy 0.586 / 0.605.
+
+**Policy-only games** (`scripts/eval_generic.py --title 1867 --auction-start --max-decisions 8000
+--auction-stall-decisions 0`, the model against itself, every game from the opening auction, in-process CPU
+inference). Every game finished (none hit a cap), and self-play scores sit at the fair share within noise:
+
+| model, T | players (seats) | games | wall | decisions per game: median / p90 / p99 / max | auction decisions: median / max | score (fair) |
+|---|---|---|---|---|---|---|
+| 600 steps, 0.5 | 3 (1v2) | 24 | 51 s | 570 / 636 / 665 / 670 | - | 0.375 +- 0.101 (0.33) |
+| 600 steps, 0.5 | 4 (2v2) | 24 | 63 s | 566 / 608 / 654 / 661 | - | 0.458 +- 0.104 (0.50) |
+| 600 steps, 0.5 | 5 (2v3) | 30 | 102 s | 562 / 613 / 699 / 723 | - | 0.300 +- 0.085 (0.40) |
+| 600 steps, 0.5 | 6 (3v3) | 40 | 82 s | 570 / 665 / 710 / 724 | - | 0.550 +- 0.080 (0.50) |
+| 600 steps, 1.0 | 3 | 24 | 201 s | 600 / 707 / 775 / 783 | 34 / 49 | 0.250 +- 0.090 |
+| 600 steps, 1.0 | 4 | 24 | 199 s | 630 / 731 / 783 / 794 | 38 / 52 | 0.542 +- 0.104 |
+| 600 steps, 1.0 | 5 | 30 | 335 s | 698 / 794 / 873 / 892 | 46 / 58 | 0.300 +- 0.085 |
+| 600 steps, 1.0 | 6 | 40 | 819 s | 746 / 866 / 920 / 925 | 57 / 69 | 0.500 +- 0.080 |
+| 4k steps, 0.5 | 3 (1v2) | 48 | 348 s | 615 / 683 / 744 / 780 | 27 / 37 | 0.354 +- 0.070 (0.33) |
+| 4k steps, 0.5 | 4 (2v2) | 48 | 322 s | 568 / 696 / 745 / 751 | 30 / 40 | 0.479 +- 0.073 (0.50) |
+| 4k steps, 0.5 | 5 (2v3) | 50 | 396 s | 632 / 709 / 760 / 765 | 37 / 43 | 0.340 +- 0.068 (0.40) |
+| 4k steps, 0.5 | 6 (3v3) | 60 | 337 s | 618 / 678 / 696 / 698 | 44 / 50 | 0.533 +- 0.065 (0.50) |
+(Wall times are on cores shared with other jobs; the T 1.0 batch ran beside a pretraining and the PG smoke.)
+
+**Policy gradient** (`main.py policy-gradient-generic --title 1867`): the 4k-step model as policy, critic and
+league member, the 600-step model as the second member (`min_share` 0.2 at 4 players); mix 3:1,4:2,5:1,6:1 (one
+opponent slot per count), placement reward, T 0.5 / 0.5, KL 0.02 -> target 0.08, anchor and own snapshots every 2
+updates (2 kept), starts auction 0.3 / mid-game 0.3 / random 0.2 / else human SR1 (the files above),
+`--auction-stall-decisions 0`, `--max-decisions 4000` (to measure, not to cap), 8 workers x 4 games, 16 rows per
+seat, 2,000 rows per update, minibatch 512 / microbatch 256, lr 2e-5 / critic 3e-5, CPU servers (1 thread each):
+
+```bash
+CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=1 taskset -c 24-31,56-63 nice -19 .venv/bin/python main.py policy-gradient-generic \
+  --policy <4k>/final.pth --title 1867 --out-dir <out> --run-name smoke1 --player-mix 3:1,4:2,5:1,6:1 \
+  --max-decisions 4000 --workers 8 --games-per-task 4 --positions-per-seat 16 --population <league.json> \
+  --opponent-slots 1 --slot-refresh-every 1 --league-snapshot-every 2 --league-max-snapshots 2 --reward placement \
+  --anchor-every 2 --rows-per-update 2000 --minibatch 512 --microbatch 256 --lr 2e-5 --critic-lr 3e-5 --kl-coef 0.02 \
+  --kl-target 0.08 --learner-temperature 0.5 --opponent-temperature 0.5 --max-updates 3 --snapshot-every 2 \
+  --random-start-fraction 0.2 --midgame-fraction 0.3 --auction-fraction 0.3 --auction-stall-decisions 0 \
+  --save-game-every 10 --start-positions <starts>/start_positions_1867_{n}p.jsonl \
+  --midgame-positions <starts>/midgame_positions_1867_{n}p.jsonl --server-cpu --server-threads 1 --threads 4 \
+  --inference-batch-size 256
+# then: ... policy-gradient-generic --resume <out>/smoke1 --max-updates 5
+```
+
+* 3 updates, then a **resume** to 5. The resume continues from the last snapshot (`--snapshot-every 2`: update 2),
+  so update 3 ran twice (the legacy semantics; both are in `history.jsonl`). 416 games, **all finished** (no
+  decision cap, no stall, no skipped start); starts human 180, auction 113, mid-game 85, random 38; 52 saved games.
+  Mean 507-546 decisions per game, the longest 801 (6 players); at most 57 auction decisions.
+* Losses finite; at each update's first minibatch `approx_kl` within 8e-4 and `log_ratio_abs_mean` 0.001-0.004 (the
+  trainer recomputes the servers' sampling probabilities, price cells included: the rows carry the grid); KL to
+  the anchor <= 6e-5 at lr 2e-5 (`kl_coef` adapted to its floor); critic CE 0.83-1.09 over 3-6 seats; the league
+  grew to 4 members (own snapshots per count).
+* **Throughput** (cores shared with other jobs): 620-830 games/h (90-120 decisions/s) for updates 1-3, then
+  860-1,240 games/h (124-186 decisions/s) after applying moves from their action dicts (`LegalActions.wires`:
+  workers' play time per update 1,060-1,250 s -> 590-680 s). 1830's C2 smoke made 8.5-11.7k games/h on the same
+  setup. The difference is the rules side: on human positions the 1867 generator takes ~8 ms per decision (median
+  2.4 ms, p99 93 ms; tile-lay positions 12 ms, the router behind RunRoutes ~6 ms) against ~0.03 ms for 1830's
+  enumeration, and `rl_apply_index` re-enumerated the moves (another ~7 ms) until the wire fix. On the GPU, 1867
+  policy gradient will be bound by the workers' CPU: at ~9 ms per decision, 32 workers give ~3.5k decisions/s,
+  **~20-25k games/h** (gen6 made ~125k 1830 games/h) unless the generator gets faster
+  (`docs/g1867_remaining_work.md` "Generator speed": cache the graph walk per state).
+
+### Decision caps and auction stalls (proposal, for the user to decide)
+
+How long 1867 games are, in decisions (several legal rows or an open price), every game played to its end:
+
+| source | 3p max | 4p max | 5p max | 6p max | medians |
+|---|---|---|---|---|---|
+| human games (finished, 965) | 656 | 707 | 658 | 631 | 488-546 (p99 622-628) |
+| smoke models T 0.5, from the auction (600 steps; 4k steps) | 670; 780 | 661; 751 | 723; 765 | 724; 698 | 562-570; 568-632 |
+| smoke model T 1.0, from the auction | 783 | 794 | 892 | 925 | 600-746 |
+| PG smoke (416 games, mixed starts, T 0.5) | 738 | 762 | 749 | 801 | means 512-531 |
+| 1830 gen6 caps, for scale | 1100 | 1200 | 1300 | 1500 | |
+
+So 1867 games are not longer than 1830's (the C2 outline expected longer games from mergers and loans; humans
+average ~500 decisions, the smoke models 560-630): their length grows with randomness and player count, not with the
+rules' extras. **Proposal: `--max-decisions-by-players 3:1200,4:1200,5:1400,6:1500`** (~1.5x the longest T 1.0
+game, ~1.7-2.4x the human maximum), i.e. 1830's gen6 caps with 5 players one notch up; watch `p<n>_max_length` in
+the PG history -- a cap that fires on more than a few games per update means a degenerate policy (1830's bots
+learned train shuffling), not a short cap.
+
+**Auction stalls cannot happen in 1867.** The opening auction is Ruby's `SingleItemAuction`: one lot at a time
+(cheapest first), ascending bids (each at least $5 above the last, up to the bidder's cash), and when every player
+declines, a dutch phase that drops the lot $5 per all-pass round (`company.discount += 5`) down to $0, where the
+first player is made to buy it (the engine's documented fix of Ruby's crash there). Every lot therefore ends after at
+most ~(opening bid / 5 + 1) all-pass rounds plus the bids the players' cash allows (opening bids $20-$60, cash
+$210-$420), and the hidden "3" company is never auctioned. 1830's lock (everyone passing forever on a non-SV
+private) has no counterpart; `auction_unlock` is 1830's. Measured over 442 eval and 416 PG games: at most 69
+auction decisions (600 steps at T 1.0, 6 players), medians 27-57. The SR minor auctions (`Bid.corporation`) are Stock-Round bids bounded by cash the same way.
+**Proposal: `--auction-stall-decisions 0` (off) for 1867**; the decision cap is the backstop (or 300 if the user
+wants a stall line in the history anyway: four times the measured maximum).
+
+### Open questions after A3 (the user's decisions)
+
+1. **Decision caps and the stall setting** for 1867 runs: the proposal above (`3:1200,4:1200,5:1400,6:1500`,
+   `--auction-stall-decisions 0`).
+2. **Legal lists of the supervised data** are the title's cross-player policy's (what self-play is offered); the
+   38 human moves it excludes are skipped. The alternative is the rules' lists (then the model also scores moves
+   it will never be offered).
+3. **Old records the replay rejects part-way** (24 games, 3.5% of the old corpus's in-scope games with actions) are kept up to
+   the rejection with net worth there as the value target, like 1830's unfinished games; 1830's importer drops a
+   game whose replay fails. The 101 games ended early on the site are kept as 1830's are (`finished` False in both
+   cases; `stopped` marks the first kind).
+4. **6 players is thin**: 19 games / 12,865 positions, 22 SR1 starts (3p 242 games, 4p 575, 5p 129). A 6-player
+   share in the PG mix leans on random openings and auction starts.
+5. **1867 generation speed**: the generator, not the network, will bound 1867 policy gradient on the GPU (~20-25k
+   games/h estimated vs gen6's ~125k for 1830); worth the graph-walk caching of `g1867_remaining_work.md` item 2
+   before a long run?
+6. **Placement points at 3, 5 and 6 players** (C2's open question 1) apply to 1867 as they are.
+7. The start files and the dataset live in the A3 scratch area until copied to `human_games/` (the `TitleSpec`
+   templates `human_games/{start,midgame}_positions_1867_{n}p.jsonl`).
+
+### Notes on the design documents (found during A3)
+
+* C1's text said 1867's importer would come from an engine-side `match_human_action`; there is none (the matching
+  is Python's, over `rl_legal_moves_json`, as A2's completeness).
+* C2's text said `TitlePlay` reads a title's layout through `apply_action_index` / `price_range_for_index`; both
+  refuse a generator layout, so 1867 games could not be played (fixed: `rl_apply_index` / `rl_price_range`, then the
+  action dicts).
+* `docs/rl_descriptors.md` §6 said code that samples prices must pass the grid; so must code that rebuilds cells to
+  *score* them (`generic_data.collate`, `generic_pg.collate_rows`), or 1867's supervised price targets and the
+  trainer's PPO ratio for price decisions are computed in the wrong cells (fixed).
+* §8 counted 25 old-corpus games that end in a replay rejection; there are 24 (`replay_export` over the corpus).
+* The C2 outline expected 1867 games to be longer than 1830's (mergers, loans): they are not (~500-570 decisions
+  per game; 1830's PG games averaged ~450).
