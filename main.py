@@ -408,11 +408,33 @@ def cmd_pretrain_generic(args):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     from rl18xx.agent.alphazero.generic_pretrain import MODEL_PRESETS, GenericPretrainConfig, pretrain
 
-    model = dict(MODEL_PRESETS[args.model_preset])
+    def per_label(text, cast):
+        """``N`` (every dataset) or ``label:N,label:N`` -> scalar or {label: N}."""
+        if text is None:
+            return None
+        if ":" not in text:
+            return cast(text)
+        out = {}
+        for part in text.split(","):
+            label, _, value = part.rpartition(":")
+            out[label.strip()] = cast(value)
+        return out
+
+    # With --init the run keeps the checkpoint's architecture: a preset or config given must match it.
+    model = dict(MODEL_PRESETS[args.model_preset or "default"]) if (args.model_preset or not args.init) else {}
     if args.model_config:
         model.update(json.loads(args.model_config))
+    splits = None
+    if args.splits:
+        splits = {}
+        for entry in args.splits:
+            label, _, path = entry.partition(":")
+            splits[label] = path
+    mix = per_label(args.mix, float)
+    if mix is not None and not isinstance(mix, dict):
+        raise SystemExit("--mix takes label:share pairs, e.g. 1830:0.5,1867:0.5")
     cfg = GenericPretrainConfig(
-        data=args.data,
+        data=args.data[0] if len(args.data) == 1 else list(args.data),
         out=args.out,
         model=model,
         init=args.init,
@@ -439,10 +461,19 @@ def cmd_pretrain_generic(args):
         seed=args.seed,
         max_steps=args.max_steps,
         eval_every=args.eval_every,
-        train_max_games=args.train_max_games,
-        val_max_games=args.val_max_games,
+        train_max_games=per_label(args.train_max_games, int),
+        val_max_games=per_label(args.val_max_games, int),
         log_every=args.log_every,
         threads=args.threads,
+        mix=mix,
+        splits=splits,
+        select_title=args.select_title,
+        select_split=args.select_split,
+        eval_titles=args.eval_titles.split(",") if args.eval_titles else None,
+        final_eval=args.final_eval,
+        report_split=args.report_split,
+        report_max_games=per_label(args.report_max_games, int),
+        loader=args.loader,
     )
     pretrain(cfg)
 
@@ -1218,11 +1249,46 @@ def build_parser():
 
     # pretrain-generic (two-stage supervised pretraining of the generic model)
     p = sub.add_parser("pretrain-generic", help="Supervised two-stage pretraining of the title-generic model")
-    p.add_argument("--data", type=str, required=True, help="Dataset directory from convert-generic")
+    p.add_argument(
+        "--data", type=str, required=True, action="append",
+        help="Dataset directory from convert-generic, as PATH or LABEL=PATH (label default: its title); "
+        "repeat for a mixed-title run (docs/rl_model.md 'Mixed-title training')",
+    )
     p.add_argument("--out", type=str, required=True, help="Run directory (checkpoints, tb/, history.jsonl)")
-    p.add_argument("--model-preset", choices=["default", "small"], default="default")
+    p.add_argument(
+        "--model-preset", choices=["default", "small"], default=None,
+        help="Model size (default: 'default'; with --init the checkpoint's architecture, which a preset must match)",
+    )
     p.add_argument("--model-config", type=str, default=None, help="JSON GenericModelConfig overrides")
-    p.add_argument("--init", type=str, default=None, help="Warm start from a generic checkpoint")
+    p.add_argument(
+        "--init", type=str, default=None,
+        help="Start from a generic checkpoint (fine-tuning): its architecture, fresh optimizer; refused on an "
+        "encoder / vocabulary / layout mismatch with the engine or the datasets",
+    )
+    p.add_argument(
+        "--mix", type=str, default=None,
+        help="Share of training positions per dataset label, e.g. 1830:0.5,1867:0.5 (default: by training positions)",
+    )
+    p.add_argument(
+        "--splits", type=str, action="append", default=None,
+        help="LABEL:FILE -- a JSON {split: [game ids]} overriding that dataset's train / validation split "
+        "(other split names allowed, e.g. dev); repeatable",
+    )
+    p.add_argument(
+        "--select-title", type=str, default=None,
+        help="Dataset label whose --select-split loss picks the best checkpoint, early-stops and drives the "
+        "value refit (default: the one dataset, else the mix-weighted mean over --eval-titles)",
+    )
+    p.add_argument("--select-split", type=str, default="validation", help="Split evaluated during training")
+    p.add_argument("--eval-titles", type=str, default=None, help="Comma-separated labels evaluated during training (default all)")
+    p.add_argument("--final-eval", action="store_true", help="Evaluate final.pth on every dataset's --report-split")
+    p.add_argument("--report-split", type=str, default="validation")
+    p.add_argument("--report-max-games", type=str, default=None, help="N or LABEL:N,... games of the report split")
+    p.add_argument(
+        "--loader", choices=["auto", "epochs", "stream"], default="auto",
+        help="epochs: one dataset, a pass per epoch; stream: datasets mixed endlessly, step-based "
+        "(auto: stream with several datasets or --mix)",
+    )
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--weight-decay", type=float, default=1e-4)
@@ -1246,8 +1312,8 @@ def build_parser():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--max-steps", type=int, default=None, help="Cap on stage-1 steps (smoke runs)")
     p.add_argument("--eval-every", type=int, default=None, help="Validate every N steps (default: each epoch)")
-    p.add_argument("--train-max-games", type=int, default=None)
-    p.add_argument("--val-max-games", type=int, default=None)
+    p.add_argument("--train-max-games", type=str, default=None, help="N or LABEL:N,... (first N training games)")
+    p.add_argument("--val-max-games", type=str, default=None, help="N or LABEL:N,... (first N evaluated games)")
     p.add_argument("--log-every", type=int, default=50)
     p.add_argument("--threads", type=int, default=4, help="torch threads of the training process")
 

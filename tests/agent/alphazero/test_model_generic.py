@@ -191,6 +191,29 @@ def test_default_size():
     assert 7_000_000 < n < 10_000_000
 
 
+def test_static_hex_bias_is_the_per_map_lookup():
+    """The distance / direction bias computed once per title and gathered equals the per-map embedding
+    lookup bit for bit, and so do the embeddings' gradients."""
+    model = small_model()
+    for emb in (model.dist_bias, model.dir_bias):
+        torch.nn.init.normal_(emb.weight)
+    titles = torch.tensor([1, 2, 1, 1, 2, 2, 1])
+    h = int(mg.title_tables()["h_max"])
+    bias = model._static_hex_bias(titles, h)
+    dist = model.t_hex_dist[:, :h, :h][titles]
+    direction = model.t_hex_dir[:, :h, :h][titles]
+    ref = (model.dist_bias(dist) + model.dir_bias(direction)).permute(0, 3, 1, 2)
+    assert bias.shape == ref.shape and torch.equal(bias, ref)
+    weight = torch.randn_like(ref)
+    grads = []
+    for out in (bias, ref):
+        model.zero_grad()
+        (out * weight).sum().backward(retain_graph=True)
+        grads.append([model.dist_bias.weight.grad.clone(), model.dir_bias.weight.grad.clone()])
+    for a, b in zip(*grads):
+        assert torch.allclose(a, b, rtol=1e-4, atol=1e-5 * float(b.abs().max()))  # fp32 summation order
+
+
 def test_tile_exits_match_laid_tiles(walks):
     """The rotation convention of ``title_tables()["tile_exits"]``: a laid tile's track edges (the
     encoder writes them rotated) are the catalog tile's at rotation 0 rotated by the hex's rotation."""

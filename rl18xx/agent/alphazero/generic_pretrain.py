@@ -24,6 +24,12 @@ fingerprints, encoder version; the training config and metrics in ``extra``).
 
 :func:`compare_with_legacy` scores a generic checkpoint and a legacy 1830 checkpoint (e.g. SL ckpt 10)
 on the same positions of a dataset split: per-family top-1, policy CE and value CE / winner accuracy.
+
+Several datasets (milestone C3, ``docs/rl_model.md`` "Mixed-title training and the sharing probe"): ``data`` as
+a list of ``path`` / ``label=path``, mixed per batch at ``mix`` shares by the stream loader
+(``generic_data.MixedPositionBatches``), split overrides (``splits``), per-dataset evaluations, selection and
+early stopping on one dataset (``select_title`` / ``select_split``), a final per-dataset evaluation
+(``final_eval``); ``init`` starts from another run's checkpoint through :func:`load_init`'s checks.
 """
 
 from __future__ import annotations
@@ -37,7 +43,7 @@ import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import torch
@@ -68,7 +74,9 @@ MODEL_PRESETS = {"default": {}, "small": SMALL_CONFIG}
 
 @dataclass
 class GenericPretrainConfig:
-    data: str
+    #: One dataset directory, or several (a mixed-title run): each ``path`` or ``label=path`` (the label
+    #: names the dataset in ``mix``, ``splits``, the per-dataset options and the metrics; default its title).
+    data: Union[str, List[str]]
     out: str
     #: ``GenericModelConfig`` overrides (a preset name's dict, plus any fields).
     model: dict = field(default_factory=dict)
@@ -102,12 +110,32 @@ class GenericPretrainConfig:
     seed: int = 0
     #: Stage 1 step cap (smoke runs); None = epochs x steps per epoch.
     max_steps: Optional[int] = None
-    #: Validate every N steps (None: after each epoch).
+    #: Validate every N steps (None: after each epoch; with the stream loader, every epoch-equivalent).
     eval_every: Optional[int] = None
-    train_max_games: Optional[int] = None
-    val_max_games: Optional[int] = None
+    #: The first N games of the training / evaluated split: an int for every dataset or ``{label: N}``.
+    train_max_games: Optional[Union[int, Dict[str, int]]] = None
+    val_max_games: Optional[Union[int, Dict[str, int]]] = None
     log_every: int = 50
     threads: int = 4
+    # -- several datasets (mixed titles), split overrides, selection (docs/rl_model.md "Mixed-title training") --
+    #: ``{label: share}`` of the training positions (normalized; 0 = evaluated only). None: each dataset's
+    #: share is its number of training positions (the datasets concatenated).
+    mix: Optional[Dict[str, float]] = None
+    #: ``{label: split override}`` (``generic_data.load_splits``: a ``{split: [game ids]}`` dict or JSON file).
+    splits: Optional[Dict[str, object]] = None
+    #: The label whose ``select_split`` total picks the best checkpoint and drives early stopping (and whose
+    #: win CE drives the value refit). None: the one dataset, or the mix-weighted mean over ``eval_titles``.
+    select_title: Optional[str] = None
+    select_split: str = "validation"
+    #: Labels evaluated during training (None: every dataset).
+    eval_titles: Optional[List[str]] = None
+    #: After training, evaluate ``final.pth`` on every dataset's ``report_split`` (``summary["final_eval"]``).
+    final_eval: bool = False
+    report_split: str = "validation"
+    report_max_games: Optional[Union[int, Dict[str, int]]] = None
+    #: "epochs" (one dataset, a pass per epoch: C1's loop), "stream" (``MixedPositionBatches``: any number of
+    #: datasets, endless, step-based) or "auto" (stream when there are several datasets or a ``mix``).
+    loader: str = "auto"
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -273,6 +301,7 @@ def make_loader(
     buffer_positions: int = 32768,
     pin_memory: bool = False,
     config=None,
+    splits=None,
 ):
     stream = gd.PositionBatches(
         data,
@@ -284,7 +313,23 @@ def make_loader(
         epoch=epoch,
         max_games=max_games,
         config=config,
+        splits=splits,
     )
+    return _data_loader(stream, workers, pin_memory)
+
+
+def make_mixed_loader(
+    sources, batch_size: int, workers: int, seed: int = 0, buffer_positions: int = 32768, pin_memory: bool = False,
+    config=None,
+):
+    """An endless ``DataLoader`` over :class:`generic_data.MixedPositionBatches` (several datasets mixed)."""
+    stream = gd.MixedPositionBatches(
+        sources, batch_size, buffer_positions=buffer_positions, seed=seed, config=config
+    )
+    return _data_loader(stream, workers, pin_memory)
+
+
+def _data_loader(stream, workers: int, pin_memory: bool):
     kwargs = dict(batch_size=None, num_workers=workers, pin_memory=pin_memory)
     if workers > 0:
         kwargs.update(worker_init_fn=gd.loader_worker_init, prefetch_factor=4, multiprocessing_context="spawn")
@@ -347,13 +392,16 @@ def evaluate(
     max_games: Optional[int] = None,
     cfg: Optional[GenericPretrainConfig] = None,
     value_only: bool = False,
+    splits=None,
 ) -> dict:
     """Metrics of ``model`` on a split, fp32, positions in a fixed order (:class:`MetricSums`)."""
     device = torch.device(device)
     was_training = model.training
     model.eval()
     sums = MetricSums(mg.vocab()["families"])
-    loader = make_loader(data, split, batch_size, False, workers, max_games=max_games, config=model.config)
+    loader = make_loader(
+        data, split, batch_size, False, workers, max_games=max_games, config=model.config, splits=splits
+    )
     for batch in loader:
         b = gd.batch_to_device(batch, device)
         out = model(b["inputs"], value_only=value_only)
@@ -406,8 +454,171 @@ def _summary_line(m: dict) -> str:
 
 
 # ---------------------------------------------------------------------------------------------------
+# Datasets of a run, and initialization from another run's checkpoint
+# ---------------------------------------------------------------------------------------------------
+
+
+def _per_label(value, label: str, labels: List[str], name: str):
+    """An option given for every dataset (a scalar) or per dataset (``{label: value}``)."""
+    if isinstance(value, dict):
+        unknown = sorted(set(value) - set(labels))
+        if unknown:
+            raise ValueError(f"{name}: unknown dataset labels {unknown} (have {labels})")
+        return value.get(label)
+    return value
+
+
+def _split_entry(entry) -> tuple:
+    """``label=path`` -> (label, path); a bare path -> (None, path)."""
+    text = str(entry)
+    head, sep, tail = text.partition("=")
+    if sep and head and "/" not in head and os.sep not in head:
+        return head, tail
+    return None, text
+
+
+def resolve_sources(cfg: GenericPretrainConfig) -> List[gd.DataSource]:
+    """The run's datasets as :class:`generic_data.DataSource` s: labels (``label=path``, else the dataset's
+    title), split overrides, game caps and mix weights (``cfg.mix``, else each dataset's training positions)."""
+    entries = [cfg.data] if isinstance(cfg.data, (str, Path)) else list(cfg.data)
+    if not entries:
+        raise ValueError("no dataset")
+    parsed = []
+    for entry in entries:
+        label, path = _split_entry(entry)
+        if label is None:
+            titles = gd.GenericDataset(path, check_layouts=False).titles
+            label = titles[0] if len(titles) == 1 else "+".join(titles)
+        parsed.append((label, path))
+    labels = [label for label, _ in parsed]
+    if len(set(labels)) != len(labels):
+        raise ValueError(f"dataset labels {labels} are not unique: name them (label=path)")
+    for name in ("mix", "splits"):
+        unknown = sorted(set(getattr(cfg, name) or {}) - set(labels))
+        if unknown:
+            raise ValueError(f"{name}: unknown dataset labels {unknown} (have {labels})")
+    for name in ("select_title",):
+        value = getattr(cfg, name)
+        if value is not None and value not in labels:
+            raise ValueError(f"{name} {value!r} is not a dataset label (have {labels})")
+    unknown = sorted(set(cfg.eval_titles or ()) - set(labels))
+    if unknown:
+        raise ValueError(f"eval_titles: unknown dataset labels {unknown} (have {labels})")
+    sources = []
+    for label, path in parsed:
+        sources.append(
+            gd.DataSource(
+                path=str(path),
+                label=label,
+                splits=(cfg.splits or {}).get(label),
+                max_games=_per_label(cfg.train_max_games, label, labels, "train_max_games"),
+                val_max_games=_per_label(cfg.val_max_games, label, labels, "val_max_games"),
+                report_max_games=_per_label(cfg.report_max_games, label, labels, "report_max_games"),
+            )
+        )
+    if cfg.mix is not None:
+        missing = [s.label for s in sources if s.label not in cfg.mix]
+        if missing:
+            raise ValueError(f"mix: no share for {missing}")
+        for s in sources:
+            s.weight = float(cfg.mix[s.label])
+    else:
+        for s in sources:
+            ds = s.dataset(check_layouts=False)
+            dec = ds.decisions()
+            s.weight = float(sum(dec[g] for g in s.train_ids(ds)))
+    if sum(s.weight for s in sources) <= 0 or any(s.weight < 0 for s in sources):
+        raise ValueError(f"mix shares must be >= 0 with a positive sum: {[(s.label, s.weight) for s in sources]}")
+    return sources
+
+
+def _use_stream(cfg: GenericPretrainConfig, sources: List[gd.DataSource]) -> bool:
+    if cfg.loader not in ("auto", "epochs", "stream"):
+        raise ValueError(f"loader must be auto / epochs / stream, got {cfg.loader!r}")
+    if cfg.loader == "epochs":
+        if len(sources) > 1:
+            raise ValueError("the epochs loader reads one dataset; use the stream loader for several")
+        return False
+    return cfg.loader == "stream" or len(sources) > 1 or cfg.mix is not None
+
+
+def _merge_titles(*lists) -> List[str]:
+    out: List[str] = []
+    for titles in lists:
+        for t in titles:
+            if t not in out:
+                out.append(t)
+    return out
+
+
+def load_init(path, model_overrides: Optional[dict], datasets: Dict[str, gd.GenericDataset], device) -> tuple:
+    """``(model, generic_meta)`` of a checkpoint a run starts from (fine-tuning). Refuses
+    (``model_generic.CheckpointMismatch``) what ``load_checkpoint`` refuses -- another architecture,
+    encoder version, seat count, price cells, a vocabulary that is not an append-only extension of the
+    checkpoint's, a layout fingerprint that differs from the engine's -- and, against this run's datasets:
+    a requested model config that differs from the checkpoint's (the run keeps the checkpoint's
+    architecture), a dataset title the checkpoint has no embedding row for (registered after it was
+    trained), and a dataset whose layout for a title the checkpoint was trained on differs from the
+    checkpoint's."""
+    model, meta = mg.load_checkpoint(path, device)
+    saved = model.config.to_json()
+    differ = {k: (v, saved.get(k)) for k, v in (model_overrides or {}).items() if saved.get(k) != v}
+    if differ:
+        raise mg.CheckpointMismatch(
+            f"--init {path}: the requested model config differs from the checkpoint's {differ} "
+            "(requested, checkpoint); a run from a checkpoint keeps its architecture"
+        )
+    titles = mg.vocab()["titles"]
+    for label, ds in datasets.items():
+        for title in ds.titles:
+            if title not in titles:
+                raise mg.CheckpointMismatch(f"dataset {label}: title {title} unknown to the running engine")
+            tid = titles.index(title) + 1
+            if tid >= model.config.num_titles:
+                raise mg.CheckpointMismatch(
+                    f"--init {path}: dataset {label}'s title {title} (id {tid}) is beyond the checkpoint's "
+                    f"{model.config.num_titles - 1} titles"
+                )
+            ours, theirs = ds.meta["layouts"].get(title), (meta.get("layouts") or {}).get(title)
+            if ours and theirs and (ours["version"], ours["fingerprint"]) != (theirs["version"], theirs["fingerprint"]):
+                raise mg.CheckpointMismatch(
+                    f"--init {path}: {title} layout {theirs['version']} {theirs['fingerprint']} != dataset "
+                    f"{label}'s {ours['version']} {ours['fingerprint']}"
+                )
+    return model, meta
+
+
+# ---------------------------------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------------------------------
+
+
+class _Selection:
+    """Which number picks the best checkpoint: the selected dataset's, else the mix-weighted mean over
+    the evaluated datasets (plain mean if they all have weight 0)."""
+
+    def __init__(self, cfg: GenericPretrainConfig, sources: List[gd.DataSource]):
+        self.labels = list(cfg.eval_titles or [s.label for s in sources])
+        self.select = cfg.select_title or (sources[0].label if len(sources) == 1 else None)
+        if self.select and self.select not in self.labels:
+            self.labels.append(self.select)
+        weights = {s.label: s.weight for s in sources}
+        total = sum(weights[label] for label in self.labels)
+        self.weights = {label: (weights[label] / total if total > 0 else 1.0 / len(self.labels)) for label in self.labels}
+
+    def value(self, metrics: Dict[str, dict], key: str) -> float:
+        if self.select:
+            return float(metrics[self.select][key])
+        return float(sum(self.weights[label] * metrics[label][key] for label in self.labels))
+
+    def describe(self) -> str:
+        return self.select or "mix-weighted mean of " + ", ".join(f"{k} {w:.3f}" for k, w in self.weights.items())
+
+
+def _check_split(source: gd.DataSource, split: str, what: str) -> None:
+    ds = source.dataset(check_layouts=False)
+    if not ds.game_ids(split):
+        raise ValueError(f"dataset {source.label}: no {split!r} games for {what} ({ds.split_names()})")
 
 
 def pretrain(cfg: GenericPretrainConfig) -> dict:
@@ -422,127 +633,234 @@ def pretrain(cfg: GenericPretrainConfig) -> dict:
     if device.type == "cuda":
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-    dataset = gd.GenericDataset(cfg.data)
-    titles = dataset.titles
+    sources = resolve_sources(cfg)
+    stream = _use_stream(cfg, sources)
+    datasets = {s.label: s.dataset() for s in sources}  # checks each dataset's layouts against the engine
+    multi = len(sources) > 1
+    selection = _Selection(cfg, sources)
+    for label in selection.labels:
+        _check_split(next(s for s in sources if s.label == label), cfg.select_split, "evaluation")
+    titles = _merge_titles(*(ds.titles for ds in datasets.values()))
+    init_meta = None
     if cfg.init:
-        model, _ = mg.load_checkpoint(cfg.init, device)
+        model, init_meta = load_init(cfg.init, cfg.model, datasets, device)
+        titles = _merge_titles(init_meta.get("titles") or [], titles)
     else:
         model = mg.GenericPolicyValueModel(mg.GenericModelConfig(**cfg.model)).to(device)
+    init_info = None
+    if init_meta is not None:
+        extra = init_meta.get("extra") or {}
+        init_info = {"path": str(cfg.init), "titles": init_meta.get("titles"), "stage": extra.get("stage"),
+                     "step": extra.get("step"), "data": extra.get("data")}
     (out / "config.json").write_text(
         json.dumps(
-            {"pretrain": asdict(cfg), "model": model.config.to_json(), "data_meta": _data_meta(dataset)}, indent=2
+            {
+                "pretrain": asdict(cfg),
+                "model": model.config.to_json(),
+                "data_meta": _data_meta(datasets),
+                "sources": [asdict(s) for s in sources],
+                "loader": "stream" if stream else "epochs",
+                "selection": selection.describe(),
+                "init": init_info,
+            },
+            indent=2,
         )
     )
     log = _Log(out)
+    train_positions = {}
+    for s in sources:
+        dec = datasets[s.label].decisions()
+        train_positions[s.label] = sum(dec[g] for g in s.train_ids(datasets[s.label]))
     LOGGER.info(
-        "Generic pretraining: %s parameters, device %s, bf16 %s, data %s (%d train / %d validation positions)",
-        f"{model.num_parameters():,}", device, use_amp, cfg.data,
-        dataset.num_positions("train"), dataset.num_positions("validation"),
+        "Generic pretraining: %s parameters, device %s, bf16 %s, %s loader, data %s, selection on %s %s%s",
+        f"{model.num_parameters():,}", device, use_amp, "stream" if stream else "epochs",
+        ", ".join(
+            f"{s.label}={s.path} ({train_positions[s.label]} train positions, share {s.weight / sum(x.weight for x in sources):.3f})"
+            for s in sources
+        ),
+        selection.describe(), cfg.select_split, f", init {cfg.init}" if cfg.init else "",
     )
-    train_ids = dataset.game_ids("train")[: cfg.train_max_games] if cfg.train_max_games else dataset.game_ids("train")
-    train_set = set(train_ids)
-    train_positions = sum(e["decisions"] for e in dataset.index if e["split"] == "train" and e["id"] in train_set)
-    steps_per_epoch = max(1, train_positions // cfg.batch_size)
+    if stream:
+        positions = sum(train_positions[s.label] for s in sources if s.weight > 0)
+    else:
+        positions = train_positions[sources[0].label]
+    steps_per_epoch = max(1, positions // cfg.batch_size)
     total_steps = cfg.epochs * steps_per_epoch
     if cfg.max_steps:
-        total_steps = min(total_steps, cfg.max_steps)
+        total_steps = min(total_steps, cfg.max_steps) if not stream else cfg.max_steps
+    eval_every = cfg.eval_every or (steps_per_epoch if stream else None)
     optimizer = build_optimizer(model, cfg.lr, cfg.weight_decay, cfg.value_lr_multiplier)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
-    eval_kwargs = dict(
-        data=cfg.data, split="validation", batch_size=cfg.batch_size, device=device, workers=cfg.workers,
-        max_games=cfg.val_max_games, cfg=cfg,
-    )
     best_loss, best_step, evals_since = float("inf"), None, 0
     best_path = out / "best_joint.pth"
     step, stop, started = 0, False, time.time()
     window = defaultdict(float)
     window_n = 0
     history_evals: List[dict] = []
+    labels = [s.label for s in sources]
 
     def run_eval(epoch: int) -> None:
         nonlocal best_loss, best_step, evals_since, stop
         t0 = time.time()
-        m = evaluate(model, **eval_kwargs)
-        m.update(stage="joint", step=step, epoch=epoch, seconds=round(time.time() - t0, 1))
-        history_evals.append(m)
-        log.write({"kind": "eval", **m}, "val", step)
-        improved = m["total"] < best_loss
-        LOGGER.info("eval step %d epoch %d: %s%s", step, epoch, _summary_line(m), " (best)" if improved else "")
+        per = {}
+        for s in sources:
+            if s.label not in selection.labels:
+                continue
+            m = evaluate(
+                model, s.path, cfg.select_split, batch_size=cfg.batch_size, device=device, workers=cfg.workers,
+                max_games=s.val_max_games, cfg=cfg, splits=s.splits,
+            )
+            per[s.label] = m
+        seconds = round(time.time() - t0, 1)
+        value = selection.value(per, "total")
+        improved = value < best_loss
+        for label, m in per.items():
+            m.update(stage="joint", step=step, epoch=epoch, seconds=seconds)
+            entry = {"kind": "eval", **m}
+            if multi or stream:
+                entry.update(source=label, split=cfg.select_split)
+            log.write(entry, f"val_{label}" if multi else "val", step)
+            LOGGER.info(
+                "eval step %d epoch %d%s: %s%s", step, epoch, f" [{label} {cfg.select_split}]" if multi or stream else "",
+                _summary_line(m), " (best)" if improved and label == selection.select else "",
+            )
+        history_evals.append({"step": step, "value": value, "by_source": per})
+        if multi:
+            log.write({"kind": "select", "step": step, "epoch": epoch, "value": value, "best": improved}, "val", step)
+            LOGGER.info("selection (%s): %.4f%s", selection.describe(), value, " (best)" if improved else "")
         if improved:
-            best_loss, best_step, evals_since = m["total"], step, 0
-            mg.save_checkpoint(model, best_path, titles, extra=_extra(cfg, "joint", step, epoch, m, dataset))
+            best_loss, best_step, evals_since = value, step, 0
+            metrics = per[next(iter(per))] if len(per) == 1 else per
+            mg.save_checkpoint(model, best_path, titles, extra=_extra(cfg, "joint", step, epoch, metrics, datasets, init_info))
         else:
             evals_since += 1
             if cfg.patience and evals_since >= cfg.patience:
                 LOGGER.warning("early stop at step %d: no improvement in %d evaluations", step, evals_since)
                 stop = True
 
-    for epoch in range(cfg.epochs):
+    def train_step(batch, epoch: int) -> None:
+        nonlocal step, window_n
+        b = gd.batch_to_device(batch, device)
+        with _autocast(device, use_amp):
+            out_ = model(b["inputs"])
+        losses = compute_losses(out_, b, cfg)
+        if not torch.isfinite(losses["total"]):
+            parts = {k: float(v) for k, v in losses.items()}
+            raise RuntimeError(f"generic pretraining diverged at step {step}: {parts}")
+        optimizer.zero_grad(set_to_none=True)
+        losses["total"].backward()
+        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip)
+        if not torch.isfinite(norm):
+            raise RuntimeError(f"generic pretraining diverged at step {step}: non-finite gradient norm")
+        optimizer.step()
+        scheduler.step()
+        step += 1
+        with torch.no_grad():
+            inputs = b["inputs"]
+            rank = segment_rank(out_["logp"].float(), inputs["legal_pos"], inputs["legal_offsets"], b["target_index"])
+            top1 = (rank == 0).float()
+            window["top1"] += float(top1.mean())
+            if "source" in b:  # per-dataset training metrics
+                nll = -out_["logp"].float()[inputs["legal_offsets"][:-1] + b["target_index"]]
+                for k, label in enumerate(labels):
+                    mask = b["source"] == k
+                    window[f"n:{label}"] += float(mask.sum())
+                    window[f"nll:{label}"] += float(nll[mask].sum())
+                    window[f"top1:{label}"] += float(top1[mask].sum())
+        for k, v in losses.items():
+            window[k] += float(v.detach())
+        window_n += 1
+        if step % cfg.log_every == 0 or step == total_steps:
+            entry = {k: v / window_n for k, v in window.items() if ":" not in k}
+            by_source = {}
+            n_all = sum(window.get(f"n:{label}", 0.0) for label in labels)
+            for label in labels:
+                n = window.get(f"n:{label}", 0.0)
+                if n:
+                    by_source[label] = {
+                        "share": n / n_all,
+                        "policy_ce": window[f"nll:{label}"] / n,
+                        "top1": window[f"top1:{label}"] / n,
+                    }
+            if by_source:
+                entry["by_source"] = by_source
+            entry.update(
+                kind="train", step=step, epoch=epoch, lr=optimizer.param_groups[0]["lr"],
+                grad_norm=float(norm), elapsed=round(time.time() - started, 1),
+            )
+            log.write(entry, "train", step)
+            for label, r in by_source.items():
+                for key, val in r.items():
+                    log.writer.add_scalar(f"train_{label}/{key}", val, step)
+            LOGGER.info(
+                "step %d/%d epoch %d: loss %.4f policy_ce %.4f top1 %.3f price %.3f value %.4f lr %.2e%s",
+                step, total_steps, epoch, entry["total"], entry["policy_ce"], entry["top1"], entry["price"],
+                entry["value"], entry["lr"],
+                "".join(f" | {k} ce {r['policy_ce']:.3f} ({r['share']:.2f})" for k, r in by_source.items()),
+            )
+            window.clear()
+            window_n = 0
+
+    epoch = 0
+    if stream:
         model.train()
-        model.value_stop_grad = cfg.value_joint_epochs is not None and epoch >= cfg.value_joint_epochs
-        loader = make_loader(
-            cfg.data, "train", cfg.batch_size, True, cfg.workers, seed=cfg.seed, epoch=epoch,
-            max_games=cfg.train_max_games, buffer_positions=cfg.buffer_positions,
+        loader = make_mixed_loader(
+            sources, cfg.batch_size, cfg.workers, seed=cfg.seed, buffer_positions=cfg.buffer_positions,
             pin_memory=device.type == "cuda", config=model.config,
         )
         for batch in loader:
-            b = gd.batch_to_device(batch, device)
-            with _autocast(device, use_amp):
-                out_ = model(b["inputs"])
-            losses = compute_losses(out_, b, cfg)
-            if not torch.isfinite(losses["total"]):
-                parts = {k: float(v) for k, v in losses.items()}
-                raise RuntimeError(f"generic pretraining diverged at step {step}: {parts}")
-            optimizer.zero_grad(set_to_none=True)
-            losses["total"].backward()
-            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip)
-            if not torch.isfinite(norm):
-                raise RuntimeError(f"generic pretraining diverged at step {step}: non-finite gradient norm")
-            optimizer.step()
-            scheduler.step()
-            step += 1
-            with torch.no_grad():
-                rank = segment_rank(
-                    out_["logp"].float(), b["inputs"]["legal_pos"], b["inputs"]["legal_offsets"], b["target_index"]
-                )
-                window["top1"] += float((rank == 0).float().mean())
-            for k, v in losses.items():
-                window[k] += float(v.detach())
-            window_n += 1
-            if step % cfg.log_every == 0 or step == total_steps:
-                entry = {k: v / window_n for k, v in window.items()}
-                entry.update(
-                    kind="train", step=step, epoch=epoch, lr=optimizer.param_groups[0]["lr"],
-                    grad_norm=float(norm), elapsed=round(time.time() - started, 1),
-                )
-                log.write(entry, "train", step)
-                LOGGER.info(
-                    "step %d/%d epoch %d: loss %.4f policy_ce %.4f top1 %.3f price %.3f value %.4f lr %.2e",
-                    step, total_steps, epoch, entry["total"], entry["policy_ce"], entry["top1"], entry["price"],
-                    entry["value"], entry["lr"],
-                )
-                window.clear()
-                window_n = 0
-            if cfg.eval_every and step % cfg.eval_every == 0:
+            epoch = step // steps_per_epoch
+            model.value_stop_grad = cfg.value_joint_epochs is not None and epoch >= cfg.value_joint_epochs
+            train_step(batch, epoch)
+            if eval_every and step % eval_every == 0:
                 run_eval(epoch)
             if stop or step >= total_steps:
                 break
-        if not cfg.eval_every and not stop:
-            run_eval(epoch)
-        if stop or step >= total_steps:
-            break
-    if cfg.eval_every and (not history_evals or history_evals[-1]["step"] != step) and not stop:
+        del loader
+    else:
+        for epoch in range(cfg.epochs):
+            model.train()
+            model.value_stop_grad = cfg.value_joint_epochs is not None and epoch >= cfg.value_joint_epochs
+            src = sources[0]
+            loader = make_loader(
+                src.path, "train", cfg.batch_size, True, cfg.workers, seed=cfg.seed, epoch=epoch,
+                max_games=src.max_games, buffer_positions=cfg.buffer_positions,
+                pin_memory=device.type == "cuda", config=model.config, splits=src.splits,
+            )
+            for batch in loader:
+                train_step(batch, epoch)
+                if eval_every and step % eval_every == 0:
+                    run_eval(epoch)
+                if stop or step >= total_steps:
+                    break
+            if not eval_every and not stop:
+                run_eval(epoch)
+            if stop or step >= total_steps:
+                break
+    if eval_every and (not history_evals or history_evals[-1]["step"] != step) and not stop:
         run_eval(epoch)
     model.value_stop_grad = False
-    last_extra = _extra(cfg, "joint_last", step, epoch, None, dataset)
+    last_extra = _extra(cfg, "joint_last", step, epoch, None, datasets, init_info)
     mg.save_checkpoint(model, out / "last_joint.pth", titles, extra=last_extra)
     summary = {
-        "joint": {"best_step": best_step, "best_val_total": best_loss, "steps": step, "evals": len(history_evals)},
+        "joint": {"best_step": best_step, "best_val_total": best_loss, "steps": step, "evals": len(history_evals),
+                  "planned_steps": total_steps, "early_stopped": stop},
         "best_joint": str(best_path),
+        "selection": {"on": selection.describe(), "split": cfg.select_split},
+        "loader": "stream" if stream else "epochs",
     }
+    if multi or stream:
+        summary["joint"]["curve"] = [
+            {"step": h["step"], "value": h["value"],
+             **{label: {k: m.get(k) for k in ("total", "policy_ce", "top1", "value_ce")} for label, m in h["by_source"].items()}}
+            for h in history_evals
+        ]
     final = best_path
     if cfg.value_refit and best_path.exists():
-        refit = refit_value_heads(best_path, cfg, device, use_amp, log, dataset)
+        refit = refit_value_heads(
+            best_path, cfg, device, use_amp, log, datasets, sources=sources, stream=stream, selection=selection,
+            titles=titles, init_info=init_info,
+        )
         summary["refit"] = refit
         final = Path(refit["path"])
     summary["final"] = str(final)
@@ -550,17 +868,60 @@ def pretrain(cfg: GenericPretrainConfig) -> dict:
         import shutil
 
         shutil.copyfile(final, out / "final.pth")
+        if cfg.final_eval:
+            summary["final_eval"] = final_evaluation(out / "final.pth", cfg, sources, device, log, step)
     summary["seconds"] = round(time.time() - started, 1)
     (out / "summary.json").write_text(json.dumps(summary, indent=2))
     log.close()
-    LOGGER.info("Generic pretraining done: %s", json.dumps(summary))
+    LOGGER.info("Generic pretraining done: %s", json.dumps({k: v for k, v in summary.items() if k != "final_eval"}))
     return summary
 
 
+def final_evaluation(path, cfg: GenericPretrainConfig, sources: List[gd.DataSource], device, log=None, step=0) -> dict:
+    """Metrics of a checkpoint on every dataset's ``report_split`` (datasets without that split are skipped),
+    ``report_max_games`` games each."""
+    model, _ = mg.load_checkpoint(path, device)
+    out = {}
+    for s in sources:
+        if not s.dataset(check_layouts=False).game_ids(cfg.report_split):
+            LOGGER.info("final eval: %s has no %s games, skipped", s.label, cfg.report_split)
+            continue
+        t0 = time.time()
+        m = evaluate(
+            model, s.path, cfg.report_split, batch_size=cfg.batch_size, device=device, workers=cfg.workers,
+            max_games=s.report_max_games, cfg=cfg, splits=s.splits,
+        )
+        m.update(seconds=round(time.time() - t0, 1), split=cfg.report_split, checkpoint=str(path))
+        out[s.label] = m
+        if log is not None:
+            log.write({"kind": "final_eval", "source": s.label, "step": step, **m}, f"final_{s.label}", step)
+        LOGGER.info("final eval [%s %s]: %s", s.label, cfg.report_split, _summary_line(m))
+    return out
+
+
 def refit_value_heads(
-    best_path: Path, cfg: GenericPretrainConfig, device: torch.device, use_amp: bool, log: _Log, dataset
+    best_path: Path,
+    cfg: GenericPretrainConfig,
+    device: torch.device,
+    use_amp: bool,
+    log: _Log,
+    dataset,
+    sources: Optional[List[gd.DataSource]] = None,
+    stream: bool = False,
+    selection: Optional[_Selection] = None,
+    titles: Optional[List[str]] = None,
+    init_info: Optional[dict] = None,
 ) -> dict:
-    """Stage 2: fresh value heads on the frozen best joint checkpoint, early-stopped on validation win CE."""
+    """Stage 2: fresh value heads on the frozen best joint checkpoint, early-stopped on validation win CE
+    (the selected dataset's, or the mix-weighted mean; ``cfg.select_split``). ``dataset`` is the run's
+    dataset, or ``{label: dataset}``; with ``stream`` the heads train on the run's mixed stream."""
+    datasets = dataset if isinstance(dataset, dict) else {"_": dataset}
+    if sources is None:
+        sources = resolve_sources(cfg)
+    if selection is None:
+        selection = _Selection(cfg, sources)
+    if titles is None:
+        titles = _merge_titles(*(ds.titles for ds in datasets.values()))
     model, _ = mg.load_checkpoint(best_path, device)
     reset_value_heads(model)
     heads = (model.win_head, model.score_head)
@@ -571,11 +932,18 @@ def refit_value_heads(
     optimizer = torch.optim.AdamW(
         [p for h in heads for p in h.parameters()], lr=cfg.lr, weight_decay=cfg.weight_decay
     )
-    eval_kwargs = dict(
-        data=cfg.data, split="validation", batch_size=cfg.batch_size, device=device, workers=cfg.workers,
-        max_games=cfg.val_max_games, value_only=True,
-    )
-    m = evaluate(model, **eval_kwargs)
+
+    def run_eval() -> tuple:
+        per = {}
+        for s in sources:
+            if s.label in selection.labels:
+                per[s.label] = evaluate(
+                    model, s.path, cfg.select_split, batch_size=cfg.batch_size, device=device, workers=cfg.workers,
+                    max_games=s.val_max_games, value_only=True, splits=s.splits,
+                )
+        return per, {k: selection.value(per, k) for k in ("value_ce", "value_baseline", "winner_acc", "score_mse")}
+
+    per, m = run_eval()
     best_ce, best_acc = m["value_ce"], m["winner_acc"]
     best_state = [copy.deepcopy(h.state_dict()) for h in heads]
     LOGGER.info("value refit: fresh heads val value CE %.4f (equal odds %.4f)", best_ce, m["value_baseline"])
@@ -584,16 +952,32 @@ def refit_value_heads(
     window: List[float] = []
     epoch = 0
     model.train()
-    while step < cfg.refit_max_steps and evals_since < cfg.refit_patience:
-        loader = make_loader(
-            cfg.data, "train", cfg.batch_size, True, cfg.workers, seed=cfg.seed + 7919, epoch=epoch,
-            max_games=cfg.train_max_games, buffer_positions=cfg.buffer_positions,
-            pin_memory=device.type == "cuda", config=model.config,
-        )
-        epoch += 1
-        progressed = False
-        for batch in loader:
-            progressed = True
+
+    def batches():
+        nonlocal epoch
+        if stream:
+            yield from make_mixed_loader(
+                sources, cfg.batch_size, cfg.workers, seed=cfg.seed + 7919, buffer_positions=cfg.buffer_positions,
+                pin_memory=device.type == "cuda", config=model.config,
+            )
+            return
+        src = sources[0]
+        while True:
+            loader = make_loader(
+                src.path, "train", cfg.batch_size, True, cfg.workers, seed=cfg.seed + 7919, epoch=epoch,
+                max_games=src.max_games, buffer_positions=cfg.buffer_positions,
+                pin_memory=device.type == "cuda", config=model.config, splits=src.splits,
+            )
+            epoch += 1
+            progressed = False
+            for batch in loader:
+                progressed = True
+                yield batch
+            if not progressed:
+                return
+
+    if cfg.refit_max_steps > 0 and cfg.refit_patience > 0:
+        for batch in batches():
             b = gd.batch_to_device(batch, device)
             with _autocast(device, use_amp):
                 out_ = model(b["inputs"], value_only=True)
@@ -607,12 +991,19 @@ def refit_value_heads(
             window.append(float(v["ce"].detach()))
             step += 1
             if step % cfg.refit_eval_steps == 0 or step >= cfg.refit_max_steps:
-                m = evaluate(model, **eval_kwargs)
+                per, m = run_eval()
                 entry = {
                     "kind": "refit_eval", "step": step, "train_value": float(np.mean(window)),
                     "value_ce": m["value_ce"], "value_baseline": m["value_baseline"], "winner_acc": m["winner_acc"],
-                    "score_mse": m["score_mse"], "by_players": m["by_players"],
+                    "score_mse": m["score_mse"],
                 }
+                if len(per) == 1:
+                    entry["by_players"] = next(iter(per.values()))["by_players"]
+                else:
+                    entry["by_source"] = {
+                        label: {k: r[k] for k in ("value_ce", "value_baseline", "winner_acc", "score_mse")}
+                        for label, r in per.items()
+                    }
                 window = []
                 curve.append(entry)
                 log.write(entry, "value_refit", step)
@@ -629,8 +1020,6 @@ def refit_value_heads(
                 )
                 if evals_since >= cfg.refit_patience or step >= cfg.refit_max_steps:
                     break
-        if not progressed:
-            break
     for h, state in zip(heads, best_state):
         h.load_state_dict(state)
     for p in model.parameters():
@@ -638,29 +1027,38 @@ def refit_value_heads(
     model.value_stop_grad = False
     path = Path(cfg.out) / "refit.pth"
     mg.save_checkpoint(
-        model, path, dataset.titles,
-        extra=_extra(cfg, "refit", step, None, {"value_ce": best_ce, "winner_acc": best_acc}, dataset),
+        model, path, titles,
+        extra=_extra(cfg, "refit", step, None, {"value_ce": best_ce, "winner_acc": best_acc}, datasets, init_info),
     )
     return {"path": str(path), "steps": step, "val_value_ce": best_ce, "val_winner_acc": best_acc, "curve": curve}
 
 
-def _data_meta(dataset: gd.GenericDataset) -> dict:
+def _data_meta(dataset) -> dict:
+    """A dataset's meta summary; for ``{label: dataset}`` one per label (a single one unwrapped)."""
+    if isinstance(dataset, dict):
+        if len(dataset) == 1:
+            return _data_meta(next(iter(dataset.values())))
+        return {label: _data_meta(ds) for label, ds in dataset.items()}
     m = dataset.meta
     return {k: m.get(k) for k in ("titles", "layouts", "encoder_version_at_conversion", "counts", "sources", "created")}
 
 
-def _extra(cfg, stage, step, epoch, metrics, dataset) -> dict:
+def _extra(cfg, stage, step, epoch, metrics, dataset, init_info=None) -> dict:
     keep = None
     if metrics:
-        keep = {k: v for k, v in metrics.items() if k not in ("by_players",)}
+        if all(isinstance(v, dict) and "positions" in v for v in metrics.values()):  # {label: metrics}
+            keep = {label: {k: v for k, v in m.items() if k != "by_players"} for label, m in metrics.items()}
+        else:
+            keep = {k: v for k, v in metrics.items() if k not in ("by_players",)}
     return {
         "stage": stage,
         "step": step,
         "epoch": epoch,
-        "data": str(cfg.data),
+        "data": cfg.data if isinstance(cfg.data, str) else list(cfg.data),
         "data_meta": _data_meta(dataset),
         "pretrain_config": asdict(cfg),
         "metrics": keep,
+        "init": init_info,
     }
 
 
@@ -767,8 +1165,12 @@ __all__ = [
     "compare_with_legacy",
     "compute_losses",
     "evaluate",
+    "final_evaluation",
+    "load_init",
+    "make_mixed_loader",
     "pretrain",
     "refit_value_heads",
     "reset_value_heads",
+    "resolve_sources",
     "segment_rank",
 ]

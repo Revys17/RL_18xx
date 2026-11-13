@@ -460,7 +460,8 @@ worker through the shuffle buffer, 6 workers).
 2. **Unfinished human games** (10% of positions): their value targets are net worth when the log stops, as in the
    legacy data. A `finished` flag is in each record if the value loss should skip them.
 3. **Mixed titles** (E0 / E1, 1830 + 1867): `PositionBatches` reads one dataset; a mixed run needs a loader over
-   several (each game already carries its title, and batches can mix titles).
+   several (each game already carries its title, and batches can mix titles). Built in C3 (below: "Mixed-title
+   training and the sharing probe").
 4. **1867 import**: waits for A2's layout and `match_human_action` (`generic_data.register_importer`).
 5. **No resume** of a pretraining run (the legacy one has none either).
 
@@ -730,3 +731,111 @@ the mix) -> ~55 s of generation per update, plus the update itself (the legacy's
 * §5.3 lists the acting seat among the native getters the loop needs; the generic workers read it from the
   encoder's `meta[:, 5]` (one native call encodes every pending position and routes it).
 * `docs/rl_bridge_work_packages.md` says to start each package from branch `gen6-mixed-count`; master has it all.
+
+## Mixed-title training and the sharing probe (milestone C3, 2026-11-13)
+
+Code: `generic_data.py` (`DataSource`, `MixedPositionBatches`, split overrides, `nested_subset`), `generic_pretrain.py`
+(several datasets, per-dataset metrics and selection, `load_init`), `main.py pretrain-generic`; the probe harness
+`scripts/sharing_probe.py`. Tests: `tests/agent/alphazero/test_generic_mixed.py` (9, ~25 s on CPU; 1830 fixture games
+and synthetic 1867 games -- random walks over 1867's layout labelled by a test importer).
+
+### Several datasets in one run (`pretrain-generic --data A --data B`)
+
+* **Datasets and labels.** `--data PATH` or `--data LABEL=PATH`, repeatable; the label (default: the dataset's
+  title) names the dataset in every per-dataset option and metric. One dataset without `--mix` runs C1's loop
+  unchanged (`--loader epochs`: a pass per epoch).
+* **Mix** (`--mix 1830:0.5,1867:0.5`): each item of a batch comes from dataset k with probability share_k (a mix by
+  positions; default: the datasets' training positions, i.e. concatenated). Share 0 = evaluated, never trained on.
+  Batches mix titles (`collate` pads every title's encoding to the batch maxima: tested with 1830 + 1867 items in
+  one batch, forward / backward, probabilities summing to 1 per position).
+* **The stream loader** (`MixedPositionBatches`, `--loader stream`, automatic with several datasets or a mix):
+  endless and step-based. Per dataset, each loader worker reads every W-th game of that dataset's order (permuted per
+  seed, label and pass) into its own shuffle buffer (capped at `--buffer-positions` and at the worker's share of the
+  dataset's positions, so a small dataset's buffer is its whole shard); a dataset that runs out starts its next pass
+  in a new order, so a 100-game target cycles while 1830 is still in its first pass. Batches carry `source`.
+  An "epoch" is nominal here: the training positions of the datasets with a share, `/ batch`; `--max-steps` sets the
+  run's length and the cosine schedule.
+* **Split overrides** (`--splits LABEL:FILE`, JSON `{split: [game ids]}`): replace a dataset's train / validation
+  assignment; any split name (e.g. `dev`, carved out of the training games); a game in no split is in none; ids
+  must exist and be in one split only. `--train-max-games` / `--val-max-games` / `--report-max-games` take `N` or
+  `LABEL:N,...`.
+* **Evaluation and selection.** `--eval-titles` (default all) are evaluated on `--select-split` (default
+  `validation`) every `--eval-every` steps, each logged separately (history `{"kind": "eval", "source": label}`,
+  TensorBoard `val_<label>/*`: policy CE, top-1 / top-5, top-1 per family and per player count, price NLL, win CE vs
+  the equal-odds baseline, winner accuracy). `--select-title` picks the dataset whose total loss selects
+  `best_joint.pth` and drives early stopping and the value refit's early stopping (default: the one dataset, else
+  the mix-weighted mean over the evaluated ones). Training windows log policy CE / top-1 / share per dataset.
+  The value refit (stage 2) trains on the run's mixed stream. `--final-eval` scores `final.pth` on every dataset's
+  `--report-split` (`summary.json["final_eval"]`).
+* **`--init <checkpoint>`** (fine-tuning: the checkpoint's weights, a fresh optimizer and schedule) goes through
+  `load_init`: B2's `load_checkpoint` refusals (architecture, encoder version, seats, price cells, vocabularies
+  append-only, layout fingerprints vs the engine), plus a requested model config that differs from the checkpoint's
+  (with `--init` the run keeps the checkpoint's architecture; a preset is optional and must match), a dataset title
+  beyond the checkpoint's title rows, and a dataset layout that differs from the checkpoint's for the same title.
+  The run's checkpoints name the init's titles plus the datasets' (`extra["init"]` records where it started).
+
+Two model changes came with this (both keep every output; tests in `test_model_generic.py`): the hex distance /
+direction attention bias is computed once per title in the batch and gathered (`_static_hex_bias`: bit-identical
+values; the embeddings' dense backward over `M x H x H` indices was ~30% of a CPU training step, so the small model
+trains ~1.4x faster on the CPU), and a model with fewer title rows than the engine knows (a checkpoint trained before
+a title was registered) can be built again (the per-title parameter scale table indexed past its rows).
+
+### The sharing probe (`scripts/sharing_probe.py`)
+
+The question (design §4.2.6, scaled to what runs on the CPU while the GPU is elsewhere): at small model scale, does
+training on 1830 as well help an 1867 model, against 1867 alone? Arms, at each 1867 training-set size and seed:
+
+* **a**: 1867 alone;
+* **b**: joint, every batch 50% 1867 / 50% 1830 positions;
+* **c**: 1830 alone first (`c_pre`, one run per seed, shared by the sizes), then 1867 alone from its best checkpoint.
+
+Data: 1867 = A3's `generic_1867_v1` (965 games of 3-6 players, 915 training / 50 validation, 540,775 / 30,938
+positions); 50 of its training games are a fixed **dev** split (early stopping and the value refit's selection); the
+other 865 form the pool from which the sizes are nested subsets (`nested_subset`, seed 0): **100, 300 and all 865
+games** (55,745 / 176,771 / 510,565 positions; dev: 30,210). Results are on 1867's **validation** split (all 50
+games, never used for any choice). 1830 = `generic_1830_clean_all_v1` (3,878 training games, 2.38M positions, 2-6
+players; 30 validation games for the interference check).
+
+Recipe (every arm the same; `sharing_probe.py plan` defaults): the probe model `PROBE_MODEL` (d_model 64, 4 heads,
+2 map layers, 1 entity layer, 1 fusion round, d_trunk 128, d_head 64: **538,550 parameters**, 1/16 of the default),
+fp32 on the CPU, batch 128, C1's losses and AdamW at lr 1e-3 with cosine decay over the step cap. **Equal compute
+per arm**: every arm's 1867 phase is capped at **7,812 steps** (1M positions; arm b's are half 1830); `c_pre` runs
+3,906 steps (500k 1830 positions = arm b's 1830 share at the cap), selected on 1830 validation, no value refit.
+Evaluation on dev every min(max(the size's training positions, 32k), 100k) 1867 positions (arm b: twice as many
+steps apart), early stop after 3 evaluations without improvement of the dev total loss; then the value refit (at
+most 1,600 steps, evaluated every 400, patience 2, on dev win CE), then the final evaluation on validation. Seeds
+0, 1, 2 vary the initialization, the game orders and the shuffle draws; the dev / validation games and the subsets
+are fixed, so arms are compared on the same positions.
+
+CPU throughput behind these numbers (2026-11-13, cores 24-31,56-63 shared with other jobs, 1830 positions, batch
+128, stage 1): probe model 300 positions/s on 1 thread + 1 loader worker (434 on 2 threads), the 150k smoke config
+444 (719 on 2 threads); bf16 autocast was 1-11% faster in paired runs and is not used (training and evaluation
+stay in one precision). A cell is ~1.1 GB (trainer)
++ ~0.6 GB (loader worker); the probe runs 7 cells at a time with 1 thread each.
+
+#### Decision rule (fixed 2026-11-13, before any 1867 cell ran)
+
+Metric: 1867 validation **policy CE** (mean NLL of the human move over the legal moves) of each run's final
+checkpoint. Per (arm, size), the **seed spread** is the range (max - min) over the 3 seeds. For X in {b, c} at size
+n: gain = mean CE(a) - mean CE(X); noise = the larger of the two spreads. X **passes** at n iff gain > 2 x noise
+**and** X's win CE (after the value refit) is not worse than a's by more than 2 x the larger win-CE spread.
+
+* **Adopt sharing for 1867 only if some X passes at the full size (865 games).** These are 0.5M-parameter CPU
+  models: a signal, not proof for the full-size models. So "adopt" means: run the full-size comparison (E1: the
+  default model, 1867-only against X, plus a policy-only 1867 head-to-head) on the GPU next, and start 1867's
+  supervised stage from X only if it holds there. If both pass, prefer c (per-title weights, releases decoupled)
+  unless b's gain exceeds c's by more than 2 x noise.
+* If X passes only at 100 or 300 games: keep 1867 per-title; record it as evidence for warm-starting data-poor
+  titles (1822CA, 1822MX, 1828) from another title's model (family pooling stays the first sharing step).
+* If nothing passes: keep per-title models (the default). A null result at 0.5M parameters does not rule out
+  transfer at 8M (published multi-game transfer grows with model size, design §4.2.3); it means no GPU time for
+  cross-title sharing before 1867's per-title pipeline.
+* An X worse than a by more than 2 x noise at the full size is recorded as interference.
+* Reported, not part of the decision: top-1 overall and per family, top-5, winner accuracy; the 1830 validation of
+  the joint model and of c after fine-tuning against `c_pre` (interference / retention).
+* Budget caveat: with equal step caps, arm b sees half of a's 1867 positions (conservative for b), and c's extra is
+  its 1830 phase. If a's full-size runs are still improving at the cap (best = last evaluation, flagged in the
+  report), a full-size pass is provisional on that budget -- E1 decides anyway.
+
+The harness writes the per-cell runs under `<out>/runs/`, `report.md` / `report.json` (the table per arm x size with
+mean and half the seed range, per-family top-1, the 1830 interference rows, each pass / fail and the verdict).

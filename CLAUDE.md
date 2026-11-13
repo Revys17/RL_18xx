@@ -43,6 +43,8 @@ uv run python main.py pretrain --fresh --data-dir human_games/lmdb_v6k  # Fresh 
 uv run python main.py convert-generic --data-dir human_games/1830_clean_all --output human_games/generic_1830_clean_all_v1
 uv run python main.py pretrain-generic --data <dataset> --out model_checkpoints_generic/<run>  # --model-preset small: CPU smoke
 uv run python main.py compare-generic --generic <run>/final.pth --legacy <SL ckpt 10.pth> --data <dataset>  # per-family top-1
+uv run python main.py pretrain-generic --data <1830 ds> --data <1867 ds> --mix 1830:0.5,1867:0.5 --select-title 1867 ...  # mixed titles (C3); --init <ckpt>: fine-tune
+uv run python scripts/sharing_probe.py plan|run|report|status --out <dir> ...  # weight-sharing probe: 1867 alone vs +1830 (docs/rl_model.md "The sharing probe")
 bash scripts/launch/2026-11/bridge/gpu_check_1830.sh   # the 1830 GPU check (convert, pretrain, compare, policy-only evals)
 # Generic policy gradient (docs/rl_model.md "Policy gradient for the generic model"): league / PFSP per count, generic servers
 uv run python main.py policy-gradient-generic --policy <generic final.pth> --title 1830 --population <generic league.json> ...

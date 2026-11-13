@@ -738,10 +738,11 @@ class GenericPolicyValueModel(nn.Module):
         table("t_num_tiles", t["num_tiles"], torch.long)
         table("t_bank", t["bank"], torch.float32)
         param_scale = np.zeros((nt, c.num_families), dtype=np.float32)
+        k = min(nt, len(t["max_market"]))  # a model with fewer titles than the engine (registered since) keeps its own
         for fam_name, scale in _PARAM_SCALE_BY_FAMILY.items():
             if fam_name in v["families"][: c.num_families]:
                 f = v["families"].index(fam_name)
-                param_scale[: len(t["max_market"]), f] = t["max_market"] if isinstance(scale, str) else scale
+                param_scale[:k, f] = t["max_market"][:k] if isinstance(scale, str) else scale
         self.register_buffer("t_param_scale", torch.as_tensor(param_scale).clamp(min=1.0), persistent=False)
         is_map = torch.zeros(c.num_families, dtype=torch.bool)
         for f in v["map_families"]:
@@ -897,6 +898,17 @@ class GenericPolicyValueModel(nn.Module):
         emb = self.tile_feat_proj(self.t_tile_feat[titles, t]) + self.tile_id_emb(titles * self.config.max_tiles + t)
         return emb * valid[..., None].to(emb.dtype)
 
+    def _static_hex_bias(self, map_title: Tensor, h: int) -> Tensor:
+        """(M, heads, H, H) distance + direction attention bias of each map's title. It depends on the title
+        alone, so it is computed once per title in the batch and gathered: the values are exactly the
+        per-map lookup's, and the embeddings' backward sees T x H x H indices instead of M x H x H (on the
+        CPU their dense backward was ~30% of a training step)."""
+        titles, inverse = torch.unique(map_title, return_inverse=True)
+        dist = self.t_hex_dist[:, :h, :h][titles]
+        direction = self.t_hex_dir[:, :h, :h][titles]
+        per_title = (self.dist_bias(dist) + self.dir_bias(direction)).permute(0, 3, 1, 2)  # (T, heads, H, H)
+        return per_title.index_select(0, inverse)
+
     def _map_encoder(self, inputs: dict, map_title: Tensor, num_entities: int) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Per distinct map: hex tokens (M, H, d), token and reservation counts (M, H, E) and the raw
         per-edge features of the rotation factor (M, H, 6, 7)."""
@@ -931,9 +943,7 @@ class GenericPolicyValueModel(nn.Module):
         x = self.map_in_norm(x)
 
         # attention bias: distance, direction, track across the shared edge, same corporation's tokens
-        dist = self.t_hex_dist[:, :h, :h][map_title]
-        direction = self.t_hex_dir[:, :h, :h][map_title]
-        bias = (self.dist_bias(dist) + self.dir_bias(direction)).permute(0, 3, 1, 2)  # (M, heads, H, H)
+        bias = self._static_hex_bias(map_title, h)  # (M, heads, H, H)
         edge_track = (hex_feat @ self.hex_edge_track > 0).to(x.dtype)  # (M, H, 6)
         nbr = self.t_hex_nbr[map_title][:, :h]  # (M, H, 6)
         valid_nbr = nbr >= 0
