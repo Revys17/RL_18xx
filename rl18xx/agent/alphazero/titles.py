@@ -17,8 +17,9 @@ its eval defaults. :func:`new_game` builds an empty game of any registered title
 Player counts follow the user's decisions (``docs/rl_bridge_design.md``, 2026-10-16 / 2026-11-13):
 3-6 for every new title, 2-6 for 1830 (its 2-player game is trained since 2026-11-07).
 
-Nothing in the pipeline reads this module yet; the per-title wiring (records, data, checkpoints,
-policy gradient, evals) is package C's (``docs/rl_bridge_work_packages.md``).
+The generic pipeline (package C, ``docs/rl_bridge_work_packages.md``) reads it: player ranges and start-file
+templates in ``generic_pg`` / ``generic_play`` / ``scripts/eval_generic.py`` /
+``scripts/build_generic_start_positions.py``, new games in ``generic_play.new_title_game``.
 """
 
 from __future__ import annotations

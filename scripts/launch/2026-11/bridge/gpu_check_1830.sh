@@ -30,6 +30,8 @@ EVAL_OUT=${EVAL_OUT:-logs/eval/$RUN}
 SL10=${SL10:-/home/revys/longrun/work/lr1/model_checkpoints/AlphaZeroTransformer/20261004_134558_804974562/10.pth}
 DEVICE=${DEVICE:-cuda}
 GENERIC_DEVICE=${GENERIC_DEVICE:-cpu}  # the generic player in eval_policy_only's pool workers
+# GENERIC_SERVER=1: the generic player on a generic inference server (the GPU; milestone C2) instead
+GENERIC_SERVER=${GENERIC_SERVER:-}
 CPUS=${CPUS:-24-31,56-63}
 GAMES=${GAMES:-800}
 WORKERS=${WORKERS:-16}
@@ -68,6 +70,7 @@ if want eval; then
   G="generic:$OUT/final.pth@0.5"
   L="$SL10@0.5"
   COMMON=(--games "$GAMES" --auction-start --workers "$WORKERS" --generic-device "$GENERIC_DEVICE" --save-games 12)
+  [ -n "$GENERIC_SERVER" ] && COMMON+=(--generic-server)
   "${PY1[@]}" scripts/eval_policy_only.py --match "$G" "$L" --num-players 4 --a-seats 2 "${COMMON[@]}" \
     --out "$EVAL_OUT/h2h_4p_2v2" 2>&1 | tee "$EVAL_OUT/h2h_4p_2v2.log"
   "${PY1[@]}" scripts/eval_policy_only.py --match "$G" "$L" --num-players 4 --a-seats 1 "${COMMON[@]}" \

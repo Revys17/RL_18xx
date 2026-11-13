@@ -79,4 +79,6 @@ exec "${PY[@]}" main.py policy-gradient-generic "${COMMON[@]}" --policy "$SL" \
   --auction-fraction 0.5 --no-auction-unlock --auction-stall-decisions 150 --save-game-every 20 \
   --start-positions 'human_games/start_positions_1830_{n}p_v2.jsonl' \
   --midgame-positions 'human_games/midgame_positions_1830_{n}p_v2.jsonl' \
-  --inference-batch-size 1024 --server-replicas 2 --server-pipeline --threads 8
+  --inference-batch-size 1024 --server-replicas 2 --threads 8
+# --server-pipeline (a collector thread merging the next batch) was faster on the CPU transport benchmark, but the
+# legacy server's collector thread was slower on the GPU (GIL): try it only with RL18XX_SERVER_PROFILE on.
