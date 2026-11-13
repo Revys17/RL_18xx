@@ -429,14 +429,17 @@ title="1867")`, `scripts/g1867_fuzz.py`; written, not enforced). 1830 records ar
   The 40 misses of the old corpus (place_token 22, buy_train 6, buy_shares 3, lay_tile 3,
   discard_train 2, pass 2, merge 1, run_routes 1) are the generator's own misses: the index layer
   adds none (every generated move has exactly one index). 23 are the action at which the replay
-  itself then stops (25 old games end in a replay rejection: e.g. 23812@607, 32537@630,
+  itself then stops (24 old games end in a replay rejection, recounted in A3: e.g. 23812@607, 32537@630,
   24437@929, 87092@379). The other 17 are old records the generator does not offer: 11
   place_token (21494@776 is the documented home token Ruby HEAD also refuses; 28418@641,
   29292@510, 32894@633, 39631@631, 42154@657, 42964@581, 48185@477, 67332@710, 81411@536 and
   31586@669 lie beyond the 300-file sample `g1867_remaining_work.md` probed), 3 buy_shares
   (39631@693/@702, 41062@688) and 3 lay_tile in games the replay rejects a few actions later
-  (24437@899, 45921@503, 72923@336). Not probed against Ruby HEAD yet; the 2026-10 scrape, which
-  Ruby HEAD replays, has none.
+  (24437@899, 45921@503, 72923@336). Probed against Ruby HEAD 849c522 in A3 (`docs/rl_model.md` "Ruby HEAD
+  check of A2's 17 unexplained misses"): none is a generator bug -- 11 are refused by a live player at Ruby HEAD
+  in the same state (9 home tokens in Toronto / Montreal / N12, 2 tile rotations on M11), 6 lie past Ruby HEAD's
+  replay horizon (pre-#9655 merger order, or after a home token Ruby refuses). The 2026-10 scrape, which Ruby HEAD
+  replays, has none.
 
 ### Price census and price specs
 

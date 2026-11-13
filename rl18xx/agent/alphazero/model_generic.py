@@ -238,9 +238,20 @@ class LegalActions:
     #: units (a generator layout, 1867: ``ActionDescriptors.price_grid``); False = every integer of the
     #: range, cells in price space with ``step`` the "Bid" ladder (1830, the legacy head's cells).
     price_grid: bool = False
+    #: A generator layout's moves as 18xx.games action dicts, aligned with ``rows`` (``rl_legal_moves_json``'s
+    #: ``wire``; None for 1830): ``generic_play.TitlePlay.apply`` processes the chosen one directly instead of
+    #: decoding its index again (``rl_apply_index`` re-enumerates the moves: half of 1867's per-decision CPU).
+    wires: Optional[list] = None
 
     def __len__(self) -> int:
         return len(self.rows)
+
+    def price_cells(self, k: int):
+        """The price head's cells of legal row ``k``'s range, on this list's grid (:func:`price_cells_for`):
+        ``cell_of`` / ``sample_price`` / ``member`` give legal prices only (1867: on the move's step grid).
+        Every caller that samples or scores a price of a legal row goes through here."""
+        lo, hi, step = (int(x) for x in self.price_range[k])
+        return price_cells_for(int(self.rows[k, C_PRICE_KIND]), lo, hi, step, grid=bool(self.price_grid))
 
 
 def legal_actions(game, indices: Optional[Sequence[int]] = None, policy: Optional[str] = None) -> LegalActions:
@@ -256,7 +267,9 @@ def legal_actions(game, indices: Optional[Sequence[int]] = None, policy: Optiona
     g = raw_game(game)
     d = action_descriptors(g.title)
     if d.kind == "generator":
-        ranges = {m["index"]: m["range"] for m in json.loads(g.rl_legal_moves_json(policy))}
+        moves = json.loads(g.rl_legal_moves_json(policy))
+        ranges = {m["index"]: m["range"] for m in moves}
+        wire_of = {m["index"]: m["wire"] for m in moves}
         idx = np.asarray(sorted(ranges) if indices is None else indices, dtype=np.int64)
         rows = d.gather(idx)
         price_range = np.full((len(idx), 3), -1, dtype=np.int64)
@@ -270,7 +283,8 @@ def legal_actions(game, indices: Optional[Sequence[int]] = None, policy: Optiona
                         f"{g.title}: legal index {idx[i]} has price_kind {rows[i, C_PRICE_KIND]} but no range"
                     )
                 price_range[i] = r
-        return LegalActions(rows=rows, price_range=price_range, indices=idx, price_grid=True)
+        wires = [wire_of[int(i)] for i in idx]
+        return LegalActions(rows=rows, price_range=price_range, indices=idx, price_grid=True, wires=wires)
     idx = np.asarray(g.factored_legal_indices() if indices is None else indices, dtype=np.int64)
     rows = d.gather(idx)
     price_range = np.full((len(idx), 3), -1, dtype=np.int64)

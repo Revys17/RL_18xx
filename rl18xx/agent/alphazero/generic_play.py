@@ -5,8 +5,9 @@
 model's :class:`model_generic.LegalActions` (descriptor rows, legal price ranges, layout indices), whether a
 position is a decision (several legal moves, or one whose price is still open), the engine price of a
 fixed-price move, and applying a legal row at a price. The default reads the title's RL layout
-(``model_generic.legal_actions``, ``apply_action_index``, ``price_range_for_index``): 1830 today, 1867 once
-its layout lands (package A2; if A2's legal path differs, :func:`register_title_play` is the hook).
+(``model_generic.legal_actions``; 1830's factored layout through ``apply_action_index`` /
+``price_range_for_index``, a generator layout -- 1867 -- through ``rl_apply_index`` / ``rl_price_range``);
+:func:`register_title_play` is the hook for a title that needs something else.
 
 **Starts** (design §5.6): as 1830's ``start_positions``, a game starts at the opening (``auction``), at the
 first Stock Round from a recorded human game (``human:<id>``) or from a random opening played through legal
@@ -83,15 +84,42 @@ class TitlePlay:
         ``policy_selfplay._advance``)."""
         return len(legal) > 1 or (len(legal) == 1 and self.open_price(legal, 0))
 
+    @property
+    def generator_layout(self) -> bool:
+        """Whether the title's layout is a generator layout (1867: ``rl_price_range`` / ``rl_apply_index``)
+        rather than 1830's factored one (``price_range_for_index`` / ``apply_action_index``)."""
+        if not hasattr(self, "_generator_layout"):
+            from rl18xx.agent.alphazero.action_descriptors import action_descriptors
+
+            self._generator_layout = action_descriptors(self.title).kind == "generator"
+        return self._generator_layout
+
     def fixed_price(self, raw, legal, k: int) -> Optional[int]:
         """The price of legal row ``k`` when it has no open price: None for a move without one, the engine's
         price for a fixed-price move (a depot train), the range's low end otherwise (as the legacy samplers)."""
         index = int(legal.indices[k])
-        price_range = raw.price_range_for_index(index)
+        price_range = raw.rl_price_range(index) if self.generator_layout else raw.price_range_for_index(index)
         return None if price_range is None else int(price_range[0])
 
     def apply(self, raw, legal, k: int, price: Optional[int]) -> None:
-        raw.apply_action_index(int(legal.indices[k]), price)
+        """Apply legal row ``k`` at ``price`` (None: the move's own price, its range's low end). A generator
+        layout's row is applied from its action dict when the legal list carries them (``LegalActions.wires``:
+        the same state and logged action as ``rl_apply_index``, without enumerating the moves again), the price
+        checked against the row's range and step first."""
+        if not self.generator_layout:
+            raw.apply_action_index(int(legal.indices[k]), price)
+            return
+        wires = getattr(legal, "wires", None)
+        if wires is None:
+            raw.rl_apply_index(int(legal.indices[k]), price)
+            return
+        wire = dict(wires[k])
+        if price is not None:
+            lo, hi, step = (int(x) for x in legal.price_range[k])
+            if lo < 0 or not (lo <= int(price) <= hi and (int(price) - lo) % max(step, 1) == 0):
+                raise ValueError(f"price {price} is not legal for index {int(legal.indices[k])}: ({lo}, {hi}, {step})")
+            wire["price"] = int(price)
+        raw.process_action(wire)
 
     def generator_moves(self, raw) -> Optional[list]:
         """The title's own legal-move generator (``[{"wire": action, "range": [lo, hi, step] or None}]``) for
@@ -443,6 +471,8 @@ def _load_titled(game: dict) -> Tuple[Optional[ReplayedGame], Optional[str]]:
     try:
         replay_game(game, on_action=lambda rust, i, a: captured.setdefault("game", rust))
     except (ReplayError, TitleUnsupported, ValueError) as e:
+        # A record the engine rejects part-way gives no start at all, not even before the rejection (A3, the
+        # user's call "for correctness": 1867's 24 such old games are records the current rules refuse).
         return None, f"replay_failed: {str(e)[:120]}"
     rust = captured.get("game")
     if rust is None:

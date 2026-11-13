@@ -292,6 +292,7 @@ class PGRow:
     advantage: float = 0.0  # the seat's reward, then reward - V(s) (subtract_baselines)
     win: Optional[np.ndarray] = None  # (6,) win share, seat frame
     score: Optional[np.ndarray] = None  # (6,) score-head target (placement points / reward), seat frame
+    price_grid: bool = False  # the legal list's price grid (1867: cells in step units, as the server's mask)
 
 
 @dataclass
@@ -303,6 +304,7 @@ class _Game:
     start: str
     seed: Optional[int] = None
     decisions: int = 0
+    auction_decisions: int = 0  # decisions taken in an Auction round (1830 waterfall, 1867 single-item auction)
     termination: Optional[str] = None
     learner: set = field(default_factory=set)
     seen: dict = field(default_factory=dict)  # learner seat -> decisions so far
@@ -495,9 +497,8 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
                 if play.open_price(legal, k):
                     q = price_of_row[lo + k]
                     cell, cell_logp = int(reply.price_cell[q]), float(reply.price_cell_logp[q])
-                    kind = int(legal.rows[k, mg.C_PRICE_KIND])
-                    plo, phi, step = (int(x) for x in legal.price_range[k])
-                    price = int(mg.price_cells_for(kind, plo, phi, step).sample_price(cell, rng))
+                    # the cells of the server's mask: on the layout's grid (1867: the move's step)
+                    price = int(legal.price_cells(k).sample_price(cell, rng))
                 else:
                     price = play.fixed_price(g.raw, legal, k)
                 if is_learner:
@@ -518,6 +519,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
                             price_cell=cell,
                             seat=seat,
                             num_players=n_players,
+                            price_grid=bool(legal.price_grid),
                         )
                         if slot < len(g.reservoir[seat]):
                             g.reservoir[seat][slot] = row
@@ -525,6 +527,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
                             g.reservoir[seat].append(row)
                     stats["learner_decisions"] += 1
                     stats["learner_price_decisions"] += cell >= 0
+                g.auction_decisions += g.raw.round.round_type == "Auction"
                 play.apply(g.raw, legal, k, price)
                 g.decisions += 1
                 decisions_total += 1
@@ -553,6 +556,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
             "worth_share": fractions.tolist(),
             "reward": [float(x) for x in reward],
             "decisions": g.decisions,
+            "auction_decisions": g.auction_decisions,
             "learner_decisions": sum(g.seen.values()),
             "termination": g.termination,
             "start_kind": g.start.split(":")[0] if g.start else None,
@@ -677,7 +681,7 @@ def collate_rows(rows: Sequence[PGRow], config=None) -> dict:
     from rl18xx.agent.alphazero.generic_data import concat_encodings
 
     arrays = concat_encodings([_decompress(r.tokens) for r in rows])
-    legal = [mg.LegalActions(rows=r.rows, price_range=r.price_range) for r in rows]
+    legal = [mg.LegalActions(rows=r.rows, price_range=r.price_range, price_grid=r.price_grid) for r in rows]
     mg.add_legal_inputs(arrays, legal, config=config)
     choice = np.array([r.choice for r in rows], dtype=np.int64)
     offsets = arrays["legal_offsets"]
@@ -1068,7 +1072,7 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
     buffer: List[PGRow] = []
     gen, total_games = Counter(), 0
     gen_started = run_started = time.time()
-    terminations, lengths, starts = Counter(), [], Counter()
+    terminations, lengths, starts, auction_lengths = Counter(), [], Counter(), []
     worker_seconds = Counter()
     prices = defaultdict(list)
     by_count = defaultdict(lambda: defaultdict(list))
@@ -1102,9 +1106,11 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                         for company, price in (record.get("auction_prices") or {}).items():
                             prices[company].append(price)
                         lengths.append(record["decisions"])
+                        auction_lengths.append(record.get("auction_decisions", 0))
                         if mixed:
                             c = by_count[players]
                             c["decisions"].append(record["decisions"])
+                            c["auction_decisions"].append(record.get("auction_decisions", 0))
                             c["max_length"].append(record["termination"] == "max_length")
                             c["auction_stall"].append(record["termination"] == "auction_stall")
                             if record["opponent"] == "league":
@@ -1204,6 +1210,8 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                     "games_per_hour_run": total_games / (time.time() - run_started) * 3600,
                     "decisions_per_second": gen["decisions"] / elapsed,
                     "mean_decisions": float(np.mean(lengths)) if lengths else 0.0,
+                    "max_decisions_game": int(max(lengths, default=0)),
+                    "max_auction_decisions": int(max(auction_lengths, default=0)),
                     "terminations": dict(terminations),
                     "starts": dict(starts),
                     "auction_games": max((len(v) for v in prices.values()), default=0),
@@ -1228,6 +1236,8 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                 for n, c in sorted(by_count.items()):
                     record[f"p{n}_games"] = len(c["decisions"])
                     record[f"p{n}_mean_decisions"] = float(np.mean(c["decisions"]))
+                    record[f"p{n}_max_decisions_game"] = int(max(c["decisions"]))
+                    record[f"p{n}_max_auction_decisions"] = int(max(c["auction_decisions"], default=0))
                     record[f"p{n}_max_length"] = int(sum(c["max_length"]))
                     record[f"p{n}_auction_stalls"] = int(sum(c["auction_stall"]))
                     if c["score"]:
@@ -1235,7 +1245,7 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                 gen.clear()
                 worker_seconds.clear()
                 gen_started = time.time()
-                terminations, lengths, starts = Counter(), [], Counter()
+                terminations, lengths, starts, auction_lengths = Counter(), [], Counter(), []
                 prices = defaultdict(list)
                 by_count = defaultdict(lambda: defaultdict(list))
                 history.write(json.dumps(record) + "\n")

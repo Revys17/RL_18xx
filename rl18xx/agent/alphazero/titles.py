@@ -61,6 +61,10 @@ class TitleSpec:
     human_games_dirs: Tuple[str, ...] = ()
     #: Supervised-data LMDB (None until one is converted).
     lmdb: Optional[str] = None
+    #: ``convert-generic``'s default for ``finished_only``: keep only human games whose record replays to the
+    #: game's end in our engine (1867: the user's decision of 2026-11-13, "just for correctness"; 1830 keeps its
+    #: unfinished games, as SL checkpoint 10's data did).
+    supervised_finished_only: bool = False
     #: Start files per player count (``{n}``): post-auction human positions, mid-game cuts. New
     #: titles' files are not built yet (package C).
     start_positions_template: Optional[str] = None
@@ -139,6 +143,7 @@ TITLE_SPECS = {
             human_games_dirs=("human_games/1867", _scrape("1867")),
             start_positions_template="human_games/start_positions_1867_{n}p.jsonl",
             midgame_positions_template="human_games/midgame_positions_1867_{n}p.jsonl",
+            supervised_finished_only=True,
         ),
         TitleSpec(
             title="1822",
