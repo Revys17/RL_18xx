@@ -4,7 +4,7 @@ training"), on CPU with the small config.
 
 Data: the 1830 fixture games (``convert_dataset`` with the 1830 importer) and synthetic 1867 games --
 random walks over 1867's layout, converted by a test importer that labels each logged action with the
-index the walk played (no human 1867 importer exists yet).
+index the walk played (the real 1867 importer reads human exports).
 
 Checked: nested subsets and split overrides (a ``dev`` split, refusals); the mixed stream draws each
 dataset at its share, carries each item's source, mixes titles inside a batch, cycles a small dataset and
@@ -111,12 +111,17 @@ def data_1867(tmp_path_factory):
         path = root / "games" / f"{900 + k}.json"
         path.write_text(json.dumps(walk_1867(n, seed=k + 1, steps=160)))
         paths.append(path)
+    previous = gd._IMPORTERS.get("1867")  # the real 1867 importer (A3) reads human exports, not walks
     gd.register_importer("1867", WalkImporter1867)
+    gd._WORKER_IMPORTER = None  # an in-process conversion caches its importer per title
     try:
         out = root / "ds"
         gd.convert_dataset([str(p) for p in paths], str(out), title="1867", workers=1, validation_percentage=0.4)
     finally:
-        gd._IMPORTERS.pop("1867", None)
+        if previous is None:
+            gd._IMPORTERS.pop("1867", None)
+        else:
+            gd._IMPORTERS["1867"] = previous
         gd._WORKER_IMPORTER = None
     ds = gd.GenericDataset(out)
     assert ds.titles == ["1867"] and ds.num_positions() > 400

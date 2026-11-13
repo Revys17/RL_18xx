@@ -20,8 +20,10 @@ Layout::
 
 Records are made by a per-title :class:`TitleImporter`. 1830's is the legacy converter's own matching
 (``pretraining._action_dict_to_factored_index`` on the replayed ``RustGameAdapter``), so its labels are
-the legacy converter's, index for index; titles without an importer (1867 until milestone A2's
-``match_human_action``) raise :class:`UnsupportedTitle`.
+the legacy converter's, index for index. 1867's (``generic_import_1867``, milestone A3) reads raw
+18xx.games exports and matches each human decision against the layout's indexed moves
+(``rl_legal_moves_json``, the matching of ``scripts/g1867_completeness.py --index``). Titles without an
+importer (the 1822 family) raise :class:`UnsupportedTitle`.
 
 Reading: :class:`GenericDataset` (meta, index, records); :func:`replay` (a record's decision positions);
 :func:`position_item` (one decision's encoding, legal rows and targets in the encoder's seat frame);
@@ -120,10 +122,26 @@ class TitleImporter:
     def raw(self, state):
         return getattr(state, "_game", state)
 
+    def is_decision(self, state, pos: int, action: dict) -> Tuple[bool, str]:
+        """Whether log action ``pos`` is a decision to label (``(False, reason)`` for e.g. a recorded
+        server auto-action, which is applied and counted under ``not_decision``). Default: every action."""
+        return True, ""
+
+    def legal_actions(self, state):
+        """The position's legal list (``model_generic.LegalActions``); default ``legal_actions(raw)``."""
+        from rl18xx.agent.alphazero import model_generic as mg
+
+        return mg.legal_actions(self.raw(state))
+
     def match(self, state, action: dict, legal_indices: np.ndarray) -> Tuple[Optional[int], str]:
         """``(layout index, "ok")`` for the one legal index the human action names, else
-        ``(None, "unmatched")`` or ``(None, "ambiguous")`` (several indices: never guess)."""
+        ``(None, "unmatched")`` or ``(None, "ambiguous")`` (several indices: never guess), or another
+        skip status of the title's (counted under it)."""
         raise NotImplementedError
+
+    def record_extra(self, game: dict) -> dict:
+        """Extra per-game fields of the record (after :meth:`load`)."""
+        return {}
 
     def apply(self, state, action: dict) -> None:
         state.process_action(action)
@@ -187,12 +205,19 @@ class Importer1830(TitleImporter):
         return int(index), "ok"
 
 
-_IMPORTERS = {"1830": Importer1830}
+def _importer_1867():
+    from rl18xx.agent.alphazero.generic_import_1867 import Importer1867
+
+    return Importer1867()
+
+
+_IMPORTERS = {"1830": Importer1830, "1867": _importer_1867}
 
 
 def register_importer(title: str, factory) -> None:
-    """Register a title's importer (a :class:`TitleImporter` subclass or factory). Milestone A2 adds
-    1867's (labels from the engine's ``match_human_action``, design §5.2)."""
+    """Register a title's importer (a :class:`TitleImporter` subclass or factory). 1830's is the legacy
+    converter's matching; 1867's (``generic_import_1867``, milestone A3) matches against the layout's
+    indexed moves (``rl_legal_moves_json``)."""
     _IMPORTERS[str(title)] = factory
 
 
@@ -201,8 +226,8 @@ def importer_for(title: str) -> TitleImporter:
         factory = _IMPORTERS[str(title)]
     except KeyError:
         raise UnsupportedTitle(
-            f"no human-game importer for {title!r} yet (have: {', '.join(_IMPORTERS)}); "
-            "TODO(A2): 1867's labels come from its layout's match_human_action"
+            f"no human-game importer for {title!r} yet (have: {', '.join(_IMPORTERS)}; the 1822 family "
+            "needs its RL layout first)"
         ) from None
     return factory()
 
@@ -284,9 +309,15 @@ def convert_game(
     skipped: Dict[str, Counter] = defaultdict(Counter)
     forced = forced_skipped = price_targets = price_outside = 0
     families = d.families
+    not_decision: Counter = Counter()
     for pos, action in enumerate(actions):
         atype = str(action.get("type", "?"))
-        legal = mg.legal_actions(raw)
+        decision, why = importer.is_decision(state, pos, action)
+        if not decision:
+            not_decision[why] += 1
+            importer.apply(state, action)
+            continue
+        legal = importer.legal_actions(state)
         index, status = importer.match(state, action, legal.indices)
         if index is not None:
             where = np.flatnonzero(legal.indices == index)
@@ -306,9 +337,10 @@ def convert_game(
         p = -1
         if legal.rows[row, mg.C_PRICE_KIND] >= 0:
             human = importer.price(action)
-            lo, hi, _ = (int(x) for x in legal.price_range[row])
+            lo, hi, step = (int(x) for x in legal.price_range[row])
             if human is not None:
-                if lo <= human <= hi:
+                # a generator layout's legal prices lie on the move's step grid (docs/rl_descriptors.md §6)
+                if lo <= human <= hi and not (legal.price_grid and (human - lo) % max(step, 1)):
                     p = human
                     price_targets += hi > lo
                 else:
@@ -362,6 +394,7 @@ def convert_game(
         "worth": worth.astype(np.float32),
         "win_share": win_share,
         "placement": placement,
+        **importer.record_extra(game),
     }
     stats.update(
         converted=1,
@@ -376,6 +409,11 @@ def convert_game(
         matched_by_family=dict(matched_by_family),
         **{status: dict(c) for status, c in skipped.items()},
     )
+    if not_decision:
+        stats["not_decision"] = dict(not_decision)
+    if record.get("stopped"):
+        stats["stopped"] = 1
+        stats["stopped_at"] = {str(record["stopped"]).split(" ")[0]: 1}
     stats[f"positions_{split}"] = len(action_pos)
     stats[f"games_{split}"] = 1
     stats[f"positions_{n}p"] = len(action_pos)
@@ -413,6 +451,8 @@ def list_game_files(sources: Sequence[str]) -> List[Path]:
 
 
 _WORKER_IMPORTER: Optional[TitleImporter] = None
+#: Skip statuses of :func:`convert_game` (plus a title's ``replay_only:<class>``), per game in ``games.jsonl``.
+_SKIP_KEYS = ("unmatched", "ambiguous", "not_legal", "policy")
 
 
 def _convert_file(job: tuple) -> tuple:
@@ -434,12 +474,18 @@ def _convert_file(job: tuple) -> tuple:
         return gid, None, stats, None
     entry = {
         "id": record["id"],
+        "source": str(Path(path).parent),
         "split": record["split"],
         "players": record["num_players"],
         "decisions": record_decisions(record),
         "actions": record["num_actions"],
         "finished": record["finished"],
     }
+    if record.get("stopped"):
+        entry["stopped"] = True  # the replay stopped at a rejected action (1867's old records)
+    skipped = {k: sum(v.values()) for k, v in stats.items() if k in _SKIP_KEYS or k.startswith("replay_only:")}
+    if skipped:
+        entry["skipped"] = skipped  # labels skipped in this game, by status (per-source sums)
     return gid, encode_record(record), stats, entry
 
 
@@ -541,6 +587,10 @@ def convert_dataset(
                     str(n): sum(e["decisions"] for e in index if e["players"] == n)
                     for n in sorted({e["players"] for e in index})
                 },
+                "games_by_players": {
+                    str(n): sum(1 for e in index if e["players"] == n) for n in sorted({e["players"] for e in index})
+                },
+                "by_source": _counts_by_source(index),
             },
             "stats": stats,
         }
@@ -562,6 +612,18 @@ def convert_dataset(
         meta["seconds"], stats.get("dropped", {}),
     )
     return meta
+
+
+def _counts_by_source(index: List[dict]) -> dict:
+    """Games, positions and skipped labels per source directory of a conversion's index."""
+    out: dict = {}
+    for e in index:
+        c = out.setdefault(e.get("source", "?"), {"games": 0, "positions": 0, "skipped": {}})
+        c["games"] += 1
+        c["positions"] += e["decisions"]
+        for k, v in (e.get("skipped") or {}).items():
+            c["skipped"][k] = c["skipped"].get(k, 0) + v
+    return out
 
 
 def _quiet_worker():
@@ -761,6 +823,7 @@ def position_item(record: dict, decision: int, game, descriptors=None) -> dict:
         "enc": enc,
         "rows": d.gather(indices),
         "price_range": record["legal_price_range"][lo:hi],
+        "price_grid": d.price_grid,
         "indices": indices,
         "target": int(record["target"][decision]),
         "price": int(record["price"][decision]),
@@ -820,7 +883,10 @@ def collate(items: Sequence[dict], config=None) -> dict:
     from rl18xx.agent.alphazero import model_generic as mg
 
     arrays = concat_encodings([it["enc"] for it in items])
-    legal = [mg.LegalActions(rows=it["rows"], price_range=it["price_range"]) for it in items]
+    legal = [
+        mg.LegalActions(rows=it["rows"], price_range=it["price_range"], price_grid=bool(it.get("price_grid", False)))
+        for it in items
+    ]
     mg.add_legal_inputs(arrays, legal, config=config)
     target = np.array([it["target"] for it in items], dtype=np.int64)
     offsets = arrays["legal_offsets"]

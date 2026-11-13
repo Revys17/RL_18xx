@@ -48,107 +48,16 @@ import engine_rs  # noqa: E402
 
 from tests.title_replay_harness import game_seed, ruby_filtered_actions  # noqa: E402
 
+# The matching lives in the library (the 1867 importer of the generic supervised data uses the same):
+# rl18xx/agent/alphazero/generic_import_1867.py.
+from rl18xx.agent.alphazero.generic_import_1867 import POLICY_TYPES, matching, replay_only_reason  # noqa: E402
+from rl18xx.agent.alphazero.generic_import_1867 import action_key as _key  # noqa: E402
+
 SKIP = {"run_routes"}
-# Action types the cross-player policy (GameTitle::generator_cross_player) can exclude.
-POLICY_TYPES = {"buy_train", "buy_company", "merge"}
-
-
-def _in_range(value, rng) -> bool:
-    if rng is None or value is None:
-        return False
-    lo, hi, step = rng
-    return lo <= value <= hi and (value - lo) % max(step, 1) == 0
-
-
-def _shares_key(g, a: dict):
-    ids = list(a.get("shares") or [])
-    owners = sorted(g.g1867_share_owner(s) for s in ids)
-    corp = ids[0].rsplit("_", 1)[0] if ids else a.get("corporation")
-    pres = any(s.endswith("_0") for s in ids)
-    return (corp, tuple(owners), int(a.get("percent") or 0), pres)
-
-
-def _key(g, a: dict):
-    """The outcome-relevant parameters of a wire action (state BEFORE it)."""
-    t = a["type"]
-    if t == "bid":
-        return (a.get("company"), a.get("corporation"))
-    if t in ("buy_shares", "sell_shares"):
-        return _shares_key(g, a)
-    if t == "par":
-        sp = a.get("share_price")
-        if isinstance(sp, str):
-            sp = int(sp.split(",")[0])
-        return (a.get("corporation"), sp)
-    if t == "lay_tile":
-        return (a.get("hex"), str(a.get("tile")).rsplit("-", 1)[0], int(a.get("rotation") or 0))
-    if t == "place_token":
-        city = a.get("city")
-        return tuple(g.g1867_city_ref(city)) if city else (a.get("hex"),)
-    if t == "remove_token":
-        return tuple(g.g1867_city_ref(a.get("city"))) + (int(a.get("slot") or 0),)
-    if t == "dividend":
-        return (a.get("kind"),)
-    if t == "choose":
-        return (str(a.get("choice")),)
-    if t == "buy_train":
-        name, owner = g.g1867_train_info(a.get("train", ""))
-        exch = a.get("exchange")
-        return (name, owner, g.g1867_train_info(exch)[0] if exch else None)
-    if t == "discard_train":
-        return (g.g1867_train_info(a.get("train", ""))[0],)
-    if t == "merge":
-        return (a.get("corporation"),)
-    if t == "buy_company":
-        return (a.get("company"),)
-    return ()
-
-
-def _price(a: dict):
-    return a.get("price") if a["type"] in ("bid", "buy_train", "buy_company") else None
-
-
-def matching(g, human: dict, moves: list[dict]) -> list[dict]:
-    """The generated moves the human action matches."""
-    t = human["type"]
-    ent = str(human.get("entity"))
-    hk = _key(g, human)
-    hp = _price(human)
-    out = []
-    for m in moves:
-        w = m["wire"]
-        if w["type"] != t or str(w.get("entity")) != ent:
-            continue
-        if _key(g, w) != hk:
-            continue
-        if m["range"] is not None:
-            if not _in_range(hp, m["range"]):
-                continue
-        elif hp is not None and w.get("price") != hp:
-            continue
-        out.append(m)
-    return out
 
 
 def matches(g, human: dict, moves: list[dict]) -> int:
     return len(matching(g, human, moves))
-
-
-def replay_only_reason(g, human: dict) -> str | None:
-    """A missed human action in a documented replay-only class (see the
-    generator status notes in docs/g1867_remaining_work.md), else None."""
-    offers = g.g1867_step_offers()
-    if not offers:
-        return None
-    kind, ent, _types = offers[0]
-    t, who = human["type"], str(human.get("entity"))
-    if kind == "MajorTrainless" and t in ("choose", "pass") and who != ent:
-        return "trainless_out_of_order"  # Ruby accepts any queued major; we decide in queue order
-    if kind == "PostMergerShares" and t in ("buy_shares", "pass") and who != ent:
-        return "dealing_out_of_turn"  # Ruby's actions ignore the dealing order
-    if kind == "ReduceTokens" and t in ("buy_shares", "pass") and human.get("entity_type") == "player":
-        return "pre_9655_merger_order"  # old records deal shares before removing tokens
-    return None
 
 
 def audit_game(path: str) -> dict:

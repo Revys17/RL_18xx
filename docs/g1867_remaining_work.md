@@ -321,8 +321,12 @@ Replay-neutral: the 300-game sample (206/60/3/4/27), the 2026-10 scrape
 
 ## Remaining work (ordered by expected yield)
 
-1. **The RL bridge — the actual goal** (on hold by the user's decision).
-   1867 is still `alphazero_bridge_ready() == false`. Needed: per-title
+1. **The RL bridge — the actual goal** (off hold since 2026-11-13; status in
+   `docs/rl_descriptors.md` §8 -- layout `1867-v1`, index API -- and
+   `docs/rl_model.md` "1867: data, starts, caps and the CPU smoke": the human
+   importer, a 965-game supervised dataset, start files, the generic
+   pipeline playing 1867 end to end on the CPU). The original list, for the
+   record: 1867 was `alphazero_bridge_ready() == false`. Needed: per-title
    action layout (the generator's families: single-item and corporation
    bids with price ranges, par cells, buy/sell bundles, two-lay tile lays,
    distance-priced tokens, home tokens, three discounted trains + trade-ins,
