@@ -238,14 +238,15 @@ class LegalActions:
         return len(self.rows)
 
 
-def legal_actions(game) -> LegalActions:
+def legal_actions(game, indices: Optional[Sequence[int]] = None) -> LegalActions:
     """The legal actions of a position of a title with an RL layout (today 1830): its legal indices
-    (``factored_legal_indices``), their descriptor rows, and each price-bearing row's range
-    (``price_range_for_index``; a bid's ladder step is 1830's $5 -- the layout path's ranges carry no
-    step yet, new titles' generator ranges will)."""
+    (``factored_legal_indices``, or ``indices`` when the caller already has them), their descriptor
+    rows, and each price-bearing row's range (``price_range_for_index``; a bid's ladder step is 1830's
+    $5 -- the layout path's ranges carry no step yet, new titles' generator ranges will). This is the
+    one place a legal range's step is decided (the supervised data and the policy players call it)."""
     g = raw_game(game)
     d = action_descriptors(g.title)
-    idx = np.asarray(g.factored_legal_indices(), dtype=np.int64)
+    idx = np.asarray(g.factored_legal_indices() if indices is None else indices, dtype=np.int64)
     rows = d.gather(idx)
     price_range = np.full((len(idx), 3), -1, dtype=np.int64)
     bid = vocab()["price_kinds"].index("bid")
@@ -289,6 +290,17 @@ def build_inputs(
         return arrays
     if len(legal) != len(games):
         raise ValueError(f"{len(legal)} legal lists for {len(games)} positions")
+    return add_legal_inputs(arrays, legal, config=config)
+
+
+def add_legal_inputs(
+    arrays: dict, legal: Sequence[LegalActions], config: Optional["GenericModelConfig"] = None
+) -> dict:
+    """Add the flat legal list of ``legal`` (one :class:`LegalActions` per position of ``arrays``, in
+    order) to token arrays -- ``encode_batch``'s, or a supervised batch's collated encodings
+    (``generic_data.collate``) -- as :func:`build_inputs` describes. Returns ``arrays`` (updated)."""
+    if len(legal) != len(arrays["meta"]):
+        raise ValueError(f"{len(legal)} legal lists for {len(arrays['meta'])} positions")
     v = vocab()
     counts = np.array([len(la) for la in legal], dtype=np.int64)
     offsets = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
@@ -1464,6 +1476,7 @@ __all__ = [
     "GenericModelConfig",
     "GenericPolicyValueModel",
     "LegalActions",
+    "add_legal_inputs",
     "build_inputs",
     "check_checkpoint_meta",
     "check_inputs",

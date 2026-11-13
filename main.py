@@ -4,6 +4,9 @@ Usage:
     python main.py train              Run the AlphaZero training loop (self-play + training)
     python main.py pretrain            Pre-train from human game data
     python main.py convert             Encode cleaned game JSONs to LMDB for pretraining
+    python main.py convert-generic     Cleaned games -> supervised records for the title-generic model
+    python main.py pretrain-generic    Two-stage supervised pretraining of the title-generic model
+    python main.py compare-generic     A generic vs a legacy checkpoint on the same validation positions
     python main.py arena               Run an arena match between agents
     python main.py dashboard           Start the training dashboard web server
     python main.py replay <game_file>  Check a saved game in the Python engine and open it in the game viewer
@@ -376,6 +379,102 @@ def cmd_convert(args):
         save_path=args.output,
         skip_forced=args.skip_forced,
     )
+
+
+def cmd_convert_generic(args):
+    import json
+    import logging
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from rl18xx.agent.alphazero.generic_data import convert_dataset
+
+    meta = convert_dataset(
+        sources=args.data_dir,
+        out=args.output,
+        title=args.title,
+        workers=args.workers,
+        limit=args.limit,
+        validation_percentage=args.validation_percentage,
+        skip_forced=args.skip_forced,
+    )
+    stats = {k: v for k, v in meta["stats"].items() if k != "dropped_detail"}
+    print(json.dumps({"counts": meta["counts"], "stats": stats}, indent=2))
+
+
+def cmd_pretrain_generic(args):
+    import json
+    import logging
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from rl18xx.agent.alphazero.generic_pretrain import MODEL_PRESETS, GenericPretrainConfig, pretrain
+
+    model = dict(MODEL_PRESETS[args.model_preset])
+    if args.model_config:
+        model.update(json.loads(args.model_config))
+    cfg = GenericPretrainConfig(
+        data=args.data,
+        out=args.out,
+        model=model,
+        init=args.init,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        value_lr_multiplier=args.value_lr_multiplier,
+        epochs=args.epochs,
+        patience=args.patience,
+        label_smoothing=args.label_smoothing,
+        entropy_weight=args.entropy_weight,
+        value_loss_weight=args.value_loss_weight,
+        score_loss_weight=args.score_loss_weight,
+        price_loss_weight=args.price_loss_weight,
+        value_joint_epochs=None if args.value_joint_epochs < 0 else args.value_joint_epochs,
+        value_refit=not args.no_value_refit,
+        refit_eval_steps=args.refit_eval_steps,
+        refit_patience=args.refit_patience,
+        refit_max_steps=args.refit_max_steps,
+        device=args.device,
+        bf16=args.bf16,
+        workers=args.workers,
+        buffer_positions=args.buffer_positions,
+        seed=args.seed,
+        max_steps=args.max_steps,
+        eval_every=args.eval_every,
+        train_max_games=args.train_max_games,
+        val_max_games=args.val_max_games,
+        log_every=args.log_every,
+        threads=args.threads,
+    )
+    pretrain(cfg)
+
+
+def cmd_compare_generic(args):
+    import json
+    import logging
+    from pathlib import Path
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    import torch
+
+    from rl18xx.agent.alphazero.generic_pretrain import compare_with_legacy
+
+    torch.set_num_threads(args.threads)
+    result = compare_with_legacy(
+        args.generic, args.legacy, args.data, split=args.split, batch_size=args.batch_size, device=args.device,
+        max_games=args.max_games, max_positions=args.max_positions,
+    )
+    text = json.dumps(result, indent=2)
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(text)
+    for name in ("generic", "legacy"):
+        m = result[name]
+        fams = " ".join(f"{k}={v['top1']:.3f}" for k, v in sorted(m["top1_by_family"].items()))
+        print(
+            f"{name}: positions {m['positions']} top1 {m['top1']:.4f} top5 {m['top5']:.4f} "
+            f"value CE {m['value_ce']:.4f} (equal odds {m['value_baseline']:.4f}) "
+            f"winner {m['winner_acc']:.3f}\n  {fams}"
+        )
+    print(f"rotation mismatches: {result['rotation_mismatch']}")
 
 
 def cmd_refit_price_head(args):
@@ -1020,6 +1119,75 @@ def build_parser():
         "it made pretraining worse (see pretraining.convert_game_to_training_data)",
     )
 
+    # convert-generic (title-generic supervised records for the generic model; docs/rl_model.md)
+    p = sub.add_parser(
+        "convert-generic",
+        help="Cleaned human games -> title-generic supervised records (legal indices, labels, prices, outcomes)",
+    )
+    p.add_argument(
+        "--data-dir", type=str, nargs="+", default=["human_games/1830_clean_all"],
+        help="Cleaned game JSON directories or files (default: human_games/1830_clean_all, lmdb_v6k's source)",
+    )
+    p.add_argument("--output", type=str, required=True, help="New dataset directory")
+    p.add_argument("--title", type=str, default="1830", help="Title of the games (needs an importer; default 1830)")
+    p.add_argument("--workers", type=int, default=4, help="Conversion processes (default 4)")
+    p.add_argument("--limit", type=int, default=None, help="Convert only the first N games by id")
+    p.add_argument(
+        "--validation-percentage", type=float, default=0.05,
+        help="pretraining.in_validation_split's per-game share (default 0.05, as lmdb_v6k / SL ckpt 10)",
+    )
+    p.add_argument("--skip-forced", action="store_true", help="Drop positions with one legal index (off: kept)")
+
+    # pretrain-generic (two-stage supervised pretraining of the generic model)
+    p = sub.add_parser("pretrain-generic", help="Supervised two-stage pretraining of the title-generic model")
+    p.add_argument("--data", type=str, required=True, help="Dataset directory from convert-generic")
+    p.add_argument("--out", type=str, required=True, help="Run directory (checkpoints, tb/, history.jsonl)")
+    p.add_argument("--model-preset", choices=["default", "small"], default="default")
+    p.add_argument("--model-config", type=str, default=None, help="JSON GenericModelConfig overrides")
+    p.add_argument("--init", type=str, default=None, help="Warm start from a generic checkpoint")
+    p.add_argument("--batch-size", type=int, default=256)
+    p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--weight-decay", type=float, default=1e-4)
+    p.add_argument("--value-lr-multiplier", type=float, default=1.0)
+    p.add_argument("--epochs", type=int, default=10)
+    p.add_argument("--patience", type=int, default=4, help="Evaluations without improvement before stopping")
+    p.add_argument("--label-smoothing", type=float, default=0.03)
+    p.add_argument("--entropy-weight", type=float, default=0.01)
+    p.add_argument("--value-loss-weight", type=float, default=0.1)
+    p.add_argument("--score-loss-weight", type=float, default=0.1)
+    p.add_argument("--price-loss-weight", type=float, default=0.1)
+    p.add_argument("--value-joint-epochs", type=int, default=-1, help="-1: value gradients reach the trunk throughout")
+    p.add_argument("--no-value-refit", action="store_true", help="Skip stage 2 (value heads refit)")
+    p.add_argument("--refit-eval-steps", type=int, default=250)
+    p.add_argument("--refit-patience", type=int, default=4)
+    p.add_argument("--refit-max-steps", type=int, default=20000)
+    p.add_argument("--device", type=str, default="auto", help="auto / cpu / cuda / cuda:N")
+    p.add_argument("--bf16", choices=["auto", "on", "off"], default="auto", help="auto: bf16 autocast on CUDA only")
+    p.add_argument("--workers", type=int, default=4, help="Data-loader workers (replay + encode)")
+    p.add_argument("--buffer-positions", type=int, default=32768, help="Per-worker shuffle buffer (positions)")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--max-steps", type=int, default=None, help="Cap on stage-1 steps (smoke runs)")
+    p.add_argument("--eval-every", type=int, default=None, help="Validate every N steps (default: each epoch)")
+    p.add_argument("--train-max-games", type=int, default=None)
+    p.add_argument("--val-max-games", type=int, default=None)
+    p.add_argument("--log-every", type=int, default=50)
+    p.add_argument("--threads", type=int, default=4, help="torch threads of the training process")
+
+    # compare-generic (generic vs legacy 1830 checkpoint on the same positions)
+    p = sub.add_parser(
+        "compare-generic", help="Per-family top-1 and value CE of a generic and a legacy checkpoint on one split"
+    )
+    p.add_argument("--generic", type=str, required=True, help="Generic checkpoint (e.g. <run>/final.pth)")
+    p.add_argument("--legacy", type=str, required=True, help="Legacy checkpoint (e.g. SL ckpt 10's 10.pth)")
+    p.add_argument("--data", type=str, required=True, help="Dataset directory from convert-generic")
+    p.add_argument("--split", choices=["validation", "train"], default="validation")
+    p.add_argument("--batch-size", type=int, default=128)
+    p.add_argument("--device", type=str, default="cpu")
+    p.add_argument("--max-games", type=int, default=None)
+    p.add_argument("--max-positions", type=int, default=None)
+    p.add_argument("--threads", type=int, default=4)
+    p.add_argument("--out", type=str, default=None, help="Write the full result JSON here")
+
     # refit-price-head (fit the price head on a frozen checkpoint)
     p = sub.add_parser("refit-price-head", help="Fit a fresh price head on the current-best checkpoint's frozen trunk")
     p.add_argument("--model-dir", type=str, default="model_checkpoints", help="Model checkpoint directory")
@@ -1236,6 +1404,9 @@ if __name__ == "__main__":
         "pretrain": cmd_pretrain,
         "clean": cmd_clean,
         "convert": cmd_convert,
+        "convert-generic": cmd_convert_generic,
+        "pretrain-generic": cmd_pretrain_generic,
+        "compare-generic": cmd_compare_generic,
         "policy-selfplay": cmd_policy_selfplay,
         "policy-gradient": cmd_policy_gradient,
         "search-learning": cmd_search_learning,
