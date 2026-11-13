@@ -276,8 +276,8 @@ fn check(g: &BaseGame, enc: &TokenEncoding, stats: &mut Stats) {
     }
     // cert counts match the engine's
     let certs_col = PLAYER_FEATURES.iter().position(|x| *x == "certs").unwrap();
-    let mut ids: Vec<u32> = g.players.iter().map(|p| p.id).collect();
-    ids.sort_unstable();
+    let ids: Vec<u32> = g.players.iter().map(|p| p.id).collect();
+    // seating order (BaseGame.players), as the descriptor vocabulary
     for s in 0..np {
         let pid = ids[(s + m[5] as usize) % np];
         let want = (g.num_certs_internal(pid) as f32 / (g.cert_limit as f32).max(1.0)).clamp(-FEATURE_CLIP, FEATURE_CLIP);
@@ -285,8 +285,8 @@ fn check(g: &BaseGame, enc: &TokenEncoding, stats: &mut Stats) {
     }
     // seat 0 is the mover
     if let Some(mover) = g.rl_mover_id() {
-        let mut ids: Vec<u32> = g.players.iter().map(|p| p.id).collect();
-        ids.sort_unstable();
+        let ids: Vec<u32> = g.players.iter().map(|p| p.id).collect();
+        // seating order (BaseGame.players)
         assert_eq!(ids[m[5] as usize], mover);
         let is_mover = PLAYER_FEATURES.iter().position(|x| *x == "is_mover").unwrap();
         assert_eq!(enc.ent_feat[F_ENT + is_mover], 1.0);
@@ -483,10 +483,82 @@ fn spec_geometry_matches_adjacency() {
         assert_eq!(spec.entity_types().len(), spec.num_entities);
         assert_eq!(spec.tile_feat.len(), spec.num_tiles() * F_TILE);
     }
-    // 1830 keeps its frozen action-layout hex order
     let s30 = rl_spec_for("1830");
-    assert_eq!(s30.hex_coords, crate::title::resolve("1830").action_hex_order());
     assert_eq!(s30.num_entities, 1 + MAX_SEATS + 8 + 6 + 6 + 6);
+}
+
+/// Tokens use the descriptor vocabularies' orders (`rl::Vocab`,
+/// docs/rl_descriptors.md §4): hexes in `hex_definitions()` order (=
+/// `BaseGame.hexes`), tiles in `tile_counts()` order, corporations,
+/// companies and train types in title-data order.
+#[test]
+fn token_orders_are_the_descriptor_vocabularies() {
+    for t in crate::title::all_titles() {
+        let spec = rl_spec_for(t.name());
+        let vocab = crate::rl::Vocab::for_title(*t);
+        assert_eq!(spec.hex_coords, vocab.hexes, "{} hexes", t.name());
+        assert_eq!(spec.tile_ids, vocab.tiles, "{} tiles", t.name());
+        assert_eq!(spec.corps.iter().map(|c| c.sym).collect::<Vec<_>>(), vocab.corporations, "{}", t.name());
+        assert_eq!(spec.companies.iter().map(|c| c.sym).collect::<Vec<_>>(), vocab.companies, "{}", t.name());
+        assert_eq!(spec.trains.iter().map(|c| c.name).collect::<Vec<_>>(), vocab.trains, "{}", t.name());
+        // BaseGame.hexes is that order too
+        if !t.name().starts_with("TEST") {
+            let g = new_game(t.name(), 4, 1);
+            let ids: Vec<&str> = g.hexes.iter().map(|h| h.id.as_str()).collect();
+            assert_eq!(ids, spec.hex_coords, "{} BaseGame.hexes", t.name());
+        }
+    }
+}
+
+/// Every descriptor of the frozen 1830 layout addresses the token of the
+/// entity / hex / tile its vocabulary names.
+#[test]
+fn descriptors_index_the_tokens() {
+    use crate::rl::descriptor::{EntKind, NONE};
+    let layout = crate::rl::rl_layout("1830").expect("1830 layout");
+    let spec = rl_spec_for("1830");
+    let names = spec.entity_names();
+    let types = spec.entity_types();
+    let (mut ents, mut hexes, mut tiles) = (0, 0, 0);
+    for d in &layout.descriptors {
+        for (kind, index) in [(d.ent0_kind, d.ent0), (d.ent1_kind, d.ent1)] {
+            if index == NONE {
+                continue;
+            }
+            let tok = spec.descriptor_entity(kind, index, 0, 4);
+            assert!(tok >= 0, "{d:?}");
+            let tok = tok as usize;
+            let want = if kind == EntKind::Corporation.id() {
+                format!("corp:{}", layout.vocab.corporations[index as usize])
+            } else if kind == EntKind::Company.id() {
+                format!("company:{}", layout.vocab.companies[index as usize])
+            } else if kind == EntKind::Train.id() {
+                format!("train:{}", layout.vocab.trains[index as usize])
+            } else {
+                assert_eq!(types[tok], ENT_PLAYER);
+                continue;
+            };
+            assert_eq!(names[tok], want);
+            ents += 1;
+        }
+        if d.via != NONE {
+            let tok = spec.descriptor_entity(EntKind::Company.id(), d.via, 0, 4) as usize;
+            assert_eq!(names[tok], format!("company:{}", layout.vocab.companies[d.via as usize]));
+        }
+        if d.hex != NONE {
+            assert_eq!(spec.hex_coords[d.hex as usize], layout.vocab.hexes[d.hex as usize]);
+            hexes += 1;
+        }
+        if d.tile != NONE {
+            assert_eq!(spec.tile_ids[d.tile as usize], layout.vocab.tiles[d.tile as usize]);
+            tiles += 1;
+        }
+    }
+    assert!(ents > 0 && hexes > 25_000 && tiles > 25_000, "{ents} {hexes} {tiles}");
+    // a player index follows the rotation: seat 0 is the mover
+    assert_eq!(spec.descriptor_entity(EntKind::Player.id(), 2, 2, 4), 1);
+    assert_eq!(spec.descriptor_entity(EntKind::Player.id(), 1, 2, 4), 4);
+    assert_eq!(spec.descriptor_entity(EntKind::Player.id(), 4, 0, 4), PTR_NONE);
 }
 
 /// The 1822 family's companies split into privates, concessions and minor
@@ -609,8 +681,8 @@ fn seat_rotation_moves_seats_only() {
     let enc = g.encode_tokens();
     let rot = enc.meta[5] as usize;
     // per-seat share percents equal the players' holdings, in rotated order
-    let mut ids: Vec<u32> = g.players.iter().map(|p| p.id).collect();
-    ids.sort_unstable();
+    let ids: Vec<u32> = g.players.iter().map(|p| p.id).collect();
+    // seating order (BaseGame.players), as the descriptor vocabulary
     let spec = rl_spec_for("1830");
     let col = CORPORATION_FEATURES.iter().position(|x| *x == "pct_seat_0").unwrap();
     for (ci, c) in g.corporations.iter().enumerate() {
@@ -631,7 +703,7 @@ fn seat_rotation_moves_seats_only() {
 
 // ---------------------------------------------------------------------------
 // throughput (ignored): `cargo test --release --no-default-features
-// rl_encode::tests::bench -- --ignored --nocapture`
+// rl::encode::tests::bench -- --ignored --nocapture`
 // ---------------------------------------------------------------------------
 
 fn collect_positions(title: &str, players: usize, seeds: u64, per_game: usize) -> Vec<BaseGame> {

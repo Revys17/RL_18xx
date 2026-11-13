@@ -25,17 +25,19 @@ is added.
 
 | | |
 |---|---|
-| `engine-rs/src/rl_encode/mod.rs` | constants, entity types, relation kinds, global vocabularies |
-| `engine-rs/src/rl_encode/schema.rs` | feature names per token type (the encoder writes exactly these, in order) |
-| `engine-rs/src/rl_encode/spec.rs` | `RlSpec` per title (`rl_spec_for(title)`), track features, tile table |
-| `engine-rs/src/rl_encode/encode.rs` | `BaseGame::encode_tokens() -> TokenEncoding` |
-| `engine-rs/src/rl_encode/py.rs` | PyO3: `rl_encode_batch`, `rl_encoder_schema`, `rl_spec_info` |
-| `engine-rs/src/rl_encode/tests.rs` | cargo tests (walks of every title, vocab coverage, geometry, batching, bench) |
+| `engine-rs/src/rl/encode/mod.rs` | constants, entity types, relation kinds, global vocabularies |
+| `engine-rs/src/rl/encode/schema.rs` | feature names per token type (the encoder writes exactly these, in order) |
+| `engine-rs/src/rl/encode/spec.rs` | `RlSpec` per title (`rl_spec_for(title)`), track features, tile table |
+| `engine-rs/src/rl/encode/encode.rs` | `BaseGame::encode_tokens() -> TokenEncoding` |
+| `engine-rs/src/rl/encode/py.rs` | PyO3: `rl_encode_batch`, `rl_encoder_schema`, `rl_spec_info` |
+| `engine-rs/src/rl/encode/tests.rs` | cargo tests (walks of every title, vocab coverage, geometry, batching, bench) |
 | `rl18xx/agent/alphazero/generic_tokens.py` | `encode_batch`, `to_torch`, `TitleGeometry`, the `TokenTrunkStub` module |
 | `tests/agent/alphazero/test_generic_tokens.py` | pytest: 1830 / 1867 walks, batching, stub forward / backward, benchmark |
 
-The module is self-contained: nothing else in the crate depends on it, and the only shared-file edit is its
-registration in `lib.rs`.
+The encoder is a submodule of milestone A1's RL bridge module (`engine-rs/src/rl/`, `docs/rl_descriptors.md`):
+registered by one line in `rl/mod.rs`, its Python functions added by `rl::py::register`. Nothing else in the crate
+depends on it. Its entity, hex and tile orders are A1's descriptor vocabularies (`rl::Vocab`), so a descriptor's
+`ent0` / `ent1` / `via` / `hex` / `tile` index addresses a token directly (see "Descriptors" below).
 
 ```python
 import engine_rs
@@ -99,12 +101,14 @@ Closed corporations and companies keep their tokens (with `closed` = 1): indices
 
 ### Seats
 
-Seats are the players sorted by id, rotated so that seat 0 is the player deciding the current move -- the rule of
-1830's canonical encoding (`acting_player_id_pub`: the active player, or the active corporation's president), and for
-the 1822 family Ruby's `acting_for_entity` (`g1822_acting_player`'s logic: a company's owner, the NdeM's chooser,
-...). With nobody to move (a finished game) the rotation is 0. `meta[5]` is the rotation. Seats beyond the player
-count are padding (type 0, masked). Every per-seat column (`pct_seat_k`, `bid_seat_k`) and seat pointer uses the
-rotated seats. `MAX_SEATS` stays 6.
+Seats are the players in seating order (`BaseGame.players`, the descriptor vocabulary's players), rotated so that
+seat 0 is the player deciding the current move -- the mover rule of 1830's canonical encoding
+(`acting_player_id_pub`: the active player, or the active corporation's president), and for the 1822 family Ruby's
+`acting_for_entity` (`g1822_acting_player`'s logic: a company's owner, the NdeM's chooser, ...). With nobody to move
+(a finished game) the rotation is 0. `meta[5]` is the rotation: seat k is player `(k + rotation) mod n` of the seating
+order. (1830's legacy encoder rotates the players sorted by id; every game `titles.new_game` builds numbers its
+players 1..n in seating order, so the two agree there.) Seats beyond the player count are padding (type 0, masked).
+Every per-seat column (`pct_seat_k`, `bid_seat_k`) and seat pointer uses the rotated seats. `MAX_SEATS` stays 6.
 
 ### Feature schemas
 
@@ -188,8 +192,9 @@ token, which covers 1867's chosen homes) and 1822 destination; company: the firs
 
 ## Hexes
 
-Hex order = the title's action-layout hex order (`GameTitle::action_hex_order`: 1830's frozen order; other titles
-map order), so a descriptor's hex index (milestone A1) can address hex tokens directly.
+Hex order = map order (`GameTitle::hex_definitions()` = `BaseGame.hexes` = the descriptor vocabulary's `hex`), so a
+descriptor's `hex` addresses the hex token directly. (1830's frozen action layout keeps its historical hex order for
+its indices; its descriptors already map into map order.)
 `rl_spec_info(title)` carries `hex_coords`, `hex_axial` (H, 2) (axial (q, r); hex distance = (|dq| + |dr| + |dq + dr|) / 2,
 pointy maps from doubled-width, flat from doubled-height coordinates), `hex_neighbors` (H, 6) (spec hex index across
 each edge, -1 off-map; the engine's adjacency) and `hex_pos` (H, 2) (normalized x across, y down).
@@ -220,7 +225,8 @@ registered map is 6; the tests assert no tile in any catalog exceeds 7 and no wa
 each slot's city.
 
 **Tile ids** (`hex_ids[..., 1]`): 0 no laid tile (blank, preprinted), `k + 1` = `tile_ids[k]`
-(`rl_spec_info(title)["tile_ids"]`, the action-layout tile order), `len + 1` a tile not in the list.
+(`rl_spec_info(title)["tile_ids"]`, the title's tile manifest order `tile_counts()` = the descriptor vocabulary's
+`tile`), `len + 1` a tile not in the list.
 `rl_spec_info(title)["tile_feat"]` (T, 64) gives each catalog tile at rotation 0: color, label flag, stops, revenues,
 upgrade cost, the same 49 track features and its supply -- for tile embeddings that generalize across titles (the
 LayTile head's P(tile | hex) in B2).
@@ -290,8 +296,8 @@ not on a hot path yet (its bridge comes after 1867's). Timings vary +-15% on the
 ```bash
 # cargo (the PyO3 test binary needs the venv's libpython; docs/verification_rituals.md)
 PY="$(pwd)/.venv/bin/python"; LIBDIR="$("$PY" -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
-(cd engine-rs && PYO3_PYTHON="$PY" LD_LIBRARY_PATH="$LIBDIR" cargo test --release --no-default-features rl_encode)
-(cd engine-rs && PYO3_PYTHON="$PY" LD_LIBRARY_PATH="$LIBDIR" cargo test --release --no-default-features rl_encode::tests::bench -- --ignored --nocapture)
+(cd engine-rs && PYO3_PYTHON="$PY" LD_LIBRARY_PATH="$LIBDIR" cargo test --release --no-default-features rl::encode)
+(cd engine-rs && PYO3_PYTHON="$PY" LD_LIBRARY_PATH="$LIBDIR" cargo test --release --no-default-features rl::encode::tests::bench -- --ignored --nocapture)
 CUDA_VISIBLE_DEVICES= uv run pytest tests/agent/alphazero/test_generic_tokens.py
 CUDA_VISIBLE_DEVICES= uv run pytest -m benchmark -s tests/agent/alphazero/test_generic_tokens.py
 ```
@@ -317,11 +323,26 @@ bias per clipped hex distance (from `hex_axial`), entity -> hex cross-attention 
 token, FiLM on embedding(title) + embedding(round kind) + embedding(step kind), and per-seat value logits (six, absent
 seats -1e4). No policy or price head.
 
+## Descriptors -> tokens
+
+A1's descriptor fields (`docs/rl_descriptors.md` §2, §4) index the tokens without a lookup table:
+
+| descriptor field | token |
+|---|---|
+| `hex` | hex token `hex` (same map order) |
+| `city` | the slots of that hex whose `hex_slot_city` is `city` |
+| `tile` | tile table row `tile` (`tile_feat`; `hex_ids` tile id = `tile + 1`) |
+| `ent0` / `ent1` of kind corporation / company / train | entity `base[kind] + index`, `base` = `rl_spec_info(title)["descriptor_entity_base"]` (`e_corp0`, `e_company0`, `e_train0`) |
+| `via` (a company) | entity `base["company"] + via` |
+| a player (seating-order index p) | seat token `1 + (p - rotation) mod n` (`RlSpec::descriptor_entity`) |
+
+Pinned by `token_orders_are_the_descriptor_vocabularies` (every title's orders equal `rl::Vocab::for_title`, and
+`BaseGame.hexes` is that hex order), `descriptors_index_the_tokens` (every one of 1830-v1's 26,537 descriptors names
+the token of its vocabulary entry) and pytest `test_descriptors_address_tokens` (legal 1830 indices of walk positions:
+their hexes, cities and entities are real tokens of the same encoding).
+
 ## Open points for B2 and later
 
-* **Descriptors (A1)**: B2's policy head reads hex tokens by the action-layout hex index, entities by entity index
-  (`entity_names` gives `corp:SYM` / `company:SYM` / `train:NAME` / `phase:NAME`), tiles by `tile_ids`; A1's
-  descriptor schema should name entities the same way (or ship a mapping).
 * The per-(title, entity) learned id embedding of design §3.3 is left to the model: an entity's index is stable within a
   title, so `(title, index)` keys it.
 * Not encoded yet: 1822 player debt interest, the tax haven's holdings as a holder token (its shares count as

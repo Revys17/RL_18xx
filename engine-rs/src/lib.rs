@@ -24,7 +24,7 @@ pub mod mcts;
 pub mod mcts_lockstep;
 pub mod price_pmf;
 pub mod revenue;
-pub mod rl_encode;
+pub mod rl;
 pub mod rounds;
 pub mod router;
 pub mod steps;
@@ -76,10 +76,7 @@ fn engine_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(price_pmf::price_pmf_counts, m)?)?;
     m.add_function(wrap_pyfunction!(price_pmf::price_pmf_cell_of, m)?)?;
     m.add_function(wrap_pyfunction!(price_pmf::price_pmf_member, m)?)?;
-    // Title-generic token encoder (RL bridge B1)
-    m.add_function(wrap_pyfunction!(rl_encode::py::rl_encode_batch, m)?)?;
-    m.add_function(wrap_pyfunction!(rl_encode::py::rl_encoder_schema, m)?)?;
-    m.add_function(wrap_pyfunction!(rl_encode::py::rl_spec_info, m)?)?;
+    rl::py::register(m)?;
 
     Ok(())
 }

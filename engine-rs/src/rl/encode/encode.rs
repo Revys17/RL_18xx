@@ -147,7 +147,7 @@ struct Ctx<'a> {
     spec: &'static RlSpec,
     sc: f32,
     np: usize,
-    sorted_ids: Vec<u32>,
+    seat_ids: Vec<u32>,
     rotation: usize,
     mover: Option<u32>,
     /// game corporation index -> entity index (-1 = not in the spec).
@@ -161,7 +161,7 @@ struct Ctx<'a> {
 
 impl<'a> Ctx<'a> {
     fn seat_of(&self, pid: u32) -> Option<usize> {
-        let pos = self.sorted_ids.iter().position(|&x| x == pid)?;
+        let pos = self.seat_ids.iter().position(|&x| x == pid)?;
         Some((pos + self.np - self.rotation) % self.np)
     }
     fn seat_ent(&self, pid: u32) -> i32 {
@@ -354,10 +354,11 @@ impl BaseGame {
     pub fn encode_tokens(&self) -> TokenEncoding {
         let spec = rl_spec_for(&self.title);
         let np = self.players.len();
-        let mut sorted_ids: Vec<u32> = self.players.iter().map(|p| p.id).collect();
-        sorted_ids.sort_unstable();
+        // seats: the seating order (`BaseGame.players`, the descriptor vocabulary's
+        // players), rotated so that seat 0 is the mover
+        let seat_ids: Vec<u32> = self.players.iter().map(|p| p.id).collect();
         let mover = self.rl_mover_id();
-        let rotation = mover.and_then(|m| sorted_ids.iter().position(|&x| x == m)).unwrap_or(0);
+        let rotation = mover.and_then(|m| seat_ids.iter().position(|&x| x == m)).unwrap_or(0);
 
         // Game index -> spec index: the same order on every game of a title
         // (checked per element, looked up otherwise).
@@ -389,7 +390,7 @@ impl BaseGame {
             spec,
             sc: (self.starting_cash.max(1)) as f32,
             np,
-            sorted_ids,
+            seat_ids,
             rotation,
             mover,
             corp_ent,
@@ -911,7 +912,7 @@ impl BaseGame {
         // -- seats ---------------------------------------------------------------------
         let presidents: Vec<Option<u32>> = self.corporations.iter().map(|c| c.president_id()).collect();
         for seat in 0..np.min(MAX_SEATS) {
-            let pid = ctx.sorted_ids[(seat + ctx.rotation) % np];
+            let pid = ctx.seat_ids[(seat + ctx.rotation) % np];
             let Some(player) = self.players.iter().find(|p| p.id == pid) else { continue };
             let ent = RlSpec::seat_entity(seat);
             out.ent_type[ent] = ENT_PLAYER;
@@ -1345,7 +1346,7 @@ impl BaseGame {
         }
         // sales this stock round (seat order, then corporation order)
         for s in 0..ctx.np.min(MAX_SEATS) {
-            let pid = ctx.sorted_ids[(s + ctx.rotation) % ctx.np];
+            let pid = ctx.seat_ids[(s + ctx.rotation) % ctx.np];
             let seat = RlSpec::seat_entity(s) as i32;
             match (&self.round, self.g1822.as_deref()) {
                 (_, Some(st)) => {

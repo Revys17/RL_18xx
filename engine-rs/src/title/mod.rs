@@ -367,15 +367,47 @@ pub trait GameTitle: Sync {
     // historical orders (artifacts of the Python ActionMapper's original
     // construction) because trained checkpoints depend on the exact slots.
 
-    /// Whether the AlphaZero bridge (flat action layout + encoder spec) can
-    /// be derived for this title. A RULES title can register without it —
-    /// 1867 plays/replays long before its action space and encoder land
-    /// (the roadmap's per-title action-layout phase; the current slot
-    /// layout cannot express 1867's three discounted trains, choose/merge
-    /// actions, …). While false, `action_index::layout_for` /
-    /// `encoder::spec_for` panic for this title instead of mis-deriving.
+    /// The umbrella default of the two RL-bridge readiness flags below
+    /// (`rl_layout_kind`, `rl_encoder_ready`), kept as the per-title
+    /// override point: a RULES title registers with `false` — 1867 and the
+    /// 1822 family play and replay long before their action layout and
+    /// encoder land (the flat 1830-shaped slot layout cannot express 1867's
+    /// three discounted trains, choose/merge actions, …). Callers never read
+    /// this directly: they ask for the layout or the encoder.
     fn alphazero_bridge_ready(&self) -> bool {
         true
+    }
+
+    /// How the RL bridge indexes this title's actions (design §2,
+    /// `docs/rl_descriptors.md`). `Factored`: the flat
+    /// `action_index::build_layout` slot layout over `factored.rs`'s
+    /// enumeration — 1830's frozen v1 layout (and the test-only
+    /// TEST-5SHARE). `None`: not bridge-ready — every index path
+    /// (`factored_legal_indices`, `decode_index`, the price-head slot, the
+    /// MCTS tree, `rl_layout_info`) raises "not bridge-ready" instead of
+    /// silently indexing the game with 1830's layout. A title whose legal
+    /// moves come from its own generator (1867: `g1867/legal.rs`) will get
+    /// a registry layout (`crate::rl`) with its own kind; it must never go
+    /// through `build_layout`.
+    fn rl_layout_kind(&self) -> RlLayoutKind {
+        if self.alphazero_bridge_ready() {
+            RlLayoutKind::Factored
+        } else {
+            RlLayoutKind::None
+        }
+    }
+
+    /// Whether the title has an RL action layout (index space +
+    /// descriptors).
+    fn rl_layout_ready(&self) -> bool {
+        self.rl_layout_kind() != RlLayoutKind::None
+    }
+
+    /// Whether the legacy flat encoder (`encoder::spec_for`) can be derived
+    /// for this title. Independent of the layout: the generic token encoder
+    /// (design §3) has its own readiness.
+    fn rl_encoder_ready(&self) -> bool {
+        self.alphazero_bridge_ready()
     }
 
     /// Whether the title is 1822 or one of its `G1822::Game` subclasses.
@@ -401,6 +433,16 @@ pub trait GameTitle: Sync {
     fn action_tile_order(&self) -> Vec<&'static str> {
         self.tile_counts().iter().map(|(id, _)| *id).collect()
     }
+}
+
+/// How the RL bridge indexes a title's actions (`GameTitle::rl_layout_kind`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RlLayoutKind {
+    /// Not bridge-ready: no action layout.
+    None,
+    /// The flat `action_index::build_layout` slot layout over `factored.rs`
+    /// (1830 v1, frozen; TEST-5SHARE).
+    Factored,
 }
 
 /// Which purchases between DIFFERENT players' holdings the legal-move

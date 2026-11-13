@@ -5,7 +5,7 @@
 //! to 1830's corporations, privates and map. This one encodes any title's
 //! position as a bundle of typed tokens that a transformer reads:
 //!
-//! * **hex tokens** (one per map hex, in the title's action-layout hex order)
+//! * **hex tokens** (one per map hex, in map order = the descriptor vocabulary)
 //!   with title-generic tile, track, stop, revenue, terrain/cost and border
 //!   features; the tokens in a hex's city slots are POINTERS to the owning
 //!   corporation's entity token (`hex_ptr`), not per-corporation one-hots;

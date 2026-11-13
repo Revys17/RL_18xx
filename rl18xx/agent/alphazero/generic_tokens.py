@@ -42,11 +42,20 @@ def spec_info(title: str) -> dict:
     return engine_rs.rl_spec_info(title)
 
 
+def raw_game(game):
+    """The ``engine_rs.BaseGame`` behind a game: itself, or a ``RustGameAdapter``'s
+    (``titles.new_game("1830", n)`` returns an adapter)."""
+    return getattr(game, "_game", game)
+
+
 def encode_batch(games: list, dedupe_maps: bool = False) -> dict:
-    """Encode positions (``engine_rs.BaseGame`` objects, any titles / player
-    counts) into stacked numpy arrays. With ``dedupe_maps`` the hex arrays hold
-    each distinct hex block once and ``map_index`` (B,) names each position's."""
-    return engine_rs.rl_encode_batch(list(games), dedupe_maps)
+    """Encode positions (``engine_rs.BaseGame`` objects or adapters around them,
+    any titles / player counts) into stacked numpy arrays. With ``dedupe_maps``
+    the hex arrays hold each distinct hex block once and ``map_index`` (B,)
+    names each position's. Entity, hex and tile orders are the descriptor
+    vocabularies' (``docs/rl_descriptors.md`` §4; ``spec_info(title)
+    ["descriptor_entity_base"]`` maps a descriptor's entity to its token)."""
+    return engine_rs.rl_encode_batch([raw_game(g) for g in games], dedupe_maps)
 
 
 def to_torch(arrays: dict, device: torch.device | str = "cpu") -> dict:

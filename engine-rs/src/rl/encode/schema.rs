@@ -338,7 +338,7 @@ pub const META_COLUMNS: &[&str] = &[
     "step_kind",    // STEP_KINDS id
     "acting_entity", // entity index of the acting entity, -1 none
     "num_seats",
-    "rotation",     // the mover's index among players sorted by id (seat 0 = that player)
+    "rotation",     // the mover's seat in the seating order (BaseGame.players): seat 0 = that player
     "finished",
     "round_num",    // OR k of the set (0 outside ORs)
 ];

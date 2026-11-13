@@ -420,7 +420,7 @@ impl RustMCTSPlayer {
     pub fn gumbel_policy_target(&self) -> PyResult<Vec<f32>> {
         let cfg = self.gumbel_config_or_err()?;
         let root = &self.arena[self.root_idx];
-        let mut out = vec![0.0f32; crate::action_index::layout().total as usize];
+        let mut out = vec![0.0f32; self.layout.total as usize];
         if root.legal_action_indices.is_empty() {
             return Ok(out);
         }

@@ -73,8 +73,8 @@ pub struct RlSpec {
     pub is_g1822_family: bool,
 
     // -- map ---------------------------------------------------------------
-    /// Hex coordinates in the title's action-layout hex order (1830: the
-    /// frozen order of its action layout; others: map order).
+    /// Hex coordinates in map order (`hex_definitions()` = `BaseGame.hexes`
+    /// = the descriptor vocabulary's `hex`).
     pub hex_coords: Vec<&'static str>,
     pub hex_index: HashMap<&'static str, usize>,
     /// Normalized (x, y) of each hex's centre: x across, y down the map.
@@ -99,8 +99,9 @@ pub struct RlSpec {
     pub national: Option<usize>,
 
     // -- tiles ---------------------------------------------------------------
-    /// Catalog tiles in the title's action-layout tile order; `hex_ids[1]` is
-    /// index + 1 (0 = no laid tile, len + 1 = a tile not in this list).
+    /// Tiles in the title's manifest order (`tile_counts()` = the descriptor
+    /// vocabulary's `tile`); `hex_ids[1]` is index + 1 (0 = no laid tile,
+    /// len + 1 = a tile not in this list).
     pub tile_ids: Vec<&'static str>,
     pub tile_index: HashMap<&'static str, usize>,
     /// `[tile, TILE_FEATURES]`.
@@ -145,6 +146,26 @@ impl RlSpec {
         1 + seat
     }
 
+    /// The entity token a descriptor's entity field names (`docs/rl_descriptors.md`
+    /// §2, §4): `kind` an `rl::EntKind` id, `index` into that kind's title
+    /// vocabulary. Corporations, companies and train types sit at a fixed base
+    /// (`base + index`); a player (seating-order index) is the seat token after
+    /// the encoding's rotation (`meta[5]`). -1 for none / out of range.
+    pub fn descriptor_entity(&self, kind: i32, index: i32, rotation: usize, num_seats: usize) -> i32 {
+        use crate::rl::descriptor::{EntKind, ENT_KINDS};
+        if index < 0 {
+            return PTR_NONE;
+        }
+        let i = index as usize;
+        match ENT_KINDS.get(kind.max(0) as usize).filter(|_| kind >= 0) {
+            Some(EntKind::Player) if i < num_seats => (1 + (i + num_seats - rotation % num_seats) % num_seats) as i32,
+            Some(EntKind::Corporation) if i < self.corps.len() => (self.e_corp0 + i) as i32,
+            Some(EntKind::Company) if i < self.companies.len() => (self.e_company0 + i) as i32,
+            Some(EntKind::Train) if i < self.trains.len() => (self.e_train0 + i) as i32,
+            _ => PTR_NONE,
+        }
+    }
+
     /// Entity names, in entity order: "global", "seat0".., "corp:SYM",
     /// "company:SYM", "train:NAME", "phase:NAME".
     pub fn entity_names(&self) -> Vec<String> {
@@ -175,9 +196,14 @@ impl RlSpec {
         let is_g1822_family = title.is_g1822_family();
         let family = title.g1822_family();
 
+        // Entity, hex and tile orders are the descriptor vocabularies'
+        // (`rl::Vocab`, docs/rl_descriptors.md §4), so a descriptor's
+        // ent0 / ent1 / hex / tile index addresses a token directly.
+        let vocab = crate::rl::Vocab::for_title(title);
+
         // -- map -----------------------------------------------------------
         let hex_defs = title.hex_definitions();
-        let hex_coords: Vec<&'static str> = title.action_hex_order();
+        let hex_coords: Vec<&'static str> = vocab.hexes.clone();
         let hex_index: HashMap<&'static str, usize> =
             hex_coords.iter().enumerate().map(|(i, c)| (*c, i)).collect();
         let parsed: Vec<(i32, i32)> = hex_coords.iter().map(|c| crate::title::parse_coord(c)).collect();
@@ -232,7 +258,14 @@ impl RlSpec {
 
         // -- phases and trains -------------------------------------------------
         let phase_defs = title.phases();
-        let train_defs = title.trains();
+        let mut train_defs = title.trains();
+        // one type per name, first definition kept (the vocabulary's rule)
+        let mut seen_names: Vec<&'static str> = Vec::new();
+        train_defs.retain(|t| {
+            let new = !seen_names.contains(&t.name);
+            seen_names.push(t.name);
+            new
+        });
         let phase_index: HashMap<&'static str, usize> =
             phase_defs.iter().enumerate().map(|(i, p)| (p.name, i)).collect();
         let train_index: HashMap<&'static str, usize> =
@@ -398,7 +431,7 @@ impl RlSpec {
         // -- tiles -------------------------------------------------------------
         let catalog = title.tile_catalog();
         let counts: HashMap<&str, u32> = title.tile_counts().into_iter().collect();
-        let tile_ids: Vec<&'static str> = title.action_tile_order();
+        let tile_ids: Vec<&'static str> = vocab.tiles.clone();
         let tile_index: HashMap<&'static str, usize> = tile_ids.iter().enumerate().map(|(i, t)| (*t, i)).collect();
 
         // -- normalizers: the title's maxima ------------------------------------

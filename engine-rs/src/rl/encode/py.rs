@@ -162,6 +162,14 @@ pub fn rl_encode_batch<'py>(
     Batch::stack(&encs, dedupe_maps).into_dict(py)
 }
 
+/// Registers the encoder's functions (called from `rl::py::register`).
+pub fn register(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(rl_encode_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(rl_encoder_schema, m)?)?;
+    m.add_function(wrap_pyfunction!(rl_spec_info, m)?)?;
+    Ok(())
+}
+
 fn strs<'py>(py: Python<'py>, xs: &[&str]) -> PyResult<PyObject> {
     Ok(xs.to_vec().into_pyobject(py)?.into_any().unbind())
 }
@@ -243,6 +251,14 @@ pub fn rl_spec_info<'py>(py: Python<'py>, title: &str) -> PyResult<Bound<'py, Py
     d.set_item(
         "entity_offsets",
         [("global", 0usize), ("seat", 1), ("corp", s.e_corp0), ("company", s.e_company0), ("train", s.e_train0), ("phase", s.e_phase0)]
+            .into_iter()
+            .collect::<HashMap<&str, usize>>(),
+    )?;
+    // descriptor entity kind (rl::EntKind name) -> token base: token = base + index
+    // (players: seat token 1 + (index - rotation) mod seats, `meta[5]` = rotation)
+    d.set_item(
+        "descriptor_entity_base",
+        [("player", 1usize), ("corporation", s.e_corp0), ("company", s.e_company0), ("train", s.e_train0)]
             .into_iter()
             .collect::<HashMap<&str, usize>>(),
     )?;

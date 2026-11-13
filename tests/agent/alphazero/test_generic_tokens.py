@@ -19,14 +19,17 @@ import torch
 
 engine_rs = pytest.importorskip("engine_rs")
 
+from rl18xx.agent.alphazero.action_descriptors import action_descriptors  # noqa: E402
 from rl18xx.agent.alphazero.generic_tokens import (  # noqa: E402
     TokenStubConfig,
     TokenTrunkStub,
     encode_batch,
+    raw_game,
     schema,
     spec_info,
     to_torch,
 )
+from rl18xx.agent.alphazero.titles import new_game  # noqa: E402
 from scripts.g1867_fuzz import pick as pick_1867  # noqa: E402
 
 SCHEMA = schema()
@@ -36,8 +39,8 @@ CORP_TYPES = {ENT_TYPES[k] for k in ("major", "minor", "national")}
 
 def walk_1830(num_players: int, seed: int, steps: int = 600, every: int = 3) -> list:
     rng = random.Random(seed)
-    game = engine_rs.BaseGame({i + 1: f"Player {i + 1}" for i in range(num_players)})
-    game.set_auction_unlock(True)
+    # auction_unlock: uniformly random play would otherwise lock the waterfall auction
+    game = raw_game(new_game("1830", num_players, auction_unlock=True))
     positions = []
     for step in range(steps):
         if game.finished:
@@ -56,7 +59,7 @@ def walk_1830(num_players: int, seed: int, steps: int = 600, every: int = 3) -> 
 
 def walk_1867(num_players: int, seed: int, steps: int = 600, every: int = 3) -> list:
     rng = random.Random(seed * 1_000_003 + num_players)
-    game = engine_rs.BaseGame.new_titled("1867", {i + 1: f"Player {i + 1}" for i in range(num_players)}, None, seed)
+    game = new_game("1867", num_players, seed=seed)
     positions = []
     for step in range(steps):
         if game.finished:
@@ -196,11 +199,51 @@ def test_mixed_batch_pads_to_the_largest(positions):
     assert arrays["ent_feat"].shape[1] == spec_info("1867")["num_entities"]
 
 
+def test_descriptors_address_tokens(positions):
+    """A legal 1830 index's descriptor (milestone A1) names the hex / entity tokens
+    of the same position: its hex is a real hex token, a PlaceToken's city exists on
+    that hex, and its entities are tokens of the descriptor's kind."""
+    d = action_descriptors("1830")
+    info = spec_info("1830")
+    base = info["descriptor_entity_base"]
+    kinds = list(d.ent_kinds)
+    names = info["entity_names"]
+    assert info["hex_coords"] == list(d.vocab["hex"])
+    assert info["tile_ids"] == list(d.vocab["tile"])
+    for kind, prefix in (("corporation", "corp:"), ("company", "company:"), ("train", "train:")):
+        for i, sym in enumerate(d.vocab[kind]):
+            assert names[base[kind] + i] == prefix + sym
+    checked = 0
+    for game in positions[("1830", 4)] + positions[("1830", 6)]:
+        legal = [int(i) for i in game.factored_legal_indices()]
+        if not legal:
+            continue
+        arrays = encode_batch([game])
+        rows = d.gather(legal)
+        for row in rows:
+            hex_ = row[d.col("hex")]
+            if hex_ >= 0:
+                assert arrays["hex_mask"][0, hex_]
+                city = row[d.col("city")]
+                if city >= 0:
+                    assert city in set(arrays["hex_slot_city"][0, hex_].tolist())
+            for kind_col, ent_col in (("ent0_kind", "ent0"), ("ent1_kind", "ent1")):
+                kind, ent = row[d.col(kind_col)], row[d.col(ent_col)]
+                if ent < 0 or kinds[kind] == "player":
+                    continue
+                token = base[kinds[kind]] + ent
+                prefix = {"corporation": "corp:", "company": "company:", "train": "train:"}[kinds[kind]]
+                assert names[token].startswith(prefix)
+                assert arrays["ent_mask"][0, token]
+            checked += 1
+    assert checked > 200
+
+
 def test_seat_zero_is_the_player_to_move(positions):
     for game in positions[("1830", 4)][10:40] + positions[("1867", 5)][10:40]:
         arrays = encode_batch([game])
         rotation = arrays["meta"][0, 5]
-        ids = sorted(p.id for p in game.players)
+        ids = [p.id for p in game.players]  # seating order
         cash = {p.id: p.cash for p in game.players}
         player_features = SCHEMA["entity_features"]["player"]
         col = player_features.index("cash")

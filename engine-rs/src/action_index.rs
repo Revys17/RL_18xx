@@ -15,6 +15,7 @@ use std::sync::OnceLock;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
+use crate::actions::GameError;
 use crate::factored::LegalAction;
 use crate::game::BaseGame;
 use crate::title::GameTitle;
@@ -76,25 +77,56 @@ pub struct CompanyLayBlock {
 
 static LAYOUTS: OnceLock<HashMap<&'static str, SlotLayout>> = OnceLock::new();
 
-/// The per-title slot layouts, built once over the title registry —
-/// bridge-ready titles only (1867 registers rules-first; its action layout
-/// is a later roadmap phase).
+/// The per-title slot layouts, built once over the title registry — the
+/// titles whose `rl_layout_kind` is `Factored` only (1867 and the 1822
+/// family register rules-first; their layouts come from `crate::rl`).
 fn layouts() -> &'static HashMap<&'static str, SlotLayout> {
     LAYOUTS.get_or_init(|| {
         crate::title::all_titles()
             .iter()
-            .filter(|t| t.alphazero_bridge_ready())
+            .filter(|t| t.rl_layout_kind() == crate::title::RlLayoutKind::Factored)
             .map(|t| (t.name(), build_layout(*t)))
             .collect()
     })
 }
 
-/// The slot layout for a title (panics on an unknown title string —
-/// engine-internal, same contract as `title::resolve`).
+/// The error every RL index path raises for a title without a flat slot
+/// layout (instead of silently indexing it with 1830's).
+pub fn not_bridge_ready(title_name: &str) -> GameError {
+    GameError::new(format!(
+        "title {title_name} is not bridge-ready: it has no RL action layout \
+         (GameTitle::rl_layout_kind is None), so the 1830 index path cannot index its actions; \
+         use the title's legal-move generator (e.g. g1867_legal_moves_json) until its layout lands"
+    ))
+}
+
+/// The slot layout for a title, or the "not bridge-ready" error for a
+/// registered title without one (and an "unknown title" error otherwise).
+pub fn try_layout_for(title_name: &str) -> Result<&'static SlotLayout, GameError> {
+    if let Some(lo) = layouts().get(title_name) {
+        return Ok(lo);
+    }
+    if crate::title::all_titles().iter().any(|t| t.name() == title_name) {
+        Err(not_bridge_ready(title_name))
+    } else {
+        Err(GameError::new(format!("unknown game title: {title_name}")))
+    }
+}
+
+/// The slot layout for a title (panics where [`try_layout_for`] errs —
+/// engine-internal and test use with a known bridge-ready title).
 pub fn layout_for(title_name: &str) -> &'static SlotLayout {
-    layouts()
-        .get(title_name)
-        .unwrap_or_else(|| panic!("no action layout for title {title_name}"))
+    try_layout_for(title_name).unwrap_or_else(|e| panic!("{e}"))
+}
+
+impl BaseGame {
+    /// The slot layout this game's actions are indexed with — the RL index
+    /// paths' single seam (`factored_legal_indices`, `decode_index`, the
+    /// price-head slot, the MCTS tree). Errors "not bridge-ready" for a
+    /// title without one.
+    pub fn factored_layout(&self) -> Result<&'static SlotLayout, GameError> {
+        try_layout_for(&self.title)
+    }
 }
 
 /// The 1830 layout. Callers without title context (the Python compat shims,
@@ -578,10 +610,11 @@ pub fn policy_size_py() -> u32 {
     layout().total
 }
 
-/// A title's policy size, derived from its layout.
+/// A title's policy size, derived from its layout (RuntimeError "not
+/// bridge-ready" for a title without one, instead of a panic).
 #[pyfunction]
-pub fn policy_size_for_py(title_name: &str) -> u32 {
-    layout_for(title_name).total
+pub fn policy_size_for_py(title_name: &str) -> PyResult<u32> {
+    Ok(try_layout_for(title_name)?.total)
 }
 
 /// Compatibility shim so external callers can resolve a Python-side
