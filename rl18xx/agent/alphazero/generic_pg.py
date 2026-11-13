@@ -769,15 +769,31 @@ def _baseline(out: dict, shaped: bool) -> torch.Tensor:
     return torch.softmax(out["win_logits"].float(), dim=-1)[:, 0]
 
 
+def _prefetched(parts: list, collate):
+    """``collate(part)`` for each part in order, the next one built on a helper thread while the caller runs
+    the current one on the device (the collate is CPU work: decompression, padding, legal inputs)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not parts:
+        return
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        upcoming = pool.submit(collate, parts[0])
+        for i in range(len(parts)):
+            current = upcoming.result()
+            if i + 1 < len(parts):
+                upcoming = pool.submit(collate, parts[i + 1])
+            yield current
+
+
 def subtract_baselines(critic, rows: List[PGRow], cfg: GenericPGConfig, device, chunk: int = 512) -> dict:
     """Turn each row's advantage (its seat's reward) into ``reward - V(s)`` with the critic's value in one
     batched value-only pass over the sampled rows (``policy_gradient.subtract_baselines``)."""
     critic.eval()
     shaped = parse_reward(cfg.reward)[0] != "win"
     values = []
+    chunks = [rows[start : start + chunk] for start in range(0, len(rows), chunk)]
     with torch.no_grad():
-        for start in range(0, len(rows), chunk):
-            batch = collate_rows(rows[start : start + chunk])
+        for batch in _prefetched(chunks, collate_rows):
             out = critic(batch_to_device(batch, device)["inputs"], value_only=True)
             values.append(_baseline(out, shaped).cpu().numpy())
     values = np.concatenate(values) if values else np.zeros(0, dtype=np.float32)
@@ -802,58 +818,66 @@ def _update(
     critic_sums, critic_count = Counter(), 0
     micro = min(cfg.microbatch, cfg.minibatch)
     t_collate = 0.0
+
+    def collate(part):
+        return collate_rows(part, learner.config)
+
     for epoch in range(cfg.ppo_epochs):
         order = rng.permutation(len(rows))
-        for start in range(0, len(rows), cfg.minibatch):
-            step_rows = order[start : start + cfg.minibatch]
-            learner_opt.zero_grad(set_to_none=True)
-            critic_opt.zero_grad(set_to_none=True)
-            for micro_start in range(0, len(step_rows), micro):
-                tc = time.monotonic()
-                part = [rows[i] for i in step_rows[micro_start : micro_start + micro]]
-                batch = batch_to_device(collate_rows(part, learner.config), device)
-                if scale != 1.0:
-                    batch["advantage"] = batch["advantage"] / scale
-                t_collate += time.monotonic() - tc
-                n = len(part)
-                share = n / len(step_rows)
-                with torch.no_grad():
-                    anchor_out = anchor(batch["inputs"])
-                out = learner(batch["inputs"])
-                losses = generic_pg_losses(
-                    out, anchor_out, batch, cfg.clip, kl_coef, cfg.entropy_coef, temperature=cfg.learner_temperature
+        # One optimizer step per minibatch, its gradient accumulated over microbatches, collated one ahead.
+        minibatches = [order[start : start + cfg.minibatch] for start in range(0, len(rows), cfg.minibatch)]
+        micros = [(s, mb[m : m + micro]) for s, mb in enumerate(minibatches) for m in range(0, len(mb), micro)]
+        batches = _prefetched([[rows[i] for i in idx] for _, idx in micros], collate)
+        for k, (s, idx) in enumerate(micros):
+            if k == 0 or s != micros[k - 1][0]:
+                learner_opt.zero_grad(set_to_none=True)
+                critic_opt.zero_grad(set_to_none=True)
+            tc = time.monotonic()
+            batch = batch_to_device(next(batches), device)
+            if scale != 1.0:
+                batch["advantage"] = batch["advantage"] / scale
+            t_collate += time.monotonic() - tc
+            n = len(idx)
+            share = n / len(minibatches[s])
+            with torch.no_grad():
+                anchor_out = anchor(batch["inputs"])
+            out = learner(batch["inputs"])
+            losses = generic_pg_losses(
+                out, anchor_out, batch, cfg.clip, kl_coef, cfg.entropy_coef, temperature=cfg.learner_temperature
+            )
+            total = losses["total"]
+            if not torch.isfinite(total):
+                raise RuntimeError(
+                    f"Policy gradient diverged: non-finite loss ({ {k: float(v) for k, v in losses.items()} })"
                 )
-                total = losses["total"]
-                if not torch.isfinite(total):
-                    raise RuntimeError(
-                        f"Policy gradient diverged: non-finite loss ({ {k: float(v) for k, v in losses.items()} })"
-                    )
-                (total * share).backward()
-                if count == 0:
-                    first = {
-                        "clip_frac_first": float(losses["clip_frac"]),
-                        "approx_kl_first": float(losses["approx_kl"]),
-                    }
-                count += n
-                for key, value in losses.items():
-                    if key != "total":
-                        sums[key] += float(value) * n
-                if epoch == 0:
-                    c_out = critic(batch["inputs"], value_only=True)
-                    c = mg.value_losses(c_out, batch["win"], batch["score"])
-                    loss = c["ce"] + cfg.score_loss_weight * c["mse"]
-                    if not torch.isfinite(loss):
-                        raise RuntimeError("Critic diverged: non-finite loss")
-                    (loss * share).backward()
-                    critic_count += n
-                    critic_sums["ce"] += float(c["ce"].detach()) * n
-                    critic_sums["mse"] += float(c["mse"].detach()) * n
-                    critic_sums["winner_hit"] += float(c["winner_hit"]) * n
+            (total * share).backward()
+            if count == 0:
+                first = {
+                    "clip_frac_first": float(losses["clip_frac"]),
+                    "approx_kl_first": float(losses["approx_kl"]),
+                }
+            count += n
+            for key, value in losses.items():
+                if key != "total":
+                    sums[key] += float(value) * n
+            if epoch == 0:
+                c_out = critic(batch["inputs"], value_only=True)
+                c = mg.value_losses(c_out, batch["win"], batch["score"])
+                loss = c["ce"] + cfg.score_loss_weight * c["mse"]
+                if not torch.isfinite(loss):
+                    raise RuntimeError("Critic diverged: non-finite loss")
+                (loss * share).backward()
+                critic_count += n
+                critic_sums["ce"] += float(c["ce"].detach()) * n
+                critic_sums["mse"] += float(c["mse"].detach()) * n
+                critic_sums["winner_hit"] += float(c["winner_hit"]) * n
+            if k + 1 < len(micros) and micros[k + 1][0] == s:
+                continue  # more microbatches of this minibatch
             norm = torch.nn.utils.clip_grad_norm_(learner.parameters(), max_norm=1.0)
             if not torch.isfinite(norm):
                 raise RuntimeError("Policy gradient diverged: non-finite gradient norm")
             learner_opt.step()
-            sums["grad_norm"] += float(norm) * len(step_rows)
+            sums["grad_norm"] += float(norm) * len(minibatches[s])
             steps += 1
             if epoch == 0:
                 cnorm = torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=1.0)

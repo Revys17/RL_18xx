@@ -80,3 +80,8 @@ model, a sparse-legal inference server path, `policy_gradient.py` per title (mix
 per-count PFSP, placement reward), `eval_policy_only.py` per title, 1867 start positions (human
 post-auction states, random auction endings, mid-game cuts) and an out-of-family panel. Then the 1830
 check of the generic model and the first 1867 supervised run, once the GPU is available.
+
+Status (2026-11-13): C1 (dataset, supervised training, policy-only player, 1830 GPU check recipe) and C2
+(generic inference server, policy-gradient trainer, per-title starts and start-file builder, title-generic
+eval, 1830 PG recipe) are built and CPU-tested (`docs/rl_model.md`); nothing has run on the GPU. Open for 1867:
+A2's layout and importer, then the start files, supervised run and PG run of `docs/rl_model.md` "1867 outline".

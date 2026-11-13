@@ -290,9 +290,10 @@ def test_league_games_record_pairwise_results(start_file, clients):
 
 def test_update_trains_learner_and_critic(start_file, clients, model):
     rows = []
-    while len(rows) < 48:
-        result = gpg.play_generic_pg_games(2, _settings(start_file, num_players=random.choice((2, 4, 5))))
+    for n in (2, 4, 5):  # rows of several player counts in one batch
+        result = gpg.play_generic_pg_games(2, _settings(start_file, num_players=n, learner_seats=n // 2))
         rows += [r for g in result["games"] for r in g["rows"]]
+    assert len({r.num_players for r in rows}) == 3 and len(rows) >= 30
     cfg = gpg.GenericPGConfig(policy_checkpoint="unused", minibatch=16, microbatch=8, lr=1e-3, critic_lr=1e-3,
                               reward="placement", learner_temperature=0.5)
     learner = mg.GenericPolicyValueModel(model.config)
