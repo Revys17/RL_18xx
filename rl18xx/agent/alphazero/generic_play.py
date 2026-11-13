@@ -102,10 +102,24 @@ class TitlePlay:
         return None if price_range is None else int(price_range[0])
 
     def apply(self, raw, legal, k: int, price: Optional[int]) -> None:
-        if self.generator_layout:
-            raw.rl_apply_index(int(legal.indices[k]), price)
-        else:
+        """Apply legal row ``k`` at ``price`` (None: the move's own price, its range's low end). A generator
+        layout's row is applied from its action dict when the legal list carries them (``LegalActions.wires``:
+        the same state and logged action as ``rl_apply_index``, without enumerating the moves again), the price
+        checked against the row's range and step first."""
+        if not self.generator_layout:
             raw.apply_action_index(int(legal.indices[k]), price)
+            return
+        wires = getattr(legal, "wires", None)
+        if wires is None:
+            raw.rl_apply_index(int(legal.indices[k]), price)
+            return
+        wire = dict(wires[k])
+        if price is not None:
+            lo, hi, step = (int(x) for x in legal.price_range[k])
+            if lo < 0 or not (lo <= int(price) <= hi and (int(price) - lo) % max(step, 1) == 0):
+                raise ValueError(f"price {price} is not legal for index {int(legal.indices[k])}: ({lo}, {hi}, {step})")
+            wire["price"] = int(price)
+        raw.process_action(wire)
 
     def generator_moves(self, raw) -> Optional[list]:
         """The title's own legal-move generator (``[{"wire": action, "range": [lo, hi, step] or None}]``) for

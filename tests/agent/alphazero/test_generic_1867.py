@@ -457,19 +457,33 @@ def test_1867_pg_games_and_the_trainers_probabilities(clients, random_model, tmp
     assert float(losses["log_ratio_abs_mean"]) < 1e-4
 
 
-def test_1867_title_play_applies_by_index():
+def test_1867_title_play_applies_like_rl_apply_index():
+    """``TitlePlay.apply`` on 1867 processes the row's action dict (``LegalActions.wires``) at the price: the
+    same state and logged action as ``rl_apply_index``, without re-enumerating; an illegal price raises."""
     from rl18xx.agent.alphazero.generic_play import title_play
 
     play = title_play("1867")
-    raw = new_game("1867", 3, seed=4)
     rng = random.Random(0)
-    for _ in range(80):
-        legal = play.legal(raw)
-        k = rng.randrange(len(legal))
-        price = play.fixed_price(raw, legal, k)
-        if play.open_price(legal, k):
-            lo, hi, step = (int(x) for x in legal.price_range[k])
-            price = lo + step * rng.randrange((hi - lo) // step + 1)
-        n = len(raw.raw_actions)
-        play.apply(raw, legal, k, price)
-        assert len(raw.raw_actions) == n + 1
+    checked = 0
+    for n, seed in ((3, 4), (5, 6)):
+        raw = new_game("1867", n, seed=seed)
+        for _ in range(600):
+            if raw.finished:
+                break
+            legal = play.legal(raw)
+            assert legal.wires is not None and len(legal.wires) == len(legal)
+            k = rng.randrange(len(legal))
+            price = play.fixed_price(raw, legal, k)
+            if play.open_price(legal, k):
+                lo, hi, step = (int(x) for x in legal.price_range[k])
+                price = lo + step * rng.randrange((hi - lo) // step + 1)
+                if step > 1 and hi - lo > step:
+                    with pytest.raises(ValueError):
+                        play.apply(raw.pickle_clone(), legal, k, lo + 1)
+            by_index = raw.pickle_clone()
+            by_index.rl_apply_index(int(legal.indices[k]), price)
+            play.apply(raw, legal, k, price)
+            assert raw.raw_actions[-1] == by_index.raw_actions[-1]
+            assert raw.__getstate__() == by_index.__getstate__()
+            checked += 1
+    assert checked > 500
