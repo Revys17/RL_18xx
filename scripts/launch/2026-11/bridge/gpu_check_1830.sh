@@ -16,6 +16,9 @@
 # (10 epochs of 2.38M positions at ~1.4x the 1830 v2 model's cost per position -- SL ckpt 10's own two-stage run
 # took ~3.5 h; read the real rate off the first log lines' "elapsed"); compare ~10-20 min; eval ~10-20 min per
 # match (the legacy side on the GPU inference server, the generic side in the 16 pool workers on CPU).
+#
+# Run it from a checkout that has human_games/ (the main checkout; worktrees don't), or set DATA_SRC / DATA to
+# absolute paths. Steps are idempotent only for convert (an existing dataset is kept); pretrain appends to $OUT.
 set -euo pipefail
 cd "$(dirname "$0")/../../../.."  # the repository root
 
