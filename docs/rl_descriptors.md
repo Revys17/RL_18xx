@@ -234,7 +234,8 @@ expressed; the legal range comes from the state:
   `counts`, `nonempty`); Rust: `rl::generator::price_cells` / `price_at` / `price_step`.
   `model_generic.legal_actions(game)` reads the ranges this way for both titles
   (`LegalActions.price_grid`, `inputs["price_grid"]`, `price_cells_for(..., grid=)`); its 1830
-  values are unchanged.
+  values are unchanged. Code that builds cells or samples prices itself (the generic policy player,
+  policy gradient, evals) must pass `grid=` the position's `price_grid` before it plays 1867.
 - **No price kind** means the price is not a decision: par cost, a depot or pool train at face, a
   token's price, a trade-in's fixed discount. (1830's enumeration carries a degenerate range
   `lo == hi` for depot trains; that is not a price parameter.)

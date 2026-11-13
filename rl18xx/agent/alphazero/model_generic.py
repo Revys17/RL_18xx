@@ -243,10 +243,11 @@ class LegalActions:
         return len(self.rows)
 
 
-def legal_actions(game, policy: Optional[str] = None) -> LegalActions:
-    """The legal actions of a position of a title with an RL layout: its legal indices, their
-    descriptor rows, and each price-bearing row's ``(lo, hi, step)`` (``BaseGame.rl_price_range``,
-    ``docs/rl_descriptors.md`` §6).
+def legal_actions(game, indices: Optional[Sequence[int]] = None, policy: Optional[str] = None) -> LegalActions:
+    """The legal actions of a position of a title with an RL layout: its legal indices (or ``indices``
+    when the caller already has them), their descriptor rows, and each price-bearing row's
+    ``(lo, hi, step)`` (``BaseGame.rl_price_range``, ``docs/rl_descriptors.md`` §6). This is the one
+    place a legal range's step is decided (the supervised data and the policy players call it).
 
     * 1830 (layout kind "factored"): ``factored_legal_indices``; ranges as ``price_range_for_index``
       with ``step`` the bid ladder ($5) for a bid, 1 otherwise; ``price_grid`` False.
@@ -255,19 +256,22 @@ def legal_actions(game, policy: Optional[str] = None) -> LegalActions:
     g = raw_game(game)
     d = action_descriptors(g.title)
     if d.kind == "generator":
-        moves = json.loads(g.rl_legal_moves_json(policy))
-        idx = np.asarray([m["index"] for m in moves], dtype=np.int64)
+        ranges = {m["index"]: m["range"] for m in json.loads(g.rl_legal_moves_json(policy))}
+        idx = np.asarray(sorted(ranges) if indices is None else indices, dtype=np.int64)
         rows = d.gather(idx)
         price_range = np.full((len(idx), 3), -1, dtype=np.int64)
-        for i, m in enumerate(moves):
+        for i in range(len(idx)):
+            if int(idx[i]) not in ranges:
+                raise ValueError(f"{g.title}: index {idx[i]} is not legal at this position")
             if rows[i, C_PRICE_KIND] >= 0:
-                if m["range"] is None:
+                r = ranges[int(idx[i])]
+                if r is None:
                     raise ValueError(
                         f"{g.title}: legal index {idx[i]} has price_kind {rows[i, C_PRICE_KIND]} but no range"
                     )
-                price_range[i] = m["range"]
+                price_range[i] = r
         return LegalActions(rows=rows, price_range=price_range, indices=idx, price_grid=True)
-    idx = np.asarray(g.factored_legal_indices(), dtype=np.int64)
+    idx = np.asarray(g.factored_legal_indices() if indices is None else indices, dtype=np.int64)
     rows = d.gather(idx)
     price_range = np.full((len(idx), 3), -1, dtype=np.int64)
     for i in np.flatnonzero(rows[:, C_PRICE_KIND] >= 0):
@@ -309,6 +313,17 @@ def build_inputs(
         return arrays
     if len(legal) != len(games):
         raise ValueError(f"{len(legal)} legal lists for {len(games)} positions")
+    return add_legal_inputs(arrays, legal, config=config)
+
+
+def add_legal_inputs(
+    arrays: dict, legal: Sequence[LegalActions], config: Optional["GenericModelConfig"] = None
+) -> dict:
+    """Add the flat legal list of ``legal`` (one :class:`LegalActions` per position of ``arrays``, in
+    order) to token arrays -- ``encode_batch``'s, or a supervised batch's collated encodings
+    (``generic_data.collate``) -- as :func:`build_inputs` describes. Returns ``arrays`` (updated)."""
+    if len(legal) != len(arrays["meta"]):
+        raise ValueError(f"{len(legal)} legal lists for {len(arrays['meta'])} positions")
     v = vocab()
     counts = np.array([len(la) for la in legal], dtype=np.int64)
     offsets = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
@@ -1493,6 +1508,7 @@ __all__ = [
     "GenericModelConfig",
     "GenericPolicyValueModel",
     "LegalActions",
+    "add_legal_inputs",
     "build_inputs",
     "check_checkpoint_meta",
     "check_inputs",

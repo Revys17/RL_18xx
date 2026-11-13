@@ -868,7 +868,14 @@ architecture-level check. It needs GPU time (decision 5).
 > CPU-tested). What this check still needs from milestone C -- a converted 1830 dataset with sparse legal
 > indices, price ranges and per-seat targets, a collate into `build_inputs`' flat layout, the two-stage
 > supervised loop, and a sparse-legal policy-only player for `eval_policy_only.py` -- is listed in
-> `docs/rl_model.md` "For the 1830 GPU validation".
+> `docs/rl_model.md` (now "Supervised data and pretraining" and "The 1830 GPU check").
+>
+> **2026-11-13 (milestone C1):** all four exist (`generic_data.py`, `generic_pretrain.py`, `generic_policy.py`;
+> `main.py convert-generic` / `pretrain-generic` / `compare-generic`, `eval_policy_only.py` `generic:` players),
+> CPU-tested; the 1830 conversion reproduces lmdb_v7's position counts exactly. The ready-to-run check is
+> `scripts/launch/2026-11/bridge/gpu_check_1830.sh` (~6-7 GPU hours, estimated): `docs/rl_model.md` "The 1830 GPU
+> check". The dataset stores game records (legal indices, labels, prices, outcomes), not §5.1's per-row token
+> bundles and sparse `pi`: positions are replayed and encoded in the loader.
 
 ### 4.5 Player-count width
 

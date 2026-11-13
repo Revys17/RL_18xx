@@ -146,6 +146,7 @@ model_checkpoints_pg/
 model_checkpoints_search/
 model_checkpoints_ag/
 model_checkpoints_ph/
+model_checkpoints_generic/
 runs/
 self_play_games_status/
 human_games/

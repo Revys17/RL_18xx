@@ -207,12 +207,17 @@ def test_a_tiny_one_network_two_player_run_from_the_auction(tmp_path, monkeypatc
     from rl18xx.agent.alphazero.policy_gradient import _load, _save
 
     from .test_search_learning import _tiny_model
+    from .test_search_learning_az2 import _random_value_heads
 
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
     source = tmp_path / "fresh"
     (source / "learner").mkdir(parents=True)
     (source / "config.json").write_text(json.dumps({"learner_temperature": 1.0}))
-    _save(_tiny_model(0), source / "learner" / "0.pth")
+    # The value heads' output layers start at zero: even odds, exactly the target of a tied game. These
+    # tiny games all end as auction stalls, most of them tied (nobody paid over face value), so with
+    # zero heads an update whose value rows are all ties has an exactly zero value gradient, and the
+    # heads stayed put in some runs (no bug: nothing to learn). Off zero, every value row moves them.
+    _save(_random_value_heads(_tiny_model(0), 0), source / "learner" / "0.pth")
     cfg = sl.SearchLearningConfig(
         policy_checkpoint=str(source / "learner" / "0.pth"), value_checkpoint="", out_dir=str(tmp_path / "runs"),
         run_name="az0", shared=True, value_head="win", num_players=2, target="visits", visit_target="raw",
@@ -229,7 +234,12 @@ def test_a_tiny_one_network_two_player_run_from_the_auction(tmp_path, monkeypatc
     assert [h["update"] for h in history] == [1, 2]
     for h in history:
         assert math.isfinite(h["ce"]) and math.isfinite(h["critic_outcome_ce"]) and h["critic_rows_trained"] > 0
-        assert set(h["starts"]) == {"auction"} and 0.5 < h["noised_share"] < 2.0
+        assert set(h["starts"]) == {"auction"}
+    # Root noise on. Not ~1 per update at this scale: noise is counted as a full search starts, the search
+    # as it is played, and searches straddle the 2-second tasks, so one update's share was seen anywhere
+    # from 0 to 3. Over the run noised >= played >= rows > 0 (the exact count: test_search_learning's
+    # test_root_noise_goes_on_the_full_searches_only).
+    assert any(h["noised_share"] > 0 for h in history)
     assert not (run_dir / "critic").exists()  # one network
     first, last = _load(run_dir / "learner" / "0.pth"), _load(run_dir / "learner" / "2.pth")
     heads = [n for n, _ in first.named_parameters() if n.startswith("win_loss_head")]
