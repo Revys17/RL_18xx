@@ -11,7 +11,7 @@ use super::legal::{g1867_generator_status, GenStatus};
 
 /// `None` = the title's policy, "rules" = everything Ruby allows,
 /// "restricted" = no cross-player purchases.
-fn policy_of(game: &BaseGame, policy: Option<&str>) -> PyResult<CrossPlayerPolicy> {
+pub(crate) fn policy_of(game: &BaseGame, policy: Option<&str>) -> PyResult<CrossPlayerPolicy> {
     match policy {
         None | Some("title") => Ok(game.title_def().generator_cross_player()),
         Some("rules") => Ok(CrossPlayerPolicy::RULES),

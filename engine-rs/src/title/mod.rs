@@ -385,9 +385,10 @@ pub trait GameTitle: Sync {
     /// TEST-5SHARE). `None`: not bridge-ready — every index path
     /// (`factored_legal_indices`, `decode_index`, the price-head slot, the
     /// MCTS tree, `rl_layout_info`) raises "not bridge-ready" instead of
-    /// silently indexing the game with 1830's layout. A title whose legal
-    /// moves come from its own generator (1867: `g1867/legal.rs`) will get
-    /// a registry layout (`crate::rl`) with its own kind; it must never go
+    /// silently indexing the game with 1830's layout. `Generator`: a
+    /// registry layout built from title data (`crate::rl`) whose index
+    /// function maps the title's own legal-move generator's moves to
+    /// indices (1867: `g1867/legal.rs`, layout `1867-v1`); it never goes
     /// through `build_layout`.
     fn rl_layout_kind(&self) -> RlLayoutKind {
         if self.alphazero_bridge_ready() {
@@ -443,6 +444,19 @@ pub enum RlLayoutKind {
     /// The flat `action_index::build_layout` slot layout over `factored.rs`
     /// (1830 v1, frozen; TEST-5SHARE).
     Factored,
+    /// A registry layout from title data over the title's own legal-move
+    /// generator (`crate::rl::generator`; 1867).
+    Generator,
+}
+
+impl RlLayoutKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            RlLayoutKind::None => "none",
+            RlLayoutKind::Factored => "factored",
+            RlLayoutKind::Generator => "generator",
+        }
+    }
 }
 
 /// Which purchases between DIFFERENT players' holdings the legal-move

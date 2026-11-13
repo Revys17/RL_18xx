@@ -106,7 +106,16 @@ pub fn try_layout_for(title_name: &str) -> Result<&'static SlotLayout, GameError
     if let Some(lo) = layouts().get(title_name) {
         return Ok(lo);
     }
-    if crate::title::all_titles().iter().any(|t| t.name() == title_name) {
+    if let Some(t) = crate::title::all_titles().iter().find(|t| t.name() == title_name) {
+        if t.rl_layout_kind() == crate::title::RlLayoutKind::Generator {
+            // A generator layout (1867): its moves have indices, but not
+            // through the 1830 factored path.
+            return Err(GameError::new(format!(
+                "title {title_name} has no flat slot layout: its moves are indexed by its generator \
+                 layout (crate::rl::generator; Python rl_legal_indices / rl_legal_moves_json / \
+                 rl_apply_index), not by the 1830 factored index path"
+            )));
+        }
         Err(not_bridge_ready(title_name))
     } else {
         Err(GameError::new(format!("unknown game title: {title_name}")))

@@ -171,6 +171,13 @@ impl GameTitle for G1867 {
     fn alphazero_bridge_ready(&self) -> bool {
         false
     }
+    /// The RL layout `1867-v1` (`crate::rl::g1867`): a registry layout over
+    /// the legal-move generator's moves (`g1867/legal.rs`). The legacy flat
+    /// encoder stays unavailable (`rl_encoder_ready` follows
+    /// `alphazero_bridge_ready`).
+    fn rl_layout_kind(&self) -> super::RlLayoutKind {
+        super::RlLayoutKind::Generator
+    }
     /// Phase availability windows (game.rb): green minors join when the
     /// first 3-train fires `green_minors_available`; majors can IPO from
     /// phase 4 (`majors_can_ipo`).

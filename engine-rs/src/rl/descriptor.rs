@@ -189,6 +189,11 @@ impl EntKind {
 /// through `price_pmf`'s cells of the kind's `cell_type`. Indices without a
 /// price kind cost what the state says (par cost, a depot train's face
 /// value, a token's price) or nothing.
+///
+/// A generator layout's move carries its step (`PriceRange { lo, hi, step
+/// }`); its cells are taken in step units: `k = (p - lo) / step` over
+/// `PriceCells(cell_type, 0, (hi - lo) / step, 1)`, so a cell only holds
+/// legal prices (1867 bids are on a $5 grid).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PriceKind {
     /// An auction bid: `price_pmf` "Bid" cells (a ladder of
@@ -203,13 +208,21 @@ pub enum PriceKind {
     /// An amount paid on a debt (1822 partial player-debt payoff): cells to
     /// be fixed from a human price census when the family is first used.
     Amount,
+    /// A bid priced by range-relative cells: "BuyTrain" cells (atoms at lo,
+    /// hi and hi - 1, plus 20 bins over the range), in step units. 1867's
+    /// minor bids (`1867-v1` Bid.corporation): a quarter go all-in (hi, the
+    /// bidder's limit) and a fifth of the opening bids run past a 20-step
+    /// ladder, which the "Bid" ladder leaves in one wide bin
+    /// (`docs/rl_descriptors.md` §8, price census).
+    BidRange,
 }
 
-pub const PRICE_KINDS: [PriceKind; 4] = [
+pub const PRICE_KINDS: [PriceKind; 5] = [
     PriceKind::Bid,
     PriceKind::TrainTransfer,
     PriceKind::CompanyPurchase,
     PriceKind::Amount,
+    PriceKind::BidRange,
 ];
 
 impl PriceKind {
@@ -223,6 +236,7 @@ impl PriceKind {
             PriceKind::TrainTransfer => "train_transfer",
             PriceKind::CompanyPurchase => "company_purchase",
             PriceKind::Amount => "amount",
+            PriceKind::BidRange => "bid_range",
         }
     }
 
@@ -234,19 +248,25 @@ impl PriceKind {
             PriceKind::TrainTransfer => Some("BuyTrain"),
             PriceKind::CompanyPurchase => Some("BuyCompany"),
             PriceKind::Amount => None,
+            PriceKind::BidRange => Some("BuyTrain"),
         }
     }
 }
 
 /// Categorical options of a family, one global vocabulary (append-only):
-/// share sources, dividend kinds, named choices. A family uses at most one.
-pub const CHOICES: [&str; 6] = [
+/// share sources, dividend kinds, named choices, a trade-in's train
+/// source. A family uses at most one.
+pub const CHOICES: [&str; 8] = [
     "source:ipo",
     "source:market",
     "dividend:payout",
     "dividend:withhold",
     "dividend:half",
     "choose:nationalize",
+    // 1867-v1: where a trade-in's new train comes from (the same type can
+    // be both in the depot and in the discard pool, two distinct moves).
+    "train_source:depot",
+    "train_source:pool",
 ];
 
 /// The choice id of a vocabulary string (panics on an unknown one: the
@@ -401,17 +421,19 @@ mod tests {
         let kinds: Vec<&str> = ENT_KINDS.iter().map(|k| k.name()).collect();
         assert_eq!(kinds, vec!["player", "corporation", "company", "train"]);
         let prices: Vec<&str> = PRICE_KINDS.iter().map(|k| k.name()).collect();
-        assert_eq!(prices, vec!["bid", "train_transfer", "company_purchase", "amount"]);
+        assert_eq!(prices, vec!["bid", "train_transfer", "company_purchase", "amount", "bid_range"]);
         assert_eq!(
             CHOICES[..4],
             ["source:ipo", "source:market", "dividend:payout", "dividend:withhold"]
         );
         assert_eq!(choice_id("dividend:half"), 4);
         assert_eq!(choice_id("choose:nationalize"), 5);
+        assert_eq!(choice_id("train_source:depot"), 6);
+        assert_eq!(choice_id("train_source:pool"), 7);
         assert_eq!(flags::DEAD, 1);
         assert_eq!(flags::TRAIN_FROM_STATE, 2);
         // Every price kind used by a layout prices through price_pmf cells.
-        for k in [PriceKind::Bid, PriceKind::TrainTransfer, PriceKind::CompanyPurchase] {
+        for k in [PriceKind::Bid, PriceKind::TrainTransfer, PriceKind::CompanyPurchase, PriceKind::BidRange] {
             assert!(crate::price_pmf::layout(k.cell_type().unwrap()).is_some(), "{k:?}");
         }
     }

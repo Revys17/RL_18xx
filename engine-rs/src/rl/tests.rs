@@ -14,7 +14,7 @@ use crate::factored::LegalAction;
 use crate::game::BaseGame;
 
 /// The titles registered without an RL layout (rules-first).
-const NOT_READY: [&str; 5] = ["1867", "1822", "1822PNW", "1822MX", "1822CA"];
+const NOT_READY: [&str; 4] = ["1822", "1822PNW", "1822MX", "1822CA"];
 
 fn game(title: &str, n: u32) -> BaseGame {
     // The 1822 family's minors have numeric syms: seat ids above 100 there.
@@ -149,6 +149,8 @@ fn layout_fingerprints_are_pinned_per_title() {
     let pinned: &[(&str, &str, u32)] = &[
         ("1830", "e721aa6520116e2a", 26537),
         ("TEST-5SHARE", "7196801649141472", 26513),
+        // The generator layout `1867-v1` (`rl::g1867`).
+        ("1867", "4987cd19b7e912e2", 38875),
     ];
     for (title, fp, total) in pinned {
         let lo = rl_layout(title).unwrap_or_else(|e| panic!("{title}: {e}"));

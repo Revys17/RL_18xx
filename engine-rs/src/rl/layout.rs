@@ -10,6 +10,8 @@
 //! vocabularies and every descriptor, so any change to what an index means
 //! shows up as a fingerprint change (pinned per title by a test).
 
+use std::collections::HashMap;
+
 use super::descriptor::{choice_id, flags, Descriptor, EntKind, Family, PriceKind, FIELDS, NONE};
 use crate::title::{CorpType, GameTitle};
 
@@ -276,6 +278,11 @@ pub struct RlLayout {
     pub descriptors: Vec<Descriptor>,
     pub total: u32,
     pub fingerprint: u64,
+    /// Per block, per axis: entry (as [`Axis::entries`] spells it) ->
+    /// position. The index function of a generator layout
+    /// ([`RlLayout::index_of`]) reads it; not part of the fingerprint
+    /// (derived from the blocks).
+    lookup: HashMap<String, (usize, Vec<HashMap<String, u32>>)>,
 }
 
 impl RlLayout {
@@ -306,6 +313,19 @@ impl RlLayout {
             blocks.push(Block { spec, offset, size });
             offset += size;
         }
+        let lookup = blocks
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let axes = b
+                    .spec
+                    .axes
+                    .iter()
+                    .map(|a| a.entries().into_iter().enumerate().map(|(p, e)| (e, p as u32)).collect())
+                    .collect();
+                (b.spec.name.clone(), (i, axes))
+            })
+            .collect();
         let mut layout = RlLayout {
             title,
             version: version.into(),
@@ -314,6 +334,7 @@ impl RlLayout {
             descriptors,
             total: offset,
             fingerprint: 0,
+            lookup,
         };
         layout.fingerprint = layout.compute_fingerprint();
         Ok(layout)
@@ -389,6 +410,26 @@ impl RlLayout {
 
     pub fn block(&self, name: &str) -> Option<&Block> {
         self.blocks.iter().find(|b| b.spec.name == name)
+    }
+
+    /// The index of block `name` at `entries` (one per axis, spelled as
+    /// [`Axis::entries`] spells them: `"I15.0"` for a city slot, `"3"` for
+    /// a rotation or a number, a choice's vocabulary string, an entity's
+    /// sym): `offset + mixed_radix(positions)`, the first axis slowest.
+    /// `None` if the block is unknown, the entry count differs from the
+    /// axis count, or an entry is not on its axis. The index function of a
+    /// generator layout (a title's moves -> indices) is built on it.
+    pub fn index_of(&self, name: &str, entries: &[&str]) -> Option<u32> {
+        let (bi, axes) = self.lookup.get(name)?;
+        if entries.len() != axes.len() {
+            return None;
+        }
+        let block = &self.blocks[*bi];
+        let mut j: u32 = 0;
+        for ((axis, map), e) in block.spec.axes.iter().zip(axes).zip(entries) {
+            j = j * axis.len() as u32 + *map.get(*e)?;
+        }
+        Some(block.offset + j)
     }
 
     /// The canonical text the fingerprint hashes: version, descriptor
@@ -512,6 +553,12 @@ mod tests {
         // LayTile [B2, 9, rot 4] = 5 + 1*6 + 0*6 + 4.
         let d = lo.descriptors[5 + 6 + 4];
         assert_eq!((d.hex, d.tile, d.rot, d.city), (2, 2, 4, NONE));
+        // index_of: the same mixed radix from axis entries.
+        assert_eq!(lo.index_of("BuyTrain.corp", &["B", "2"]), Some(3));
+        assert_eq!(lo.index_of("LayTile", &["B2", "9", "4"]), Some(5 + 6 + 4));
+        assert_eq!(lo.index_of("Pass", &[]), Some(0));
+        assert_eq!(lo.index_of("LayTile", &["B2", "8", "4"]), None, "tile 8 is not on the axis");
+        assert_eq!(lo.index_of("LayTile", &["B2", "9"]), None, "one entry per axis");
         assert_eq!(lo.block_of(0).unwrap().spec.name, "Pass");
         assert_eq!(lo.block_of(4).unwrap().spec.name, "BuyTrain.corp");
         assert_eq!(lo.block_of(16).unwrap().spec.name, "LayTile");

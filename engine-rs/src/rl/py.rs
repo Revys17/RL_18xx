@@ -5,7 +5,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use super::descriptor::{flags, CHOICES, ENT_KINDS, FAMILIES, FIELDS, PRICE_KINDS};
-use crate::title::RlLayoutKind;
 
 /// The global descriptor vocabularies (title-independent, append-only):
 /// `fields` (the descriptor columns), `families` (`family` ids),
@@ -42,7 +41,9 @@ pub fn rl_descriptor_vocab(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     Ok(d)
 }
 
-/// A title's RL action layout: `title`, `version`, `kind`, `total`,
+/// A title's RL action layout: `title`, `version`, `kind` ("factored": 1830's
+/// frozen layout over `factored_legal_indices`; "generator": a layout over the
+/// title's legal-move generator, `BaseGame.rl_legal_indices`), `total`,
 /// `fingerprint` (16 hex digits), `descriptors` (int32 numpy array
 /// `[total, len(fields)]`, columns in `fields` order), `blocks` (list of
 /// dicts: name, family, family_id, offset, size, price_kind, flags, axes =
@@ -56,7 +57,7 @@ pub fn rl_layout_info<'py>(py: Python<'py>, title: &str) -> PyResult<Bound<'py, 
     let d = rl_descriptor_vocab(py)?;
     d.set_item("title", lo.title)?;
     d.set_item("version", lo.version.as_str())?;
-    d.set_item("kind", "factored")?;
+    d.set_item("kind", crate::title::resolve(lo.title).rl_layout_kind().name())?;
     d.set_item("total", lo.total)?;
     d.set_item("fingerprint", lo.fingerprint_hex())?;
     let flat: Vec<i32> = lo.descriptors.iter().flat_map(|x| x.to_row()).collect();
@@ -88,8 +89,8 @@ pub fn rl_layout_info<'py>(py: Python<'py>, title: &str) -> PyResult<Bound<'py, 
 }
 
 /// A title's RL readiness: `layout_ready`, `layout_kind` ("none" /
-/// "factored"), `encoder_ready` (the legacy flat encoder). ValueError for an
-/// unknown title.
+/// "factored" / "generator"), `encoder_ready` (the legacy flat encoder).
+/// ValueError for an unknown title.
 #[pyfunction]
 pub fn rl_title_status<'py>(py: Python<'py>, title: &str) -> PyResult<Bound<'py, PyDict>> {
     let Some(t) = crate::title::all_titles().iter().find(|t| t.name() == title) else {
@@ -100,13 +101,7 @@ pub fn rl_title_status<'py>(py: Python<'py>, title: &str) -> PyResult<Bound<'py,
     let d = PyDict::new(py);
     d.set_item("title", t.name())?;
     d.set_item("layout_ready", t.rl_layout_ready())?;
-    d.set_item(
-        "layout_kind",
-        match t.rl_layout_kind() {
-            RlLayoutKind::None => "none",
-            RlLayoutKind::Factored => "factored",
-        },
-    )?;
+    d.set_item("layout_kind", t.rl_layout_kind().name())?;
     d.set_item("encoder_ready", t.rl_encoder_ready())?;
     Ok(d)
 }

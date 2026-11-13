@@ -8,10 +8,14 @@
 //! * [`py`]: the Python surface (`rl_layout_info`, `rl_title_status`,
 //!   `rl_descriptor_vocab`).
 //!
-//! Titles whose legal moves come from their own generator (1867,
-//! `g1867/legal.rs`; the 1822 family) get registry layouts here in a later
-//! milestone; until then their `rl_layout_kind` is `None` and every index
-//! path raises "not bridge-ready".
+//! * [`g1867`]: 1867's registry layout (`1867-v1`) and its move -> index
+//!   function; [`generator`]: the index API of generator titles (legal
+//!   indices, decode, apply, price range; `rl_legal_moves_json`, ...).
+//!
+//! Titles whose legal moves come from their own generator get a registry
+//! layout (`RlLayoutKind::Generator`; 1867). The 1822 family has none yet:
+//! its `rl_layout_kind` is `None` and every index path raises "not
+//! bridge-ready".
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -21,6 +25,8 @@ use crate::title::RlLayoutKind;
 
 pub mod descriptor;
 pub mod factored_layout;
+pub mod g1867;
+pub mod generator;
 pub mod layout;
 pub mod py;
 
@@ -41,6 +47,7 @@ fn registry() -> &'static HashMap<&'static str, Result<RlLayout, String>> {
                         .and_then(|lo| factored_layout::factored_registry(*t, lo));
                     Some((t.name(), built))
                 }
+                RlLayoutKind::Generator => Some((t.name(), generator::registry_layout(*t))),
             })
             .collect()
     })
