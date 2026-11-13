@@ -39,6 +39,11 @@ uv run python main.py train              # AlphaZero training loop (self-play + 
 uv run python main.py pretrain           # Pre-train from human game data
 uv run python main.py convert --data-dir human_games/1830_clean_all --output human_games/lmdb_v6k  # Cleaned games -> LMDB
 uv run python main.py pretrain --fresh --data-dir human_games/lmdb_v6k  # Fresh model on the pre-converted LMDB
+# Title-generic model (RL bridge, docs/rl_model.md "Supervised data and pretraining"): records -> two-stage SL -> vs legacy
+uv run python main.py convert-generic --data-dir human_games/1830_clean_all --output human_games/generic_1830_clean_all_v1
+uv run python main.py pretrain-generic --data <dataset> --out model_checkpoints_generic/<run>  # --model-preset small: CPU smoke
+uv run python main.py compare-generic --generic <run>/final.pth --legacy <SL ckpt 10.pth> --data <dataset>  # per-family top-1
+bash scripts/launch/2026-11/bridge/gpu_check_1830.sh   # the 1830 GPU check (convert, pretrain, compare, policy-only evals)
 uv run python scripts/build_start_positions.py   # Rebuild self-play's first-Stock-Round start file
 uv run python scripts/build_midgame_positions.py  # Rebuild the mid-game (Stock Round 2-6) start file
 uv run python scripts/eval_head_to_head.py --match 107 7 --games 240  # Strength: checkpoint vs checkpoint
@@ -79,6 +84,7 @@ uv run python main.py dashboard          # Start training dashboard (port 5001);
 uv run python main.py replay <game_file> # Check a saved game in the Python engine, print its viewer URL (--log: the game log)
 uv run python main.py advisor            # Model advisor backend (127.0.0.1:5002) for the browser extension in extension/
 uv run python scripts/eval_policy_only.py --match A B --out logs/eval/<name> --save-games 60  # + keep 60 games/match to view
+    # A or B = generic:<checkpoint>[@T]: a title-generic checkpoint, scored in the pool workers (--generic-device)
 uv run python main.py policy-gradient ... --save-game-every 1000  # + keep ~1 in 1000 training games to view
 
 # Months-long runs: a frozen deployment (read-only clone + own venv) run as a systemd user service with a watchdog
