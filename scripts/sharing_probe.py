@@ -236,13 +236,17 @@ def _done(out: Path, cell: dict) -> bool:
 
 
 def _order(cells: list) -> list:
-    """Source pretraining first (others wait on it), then the longest cells (most steps) first."""
+    """Source pretraining first (arm c waits on it), then the cells expected to run longest: larger target sizes
+    first (small ones stop early), arm b before a before c at a size, then by seed."""
 
     def steps(c):
         a = c["args"]
         return int(a[a.index("--max-steps") + 1])
 
-    return sorted(cells, key=lambda c: (c["arm"] != "c_pre", -steps(c), c["name"]))
+    rank = {"c_pre": 0, "b": 1, "a": 2, "c": 3}
+    return sorted(
+        cells, key=lambda c: (c["arm"] != "c_pre", -(c["size"] or 0), -steps(c), rank.get(c["arm"], 9), c["seed"])
+    )
 
 
 def run_plan(args) -> None:
