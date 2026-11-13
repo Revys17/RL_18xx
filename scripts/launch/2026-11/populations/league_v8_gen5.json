@@ -1,0 +1,141 @@
+{
+ "note": "gen6 (2026-11-10): league_v7_gen4 (31 members) + gen5/2800 + pg2p/2000",
+ "members": [
+  {
+   "path": "model_checkpoints/AlphaZeroTransformer/20261004_134558_804974562/10.pth",
+   "note": "SL checkpoint 10 (human-like)"
+  },
+  {
+   "path": "model_checkpoints/AlphaZeroTransformer/20261007_094500_804974562/1.pth",
+   "note": "pg3/350 (promoted)"
+  },
+  {
+   "path": "model_checkpoints_pg/pg4_20261007/learner/250.pth",
+   "note": "pg4/250"
+  },
+  {
+   "path": "model_checkpoints_pg/pg4_20261007/learner/500.pth",
+   "note": "pg4/500"
+  },
+  {
+   "path": "model_checkpoints_pg/pg4_20261007/learner/750.pth",
+   "note": "pg4/750 (main line, narrow)"
+  },
+  {
+   "path": "model_checkpoints_pg/exploit1_20261007/learner/200.pth",
+   "note": "exploit1 (B&O early, 3-trains in SR1)"
+  },
+  {
+   "path": "model_checkpoints_pg/probe_pg4_300/learner/100.pth",
+   "note": "1-seat probe of pg4/300"
+  },
+  {
+   "path": "model_checkpoints_pg/probe_pg4_600/learner/100.pth",
+   "note": "1-seat probe of pg4/600"
+  },
+  {
+   "path": "model_checkpoints_pg/x2_20261008/learner/300.pth",
+   "note": "x2_20261008 exploiter vs pg4/750, mid-game 0.3 (update 300)"
+  },
+  {
+   "path": "model_checkpoints_pg/x3_20261008/learner/300.pth",
+   "note": "x3_20261008 exploiter vs pg4/750, mid-game 0.6 (update 300)"
+  },
+  {
+   "path": "model_checkpoints_pg/lx1_20261008/learner/300.pth",
+   "note": "lx1 league exploiter (ckpt10 vs league v2, biased PFSP), update 300"
+  },
+  {
+   "path": "model_checkpoints_pg/gx_placement_20261010/learner/300.pth",
+   "note": "goal exploiter: placement (vs gen1/1000)"
+  },
+  {
+   "path": "model_checkpoints_pg/gx_bankrupt_20261010/learner/300.pth",
+   "note": "goal exploiter: bankruptcy hunter (vs gen1/1000)",
+   "min_share": 0.05
+  },
+  {
+   "path": "model_checkpoints_pg/gx_rusher_20261010/learner/300.pth",
+   "note": "goal exploiter: rusher (vs gen1/1000)"
+  },
+  {
+   "path": "model_checkpoints_pg/gx_prr_20261010/learner/200.pth",
+   "note": "goal exploiter: PRR loyalist (vs gen1/1000)"
+  },
+  {
+   "path": "model_checkpoints_pg/gx_nyc_20261010/learner/200.pth",
+   "note": "goal exploiter: NYC loyalist (vs gen1/1000)"
+  },
+  {
+   "path": "model_checkpoints_pg/gx_cpr_20261010/learner/200.pth",
+   "note": "goal exploiter: CPR loyalist (vs gen1/1000)"
+  },
+  {
+   "path": "model_checkpoints_pg/gx_bo_20261010/learner/200.pth",
+   "note": "goal exploiter: B&O loyalist (vs gen1/1000)"
+  },
+  {
+   "path": "model_checkpoints_pg/gx_co_20261010/learner/200.pth",
+   "note": "goal exploiter: C&O loyalist (vs gen1/1000)"
+  },
+  {
+   "path": "model_checkpoints_pg/gx_erie_20261010/learner/200.pth",
+   "note": "goal exploiter: ERIE loyalist (vs gen1/1000)"
+  },
+  {
+   "path": "model_checkpoints_pg/gx_nynh_20261010/learner/200.pth",
+   "note": "goal exploiter: NYNH loyalist (vs gen1/1000)"
+  },
+  {
+   "path": "model_checkpoints_pg/gx_bm_20261010/learner/200.pth",
+   "note": "goal exploiter: B&M loyalist (vs gen1/1000)"
+  },
+  {
+   "path": "model_checkpoints_pg/gx_rust_20261012/learner/300.pth",
+   "note": "goal exploiter: rust (vs gen1/1000)",
+   "min_share": 0.05
+  },
+  {
+   "path": "model_checkpoints_pg/gen1_20261009/learner/1000.pth",
+   "note": "gen1/1000 (main agent before gen2)"
+  },
+  {
+   "path": "model_checkpoints_pg/gx2_bankrupt_20261013/learner/300.pth",
+   "note": "goal exploiter round 3: bankruptcy hunter (vs gen2/1500)",
+   "min_share": 0.1
+  },
+  {
+   "path": "model_checkpoints_pg/gx2_rust_20261013/learner/300.pth",
+   "note": "goal exploiter round 3: rust (vs gen2/1500)",
+   "min_share": 0.1
+  },
+  {
+   "path": "model_checkpoints_pg/gx2_placement_20261013/learner/300.pth",
+   "note": "goal exploiter round 3: placement (vs gen2/1500)",
+   "min_share": 0.1
+  },
+  {
+   "path": "model_checkpoints_pg/gen1_20261009/learner/1500.pth",
+   "note": "gen2/1500 (main agent before gen3)"
+  },
+  {
+   "path": "model_checkpoints_pg/gen1_20261009/learner/2000.pth",
+   "note": "gen3/2000 (start of the reward A/B)"
+  },
+  {
+   "path": "model_checkpoints_pg/rab_place_20261014/learner/800.pth",
+   "note": "gen4/800 (placement reward)"
+  },
+  {
+   "path": "model_checkpoints_pg/rab_place_20261014/learner/1800.pth"
+  },
+  {
+   "path": "model_checkpoints_pg/gen5_20261107/learner/2800.pth",
+   "note": "gen5/2800 (gen6's start)"
+  },
+  {
+   "path": "model_checkpoints_pg/pg2p_20261109/learner/2000.pth",
+   "note": "pg2p/2000 (the 2-player PG run's final; strongest 2-player policy)"
+  }
+ ]
+}
