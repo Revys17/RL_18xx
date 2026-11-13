@@ -87,7 +87,7 @@ drive 1867 through `BaseGame::g1867_legal_moves()` (Python:
 | 3. fuzz | in-crate (`cargo test g1867::fuzz`) + wire (`scripts/g1867_fuzz.py`) |
 | 4. corpus completeness | `scripts/g1867_completeness.py` |
 | 5. Ruby replay of fuzz games | `scripts/g1867_fuzz_ruby_check.py` |
-| RlSpec / layout fingerprint (contract items 2, 6) | NOT done — the RL bridge is on hold |
+| RlSpec / layout fingerprint (contract items 2, 6) | layout `1867-v1` (2026-11-13, RL bridge milestone A2): `engine-rs/src/rl/g1867.rs`, index API `rl_legal_moves_json` / `rl_apply_index`, fingerprint pinned; `docs/rl_descriptors.md` §8. The generic encoder is package B's |
 
 ### Verification numbers
 

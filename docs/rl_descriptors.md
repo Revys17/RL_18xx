@@ -1,7 +1,8 @@
 # RL action descriptors: the schema
 
-*Milestone A1 of the title-generic RL bridge (2026-11-13; design `docs/rl_bridge_design.md` §2,
-work packages `docs/rl_bridge_work_packages.md` package A). Code: `engine-rs/src/rl/`,
+*Milestones A1 (the schema, the frozen 1830 layout) and A2 (the 1867 layout and its index API) of
+the title-generic RL bridge (2026-11-13; design `docs/rl_bridge_design.md` §2, work packages
+`docs/rl_bridge_work_packages.md` package A). Code: `engine-rs/src/rl/`,
 `rl18xx/agent/alphazero/action_descriptors.py`, `rl18xx/agent/alphazero/titles.py`.*
 
 Every title gets **one index space** (its *layout*): a policy index per distinct legal move, the
@@ -12,10 +13,11 @@ legal indices of a state from their descriptors, so the same weights score "buy 
 "lay tile T on hex H" in any title, and a layout can be any size (1822CA's tile lays alone are
 162k indices).
 
-Today exactly one real layout exists: **1830 v1**, the frozen flat layout of
-`action_index.rs::build_layout` (26,537 indices), now with a descriptor for every index. 1867 and
-the 1822 family have no layout yet ("not bridge-ready"); §7 sketches how 1867 maps onto the schema
-and §8 lists what the schema cannot express.
+Two layouts exist: **1830 v1**, the frozen flat layout of `action_index.rs::build_layout` (26,537
+indices) with a descriptor for every index, and **1867 v1** (38,875 indices), a registry layout
+built from title data whose index function maps the moves of 1867's legal-move generator
+(`g1867/legal.rs`) to indices (§8). The 1822 family has no layout yet ("not bridge-ready"); §9 lists
+what the schema cannot express for it.
 
 ## 1. Where it lives, how to read it
 
@@ -24,6 +26,8 @@ and §8 lists what the schema cannot express.
 | Schema, global vocabularies | `engine-rs/src/rl/descriptor.rs` |
 | Block registry, descriptors per index, fingerprint | `engine-rs/src/rl/layout.rs` |
 | 1830's frozen layout as a registry | `engine-rs/src/rl/factored_layout.rs` |
+| 1867's layout and its move -> index function | `engine-rs/src/rl/g1867.rs` (tests: `rl/g1867/tests.rs`) |
+| Index API of generator titles (legal indices, decode, apply, price range) | `engine-rs/src/rl/generator.rs`: Rust `BaseGame::rl_indexed_moves` / `rl_move_for_index` / `rl_apply_index`; Python `BaseGame.rl_legal_indices`, `rl_legal_moves_json`, `rl_decode_index`, `rl_apply_index`, `rl_price_range` |
 | Python surface | `engine_rs.rl_layout_info(title)`, `engine_rs.rl_descriptor_vocab()`, `engine_rs.rl_title_status(title)` (`engine-rs/src/rl/py.rs`) |
 | Python wrapper (cached, numpy) | `rl18xx.agent.alphazero.action_descriptors.action_descriptors(title)` |
 | Readiness per title | `GameTitle::rl_layout_kind` / `rl_layout_ready` / `rl_encoder_ready` (`engine-rs/src/title/mod.rs`) |
@@ -31,8 +35,9 @@ and §8 lists what the schema cannot express.
 ```python
 from rl18xx.agent.alphazero.action_descriptors import action_descriptors
 
-d = action_descriptors("1830")            # RuntimeError "not bridge-ready" for 1867 / 1822*
-legal = game.factored_legal_indices()     # the 1830 path's legal indices (sorted)
+d = action_descriptors("1830")            # RuntimeError "not bridge-ready" for 1822*
+legal = game.factored_legal_indices()     # the 1830 path's legal indices (sorted);
+                                          # 1867: game.rl_legal_indices()
 rows = d.gather(legal)                    # int32 [n_legal, 14], columns d.fields
 fam = rows[:, d.col("family")]            # ids into d.families
 d.describe(139 + 46 * 6 + 2 * 6 + 5)      # {'family': 'LayTile', 'hex': 'I1', 'tile': '16', 'rot': 5, ...}
@@ -62,7 +67,7 @@ the others stay -1.
 | 7 | `city` | City on that hex's tile | 0-based city index of the tile on the hex |
 | 8 | `tile` | Tile laid | tile vocabulary index |
 | 9 | `rot` | Rotation | 0-5 |
-| 10 | `param` | The family's number | Par: par price in $; BuyShares / SellShares / RedeemShares / IssueShares: percent moved; Choose: the option's position when options are a state list (§8) |
+| 10 | `param` | The family's number | Par: par price in $; BuyShares / SellShares / RedeemShares / IssueShares: percent moved; Choose: the option's position when options are a state list (§9) |
 | 11 | `choice` | A categorical option | id in the global choice vocabulary (§3): share source, dividend kind, a named choice |
 | 12 | `price_kind` | How the move's price is expressed (§6) | id in `price_kinds`, -1 = no price parameter |
 | 13 | `flags` | Bits | `dead` 1, `train_from_state` 2 (§3) |
@@ -112,7 +117,7 @@ layout's fingerprint.
 | 20 | `Bankrupt` | - | 1830, 1822 |
 | 21 | `Merge` | ent0 corporation | 1867, 1822 (minor acquisition, PNW mergers, MX NdeM) |
 | 22 | `Convert` | - | 1867 |
-| 23 | `Choose` | choice (or param, §8) | 1867 nationalize, 1822 family |
+| 23 | `Choose` | choice (or param, §9) | 1867 nationalize, 1822 family |
 | 24 | `AcquireCompany` | ent0 company | 1822 |
 | 25 | `ChooseAbility` | via company, choice | 1822 |
 | 26 | `HexToken` (map) | hex, choice token type | 1822 destination tokens |
@@ -123,11 +128,13 @@ layout's fingerprint.
 **Entity kinds** (`ent0_kind`, `ent1_kind`): 0 `player`, 1 `corporation`, 2 `company`, 3 `train`.
 
 **Price kinds** (`price_kind`, §6): 0 `bid` (cells "Bid"), 1 `train_transfer` ("BuyTrain"),
-2 `company_purchase` ("BuyCompany"), 3 `amount` (cells not fixed yet).
+2 `company_purchase` ("BuyCompany"), 3 `amount` (cells not fixed yet), 4 `bid_range` ("BuyTrain"
+cells for a bid: range-relative, with an atom at the all-in top; since `1867-v1`, §8 price census).
 
 **Choices** (`choice`): 0 `source:ipo`, 1 `source:market`, 2 `dividend:payout`,
-3 `dividend:withhold`, 4 `dividend:half`, 5 `choose:nationalize`. A title's named choices are
-appended when its layout lands (1822: `choose:double`, ...).
+3 `dividend:withhold`, 4 `dividend:half`, 5 `choose:nationalize`, 6 `train_source:depot`,
+7 `train_source:pool` (6-7 since `1867-v1`: where a trade-in's new train comes from). A title's
+named choices are appended when its layout lands (1822: `choose:double`, ...).
 
 **Flags** (`flags`, bits):
 
@@ -142,14 +149,14 @@ appended when its layout lands (1822: `choose:double`, ...).
 Entity, hex and tile fields index lists that come from the title data, in its order
 (`layout::Vocab`; `rl_layout_info(title)["vocab"]`):
 
-| Vocabulary | Order | 1830 |
-|---|---|---|
-| `corporation` | `GameTitle::corporations()` (every kind: majors, minors, nationals) | PRR NYC CPR B&O C&O ERIE NYNH B&M |
-| `company` | `GameTitle::companies()` (auctionable or not; the 1822 family's minors M1.. and concessions C1.. are companies too) | SV CS DH MH CA BO |
-| `train` | `GameTitle::trains()` names, variants included (1822's "2" is the L card's variant) | 2 3 4 5 6 D |
-| `hex` | `GameTitle::hex_definitions()` = `BaseGame.hexes` order | 93 hexes, map order |
-| `tile` | `GameTitle::tile_counts()` (the title's tile manifest) | 46 tiles |
-| players | the game's seating order (seat index; no 1830 / 1867 family refers to a player) | - |
+| Vocabulary | Order | 1830 | 1867 |
+|---|---|---|---|
+| `corporation` | `GameTitle::corporations()` (every kind: majors, minors, nationals) | PRR NYC CPR B&O C&O ERIE NYNH B&M | 8 majors, 16 minors, the CN (25) |
+| `company` | `GameTitle::companies()` (auctionable or not; the 1822 family's minors M1.. and concessions C1.. are companies too) | SV CS DH MH CA BO | C&SL NFB MB QB SCT and the hidden "3" |
+| `train` | `GameTitle::trains()` names, variants included (1822's "2" is the L card's variant) | 2 3 4 5 6 D | 2 3 4 5 6 7 8 2+2 5+5E |
+| `hex` | `GameTitle::hex_definitions()` = `BaseGame.hexes` order | 93 hexes, map order | 94 hexes |
+| `tile` | `GameTitle::tile_counts()` (the title's tile manifest) | 46 tiles | 68 tiles |
+| players | the game's seating order (seat index; no 1830 / 1867 family refers to a player) | - | - |
 
 These are **not** the frozen layout's orders: 1830's action layout keeps its historical hex and
 tile orders (`action_hex_order`, `action_tile_order`), and its descriptors map them into the map /
@@ -203,9 +210,19 @@ expressed; the legal range comes from the state:
   - `train_transfer` -> "BuyTrain": atoms at lo, hi, hi-1 plus 20 bins;
   - `company_purchase` -> "BuyCompany": atoms at lo, hi plus 8 bins;
   - `amount` (1822 partial debt payoff): cells to be fixed from a human price census when the
-    family is first used.
+    family is first used;
+  - `bid_range` -> "BuyTrain" cells for a bid: atoms at lo, hi, hi-1 plus 20 bins (1867 minor
+    bids: a quarter go all-in, §8 price census).
   `P(price) = softmax(nonempty cell logits)[cell] / |cell|` (`price_pmf.rs`), exactly as 1830's
   head; MCTS progressive widening over prices is unchanged.
+- **Step units (generator layouts)**: a generator move's range has its own step (1867: $5 for
+  both auctions, $1 for trains and companies; never a title constant). Its cells are taken over
+  `k = (price - lo) / step` in `[0, (hi - lo) / step]`, i.e. `PriceCells(cell_type, 0, K, 1)`, and
+  a cell's member `k` is the price `lo + step·k` (`rl::generator::price_cells` / `price_at` /
+  `price_step`; Python: `price_pmf.price_cells(cell_type, 0, K, 1)`). So every cell holds legal
+  prices only (1867 bids must be on the $5 grid, Ruby `MUST_BID_INCREMENT_MULTIPLE`), and for
+  `bid` the 20 atoms are the same ladder as `PriceCells("Bid", lo, hi, step)`. The 1830 path keeps
+  its legacy price units.
 - **No price kind** means the price is not a decision: par cost, a depot or pool train at face, a
   token's price, a trade-in's fixed discount. (1830's enumeration carries a degenerate range
   `lo == hi` for depot trains; that is not a price parameter.)
@@ -236,6 +253,7 @@ re-converted dataset).
 | Title | Version | Total | Fingerprint |
 |---|---|---|---|
 | 1830 | `1830-v1` | 26,537 | `e721aa6520116e2a` |
+| 1867 | `1867-v1` | 38,875 | `4987cd19b7e912e2` |
 | TEST-5SHARE (test builds only) | `TEST-5SHARE-v1` | 26,513 | `7196801649141472` |
 
 ### The frozen 1830 layout (`1830-v1`)
@@ -296,51 +314,142 @@ Gumbel / dense policy vectors. For a title whose kind is `None` each of these ra
 1830's layout (which `factored_legal_indices` used to do). 1830 resolves to the very same
 `SlotLayout` as before (pointer-equal), so its behaviour is unchanged.
 
-A title whose moves come from its own generator (1867, the 1822 family) will get a third kind
-(a registry layout built from title data, mapping generator moves to indices); it must never go
-through `build_layout`, which cannot express it.
+A title whose moves come from its own generator has the third kind, **`Generator`** (1867 today;
+the 1822 family next): a registry layout built from title data plus an index function from the
+generator's moves to indices (§8). It never goes through `build_layout`. The 1830 index path
+refuses it with its own message ("indexed by its generator layout ... not by the 1830 factored
+index path"), and the generator API (`rl_legal_indices`, ...) refuses 1830 ("index it through
+factored_legal_indices"). `rl_title_status` / `rl_layout_info` report the kind (`"none"`,
+`"factored"`, `"generator"`); `rl_encoder_ready` stays false for 1867 (the generic encoder is
+package B's).
 
-## 8. Sketch: 1867 on the schema (not implemented)
+## 8. The 1867 layout (`1867-v1`)
 
-Built from title data (`rl::tests::print_title_axis_sizes`): 94 hexes, 68 tiles, 6 companies (5
-auctionable; the hidden "3" is not), 8 majors + 16 minors + the CN, 11 major par cells (par_2 +
-par), trains 2 3 4 5 6 7 8 2+2 5+5E, 19 city slots on the initial map. Every generator move of
-`g1867/legal.rs` maps to one block:
+A registry layout built from title data (`rl/g1867.rs::block_specs`, kind `Generator`): 38,875
+indices, fingerprint `4987cd19b7e912e2`. Every move of the legal-move generator
+(`g1867/legal.rs`) maps to exactly one index (`rl/g1867.rs::move_key` -> `RlLayout::index_of`); a
+state's moves map to distinct indices; a price-bearing move is one index whose range comes from the
+move. 98.7% of the indices are tile lays.
 
-| Generator (`g1867_gen`) | Block | Size | Notes |
-|---|---|---|---|
-| any step: pass | `Pass` | 1 | |
-| SingleItemAuction bid (range $5 grid, dutch: the asking price only) | `Bid.company[auctionable companies]` | 5 | price `bid`, step from the move |
-| BuySellParShares: minor opening bid ($100+) and raise in a live minor auction | `Bid.corporation[minors]` | 16 | price `bid`; opening vs raise is the step state |
-| BuySellParShares: par | `Par[majors x par $]` | 88 | |
-| BuySellParShares: buy one certificate | `BuyShares[majors x {ipo, market}]` | 16 | minors are one 100% certificate, never bought as shares |
-| BuySellParShares: sell a bundle | `SellShares[majors x percent 10..50]` | 40 | |
-| PostMergerShares: buy a treasury share of the converted major | `BuyShares[majors x ipo]` (same block) | - | |
-| HomeToken (SR), Token (OR): place_token | `PlaceToken[(hex, city)]` | ~19-21 | city slots = max cities over each hex's upgrade closure (L12's triple city); the distance price is state |
-| ReduceTokens: remove_token | `RemoveToken[(hex, city)]` | ~19-21 | the corporation has one token per city, so (hex, city) names it |
-| Track: lay_tile (two lays per turn) | `LayTile[hex x tile x rot]` | 38,352 | the slot rules (second lay $20, no upgrade after an upgrade) are state |
-| Route: run_routes | `RunRoutes` | 1 | |
-| Dividend: payout / half / withhold | `Dividend[choice]` | 3 | |
-| BuyTrain: a depot train at face | `BuyTrain.depot[train]` | 9 | |
-| BuyTrain: a discarded train at face | `BuyTrain.pool[train]` | 9 | |
-| BuyTrain: trade-in (phase 8) | `BuyTrain.exchange[new x traded]` | ~18 | the (new, traded) pairs of the trains' discount tables |
-| BuyTrain: another corporation's train ($1..cash) | `BuyTrain.corp[corps x train]` | ~216 | price `train_transfer` |
-| DiscardTrain | `DiscardTrain[train]` | 9 | |
-| BuyCompany / BuyCompanyPreloan ($1..face) | `BuyCompany[companies]` | 5 | price `company_purchase` |
-| RedeemShares: buy back own pool shares (cumulative bundles) | `RedeemShares[percent 10..50]` | 5 | |
-| Merge: merge (add a minor, or name the major) | `Merge[corporations]` | 24 | the two meanings never share a legal set (the step state says which) |
-| Merge: convert | `Convert` | 1 | |
-| MajorTrainless: choose nationalize | `Choose[choose:nationalize]` | 1 | |
+| Block | Family | Offset | Size | Axes (title data) | Generator moves (step: action) |
+|---|---|---|---|---|---|
+| Pass | Pass | 0 | 1 | - | every step's pass (whose pass, and what it means, is state) |
+| Bid.company | Bid.company | 1 | 5 | auctionable companies C&SL NFB MB QB SCT (the hidden "3" is not) | SingleItemAuction: bid on the lot up for auction; price `bid` ($5 grid; dutch mode: the asking price only, `lo == hi`) |
+| Bid.corporation | Bid.corporation | 6 | 16 | minors | BuySellParShares: a minor's opening bid ($100+) or a raise in its live auction (never both in one state); price `bid_range` |
+| Par | Par | 22 | 88 | majors x the market's major par cells (par_2 + par: $70 80 90 100 110 120 135 150 165 180 200) | BuySellParShares: par |
+| BuyShares | BuyShares | 110 | 16 | majors x {`source:ipo` (treasury), `source:market`} | BuySellParShares: buy one certificate; PostMergerShares: buy a treasury share of the converted major (`source:ipo`) |
+| SellShares | SellShares | 126 | 40 | majors x percent 10..50 (one unit up to the pool limit) | BuySellParShares: sell a bundle (one bundle per percent) |
+| RedeemShares | RedeemShares | 166 | 5 | percent 10..50 | RedeemShares: the acting major buys back its own pool shares (cumulative bundles) |
+| PlaceToken | PlaceToken | 171 | 19 | city slots `(hex, city)` | HomeToken (SR, and an OR re-placement): a home city; Token: a connected city (the distance price is state) |
+| RemoveToken | RemoveToken | 190 | 19 | city slots | ReduceTokens: one of the merged major's tokens (duplicates in a city are removed by the merge, so `(hex, city)` names the token) |
+| BuyTrain.depot | BuyTrain.depot | 209 | 9 | trains 2 3 4 5 6 7 8 2+2 5+5E | BuyTrain: a depot train at face (the head, or a phase-available later type) |
+| BuyTrain.pool | BuyTrain.pool | 218 | 9 | trains | BuyTrain: a discarded train at face |
+| BuyTrain.exchange | BuyTrain.exchange | 227 | 36 | new (8, 2+2, 5+5E: the trains with a discount table) x traded (5 6 7 8 2+2 5+5E: the types those tables discount) x {`train_source:depot`, `train_source:pool`} | BuyTrain: a phase-8 trade-in; the source axis tells a depot train from a pool train of the same type (the generator offers both; 186 such states in the fuzz below) |
+| BuyTrain.corp | BuyTrain.corp | 263 | 216 | majors + minors (the CN only holds tokens) x trains | BuyTrain: another corporation's train; price `train_transfer` |
+| DiscardTrain | DiscardTrain | 479 | 9 | trains | DiscardTrain |
+| Dividend | Dividend | 488 | 3 | `dividend:payout`, `dividend:half`, `dividend:withhold` | Dividend |
+| BuyCompany | BuyCompany | 491 | 5 | auctionable companies | BuyCompany / BuyCompanyPreloan: a player's private for $1..face; price `company_purchase` |
+| RunRoutes | RunRoutes | 496 | 1 | - | Route: the auto-router's optimum (`g1867_auto_routes`), one move |
+| Merge | Merge | 497 | 24 | majors + minors | Merge: add a minor to the merge set, or name the major (unfloated) that takes the set or a conversion; the two never share a legal set |
+| Convert | Convert | 521 | 1 | - | Merge: convert |
+| Choose | Choose | 522 | 1 | `choose:nationalize` | MajorTrainless: nationalize (the decline is the pass) |
+| LayTile | LayTile | 523 | 38,352 | 94 hexes x 68 tiles x 6 rotations | Track: either of the turn's two lays (the slot rules, the $20 second lay, terrain and border costs are state) |
 
-About 38,900 indices, 99% of them tile lays (design §2.3's estimate holds). Open points for the
-1867 layout (A2): a trade-in whose new train exists both in the depot and in the pool (the
-generator offers both, with different train ids) needs a source axis or a rule; the city-slot
-axis needs the upgrade closure (the 1830 rule "cities of the initial tile" misses L12's third
-city); the price census for 1867 bids and company purchases decides the cells.
+Choices of the layout:
+
+- **Not in the layout**: `bankrupt` (replay-only: Ruby 1867 has no Bankrupt step), a BuyTrain
+  step's `sell_shares` (1867's EMR never sells), and the replay-only out-of-order decisions
+  (`g1867_remaining_work.md` "Replay-only"). A future rules change that generates one of them adds
+  a block and bumps the version.
+- **City slots** = for each hex the most cities over its upgrade closure (its initial tile and
+  every manifest tile reachable by `g1867_upgrades_to`, phases and supply ignored): 19 slots on 16
+  hexes. The closure adds none today: L12 (Montreal) already starts as the triple city, and 1867's
+  upgrades never add a city to a hex. A `city` is the city's position on the hex's current tile.
+- **Pass is one index** for every passing entity and step; the fuzz and both corpora never show
+  two passes in one legal set (the API would raise on it).
+- **Indices mean the same move under either cross-player policy**: the title's policy only removes
+  moves (`policy=None` vs `"rules"`).
+
+### The index API (`rl/generator.rs`)
+
+| Rust (`BaseGame`) | Python (`engine_rs.BaseGame`) | |
+|---|---|---|
+| `rl_indexed_moves(policy)` | `rl_legal_indices(policy=None)`, `rl_legal_moves_json(policy=None)` | the state's moves with their indices, ascending: `[{"index", "block", "wire", "range": [lo, hi, step] or null, "step"}]`; raises if a move has no index or two share one |
+| `rl_move_for_index(idx, price, policy)` | `rl_decode_index(idx, price=None, policy=None)` | index -> the move (18xx.games action dict in Python) with `price` checked against its range and step (None: `lo`) |
+| `rl_apply_index(idx, price, policy)` | `rl_apply_index(idx, price=None, policy=None)` | apply it and log its action dict (so `raw_actions` replays the game) |
+| - | `rl_price_range(idx, policy=None)` | `(lo, hi, step)` or None |
+| `rl::generator::price_cells(kind, range)`, `price_at`, `price_step` | `price_pmf.price_cells(cell_type, 0, K, 1)` | the price head's cells in step units (§6) |
+
+`policy`: None = the title's cross-player policy (`RESTRICTED`), `"rules"` = everything Ruby
+accepts. `rl_layout_info("1867")` / `action_descriptors("1867")` give the descriptors (kind
+`"generator"`). Game records of the 1867 path carry `rl18xx.layout` = `{title, layout_kind,
+layout_version, layout_fingerprint}` (`titles.layout_metadata`, `game_records.make_game_record(...,
+title="1867")`, `scripts/g1867_fuzz.py`; written, not enforced). 1830 records are unchanged.
+
+### Verification (2026-11-13)
+
+- **Layout**: blocks contiguous, every descriptor row distinct, no `dead` index, price kinds on
+  exactly the four priced blocks, fingerprint pinned (`rl::g1867::tests::layout_blocks`,
+  `rl::tests::layout_fingerprints_are_pinned_per_title`, `tests/test_rl_g1867_index.py`).
+- **Fuzz through the index API** (`rl::g1867::tests::index_fuzz_many`, `G1867_INDEX_SEEDS=5`):
+  40 walks, 3-6 players x 5 seeds x {title's policy, rules' policy}, every game to its end: 48,535
+  states, 339,600 legal moves. At every state: every move indexed, indices distinct, each
+  index's descriptor agrees with its move (entity, hex/city, tile/rotation, percent, par $,
+  choice, train type and source), decode(index) through the API gives back the chosen move at its
+  chosen price, both ends of every price range apply (96,486 price checks), and apply-by-index
+  leaves the same state (serialized) and logs the same action dict as apply-by-move; the walk
+  advances by index. Every block was offered and played; 186 states offered one trade-in pair
+  from both the depot and the pool. The default test (`index_fuzz_3_to_6_players`, 6 walks) runs
+  in ~75 s.
+- **Index-level corpus completeness** (`scripts/g1867_completeness.py --index`, rules' moves,
+  every human decision including `run_routes`, which matches the RunRoutes index by type): for an
+  exact match also `rl_decode_index` == the human action (key and price) and `rl_apply_index`
+  leaves the state the human action leaves (players' cash, corporations' cash / price / trains /
+  certificates, companies, tiles and tokens, depot, bank, round and step).
+
+  | Corpus | Games in scope (3/4/5/6 p) | Decisions | Exactly one index | Ambiguous | Decode / apply mismatch | Policy-excluded | Replay-only classes | Missing |
+  |---|---|---|---|---|---|---|---|---|
+  | 2026-10 scrape (`human_games/scrape_2026_10/1867`) | 316 (46/219/43/8) | 181,947 | 181,944 (99.998%) | 0 | 0 / 0 | 7 (2 companies, 5 merger adds) | 3 (out-of-turn post-merger passes) | 0 |
+  | 2020-22 corpus (`human_games/1867`, all 1,027 files) | 727 (222/397/96/12) | 390,709 | 389,807 (99.769%) | 0 | 0 / 0 | 31 (1 company, 5 trains, 25 merger adds) | 862 (429 pre-#9655 merger-order buys, 370 passes and 63 choices out of order) | 40 |
+
+  "Exactly one index" counts the policy-excluded decisions (legal under the rules, one index).
+  The 40 misses of the old corpus (place_token 22, buy_train 6, buy_shares 3, lay_tile 3,
+  discard_train 2, pass 2, merge 1, run_routes 1) are the generator's own misses: the index layer
+  adds none (every generated move has exactly one index). 23 are the action at which the replay
+  itself then stops (25 old games end in a replay rejection: e.g. 23812@607, 32537@630,
+  24437@929, 87092@379). The other 17 are old records the generator does not offer: 11
+  place_token (21494@776 is the documented home token Ruby HEAD also refuses; 28418@641,
+  29292@510, 32894@633, 39631@631, 42154@657, 42964@581, 48185@477, 67332@710, 81411@536 and
+  31586@669 lie beyond the 300-file sample `g1867_remaining_work.md` probed), 3 buy_shares
+  (39631@693/@702, 41062@688) and 3 lay_tile in games the replay rejects a few actions later
+  (24437@899, 45921@503, 72923@336). Not probed against Ruby HEAD yet; the 2026-10 scrape, which
+  Ruby HEAD replays, has none.
+
+### Price census and price specs
+
+Human prices of the price-bearing indices, both corpora (exact matches only;
+`--census-rows`), against `price_pmf` cell layouts taken in step units (§6). "Bits" = E[log2
+|cell of the human price|], the resolution a cell layout leaves (0 = every human price is a cell
+of its own):
+
+| Block (n) | Where humans price | "Bid" cells | "BuyTrain" cells | "BuyCompany" cells | Spec |
+|---|---|---|---|---|---|
+| Bid.company (16,871) | 72-83% at the minimum bid, 99% within 5 steps; never beyond 19 steps | 100% on atoms, 0.00 bits | 0.23 | 0.51 | `bid` ("Bid" ladder, step $5 from the move) |
+| Bid.corporation (18,148) | openings (11,481): 29-33% at $100, 27-29% all-in (hi = the bidder's limit), 18-20% beyond 19 steps; raises (6,667): 51-59% at the minimum raise, 13-18% all-in | 0.45 (openings 0.69: the all-in bids and everything past the ladder fall in one bin of ~150 prices) | **0.20** (openings 0.26, raises 0.09) | 0.60 | **`bid_range`** ("BuyTrain" cells: atoms lo, hi, hi-1 + 20 bins) |
+| BuyTrain.corp (6,797) | $1: 18-20%; all the buyer's cash (hi): 43-55%; hi-1: 3-8%; the train's face value 4-5% (2-trains are 66% of these purchases) | 4.54 | **0.78** (69-77% on atoms) | 1.37 | `train_transfer` ("BuyTrain") |
+| BuyCompany (4,077) | at hi 96-97% (face, when the buyer can pay it: 87-92% at face), $1: 0.5% | 4.85 | 0.05 | **0.09** (97% on atoms) | `company_purchase` ("BuyCompany") |
+
+The only spec that differs from 1830's is the minor bid: price kind `bid_range` (appended to the
+price-kind vocabulary, id 4) with "BuyTrain" cells. A face-value atom for train transfers would
+catch 4-5% more; not worth a new cell layout. Pars are an index axis, not a price: 1,055 human pars
+used all 11 cells ($70: 49, $80: 41, $90: 40, $100: 67, $110: 59, $120: 65, $135: 55, $150: 84,
+$165: 67, $180: 108, $200: 420).
 
 ## 9. What the schema cannot express yet
 
-1867: nothing beyond the open points above.
+1867: nothing (§8). The 1822 family's generator moves (`g1822_legal_moves_json`) need the
+generator index function (`rl/generator.rs`, today typed on 1867's `Move`) generalized to their
+move type.
 
 The 1822 family (to settle with its layout):
 

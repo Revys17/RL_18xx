@@ -316,6 +316,13 @@ and writes its generator(s) (§2.4). The registry is the contract.*
 
 ### 2.3 The 1867 layout concretely
 
+> *2026-11-13: implemented as `1867-v1`, see `docs/rl_descriptors.md` §8 (38,875 indices). It
+> differs from this table: the trade-ins have a source axis (depot / pool: 36 indices, the same new
+> type can be offered from both); redemptions are `RedeemShares[percent 10..50]` (the acting major
+> is state); city slots are exactly 19 (L12 already starts as the triple city); no Bankrupt block
+> (Ruby 1867 has no Bankrupt step); minor bids price with range-relative cells (`bid_range`, from
+> the human price census) and every price range's step comes from the move.*
+
 | Block | Size | Notes |
 |---|---|---|
 | Pass | 1 | |
