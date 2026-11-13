@@ -33,7 +33,10 @@ It serves on 127.0.0.1 unless ``--host`` says otherwise (``--host 0.0.0.0`` for 
 browser on another machine of the LAN). Only requests addressed to an IP address,
 localhost or this machine's host name (no DNS rebinding) from a browser extension
 (``Origin: chrome-extension://...`` or ``moz-extension://...``, which web pages
-can't forge) reach the API -- plus, with ``--debug-page``, the backend's own page.
+can't forge) reach the API -- plus, with ``--debug-page``, the backend's own page, and
+with ``--web-site-port P`` the pages of a site served on port P of this machine (the local
+copy of 18xx.games, whose game page has an engine panel), for ``/api/health`` and
+``/api/advise`` only.
 """
 
 from __future__ import annotations
@@ -57,6 +60,8 @@ from rl18xx.agent.advisor.live_game import LiveGame, UnsupportedGame, support_pr
 LOGGER = logging.getLogger(__name__)
 
 EXTENSION_ORIGINS = ("chrome-extension://", "moz-extension://")
+# What a web page (--web-site-port) may ask: advice, nothing that searches or plays.
+WEB_PAGE_PATHS = ("/api/health", "/api/advise")
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 LOCAL_HOSTNAMES = ("127.0.0.1", "localhost", "::1")
 MAX_GAMES = 8
@@ -122,27 +127,43 @@ def host_allowed(hostname: Optional[str]) -> bool:
     return True
 
 
-def create_app(advisor: Advisor, *, port: int, debug_page: bool = False) -> Flask:
+def web_page_origin(origin: str, ports) -> bool:
+    """Whether ``origin`` is a page of a site on this machine served on one of ``ports``
+    (``--web-site-port``): http(s), that port, and a host :func:`host_allowed` accepts."""
+    if not ports:
+        return False
+    try:
+        parts = urlsplit(origin)
+        port = parts.port
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and port in ports and host_allowed(parts.hostname)
+
+
+def create_app(advisor: Advisor, *, port: int, debug_page: bool = False, web_site_ports=()) -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
     games = GameCache()
     own_origins = {f"http://{host}:{port}" for host in LOCAL_HOSTS} if debug_page else set()
+    web_ports = {int(p) for p in web_site_ports or ()}
 
-    def origin_allowed(origin: str) -> bool:
-        return origin.startswith(EXTENSION_ORIGINS) or origin in own_origins
+    def origin_allowed(origin: str, path: str) -> bool:
+        if origin.startswith(EXTENSION_ORIGINS) or origin in own_origins:
+            return True
+        return path in WEB_PAGE_PATHS and web_page_origin(origin, web_ports)
 
     @app.before_request
     def guard():
         if not host_allowed(urlsplit(f"//{request.host or ''}").hostname):
             return jsonify({"error": "This server only answers to an IP address or this machine's name"}), 403
-        if request.path.startswith("/api/") and not origin_allowed(request.headers.get("Origin", "")):
+        if request.path.startswith("/api/") and not origin_allowed(request.headers.get("Origin", ""), request.path):
             return jsonify({"error": "Only the advisor's browser extension may use this API"}), 403
         return None
 
     @app.after_request
     def cors(response):
         origin = request.headers.get("Origin", "")
-        if request.path.startswith("/api/") and origin_allowed(origin):
+        if request.path.startswith("/api/") and origin_allowed(origin, request.path):
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
             response.headers["Access-Control-Allow-Headers"] = "Content-Type"
@@ -313,7 +334,20 @@ def run(args) -> None:
         labels["play_auction_value"],
     )
     advisor = Advisor(models)
-    app = create_app(advisor, port=args.port, debug_page=args.debug_page)
+    web_site_ports = getattr(args, "web_site_port", None) or []
+    app = create_app(advisor, port=args.port, debug_page=args.debug_page, web_site_ports=web_site_ports)
+    if getattr(args, "bots", False):
+        from rl18xx.agent.advisor import admin
+        from rl18xx.agent.advisor.bot_hub import BotHub
+
+        hub = BotHub(advisor, args.bot_settings)
+        admin.register(app, hub, admin.read_password(args.admin_password_file))
+        hub.start()
+        LOGGER.info(
+            "Bots: settings %s; admin page /admin (user admin, password in %s)",
+            hub.settings_path,
+            args.admin_password_file,
+        )
     host = getattr(args, "host", "127.0.0.1")
     LOGGER.info("Advisor backend on http://%s:%d (device %s)", host, args.port, device)
     if host not in ("127.0.0.1", "localhost", "::1"):
@@ -322,4 +356,6 @@ def run(args) -> None:
         )
     if args.debug_page:
         LOGGER.info("Debug page: http://127.0.0.1:%d/debug", args.port)
+    if web_site_ports:
+        LOGGER.info("Pages of this machine's sites on port(s) %s may ask for advice", web_site_ports)
     app.run(host=host, port=args.port, threaded=True, use_reloader=False)

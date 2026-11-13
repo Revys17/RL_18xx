@@ -1113,6 +1113,24 @@ def build_parser():
         "--debug-page", action="store_true",
         help="Also serve /debug: paste a game JSON and see the extension's panel for it",
     )
+    p.add_argument(
+        "--web-site-port", type=int, action="append", default=[],
+        help="Let the pages of a site on this machine served on this port ask for advice (/api/advise, "
+        "/api/health): the local copy of 18xx.games (9292) has an engine panel. Repeatable",
+    )
+    p.add_argument(
+        "--bots", action="store_true",
+        help="Also play bot seats: on the local copy of 18xx.games and/or 18xx.games, each switched on and off "
+        "on the admin page /admin (rl18xx/agent/advisor/bot_hub.py)",
+    )
+    p.add_argument(
+        "--bot-settings", type=str, default="~/.config/18xx/bot_hub.json",
+        help="The bots' settings, as the admin page saves them (default: ~/.config/18xx/bot_hub.json)",
+    )
+    p.add_argument(
+        "--admin-password-file", type=str, default="~/.config/18xx/bot_admin_password",
+        help="The admin page's password (user admin), made on first start (default: ~/.config/18xx/bot_admin_password)",
+    )
 
     # value-train (the long run's value trainer)
     from rl18xx.agent.alphazero.value_trainer import ValueTrainerConfig as V

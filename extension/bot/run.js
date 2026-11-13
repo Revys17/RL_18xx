@@ -51,11 +51,19 @@ const STUCK_MS = 5 * 60_000;
 const MONITOR_MAX_AGE_MS = 30_000; // the runner's own once-a-minute look may reuse a read this recent
 const PAGE_SPACING_MS = 8_000; // a page load is a handful of requests: keep the queue clear after one
 const MAX_AUTOPLAY_RESTARTS = 3; // per stuck turn: a stop that keeps coming back needs a person
+const LOST_POST_WAIT_MS = 5_000; // after a move got no answer: time for the server to finish it
+const MAX_LOST_POSTS = 3; // moves in a row that got no answer before autoplay stops
 
 /** Whether the panel's autoplay status (``data-autoplay``: "<phase>: <text>", absent while it is
  * off) says autoplay has stopped: off, or stopped on an error. */
 function autoplayStopped(status) {
   return !status || /^(error|off)\b/.test(status);
+}
+
+/** An error's message, first line only: Playwright's go on with a call log that shows the request's
+ * headers, an account's login cookie among them. */
+function errorText(e) {
+  return String((e && e.message) || e).split('\n')[0];
 }
 
 function parseArgs(argv) {
@@ -246,6 +254,7 @@ class GameWatch {
     this.lastStatus = null;
     this.waitLogged = false;
     this.restarts = 0; // autoplay switched back on since the game last moved
+    this.lostPosts = 0; // moves posted in a row that got no answer
   }
 
   async open() {
@@ -370,6 +379,7 @@ class Bot {
     this.viewer = null;
     this.games = null;
     this.extensionId = null;
+    this.lostPostWaitMs = LOST_POST_WAIT_MS;
   }
 
   async start() {
@@ -427,17 +437,35 @@ class Bot {
     }
   }
 
-  /** The bridge's move, posted as the account playing ``playerId``: JSON ``{ok, status, error}``. */
+  /** The bridge's move, posted as the account playing ``playerId``: JSON ``{ok, status, error}``, with
+   * ``unknown`` when the connection failed before an answer (the move may have landed or not). */
   async post(id, move, playerId, stored) {
     const watch = this.watches.get(id);
     const account = watch && watch.byPlayerId.get(String(playerId));
     if (!account) return JSON.stringify({ ok: false, error: `no bot plays player ${playerId} in game ${id}` });
     await this.pacer.turn();
-    const response = await account.api.post(`${SITE}/api/game/${id}/action`, {
-      headers: { 'Content-Type': 'application/json' },
-      data: move,
-    });
-    const text = await response.text();
+    let response;
+    let text;
+    try {
+      response = await account.api.post(`${SITE}/api/game/${id}/action`, {
+        headers: { 'Content-Type': 'application/json' },
+        data: move,
+      });
+      text = await response.text();
+    } catch (e) {
+      // E.g. "socket hang up": the server may have taken the move. It doesn't refuse a repeat (it
+      // numbers a move itself), so nothing is re-sent: once it has had time to finish, the bridge
+      // reads the game afresh and plays on from there, searching and posting again if it didn't land.
+      const error = errorText(e);
+      watch.lostPosts += 1;
+      log(`game ${id}: a move got no answer (${error}), ${watch.lostPosts} in a row`);
+      await sleep(this.lostPostWaitMs);
+      this.games.posted(id, null);
+      if (watch.lostPosts < MAX_LOST_POSTS) return JSON.stringify({ ok: false, unknown: true, error });
+      watch.lostPosts = 0;
+      return JSON.stringify({ ok: false, error: `${MAX_LOST_POSTS} moves in a row got no answer: ${error}` });
+    }
+    watch.lostPosts = 0;
     let body = null;
     try {
       body = JSON.parse(text);
@@ -485,7 +513,7 @@ class Bot {
   /** --watch: join the requested games, then track every new or active 1830 game an account is in. */
   async discover() {
     for (const id of takeJoinRequests(this.args.joinFile)) {
-      for (const account of this.accounts) await this.join(account, id).catch((e) => log(`game ${id}: ${e.message || e}`));
+      for (const account of this.accounts) await this.join(account, id).catch((e) => log(`game ${id}: ${errorText(e)}`));
     }
     for (const account of this.accounts) {
       try {
@@ -500,14 +528,14 @@ class Bot {
           this.track(game.id);
         }
       } catch (e) {
-        log(`[${account.name}] listing its games: ${e.message || e}`);
+        log(`[${account.name}] listing its games: ${errorText(e)}`);
       }
     }
   }
 
   async run() {
     for (const id of this.args.joins) {
-      for (const account of this.accounts) await this.join(account, id).catch((e) => log(`game ${id}: ${e.message || e}`));
+      for (const account of this.accounts) await this.join(account, id).catch((e) => log(`game ${id}: ${errorText(e)}`));
     }
     for (const id of this.args.games) this.track(id);
     let stopping = false;
@@ -523,7 +551,7 @@ class Bot {
         try {
           await watch.check();
         } catch (e) {
-          log(`game ${watch.id}: ${String((e && e.message) || e).slice(0, 300)}`);
+          log(`game ${watch.id}: ${errorText(e).slice(0, 300)}`);
         }
       }
       if (!this.args.watch && [...this.watches.values()].every((w) => w.state === 'done')) {
@@ -563,9 +591,9 @@ async function main() {
 
 if (require.main === module) {
   main().catch((e) => {
-    console.error(new Date().toISOString(), String((e && e.message) || e));
+    console.error(new Date().toISOString(), errorText(e));
     process.exit(1);
   });
 } else {
-  module.exports = { Pacer, Games, takeJoinRequests, accountsOf, autoplayStopped };
+  module.exports = { Pacer, Games, Bot, takeJoinRequests, accountsOf, autoplayStopped, errorText };
 }

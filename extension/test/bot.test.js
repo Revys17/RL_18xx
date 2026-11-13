@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { Pacer, Games, takeJoinRequests, accountsOf, autoplayStopped } = require('../bot/run.js');
+const { Pacer, Games, Bot, takeJoinRequests, accountsOf, autoplayStopped, errorText } = require('../bot/run.js');
 
 test('the pacer spaces requests at least its interval apart, in order', async () => {
   const pacer = new Pacer(1000);
@@ -65,6 +65,48 @@ test("a posted move updates the shared copy; anything else makes the next look r
   games.posted('1', null); // a refused move or a join
   await games.get('1', 60000);
   assert.equal(site.reads, 3);
+});
+
+test('a move that gets no answer asks for a fresh look, a few times in a row, then stops', async () => {
+  const site = fakeSite({ id: 1, actions: [{ id: 1, type: 'pass', entity: 1 }] });
+  const bot = new Bot({ minInterval: 1000 });
+  bot.pacer.interval = 5;
+  bot.lostPostWaitMs = 0;
+  bot.games = new Games(bot.pacer, site.api);
+  let answer = null; // null: the connection drops
+  const api = {
+    post: async () => {
+      if (!answer) throw new Error('apiRequestContext.post: socket hang up\nCall log:\n  - cookie: auth_token=secret');
+      return { ok: () => answer.ok, status: () => answer.status, text: async () => answer.text };
+    },
+  };
+  bot.watches.set('1', { byPlayerId: new Map([['7', { name: 'Bot', api }]]), lostPosts: 0 });
+  const move = { type: 'pass', entity: 7, entity_type: 'player', id: 2 };
+  const stored = Object.assign({ user: 7 }, move);
+  const post = async () => JSON.parse(await bot.post('1', move, 7, stored));
+
+  await bot.games.get('1', 1000);
+  const lost = await post();
+  assert.deepEqual(lost, { ok: false, unknown: true, error: 'apiRequestContext.post: socket hang up' });
+  await bot.games.get('1', 60000);
+  assert.equal(site.reads, 2); // the move may have landed: read the game afresh
+  assert.equal((await post()).unknown, true);
+  const stop = await post(); // the third in a row: a real error, autoplay stops
+  assert.equal(stop.unknown, undefined);
+  assert.equal(stop.ok, false);
+  assert.match(stop.error, /^3 moves in a row got no answer: apiRequestContext.post: socket hang up$/);
+  assert.equal((await post()).unknown, true); // the count starts again
+
+  answer = { ok: true, status: 200, text: '{}' };
+  assert.deepEqual(await post(), { ok: true, status: 200, error: null });
+  assert.equal(bot.watches.get('1').lostPosts, 0);
+  answer = { ok: false, status: 500, text: '{"error":"Illegal action"}' };
+  assert.deepEqual(await post(), { ok: false, status: 500, error: 'Illegal action' });
+});
+
+test("error text keeps an error's first line (Playwright's call log shows the login cookie)", () => {
+  assert.equal(errorText(new Error('socket hang up\nCall log:\n  - cookie: auth_token=x')), 'socket hang up');
+  assert.equal(errorText('plain'), 'plain');
 });
 
 test('the join file is read once and emptied; accounts come from <name>.token files', () => {

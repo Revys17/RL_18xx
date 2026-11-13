@@ -663,6 +663,12 @@ class Advisor:
         with self._jobs_lock:
             return self._jobs.get(job_id)
 
+    def running_search(self) -> Optional[SearchJob]:
+        """The search running now (a "Think harder" or a seat's move), if any."""
+        with self._jobs_lock:
+            job = self._running
+        return job if job is not None and job.status == "running" else None
+
     def _search(self, job: SearchJob, game, names: dict) -> None:
         try:
             job.result = self._run_search(job, game, names)

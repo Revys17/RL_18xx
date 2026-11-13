@@ -200,12 +200,14 @@
   }
 
   /** POST a live game's move as the site's page does (or through the live bot's runner, as the
-   * account playing ``playerId``); the server's error, if any. */
+   * account playing ``playerId``): null, the server's error, or ``{unknown}`` when the runner got no
+   * answer (the move may have landed or not). */
   async function post(game, move, playerId, stored) {
     if (typeof root.rl18xxPostAction === 'function') {
       const reply = JSON.parse(
         await root.rl18xxPostAction(String(game.id), JSON.stringify(move), playerId, JSON.stringify(stored)),
       );
+      if (reply.unknown) return { unknown: reply.error };
       return reply.ok ? null : reply.error || `HTTP ${reply.status}`;
     }
     const response = await root.fetch(`/api/game/${encodeURIComponent(game.id)}/action`, {
@@ -249,6 +251,8 @@
     if (game.live) {
       if (dryRun) return { ok: false, dry_run: true, action: stored };
       const refused = await post(game, move, acting && acting.player, stored);
+      // No answer: as if the game had moved meanwhile, autoplay looks at it again.
+      if (refused && typeof refused === 'object') return { ok: false, stale: true, error: refused.unknown };
       if (refused) return { ok: false, invalid: true, error: `the server refused it: ${refused}` };
       return { ok: true, action: stored, live: true };
     }
