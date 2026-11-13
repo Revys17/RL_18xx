@@ -96,8 +96,16 @@ class TitlePlay:
 
     def fixed_price(self, raw, legal, k: int) -> Optional[int]:
         """The price of legal row ``k`` when it has no open price: None for a move without one, the engine's
-        price for a fixed-price move (a depot train), the range's low end otherwise (as the legacy samplers)."""
+        price for a fixed-price move (a depot train), the range's low end otherwise (as the legacy samplers).
+
+        A generator layout's list (``LegalActions.wires`` set) already holds every priced move's range
+        (``rl_legal_moves_json``'s "range"; -1 for a move without one -- every priced move's block has a price
+        kind, ``test_generic_1867``): its low end is ``rl_price_range``'s, without enumerating the moves again
+        (which cost a second generator run per position)."""
         index = int(legal.indices[k])
+        if self.generator_layout and getattr(legal, "wires", None) is not None:
+            lo = int(legal.price_range[k, 0])
+            return None if lo < 0 else lo
         price_range = raw.rl_price_range(index) if self.generator_layout else raw.price_range_for_index(index)
         return None if price_range is None else int(price_range[0])
 
