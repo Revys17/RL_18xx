@@ -215,14 +215,26 @@ expressed; the legal range comes from the state:
     bids: a quarter go all-in, §8 price census).
   `P(price) = softmax(nonempty cell logits)[cell] / |cell|` (`price_pmf.rs`), exactly as 1830's
   head; MCTS progressive widening over prices is unchanged.
-- **Step units (generator layouts)**: a generator move's range has its own step (1867: $5 for
-  both auctions, $1 for trains and companies; never a title constant). Its cells are taken over
-  `k = (price - lo) / step` in `[0, (hi - lo) / step]`, i.e. `PriceCells(cell_type, 0, K, 1)`, and
-  a cell's member `k` is the price `lo + step·k` (`rl::generator::price_cells` / `price_at` /
-  `price_step`; Python: `price_pmf.price_cells(cell_type, 0, K, 1)`). So every cell holds legal
-  prices only (1867 bids must be on the $5 grid, Ruby `MUST_BID_INCREMENT_MULTIPLE`), and for
-  `bid` the 20 atoms are the same ladder as `PriceCells("Bid", lo, hi, step)`. The 1830 path keeps
-  its legacy price units.
+- **One call for every layout: `BaseGame.rl_price_range(idx)` -> `(lo, hi, step)`** (None for an
+  index without a price; RuntimeError for an illegal index). How to read it is the layout's
+  `price_units` (`rl_layout_info(title)["price_units"]`, `ActionDescriptors.price_units` /
+  `.price_grid`):
+  - **"step" (generator layouts, 1867)**: the move's own `PriceRange`; legal prices are exactly
+    `lo + step·k <= hi` (1867: $5 for both auctions, Ruby `MUST_BID_INCREMENT_MULTIPLE`; $1 for
+    trains and companies; never a title constant). The cells are taken in step units, `k = (price
+    - lo) / step` over `PriceCells(cell_type, 0, (hi - lo) / step, 1)`, so every cell holds legal
+    prices only (`bid`'s 20 atoms are the same ladder as `PriceCells("Bid", lo, hi, step)`).
+  - **"price" (1830)**: `(lo, hi)` exactly as `price_range_for_index` (a depot train's degenerate
+    `lo == hi` included), `step` = the title's `bid_price_step` ($5) for a bid and 1 otherwise;
+    every integer in `[lo, hi]` is legal and the cells are the legacy head's,
+    `PriceCells(cell_type, lo, hi, step)`.
+
+  `action_descriptors.range_price_cells(cell_type, lo, hi, step, grid)` (`RangePriceCells`) gives
+  either partition addressed in prices (`cell_of(price)`, `member(cell, u)` -> price,
+  `counts`, `nonempty`); Rust: `rl::generator::price_cells` / `price_at` / `price_step`.
+  `model_generic.legal_actions(game)` reads the ranges this way for both titles
+  (`LegalActions.price_grid`, `inputs["price_grid"]`, `price_cells_for(..., grid=)`); its 1830
+  values are unchanged.
 - **No price kind** means the price is not a decision: par cost, a depot or pool train at face, a
   token's price, a trade-in's fixed discount. (1830's enumeration carries a degenerate range
   `lo == hi` for depot trains; that is not a price parameter.)
@@ -445,6 +457,12 @@ catch 4-5% more; not worth a new cell layout. Pars are an index axis, not a pric
 used all 11 cells ($70: 49, $80: 41, $90: 40, $100: 67, $110: 59, $120: 65, $135: 55, $150: 84,
 $165: 67, $180: 108, $200: 420).
 
+**`amount` stays without cells**: 1867 has no price-bearing decision of that kind. Its loans are
+automatic (Ruby `AutomaticLoan` in the Track and BuyTrain steps takes them while a cost exceeds
+cash; `LoanOperations` pays the interest and repays them; there is no `take_loan` action), and
+redemptions are indices (`RedeemShares[percent]`), not prices. The kind's first user is 1822's partial player-debt payoff, whose census decides its
+cells (the generic model's price head rightly raises on it until then).
+
 ## 9. What the schema cannot express yet
 
 1867: nothing (§8). The 1822 family's generator moves (`g1822_legal_moves_json`) need the
@@ -463,7 +481,9 @@ The 1822 family (to settle with its layout):
 3. **Bids on something the state names**: 1822MX's NdeM token auction bids on "the token up for
    auction" (`Bid` with no company); it needs a target-less bid family or hex/city fields on a
    bid. Its bids also move in $10 steps while MX company bids move in $5: the price ladder step
-   must come from the move's `PriceRange.step` (§6), not from the title's `bid_price_step`.
+   must come from the move's `PriceRange.step` (§6), not from the title's `bid_price_step` -- done
+   for generator layouts since `1867-v1` (`rl_price_range` returns the move's step, cells in step
+   units).
 4. **Pseudo-tiles**: 1822MX's builder cubes ("BC") and port tiles are laid as tiles; the tile
    vocabulary (the title's manifest) must include them, with tile features.
 5. **Many named choices**: P16 tax haven, P17 / P18 / P5 ability choices, choices-round "double",

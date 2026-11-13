@@ -29,6 +29,7 @@ The frozen 1830 model (``model_transformer.py``) is untouched: it stays the prod
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -45,7 +46,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from rl18xx.agent.alphazero import price_pmf
-from rl18xx.agent.alphazero.action_descriptors import NONE, action_descriptors, descriptor_vocab
+from rl18xx.agent.alphazero.action_descriptors import NONE, action_descriptors, descriptor_vocab, range_price_cells
 from rl18xx.agent.alphazero.generic_tokens import encode_batch, raw_game, schema, spec_info
 
 LOGGER = logging.getLogger(__name__)
@@ -233,29 +234,48 @@ class LegalActions:
     price_range: np.ndarray
     #: The rows' layout indices (None for rows built without a layout, e.g. a test stub).
     indices: Optional[np.ndarray] = None
+    #: Whether legal prices lie on the ``lo + step * k`` grid and the price cells are taken in step
+    #: units (a generator layout, 1867: ``ActionDescriptors.price_grid``); False = every integer of the
+    #: range, cells in price space with ``step`` the "Bid" ladder (1830, the legacy head's cells).
+    price_grid: bool = False
 
     def __len__(self) -> int:
         return len(self.rows)
 
 
-def legal_actions(game) -> LegalActions:
-    """The legal actions of a position of a title with an RL layout (today 1830): its legal indices
-    (``factored_legal_indices``), their descriptor rows, and each price-bearing row's range
-    (``price_range_for_index``; a bid's ladder step is 1830's $5 -- the layout path's ranges carry no
-    step yet, new titles' generator ranges will)."""
+def legal_actions(game, policy: Optional[str] = None) -> LegalActions:
+    """The legal actions of a position of a title with an RL layout: its legal indices, their
+    descriptor rows, and each price-bearing row's ``(lo, hi, step)`` (``BaseGame.rl_price_range``,
+    ``docs/rl_descriptors.md`` §6).
+
+    * 1830 (layout kind "factored"): ``factored_legal_indices``; ranges as ``price_range_for_index``
+      with ``step`` the bid ladder ($5) for a bid, 1 otherwise; ``price_grid`` False.
+    * A generator layout (1867): ``rl_legal_moves_json(policy)`` (None = the title's cross-player
+      policy); each move's own range and step; ``price_grid`` True."""
     g = raw_game(game)
     d = action_descriptors(g.title)
+    if d.kind == "generator":
+        moves = json.loads(g.rl_legal_moves_json(policy))
+        idx = np.asarray([m["index"] for m in moves], dtype=np.int64)
+        rows = d.gather(idx)
+        price_range = np.full((len(idx), 3), -1, dtype=np.int64)
+        for i, m in enumerate(moves):
+            if rows[i, C_PRICE_KIND] >= 0:
+                if m["range"] is None:
+                    raise ValueError(
+                        f"{g.title}: legal index {idx[i]} has price_kind {rows[i, C_PRICE_KIND]} but no range"
+                    )
+                price_range[i] = m["range"]
+        return LegalActions(rows=rows, price_range=price_range, indices=idx, price_grid=True)
     idx = np.asarray(g.factored_legal_indices(), dtype=np.int64)
     rows = d.gather(idx)
     price_range = np.full((len(idx), 3), -1, dtype=np.int64)
-    bid = vocab()["price_kinds"].index("bid")
     for i in np.flatnonzero(rows[:, C_PRICE_KIND] >= 0):
-        r = g.price_range_for_index(int(idx[i]))
+        r = g.rl_price_range(int(idx[i]))
         if r is None:
             raise ValueError(f"{g.title}: legal index {idx[i]} has price_kind {rows[i, C_PRICE_KIND]} but no range")
-        step = price_pmf.BID_STEP_1830 if rows[i, C_PRICE_KIND] == bid else 1
-        price_range[i] = (int(r[0]), int(r[1]), step)
-    return LegalActions(rows=rows, price_range=price_range, indices=idx)
+        price_range[i] = r
+    return LegalActions(rows=rows, price_range=price_range, indices=idx, price_grid=d.price_grid)
 
 
 def _unique_rows(keys: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -303,6 +323,7 @@ def build_inputs(
         if len(legal)
         else np.zeros((0, 3), dtype=np.int64)
     )
+    grid_all = np.repeat(np.array([bool(la.price_grid) for la in legal], dtype=bool), counts)
     arrays["legal_rows"] = rows
     arrays["legal_pos"] = pos
     arrays["legal_offsets"] = offsets
@@ -337,25 +358,31 @@ def build_inputs(
     price_rows = np.flatnonzero(rows[:, C_PRICE_KIND] >= 0).astype(np.int64)
     cell_mask = np.zeros((len(price_rows), NUM_CELLS), dtype=bool)
     for j, i in enumerate(price_rows):
-        cells = price_cells_for(int(rows[i, C_PRICE_KIND]), *price_all[i])
+        cells = price_cells_for(int(rows[i, C_PRICE_KIND]), *price_all[i], grid=bool(grid_all[i]))
         cell_mask[j] = cells.nonempty
     arrays["price_rows"] = price_rows
     arrays["price_range"] = price_all[price_rows]
+    arrays["price_grid"] = grid_all[price_rows]
     arrays["price_cell_mask"] = cell_mask
     if config is not None:
         check_inputs(config, arrays)
     return arrays
 
 
-def price_cells_for(price_kind: int, lo: int, hi: int, step: int) -> price_pmf.PriceCells:
+def price_cells_for(price_kind: int, lo: int, hi: int, step: int, grid: bool = False):
     """The cell partition of a legal range for a descriptor ``price_kind`` (its ``price_cell_types``
-    entry: "Bid" ladder at ``step``, "BuyTrain", "BuyCompany"; ``amount`` has no cells yet)."""
+    entry: "Bid" ladder at ``step``, "BuyTrain", "BuyCompany"; ``amount`` has no cells yet).
+    ``grid`` False (1830): ``price_pmf.price_cells(cell_type, lo, hi, step)``, the legacy cells.
+    ``grid`` True (a generator layout): the cells in step units, so they hold legal prices only
+    (``action_descriptors.RangePriceCells``; ``cell_of`` / ``member`` in prices either way)."""
     v = vocab()
     cell_type = v["price_cell_types"][price_kind]
     if cell_type is None:
         raise NotImplementedError(f"price kind {v['price_kinds'][price_kind]!r} has no cell spec yet")
     if lo < 0 or hi < lo:
         raise ValueError(f"bad legal range [{lo}, {hi}] for a {cell_type} price")
+    if grid:
+        return range_price_cells(cell_type, int(lo), int(hi), int(step), grid=True)
     return price_pmf.price_cells(cell_type, int(lo), int(hi), int(step) if step > 0 else price_pmf.BID_STEP_1830)
 
 
@@ -369,12 +396,14 @@ def price_targets(inputs: dict, prices: np.ndarray) -> Dict[str, np.ndarray]:
     cell = np.zeros(len(pr), dtype=np.int64)
     log_count = np.zeros(len(pr), dtype=np.float32)
     valid = np.zeros(len(pr), dtype=bool)
+    grids = inputs.get("price_grid")
     for j, i in enumerate(pr):
         price = int(prices[j])
         lo, hi, step = (int(x) for x in inputs["price_range"][j])
-        if price < 0 or hi <= lo or not lo <= price <= hi:
+        grid = bool(grids[j]) if grids is not None else False
+        if price < 0 or hi <= lo or not lo <= price <= hi or (grid and (price - lo) % max(step, 1)):
             continue
-        cells = price_cells_for(int(rows[i, C_PRICE_KIND]), lo, hi, step)
+        cells = price_cells_for(int(rows[i, C_PRICE_KIND]), lo, hi, step, grid=grid)
         c = cells.cell_of(price)
         cell[j], log_count[j], valid[j] = c, math.log(int(cells.counts[c])), True
     return {"price_cell": cell, "price_log_count": log_count, "price_valid": valid}

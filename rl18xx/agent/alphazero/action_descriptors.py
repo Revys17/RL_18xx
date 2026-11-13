@@ -50,6 +50,16 @@ class ActionDescriptors:
     #: How legal indices are computed: "factored" (1830: ``factored_legal_indices``) or "generator"
     #: (1867: ``rl_legal_indices`` over the title's legal-move generator).
     kind: str = "factored"
+    #: How a legal priced index's ``(lo, hi, step)`` (``BaseGame.rl_price_range``) reads: "step" --
+    #: legal prices are ``lo + step * k`` and the price cells are taken in step units (generator
+    #: layouts, 1867); "price" -- every integer in ``[lo, hi]`` is legal, cells in price space, ``step``
+    #: only the "Bid" ladder (1830, as the legacy head). See :func:`range_price_cells`.
+    price_units: str = "price"
+
+    @property
+    def price_grid(self) -> bool:
+        """Whether legal prices lie on the ``lo + step * k`` grid (``price_units == "step"``)."""
+        return self.price_units == "step"
 
     def col(self, field: str) -> int:
         return self.fields.index(field)
@@ -124,7 +134,59 @@ def action_descriptors(title: str) -> ActionDescriptors:
         vocab=vocab,
         blocks=tuple(dict(b) for b in info["blocks"]),
         kind=str(info["kind"]),
+        price_units=str(info["price_units"]),
     )
+
+
+class RangePriceCells:
+    """The price head's cells of one legal range, addressed in prices (``docs/rl_descriptors.md`` §6).
+
+    ``grid`` (generator layouts): legal prices are ``lo + step * k``; the cells are
+    ``price_pmf.price_cells(cell_type, 0, K, 1)`` over ``k`` (``K = (hi - lo) // step``), so a cell
+    holds legal prices only. Otherwise (1830) every integer in ``[lo, hi]`` is legal and the cells are
+    ``price_pmf.price_cells(cell_type, lo, hi, step)`` -- the legacy head's, with ``step`` the "Bid"
+    ladder. ``cell_of`` / ``member`` take and give prices either way; ``counts`` / ``nonempty`` /
+    ``n_atoms`` are the underlying cells'."""
+
+    def __init__(self, cell_type: str, lo: int, hi: int, step: int, grid: bool):
+        from rl18xx.agent.alphazero.price_pmf import price_cells
+
+        self.lo, self.hi, self.step, self.grid = int(lo), int(hi), max(int(step), 1), bool(grid)
+        if self.grid:
+            self.cells = price_cells(cell_type, 0, (self.hi - self.lo) // self.step, 1)
+        else:
+            self.cells = price_cells(cell_type, self.lo, self.hi, self.step)
+        self.n_atoms = self.cells.n_atoms
+        self.counts = self.cells.counts
+
+    @property
+    def nonempty(self) -> np.ndarray:
+        return self.cells.nonempty
+
+    def cell_of(self, price: int) -> int:
+        """The cell of a legal price (ValueError off the range or, on a grid, off the grid)."""
+        price = int(price)
+        if not self.lo <= price <= self.hi:
+            raise ValueError(f"price {price} outside [{self.lo}, {self.hi}]")
+        if not self.grid:
+            return self.cells.cell_of(price)
+        k, r = divmod(price - self.lo, self.step)
+        if r:
+            raise ValueError(f"price {price} is off the ${self.step} grid from {self.lo}")
+        return self.cells.cell_of(k)
+
+    def member(self, cell: int, u: int) -> int:
+        """The ``u``-th (ascending) legal price in ``cell``."""
+        x = self.cells.member(cell, u)
+        return self.lo + self.step * x if self.grid else x
+
+    def sample_price(self, cell: int, rng: np.random.Generator) -> int:
+        return self.member(cell, int(rng.integers(max(int(self.counts[cell]), 1))))
+
+
+def range_price_cells(cell_type: str, lo: int, hi: int, step: int, grid: bool) -> RangePriceCells:
+    """:class:`RangePriceCells` of a legal range (``grid``: the layout's :attr:`ActionDescriptors.price_grid`)."""
+    return RangePriceCells(cell_type, lo, hi, step, grid)
 
 
 def descriptor_vocab() -> dict:
@@ -134,4 +196,11 @@ def descriptor_vocab() -> dict:
     return dict(engine_rs.rl_descriptor_vocab())
 
 
-__all__: List[str] = ["ActionDescriptors", "action_descriptors", "descriptor_vocab", "NONE"]
+__all__: List[str] = [
+    "ActionDescriptors",
+    "RangePriceCells",
+    "action_descriptors",
+    "descriptor_vocab",
+    "range_price_cells",
+    "NONE",
+]

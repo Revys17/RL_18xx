@@ -142,3 +142,53 @@ def test_walk_by_index(d67, players, seed):
     record = make_game_record(game.raw_actions, players, title="1867", seed=seed)
     assert record["rl18xx"]["layout"] == layout_metadata("1867")
     assert record["rl18xx"]["layout"]["layout_fingerprint"] == FINGERPRINT_1867
+
+
+def test_price_range_carries_the_step_on_every_layout():
+    """``rl_price_range`` on 1830 is ``price_range_for_index`` plus the step (the $5 bid ladder, 1
+    otherwise), and its cells are the legacy ones; on 1867 the step is the move's grid and the cells,
+    in step units, hold grid prices only."""
+    from rl18xx.agent.alphazero import price_pmf
+    from rl18xx.agent.alphazero.action_descriptors import range_price_cells
+
+    d30 = action_descriptors("1830")
+    assert (d30.price_units, d30.price_grid) == ("price", False)
+    rng = random.Random(5)
+    game = new_game("1830", 4)._game
+    priced = 0
+    for _ in range(300):
+        if game.finished:
+            break
+        legal = game.factored_legal_indices()
+        for i in legal:
+            r = game.price_range_for_index(i)
+            got = game.rl_price_range(i)
+            if r is None:
+                assert got is None
+                continue
+            family = d30.families[d30.table[i, d30.col("family")]]
+            assert got == (r[0], r[1], 5 if family == "Bid.company" else 1), (i, family)
+            kind = d30.table[i, d30.col("price_kind")]
+            if kind >= 0 and r[1] > r[0]:
+                ct = d30.price_cell_types[kind]
+                legacy = price_pmf.price_cells(ct, r[0], r[1], got[2])
+                cells = range_price_cells(ct, *got, grid=False)
+                assert (cells.counts == legacy.counts).all()
+                assert all(cells.cell_of(p) == legacy.cell_of(p) for p in range(r[0], r[1] + 1))
+                priced += 1
+        i = rng.choice(legal)
+        r = game.price_range_for_index(i)
+        game.apply_action_index(i, rng.randint(*r) if r else None)
+    assert priced > 20
+    with pytest.raises(RuntimeError, match="not legal"):
+        game.rl_price_range(26536 if 26536 not in game.factored_legal_indices() else 0)
+
+    d67 = action_descriptors("1867")
+    assert (d67.price_units, d67.price_grid) == ("step", True)
+    cells = range_price_cells("BuyTrain", 100, 300, 5, grid=True)  # bid_range's cells of a minor bid
+    assert int(cells.counts.sum()) == 41
+    prices = sorted({cells.member(c, u) for c in range(len(cells.counts)) for u in range(int(cells.counts[c]))})
+    assert prices == list(range(100, 301, 5))
+    assert all(cells.member(cells.cell_of(p), 0) <= p for p in prices)
+    with pytest.raises(ValueError, match="grid"):
+        cells.cell_of(102)

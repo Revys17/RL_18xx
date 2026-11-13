@@ -57,7 +57,16 @@ pub fn rl_layout_info<'py>(py: Python<'py>, title: &str) -> PyResult<Bound<'py, 
     let d = rl_descriptor_vocab(py)?;
     d.set_item("title", lo.title)?;
     d.set_item("version", lo.version.as_str())?;
-    d.set_item("kind", crate::title::resolve(lo.title).rl_layout_kind().name())?;
+    let kind = crate::title::resolve(lo.title).rl_layout_kind();
+    d.set_item("kind", kind.name())?;
+    // How `BaseGame.rl_price_range`'s (lo, hi, step) reads (docs §6): "step"
+    // = legal prices are lo + step*k and the price cells are taken in step
+    // units (generator layouts); "price" = every integer in [lo, hi] is
+    // legal, cells in price space, `step` only the "Bid" ladder (1830).
+    d.set_item(
+        "price_units",
+        if kind == crate::title::RlLayoutKind::Generator { "step" } else { "price" },
+    )?;
     d.set_item("total", lo.total)?;
     d.set_item("fingerprint", lo.fingerprint_hex())?;
     let flat: Vec<i32> = lo.descriptors.iter().flat_map(|x| x.to_row()).collect();

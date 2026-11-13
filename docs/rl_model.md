@@ -35,11 +35,13 @@ loss = (mg.policy_loss(out, inputs, target_index=idx) + mg.price_loss(out, **pri
 mg.save_checkpoint(model, path, titles=["1830"]); model, meta = mg.load_checkpoint(path)
 ```
 
-`LegalActions(rows, price_range, indices)` is one position's legal list: descriptor rows `(n, 14)`, each
-priced row's `(lo, hi, step)` (-1 elsewhere) and the layout indices. `legal_actions(game)` builds it for a
-title with an RL layout (today 1830: `factored_legal_indices`, `action_descriptors(title).gather`,
-`price_range_for_index`). A title whose layout is not on master yet (1867) passes its own rows (the tests
-map 1867 generator moves with a stub).
+`LegalActions(rows, price_range, indices, price_grid)` is one position's legal list: descriptor rows
+`(n, 14)`, each priced row's `(lo, hi, step)` (-1 elsewhere), the layout indices, and whether legal prices
+lie on the `lo + step * k` grid. `legal_actions(game)` builds it for a title with an RL layout: 1830
+(`factored_legal_indices`, `action_descriptors(title).gather`, `rl_price_range`: `price_range_for_index`'s
+range with the $5 bid ladder as step; `price_grid` False) and 1867 (`rl_legal_moves_json`: the generator
+layout's indices and each move's range and step; `price_grid` True, cells in step units --
+`docs/rl_descriptors.md` §6).
 
 ### Inputs (`build_inputs`)
 
@@ -223,8 +225,7 @@ CUDA_VISIBLE_DEVICES= taskset -c 24-31,56-63 nice -19 uv run pytest -m benchmark
 ```
 
 Positions are random walks of 1830 at 2-6 players (legal indices and descriptors from the 1830 layout) and
-1867 at 3-6 (`g1867_legal_moves_json` mapped to descriptor rows by a stub in the test, following
-`docs/rl_descriptors.md` §8; **TODO(A2)**: switch to the 1867 layout's `legal_actions` when it lands). A
+1867 at 3-6 (legal indices and descriptors from the 1867 layout `1867-v1`, `docs/rl_descriptors.md` §8). A
 mixed batch takes five positions per (title, player count), covering tile lays, tokens and each price kind.
 
 * `test_default_size`; `test_tile_exits_match_laid_tiles` (the rotation convention of the edge term, and
@@ -263,14 +264,13 @@ mixed batch takes five positions per (title, player count), covering tile lays, 
 
 ## Open questions
 
-1. **1830 bid step**: `price_range_for_index` returns (lo, hi) without a step, so `legal_actions` uses
-   1830's $5 ladder for every bid. New titles' generator ranges carry their step; the layout path should
-   too (A2 / C), as `rl_descriptors.md` §9.3 asks.
-2. **1867 rows**: the tests use a stub mapping; the real 1867 layout (A2) decides share sources, trade-ins
-   and the city axis. The model needs nothing title-specific beyond `descriptor_entity_base` and the tile
-   table.
-3. **`amount` price kind** (1822 partial debt payoff) has no cell spec; `price_cells_for` raises. Fix the
-   cells from a price census when the family is first used.
+1. **Price steps** (settled by A2): `BaseGame.rl_price_range(idx)` gives `(lo, hi, step)` for every layout
+   (1830: `price_range_for_index`'s values with the $5 bid ladder; 1867: the move's own step, prices on its
+   grid, cells in step units: `price_cells_for(..., grid=True)`).
+2. **1867 rows** (settled by A2): the tests use the real 1867 layout. The model needs nothing
+   title-specific beyond `descriptor_entity_base` and the tile table.
+3. **`amount` price kind** (1822 partial debt payoff) has no cell spec; `price_cells_for` raises. 1867 never
+   uses it (its loans are automatic); fix the cells from a price census when 1822's family lands.
 4. **Cost of very large legal sets**: the edge term materializes `(lay rows, 6, d_edge)`; at ~1,000 lays
    per position and batch 64 that is ~12M floats. Fine for 1830 / 1867 (the random walks' legal lists stay
    under ~150 rows; real tile-lay states reach a few thousand, design §2.6); for 1822CA-sized maps, compute it

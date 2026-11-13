@@ -1,7 +1,7 @@
 """The title-generic policy / value model (``model_generic``, RL bridge milestone B2) on real positions:
 random walks of 1830 (2-6 players; legal indices and descriptors from the 1830 layout) and 1867
-(3-6 players; descriptor rows from a stub mapping of the generator's moves until the 1867 layout of
-milestone A2 lands).
+(3-6 players; legal indices and descriptors from the 1867 layout ``1867-v1`` of milestone A2, prices on
+each move's step grid).
 
 Checked: shapes over mixed titles and player counts in one batch; probabilities sum to 1 over each
 position's legal actions (and the map factors inside each group); invariance to the order of the legal
@@ -30,9 +30,6 @@ from scripts.g1867_fuzz import pick as pick_1867  # noqa: E402
 
 V = mg.vocab()
 FAM = {name: i for i, name in enumerate(V["families"])}
-CHOICE = {name: i for i, name in enumerate(V["choices"])}
-PK = {name: i for i, name in enumerate(V["price_kinds"])}
-EK = {name: i for i, name in enumerate(V["ent_kinds"])}
 
 SMALL = dict(
     d_model=32,
@@ -88,115 +85,8 @@ def walk_1867(num_players: int, seed: int, steps: int = 700, every: int = 4) -> 
     return positions
 
 
-def legal_1867_stub(game) -> mg.LegalActions:
-    """Descriptor rows for an 1867 position's generator moves, mapped as ``docs/rl_descriptors.md`` §8
-    sketches. TODO(A2): replace with the 1867 layout's ``legal_actions`` once it is on master; this stub
-    has no index space, so a move the layout would split (e.g. a share's source) may share a row."""
-    info = spec_info("1867")
-    names = info["entity_names"]
-    corps = [n[5:] for n in names if n.startswith("corp:")]
-    companies = [n[8:] for n in names if n.startswith("company:")]
-    trains = [n[6:] for n in names if n.startswith("train:")]
-    hexes = list(info["hex_coords"])
-    tiles = list(info["tile_ids"])
-    rows, ranges = [], []
-    for move in json.loads(game.g1867_legal_moves_json(None)):
-        w, step = move["wire"], move["step"]
-        kind = w["type"]
-        row = [mg.NONE] * len(mg.DESCRIPTOR_FIELDS)
-        price = (-1, -1, -1)
-
-        def ent(slot, ek, index):
-            row[mg.C_E0K if slot == 0 else mg.C_E1K] = EK[ek]
-            row[mg.C_E0 if slot == 0 else mg.C_E1] = index
-
-        if kind == "pass":
-            fam = "Pass"
-        elif kind == "bid":
-            if "company" in w:
-                fam = "Bid.company"
-                ent(0, "company", companies.index(w["company"]))
-            else:
-                fam = "Bid.corporation"
-                ent(0, "corporation", corps.index(w["corporation"]))
-            row[mg.C_PRICE_KIND] = PK["bid"]
-            price = tuple(move["range"])
-        elif kind == "par":
-            fam = "Par"
-            ent(0, "corporation", corps.index(w["corporation"]))
-            row[mg.C_PARAM] = int(w["share_price"].split(",")[0])
-        elif kind in ("buy_shares", "sell_shares"):
-            share = w["shares"][0]
-            corp = share.rsplit("_", 1)[0]
-            row[mg.C_PARAM] = int(w["percent"])
-            if step == "RedeemShares":
-                fam = "RedeemShares"
-            else:
-                fam = "BuyShares" if kind == "buy_shares" else "SellShares"
-                ent(0, "corporation", corps.index(corp))
-                if kind == "buy_shares":
-                    owner = game.g1867_share_owner(share)
-                    row[mg.C_CHOICE] = CHOICE["source:market" if owner == "market" else "source:ipo"]
-        elif kind in ("place_token", "remove_token"):
-            fam = "PlaceToken" if kind == "place_token" else "RemoveToken"
-            hex_id, city = game.g1867_city_ref(w["city"])
-            row[mg.C_HEX], row[mg.C_CITY] = hexes.index(hex_id), int(city)
-        elif kind == "lay_tile":
-            fam = "LayTile"
-            row[mg.C_HEX] = hexes.index(w["hex"])
-            row[mg.C_TILE] = tiles.index(w["tile"].rsplit("-", 1)[0])
-            row[mg.C_ROT] = int(w["rotation"])
-        elif kind == "run_routes":
-            fam = "RunRoutes"
-        elif kind == "dividend":
-            fam = "Dividend"
-            row[mg.C_CHOICE] = CHOICE[f"dividend:{w['kind']}"]
-        elif kind == "buy_train":
-            name, owner = game.g1867_train_info(w["train"])
-            variant = w.get("variant") or name
-            if w.get("exchange"):
-                fam = "BuyTrain.exchange"
-                ent(0, "train", trains.index(variant))
-                ent(1, "train", trains.index(game.g1867_train_info(w["exchange"])[0]))
-            elif move["range"]:
-                fam = "BuyTrain.corp"
-                if owner in corps:
-                    ent(0, "corporation", corps.index(owner))
-                ent(1, "train", trains.index(variant))
-                row[mg.C_PRICE_KIND] = PK["train_transfer"]
-                price = tuple(move["range"])
-            else:
-                fam = "BuyTrain.pool" if owner == "discard" else "BuyTrain.depot"
-                ent(0, "train", trains.index(variant))
-        elif kind == "discard_train":
-            fam = "DiscardTrain"
-            ent(0, "train", trains.index(game.g1867_train_info(w["train"])[0]))
-        elif kind == "buy_company":
-            fam = "BuyCompany"
-            ent(0, "company", companies.index(w["company"]))
-            row[mg.C_PRICE_KIND] = PK["company_purchase"]
-            price = tuple(move["range"])
-        elif kind == "merge":
-            fam = "Merge"
-            ent(0, "corporation", corps.index(w["corporation"]))
-        elif kind == "convert":
-            fam = "Convert"
-        elif kind == "choose":
-            fam = "Choose"
-            row[mg.C_CHOICE] = CHOICE[f"choose:{w['choice']}"]
-        else:
-            raise AssertionError(f"unmapped 1867 move {kind} in {step}")
-        row[mg.C_FAMILY] = FAM[fam]
-        rows.append(row)
-        ranges.append(price)
-    return mg.LegalActions(
-        rows=np.asarray(rows, dtype=np.int32).reshape(-1, len(mg.DESCRIPTOR_FIELDS)),
-        price_range=np.asarray(ranges, dtype=np.int64).reshape(-1, 3),
-    )
-
-
 def legal_of(game) -> mg.LegalActions:
-    return legal_1867_stub(game) if game.title == "1867" else mg.legal_actions(game)
+    return mg.legal_actions(game)
 
 
 def _features(la: mg.LegalActions) -> set:
@@ -443,8 +333,9 @@ def _targets(arrays: dict, inputs: dict, seed: int = 0):
             w = rng.random(c).astype(np.float32)
             probs[arrays["legal_offsets"][i] : arrays["legal_offsets"][i + 1]] = w / w.sum()
     prices = []
-    for lo, hi, _ in arrays["price_range"]:
-        prices.append(int(rng.integers(lo, hi + 1)))
+    for (lo, hi, step), grid in zip(arrays["price_range"], arrays["price_grid"]):
+        unit = int(step) if grid else 1
+        prices.append(int(lo + unit * rng.integers((hi - lo) // unit + 1)))
     pt = mg.to_device(mg.price_targets(arrays, np.array(prices, dtype=np.int64)))
     b = len(counts)
     players = torch.from_numpy(arrays["meta"][:, 4])
@@ -522,18 +413,19 @@ def test_price_head_covers_every_legal_price(mixed):
         lo, hi, step = (int(x) for x in arrays["price_range"][j])
         kind = int(arrays["legal_rows"][i, mg.C_PRICE_KIND])
         kinds.add(V["price_kinds"][kind])
-        cells = mg.price_cells_for(kind, lo, hi, step)
-        total = sum(
-            math_exp(logp[j, cells.cell_of(p)].item()) / cells.counts[cells.cell_of(p)] for p in range(lo, hi + 1)
-        )
+        grid = bool(arrays["price_grid"][j])
+        cells = mg.price_cells_for(kind, lo, hi, step, grid=grid)
+        legal_prices = range(lo, hi + 1, step if grid else 1)  # 1867: the move's step grid only
+        total = sum(math_exp(logp[j, cells.cell_of(p)].item()) / cells.counts[cells.cell_of(p)] for p in legal_prices)
         assert abs(total - 1.0) < 1e-6, (lo, hi)
         if hi > lo:
-            price = (lo + hi) // 2
+            price = legal_prices[len(legal_prices) // 2]
             pt = mg.price_targets(
                 {
                     **arrays,
                     "price_rows": arrays["price_rows"][j : j + 1],
                     "price_range": arrays["price_range"][j : j + 1],
+                    "price_grid": arrays["price_grid"][j : j + 1],
                 },
                 np.array([price]),
             )
@@ -570,7 +462,7 @@ def test_checkpoint_round_trip_and_refusals(mixed, tmp_path):
     loaded, meta = mg.load_checkpoint(path)
     assert meta["encoder_version"] == schema()["version"]
     assert meta["layouts"]["1830"]["fingerprint"] == "e721aa6520116e2a"
-    assert meta["layouts"]["1867"] is None  # TODO(A2): pinned once 1867 has a layout
+    assert meta["layouts"]["1867"]["fingerprint"] == "4987cd19b7e912e2"  # 1867-v1
     with torch.no_grad():
         a, b = model(inputs), loaded.eval()(inputs)
     for key in ("logp", "price_logp", "win_logits", "score"):

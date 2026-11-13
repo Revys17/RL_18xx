@@ -293,7 +293,11 @@ def audit_game_index(path: str, apply_check: bool = True) -> dict:
             try:
                 moves = json.loads(g.rl_legal_moves_json("rules"))
                 if a["type"] in SKIP:
-                    hits = [m for m in moves if m["wire"]["type"] == a["type"] and str(m["wire"].get("entity")) == str(a.get("entity"))]
+                    hits = [
+                        m
+                        for m in moves
+                        if m["wire"]["type"] == a["type"] and str(m["wire"].get("entity")) == str(a.get("entity"))
+                    ]
                 else:
                     hits = matching(g, a, moves)
                 if len(hits) == 1:
@@ -349,7 +353,12 @@ def summarize_census(rows: list[dict], pars: list) -> dict:
     the step from the move) resolve them."""
     from rl18xx.agent.alphazero.price_pmf import price_cells
 
-    cell_type = {"Bid.company": "Bid", "Bid.corporation": "Bid", "BuyTrain.corp": "BuyTrain", "BuyCompany": "BuyCompany"}
+    cell_type = {
+        "Bid.company": "Bid",
+        "Bid.corporation": "Bid",
+        "BuyTrain.corp": "BuyTrain",
+        "BuyCompany": "BuyCompany",
+    }
     out = {}
     groups = defaultdict(list)
     for r in rows:
@@ -432,7 +441,9 @@ def main_index(args, paths: list[str]) -> int:
     for b in blocks:
         ro = sum(v for (bb, k), v in totals.items() if bb == b and k not in kinds)
         ex = [e for (bb, k), e in examples.items() if bb == b and k != "exact"]
-        print(f"{b:28} " + " ".join(f"{totals[(b, k)]:9}" for k in kinds) + f"  {ro:6}  {[x for e in ex for x in e][:4]}")
+        print(
+            f"{b:28} " + " ".join(f"{totals[(b, k)]:9}" for k in kinds) + f"  {ro:6}  {[x for e in ex for x in e][:4]}"
+        )
     n = sum(totals.values())
     one = sum(v for (b, k), v in totals.items() if k in ("exact", "policy"))
     ro = sum(v for (b, k), v in totals.items() if k not in kinds)

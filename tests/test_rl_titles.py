@@ -105,7 +105,12 @@ def test_new_titles_build_raw_rust_games(title, n):
     # 1867 has its generator layout; the 1822 family has none yet.
     if title == "1867":
         assert spec.layout_ready()
-        assert spec.status() == {"title": "1867", "layout_ready": True, "layout_kind": "generator", "encoder_ready": False}
+        assert spec.status() == {
+            "title": "1867",
+            "layout_ready": True,
+            "layout_kind": "generator",
+            "encoder_ready": False,
+        }
     else:
         assert not spec.layout_ready()
         assert spec.status()["layout_kind"] == "none"

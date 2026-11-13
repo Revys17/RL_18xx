@@ -240,10 +240,26 @@ impl BaseGame {
         Ok(())
     }
 
-    /// `(lo, hi, step)` of a legal price-bearing index; None for an index
+    /// `(lo, hi, step)` of a legal index of ANY layout; None for an index
     /// without a price; RuntimeError if the index is not legal.
+    ///
+    /// * A generator layout (1867): the move's `PriceRange`; legal prices
+    ///   are `lo + step * k <= hi` (the layout's `price_units` "step").
+    /// * 1830 (factored): `(lo, hi)` exactly as `price_range_for_index`
+    ///   (a depot train's degenerate `lo == hi` included), and `step` the
+    ///   price head's ladder: the title's `bid_price_step` ($5) for a bid,
+    ///   1 otherwise; every integer in `[lo, hi]` is legal (`price_units`
+    ///   "price": cells in price space, as the legacy head). `policy` is
+    ///   ignored.
     #[pyo3(signature = (idx, policy=None))]
     fn rl_price_range(&mut self, idx: u32, policy: Option<&str>) -> PyResult<Option<(i32, i32, i32)>> {
+        if self.title_def().rl_layout_kind() == RlLayoutKind::Factored {
+            let la = self
+                .legal_action_for_index(idx)?
+                .ok_or_else(|| GameError::new(format!("index {idx} is not legal at the current state")))?;
+            let step = if la.action_type == "Bid" { self.title_def().bid_price_step() as i32 } else { 1 };
+            return Ok(la.price_range.map(|(lo, hi)| (lo as i32, hi as i32, step)));
+        }
         let p = self::policy(self, policy)?;
         let m = self.rl_move_for_index(idx, None, p)?;
         Ok(m.price.map(|r| (r.lo, r.hi, r.step)))
