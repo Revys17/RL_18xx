@@ -864,6 +864,12 @@ indices). Compare it with the legacy pretrained model on:
 The pass bar is "within noise". 1867 has no baseline, so this is the only
 architecture-level check. It needs GPU time (decision 5).
 
+> **2026-11-13 (milestone B2):** the generic model exists (`model_generic.py`, `docs/rl_model.md`,
+> CPU-tested). What this check still needs from milestone C -- a converted 1830 dataset with sparse legal
+> indices, price ranges and per-seat targets, a collate into `build_inputs`' flat layout, the two-stage
+> supervised loop, and a sparse-legal policy-only player for `eval_policy_only.py` -- is listed in
+> `docs/rl_model.md` "For the 1830 GPU validation".
+
 ### 4.5 Player-count width
 
 - Corpus maxima: 1822 7 players (21 games), 1822CA 7 (4), 18USA 7 (3),

@@ -111,5 +111,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rl_descriptor_vocab, m)?)?;
     m.add_function(wrap_pyfunction!(rl_layout_info, m)?)?;
     m.add_function(wrap_pyfunction!(rl_title_status, m)?)?;
+    super::encode::py::register(m)?;
     Ok(())
 }

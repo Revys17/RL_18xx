@@ -24,6 +24,8 @@ use crate::actions::GameError;
 use crate::title::RlLayoutKind;
 
 pub mod descriptor;
+/// The title-generic typed-token state encoder (milestone B1, `docs/rl_encoder.md`).
+pub mod encode;
 pub mod factored_layout;
 pub mod g1867;
 pub mod generator;
