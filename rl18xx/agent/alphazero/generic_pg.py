@@ -292,6 +292,7 @@ class PGRow:
     advantage: float = 0.0  # the seat's reward, then reward - V(s) (subtract_baselines)
     win: Optional[np.ndarray] = None  # (6,) win share, seat frame
     score: Optional[np.ndarray] = None  # (6,) score-head target (placement points / reward), seat frame
+    price_grid: bool = False  # the legal list's price grid (1867: cells in step units, as the server's mask)
 
 
 @dataclass
@@ -495,9 +496,8 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
                 if play.open_price(legal, k):
                     q = price_of_row[lo + k]
                     cell, cell_logp = int(reply.price_cell[q]), float(reply.price_cell_logp[q])
-                    kind = int(legal.rows[k, mg.C_PRICE_KIND])
-                    plo, phi, step = (int(x) for x in legal.price_range[k])
-                    price = int(mg.price_cells_for(kind, plo, phi, step).sample_price(cell, rng))
+                    # the cells of the server's mask: on the layout's grid (1867: the move's step)
+                    price = int(legal.price_cells(k).sample_price(cell, rng))
                 else:
                     price = play.fixed_price(g.raw, legal, k)
                 if is_learner:
@@ -518,6 +518,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
                             price_cell=cell,
                             seat=seat,
                             num_players=n_players,
+                            price_grid=bool(legal.price_grid),
                         )
                         if slot < len(g.reservoir[seat]):
                             g.reservoir[seat][slot] = row
@@ -677,7 +678,7 @@ def collate_rows(rows: Sequence[PGRow], config=None) -> dict:
     from rl18xx.agent.alphazero.generic_data import concat_encodings
 
     arrays = concat_encodings([_decompress(r.tokens) for r in rows])
-    legal = [mg.LegalActions(rows=r.rows, price_range=r.price_range) for r in rows]
+    legal = [mg.LegalActions(rows=r.rows, price_range=r.price_range, price_grid=r.price_grid) for r in rows]
     mg.add_legal_inputs(arrays, legal, config=config)
     choice = np.array([r.choice for r in rows], dtype=np.int64)
     offsets = arrays["legal_offsets"]

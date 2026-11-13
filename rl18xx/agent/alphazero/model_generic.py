@@ -242,6 +242,13 @@ class LegalActions:
     def __len__(self) -> int:
         return len(self.rows)
 
+    def price_cells(self, k: int):
+        """The price head's cells of legal row ``k``'s range, on this list's grid (:func:`price_cells_for`):
+        ``cell_of`` / ``sample_price`` / ``member`` give legal prices only (1867: on the move's step grid).
+        Every caller that samples or scores a price of a legal row goes through here."""
+        lo, hi, step = (int(x) for x in self.price_range[k])
+        return price_cells_for(int(self.rows[k, C_PRICE_KIND]), lo, hi, step, grid=bool(self.price_grid))
+
 
 def legal_actions(game, indices: Optional[Sequence[int]] = None, policy: Optional[str] = None) -> LegalActions:
     """The legal actions of a position of a title with an RL layout: its legal indices (or ``indices``

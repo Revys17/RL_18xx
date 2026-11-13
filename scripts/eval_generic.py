@@ -125,9 +125,7 @@ def play_games(game_indices: list, settings: dict) -> list:
                 k = int(rng.choice(len(p), p=p / p.sum()))
                 if play.open_price(legal, k):
                     cell = int(reply.price_cell[price_of_row[lo + k]])
-                    kind = int(legal.rows[k, mg.C_PRICE_KIND])
-                    plo, phi, step = (int(x) for x in legal.price_range[k])
-                    price = int(mg.price_cells_for(kind, plo, phi, step).sample_price(cell, rng))
+                    price = int(legal.price_cells(k).sample_price(cell, rng))  # on the layout's grid
                 else:
                     price = play.fixed_price(g.raw, legal, k)
                 play.apply(g.raw, legal, k, price)

@@ -148,17 +148,16 @@ def sample_price(game, output: PolicyOutput, k: int, rng: np.random.Generator, e
     """The price of legal row ``k``: None for a move without a price, the engine price for a fixed one
     (a depot train, ``lo == hi``), else a cell from the price head over the row's legal range (mixed with
     ``eps`` uniform over the range's non-empty cells) and a price inside it."""
+    from rl18xx.agent.alphazero.generic_play import title_play
+
     g = raw_game(game)
-    index = int(output.legal.indices[k])
-    price_range = g.price_range_for_index(index)
-    if price_range is None:
-        return None
-    lo, hi = (int(x) for x in price_range)
-    kind = int(output.legal.rows[k, mg.C_PRICE_KIND])
-    if kind < 0 or lo == hi:
+    legal = output.legal
+    if int(legal.rows[k, mg.C_PRICE_KIND]) < 0:  # no price decision: the engine's (1830's depot train) or none
+        return title_play(g.title).fixed_price(g, legal, k)
+    lo, hi, _ = (int(x) for x in legal.price_range[k])
+    if lo == hi:
         return lo
-    lo, hi, step = (int(x) for x in output.legal.price_range[k])
-    cells = mg.price_cells_for(kind, lo, hi, step)
+    cells = legal.price_cells(k)  # on the layout's grid: 1867's sampled prices are legal
     live = cells.nonempty
     logits = output.price_logp.get(k)
     probs = np.where(live, np.exp(logits.astype(np.float64)), 0.0) if logits is not None else live.astype(np.float64)

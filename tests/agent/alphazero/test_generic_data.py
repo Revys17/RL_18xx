@@ -220,8 +220,8 @@ def test_split_is_the_legacy_hash_and_stable():
 
 
 def test_unsupported_title():
-    with pytest.raises(gd.UnsupportedTitle):
-        gd.importer_for("1867")
+    with pytest.raises(gd.UnsupportedTitle):  # 1867 has one since A3 (test_generic_1867.py)
+        gd.importer_for("1822")
 
 
 # ---------------------------------------------------------------------------------------------------
