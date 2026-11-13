@@ -1109,8 +1109,8 @@ training on 1830 as well help an 1867 model, against 1867 alone? Arms, at each 1
 * **b**: joint, every batch 50% 1867 / 50% 1830 positions;
 * **c**: 1830 alone first (`c_pre`, one run per seed, shared by the sizes), then 1867 alone from its best checkpoint.
 
-Data: 1867 = A3's `generic_1867_v1` (965 games of 3-6 players, 915 training / 50 validation, 540,775 / 30,938
-positions; every record replays and encodes on this branch: 571,713 positions); 30 of its training games are a fixed
+Data: 1867 = A3's `generic_1867` (converted at A3's 2a758f2; 965 games of 3-6 players, 915 training / 50
+validation, 540,775 / 30,938 positions; the same games as its earlier `generic_1867_v1`); 30 of its training games are a fixed
 **dev** split (18,081 positions: early stopping and the value refit's selection); the other 885 form the pool from
 which the sizes are nested subsets (`nested_subset`, seed 0): **100, 300 and all 885 games** (55,954 / 175,887 /
 522,694 positions). Results are on 1867's **validation** split (all 50 games, 30,938 positions, never used for any
@@ -1137,6 +1137,17 @@ and evaluation stay in one precision). A cell is ~1.1 GB (trainer) + ~0.6 GB (lo
 measured on the first launch): a first plan (cap 7,812 steps, `c_pre` 3,906, 50 dev games, refit 1,600, three seeds
 everywhere) would have taken ~10 hours, so it was stopped after ~8 minutes (before any 1867 evaluation) and cut to
 the above (~5-6 hours).
+
+**Price-grid fix (A3) and what was rerun.** The second launch ran on master's code, whose supervised collate built
+1867's price cells in price space instead of the layout's step grid (A3 fixed it: `LegalActions.price_cells`), so
+1867's price targets and price loss were wrong there -- and the price loss (weight 0.1) reaches the shared trunk.
+It was stopped after ~2 hours, A3's branch merged, and every 1867 cell rerun on the merged code with A3's
+`generic_1867` (`probe_1867_fixed`). Collated batches before and after the merge (`MixedPositionBatches`, same
+seed): 1830's bit-identical; 1867's differ exactly in `price_cell_mask`, `price_grid`, `price_cell` and
+`price_log_count` (in one batch of 128: 1 of 92 price cells, 3 log counts, 80 of 2,208 mask entries). So the three
+1830-only `c_pre` cells were reused (`runs/C_PRE_REUSED.txt`). Four pre-fix full-size cells had finished (a s0,
+b s0-s2); they are kept (`probe_1867_prefix`) to show how much the wrong price targets moved policy CE, top-1 and win
+CE (below).
 
 #### Decision rule (fixed 2026-11-13, before any 1867 cell ran)
 
