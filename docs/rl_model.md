@@ -16,8 +16,10 @@ descriptor rows of the position's **legal** actions, and returns
   6 seats with padding masked. `value_only=True` skips the policy and price heads; a critic is this
   architecture used value-only.
 
-Nothing in the pipeline uses it yet (no dataset, training loop or inference server: milestone C). The frozen
-1830 model (`model_transformer.py`) is untouched.
+Milestone C1 (2026-11-13, below: "Supervised data and pretraining", "The 1830 GPU check") gives it a supervised
+dataset, a two-stage training loop, a comparison with legacy checkpoints and a policy-only player for
+`eval_policy_only.py`; nothing trains it by policy gradient yet. The frozen 1830 model (`model_transformer.py`)
+is untouched.
 
 ## API
 
@@ -39,7 +41,11 @@ mg.save_checkpoint(model, path, titles=["1830"]); model, meta = mg.load_checkpoi
 priced row's `(lo, hi, step)` (-1 elsewhere) and the layout indices. `legal_actions(game)` builds it for a
 title with an RL layout (today 1830: `factored_legal_indices`, `action_descriptors(title).gather`,
 `price_range_for_index`). A title whose layout is not on master yet (1867) passes its own rows (the tests
-map 1867 generator moves with a stub).
+map 1867 generator moves with a stub). `legal_actions(game, indices)` takes legal indices the caller already
+has (the policy-only player); it is the one place a range's step is decided (the supervised records store its
+ranges). `add_legal_inputs(arrays, legal)` adds the flat legal list to token arrays that are already built
+(`build_inputs` = `encode_batch` + `add_legal_inputs`; the supervised collate stacks per-position encodings
+and calls it).
 
 ### Inputs (`build_inputs`)
 
@@ -283,24 +289,174 @@ mixed batch takes five positions per (title, player count), covering tile lays, 
    data; an 1830 / 1867 model leaves them at init (harmless, but a DDP run must set
    `find_unused_parameters`).
 
-## For the 1830 GPU validation (design §4.4), from milestone C
+## Supervised data and pretraining (milestone C1, 2026-11-13)
 
-The check: a short supervised run of the generic model on 1830's human data against SL checkpoint 10,
-compared on per-type top-1 (Par / BuyTrain / LayTile separately), value CE against the equal-odds baseline
-and a policy-only head-to-head. It needs:
+Code: `generic_data.py` (records, replay, collate, loader), `generic_pretrain.py` (two-stage training, metrics,
+comparison with a legacy checkpoint), `generic_policy.py` (policy-only player); `main.py convert-generic`,
+`pretrain-generic`, `compare-generic`; `scripts/eval_policy_only.py` players `generic:<checkpoint>[@T]`. Tests:
+`tests/agent/alphazero/test_generic_data.py`, `test_generic_pretrain.py`.
 
-1. **A converted dataset** (LMDB v3, design §5.1) of `lmdb_v6k`'s games: per row the game's title, enough
-   to rebuild the tokens (the action log prefix and replay, or stored token arrays), the legal index list
-   (sparse; descriptors are gathered at load time from the 1830 layout), the chosen index, the price target
-   with its legal range, the value target (per-seat win share + placement points), the player count and
-   rotation. Forced positions kept, the validation split by `in_validation_split(game_id)`.
-2. **A collate function** that concatenates positions into `build_inputs`' flat layout (legal rows,
-   offsets, map keys, price rows) -- the keys are per position, so they can be precomputed per row and
-   offset at collate time.
-3. **The training loop**: `policy_loss` (index targets) + `price_loss` + a small value weight, bf16
-   autocast, the two-stage recipe (joint run early-stopped on validation loss, then the value heads refit
-   on the frozen trunk with `value_stop_grad`), per-type top-1 from `logp` grouped by family.
-4. **Policy-only play** for the head-to-head: a sparse-legal inference path (`legal_actions` +
-   `build_inputs` per request, sampling from `logp`, prices from `price_logp`) wired into
-   `eval_policy_only.py` next to the legacy 1830 model.
-5. GPU time (decision 5): a few hours at 1830's pretraining scale.
+### Dataset: compact game records, replayed and encoded in the loader
+
+Storage was decided by measuring 1830's corpus (2.5M positions): stored token arrays are ~58 KB per position
+raw, ~4.8 KB LZ4-compressed per position (**~12 GB**, a little under the ~20 GB threshold; ~0.34 KB per position
+only when a whole game is compressed as one block), while a game record with every label is ~60 bytes per
+position (**144 MB** for the corpus). Replay (~15 us per action) + encode (~25 us) runs at ~12k positions/s per
+loader worker unshuffled, ~6k/s through the shuffle buffer -- several times what the GPU consumes. So a dataset
+holds records and the loader re-encodes: it is independent of the encoder version (B1's encoder is version 1 and
+its open points foresee additions; stored arrays would need a re-conversion per bump), small, and the same format
+serves 1867 and mixed-title runs.
+
+A dataset directory: LMDB `g:<game id>` -> lz4(pickle(record)), `meta.json` (titles, layout version and
+fingerprint, the encoder version at conversion, sources, split rule, counts, match / skip statistics) and
+`games.jsonl` (id, split, players, decisions, actions, finished). A **record** (`generic_data.convert_game`):
+the action log as the engine replays it (JSON), players in seating order, optional rules, rule variants (off for
+human games), the layout version and fingerprint, and per decision:
+
+| field | content |
+|---|---|
+| `action_pos` | the decision's action in the log (the position is the state before it) |
+| `legal_offsets`, `legal_indices` | the legal layout indices (sparse; `model_generic.legal_actions`) |
+| `legal_price_range` | (lo, hi, step) of every legal row with a price kind, -1 elsewhere |
+| `chosen_index`, `target` | the human move's layout index and its row in the legal list |
+| `price` | the human price when the chosen row has a price kind and it lies in the range, else -1 |
+| `family` | the chosen row's descriptor family |
+| `meta` | the encoder's meta row at conversion (title, round / step kind, acting entity, seats, rotation, ...); the loader checks the replayed rotation against it |
+
+and per game the outcome in **seating order**: net worth (`result()`), win share (ties split) and placement
+points (`policy_gradient.default_placement_points`). The collate rotates them into the encoder's seats (seat k =
+player `(k + rotation) mod n`, as the legacy `canonicalize_value_target`). The split is
+`pretraining.in_validation_split(game id, 0.05)`: a game is held out exactly when it was held out of `lmdb_v6k`
+/ SL checkpoint 10.
+
+**Labels.** Each decision's human action must match exactly one legal index, else the position is skipped and
+counted by action type (`unmatched`, `ambiguous`, `not_legal`) and the action still applied. 1830's importer is
+the legacy converter's own matching (`pretraining._action_dict_to_factored_index` on the replayed
+`RustGameAdapter`), so labels, legal lists and price targets equal the legacy converter's index for index
+(`test_matches_legacy_converter`). Forced positions (one legal index) are kept. A title without an importer
+raises `UnsupportedTitle` (`generic_data.register_importer`: 1867's comes with milestone A2's
+`match_human_action`, design §5.2).
+
+**Conversions (2026-11-13, current engine, 7 processes, ~70-110 s each):**
+
+| source | games converted | dropped | positions train / validation | legacy LMDB |
+|---|---|---|---|---|
+| `1830_clean_all` (lmdb_v6k's source = SL ckpt 10's games) | 4,076 | 266 error records, 60 no longer replay (rules fixed 2026-10-16: 56 "Run Routes cannot process pass", 2 ERIE E11, 2 SR buys) | 2,376,021 / 117,053 | lmdb_v6k: 4,136 games, 2,416,316 / 118,944 (converted on the old engine) |
+| `1830_clean_20261017` (the re-clean on the current rules) | 4,216 | 187 error records | 2,474,663 / 122,211 | lmdb_v7: **identical** counts (2,474,663 / 122,211) |
+
+Skipped labels: `unmatched` bankrupt 945 / 963 and discard_train 2 / 2, `ambiguous` 0, `not_legal` 0. Forced
+positions kept: 311,771 / 325,314 (12.5%). Price targets (open ranges): 101,285 / 105,094. Matched positions by
+family (`1830_clean_all`): Pass 987,430; BuyShares 315,395; RunRoutes 284,904; Dividend 284,633; LayTile 272,865;
+SellShares 82,196; BuyTrain.depot 81,424; Bid.company 66,504; PlaceToken 38,703; Par 29,828; BuyTrain.corp
+27,166; BuyCompany 16,181; BuyTrain.exchange 2,734; DiscardTrain 1,594; ExchangeShares 746; BuyTrain.pool 602;
+Bankrupt 169. 856 of the 4,076 games (254,558 positions) end before the game's end (the log stops; the site
+scored them on `result()`): their value targets are net worth at that point, as in the legacy data.
+
+**Loader.** `PositionBatches` (a `torch` `IterableDataset`; `DataLoader(..., batch_size=None, num_workers=W)`,
+spawn): each worker takes every W-th game of the epoch's order (permuted per seed and epoch), replays it, encodes
+each decision (`position_item`: `encode_batch([game])`, the legal descriptor rows gathered from the stored
+indices, targets in the seat frame) and passes it through a shuffle buffer of `buffer_positions` LZ4-compressed
+items (~5 KB each; 32k by default, ~150 MB per worker), so a batch of 256 mixes ~50 games (legacy: a full
+shuffle). `collate` pads and stacks the single-position encodings exactly as `encode_batch` pads a batch, then
+calls `add_legal_inputs` (bit-identical to `build_inputs` on the same positions, tested, 1830 + 1867 padding
+included) and adds `target_index`, `price_cell` / `price_log_count` / `price_valid` (the chosen row's observed
+price), `win` / `score` (B, 6), `family`, `num_players`.
+
+### Training (`main.py pretrain-generic`)
+
+The legacy recipe (`pretraining.pretrain_model` + `_refit_value_heads` with `main.py pretrain`'s defaults):
+
+* **Stage 1**: `(1 - 0.03) * CE(target) + 0.03 * mean over the legal rows of -log p` (label smoothing over the
+  legal set; the legacy pi gave the target 1 - eps and every legal index eps / n) - 0.01 entropy + 0.1 price NLL
+  + 0.1 win CE + 0.1 score MSE (placement points); AdamW lr 1e-3 (decay 1e-4 on matrices only, as
+  `train.build_optimizer`), cosine to 0 over the planned steps, clip 1.0, batch 256, 10 epochs; bf16 autocast on
+  CUDA (`--bf16 on` forces it on CPU), fp32 evaluation; validation per epoch (or `--eval-every` steps), the best
+  total validation loss saved as `best_joint.pth`, early stop after 4 evaluations without improvement.
+* **Stage 2**: `best_joint.pth`'s value heads re-initialized (zero outputs: equal odds) and trained alone on the
+  frozen network (`value_stop_grad`, value-only forwards), validated every 250 steps on the win CE (patience 4,
+  at most 20k steps), the best heads saved as `refit.pth`; `final.pth` = the refit.
+* Logged to `<out>/tb` and `<out>/history.jsonl`: losses, top-1 / top-5 over the legal moves, top-1 per
+  descriptor family and per player count, the chance top-1 of a uniform policy (mean 1 / legal count), price NLL,
+  win CE against the equal-odds baseline ln(n), winner accuracy (the argmax seat is a winner). Checkpoints via
+  `save_checkpoint` with `extra` = stage, step, metrics, the training config and the dataset's meta.
+
+Departures from the legacy loop: batches mix player counts (the model masks absent seats; the legacy sampler made
+each batch one count, which only reorders an epoch -- every bucket is exhausted, so the totals are the same);
+positions are mixed through a shuffle buffer, not a full shuffle; the score target is placement points (the
+legacy one was net-worth fractions), as the policy-gradient critic's.
+
+`main.py compare-generic --generic <final.pth> --legacy <SL ckpt 10> --data <dataset>` scores both models on the
+same decisions of a split (the legacy model through its encoder and dense policy read at the same legal indices,
+renormalized; its value over the present seats): top-1 / top-5 / CE overall, per family and per player count, win
+CE and winner accuracy. It also counts positions where the two encoders disagree on the mover (0 on the smoke
+games).
+
+### Policy-only play (`generic_policy.py`)
+
+`GenericPolicy(path).evaluate(games, legal_indices)` builds the inputs of a batch of positions from their legal
+indices (`legal_actions(game, indices)` + `build_inputs`) and runs one fp32 forward; `choose` samples a move from
+`tempered(probs, T)` (as every legacy policy-only player) and `sample_price` a price: the engine's price for a
+fixed one (lo == hi), else a cell of the price head over the move's legal range (`--price-eps` mixes uniform cells
+in, as `policy_gradient.choose_price`) and a price inside it. In `eval_policy_only.py` a player
+`generic:<checkpoint>[@T]` needs no inference server: each pool worker loads the checkpoint once
+(`--generic-device`, default cpu) and scores its games' pending generic positions in one forward while the legacy
+sides' requests are on their servers. Everything else (starts, `--auction-start`, the rule against train
+shuffling via `start_positions.new_game`, seat arrangements, scoring) is the legacy eval's. In-process inference
+is enough: the default model scores ~100 positions/s per CPU thread, i.e. 16 workers play an 800-game 4-player
+match's ~225k generic decisions in a few minutes; a GPU inference-server path can come with policy gradient.
+
+### CPU smoke (2026-11-13, `CUDA_VISIBLE_DEVICES=`, cores 24-31,56-63)
+
+* Conversions: the two above (whole corpora; a `--limit 100` conversion takes ~5 s).
+* Training: small config (151,646 parameters), the first 100 training games (56,211 positions), batch 64, 400
+  steps, 2 loader workers: 64 s for stage 1 (~6 steps/s). Training loss (window means) 1.825 -> 1.256, policy CE
+  1.370 -> 0.959, top-1 0.61 -> 0.71. Validation (first 20 validation games, 10,346 positions) at steps
+  100 / 200 / 300 / 400: top-1 0.675 / 0.673 / 0.677 / 0.678 (chance 0.298), top-5 0.92, policy CE 1.033 -> 0.973,
+  win CE 1.483 -> 1.359 (equal odds 1.508); stage 2 (200 steps) win CE 1.352, winner accuracy 0.367.
+* `compare-generic` on 6 validation games (3,068 positions): SL ckpt 10 top-1 0.705 (its documented human
+  top-1 is 0.712), the smoke model 0.677; mover disagreements 0.
+* Policy-only games against SL ckpt 10 (both T 0.5, from the auction, real rules + train-shuffle rule): 4 players
+  2v2, 6 games, 25 s; 2 players 1v1, 4 games, 22 s; all played to the end. The 150k-parameter smoke model lost
+  every game (worth share 0.41 / 0.39), as expected of 400 steps on 100 games; its auction bids are plausible
+  (e.g. DH $75 / $85, B&O $220).
+
+## The 1830 GPU check (design §4.4)
+
+`scripts/launch/2026-11/bridge/gpu_check_1830.sh [convert] [pretrain] [compare] [eval]` (all by default; paths and
+devices from environment variables at its top):
+
+1. **convert**: `main.py convert-generic --data-dir human_games/1830_clean_all --output
+   human_games/generic_1830_clean_all_v1` (CPU, ~2 min). `DATA_SRC=human_games/1830_clean_20261017` trains on the
+   re-cleaned corpus instead (lmdb_v7's games, 140 more). Both split by the same game-id hash, so no validation
+   game of either was in ckpt 10's training: either comparison is fair.
+2. **pretrain**: `main.py pretrain-generic --model-preset default` with the legacy defaults (10 epochs, batch
+   256, lr 1e-3 cosine, patience 4, value refit), `--device cuda`, 6 loader workers.
+3. **compare**: `main.py compare-generic` of `final.pth` and SL ckpt 10 on every validation decision (117k):
+   top-1 per family (Par / BuyShares / LayTile / BuyTrain.* separately), win CE vs equal odds, winner accuracy.
+4. **eval**: `eval_policy_only.py`, generic vs SL ckpt 10 both at T 0.5, `--auction-start`, 800 games each: 4
+   players 2v2, 1v3 with the generic model alone, 1v3 with ckpt 10 alone, 2 players 1v1 (equal strength = 0.5 /
+   0.25 / 0.75 / 0.5), 12 games of each saved for the viewer.
+
+Pass bar (design): within noise of ckpt 10 -- per-family top-1 within ~0.01 (the per-family standard errors on
+117k positions are 0.002-0.01; Par has ~1.4k validation positions, se ~0.013), win CE no worse, and the
+head-to-heads within two standard errors of equal (800 games: se ~0.015 in 2v2).
+
+**GPU time (estimate; no GPU was available to measure).** SL ckpt 10's own two-stage run took ~3.5 h
+(`20261004_134558`: session start 13:45, checkpoint 10 at 17:20). The generic model costs ~1.3-1.5x the 1830
+model per position (forward, CPU-measured above), so stage 1 ~4.5-5.5 h for 10 epochs (less if it stops early),
+stage 2 ~0.3 h, compare ~0.2 h, the four evals ~0.5-1 h (mostly CPU: the generic side in the pool workers, the
+legacy side on the GPU server): **~6-7 GPU hours** in all, about half a day of wall clock. Read the real rate off
+the first `step ... ` lines' `elapsed` (`<out>/history.jsonl`); the loader is not the limit (~6k positions/s per
+worker through the shuffle buffer, 6 workers).
+
+## Open questions after C1
+
+1. **Which corpus**: `1830_clean_all` (ckpt 10's games, 60 no longer replay) or `1830_clean_20261017` (the
+   re-clean on the current rules, = lmdb_v7). The recipe uses the former; the latter is the corpus every
+   1830 start file now comes from.
+2. **Unfinished human games** (10% of positions): their value targets are net worth when the log stops, as in the
+   legacy data. A `finished` flag is in each record if the value loss should skip them.
+3. **Mixed titles** (E0 / E1, 1830 + 1867): `PositionBatches` reads one dataset; a mixed run needs a loader over
+   several (each game already carries its title, and batches can mix titles).
+4. **1867 import**: waits for A2's layout and `match_human_action` (`generic_data.register_importer`).
+5. **No resume** of a pretraining run (the legacy one has none either).
