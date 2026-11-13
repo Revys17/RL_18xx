@@ -396,6 +396,7 @@ def cmd_convert_generic(args):
         limit=args.limit,
         validation_percentage=args.validation_percentage,
         skip_forced=args.skip_forced,
+        finished_only=args.finished_only,
     )
     stats = {k: v for k, v in meta["stats"].items() if k != "dropped_detail"}
     print(json.dumps({"counts": meta["counts"], "stats": stats}, indent=2))
@@ -1215,6 +1216,16 @@ def build_parser():
         help="pretraining.in_validation_split's per-game share (default 0.05, as lmdb_v6k / SL ckpt 10)",
     )
     p.add_argument("--skip-forced", action="store_true", help="Drop positions with one legal index (off: kept)")
+    finished = p.add_mutually_exclusive_group()
+    finished.add_argument(
+        "--finished-only", dest="finished_only", action="store_const", const=True, default=None,
+        help="Drop every game whose record does not reach the game's end in our engine (replay rejections, records "
+        "that end early); default: the title's TitleSpec.supervised_finished_only (1867 on, 1830 off)",
+    )
+    finished.add_argument(
+        "--keep-unfinished", dest="finished_only", action="store_const", const=False,
+        help="Keep games whose record ends before the game does (1830's default)",
+    )
 
     # pretrain-generic (two-stage supervised pretraining of the generic model)
     p = sub.add_parser("pretrain-generic", help="Supervised two-stage pretraining of the title-generic model")

@@ -16,7 +16,8 @@ Layout::
     <dir>/data.mdb, lock.mdb   LMDB: b"g:<game id>" -> lz4(pickle(record)), b"__meta__" -> meta JSON
     <dir>/meta.json            title(s), layout (version, fingerprint), encoder version at conversion,
                                sources, split, counts, match / skip statistics
-    <dir>/games.jsonl          one line per game: id, split, players, decisions, actions
+    <dir>/games.jsonl          one line per game: id, source, split, players, decisions, actions, finished, skips
+    <dir>/dropped.jsonl        one line per dropped game: id, source, players, reason
 
 Records are made by a per-title :class:`TitleImporter`. 1830's is the legacy converter's own matching
 (``pretraining._action_dict_to_factored_index`` on the replayed ``RustGameAdapter``), so its labels are
@@ -139,6 +140,13 @@ class TitleImporter:
     def record_extra(self, game: dict) -> dict:
         """Extra per-game fields of the record (after :meth:`load`)."""
         return {}
+
+    def unfinished_reason(self, game: dict) -> Optional[str]:
+        """After :meth:`load`: why the loaded log does not reach the game's end -- ``"unfinished_replay_rejected:
+        <action>"`` (the replay stopped at a rejected action) or ``"unfinished_record_ends"`` (the record ends
+        before the game does) -- None if it does, or ``"unknown"`` when only the conversion's replay can tell
+        (then :func:`convert_game` checks at the end)."""
+        return "unknown"
 
     def apply(self, state, action: dict) -> None:
         state.process_action(action)
@@ -271,6 +279,7 @@ def convert_game(
     importer: TitleImporter,
     validation_percentage: float = DEFAULT_VALIDATION_PERCENTAGE,
     skip_forced: bool = False,
+    finished_only: bool = False,
 ) -> Tuple[Optional[dict], dict]:
     """One cleaned human game -> ``(record or None, stats)``.
 
@@ -278,7 +287,9 @@ def convert_game(
     ``model_generic.legal_actions`` (layout indices, descriptor rows, price ranges). A position whose
     action the importer cannot match to exactly one legal index is skipped and counted by the action's
     type (``unmatched`` / ``ambiguous`` / ``not_legal``) and the action is still applied. Forced
-    positions (one legal index) are kept unless ``skip_forced`` (as the legacy converter's default)."""
+    positions (one legal index) are kept unless ``skip_forced`` (as the legacy converter's default). With
+    ``finished_only`` a game whose log does not reach the game's end in our engine is dropped and counted
+    (``unfinished_replay_rejected`` / ``unfinished_record_ends``, :meth:`TitleImporter.unfinished_reason`)."""
     from rl18xx.agent.alphazero import model_generic as mg
     from rl18xx.agent.alphazero.action_descriptors import action_descriptors
     from rl18xx.agent.alphazero.generic_tokens import encode_batch
@@ -287,9 +298,11 @@ def convert_game(
     stats: dict = {"games": 1}
     actions, reason = importer.load(game)
     if actions is None:
-        stats["dropped"] = {reason.split(":")[0]: 1}
-        stats["dropped_detail"] = {gid: reason}
-        return None, stats
+        return None, _dropped(stats, gid, reason)
+    if finished_only:
+        unfinished = importer.unfinished_reason(game)
+        if unfinished not in (None, "unknown"):
+            return None, _dropped(stats, gid, unfinished)
     title = importer.title
     d = action_descriptors(title)
     players = importer.players(game)
@@ -357,6 +370,8 @@ def convert_game(
         matched_by_family[families[fam]] += 1
         importer.apply(state, action)
 
+    if finished_only and not raw.finished:
+        return None, _dropped({"games": 1}, gid, "unfinished_record_ends")
     result = raw.result()
     ids = list(players)
     worth = np.array([float(result.get(pid, 0)) for pid in ids], dtype=np.float64)
@@ -417,6 +432,12 @@ def convert_game(
     return record, stats
 
 
+def _dropped(stats: dict, gid: str, reason: str) -> dict:
+    stats["dropped"] = {reason.split(":")[0]: 1}
+    stats["dropped_detail"] = {gid: reason}
+    return stats
+
+
 def _merge_stats(total: dict, part: dict) -> None:
     for key, value in part.items():
         if isinstance(value, dict):
@@ -441,6 +462,8 @@ def list_game_files(sources: Sequence[str]) -> List[Path]:
     seen: Dict[str, Path] = {}
     for src in sources:
         p = Path(src)
+        if not p.exists():  # a missing corpus directory would otherwise be one unreadable "game"
+            raise FileNotFoundError(f"source {src} does not exist")
         files = sorted(p.glob("*.json")) if p.is_dir() else [p]
         for f in files:
             seen.setdefault(f.stem, f)
@@ -452,23 +475,32 @@ _WORKER_IMPORTER: Optional[TitleImporter] = None
 _SKIP_KEYS = ("unmatched", "ambiguous", "not_legal", "policy")
 
 
+def _drop_entry(gid: str, path, game: Optional[dict], stats: dict) -> dict:
+    """A dropped game's line in ``dropped.jsonl``: id, source, player count, reason (the stats' drop key)."""
+    reason = next(iter(stats.get("dropped") or {"unknown": 1}))
+    players = len((game or {}).get("players") or [])
+    return {"id": gid, "source": str(Path(path).parent), "players": players, "reason": reason}
+
+
 def _convert_file(job: tuple) -> tuple:
-    path, title, validation_percentage, skip_forced = job
+    path, title, validation_percentage, skip_forced, finished_only = job
     global _WORKER_IMPORTER
     if _WORKER_IMPORTER is None or _WORKER_IMPORTER.title != title:
         logging.getLogger("rl18xx").setLevel(logging.ERROR)
         _WORKER_IMPORTER = importer_for(title)
     gid = Path(path).stem
+    game = None
     try:
         with open(path) as f:
             game = json.load(f)
         game["id"] = gid
-        record, stats = convert_game(game, _WORKER_IMPORTER, validation_percentage, skip_forced)
+        record, stats = convert_game(game, _WORKER_IMPORTER, validation_percentage, skip_forced, finished_only)
     except Exception as e:  # never lose the whole conversion to one game
         reason = f"convert_error: {type(e).__name__}: {str(e)[:120]}"
-        return gid, None, {"games": 1, "dropped": {"convert_error": 1}, "dropped_detail": {gid: reason}}, None
+        stats = {"games": 1, "dropped": {"convert_error": 1}, "dropped_detail": {gid: reason}}
+        return gid, None, stats, _drop_entry(gid, path, game, stats)
     if record is None:
-        return gid, None, stats, None
+        return gid, None, stats, _drop_entry(gid, path, game, stats)
     entry = {
         "id": record["id"],
         "source": str(Path(path).parent),
@@ -505,16 +537,25 @@ def convert_dataset(
     validation_percentage: float = DEFAULT_VALIDATION_PERCENTAGE,
     skip_forced: bool = False,
     progress_every: int = 200,
+    finished_only: Optional[bool] = None,
 ) -> dict:
     """Convert cleaned human games (JSON files under ``sources``) of ``title`` into a dataset directory
-    ``out`` (must not exist yet). ``limit`` takes the first N game files by id. Returns the meta dict
-    (also written to ``meta.json``)."""
+    ``out`` (must not exist yet). ``limit`` takes the first N game files by id. ``finished_only`` drops every
+    game whose log does not reach the game's end in our engine (None: the title's
+    ``TitleSpec.supervised_finished_only`` -- 1867 yes, 1830 no). Every dropped game is listed in
+    ``dropped.jsonl`` (id, source, players, reason) and counted by reason and player count in the meta.
+    Returns the meta dict (also written to ``meta.json``)."""
     import lmdb
 
     from rl18xx.agent.alphazero.action_descriptors import action_descriptors
     from rl18xx.agent.alphazero.generic_tokens import schema
 
     importer_for(title)  # fail early for a title without an importer
+    if finished_only is None:
+        from rl18xx.agent.alphazero.titles import title_spec
+
+        finished_only = title_spec(title).supervised_finished_only
+    finished_only = bool(finished_only)
     out = Path(out)
     if out.exists() and any(out.iterdir()):
         raise FileExistsError(f"{out} exists and is not empty; convert into a new directory")
@@ -522,11 +563,12 @@ def convert_dataset(
     files = list_game_files(sources)
     if limit:
         files = files[:limit]
-    jobs = [(str(f), title, validation_percentage, skip_forced) for f in files]
+    jobs = [(str(f), title, validation_percentage, skip_forced, finished_only) for f in files]
     LOGGER.info("Converting %d %s games from %s into %s (%d workers)", len(jobs), title, list(sources), out, workers)
     env = lmdb.open(str(out), map_size=_LMDB_MAP_SIZE, subdir=True, max_dbs=0)
     stats: dict = {}
     index: List[dict] = []
+    dropped: List[dict] = []
     started = time.time()
     txn = env.begin(write=True)
     pending = 0
@@ -543,6 +585,8 @@ def convert_dataset(
                 txn.commit()
                 txn = env.begin(write=True)
                 pending = 0
+        elif entry is not None:
+            dropped.append(entry)
 
     try:
         if workers > 1:
@@ -572,6 +616,7 @@ def convert_dataset(
             "validation_percentage": validation_percentage,
             "split": "pretraining.in_validation_split(game id, validation_percentage)",
             "skip_forced": skip_forced,
+            "finished_only": finished_only,
             "sources": [str(s) for s in sources],
             "limit": limit,
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -588,6 +633,7 @@ def convert_dataset(
                     str(n): sum(1 for e in index if e["players"] == n) for n in sorted({e["players"] for e in index})
                 },
                 "by_source": _counts_by_source(index),
+                "dropped_by_reason_and_players": _dropped_counts(dropped),
             },
             "stats": stats,
         }
@@ -603,12 +649,25 @@ def convert_dataset(
     with open(out / "games.jsonl", "w") as f:
         for e in index:
             f.write(json.dumps(e) + "\n")
+    dropped.sort(key=lambda e: (len(e["id"]), e["id"]))
+    with open(out / "dropped.jsonl", "w") as f:
+        for e in dropped:
+            f.write(json.dumps(e) + "\n")
     LOGGER.info(
         "Converted %d games (%d train / %d validation positions) in %.0f s; dropped %s",
         len(index), meta["counts"]["positions"]["train"], meta["counts"]["positions"]["validation"],
         meta["seconds"], stats.get("dropped", {}),
     )
     return meta
+
+
+def _dropped_counts(dropped: List[dict]) -> dict:
+    """``{reason: {players: games}}`` of a conversion's dropped games."""
+    out: dict = {}
+    for e in dropped:
+        by_players = out.setdefault(e["reason"], {})
+        by_players[str(e["players"])] = by_players.get(str(e["players"]), 0) + 1
+    return out
 
 
 def _counts_by_source(index: List[dict]) -> dict:

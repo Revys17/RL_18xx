@@ -444,8 +444,6 @@ class ReplayedGame:
     seed: Optional[int]
     actions: list
     optional_rules: tuple = ()
-    #: The replay's rejection when the log stops before the record does (the actions are the prefix before it).
-    stopped: Optional[str] = None
 
 
 def _load_1830(game: dict) -> Tuple[Optional[ReplayedGame], Optional[str]]:
@@ -470,22 +468,17 @@ def _load_titled(game: dict) -> Tuple[Optional[ReplayedGame], Optional[str]]:
 
     captured = {}  # the harness's engine game (handed to on_action before every action)
     rules = tuple((game.get("settings") or {}).get("optional_rules") or ())
-    stopped = None
     try:
         replay_game(game, on_action=lambda rust, i, a: captured.setdefault("game", rust))
-    except ReplayError as e:
-        # An old record the current rules reject part-way (1867: 25 of the 2020-22 corpus's games): the log
-        # up to the rejection is a legal game, so its Stock Rounds before it still make starts.
-        if captured.get("game") is None or not captured["game"].raw_actions:
-            return None, f"replay_failed: {str(e)[:120]}"
-        stopped = str(e)[:120]
-    except (TitleUnsupported, ValueError) as e:
+    except (ReplayError, TitleUnsupported, ValueError) as e:
+        # A record the engine rejects part-way gives no start at all, not even before the rejection (A3, the
+        # user's call "for correctness": 1867's 24 such old games are records the current rules refuse).
         return None, f"replay_failed: {str(e)[:120]}"
     rust = captured.get("game")
     if rust is None:
         return None, "no_actions"
     actions = [dict(a) for a in rust.raw_actions]
-    return ReplayedGame(str(game.get("id")), len(game["players"]), game_seed(game), actions, rules, stopped), None
+    return ReplayedGame(str(game.get("id")), len(game["players"]), game_seed(game), actions, rules), None
 
 
 _LOADERS: Dict[str, Callable[[dict], Tuple[Optional[ReplayedGame], Optional[str]]]] = {

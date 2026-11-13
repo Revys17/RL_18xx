@@ -231,8 +231,52 @@ def dataset_dir(tmp_path_factory):
     for name in GAMES[1:]:
         (games / name).write_text(json.dumps(load_fixture(name)))
     out = root / "ds"
-    gd.convert_dataset([str(games)], str(out), title="1867", workers=1, validation_percentage=0.5)
+    # all games: hs_ahjzadkh_19792's record ends before the game does (the finished-only default would drop it)
+    gd.convert_dataset(
+        [str(games)], str(out), title="1867", workers=1, validation_percentage=0.5, finished_only=False
+    )
     return out
+
+
+def test_finished_only_drops_and_lists_unfinished_games(tmp_path, importer):
+    """1867's default (``TitleSpec.supervised_finished_only``) keeps only games whose log reaches the game's end:
+    a record that ends early and one the replay rejects part-way are dropped, counted by reason and player count
+    and listed in ``dropped.jsonl``; ``finished_only=False`` (1830's default) keeps them."""
+    from rl18xx.agent.alphazero.titles import title_spec
+
+    assert title_spec("1867").supervised_finished_only and not title_spec("1830").supervised_finished_only
+    games = tmp_path / "games"
+    games.mkdir()
+    for name in ("nationalization_cash.json", "hs_ahjzadkh_19792.json"):  # finished; record ends early
+        (games / name).write_text(json.dumps(load_fixture(name)))
+    rejected = load_fixture("21268.json")
+    rejected["id"] = "rejected"
+    bad = {"type": "dividend", "entity": "NOPE", "entity_type": "corporation", "kind": "payout", "id": 10**6}
+    rejected["actions"] = rejected["actions"][:300] + [bad] + rejected["actions"][300:]
+    (games / "rejected.json").write_text(json.dumps(rejected))
+    meta = gd.convert_dataset([str(games)], str(tmp_path / "ds"), title="1867", workers=1)
+    assert meta["finished_only"] is True
+    ds = gd.GenericDataset(tmp_path / "ds")
+    assert ds.game_ids() == ["nationalization_cash"]
+    assert all(ds.record(g)["finished"] for g in ds.game_ids())
+    assert meta["stats"]["dropped"] == {"unfinished_record_ends": 1, "unfinished_replay_rejected": 1}
+    assert meta["counts"]["dropped_by_reason_and_players"] == {
+        "unfinished_record_ends": {"4": 1}, "unfinished_replay_rejected": {"4": 1}
+    }
+    lines = [json.loads(x) for x in (tmp_path / "ds" / "dropped.jsonl").read_text().splitlines()]
+    assert {(e["id"], e["reason"], e["players"]) for e in lines} == {
+        ("hs_ahjzadkh_19792", "unfinished_record_ends", 4), ("rejected", "unfinished_replay_rejected", 4)
+    }
+    keep = gd.convert_dataset([str(games)], str(tmp_path / "all"), title="1867", workers=1, finished_only=False)
+    assert keep["finished_only"] is False and sum(keep["counts"]["games"].values()) == 3
+    # the importer-independent check at the end (an importer that cannot tell after load)
+    record, stats = gd.convert_game(load_fixture("hs_ahjzadkh_19792.json"), _Unknown(), finished_only=True)
+    assert record is None and stats["dropped"] == {"unfinished_record_ends": 1}
+
+
+class _Unknown(gi67.Importer1867):
+    def unfinished_reason(self, game):
+        return "unknown"
 
 
 def test_dataset_round_trip_and_loader(dataset_dir, records):
@@ -487,3 +531,19 @@ def test_1867_title_play_applies_like_rl_apply_index():
             assert raw.__getstate__() == by_index.__getstate__()
             checked += 1
     assert checked > 500
+
+
+def test_start_files_skip_games_the_replay_rejects():
+    """A start file takes starts only from games that replay to the end of their record: a record the engine
+    rejects part-way gives none, not even its Stock Rounds before the rejection."""
+    from rl18xx.agent.alphazero import generic_play as gp
+
+    game = load_fixture("21268.json")
+    replayed, reason = gp.replay_human_game("1867", game)
+    assert reason is None
+    start, midgame, why = gp.start_records("1867", replayed)
+    assert start is not None and midgame is not None and why is None
+    bad = {"type": "dividend", "entity": "NOPE", "entity_type": "corporation", "kind": "payout", "id": 10**6}
+    game["actions"] = game["actions"][:600] + [bad] + game["actions"][600:]
+    replayed, reason = gp.replay_human_game("1867", game)
+    assert replayed is None and reason.startswith("replay_failed")

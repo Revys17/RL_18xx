@@ -23,7 +23,8 @@ of another player's minor) is skipped and counted as ``policy``. Misses in a doc
 (``g1867_remaining_work.md`` "Replay-only") count as ``replay_only:<class>``, other misses ``unmatched``,
 several matches ``ambiguous``. A game the replay rejects part-way is kept up to the rejection (its decisions
 are human decisions of a legal position; ``finished`` False, ``stopped`` names the rejected action), so its
-labels are exactly A2's completeness decisions.
+labels are exactly A2's completeness decisions -- unless the conversion is ``finished_only`` (1867's default,
+``titles.TitleSpec.supervised_finished_only``), which drops every game whose log does not reach the game's end.
 """
 
 from __future__ import annotations
@@ -234,6 +235,7 @@ class Importer1867(TitleImporter):
         self._game_id: Optional[str] = None
         self._auto: List[bool] = []
         self._stopped: Optional[str] = None
+        self._finished = False
 
     def players(self, game: dict) -> Dict[int, str]:
         n = len(game.get("players") or [])
@@ -245,15 +247,22 @@ class Importer1867(TitleImporter):
         return int(game_seed(game))
 
     def load(self, game: dict) -> Tuple[Optional[list], Optional[str]]:
-        self._game_id, self._auto, self._stopped = str(game.get("id")), [], None
+        self._game_id, self._auto, self._stopped, self._finished = str(game.get("id")), [], None, False
         reason = scope_reason(game)
         if reason is not None:
             return None, reason
-        actions, auto, stopped, _ = replay_export(game)
+        actions, auto, stopped, raw = replay_export(game)
         if not actions:
             return None, "replay_rejected_at_start" if stopped else "no_actions"
-        self._auto, self._stopped = auto, stopped
+        self._auto, self._stopped, self._finished = auto, stopped, bool(raw.finished)
         return actions, None
+
+    def unfinished_reason(self, game: dict) -> Optional[str]:
+        """The loaded log stops at a rejected action, or ends before the game's end (a game ended early on the
+        site, abandoned, or archived mid-game); None when it reaches the end (``finished_only`` conversions)."""
+        if self._stopped:
+            return f"unfinished_replay_rejected: {self._stopped}"
+        return None if self._finished else "unfinished_record_ends"
 
     def is_decision(self, state, pos: int, action: dict) -> Tuple[bool, str]:
         """Auto-actions (programmed passes, the BuyCompanyPreloan auto-pass) and actions after the game's
