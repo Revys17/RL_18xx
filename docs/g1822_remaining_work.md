@@ -870,6 +870,27 @@ filtered).
 
 ### CA known issues
 
+* **Fixed 2026-11-14: lays on a destination hex** (a policy-gradient smoke game died on "216-1
+  is not legally rotated for 512"). The generator skips its apply filter for a corporation's
+  own lays, but `preprocess_action` picks a destination hex's destination tokens up BEFORE the
+  lay and the rotation check then reads the graph without them (Ruby HEAD in a strict replay
+  too; the Rust process mirrors it), so a corporation connected to its destination only
+  through its destination token was offered upgrades there that both engines refuse. Policy
+  self-play under the smoke's conditions (the SL smoke checkpoint at T 0.5 in every seat, 3-6
+  players, auction / mid-game / human starts), every generated lay applied at every position:
+  before the fix 2 of 64 games (85,416 positions) had such lays -- GT's M5 / M6 on Montreal
+  (AF12) and GTP's 512 on Prince Rupert (A7, 216-1) at all six rotations, the smoke's error;
+  Ruby HEAD replays both games with no divergence and rejects both moves. Such lays now go
+  through the apply filter (`g1822_ca_lay_picks_up_tokens`, the condition
+  `g1822_ca_preprocess_lay` acts on): the generator offers the lays Ruby's UI shows (its graph
+  still has the token) that the process accepts. After the fix: 199 policy games (266,138
+  positions), 0 refused lays. The CA scrape's 196,831 human decisions (both policies) offered
+  374 such lays at 58 decisions in 25 games (GTP on A7 246, PGE on D10 60, ICR on AH8 26, NTR /
+  GNWR on N16 28, GWR on Z28 10, GT on AF12 4); now none, and every other destination-hex lay
+  is unchanged (175,822 -> 175,448 lay moves).
+  Regression: `tests/test_g1822ca_legal_moves.py` on the two games
+  (`tests/fixtures/g1822_generator/`); checks: the ignored cargo tests
+  `every_generated_lay_applies` and `rl_path_keeps_state`, `BaseGame.g1822_refused_generated_moves`.
 * Router: one shortfall (above) and slow late positions — a CA pullman's
   bound lets every town count (towns are only bounded by 3d stops), so
   pullman / grain walks on the densest maps run long (up to ~20 s for one
