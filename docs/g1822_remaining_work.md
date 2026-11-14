@@ -226,9 +226,12 @@ president. Cases, and what the switch does with each:
 
 1. ~~Router speed/strength~~ done 2026-10-17 (router v2, see "Router"
    below and the numbers above).
-2. RL bridge: action layout and encoder for 1822 (the action families
-   above), behind `alphazero_bridge_ready()` (false today). See
-   `docs/rl_bridge_design.md`.
+2. RL bridge: ~~action layout~~ done 2026-11-13 (milestone A4: `1822-v1`,
+   `1822PNW-v1`, `1822MX-v1`, `1822CA-v1`, registry layouts over this
+   generator, `docs/rl_descriptors.md` §9; `rl_layout_kind` = Generator,
+   `rl_legal_indices` / `rl_decode_index` / `rl_apply_index` /
+   `rl_price_range`); the encoder is milestone B's (`rl_encoder_ready`
+   stays false). See `docs/rl_bridge_design.md`.
 3. Variants: 1822PNW, 1822MX and 1822CA done (see their sections); the
    1822CA scenarios (ERS / WRS) and 1822Africa / 1822MRS / 1822NRS would go
    the same way — `scripts/g1822_title_data.{rb,py}` generates the data module
@@ -406,8 +409,18 @@ The title uses the family default (`RESTRICTED`). PNW adds:
 
 ### PNW known issues
 
+* **Tile instance** (found by the RL layout's corpus check, 2026-11-13,
+  `docs/rl_descriptors.md` §9): the generator lays the lowest-numbered
+  free instance of a tile (`tile_instance_for`), Ruby's UI a fresh one;
+  in PNW an instance upgraded off the map keeps its builder cubes and
+  brings their discount back when laid again, so 10 of the scrape's
+  64,507 corporation lays cost $10 less by the generator's instance
+  (232649 @1168: the human laid 9-13, the generator offers 9-2). Both are
+  legal; the generator should offer the instance Ruby's UI offers.
 * The generator applies every PNW lay to a clone (no pre-validated fast
   path as in 1822): ~11 ms per state on average, Track 64 ms (1822: 47).
+  (2026-11-13, one process on the shared cores: 24.9 ms per human
+  decision on average, Track 141 ms, p99 0.6 s.)
 * The Ruby graph-cache emulation is entered only where Rust mirrors a full
   Ruby compute (the Merger round's connection checks); a graph Ruby
   caches elsewhere and later reads stale would still be fresh here (none

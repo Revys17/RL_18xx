@@ -142,7 +142,8 @@ vocabularies (a checkpoint older than an appended family).
    * **Price head** (every priced legal row): `MLP(W h_row + W_range range_features)` -> 24 cell logits,
      empty cells of the row's range at -1e4 before the log-softmax. The cell structure comes from the
      descriptor: `price_kind` -> `price_cell_types` ("Bid" ladder at the range's step, "BuyTrain" atoms
-     lo / hi / hi-1 + 20 bins, "BuyCompany" lo / hi + 8 bins; `amount` raises: no cells yet) and the range
+     lo / hi / hi-1 + 20 bins -- also `bid_range`'s and, since the 1822 family's layouts, `amount`'s --,
+     "BuyCompany" lo / hi + 8 bins) and the range
      from the state; `P(price) = softmax(nonempty cells)[cell] / |cell|`, exactly 1830's `price_pmf`.
      The range features are lo, hi, hi - lo and the step in units of the starting cash per player (the
      encoder's money unit), log1p(hi - lo), a degenerate-range flag and log1p(lo). Zero-initialized output
@@ -283,8 +284,10 @@ mixed batch takes five positions per (title, player count), covering tile lays, 
    grid, cells in step units: `price_cells_for(..., grid=True)`).
 2. **1867 rows** (settled by A2): the tests use the real 1867 layout. The model needs nothing
    title-specific beyond `descriptor_entity_base` and the tile table.
-3. **`amount` price kind** (1822 partial debt payoff) has no cell spec; `price_cells_for` raises. 1867 never
-   uses it (its loans are automatic); fix the cells from a price census when 1822's family lands.
+3. ~~**`amount` price kind** (1822 partial debt payoff) has no cell spec~~: settled by A4 -- "BuyTrain"
+   cells (atoms at the lowest payment, the highest -- 78% of human payments -- and one below it, 20 bins),
+   from the family's price census (`docs/rl_descriptors.md` §9); `test_amount_prices_have_cells`. A
+   checkpoint written while `amount` had no cells still loads (`load_checkpoint`'s vocabulary check).
 4. **Cost of very large legal sets** (settled 2026-11-13, "Model fit across titles"): the edge term in fact
    materialized `(lay rows, 6, d_model)` -- the neighbor tokens were gathered per row, then projected by a linear
    layer that saved them for its backward -- not `(lay rows, 6, d_edge)`. It now projects per hex first and
