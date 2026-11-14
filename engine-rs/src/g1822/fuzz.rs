@@ -556,3 +556,127 @@ fn clone_bench() {
         g.action_log.len()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Tile instances: the generator offers Ruby's UI's instance
+// ---------------------------------------------------------------------------
+
+/// Ruby's supply (`@tiles`) as a list, kept beside a walk: the initial
+/// instances (`init_tile`: `<name>-0..` in TILES order, one for an unlimited
+/// tile) and `update_tile_lists` at every lay (an unlimited tile adds an
+/// instance one past its highest, the laid instance leaves, the old tile --
+/// unless preprinted -- goes last). Ruby's UI offers the first instance of a
+/// name (`potential_tiles`' `uniq(&:name)`).
+struct SupplyModel {
+    tiles: Vec<String>,
+    unlimited: std::collections::HashSet<String>,
+    max_index: HashMap<String, u32>,
+}
+
+impl SupplyModel {
+    fn new(g: &BaseGame) -> SupplyModel {
+        let mut tiles = Vec::new();
+        let mut unlimited = std::collections::HashSet::new();
+        let mut max_index = HashMap::new();
+        for (name, count) in g.title_def().tile_counts() {
+            let n = if count == u32::MAX {
+                unlimited.insert(name.to_string());
+                1
+            } else {
+                count
+            };
+            for i in 0..n {
+                tiles.push(format!("{name}-{i}"));
+            }
+            max_index.insert(name.to_string(), n.saturating_sub(1));
+        }
+        SupplyModel { tiles, unlimited, max_index }
+    }
+
+    fn first(&self, name: &str) -> Option<&String> {
+        self.tiles.iter().find(|t| t.rsplit_once('-').map_or(false, |(b, _)| b == name))
+    }
+
+    /// A lay of `laid` replacing `old` (None: a preprinted tile).
+    fn lay(&mut self, laid: &str, old: Option<&str>) {
+        let name = laid.rsplit_once('-').map_or(laid, |(b, _)| b).to_string();
+        if self.unlimited.contains(&name) {
+            let m = self.max_index.entry(name.clone()).or_insert(0);
+            *m += 1;
+            self.tiles.push(format!("{name}-{m}"));
+        }
+        self.tiles.retain(|t| t != laid);
+        if let Some(o) = old {
+            self.tiles.push(o.to_string());
+        }
+    }
+}
+
+/// At every state of random walks (each title, both policies), every tile
+/// lay the generator offers uses the instance Ruby's UI would: the first of
+/// its name in the independently kept supply list ([`SupplyModel`]).
+fn instance_walks(title: &str, players: &[usize], seeds: std::ops::RangeInclusive<u64>, max: usize) -> (usize, usize) {
+    let (mut lays_checked, mut changed) = (0, 0);
+    for &p in players {
+        for seed in seeds.clone() {
+            let policy = if seed % 2 == 0 { CrossPlayerPolicy::RULES } else { CrossPlayerPolicy::RESTRICTED };
+            let mut g = new_game_titled(title, p, seed, diff_rules(title, seed));
+            let mut model = SupplyModel::new(&g);
+            let mut rng = Rng::new(seed ^ 0xA5A5);
+            for _ in 0..max {
+                if g.finished {
+                    break;
+                }
+                let moves = g.g1822_legal_moves_with(policy);
+                if moves.is_empty() {
+                    break;
+                }
+                for m in &moves {
+                    let crate::actions::Action::LayTile { tile_id, .. } = &m.action else { continue };
+                    let name = tile_id.rsplit_once('-').map_or(tile_id.as_str(), |(b, _)| b);
+                    if name == "BC" {
+                        continue;
+                    }
+                    let want = model.first(name);
+                    assert_eq!(Some(tile_id), want, "{title} {p}p seed {seed}: offered {tile_id}, Ruby's supply {want:?}");
+                    lays_checked += 1;
+                    // (the rule before 2026-11-14: the lowest-numbered
+                    // instance not on the map)
+                    let on_map: std::collections::HashSet<&str> = g.hexes.iter().map(|h| h.tile.id.as_str()).collect();
+                    let old_rule = (0..).map(|n| format!("{name}-{n}")).find(|id| !on_map.contains(id.as_str()));
+                    if old_rule.as_ref() != Some(tile_id) {
+                        changed += 1;
+                    }
+                }
+                let m = choose(&moves, &mut rng);
+                let lay = match &m.action {
+                    crate::actions::Action::LayTile { hex_id, tile_id, .. } if !tile_id.starts_with("BC") => {
+                        let hi = g.hex_idx[hex_id.as_str()];
+                        let old = &g.hexes[hi].tile;
+                        let old_base = old.name.split('-').next().unwrap_or(&old.name).to_string();
+                        let returns = !old.id.starts_with("preprinted_") && !old_base.is_empty() && old_base != *hex_id;
+                        Some((hi, returns.then(|| old.id.clone())))
+                    }
+                    _ => None,
+                };
+                if let Err(e) = g.g1822_apply_move(&m) {
+                    panic!("{title} {p}p seed {seed}: {:?} rejected: {e}", m.action);
+                }
+                if let Some((hi, old)) = lay {
+                    let laid = g.hexes[hi].tile.id.clone();
+                    model.lay(&laid, old.as_deref());
+                }
+            }
+        }
+    }
+    (lays_checked, changed)
+}
+
+#[test]
+fn offered_tile_instance_is_rubys() {
+    for (title, players) in [("1822", &[3usize, 5][..]), ("1822PNW", &[3, 4][..]), ("1822MX", &[4][..]), ("1822CA", &[4][..])] {
+        let (n, changed) = instance_walks(title, players, 301..=302, 2500);
+        eprintln!("{title}: {n} offered lays checked against Ruby's supply order ({changed} where the old rule differs)");
+        assert!(n > 0);
+    }
+}

@@ -1257,7 +1257,30 @@ impl BaseGame {
     // Tile lays
     // =====================================================================
 
+    /// The instance of tile `name` a lay offers: the one Ruby's UI offers,
+    /// the first of the name in the supply's order (`Tracker#potential_tiles`
+    /// keeps `@game.tiles.uniq(&:name)`): the initial instances still unlaid
+    /// in index order, then those appended since (`tile_supply_tail`: tiles
+    /// upgraded off the map -- in 1822PNW with their builder cubes --, an
+    /// unlimited tile's extras).
+    pub(crate) fn g1822_tile_instance_for(&self, name: &str) -> String {
+        self.tile_instance_for(name)
+    }
+
     fn tile_instance_for(&self, name: &str) -> String {
+        // instance ids are "<name>-<index>"
+        let index_of = |id: &str| id.strip_prefix(name).and_then(|r| r.strip_prefix('-')).and_then(|i| i.parse::<u32>().ok());
+        let on_map_idx: std::collections::HashSet<u32> = self.hexes.iter().filter_map(|h| index_of(&h.tile.id)).collect();
+        let tail = &self.g().tile_supply_tail;
+        let initial = self.g1822_initial_tile_count(name);
+        let in_tail: std::collections::HashSet<u32> = tail.iter().filter_map(|t| index_of(t)).collect();
+        if let Some(i) = (0..initial).find(|i| !on_map_idx.contains(i) && !in_tail.contains(i)) {
+            return format!("{name}-{i}");
+        }
+        if let Some(t) = tail.iter().find(|t| t.rsplit_once('-').map_or(false, |(b, _)| b == name)) {
+            return t.clone();
+        }
+        // (no instance in the supply: the lowest-numbered one off the map)
         let on_map: std::collections::HashSet<&str> = self.hexes.iter().map(|h| h.tile.id.as_str()).collect();
         for n in 0..10_000u32 {
             let id = format!("{name}-{n}");
@@ -1266,6 +1289,29 @@ impl BaseGame {
             }
         }
         format!("{name}-0")
+    }
+
+    /// How many instances of tile `name` the supply starts with (Ruby
+    /// `init_tile`: an unlimited tile starts with one).
+    fn g1822_initial_tile_count(&self, name: &str) -> u32 {
+        use std::sync::{Arc, Mutex, OnceLock};
+        type Counts = HashMap<&'static str, Arc<HashMap<String, u32>>>;
+        static COUNTS: OnceLock<Mutex<Counts>> = OnceLock::new();
+        let title = self.title_def().name();
+        let counts = COUNTS.get_or_init(Default::default).lock().ok().and_then(|m| m.get(title).cloned());
+        let counts = counts.unwrap_or_else(|| {
+            let c: Arc<HashMap<String, u32>> =
+                Arc::new(self.title_def().tile_counts().into_iter().map(|(n, k)| (n.to_string(), k)).collect());
+            if let Ok(mut m) = COUNTS.get_or_init(Default::default).lock() {
+                m.insert(title, Arc::clone(&c));
+            }
+            c
+        });
+        match counts.get(name).copied() {
+            Some(u32::MAX) => 1,
+            Some(k) => k,
+            None => 0,
+        }
     }
 
     /// Track step lays for the operating corporation.

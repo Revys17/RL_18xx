@@ -409,6 +409,15 @@ impl BaseGame {
         Ok(self.g1822_reference_diff_with(p))
     }
 
+    /// The instance of tile `name` the generator's lays offer (the first of
+    /// the name in Ruby's supply order; `scripts/g1822_tile_instance_check.py`).
+    fn g1822_offered_tile_instance(&self, name: &str) -> PyResult<String> {
+        if self.g1822.is_none() {
+            return Err(pyo3::exceptions::PyValueError::new_err("not an 1822-family game"));
+        }
+        Ok(self.g1822_tile_instance_for(name))
+    }
+
     /// The fast paths' pure helpers against their references on this state
     /// (neighbour map, every tokened corporation's graph): None, or the
     /// first difference.

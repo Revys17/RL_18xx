@@ -417,6 +417,14 @@ pub struct G1822State {
     pub borders: BTreeMap<String, Vec<(u8, i32, String)>>,
     /// Next instance index per unlimited tile name.
     pub tile_instances: BTreeMap<String, u32>,
+    /// Ruby `@tiles` past setup: the tile instances appended to the supply
+    /// since (`update_tile_lists`: a tile upgraded off the map, an
+    /// unlimited tile's extra instance), in order; one leaves when laid.
+    /// The supply's order is the initial instances still unlaid
+    /// (`<name>-0`, `-1`, ...), then these -- the instance of a name Ruby's
+    /// UI offers is the first (`potential_tiles`' `uniq(&:name)`).
+    #[serde(default)]
+    pub tile_supply_tail: Vec<String>,
     /// combo_entities of the action being processed.
     pub pending_combo: Vec<String>,
     /// `share_price` of the buy/sell action being processed.
@@ -1137,6 +1145,7 @@ impl BaseGame {
             lcdr_token_ability: true,
             borders: BTreeMap::new(),
             tile_instances: BTreeMap::new(),
+            tile_supply_tail: Vec::new(),
             pending_combo: Vec::new(),
             pending_share_price: None,
             round_passed_players: Vec::new(),

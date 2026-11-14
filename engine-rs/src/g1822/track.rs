@@ -622,7 +622,9 @@ impl BaseGame {
         let old_color = self.g1822_tile_color_name(hi);
         let old_name = self.hexes[hi].tile.name.clone();
         let old_base = old_name.split('-').next().unwrap_or(&old_name).to_string();
-        if !self.hexes[hi].tile.id.starts_with("preprinted_") && !old_base.is_empty() && old_base != hex_id {
+        let returns_old =
+            !self.hexes[hi].tile.id.starts_with("preprinted_") && !old_base.is_empty() && old_base != hex_id;
+        if returns_old {
             let n = self.tile_counts_remaining.entry(old_base).or_insert(0);
             if *n != u32::MAX {
                 *n += 1;
@@ -641,6 +643,7 @@ impl BaseGame {
             self.g1822_next_tile_instance(&base)
         };
         let old_tile_id = self.hexes[hi].tile.id.clone();
+        self.g1822_supply_lay(&base, &instance, remaining == u32::MAX, returns_old.then(|| old_tile_id.clone()));
         self.g1822_hex_lay(hi, &def, rotation, &instance)?;
         if pnw {
             // Tracker#lay_tile: a lay on an impassable colour opens it
@@ -718,6 +721,32 @@ impl BaseGame {
         }
         self.clear_graph_cache();
         Ok(())
+    }
+
+    /// Ruby `update_tile_lists`' effect on the supply's order
+    /// (`G1822State::tile_supply_tail`): an unlimited tile adds an instance
+    /// one past the highest of its name (`add_extra_tile`), the laid
+    /// instance leaves, the old tile -- unless preprinted -- goes last.
+    fn g1822_supply_lay(&mut self, base: &str, instance: &str, unlimited: bool, returned: Option<String>) {
+        if unlimited {
+            let index = |id: &str| {
+                id.rsplit_once('-').filter(|(b, _)| *b == base).and_then(|(_, i)| i.parse::<u32>().ok())
+            };
+            let max = self
+                .hexes
+                .iter()
+                .filter_map(|h| index(&h.tile.id))
+                .chain(self.g().tile_supply_tail.iter().filter_map(|t| index(t)))
+                .chain(index(instance))
+                .max()
+                .unwrap_or(0);
+            self.gm().tile_supply_tail.push(format!("{base}-{}", max + 1));
+        }
+        let tail = &mut self.gm().tile_supply_tail;
+        tail.retain(|t| t != instance);
+        if let Some(old) = returned {
+            tail.push(old);
+        }
     }
 
     fn g1822_next_tile_instance(&mut self, base: &str) -> String {
