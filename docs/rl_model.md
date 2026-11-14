@@ -133,6 +133,8 @@ vocabularies (a checkpoint older than an appended family).
        (neighbor exists, has track / a city, town or offboard on the facing edge, this hex's wall and border
        cost on the edge) + a direction vector. A rotation is then scored by what it connects to, which
        transfers across hexes and titles; 1830's rotation head (6 logits from the hex embedding) cannot.
+       The neighbor projection runs per hex before the lay rows gather it, for lay rows only (since
+       2026-11-13, "Model fit across titles": the same values as projecting each row's gathered tokens).
      Other map families (`PlaceToken`, `RemoveToken`: hex · city; `HexToken`: hex) have one row per key at
      the last level (log 1 = 0).
    * One **softmax over the position's legal rows** (`segment_log_softmax`) then balances map groups against
@@ -252,7 +254,11 @@ mixed batch takes five positions per (title, player count), covering tile lays, 
   (bid, train transfer and company purchase ranges) and the price loss is `-log P(price)`;
 * `test_build_inputs_checks_vocab`; `test_checkpoint_round_trip_and_refusals`;
 * `test_overfits_a_fixed_action_and_price`: the small model learns a fixed legal action (> 0.9) and a fixed
-  price cell (> 0.9) on eight 1830 positions (priced and tile-lay ones) in 300 Adam steps.
+  price cell (> 0.9) on eight 1830 positions (priced and tile-lay ones) in 300 Adam steps;
+* (2026-11-13) `test_edge_term_matches_the_reference` (the per-hex edge term = B2's original, values, policy and
+  gradients), `test_checkpointed_layers_match` (gradient checkpointing: the same outputs and gradients),
+  `test_g1822_family_positions` (1822, 1822PNW, 1822MX and 1822CA positions with stub tile-lay lists in one batch with
+  1830 / 1867 ones: finite outputs and gradients, every entity type's projection trained, padding inert).
 
 ## Departures from the design docs
 
@@ -279,17 +285,89 @@ mixed batch takes five positions per (title, player count), covering tile lays, 
    title-specific beyond `descriptor_entity_base` and the tile table.
 3. **`amount` price kind** (1822 partial debt payoff) has no cell spec; `price_cells_for` raises. 1867 never
    uses it (its loans are automatic); fix the cells from a price census when 1822's family lands.
-4. **Cost of very large legal sets**: the edge term materializes `(lay rows, 6, d_edge)`; at ~1,000 lays
-   per position and batch 64 that is ~12M floats. Fine for 1830 / 1867 (the random walks' legal lists stay
-   under ~150 rows; real tile-lay states reach a few thousand, design §2.6); for 1822CA-sized maps, compute it
-   per (hex, tile) for all six rotations at once.
-5. **Fusion bias memory** `(B, heads, E, H)`: ~20M floats per batch of 64 1822CA positions (E 138, H 279).
-   Fine on the GPU; a per-head low-rank form if it is not.
+4. **Cost of very large legal sets** (settled 2026-11-13, "Model fit across titles"): the edge term in fact
+   materialized `(lay rows, 6, d_model)` -- the neighbor tokens were gathered per row, then projected by a linear
+   layer that saved them for its backward -- not `(lay rows, 6, d_edge)`. It now projects per hex first and
+   computes lay rows only: the same values; what a lay row saves for the edge term is its exits (6 floats). The
+   remaining per-row cost (~16 KB a lay row in training) is the scorer's own projections and MLPs.
+5. **Fusion bias memory** `(B, heads, E, H)` (settled 2026-11-13): measured, it is not what makes 1822CA dear. The
+   bias itself is transient (not saved for the backward); the E x H attention maps the fusion saves are ~8% of
+   1822CA's activations. The cost is the hex streams (map layers + fusion at 279 hexes) and the map's H x H
+   attention; `model.checkpoint_layers` (gradient checkpointing) cuts 1822CA's activations by 72%. No low-rank form.
 6. **Sharing across titles** (design §4.2): the architecture shares everything except the id embeddings and
    the per-title tables; whether to train one model over several titles is still E0/E1's question.
 7. The per-type entity projections of the 1822 family's concession / minor-proxy types train only on 1822
    data; an 1830 / 1867 model leaves them at init (harmless, but a DDP run must set
    `find_unused_parameters`).
+
+## Model fit across titles (2026-11-13: the 1822 family, encoder v2)
+
+`scripts/bench_generic_model_fit.py` runs the **default-size** model (8.6M parameters) on random-walk positions of
+each title, each (title, mode) in its own process: a training step (forward + backward of the win / score /
+policy losses) and a no-grad forward, per position, with the bytes autograd saves for the backward (distinct
+storages, parameters excluded: the activation memory a training step holds) and the peak-RSS growth. CPU, fp32,
+2 threads, batch 32, mid / late-game positions (move 60 on), 4 players (1822CA 5), 2026-11-13 on the shared machine
+(timings +-20%). The 1822 family has no RL layout yet, so it runs the value path (`value_only`) and stub tile-lay
+lists (`--modes lays`: well-formed LayTile rows on random hexes, tiles and rotations of the title's tables).
+
+**Value path** (map encoder, entities, fusion, trunk, value heads):
+
+| title | hexes H | entities E | train ms / pos | infer ms / pos | saved MB / pos | peak RSS MB / pos |
+|---|---|---|---|---|---|---|
+| 1830 | 93 | 33 | 17.4 | 5.5 | 12.4 | 13.6 |
+| 1867 | 94 | 54 | 21.5 | 6.4 | 14.7 | 16.2 |
+| 1822 | 211 | 127 | 61.6 | 16.5 | 39.8 | 46.3 |
+| 1822PNW | 163 | 102 | 42.8 | 12.9 | 29.2 | 33.1 |
+| 1822MX | 130 | 108 | 34.1 | 12.4 | 25.2 | 28.0 |
+| 1822CA | 279 | 138 | 84.7 | 21.7 | 53.1 | 55.8 |
+
+With 1830's / 1867's real legal lists (109 / 84 rows a position) the full forward costs the same as the value path
+(1830 18.0 ms and 12.5 MB, 1867 21.4 ms and 14.7 MB): the legal-only heads are cheap at those sizes.
+
+So an 1822CA position costs ~4-5x an 1830 one in time and ~4.3x in activations -- the token counts (3x the hexes,
+4.2x the entities), not one component. Where 1822CA's activations go (8 positions, value path, by tensor shape): the
+map layers' H x H attention ~17%, the hex streams (B x H tokens through four map layers and two fusion rounds: linear
+inputs, feed-forward, q / k / v) ~40%, the fusion's E x H attention maps ~8%, the entity streams ~14%, E x E ~3%. The fusion bias
+`(B, heads, E, H)` that B2's open question 5 worried about is transient (not saved); a low-rank form would save little.
+On a GPU, a training batch of 64 1822CA positions holds ~3.4 GB of fp32 activations (1830: ~0.8 GB) before bf16
+autocast -- fine on the training GPUs, and the lever below if not.
+
+**Lay-heavy lists** (1,000 stub lays a position):
+
+| title | edge term | train ms / pos | infer ms / pos | saved MB / pos |
+|---|---|---|---|---|
+| 1830 | B2's (project each row's 6 gathered neighbor tokens) | 51.8 | 14.8 | 33.8 |
+| 1830 | per hex, lay rows only (now) | 42.5 | 12.1 | 28.0 |
+| 1867 | now | 47.6 | 13.2 | 30.2 |
+| 1822CA | B2's | 110.3 | 32.0 | 74.4 |
+| 1822CA | now | 112.1 | 32.1 | 68.7 |
+
+B2's edge term ran each lay row's six gathered neighbor tokens (d_model each) through `edge_tok`, which saved them
+for its backward: `rows x 6 x 256` floats, ~6 MB a position at 1,000 lays. `_edge_term` now projects every hex to
+`d_edge` once and gathers for lay rows only (non-lay map rows get 0, as before): the same values and gradients
+(`_edge_term_reference` keeps B2's form for the tests and `--edge-term reference`). The remaining ~16 KB a lay row
+(~4,000 floats) is the scorer's projections of its gathered entity / hex / tile tokens (ent0, ent1, via, hex ref,
+f1-f3 hex and tile: d_model each, saved by their linear layers) and the four MLPs. Projecting those per token before
+the gather would halve it for lay-heavy batches but costs more than it saves on the common short lists (a stock
+round's 20-100 rows against 279 hexes x 4 projections); not done.
+
+**Gradient checkpointing** (`model.checkpoint_layers = True`, a runtime switch like `value_stop_grad`, not saved
+in checkpoints): the map, entity and fusion attention blocks are recomputed in the backward instead of storing their
+activations. The same outputs and gradients (`test_checkpointed_layers_match`):
+
+| title | mode | train ms / pos | saved MB / pos | peak RSS MB / pos |
+|---|---|---|---|---|
+| 1830 | value | 20.5 (17.4 without) | 2.9 (12.4) | 4.8 |
+| 1822 | value | 73.5 (61.6) | 10.8 (39.8) | 16.7 |
+| 1822CA | value | 106.7 (84.7) | 14.7 (53.1) | 17.7 |
+| 1830 | 1,000 lays | 46.5 (42.5) | 18.5 (28.0) | 21.4 |
+| 1822CA | 1,000 lays | 137.0 (112.1) | 30.3 (68.7) | 37.1 |
+
+~1.2-1.25x the training time for 3.5-4x less activation memory. Off by default; turn it on for 1822CA-sized
+training batches if GPU memory binds.
+
+Tests: `test_edge_term_matches_the_reference`, `test_checkpointed_layers_match`, `test_g1822_family_positions`
+(above, "Tests").
 
 ## Supervised data and pretraining (milestone C1, 2026-11-13)
 

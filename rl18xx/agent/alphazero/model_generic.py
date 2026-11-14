@@ -1322,10 +1322,10 @@ class GenericPolicyValueModel(nn.Module):
 
         The neighbor tokens are projected to ``d_edge`` per hex *before* the lay rows gather them (a
         neighbor that is off the map reads the projection's bias, as the projection of a zero token did),
-        and only lay rows are computed: a lay row then costs ``6 x d_edge`` gathered floats, not ``6 x
-        d_model`` floats through a linear layer that saved them for its backward. Same values as
-        projecting after the gather (``_edge_term_reference``), ~8x less memory on lay-heavy lists
-        (1822CA-sized maps; ``docs/rl_model.md`` "Model fit across titles")."""
+        and only lay rows are computed: a lay row then gathers ``6 x d_edge`` floats and saves only its
+        exits, instead of ``6 x d_model`` floats through a linear layer that saved them for its backward
+        (~6 MB a position at 1,000 lays). Same values as projecting after the gather
+        (``_edge_term_reference``; ``docs/rl_model.md`` "Model fit across titles")."""
         rows, pos, meta = inputs["legal_rows"], inputs["legal_pos"], inputs["meta"]
         out = hexes.new_zeros(mr.shape[0], self.config.d_edge)
         lay = (rows[mr, C_FAMILY] == self.lay_family).nonzero(as_tuple=True)[0]
