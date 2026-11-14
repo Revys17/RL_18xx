@@ -449,18 +449,17 @@ impl BaseGame {
         }
 
         // bid boxes: minors, concessions, privates
+        // (shown in every round: the boxes the next stock round auctions)
         let mut bidbox = Vec::new();
-        if r.kind == crate::g1822::RoundKind::Stock {
-            let rows = [
-                (self.bidbox_minors(), fam.bidding_box_minor_count),
-                (self.bidbox_concessions(), fam.bidding_box_concession_count),
-                (self.bidbox_privates(), fam.bidding_box_private_count),
-            ];
-            for (row, (list, size)) in rows.into_iter().enumerate() {
-                let size = size.max(list.len()).max(1);
-                for (k, co) in list.into_iter().enumerate() {
-                    bidbox.push((co, k, size, row == 0 && k == 0));
-                }
+        let rows = [
+            (self.bidbox_minors(), fam.bidding_box_minor_count),
+            (self.bidbox_concessions(), fam.bidding_box_concession_count),
+            (self.bidbox_privates(), fam.bidding_box_private_count),
+        ];
+        for (row, (list, size)) in rows.into_iter().enumerate() {
+            let size = size.max(list.len()).max(1);
+            for (k, co) in list.into_iter().enumerate() {
+                bidbox.push((co, k, size, row == 0 && k == 0));
             }
         }
 
@@ -920,7 +919,6 @@ impl BaseGame {
             // -- version 2: the 1822 family's map state (0 elsewhere) ---------------
             match (ctx.fam.as_ref(), self.g1822.as_deref()) {
                 (Some(fs), Some(st)) => {
-                    use crate::g1822::ca::{EAST_PORTS, GRAIN_ELEVATORS, WEST_PORTS};
                     w.put(st.builder_cubes.get(&tile.id).copied().unwrap_or(0) as f32 / 2.0);
                     let (mut forest, mut n_assigned, mut bonus) = (false, 0usize, 0i32);
                     for (_, key) in fs.assignments.iter().filter(|a| a.0 == i) {
@@ -934,10 +932,10 @@ impl BaseGame {
                     w.flag(forest);
                     w.put(n_assigned as f32);
                     w.put(bonus as f32 / ms);
-                    let ca = self.g1822_is_ca();
-                    w.flag(ca && GRAIN_ELEVATORS.contains(&coord));
-                    w.flag(ca && WEST_PORTS.contains(&coord));
-                    w.flag(ca && EAST_PORTS.contains(&coord));
+                    let marks = spec.hex_marks[i];
+                    w.flag(marks & MARK_GRAIN != 0);
+                    w.flag(marks & MARK_PORT_WEST != 0);
+                    w.flag(marks & MARK_PORT_EAST != 0);
                     w.put(n_dest as f32 / 2.0);
                     w.put(n_coal as f32 / 2.0);
                     let sale = fs.tokens_for_sale.iter().filter(|t| t.0 == i).map(|t| t.1).max();
@@ -984,15 +982,8 @@ impl BaseGame {
             _ => None,
         };
         let bid_step = title.bid_price_step() as i32;
-        let bidbox: Vec<String> = match g1822 {
-            Some(_) => {
-                let mut v = self.bidbox_minors();
-                v.extend(self.bidbox_concessions());
-                v.extend(self.bidbox_privates());
-                v
-            }
-            None => Vec::new(),
-        };
+        // the 1822 family's bid boxes (minors, concessions, privates)
+        let bidbox: Vec<&str> = ctx.fam.as_ref().map_or(Vec::new(), |fs| fs.bidbox.iter().map(|b| b.0.as_str()).collect());
         // Standing bids per company (game index): (player, price).
         let company_bids = |gi: usize| -> Vec<(u32, i32)> {
             if let Some(a) = auction {

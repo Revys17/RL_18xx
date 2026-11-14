@@ -423,6 +423,127 @@ def test_value_only_matches_the_full_forward(mixed):
         assert torch.allclose(out["score"], full["score"], atol=1e-5)
 
 
+def test_edge_term_matches_the_reference(mixed):
+    """The rotation factor's edge term, projected per hex before the lay rows gather it and computed on
+    lay rows only, equals B2's original (projection after the gather, every map row): values, the policy
+    and the gradients."""
+    model = small_model(6)
+    for p in (model.edge_tok.bias, model.edge_raw.bias):  # an off-map neighbor reads the bias: make it count
+        torch.nn.init.normal_(p, std=0.5)
+    arrays, inputs = inputs_for(mixed)
+    assert (arrays["legal_rows"][:, mg.C_FAMILY] == FAM["LayTile"]).sum() > 20
+    outs, grads = [], []
+    for impl in (mg.GenericPolicyValueModel._edge_term, mg.GenericPolicyValueModel._edge_term_reference):
+        model.zero_grad()
+        model._edge_term = impl.__get__(model)
+        out = model(inputs)
+        out["logp"].sum().backward()
+        outs.append(out["logp"].detach())
+        grads.append([p.grad.clone() for p in (model.edge_tok.weight, model.edge_tok.bias, model.edge_dir)])
+    del model._edge_term
+    assert torch.allclose(outs[0], outs[1], atol=1e-5)
+    for a, b in zip(*grads):
+        assert torch.allclose(a, b, rtol=1e-4, atol=1e-6)
+    # the term itself, every map row (0 for non-lays)
+    with torch.no_grad():
+        out = model(inputs)
+        hexes = out["hexes"]
+        _, _, _, edge_raw = model._map_encoder(inputs, inputs["meta"][:, 0], inputs["ent_type"].shape[1])
+        mi = torch.arange(len(mixed))
+        new = model._edge_term(inputs, hexes, edge_raw, inputs["map_rows"], mi)
+        ref = model._edge_term_reference(inputs, hexes, edge_raw, inputs["map_rows"], mi)
+    assert new.shape == ref.shape and torch.allclose(new, ref, atol=1e-5)
+
+
+def test_checkpointed_layers_match(mixed):
+    """Gradient checkpointing of the attention blocks (``model.checkpoint_layers``): the same outputs and
+    gradients as storing the activations."""
+    model = small_model(8).train()
+    arrays, inputs = inputs_for(mixed)
+    results = []
+    for checkpoint in (False, True):
+        model.checkpoint_layers = checkpoint
+        model.zero_grad()
+        torch.manual_seed(0)  # _targets draws the score targets from torch's generator
+        out, losses = _all_losses(model, arrays, inputs)
+        sum(losses.values()).backward()
+        grads = {n: p.grad.clone() for n, p in model.named_parameters() if p.grad is not None}
+        results.append((out["logp"].detach(), out["win_logits"].detach(), grads))
+    (lp0, w0, g0), (lp1, w1, g1) = results
+    assert torch.equal(lp0, lp1) and torch.equal(w0, w1)
+    assert g0.keys() == g1.keys()
+    # the recomputed blocks' gradients may accumulate in another order: fp32 rounding only
+    for name in g0:
+        assert torch.allclose(g0[name], g1[name], rtol=1e-4, atol=1e-6), name
+
+
+def walk_1822_family(title: str, num_players: int, seed: int, steps: int = 240, every: int = 12) -> list:
+    from scripts.g1822_fuzz import pick as pick_1822
+
+    rng = random.Random(seed * 1_000_003 + num_players)
+    ids = {1000 + i + 1: f"Player {i + 1}" for i in range(num_players)}
+    game = engine_rs.BaseGame.new_titled(title, ids, None, seed)
+    positions = []
+    for step in range(steps):
+        if game.finished:
+            break
+        moves = json.loads(game.g1822_legal_moves_json(None))
+        if not moves:
+            break
+        if step % every == 0:
+            positions.append(game.pickle_clone())
+        game.process_action(dict(pick_1822(moves, rng)))
+    return positions
+
+
+def stub_lays(game, n: int, seed: int) -> mg.LegalActions:
+    """A well-formed stub legal list for a title without an RL layout yet: ``n`` tile lays (random hexes,
+    tiles and rotations of the title's tables) and a pass."""
+    rng = random.Random(seed)
+    info = spec_info(game.title)
+    rows = [
+        [FAM["LayTile"], mg.EK_CORPORATION, 0, -1, -1, -1, rng.randrange(info["num_hexes"]), -1,
+         rng.randrange(info["num_tiles"]), rng.randrange(6), -1, -1, -1, 0]
+        for _ in range(n)
+    ]  # fmt: skip
+    rows = np.unique(np.asarray(rows, dtype=np.int32), axis=0).tolist() + [[FAM["Pass"]] + [-1] * 12 + [0]]
+    rows = np.asarray(rows, dtype=np.int32)
+    return mg.LegalActions(rows=rows, price_range=np.full((len(rows), 3), -1, dtype=np.int64))
+
+
+def test_g1822_family_positions(mixed):
+    """1822, 1822PNW, 1822MX and 1822CA positions (encoder v2; stub tile-lay lists until the family's
+    layouts exist) in one batch with 1830 / 1867 ones: finite outputs and gradients, probabilities sum to
+    1, every entity type's projection trained, and a family position alone gives the same values as in
+    the padded mixed batch."""
+    family = []
+    for k, title in enumerate(("1822", "1822PNW", "1822MX", "1822CA")):
+        for n in (3, 5):
+            games = walk_1822_family(title, n, seed=k + n)
+            family += [(g, stub_lays(g, 40, seed=i)) for i, g in enumerate(games[-3:])]
+    items = mixed[:3] + mixed[-3:] + family
+    model = small_model(7).train()
+    arrays, inputs = inputs_for(items, model=model)
+    assert set(np.unique(arrays["meta"][:, 0])) == {1, 2, 3, 4, 5, 6}
+    out, losses = _all_losses(model, arrays, inputs)
+    for name, loss in losses.items():
+        assert torch.isfinite(loss), name
+    sum(losses.values()).backward()
+    sums = torch.zeros(len(items), dtype=torch.float64).index_add(0, inputs["legal_pos"], out["logp"].double().exp())
+    assert torch.allclose(sums, torch.ones_like(sums), atol=1e-4)
+    for key in ("entities", "hexes", "trunk", "win_logits", "score"):
+        assert torch.isfinite(out[key]).all(), key
+    for name, p in model.named_parameters():
+        assert p.grad is not None, name  # concessions and minor proxies included now
+        assert torch.isfinite(p.grad).all(), name
+    model.eval()
+    with torch.no_grad():
+        batch = model(inputs, value_only=True)
+        for i in (6, len(items) - 1):  # an 1822 and an 1822CA position alone
+            alone = model(mg.to_device(mg.build_inputs([items[i][0]])), value_only=True)
+            assert torch.allclose(alone["win_logits"][0], batch["win_logits"][i], atol=1e-4)
+
+
 def test_price_head_covers_every_legal_price(mixed):
     """``P(price) = P(cell) / |cell|`` sums to 1 over every integer of each priced row's legal range,
     and the price loss is ``-log P(price)``."""

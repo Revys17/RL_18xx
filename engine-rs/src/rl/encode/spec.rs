@@ -85,6 +85,9 @@ pub struct RlSpec {
     pub hex_neighbors: Vec<[i32; 6]>,
     /// Impassable edges.
     pub hex_walls: Vec<[bool; 6]>,
+    /// Static per-hex marks of a title's route bonuses: `MARK_GRAIN`,
+    /// `MARK_PORT_WEST`, `MARK_PORT_EAST` (1822CA's grain elevators and ports).
+    pub hex_marks: Vec<u8>,
 
     // -- entities ------------------------------------------------------------
     pub corps: Vec<CorpSpec>,
@@ -253,6 +256,23 @@ impl RlSpec {
                     w[e as usize % 6] = true;
                 }
                 w
+            })
+            .collect();
+
+        let is_ca = family.map_or(false, |f| f.variant == crate::g1822::family::Variant::Ca);
+        let hex_marks = hex_coords
+            .iter()
+            .map(|c| {
+                use crate::g1822::ca::{EAST_PORTS, GRAIN_ELEVATORS, WEST_PORTS};
+                let mut m = 0u8;
+                if is_ca {
+                    for (list, bit) in [(GRAIN_ELEVATORS, MARK_GRAIN), (WEST_PORTS, MARK_PORT_WEST), (EAST_PORTS, MARK_PORT_EAST)] {
+                        if list.contains(c) {
+                            m |= bit;
+                        }
+                    }
+                }
+                m
             })
             .collect();
 
@@ -538,6 +558,7 @@ impl RlSpec {
             hex_axial,
             hex_neighbors,
             hex_walls,
+            hex_marks,
             corps,
             trains,
             phases,
@@ -579,6 +600,11 @@ impl RlSpec {
         }
     }
 }
+
+/// `RlSpec::hex_marks` bits.
+pub const MARK_GRAIN: u8 = 1;
+pub const MARK_PORT_WEST: u8 = 2;
+pub const MARK_PORT_EAST: u8 = 4;
 
 pub(crate) fn color_of(name: &str) -> TileColor {
     match name {

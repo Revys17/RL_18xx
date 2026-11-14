@@ -43,6 +43,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
 from torch import Tensor
 
 from rl18xx.agent.alphazero import price_pmf
@@ -732,6 +733,10 @@ class GenericPolicyValueModel(nn.Module):
         g_cols = {name: k for k, name in enumerate(schema()["entity_features"]["global"])}
         self.starting_cash_col = g_cols["starting_cash"]
         self.value_stop_grad = False
+        #: Gradient checkpointing of the map, entity and fusion attention blocks (a runtime switch like
+        #: ``value_stop_grad``, not saved): the same values and gradients for less activation memory --
+        #: the lever for 1822CA-sized training batches (``docs/rl_model.md`` "Model fit across titles").
+        self.checkpoint_layers = False
 
         # -- static tables (rebuilt from the engine; not saved: the checkpoint's fingerprints guard them) --
         nt = c.num_titles
@@ -899,6 +904,14 @@ class GenericPolicyValueModel(nn.Module):
 
     # -- pieces ------------------------------------------------------------------------------------------
 
+    def _layer(self, layer: nn.Module, x: Tensor, context: Tensor, bias: Optional[Tensor], key_mask: Tensor) -> Tensor:
+        """One attention block; with ``self.checkpoint_layers`` and gradients on, its activations are
+        recomputed in the backward instead of stored (``torch.utils.checkpoint``: the same values and
+        gradients, less memory for large maps -- 1822CA -- at the cost of a second forward of the block)."""
+        if self.checkpoint_layers and torch.is_grad_enabled():
+            return torch.utils.checkpoint.checkpoint(layer, x, context, bias, key_mask, use_reentrant=False)
+        return layer(x, context, bias, key_mask)
+
     def _static_entities(self, titles: Tensor, num: int) -> Tensor:
         """(len(titles), num, d) static entity embeddings: (title, index) id + the title's static type."""
         index = torch.arange(num, device=titles.device)
@@ -975,7 +988,7 @@ class GenericPolicyValueModel(nn.Module):
         bias = bias + track[:, None] * self.track_bias[None, :, None, None]
         bias = bias + same[:, None] * self.same_corp_bias[None, :, None, None]
         for layer in self.map_layers:
-            x = layer(x, x, bias, hex_mask)
+            x = self._layer(layer, x, x, bias, hex_mask)
         x = self.map_out_norm(x) * hex_mask[..., None].to(x.dtype)
         # per-edge raw features for the rotation factor: neighbor exists / has track on the facing edge /
         # a stop on it, this hex's wall and border cost on the edge
@@ -1096,7 +1109,7 @@ class GenericPolicyValueModel(nn.Module):
         ent = ent + self.cond_tokens(cond)[:, None]
         rel_bias = self._relation_bias(inputs, e)
         for layer in self.entity_layers:
-            ent = layer(ent, ent, rel_bias, ent_mask)
+            ent = self._layer(layer, ent, ent, rel_bias, ent_mask)
 
         # 3. fusion: the acting entity's marks on the map, then entities <-> hexes
         acting = meta[:, 3]
@@ -1118,9 +1131,9 @@ class GenericPolicyValueModel(nn.Module):
         for ent_from_hex, hex_from_ent, ent_self in zip(
             self.fusion_ent_from_hex, self.fusion_hex_from_ent, self.fusion_ent_self
         ):
-            ent_next = ent_from_hex(ent, hexes, bias_eh, safe_hex_mask)
-            hexes = hex_from_ent(hexes, ent, bias_he, ent_mask)
-            ent = ent_self(ent_next, ent_next, rel_bias, ent_mask)
+            ent_next = self._layer(ent_from_hex, ent, hexes, bias_eh, safe_hex_mask)
+            hexes = self._layer(hex_from_ent, hexes, ent, bias_he, ent_mask)
+            ent = self._layer(ent_self, ent_next, ent_next, rel_bias, ent_mask)
         ent = self.ent_out_norm(ent) * inputs["ent_mask"][..., None].to(ent.dtype)
         hexes = self.hex_out_norm(hexes) * hex_mask[..., None].to(hexes.dtype)
 
@@ -1305,7 +1318,37 @@ class GenericPolicyValueModel(nn.Module):
 
     def _edge_term(self, inputs: dict, hexes: Tensor, edge_raw: Tensor, mr: Tensor, map_index: Tensor) -> Tensor:
         """Per map row: the sum over the edges a tile lay's track reaches (at its rotation) of the
-        neighbor across that edge (projected token + raw edge features + direction); 0 for non-lays."""
+        neighbor across that edge (projected token + raw edge features + direction); 0 for non-lays.
+
+        The neighbor tokens are projected to ``d_edge`` per hex *before* the lay rows gather them (a
+        neighbor that is off the map reads the projection's bias, as the projection of a zero token did),
+        and only lay rows are computed: a lay row then costs ``6 x d_edge`` gathered floats, not ``6 x
+        d_model`` floats through a linear layer that saved them for its backward. Same values as
+        projecting after the gather (``_edge_term_reference``), ~8x less memory on lay-heavy lists
+        (1822CA-sized maps; ``docs/rl_model.md`` "Model fit across titles")."""
+        rows, pos, meta = inputs["legal_rows"], inputs["legal_pos"], inputs["meta"]
+        out = hexes.new_zeros(mr.shape[0], self.config.d_edge)
+        lay = (rows[mr, C_FAMILY] == self.lay_family).nonzero(as_tuple=True)[0]
+        if lay.numel() == 0:
+            return out
+        r = mr[lay]
+        b = pos[r]
+        title = meta[b, 0]
+        hx = rows[r, C_HEX].clamp(min=0)
+        tile = rows[r, C_TILE].clamp(min=0)
+        rot = rows[r, C_ROT].clamp(0, 5)
+        exits = self.t_tile_exits[title, tile, rot]  # (L, 6)
+        nbr = self.t_hex_nbr[title, hx]  # (L, 6)
+        nbr_tok = _gather_tokens(self.edge_tok(hexes), b[:, None], nbr, self.edge_tok.bias)  # (L, 6, d_edge)
+        raw = self.edge_raw(edge_raw[map_index[b], hx])  # (L, 6, d_edge)
+        edge = nbr_tok + raw + self.edge_dir
+        return out.index_copy(0, lay, torch.einsum("nk,nkd->nd", exits, edge))
+
+    def _edge_term_reference(
+        self, inputs: dict, hexes: Tensor, edge_raw: Tensor, mr: Tensor, map_index: Tensor
+    ) -> Tensor:
+        """B2's original edge term (every map row, the projection after the gather): the tests' reference
+        for :meth:`_edge_term`."""
         rows, pos, meta = inputs["legal_rows"], inputs["legal_pos"], inputs["meta"]
         b = pos[mr]
         title = meta[b, 0]

@@ -698,15 +698,12 @@ fn g1822_family_v2_features() {
                         assert_eq!(enc.ent_feat[lot as usize * F_ENT + c], 1.0, "{ctx}: lot without the subject flag");
                     }
                     // a company is up for auction exactly when it sits in a bid box
-                    let in_sr = g.g1822.as_ref().unwrap().round.kind == crate::g1822::RoundKind::Stock;
                     for k in 0..spec.companies.len() {
                         let j = spec.e_company0 + k;
                         let f = &enc.ent_feat[j * F_ENT..(j + 1) * F_ENT];
                         let up = f[col(COMPANY_FEATURES, "up_for_auction")];
                         let slot = f[col(COMPANY_FEATURES, "bidbox_slot")];
-                        if in_sr {
-                            assert_eq!(up > 0.0, slot > 0.0, "{ctx}: {} up {up} slot {slot}", spec.companies[k].sym);
-                        }
+                        assert_eq!(up > 0.0, slot > 0.0, "{ctx}: {} up {up} slot {slot}", spec.companies[k].sym);
                         assert!((0.0..=1.0).contains(&slot));
                     }
                     // the player's net worth is the engine's score
@@ -973,17 +970,24 @@ fn time_per_position<F: FnMut(&BaseGame)>(games: &[BaseGame], reps: usize, mut f
 fn bench_encoders() {
     for (title, players) in [("1830", 4), ("1867", 4), ("1822", 4), ("1822PNW", 4), ("1822MX", 4), ("1822CA", 5)] {
         let games = collect_positions(title, players, 3, 1500);
+        // the first encoding of a fresh position (the 1822 family's step
+        // evaluation fills the game's graph memos), then again (warm: as after
+        // the move generator ran on the position, the pipeline's order)
+        let cold = time_per_position(&games, 1, |g| {
+            std::hint::black_box(g.encode_tokens());
+        });
         let tok = time_per_position(&games, 5, |g| {
             std::hint::black_box(g.encode_tokens());
         });
         let mut line = format!(
-            "{title} {players}p: {} positions, token encoder {:.1} us ({:.0}/s)",
+            "{title} {players}p: {} positions, token encoder {:.1} us ({:.0}/s), first encoding {:.1} us",
             games.len(),
             tok * 1e6,
-            1.0 / tok
+            1.0 / tok,
+            cold * 1e6
         );
         if g1822_family(title) {
-            // the part of an encoding that evaluates Ruby's active step
+            // the part of an encoding that evaluates Ruby's active step (warm)
             let st = time_per_position(&games, 5, |g| {
                 std::hint::black_box(g.g1822_active_step());
             });
