@@ -309,3 +309,250 @@ fn ca_random_walks_3_to_6_players() {
     eprintln!("1822CA fuzz: {total_moves} moves, {finished}/16 games finished");
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
 }
+
+// ---------------------------------------------------------------------------
+// Differential walks: the generator against the reference generator
+// ---------------------------------------------------------------------------
+
+/// What a differential walk saw.
+pub struct DiffReport {
+    pub states: usize,
+    pub moves_compared: usize,
+    pub finished: bool,
+    pub error: Option<String>,
+}
+
+/// A random walk under `policy` that compares, at every state, the
+/// generator with the reference generator ([`super::legal::reference`])
+/// under BOTH cross-player policies (`BaseGame::g1822_reference_diff_with`:
+/// sorted move lists, RL index rows, the state left as it was).
+pub fn diff_walk(
+    title: &str,
+    players: usize,
+    seed: u64,
+    rules: &[&str],
+    policy: CrossPlayerPolicy,
+    max_moves: usize,
+) -> DiffReport {
+    let mut g = new_game_titled(title, players, seed, rules);
+    let mut rng = Rng::new(seed ^ 0xA5A5);
+    let (mut states, mut compared) = (0, 0);
+    for n in 0..max_moves {
+        if g.finished {
+            return DiffReport { states, moves_compared: compared, finished: true, error: None };
+        }
+        states += 1;
+        if let Some(d) = g.g1822_graph_check_with() {
+            return DiffReport {
+                states,
+                moves_compared: compared,
+                finished: false,
+                error: Some(format!("{title} {players}p seed {seed} move {n}: {d}")),
+            };
+        }
+        for p in [CrossPlayerPolicy::RESTRICTED, CrossPlayerPolicy::RULES] {
+            let (k, diff) = g.g1822_reference_diff_with(p);
+            compared += k;
+            if let Some(d) = diff {
+                return DiffReport {
+                    states,
+                    moves_compared: compared,
+                    finished: false,
+                    error: Some(format!("{title} {players}p seed {seed} move {n} policy {p:?}: {d}")),
+                };
+            }
+        }
+        let moves = g.g1822_legal_moves_with(policy);
+        if moves.is_empty() {
+            let dead = ruby_dead_end(&mut g);
+            return DiffReport {
+                states,
+                moves_compared: compared,
+                finished: false,
+                error: (!dead).then(|| format!("{title} {players}p seed {seed} move {n}: no legal moves")),
+            };
+        }
+        let m = choose(&moves, &mut rng);
+        if let Err(e) = g.g1822_apply_move(&m) {
+            return DiffReport {
+                states,
+                moves_compared: compared,
+                finished: false,
+                error: Some(format!("{title} {players}p seed {seed} move {n}: {:?} rejected: {e}", m.action)),
+            };
+        }
+    }
+    DiffReport { states, moves_compared: compared, finished: g.finished, error: None }
+}
+
+/// The titles' player counts (the RL pipeline's: 1822 / CA 3-6, PNW / MX
+/// 3-5).
+fn diff_players(title: &str) -> Vec<usize> {
+    match title {
+        "1822PNW" | "1822MX" => vec![3, 4, 5],
+        _ => vec![3, 4, 5, 6],
+    }
+}
+
+/// The optional rules, alternated over seeds (1822+, MX's higher cert
+/// limit).
+fn diff_rules(title: &str, seed: u64) -> &'static [&'static str] {
+    match (title, seed % 2) {
+        ("1822", 0) => &["plus_expansion"],
+        ("1822MX", 0) => &["higher_cert_limit"],
+        _ => &[],
+    }
+}
+
+fn run_diff(title: &str, players: &[usize], seeds: std::ops::RangeInclusive<u64>, policy: CrossPlayerPolicy, max: usize) {
+    let mut failures = Vec::new();
+    let (mut states, mut moves, mut finished, mut walks) = (0, 0, 0, 0);
+    for &p in players {
+        for seed in seeds.clone() {
+            walks += 1;
+            let rules = diff_rules(title, seed);
+            match std::panic::catch_unwind(|| diff_walk(title, p, seed, rules, policy, max)) {
+                Ok(rep) => {
+                    states += rep.states;
+                    moves += rep.moves_compared;
+                    finished += rep.finished as usize;
+                    if let Some(e) = rep.error {
+                        failures.push(e);
+                    }
+                }
+                Err(e) => failures.push(format!("{title} {p}p seed {seed}: PANIC {}", panic_text(&e))),
+            }
+        }
+    }
+    eprintln!(
+        "{title} diff walks ({policy:?}): {walks} walks, {finished} finished, {states} states, {moves} moves compared \
+         (each state under both policies)"
+    );
+    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+}
+
+/// The generator's move lists equal the reference generator's at every
+/// state of three walks per title (4 players under the title's policy, the
+/// smallest and largest count under the rules'; both policies compared at
+/// every state). The long run (`g1822_diff_long`) covers every count.
+#[test]
+fn generator_matches_reference_1822() {
+    run_diff("1822", &[4], 101..=101, CrossPlayerPolicy::RESTRICTED, 3000);
+    run_diff("1822", &[3, 6], 102..=102, CrossPlayerPolicy::RULES, 3000);
+}
+
+#[test]
+fn generator_matches_reference_1822pnw() {
+    run_diff("1822PNW", &[4], 101..=101, CrossPlayerPolicy::RESTRICTED, 3000);
+    run_diff("1822PNW", &[3, 5], 102..=102, CrossPlayerPolicy::RULES, 3000);
+}
+
+#[test]
+fn generator_matches_reference_1822mx() {
+    run_diff("1822MX", &[4], 101..=101, CrossPlayerPolicy::RESTRICTED, 3000);
+    run_diff("1822MX", &[3, 5], 102..=102, CrossPlayerPolicy::RULES, 3000);
+}
+
+#[test]
+fn generator_matches_reference_1822ca() {
+    run_diff("1822CA", &[4], 101..=101, CrossPlayerPolicy::RESTRICTED, 3000);
+    run_diff("1822CA", &[3, 6], 102..=102, CrossPlayerPolicy::RULES, 3000);
+}
+
+/// The long differential run: `G1822_DIFF_TITLES` (default all four),
+/// `G1822_DIFF_SEEDS` seeds (default 5) from `G1822_DIFF_FIRST` (201) per
+/// player count (the rules' policy on seeds + 1000), `G1822_DIFF_POLICY`
+/// (`restricted` / `rules`; default both), `G1822_DIFF_PLAYERS` (default
+/// the title's), `G1822_DIFF_MOVES` (6000).
+/// `cargo test --release --no-default-features g1822_diff_long -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn g1822_diff_long() {
+    let env = |k: &str| std::env::var(k).ok();
+    let seeds: u64 = env("G1822_DIFF_SEEDS").and_then(|s| s.parse().ok()).unwrap_or(5);
+    let first: u64 = env("G1822_DIFF_FIRST").and_then(|s| s.parse().ok()).unwrap_or(201);
+    let max: usize = env("G1822_DIFF_MOVES").and_then(|s| s.parse().ok()).unwrap_or(6000);
+    let titles: Vec<String> = env("G1822_DIFF_TITLES")
+        .map(|s| s.split(',').map(str::to_string).collect())
+        .unwrap_or_else(|| ["1822", "1822PNW", "1822MX", "1822CA"].iter().map(|s| s.to_string()).collect());
+    for t in &titles {
+        let players: Vec<usize> = env("G1822_DIFF_PLAYERS")
+            .map(|s| s.split(',').filter_map(|x| x.parse().ok()).collect())
+            .unwrap_or_else(|| diff_players(t));
+        let pol = env("G1822_DIFF_POLICY");
+        if pol.as_deref() != Some("rules") {
+            run_diff(t, &players, first..=first + seeds - 1, CrossPlayerPolicy::RESTRICTED, max);
+        }
+        if pol.as_deref() != Some("restricted") {
+            run_diff(t, &players, first + 1000..=first + 1000 + seeds - 1, CrossPlayerPolicy::RULES, max);
+        }
+    }
+}
+
+/// Bench: what a validation clone costs, with and without the action log,
+/// at a late state of a walk (`G1822_CLONE_BENCH="title,players,seed,moves"`).
+#[test]
+#[ignore]
+fn clone_bench() {
+    let spec = std::env::var("G1822_CLONE_BENCH").unwrap_or_else(|_| "1822,4,1,1500".to_string());
+    let p: Vec<&str> = spec.split(',').collect();
+    let (title, players, seed, max): (&str, usize, u64, usize) =
+        (p[0], p[1].parse().unwrap(), p[2].parse().unwrap(), p[3].parse().unwrap());
+    let mut g = new_game_titled(title, players, seed, &[]);
+    let mut rng = Rng::new(seed ^ 0xA5A5);
+    for _ in 0..max {
+        if g.finished {
+            break;
+        }
+        let moves = g.g1822_legal_moves();
+        if moves.is_empty() {
+            break;
+        }
+        let m = choose(&moves, &mut rng);
+        let wire = g.g1822_move_wire(&m);
+        g.g1822_apply_move(&m).unwrap();
+        g.action_log.push(wire);
+    }
+    let n = 300;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        std::hint::black_box(g.clone_for_search());
+    }
+    let with_log = t.elapsed() / n;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        std::hint::black_box(g.clone_for_search_without_log());
+    }
+    let without = t.elapsed() / n;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        std::hint::black_box(g.hexes.clone());
+    }
+    let hexes = t.elapsed() / n;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        std::hint::black_box(g.g1822.clone());
+    }
+    let st = t.elapsed() / n;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        std::hint::black_box(g.g1822_graph_fast(&g.corporations[0].sym.clone()));
+    }
+    let graph = t.elapsed() / n;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        std::hint::black_box(g.g1822_graph_reference(&g.corporations[0].sym.clone()));
+    }
+    let graph_ref = t.elapsed() / n;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        std::hint::black_box(g.g1822_neighbors());
+    }
+    let nb = t.elapsed() / n;
+    eprintln!("graph reference walk {graph_ref:?}");
+    eprintln!(
+        "{title} {players}p after {} actions: clone {with_log:?}, without log {without:?} (hexes {hexes:?}, g1822 {st:?}); \
+         graph {graph:?}, neighbors {nb:?}",
+        g.action_log.len()
+    );
+}

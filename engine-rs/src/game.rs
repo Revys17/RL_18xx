@@ -555,6 +555,17 @@ impl BaseGame {
 
     /// Fast clone for MCTS search — shares immutable data via Arc.
     pub fn clone_for_search(&self) -> BaseGame {
+        self.clone_for_search_log(true)
+    }
+
+    /// [`BaseGame::clone_for_search`] without the JSON action log (empty
+    /// in the clone): for throwaway clones whose processing never reads the
+    /// log (the 1822 family generator's validation clones).
+    pub(crate) fn clone_for_search_without_log(&self) -> BaseGame {
+        self.clone_for_search_log(false)
+    }
+
+    fn clone_for_search_log(&self, log: bool) -> BaseGame {
         BaseGame {
             players: self.players.clone(),
             corporations: self.corporations.clone(),
@@ -590,7 +601,7 @@ impl BaseGame {
             } else {
                 self.recent_actions.clone()
             },
-            action_log: self.action_log.clone(),
+            action_log: if log { self.action_log.clone() } else { Vec::new() },
             game_end_triggered: self.game_end_triggered,
             bank_broken: self.bank_broken,
             final_turn: self.final_turn,

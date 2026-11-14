@@ -729,7 +729,7 @@ impl BaseGame {
 
     /// G1822 `upgrade_cost`: the hex's terrain upgrades minus the
     /// operator's matching tile_discount abilities (exact terrain match).
-    fn g1822_upgrade_cost(&self, hi: usize, operator: &str) -> i32 {
+    pub(crate) fn g1822_upgrade_cost(&self, hi: usize, operator: &str) -> i32 {
         let base = self.g1822_upgrade_cost_g1822(hi, operator);
         if self.g1822_is_mx() {
             // MX upgrade_cost: the builder cubes on the hex

@@ -158,3 +158,20 @@ impl Family {
         !c.is_empty() && c == x
     }
 }
+
+/// A static table's first row per key, as a hash index (the family's
+/// `hex_dsl` / `tile_dsl` lookups were linear scans of their tables --
+/// `Iterator::find`, i.e. the FIRST matching row -- on hot paths: the graph
+/// walk, the neighbour map). Built once per table.
+pub(crate) fn first_index(
+    cell: &'static std::sync::OnceLock<std::collections::HashMap<&'static str, usize>>,
+    keys: impl Iterator<Item = &'static str>,
+) -> &'static std::collections::HashMap<&'static str, usize> {
+    cell.get_or_init(|| {
+        let mut m = std::collections::HashMap::new();
+        for (i, k) in keys.enumerate() {
+            m.entry(k).or_insert(i);
+        }
+        m
+    })
+}

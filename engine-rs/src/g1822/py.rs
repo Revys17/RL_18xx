@@ -395,6 +395,52 @@ impl BaseGame {
         raises || broke_token
     }
 
+    /// The differential test of this state (`g1822::legal`
+    /// `g1822_reference_diff`): the fast generator's moves under `policy`
+    /// (None = the title's, "rules") against the reference generator's,
+    /// sorted, and at the RL index level; the state must be left as it was.
+    /// `(moves compared, None)` or the first difference.
+    #[pyo3(signature = (policy=None))]
+    fn g1822_reference_diff(&mut self, policy: Option<&str>) -> PyResult<(usize, Option<String>)> {
+        if self.g1822.is_none() {
+            return Err(pyo3::exceptions::PyValueError::new_err("not an 1822-family game"));
+        }
+        let p = crate::g1867::py::policy_of(self, policy)?;
+        Ok(self.g1822_reference_diff_with(p))
+    }
+
+    /// The fast paths' pure helpers against their references on this state
+    /// (neighbour map, every tokened corporation's graph): None, or the
+    /// first difference.
+    fn g1822_graph_check(&self) -> PyResult<Option<String>> {
+        if self.g1822.is_none() {
+            return Err(pyo3::exceptions::PyValueError::new_err("not an 1822-family game"));
+        }
+        Ok(self.g1822_graph_check_with())
+    }
+
+    /// Run this thread's 1822-family generator through the reference paths
+    /// (the code before the 2026-11-14 speed-ups) or the fast ones; returns
+    /// the previous setting. Every caller of the generator follows it
+    /// (`g1822_legal_moves_json`, the `rl_*` index API).
+    #[staticmethod]
+    fn g1822_set_reference_generator(on: bool) -> bool {
+        super::legal::reference::set(on)
+    }
+
+    /// Turn the generator's per-section profile on or off (process-wide;
+    /// `scripts/g1822_generator_profile.py`).
+    #[staticmethod]
+    fn g1822_profile(on: bool) {
+        super::prof::set_profiling(on);
+    }
+
+    /// The profile since the last call: `[(section, count, ns)]`; cleared.
+    #[staticmethod]
+    fn g1822_profile_take() -> Vec<(String, u64, u64)> {
+        super::prof::take()
+    }
+
     /// `(step, action type)` → "generated" or "replay-only: <reason>" for
     /// every pair an 1822 step can offer (the RL-readiness table).
     #[staticmethod]

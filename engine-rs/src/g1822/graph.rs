@@ -15,6 +15,7 @@
 //! `lanes:2` and P9's `b_lane` paths reach hexes one merged path cannot.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +37,18 @@ pub struct Node {
 }
 
 pub(crate) type PathRef = (usize, usize);
+
+/// Ruby `hex.neighbors` of every hex: hex index -> (edge -> neighbour).
+pub(crate) type Neighbors = HashMap<usize, BTreeMap<u8, usize>>;
+
+/// The static part of the 1822 / 1822CA neighbour map: every adjacency
+/// entry (hex, edge, neighbour) the map keeps for some state, with whether
+/// the neighbour's PREPRINTED colour is impassable (then the entry needs the
+/// neighbour's current tile to have track towards the hex).
+pub(crate) struct NeighborTable {
+    hexes: usize,
+    entries: Vec<(usize, u8, usize, bool)>,
+}
 
 /// What Ruby's Graph#compute produces for one corporation.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -107,7 +120,7 @@ pub(crate) fn lane_specs(attrs: &str) -> Vec<LaneSpec> {
 /// `lane_match_different_sizes?`: the narrower side, centred by
 /// (wide − narrow) / 2, against the wider one inverted — 1822CA's 2-lane
 /// paths meeting 1-lane track. 1822PNW keeps equal widths only).
-fn lane_match(l0: (u8, u8), l1: (u8, u8), sizes: bool) -> bool {
+pub(crate) fn lane_match(l0: (u8, u8), l1: (u8, u8), sizes: bool) -> bool {
     if l1.0 == l0.0 {
         return l1.1 == l0.0 - l0.1 - 1;
     }
@@ -376,6 +389,111 @@ fn path_walk(
     }
 }
 
+/// Memoised graph computations while the generator runs (the fast path
+/// installs it for a whole `g1822_legal_moves_with` call): the generator
+/// computes a corporation's graph many times on one state (gates, lays,
+/// tokens, company lays), and each validation clone of that state again
+/// (`clone_for_search` starts with no cache), and a tile lay's clone
+/// computes its new map's graph twice (`check_track_restrictions!`, the
+/// route latch). [`BaseGame::g1822_graph_fresh`] is a pure function of
+/// (the title's static data, the corporation, the hexes -- tiles, paths,
+/// tokens --, PNW / MX's opened neighbour links): a memoised result is
+/// handed out only for inputs EQUAL to the ones it was computed from (the
+/// hexes compared in full), so it is the graph the caller would have
+/// computed. Two maps are kept: the first one seen (the state's) and the
+/// latest other one. Only active while a [`graph_memo::Guard`] lives
+/// (thread-local): never for replay or the reference generator.
+pub mod graph_memo {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use super::CorpGraph;
+    use crate::game::BaseGame;
+    use crate::graph::Hex;
+
+    struct MapMemo {
+        hexes: Vec<Hex>,
+        opened: Vec<(usize, u8, usize)>,
+        graphs: Vec<(String, CorpGraph)>,
+    }
+
+    struct Memo {
+        /// The game's static hex index (only compared by address: the
+        /// game's `Arc`, shared by its clones).
+        hex_idx: *const HashMap<String, usize>,
+        maps: Vec<MapMemo>,
+    }
+
+    thread_local! {
+        static MEMO: RefCell<Option<Memo>> = const { RefCell::new(None) };
+    }
+
+    /// While the guard lives, graph computations of the game's clones are
+    /// memoised; dropping it restores the previous memo.
+    pub struct Guard(Option<Memo>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            MEMO.with(|m| *m.borrow_mut() = prev);
+        }
+    }
+
+    /// Install a memo for `game` and its clones.
+    pub fn install(game: &BaseGame) -> Guard {
+        let memo = Memo { hex_idx: &*game.hex_idx, maps: Vec::new() };
+        Guard(MEMO.with(|m| m.borrow_mut().replace(memo)))
+    }
+
+    /// `compute()` (= the corporation's fresh graph on `game`), or the
+    /// memoised result for equal inputs.
+    pub fn get_or(game: &BaseGame, corp: &str, compute: impl FnOnce() -> CorpGraph) -> CorpGraph {
+        let opened: &[(usize, u8, usize)] = &game.g().opened_neighbors;
+        // None: no memo for this game; Some(i): map i; Some(usize::MAX): a
+        // new map
+        let slot = MEMO.with(|m| {
+            m.borrow().as_ref().and_then(|memo| {
+                if !std::ptr::eq(memo.hex_idx, &*game.hex_idx) {
+                    return None;
+                }
+                Some(
+                    memo.maps
+                        .iter()
+                        .position(|e| e.opened.as_slice() == opened && e.hexes.as_slice() == game.hexes.as_slice())
+                        .unwrap_or(usize::MAX),
+                )
+            })
+        });
+        let Some(slot) = slot else { return compute() };
+        if slot != usize::MAX {
+            let hit = MEMO.with(|m| {
+                m.borrow().as_ref().and_then(|memo| {
+                    memo.maps[slot].graphs.iter().find(|(c, _)| c == corp).map(|(_, g)| g.clone())
+                })
+            });
+            if let Some(g) = hit {
+                super::super::prof::count(|| "graph_memo:hit".into());
+                return g;
+            }
+        }
+        let g = compute();
+        MEMO.with(|m| {
+            if let Some(memo) = m.borrow_mut().as_mut() {
+                if slot == usize::MAX {
+                    let e = MapMemo { hexes: game.hexes.clone(), opened: opened.to_vec(), graphs: Vec::new() };
+                    if memo.maps.len() < 2 {
+                        memo.maps.push(e);
+                    } else {
+                        memo.maps[1] = e;
+                    }
+                }
+                let i = if slot == usize::MAX { memo.maps.len() - 1 } else { slot };
+                memo.maps[i].graphs.push((corp.to_string(), g.clone()));
+            }
+        });
+        g
+    }
+}
+
 impl BaseGame {
     /// The token cities of `corp` (Ruby `Game#city_tokened_by?`).
     pub(crate) fn g1822_token_nodes(&self, corp: &str) -> Vec<Node> {
@@ -423,6 +541,24 @@ impl BaseGame {
 
     /// Ruby Graph#compute(corporation) on the current map.
     pub(crate) fn g1822_graph_fresh(&self, corp: &str) -> CorpGraph {
+        graph_memo::get_or(self, corp, || {
+            let t = super::prof::start();
+            let g = self.g1822_graph_fresh_inner(corp);
+            super::prof::stop(t, || "graph:fresh".into());
+            g
+        })
+    }
+
+    fn g1822_graph_fresh_inner(&self, corp: &str) -> CorpGraph {
+        if !super::legal::reference::on() {
+            return self.g1822_graph_fast(corp);
+        }
+        self.g1822_graph_reference(corp)
+    }
+
+    /// The reference graph walk (`graph.rs`'s port of Ruby's
+    /// `Graph#compute`): the fast path `fastgraph.rs` must give the same.
+    pub(crate) fn g1822_graph_reference(&self, corp: &str) -> CorpGraph {
         let neighbors = self.g1822_neighbors();
         let ctx = Ctx::new(self, corp, &neighbors);
         let mut hexes: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
@@ -537,7 +673,112 @@ impl BaseGame {
     /// Ruby `hex.neighbors` (connect_hexes): adjacency minus neighbors of an
     /// impassable colour (gray/red/blue) that don't target the hex, minus
     /// edges behind the hex's OWN impassable borders (asymmetric, as Ruby).
-    pub(crate) fn g1822_neighbors(&self) -> HashMap<usize, BTreeMap<u8, usize>> {
+    pub(crate) fn g1822_neighbors(&self) -> Arc<Neighbors> {
+        let t = super::prof::start();
+        let n = if super::legal::reference::on() {
+            Arc::new(self.g1822_neighbors_inner())
+        } else {
+            self.g1822_neighbors_fast()
+        };
+        super::prof::stop(t, || "neighbors".into());
+        n
+    }
+
+    /// [`BaseGame::g1822_neighbors`] from a per-title table of the static
+    /// part, memoised (thread-local) by the dynamic part: whether each
+    /// impassable-coloured neighbour's CURRENT tile has track towards the
+    /// hex (1822, CA), the links lays opened (PNW, MX). The table holds
+    /// exactly the adjacency entries the reference walk keeps whatever the
+    /// tiles (walls and missing hexes dropped), so the map built from it is
+    /// the reference's for every state of the title.
+    fn g1822_neighbors_fast(&self) -> Arc<Neighbors> {
+        thread_local! {
+            static LAST: std::cell::RefCell<Option<(&'static str, Vec<bool>, Vec<(usize, u8, usize)>, Arc<Neighbors>)>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        let title = self.title_def().name();
+        if self.g1822_is_pnw() || self.g1822_is_mx() {
+            let opened = &self.g().opened_neighbors;
+            let hit = LAST.with(|l| {
+                l.borrow()
+                    .as_ref()
+                    .filter(|(t, k, o, _)| *t == title && k.is_empty() && o == opened)
+                    .map(|(_, _, _, n)| Arc::clone(n))
+            });
+            if let Some(n) = hit {
+                return n;
+            }
+            let n = Arc::new(self.g1822_pnw_neighbors());
+            LAST.with(|l| *l.borrow_mut() = Some((title, Vec::new(), opened.clone(), Arc::clone(&n))));
+            return n;
+        }
+        let table = self.g1822_neighbor_table();
+        if table.hexes != self.hexes.len() {
+            return Arc::new(self.g1822_neighbors_inner());
+        }
+        let targets = |ni: usize, dir: u8| {
+            let inv = (dir + 3) % 6;
+            self.hexes[ni].tile.paths.iter().any(|p| p.a.edge_num() == Some(inv) || p.b.edge_num() == Some(inv))
+        };
+        let key: Vec<bool> = table.entries.iter().filter(|e| e.3).map(|e| targets(e.2, e.1)).collect();
+        let hit = LAST.with(|l| {
+            l.borrow()
+                .as_ref()
+                .filter(|(t, k, o, _)| *t == title && o.is_empty() && *k == key)
+                .map(|(_, _, _, n)| Arc::clone(n))
+        });
+        if let Some(n) = hit {
+            return n;
+        }
+        let mut out: Neighbors = (0..self.hexes.len()).map(|hi| (hi, BTreeMap::new())).collect();
+        let mut j = 0;
+        for &(hi, dir, ni, impassable) in &table.entries {
+            if impassable {
+                j += 1;
+                if !key[j - 1] {
+                    continue;
+                }
+            }
+            out.get_mut(&hi).expect("every hex has an entry").insert(dir, ni);
+        }
+        let n = Arc::new(out);
+        LAST.with(|l| *l.borrow_mut() = Some((title, key, Vec::new(), Arc::clone(&n))));
+        n
+    }
+
+    /// The static part of the 1822 / CA neighbour map (see
+    /// [`BaseGame::g1822_neighbors_fast`]): one table per title.
+    fn g1822_neighbor_table(&self) -> Arc<NeighborTable> {
+        use std::sync::{Mutex, OnceLock};
+        static TABLES: OnceLock<Mutex<HashMap<&'static str, Arc<NeighborTable>>>> = OnceLock::new();
+        let title = self.title_def().name();
+        if let Some(t) = TABLES.get_or_init(Default::default).lock().ok().and_then(|m| m.get(title).cloned()) {
+            return t;
+        }
+        let walls = self.g1822_impassable_edges();
+        let mut entries = Vec::new();
+        for (hi, hex) in self.hexes.iter().enumerate() {
+            let Some(adj) = self.hex_adjacency.get(&hex.id) else { continue };
+            let mut dirs: Vec<(&u8, &String)> = adj.iter().collect();
+            dirs.sort();
+            for (&dir, nid) in dirs {
+                let Some(&ni) = self.hex_idx.get(nid) else { continue };
+                if walls.get(&hex.id).map_or(false, |w| w.contains(&dir)) {
+                    continue;
+                }
+                let impassable = (self.fam().hex_dsl)(&self.hexes[ni].id)
+                    .map_or(false, |(_, c)| matches!(c, "gray" | "red" | "blue"));
+                entries.push((hi, dir, ni, impassable));
+            }
+        }
+        let t = Arc::new(NeighborTable { hexes: self.hexes.len(), entries });
+        if let Ok(mut m) = TABLES.get_or_init(Default::default).lock() {
+            m.insert(title, Arc::clone(&t));
+        }
+        t
+    }
+
+    fn g1822_neighbors_inner(&self) -> HashMap<usize, BTreeMap<u8, usize>> {
         if self.g1822_is_pnw() || self.g1822_is_mx() {
             return self.g1822_pnw_neighbors();
         }

@@ -191,11 +191,15 @@ pub fn tile_catalog() -> Arc<HashMap<String, TileDef>> {
 
 /// The tile DSL for a catalog id: (DSL, color).
 pub fn tile_dsl(id: &str) -> Option<(&'static str, &'static str)> {
-    data::TILES.iter().find(|(t, _, _, _, _)| *t == id).map(|(_, _, c, d, _)| (*d, *c))
+    static IDX: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+    let idx = crate::g1822::family::first_index(&IDX, data::TILES.iter().map(|(t, _, _, _, _)| *t));
+    idx.get(id).map(|&i| (data::TILES[i].3, data::TILES[i].2))
 }
 
 pub fn hex_dsl(coord: &str) -> Option<(&'static str, &'static str)> {
-    data::HEX_DSL.iter().find(|(c, _, _)| *c == coord).map(|(_, d, col)| (*d, *col))
+    static IDX: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+    let idx = crate::g1822::family::first_index(&IDX, data::HEX_DSL.iter().map(|(c, _, _)| *c));
+    idx.get(coord).map(|&i| (data::HEX_DSL[i].1, data::HEX_DSL[i].2))
 }
 
 /// A hex's `future_label=label:L,color:C` (label, colour).

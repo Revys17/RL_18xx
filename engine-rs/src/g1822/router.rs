@@ -28,7 +28,7 @@
 //! Lanes: a `lanes:2` path is two Ruby paths; the engine keeps one, so a
 //! track key's capacity is its lane count.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use crate::actions::RouteData;
 use crate::game::BaseGame;
@@ -207,7 +207,7 @@ impl CaR {
 struct Ctx<'a> {
     g: &'a BaseGame,
     corp: &'a str,
-    neighbors: HashMap<usize, BTreeMap<u8, usize>>,
+    neighbors: std::sync::Arc<super::graph::Neighbors>,
     /// Lane width of a path at one of its edges, (hex, path, edge) → width
     /// (only > 1 is stored): `lanes:N` at both ends; 1822PNW also reads
     /// `a_lane` / `b_lane` (Route#check_overlap keys track by lane).
@@ -786,7 +786,10 @@ impl BaseGame {
     /// The best run for `c`'s route trains: (RouteData per train run,
     /// total revenue incl. the destination bonus).
     pub(crate) fn g1822_best_routes(&self, c: &str) -> (Vec<RouteData>, i32) {
-        self.g1822_best_routes_v2(c)
+        let t = super::prof::start();
+        let r = self.g1822_best_routes_v2(c);
+        super::prof::stop(t, || "router".into());
+        r
     }
 
     /// The pre-2026-10-17 router (one walk bounded by the widest train,
@@ -2522,6 +2525,17 @@ impl<'r> KWalk<'r> {
                 p
             }
             _ => {
+                // (every kind but E prices a route at its stops' revenue
+                // and the destination bonus -- `self.rev`, `self.bonus` --
+                // and the grain / sawmill extras are at most `ca_caps`: a
+                // route that cannot reach the threshold even so is dropped
+                // below anyway, so skip pricing it)
+                if self.kind != Kind::E
+                    && self.rev + px + self.bonus + pm + pl + self.ca_caps.0 + self.ca_caps.1 < thr
+                    && !super::legal::reference::on()
+                {
+                    return;
+                }
                 if self.kind == Kind::E {
                     // both ends tokened, unless the Channel exception
                     let (a, b) = (self.stops[0], *self.stops.last().unwrap());
@@ -2669,6 +2683,7 @@ impl BaseGame {
         // one kind's walk (+ the E tours / single-city local runs):
         // (list, routes, list cut or walk exhausted, best-single bound)
         let walk = |k: Kind, thr: i32, cap: usize| -> (KindList, Vec<Walked>, bool, i32) {
+            let t_walk = std::time::Instant::now();
             let mut w = KWalk::new(self, &ctx, &rg, k, thr, cap);
             w.run();
             if k == Kind::E {
@@ -2725,7 +2740,7 @@ impl BaseGame {
             stats::WALK_STEPS.fetch_add(w.steps, Relaxed);
             if router_debug() {
                 eprintln!(
-                    "  walk {:?} thr {} cap {}: steps {} exhausted {} kept {} best {:?} nodes {} segs {}",
+                    "  walk {:?} thr {} cap {}: steps {} exhausted {} kept {} best {:?} nodes {} segs {} ({:?})",
                     k,
                     thr,
                     cap,
@@ -2734,7 +2749,8 @@ impl BaseGame {
                     w.list.len(),
                     w.list.first().map(|l| l.0),
                     rg.nodes.len(),
-                    rg.segs.len()
+                    rg.segs.len(),
+                    t_walk.elapsed()
                 );
             }
             if w.exhausted {
@@ -2943,6 +2959,31 @@ impl BaseGame {
             }
             dense.push(v);
         }
+        // The fast path's layout: each kind's routes in list order (the
+        // search scans a list front to back) with their track as a bitset
+        // (`fits`: some track already at capacity = the bitset meets the
+        // `full` set) -- the same search, cheaper per step.
+        let fast = !super::legal::reference::on();
+        let words = caps.len().div_ceil(64).max(1);
+        let ordered: Vec<OrderedKind> = if fast {
+            lists
+                .iter()
+                .zip(&dense)
+                .map(|((list, _), d)| {
+                    let mut bits = vec![0u64; list.len() * words];
+                    let mut ml = Vec::with_capacity(list.len());
+                    for (pi, e) in list.iter().enumerate() {
+                        for &k in &d[e.3].track {
+                            bits[pi * words + k as usize / 64] |= 1u64 << (k % 64);
+                        }
+                        ml.push((d[e.3].mill, d[e.3].lumber));
+                    }
+                    OrderedKind { bits, ml }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let kind_of: Vec<usize> = kinds.iter().map(|k| distinct.iter().position(|d| d == k).unwrap()).collect();
         let nt = kinds.len();
         let max_rev: Vec<i32> = (0..nt)
@@ -2987,8 +3028,16 @@ impl BaseGame {
             half: half.to_vec(),
             steps: 0,
             budget: if self.g1822_is_ca() { COMBO_BUDGET_CA } else { u64::MAX },
+            fast,
+            words,
+            ordered: &ordered,
+            full_normal: vec![0u64; words],
+            full_e: vec![0u64; words],
         };
         c.search(0, 0, [0; 3], (0, 0));
+        if router_debug() {
+            eprintln!("  combine: {} search steps (budget {})", c.steps, c.budget);
+        }
         (c.best_pick, c.best)
     }
 }
@@ -3040,6 +3089,20 @@ struct Combo<'s> {
     /// the exact search slow; the best found so far stands).
     steps: u64,
     budget: u64,
+    /// The fast path (not the reference): `ordered` + the `full` bitsets.
+    fast: bool,
+    words: usize,
+    ordered: &'s [OrderedKind],
+    /// Track ids at capacity (`used >= caps`), per train type.
+    full_normal: Vec<u64>,
+    full_e: Vec<u64>,
+}
+
+/// A kind's routes in its list's order: each one's track bitset (`words`
+/// u64 per route) and its (mill, lumber baron) bonuses.
+struct OrderedKind {
+    bits: Vec<u64>,
+    ml: Vec<(i32, i32)>,
 }
 
 /// 1822MX `(revenue / 2).round(-1)` (Integer#round: half up).
@@ -3049,11 +3112,29 @@ pub(crate) fn half_revenue(r: i32) -> i32 {
 }
 
 impl Combo<'_> {
+    /// [`Combo::fits`] for the route at list position `pi` of kind `ki`:
+    /// the first check (some track of the route already at capacity) on
+    /// the bitsets; the rest as `fits`.
+    fn fits_fast(&self, t: usize, ki: usize, pi: usize, r: &CRoute) -> bool {
+        let full = if self.e[t] { &self.full_e } else { &self.full_normal };
+        let w = self.words;
+        let bits = &self.ordered[ki].bits[pi * w..(pi + 1) * w];
+        if bits.iter().zip(full).any(|(a, b)| a & b != 0) {
+            return false;
+        }
+        self.fits_rest(t, r)
+    }
+
     fn fits(&self, t: usize, r: &CRoute) -> bool {
         let used = if self.e[t] { &self.used_e } else { &self.used_normal };
         if r.track.iter().any(|&k| used[k as usize] >= self.caps[k as usize]) {
             return false;
         }
+        self.fits_rest(t, r)
+    }
+
+    fn fits_rest(&self, t: usize, r: &CRoute) -> bool {
+        let used = if self.e[t] { &self.used_e } else { &self.used_normal };
         if r.multi && r.track.iter().any(|&k| {
             used[k as usize] + r.track.iter().filter(|&&x| x == k).count() as u8 > self.caps[k as usize]
         }) {
@@ -3066,12 +3147,21 @@ impl Combo<'_> {
     }
 
     fn apply(&mut self, t: usize, r: &CRoute, add: bool) {
-        let used = if self.e[t] { &mut self.used_e } else { &mut self.used_normal };
+        let (used, full) =
+            if self.e[t] { (&mut self.used_e, &mut self.full_e) } else { (&mut self.used_normal, &mut self.full_normal) };
         for &k in &r.track {
             if add {
                 used[k as usize] += 1;
             } else {
                 used[k as usize] -= 1;
+            }
+            if self.fast {
+                let (wi, bit) = (k as usize / 64, 1u64 << (k % 64));
+                if used[k as usize] >= self.caps[k as usize] {
+                    full[wi] |= bit;
+                } else {
+                    full[wi] &= !bit;
+                }
             }
         }
         if self.local[t] {
@@ -3115,12 +3205,18 @@ impl Combo<'_> {
             if self.steps > self.budget {
                 return;
             }
-            let r = &dense[ki][ri];
-            let nb = bmax(bonus, [b, r.mill, r.lumber]);
+            let (mill, lumber) = if self.fast {
+                self.ordered[ki].ml[pi]
+            } else {
+                let r = &dense[ki][ri];
+                (r.mill, r.lumber)
+            };
+            let nb = bmax(bonus, [b, mill, lumber]);
             if revenue + rev + rr + bsum(bmax(nb, rb)) <= self.best {
                 continue;
             }
-            if !self.fits(t, r) {
+            let r = &dense[ki][ri];
+            if !(if self.fast { self.fits_fast(t, ki, pi, r) } else { self.fits(t, r) }) {
                 continue;
             }
             let saved = self.merthyr;

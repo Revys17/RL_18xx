@@ -150,6 +150,39 @@ pub mod stats {
     }
 }
 
+/// The reference generator: the code paths as they were before the
+/// 2026-11-14 speed-ups, kept callable so a differential test can compare
+/// the two move lists state by state (`g1822_legal_moves_reference`;
+/// Python `BaseGame.g1822_set_reference_generator(on)`). Thread-local, so
+/// parallel cargo tests don't see each other's flag.
+pub mod reference {
+    use std::cell::Cell;
+    thread_local! {
+        static ON: Cell<bool> = const { Cell::new(false) };
+    }
+    /// Whether the reference paths are in force on this thread.
+    #[inline]
+    pub fn on() -> bool {
+        ON.with(|c| c.get())
+    }
+    /// Set the flag on this thread (until set again); returns the previous.
+    pub fn set(enabled: bool) -> bool {
+        ON.with(|c| c.replace(enabled))
+    }
+    /// Run `f` with the reference paths on (or off); the flag is restored
+    /// afterwards, also on a panic.
+    pub fn with<T>(enabled: bool, f: impl FnOnce() -> T) -> T {
+        struct Restore(bool);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                ON.with(|c| c.set(self.0));
+            }
+        }
+        let _restore = Restore(ON.with(|c| c.replace(enabled)));
+        f()
+    }
+}
+
 fn player_ent(pid: u32) -> String {
     pid.to_string()
 }
@@ -179,31 +212,205 @@ impl BaseGame {
         // acquisition's connection checks) are not Ruby process computes:
         // they must not fill the route latch or the Ruby graph cache.
         let memo = (self.g().route_purchase.clone(), self.g().ruby_graphs.clone());
+        let t = super::prof::start();
+        // The fast paths share their (pure) graph computations -- this
+        // state's own and its validation clones' (`graph::graph_memo`).
+        let _graphs = (!reference::on()).then(|| super::graph::graph_memo::install(self));
         let out = self.g1822_legal_moves_inner(policy);
+        super::prof::stop(t, || {
+            let step = self.g1822_active_step().map_or("-".to_string(), |bi| format!("{:?}", self.rnd().steps[bi]));
+            format!("total:{step}")
+        });
         let gm = self.gm();
         gm.route_purchase = memo.0;
         gm.ruby_graphs = memo.1;
         out
     }
 
+    /// [`BaseGame::g1822_legal_moves_with`] through the reference paths
+    /// (the generator before the 2026-11-14 speed-ups): the differential
+    /// test's oracle. Same moves -- or a bug in the fast paths.
+    pub fn g1822_legal_moves_reference(&mut self, policy: CrossPlayerPolicy) -> Vec<Move> {
+        reference::with(true, || self.g1822_legal_moves_with(policy))
+    }
+
+    /// One move as a comparable string: the action, its combo, share
+    /// price, price range and certificate ids (everything a move carries
+    /// but the internal `validated` flag).
+    pub fn g1822_move_string(m: &Move) -> String {
+        format!("{:?}|{:?}|{:?}|{:?}|{:?}", m.action, m.combo, m.share_price, m.price, m.shares)
+    }
+
+    /// The state the generator must leave as it found it (the family's
+    /// state incl. the route latch and Ruby's graph cache, the map, the
+    /// corporations, the players).
+    fn g1822_state_fingerprint(&self) -> String {
+        format!(
+            "{}|{}|{}|{}",
+            serde_json::to_string(&self.g1822).unwrap_or_default(),
+            serde_json::to_string(&self.hexes).unwrap_or_default(),
+            serde_json::to_string(&self.corporations).unwrap_or_default(),
+            serde_json::to_string(&self.players).unwrap_or_default()
+        )
+    }
+
+    /// The differential test of one state: the generator's moves under
+    /// `policy` against the reference generator's ([`reference`]): (1) the
+    /// sorted move strings ([`BaseGame::g1822_move_string`]), (2) the RL
+    /// index rows (index, wire dict, price range; ascending), (3) the state
+    /// after each call equals the state before. Returns `(moves compared,
+    /// None)` when all agree, else a description of the first difference.
+    pub fn g1822_reference_diff_with(&mut self, policy: CrossPlayerPolicy) -> (usize, Option<String>) {
+        let before = self.g1822_state_fingerprint();
+        let fast = self.g1822_legal_moves_with(policy);
+        if self.g1822_state_fingerprint() != before {
+            return (fast.len(), Some("the generator changed the state".into()));
+        }
+        let slow = self.g1822_legal_moves_reference(policy);
+        if self.g1822_state_fingerprint() != before {
+            return (fast.len(), Some("the reference generator changed the state".into()));
+        }
+        let strings = |ms: &[Move]| -> Vec<String> {
+            let mut v: Vec<String> = ms.iter().map(Self::g1822_move_string).collect();
+            v.sort();
+            v
+        };
+        let (a, b) = (strings(&fast), strings(&slow));
+        if a != b {
+            let only_new: Vec<&String> = a.iter().filter(|x| !b.contains(x)).collect();
+            let only_ref: Vec<&String> = b.iter().filter(|x| !a.contains(x)).collect();
+            return (
+                a.len(),
+                Some(format!(
+                    "moves differ ({} new vs {} reference); only new: {only_new:?}; only reference: {only_ref:?}",
+                    a.len(),
+                    b.len()
+                )),
+            );
+        }
+        if self.title_def().rl_layout_kind() == crate::title::RlLayoutKind::Generator {
+            // The RL index API's rows of both lists (index, wire dict, price
+            // range; ascending), each list indexed as `rl_g1822_indexed_moves`
+            // does: every move an index, no index twice.
+            let rows = |g: &BaseGame, ms: &[Move]| -> Result<Vec<String>, GameError> {
+                let mut v: Vec<(u32, String)> = Vec::with_capacity(ms.len());
+                for m in ms {
+                    let r = m.price.map(|r| (r.lo, r.hi, r.step));
+                    v.push((g.rl_index_of::<Move>(m)?, format!("{}|{r:?}", g.g1822_move_wire(m))));
+                }
+                v.sort();
+                if let Some(w) = v.windows(2).find(|w| w[0].0 == w[1].0) {
+                    return Err(GameError::new(format!("index {} names two moves: {} / {}", w[0].0, w[0].1, w[1].1)));
+                }
+                Ok(v.into_iter().map(|(i, s)| format!("{i}|{s}")).collect())
+            };
+            match (rows(self, &fast), rows(self, &slow)) {
+                (Ok(ia), Ok(ib)) if ia != ib => {
+                    return (a.len(), Some(format!("index rows differ: new {ia:?} reference {ib:?}")));
+                }
+                (Ok(_), Ok(_)) => {}
+                (ra, rb) => {
+                    let e = |r: &Result<Vec<String>, GameError>| r.as_ref().err().map(|e| e.to_string());
+                    return (a.len(), Some(format!("index API: new {:?} reference {:?}", e(&ra), e(&rb))));
+                }
+            }
+        }
+        (a.len(), None)
+    }
+
+    /// `!self.g1822_legal_moves().is_empty()`, without generating every
+    /// move when a pass the generator offers applies (the fast path's
+    /// [`BaseGame::g1822_pass_probe`]).
+    pub(crate) fn g1822_has_legal_move(&mut self) -> bool {
+        if !reference::on() && self.g1822_pass_probe() {
+            return true;
+        }
+        !self.g1822_legal_moves().is_empty()
+    }
+
+    /// Whether the generator's candidates certainly include the acting
+    /// entity's `pass` (the conditions under which `gen_bsps` /
+    /// `gen_choose_round` / `gen_or` emit it) and it applies on a clone: then
+    /// the generator's list is not empty (a pass is never excluded by the
+    /// cross-player policy and survives validation). False says nothing.
+    pub(crate) fn g1822_pass_probe(&mut self) -> bool {
+        if self.finished || self.g1822.is_none() {
+            return false;
+        }
+        let Some(bi) = self.g1822_active_step() else { return false };
+        let step = self.rnd().steps[bi];
+        let Some(ent) = self.g1822_step_current_entity(bi) else { return false };
+        let offered = match step {
+            Step::BuySellParShares => {
+                matches!(ent, Ent::Player(_))
+                    && !(self.g1822_is_pnw() && self.rnd().converting_major.is_some())
+                    && self.g1822_bsps_actions(&ent).contains(&"pass")
+            }
+            Step::Choose => matches!(ent, Ent::Player(_)) && !self.g1822_choose_actions(&ent).is_empty(),
+            _ => {
+                let types = self.g1822_step_actions(bi, &ent);
+                let has_pass = types.contains(&"pass");
+                let corp = matches!(ent, Ent::Corp(_));
+                !types.is_empty()
+                    && match step {
+                        // (not BuyTrain: whether its pass applies reads the
+                        // route latch, which the generation of the other
+                        // candidates may still fill before the reference
+                        // validates the pass)
+                        Step::Track | Step::Token | Step::IssueShares => corp && has_pass,
+                        Step::SpecialTrack | Step::SpecialToken => matches!(ent, Ent::Company(_)) && has_pass,
+                        Step::AcquireCompany => corp && !(self.g1822_is_pnw() && !self.rnd().p20_choices.is_empty()),
+                        Step::AcquisitionTrack => corp,
+                        Step::FirstTurnHousekeeping | Step::CashOutNdem => true,
+                        Step::MinorAcquisition => {
+                            corp && has_pass && self.rnd().acquire_state == AcquireState::SelectMinor
+                        }
+                        _ => false,
+                    }
+            }
+        };
+        if !offered {
+            return false;
+        }
+        let pass = Move::plain(Action::Pass { entity_id: ent.id() });
+        let mut g = self.g1822_validation_clone();
+        g.g1822_apply_move_nobackup(&pass).is_ok()
+    }
+
+    /// A throwaway clone to apply a candidate on: the reference copies the
+    /// JSON action log, which the family's processing never reads.
+    pub(crate) fn g1822_validation_clone(&self) -> BaseGame {
+        if reference::on() {
+            self.clone_for_search()
+        } else {
+            self.clone_for_search_without_log()
+        }
+    }
+
     fn g1822_legal_moves_inner(&mut self, policy: CrossPlayerPolicy) -> Vec<Move> {
         let Some(bi) = self.g1822_active_step() else { return Vec::new() };
         let step = self.rnd().steps[bi];
         let Some(ent) = self.g1822_step_current_entity(bi) else { return Vec::new() };
+        let t = super::prof::start();
         let mut cands: Vec<Move> = match step {
             Step::BuySellParShares => self.gen_bsps(&ent),
             Step::Choose => self.gen_choose_round(&ent),
             _ => self.gen_or(bi, step, &ent),
         };
+        super::prof::stop(t, || format!("gen:{step:?}"));
         // Companies acting in parallel at the earlier steps (Ruby
         // actions_for over steps up to the blocking one): SpecialTrack /
         // SpecialToken company lays and tokens during the operator's turn.
         if self.rnd().kind == RoundKind::Operating && matches!(ent, Ent::Corp(_)) {
+            let t = super::prof::start();
             cands.extend(self.gen_parallel_companies(bi, &ent));
+            super::prof::stop(t, || "gen:parallel_companies".into());
         }
         let (kept, dropped): (Vec<Move>, Vec<Move>) =
             cands.into_iter().partition(|m| !self.g1822_cross_player_excluded(m, policy));
+        let t = super::prof::start();
         let out = self.g1822_validate(kept);
+        super::prof::stop(t, || "validate:all".into());
         if out.is_empty() && !dropped.is_empty() {
             stats::add(&stats::CROSS_FALLBACK, 1);
             return self.g1822_validate(dropped);
@@ -276,21 +483,95 @@ impl BaseGame {
         let t = std::time::Instant::now();
         stats::add(&stats::CANDS, cands.len() as u64);
         let mut out: Vec<Move> = Vec::new();
+        // (the fast path dedups through a set of the same keys `same_move`
+        // compares; the reference compares every pair)
+        let fast = !reference::on();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // The stock round's bid-box bids form one validation class (see
+        // `g1822_bid_own_checks`): the first bid whose own checks pass is
+        // applied on a clone, the others take its verdict.
+        let mut bid_class: Option<bool> = None;
         for m in cands {
-            if out.iter().any(|o| same_move(o, &m)) {
+            if fast {
+                if !seen.insert(move_key(&m)) {
+                    continue;
+                }
+            } else if out.iter().any(|o| same_move(o, &m)) {
                 continue;
             }
             if m.validated {
                 out.push(m);
                 continue;
             }
-            let mut g = self.clone_for_search();
-            if g.g1822_apply_move_nobackup(&m).is_ok() {
+            let bid_own = if fast { self.g1822_bid_own_checks(&m) } else { None };
+            match (bid_own, bid_class) {
+                (Some(false), _) => continue,
+                (Some(true), Some(v)) => {
+                    if v {
+                        out.push(m);
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            let tp = super::prof::start();
+            let mut g = self.g1822_validation_clone();
+            super::prof::stop(tp, || "validate:clone".into());
+            let tp = super::prof::start();
+            let ok = g.g1822_apply_move_nobackup(&m).is_ok();
+            super::prof::stop(tp, || {
+                let kind = match self.g1822_entity(m.action.entity_id()) {
+                    Ent::Player(_) => "player",
+                    Ent::Corp(_) => "corp",
+                    Ent::Company(_) => "company",
+                };
+                format!("validate:process:{}/{}:{}", m.action.action_type(), kind, if ok { "ok" } else { "rejected" })
+            });
+            if bid_own == Some(true) {
+                bid_class = Some(ok);
+            }
+            if ok {
                 out.push(m);
             }
         }
         stats::add(&stats::VALIDATE_NS, t.elapsed().as_nanos() as u64);
         out
+    }
+
+    /// The validation class of the stock round's bid-box bids: Some(own
+    /// checks) for a player's `bid` on a company while the round's
+    /// BuySellParShares step is the active one, else None. Proof that a
+    /// member applies iff the class's shared conditions hold and its own
+    /// checks pass: the step dispatch reads only the action's type and
+    /// entity (the same for every member); `process_bid` fails exactly on
+    /// its own checks -- an unknown company, a price below the minimum
+    /// (the highest bid + the increment, or the company's minimum bid), off
+    /// the increment, or above the player's cash less the cash their other
+    /// bids commit -- and otherwise mutates only the company's bid list and
+    /// the round's bid counters (the same for every member); what follows
+    /// (`bsps_pass` on the bid count, the next entity, the transition loop)
+    /// reads the round's counters and the players' passed flags, which every
+    /// member sets alike (a bid unsets its bidder's pass, so the round never
+    /// ends on a bid). So the first member with its own checks passing
+    /// decides the shared part for all.
+    fn g1822_bid_own_checks(&self, m: &Move) -> Option<bool> {
+        let Action::Bid { entity_id, company_sym, price } = &m.action else { return None };
+        if company_sym.is_empty() {
+            return None;
+        }
+        let bi = self.g1822_active_step()?;
+        if self.rnd().steps[bi] != Step::BuySellParShares {
+            return None;
+        }
+        let Ent::Player(pid) = self.g1822_entity(entity_id) else { return None };
+        let Some(ci) = self.co_idx(company_sym) else { return Some(false) };
+        let inc = self.fam().min_bid_increment;
+        let min = match self.g1822_highest_bid(company_sym) {
+            Some(h) => h.price + inc,
+            None => self.companies[ci].min_bid(),
+        };
+        let max = self.player_cash(pid) - self.g1822_committed_cash(pid);
+        Some(*price >= min && (*price - min) % inc == 0 && *price <= max)
     }
 
     /// Apply a move on a throwaway clone (no rollback copy: the caller
@@ -490,6 +771,12 @@ impl BaseGame {
             if c.closed || c.corp_type != CorpType::Major {
                 continue;
             }
+            // (fast path: a par of a corporation `can_par?` refuses fails in
+            // process_par -- or at the step gate before it -- whatever the
+            // price, so its candidates would all be dropped by the apply)
+            if !reference::on() && !self.g1822_can_par(&c.sym, pid) {
+                continue;
+            }
             // 1822PNW get_par_prices: converting one's floated associated
             // minor — the par prices (not 50) some exchange works at
             if self.g1822_is_pnw()
@@ -611,7 +898,9 @@ impl BaseGame {
     // =====================================================================
 
     fn gen_or(&mut self, bi: usize, step: Step, ent: &Ent) -> Vec<Move> {
+        let t = super::prof::start();
         let types = self.g1822_step_actions(bi, ent);
+        super::prof::stop(t, || "gen:step_actions".into());
         if types.is_empty() {
             return Vec::new();
         }
@@ -942,7 +1231,9 @@ impl BaseGame {
     /// Track step lays for the operating corporation.
     fn gen_corp_lays(&mut self, c: &str) -> Vec<Move> {
         let t0 = std::time::Instant::now();
+        let tp = super::prof::start();
         let out = self.gen_corp_lays_inner(c);
+        super::prof::stop(tp, || "lays:corp".into());
         stats::add(&stats::LAYS_NS, t0.elapsed().as_nanos() as u64);
         out
     }
@@ -954,7 +1245,9 @@ impl BaseGame {
         if self.g1822_is_mx() {
             return self.gen_mx_corp_lays(c);
         }
+        let t = super::prof::start();
         let graph = self.g1822_graph(c);
+        super::prof::stop(t, || "lays:graph".into());
         let nbrs = self.g1822_neighbors();
         let Some((lay, upgrade, no_reuse)) = self.g1822_tile_lay(c, false) else { return Vec::new() };
         let mut out = Vec::new();
@@ -970,7 +1263,9 @@ impl BaseGame {
             if !white && no_reuse && self.rnd().laid_hexes.contains(&self.hexes[hi].id) {
                 continue;
             }
+            let t = super::prof::start();
             let tiles = self.g1822_potential_tiles(c, hi);
+            super::prof::stop(t, || "lays:potential_tiles".into());
             out.extend(self.lays_for(c, c, hi, tiles, edges, &nbrs, RotRule::Normal, &[], true, &graph.connected_nodes));
         }
         out
@@ -992,6 +1287,7 @@ impl BaseGame {
         restrict: bool,
         connected_nodes: &std::collections::HashSet<super::graph::Node>,
     ) -> Vec<Move> {
+        let tp = super::prof::start();
         let mut with_rot: Vec<(String, Vec<u8>)> = Vec::new();
         for t in tiles {
             let def = self.tile_catalog[&t].clone();
@@ -1003,6 +1299,7 @@ impl BaseGame {
             }
         }
         let keep = self.g1822_max_exits(hi, with_rot.iter().map(|(t, _)| t.clone()).collect());
+        super::prof::stop(tp, || "lays:rotations".into());
         let hex_id = self.hexes[hi].id.clone();
         // A corporation's own lay (Track step): every process-side check is
         // the generator's (slot rules, supply, rotation) except the cost,
@@ -1026,11 +1323,70 @@ impl BaseGame {
                 });
                 m.combo = combo.to_vec();
                 if own {
+                    let tp = super::prof::start();
                     let exits = def.rotated(r).edges.clone();
-                    if self.g1822_corp_lay_cost(operator, hi, &exits, nbrs) > cash {
+                    let cost = self.g1822_corp_lay_cost(operator, hi, &exits, nbrs);
+                    super::prof::stop(tp, || "lays:cost".into());
+                    if cost > cash {
                         continue;
                     }
                     m.validated = true;
+                }
+                // 1822PNW (fast path): a plain lay decided without applying
+                // it, then checked like 1822's own lays (see
+                // `g1822_pnw_lay_prevalidate`)
+                let pnw_pre = if restrict && self.g1822_is_pnw() && !reference::on() {
+                    self.g1822_pnw_lay_prevalidate(operator, hi, &t, &def, r, &inst, nbrs)
+                } else {
+                    None
+                };
+                if cfg!(test) {
+                    if let Some(v) = pnw_pre {
+                        let mut g = self.g1822_validation_clone();
+                        let applied = g.g1822_apply_move_nobackup(&m).is_ok();
+                        let short = self.lay_restrictions_shortcut(operator, hi, &def, r, connected_nodes, connected);
+                        // (an apply that fails only on the restriction check is
+                        // the restriction verdict's business)
+                        let restricted = !applied && v && short != Some(true);
+                        assert!(applied == v || restricted, "1822PNW lay pre-validation {v} vs apply {applied}: {:?}", m.action);
+                        if short == Some(true) {
+                            assert_eq!(applied, v, "1822PNW lay pre-validation vs apply (shortcut true): {:?}", m.action);
+                        }
+                    }
+                }
+                match pnw_pre {
+                    Some(false) => continue,
+                    Some(true) => {
+                        m.validated = true;
+                        if !self.lay_passes_restrictions(&m, operator, hi, &def, r, connected_nodes, connected) {
+                            continue;
+                        }
+                        out.push(m);
+                        continue;
+                    }
+                    None => {}
+                }
+                if restrict && self.g1822_is_pnw() && !reference::on() {
+                    // 1822PNW (fast path): the reference checks the
+                    // restrictions (its shortcuts, else apply + check on a
+                    // clone) and then applies the lay again to validate it;
+                    // here one apply decides both. Reference result:
+                    // shortcut_or(applied && check) && applied
+                    //   = applied && (shortcut || check); the apply is
+                    // deterministic, so the validation is skipped.
+                    let short = self.lay_restrictions_shortcut(operator, hi, &def, r, connected_nodes, connected);
+                    if short == Some(false) {
+                        continue;
+                    }
+                    let old = self.hexes[hi].tile.clone();
+                    let mut g = self.g1822_validation_clone();
+                    let applied = g.g1822_apply_move_nobackup(&m).is_ok();
+                    if !(applied && (short == Some(true) || g.g1822_track_restrictions_ok(operator, hi, &old))) {
+                        continue;
+                    }
+                    m.validated = true;
+                    out.push(m);
+                    continue;
                 }
                 if restrict && !self.lay_passes_restrictions(&m, operator, hi, &def, r, connected_nodes, connected) {
                     continue;
@@ -1039,6 +1395,127 @@ impl BaseGame {
             }
         }
         out
+    }
+
+    /// 1822PNW: whether a corporation's own Track lay of `def` at `rotation`
+    /// (instance `inst`, a rotation `lays_for` found legal) applies, decided
+    /// without applying it -- Some(verdict) for the plain cases, None for
+    /// the cases with effects of their own (then the lay is applied on a
+    /// clone, as the reference does). Some(true) claims what 1822's own
+    /// lays claim (every check the process makes but the restrictions,
+    /// which `lay_passes_restrictions` settles): the Track step's portage
+    /// gate; `lay_tile_action`'s slot rules (an upgrade = a non-white
+    /// colour off the token cities); `lay_tile`'s forest, `upgrades_to?`
+    /// and supply checks; Hex#lay's token move (an old city's tokens need a
+    /// new city); and the cost: the hex's terrain (`upgrade_cost`) plus the
+    /// water borders the new track crosses, less 40 per builder cube the
+    /// new tile carries -- its own or the old tile's, whichever is more
+    /// (`carry_cubes`) -- never below 0, within the corporation's cash.
+    /// None: token cities (their own cost and upgrade rule), an old
+    /// blue / gray / red tile (the lay opens neighbour links the border
+    /// cost reads), H11 / H13 (Seattle's border), the PNW tiles, H19's
+    /// city+town tiles, a hex next to or holding multi-lane track (the
+    /// restriction shortcuts assume single lanes) and a corporation whose
+    /// graph Ruby's cache answers stale (the shortcuts read the generator's
+    /// graph).
+    pub(crate) fn g1822_pnw_lay_prevalidate(
+        &self,
+        c: &str,
+        hi: usize,
+        base: &str,
+        def: &crate::tiles::TileDef,
+        rotation: u8,
+        inst: &str,
+        nbrs: &HashMap<usize, BTreeMap<u8, usize>>,
+    ) -> Option<bool> {
+        let hex = &self.hexes[hi];
+        let hex_id = hex.id.as_str();
+        if Self::g1822_pnw_tokencity(hex_id)
+            || matches!(hex_id, "H11" | "H13")
+            || base.starts_with("PNW")
+            || Self::g1822_pnw_city_and_town_tile(hex_id, base)
+        {
+            return None;
+        }
+        let old_color = self.g1822_tile_color_name(hi);
+        if matches!(old_color, "blue" | "gray" | "red") || self.g().ruby_graphs.contains(c) {
+            return None;
+        }
+        if !self.g1822_pnw_single_lanes_around(hi, base) {
+            return None;
+        }
+        let ci = *self.corp_idx.get(c)?;
+        if self.rnd().num_laid_portage > 0 {
+            return Some(false);
+        }
+        let upgrade = old_color != "white";
+        let Some((lay, can_upgrade, no_reuse)) = self.g1822_tile_lay(c, false) else { return Some(false) };
+        if (upgrade && !can_upgrade)
+            || (def.color == crate::tiles::TileColor::Yellow && !lay)
+            || (no_reuse && self.rnd().laid_hexes.iter().any(|h| h == hex_id))
+            || self.g1822_pnw_assigned(hex_id, "forest")
+            || !self.g1822_upgrades_to_sel(hi, def, false, None)
+            || self.tile_counts_remaining.get(base).copied().unwrap_or(0) == 0
+        {
+            return Some(false);
+        }
+        let new_tile = BaseGame::tile_from_def(def, rotation);
+        if hex.tile.cities.len() > 1 {
+            let map = BaseGame::g1822_city_map(&hex.tile, &new_tile);
+            if map
+                .iter()
+                .enumerate()
+                .any(|(oi, m)| m.is_none() && hex.tile.cities[oi].tokens.iter().any(|t| t.is_some()))
+            {
+                return Some(false);
+            }
+        }
+        let exits: Vec<u8> =
+            new_tile.paths.iter().flat_map(|p| [p.a.edge_num(), p.b.edge_num()]).flatten().collect();
+        let border: i32 = self
+            .g()
+            .borders
+            .get(hex_id)
+            .map(|v| {
+                v.iter()
+                    .filter(|(edge, _, _)| nbrs.get(&hi).map_or(false, |m| m.contains_key(edge)) && exits.contains(edge))
+                    .map(|(_, cost, _)| *cost)
+                    .sum()
+            })
+            .unwrap_or(0);
+        let cubes = |id: &str| self.g().builder_cubes.get(id).copied().unwrap_or(0);
+        let carried = cubes(&hex.tile.id).max(cubes(inst)) as i32;
+        let cost = (self.g1822_upgrade_cost(hi, c) + border - 40 * carried).max(0);
+        Some(self.corporations[ci].cash >= cost)
+    }
+
+    /// Whether hex `hi` (its current tile and a `new_base` tile) and its
+    /// neighbours' tiles hold single-lane track only (1822PNW's lanes).
+    fn g1822_pnw_single_lanes_around(&self, hi: usize, new_base: &str) -> bool {
+        let f = self.fam();
+        let single = |dsl: Option<&str>| {
+            dsl.map_or(true, |d| {
+                d.split(';').filter_map(|p| p.trim().strip_prefix("path=")).all(|attrs| {
+                    super::graph::lane_specs(attrs).iter().all(|&(a, b)| a == (1, 0) && b == (1, 0))
+                })
+            })
+        };
+        let tile_ok = |h: usize| {
+            let hex = &self.hexes[h];
+            let dsl = if hex.tile.id.starts_with("preprinted_") {
+                (f.hex_dsl)(&hex.id).map(|(d, _)| d)
+            } else {
+                let base = hex.tile.name.split('-').next().unwrap_or(&hex.tile.name);
+                (f.tile_dsl)(base).map(|(d, _)| d)
+            };
+            single(dsl)
+        };
+        if !single((f.tile_dsl)(new_base).map(|(d, _)| d)) || !tile_ok(hi) {
+            return false;
+        }
+        self.hex_adjacency
+            .get(&self.hexes[hi].id)
+            .map_or(true, |adj| adj.values().all(|nid| self.hex_idx.get(nid).map_or(true, |&ni| tile_ok(ni))))
     }
 
     /// check_track_restrictions! on the laid tile (a clone).
@@ -1053,19 +1530,42 @@ impl BaseGame {
         connected_nodes: &std::collections::HashSet<super::graph::Node>,
         connected_edges: &[u8],
     ) -> bool {
+        if let Some(v) = self.lay_restrictions_shortcut(operator, hi, def, rotation, connected_nodes, connected_edges) {
+            return v;
+        }
+        let t0 = std::time::Instant::now();
+        stats::add(&stats::RESTRICT_N, 1);
+        let tp = super::prof::start();
+        let r = self.lay_passes_restrictions_inner(m, operator, hi);
+        super::prof::stop(tp, || "lays:restriction_walk".into());
+        stats::add(&stats::RESTRICT_NS, t0.elapsed().as_nanos() as u64);
+        r
+    }
+
+    /// The restriction verdicts that need no lay on a clone: Some(verdict)
+    /// when one of the shortcuts settles it, None when only the lay and the
+    /// walk after it can (`lay_passes_restrictions_inner`).
+    fn lay_restrictions_shortcut(
+        &self,
+        operator: &str,
+        hi: usize,
+        def: &crate::tiles::TileDef,
+        rotation: u8,
+        connected_nodes: &std::collections::HashSet<super::graph::Node>,
+        connected_edges: &[u8],
+    ) -> Option<bool> {
         let hex = &self.hexes[hi];
         if hex.tile.paths.is_empty()
             || Family::is(self.fam().english_channel_hex, &hex.id)
             || Family::is(self.fam().cardiff_hex, &hex.id)
         {
-            return true; // laying on track-less ground always uses new track
+            return Some(true); // laying on track-less ground always uses new track
         }
         if self.g1822_is_ca() {
             // TRACK_RESTRICTION :permissive: only 'New track must override'
             let new_tv = super::tile_rules::TV::from_def(def, rotation);
             let old_tv = super::tile_rules::TV::from_tile(&hex.tile);
-            let _ = (m, connected_nodes, connected_edges);
-            return super::tile_rules::cities_towns_kept(&old_tv, &new_tv);
+            return Some(super::tile_rules::cities_towns_kept(&old_tv, &new_tv));
         }
         // Fast path: the operator already reaches a city of this hex whose
         // revenue the new tile changes. Old paths are kept and reachability
@@ -1084,7 +1584,7 @@ impl BaseGame {
                 let new_tv = super::tile_rules::TV::from_def(def, rotation);
                 let old_tv = super::tile_rules::TV::from_tile(&hex.tile);
                 if super::tile_rules::cities_towns_kept(&old_tv, &new_tv) {
-                    return true;
+                    return Some(true);
                 }
             }
         }
@@ -1099,20 +1599,19 @@ impl BaseGame {
             if super::tile_rules::new_track_at(&old_tv, &new_tv, connected_edges)
                 && super::tile_rules::cities_towns_kept(&old_tv, &new_tv)
             {
-                return true;
+                return Some(true);
             }
         }
-        let t0 = std::time::Instant::now();
-        stats::add(&stats::RESTRICT_N, 1);
-        let r = self.lay_passes_restrictions_inner(m, operator, hi);
-        stats::add(&stats::RESTRICT_NS, t0.elapsed().as_nanos() as u64);
-        r
+        None
     }
 
     fn lay_passes_restrictions_inner(&self, m: &Move, operator: &str, hi: usize) -> bool {
         let old = self.hexes[hi].tile.clone();
-        let mut g = self.clone_for_search();
-        if g.g1822_apply_move(m).is_err() {
+        let mut g = self.g1822_validation_clone();
+        // (the fast path applies without the rollback copy: the clone is
+        // thrown away on an error either way)
+        let applied = if reference::on() { g.g1822_apply_move(m).is_ok() } else { g.g1822_apply_move_nobackup(m).is_ok() };
+        if !applied {
             return false;
         }
         g.g1822_track_restrictions_ok(operator, hi, &old)
@@ -1120,6 +1619,13 @@ impl BaseGame {
 
     /// SpecialTrack lays by a company (alone and in Ruby-valid combos).
     fn gen_company_lays(&mut self, co: &str, in_step: bool) -> Vec<Move> {
+        let tp = super::prof::start();
+        let out = self.gen_company_lays_inner(co, in_step);
+        super::prof::stop(tp, || "lays:company".into());
+        out
+    }
+
+    fn gen_company_lays_inner(&mut self, co: &str, in_step: bool) -> Vec<Move> {
         let _ = in_step;
         if self.g1822_is_pnw() {
             if let Some(v) = self.gen_pnw_company_lays(co) {
@@ -1507,14 +2013,16 @@ impl BaseGame {
                 // costing £20 that a broke major cannot pay (no pass) —
                 // drop choices whose next state has no legal move, unless
                 // all do.
+                let tp = super::prof::start();
                 let live: Vec<Move> = moves
                     .iter()
                     .filter(|m| {
-                        let mut g = self.clone_for_search();
-                        g.g1822_apply_move_nobackup(m).is_ok() && (g.finished || !g.g1822_legal_moves().is_empty())
+                        let mut g = self.g1822_validation_clone();
+                        g.g1822_apply_move_nobackup(m).is_ok() && (g.finished || g.g1822_has_legal_move())
                     })
                     .cloned()
                     .collect();
+                super::prof::stop(tp, || "minor_acq:lookahead".into());
                 out.extend(if live.is_empty() { moves } else { live });
             }
             AcquireState::SelectMinor => {
@@ -1755,6 +2263,11 @@ fn base(name: &str) -> &str {
 
 fn same_move(a: &Move, b: &Move) -> bool {
     format!("{:?}{:?}{:?}", a.action, a.combo, a.share_price) == format!("{:?}{:?}{:?}", b.action, b.combo, b.share_price)
+}
+
+/// The key `same_move` compares.
+fn move_key(m: &Move) -> String {
+    format!("{:?}{:?}{:?}", m.action, m.combo, m.share_price)
 }
 
 impl BaseGame {

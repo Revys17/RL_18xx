@@ -28,6 +28,7 @@ pub mod ca_legal;
 pub mod ca_route;
 pub mod ca_tokens;
 pub mod family;
+pub mod fastgraph;
 pub mod graph;
 pub mod legal;
 #[cfg(test)]
@@ -37,6 +38,7 @@ pub mod mx_legal;
 pub mod operating;
 pub mod pnw;
 pub mod pnw_legal;
+pub mod prof;
 pub mod py;
 pub mod router;
 pub mod shares;

@@ -857,7 +857,9 @@ pub fn tile_catalog() -> Arc<HashMap<String, TileDef>> {
 
 /// The tile DSL for a catalog id (Ruby `Tile.for`).
 pub fn tile_dsl(id: &str) -> Option<(&'static str, &'static str)> {
-    TILE_DSL.iter().find(|(t, _, _)| *t == id).map(|(_, c, d)| (*d, *c))
+    static IDX: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+    let idx = crate::g1822::family::first_index(&IDX, TILE_DSL.iter().map(|(t, _, _)| *t));
+    idx.get(id).map(|&i| (TILE_DSL[i].2, TILE_DSL[i].1))
 }
 
 // ---------------------------------------------------------------------------
@@ -866,7 +868,9 @@ pub fn tile_dsl(id: &str) -> Option<(&'static str, &'static str)> {
 // ---------------------------------------------------------------------------
 
 pub fn hex_dsl(coord: &str) -> Option<(&'static str, &'static str)> {
-    HEX_DSL.iter().find(|(c, _, _)| *c == coord).map(|(_, d, col)| (*d, *col))
+    static IDX: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+    let idx = crate::g1822::family::first_index(&IDX, HEX_DSL.iter().map(|(c, _, _)| *c));
+    idx.get(coord).map(|&i| (HEX_DSL[i].1, HEX_DSL[i].2))
 }
 
 pub const HEX_DSL: &[(&str, &str, &str)] = &[

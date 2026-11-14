@@ -596,7 +596,7 @@ impl BaseGame {
     }
 
     /// G1822 `can_par?(corporation, parrer)`.
-    fn g1822_can_par(&self, sym: &str, pid: u32) -> bool {
+    pub(crate) fn g1822_can_par(&self, sym: &str, pid: u32) -> bool {
         let c = &self.corporations[self.ci(sym)];
         if c.closed || c.corp_type == CorpType::Minor {
             return false;
