@@ -58,6 +58,8 @@ def positions(count: int, seed: int = 0, title: str = "1830") -> list:
                 if game.finished:
                     break
                 legal = play.legal(game)
+                if len(legal) == 0:
+                    break  # (a Ruby dead end the engine mirrors, e.g. 1822MX's NdeM out of tokens)
                 k = rng.randrange(len(legal))
                 price = play.fixed_price(game, legal, k)
                 if play.open_price(legal, k):

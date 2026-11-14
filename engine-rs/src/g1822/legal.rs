@@ -270,28 +270,68 @@ impl BaseGame {
         if self.g1822_state_fingerprint() != before {
             return (fast.len(), Some("the reference generator changed the state".into()));
         }
+        (fast.len(), self.g1822_compare_move_lists(&fast, &slow))
+    }
+
+    /// [`BaseGame::g1822_reference_diff_with`] under the title's policy AND
+    /// the rules' at once, running the reference generator once (under the
+    /// rules'): its list under the title's policy is derived from that one
+    /// exactly as `g1822_legal_moves_inner` builds it -- the candidates do
+    /// not depend on the policy, the policy only partitions them before the
+    /// validation, which decides each candidate on its own clone (no class,
+    /// dedup by the first occurrence of a key, and duplicates share their
+    /// exclusion) -- so the reference's title-policy list is its rules' list
+    /// without the excluded moves, or, when that leaves nothing, the
+    /// excluded ones. The fast generator runs under both policies.
+    pub fn g1822_reference_diff_both_policies(&mut self) -> (usize, Option<String>) {
+        let title = self.title_def().generator_cross_player();
+        let before = self.g1822_state_fingerprint();
+        let fast_title = self.g1822_legal_moves_with(title);
+        let fast_rules = self.g1822_legal_moves_with(CrossPlayerPolicy::RULES);
+        if self.g1822_state_fingerprint() != before {
+            return (0, Some("the generator changed the state".into()));
+        }
+        let slow_rules = self.g1822_legal_moves_reference(CrossPlayerPolicy::RULES);
+        if self.g1822_state_fingerprint() != before {
+            return (0, Some("the reference generator changed the state".into()));
+        }
+        let kept: Vec<Move> =
+            slow_rules.iter().filter(|m| !self.g1822_cross_player_excluded(m, title)).cloned().collect();
+        let slow_title: Vec<Move> = if kept.is_empty() {
+            slow_rules.iter().filter(|m| self.g1822_cross_player_excluded(m, title)).cloned().collect()
+        } else {
+            kept
+        };
+        let n = fast_title.len() + fast_rules.len();
+        if let Some(d) = self.g1822_compare_move_lists(&fast_rules, &slow_rules) {
+            return (n, Some(format!("policy rules: {d}")));
+        }
+        if let Some(d) = self.g1822_compare_move_lists(&fast_title, &slow_title) {
+            return (n, Some(format!("policy title: {d}")));
+        }
+        (n, None)
+    }
+
+    /// The fast and the reference generator's lists compared: sorted move
+    /// strings, then the RL index rows (index, wire dict, price range;
+    /// ascending; every move an index, no index twice).
+    fn g1822_compare_move_lists(&self, fast: &[Move], slow: &[Move]) -> Option<String> {
         let strings = |ms: &[Move]| -> Vec<String> {
             let mut v: Vec<String> = ms.iter().map(Self::g1822_move_string).collect();
             v.sort();
             v
         };
-        let (a, b) = (strings(&fast), strings(&slow));
+        let (a, b) = (strings(fast), strings(slow));
         if a != b {
             let only_new: Vec<&String> = a.iter().filter(|x| !b.contains(x)).collect();
             let only_ref: Vec<&String> = b.iter().filter(|x| !a.contains(x)).collect();
-            return (
+            return Some(format!(
+                "moves differ ({} new vs {} reference); only new: {only_new:?}; only reference: {only_ref:?}",
                 a.len(),
-                Some(format!(
-                    "moves differ ({} new vs {} reference); only new: {only_new:?}; only reference: {only_ref:?}",
-                    a.len(),
-                    b.len()
-                )),
-            );
+                b.len()
+            ));
         }
         if self.title_def().rl_layout_kind() == crate::title::RlLayoutKind::Generator {
-            // The RL index API's rows of both lists (index, wire dict, price
-            // range; ascending), each list indexed as `rl_g1822_indexed_moves`
-            // does: every move an index, no index twice.
             let rows = |g: &BaseGame, ms: &[Move]| -> Result<Vec<String>, GameError> {
                 let mut v: Vec<(u32, String)> = Vec::with_capacity(ms.len());
                 for m in ms {
@@ -304,18 +344,18 @@ impl BaseGame {
                 }
                 Ok(v.into_iter().map(|(i, s)| format!("{i}|{s}")).collect())
             };
-            match (rows(self, &fast), rows(self, &slow)) {
+            match (rows(self, fast), rows(self, slow)) {
                 (Ok(ia), Ok(ib)) if ia != ib => {
-                    return (a.len(), Some(format!("index rows differ: new {ia:?} reference {ib:?}")));
+                    return Some(format!("index rows differ: new {ia:?} reference {ib:?}"));
                 }
                 (Ok(_), Ok(_)) => {}
                 (ra, rb) => {
                     let e = |r: &Result<Vec<String>, GameError>| r.as_ref().err().map(|e| e.to_string());
-                    return (a.len(), Some(format!("index API: new {:?} reference {:?}", e(&ra), e(&rb))));
+                    return Some(format!("index API: new {:?} reference {:?}", e(&ra), e(&rb)));
                 }
             }
         }
-        (a.len(), None)
+        None
     }
 
     /// `!self.g1822_legal_moves().is_empty()`, without generating every

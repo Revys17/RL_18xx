@@ -30,6 +30,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 POLICIES = (None, "rules")
+# --both-once: one reference run per position (see g1822_reference_diff_both)
+BOTH = False
 CORPUS = "human_games/scrape_2026_10/{title}/*.json"
 
 
@@ -54,12 +56,21 @@ def diff_game(args) -> dict:
             check = g.g1822_graph_check()
             if check is not None:
                 out["diffs"].append({"fid": fid, "policy": "graph", "diff": check[:3000]})
-            for p in POLICIES:
-                moves, diff = g.g1822_reference_diff(p)
-                out["compared"] += 1
+            if BOTH:
+                # both policies, the reference run once (its title-policy list derived from its rules' list:
+                # BaseGame.g1822_reference_diff_both)
+                moves, diff = g.g1822_reference_diff_both()
+                out["compared"] += 2
                 out["moves"] += moves
                 if diff is not None:
-                    out["diffs"].append({"fid": fid, "policy": p, "diff": diff[:3000]})
+                    out["diffs"].append({"fid": fid, "policy": "both", "diff": diff[:3000]})
+            else:
+                for p in POLICIES:
+                    moves, diff = g.g1822_reference_diff(p)
+                    out["compared"] += 1
+                    out["moves"] += moves
+                    if diff is not None:
+                        out["diffs"].append({"fid": fid, "policy": p, "diff": diff[:3000]})
         try:
             g.process_action(a)
         except BaseException as exc:  # noqa: BLE001 -- a record the replay rejects (Ruby HEAD rejects it too)
@@ -77,7 +88,15 @@ def main() -> int:
     ap.add_argument("--every", type=int, default=1, help="every k-th file")
     ap.add_argument("--limit", type=int, default=0, help="first N files only")
     ap.add_argument("--json", default=None, help="write the per-game results here")
+    ap.add_argument(
+        "--both-once",
+        action="store_true",
+        help="run the reference generator once per position (under the rules'; its title-policy list derived "
+        "from it, BaseGame.g1822_reference_diff_both): about half the time",
+    )
     args = ap.parse_args()
+    global BOTH
+    BOTH = args.both_once
     import engine_rs
 
     globs = args.glob or [str(Path(args.corpus_root) / CORPUS.format(title=args.title))]

@@ -419,6 +419,17 @@ impl BaseGame {
         Ok(self.g1822_graph_check_with())
     }
 
+    /// `g1822_reference_diff` under the title's policy AND the rules' with
+    /// one reference run (its title-policy list derived from its rules'
+    /// list: `BaseGame::g1822_reference_diff_both_policies`). `(moves compared, None)`
+    /// or the first difference.
+    fn g1822_reference_diff_both(&mut self) -> PyResult<(usize, Option<String>)> {
+        if self.g1822.is_none() {
+            return Err(pyo3::exceptions::PyValueError::new_err("not an 1822-family game"));
+        }
+        Ok(self.g1822_reference_diff_both_policies())
+    }
+
     /// Run this thread's 1822-family generator through the reference paths
     /// (the code before the 2026-11-14 speed-ups) or the fast ones; returns
     /// the previous setting. Every caller of the generator follows it
