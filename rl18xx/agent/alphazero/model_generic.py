@@ -255,7 +255,9 @@ class LegalActions:
         return price_cells_for(int(self.rows[k, C_PRICE_KIND]), lo, hi, step, grid=bool(self.price_grid))
 
 
-def legal_actions(game, indices: Optional[Sequence[int]] = None, policy: Optional[str] = None) -> LegalActions:
+def legal_actions(
+    game, indices: Optional[Sequence[int]] = None, policy: Optional[str] = None, moves: Optional[list] = None
+) -> LegalActions:
     """The legal actions of a position of a title with an RL layout: its legal indices (or ``indices``
     when the caller already has them), their descriptor rows, and each price-bearing row's
     ``(lo, hi, step)`` (``BaseGame.rl_price_range``, ``docs/rl_descriptors.md`` §6). This is the one
@@ -263,12 +265,14 @@ def legal_actions(game, indices: Optional[Sequence[int]] = None, policy: Optiona
 
     * 1830 (layout kind "factored"): ``factored_legal_indices``; ranges as ``price_range_for_index``
       with ``step`` the bid ladder ($5) for a bid, 1 otherwise; ``price_grid`` False.
-    * A generator layout (1867): ``rl_legal_moves_json(policy)`` (None = the title's cross-player
-      policy); each move's own range and step; ``price_grid`` True."""
+    * A generator layout (1867, the 1822 family): ``rl_legal_moves_json(policy)`` (None = the title's
+      cross-player policy); each move's own range and step; ``price_grid`` True. ``moves`` = that call's
+      parsed result when the caller already has it (the 1822-family importer matches on the same list)."""
     g = raw_game(game)
     d = action_descriptors(g.title)
     if d.kind == "generator":
-        moves = json.loads(g.rl_legal_moves_json(policy))
+        if moves is None:
+            moves = json.loads(g.rl_legal_moves_json(policy))
         ranges = {m["index"]: m["range"] for m in moves}
         wire_of = {m["index"]: m["wire"] for m in moves}
         idx = np.asarray(sorted(ranges) if indices is None else indices, dtype=np.int64)

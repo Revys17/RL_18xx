@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import engine_rs  # noqa: E402
 
+from rl18xx.agent.alphazero import generic_import_1822 as gi22  # noqa: E402
 from tests.title_replay_harness import SEAT_ID_BASE, game_seed, ruby_filtered_actions  # noqa: E402
 
 TITLE = "1822"
@@ -54,101 +55,14 @@ SKIP = {"run_routes"}
 # The player counts the RL pipeline trains each title at (titles.py): --index checks these games only.
 PLAYERS = {"1822": (3, 6), "1822PNW": (3, 5), "1822MX": (3, 5), "1822CA": (3, 6)}
 # Action types the cross-player policy (GameTitle::generator_cross_player) can exclude.
-POLICY_TYPES = {"buy_train", "acquire_company", "merge"}
+POLICY_TYPES = gi22.POLICY_TYPES
 
 
-def _in_range(value, rng) -> bool:
-    if rng is None:
-        return False
-    lo, hi, step = rng
-    return lo <= value <= hi and (value - lo) % max(step, 1) == 0
-
-
-def _shares_key(g, a: dict):
-    ids = list(a.get("shares") or [])
-    owners = sorted(g.g1822_share_owner(s) for s in ids)
-    corp = ids[0].rsplit("_", 1)[0] if ids else a.get("corporation")
-    pres = any(s.endswith("_0") for s in ids)
-    return (corp, tuple(owners), int(a.get("percent") or 0), pres)
-
-
-def _key(g, a: dict):
-    """The outcome-relevant parameters of a wire action (state BEFORE it)."""
-    t = a["type"]
-    if t == "bid":
-        return (a.get("company"),)
-    if t in ("buy_shares", "sell_shares"):
-        return _shares_key(g, a)
-    if t == "par":
-        sp = a.get("share_price")
-        if isinstance(sp, str):
-            sp = int(sp.split(",")[0])
-        return (a.get("corporation"), sp)
-    if t == "lay_tile":
-        tile = str(a.get("tile")).split("-")[0]
-        return (
-            a.get("hex"),
-            tile,
-            # (a builder cube's rotation changes nothing)
-            0 if tile == "BC" else int(a.get("rotation") or 0),
-            tuple(sorted(a.get("combo_entities") or [])),
-        )
-    if t in ("place_token", "remove_token"):
-        # (1822MX's NdeM token auction names the token by its city)
-        city = a.get("city")
-        return tuple(g.g1822_city_ref(city)) if city else (a.get("hex"),)
-    if t == "hex_token":
-        return (a.get("hex"),)
-    if t == "dividend":
-        return (a.get("kind"),)
-    if t in ("choose", "choose_ability"):
-        return (str(a.get("choice")),)
-    if t == "buy_train":
-        name, owner = g.g1822_train_info(a.get("train", ""))
-        return (name, owner, a.get("variant") if owner == "depot" else None, bool(a.get("exchange")))
-    if t == "discard_train":
-        return (g.g1822_train_info(a.get("train", ""))[0],)
-    if t == "merge":
-        return (a.get("corporation"),)
-    if t == "acquire_company":
-        return (a.get("company"),)
-    if t == "assign":
-        return (a.get("target"), a.get("target_type"))
-    return ()
-
-
-def _price(a: dict):
-    t = a["type"]
-    if t == "bid":
-        return a.get("price")
-    if t == "payoff_player_debt_partial":
-        return a.get("amount")
-    if t == "buy_train":
-        return a.get("price")
-    return None
-
-
-def matches(g, human: dict, moves: list[dict]) -> int:
-    t = human["type"]
-    ent = str(human.get("entity"))
-    hk = _key(g, human)
-    hp = _price(human)
-    n = 0
-    for m in moves:
-        w = m["wire"]
-        if w["type"] != t or str(w.get("entity")) != ent:
-            continue
-        if _key(g, w) != hk:
-            continue
-        if m["range"] is not None:
-            if not _in_range(hp, m["range"]):
-                continue
-        elif t == "buy_train" and hp is not None and w.get("price") != hp:
-            continue
-        elif t == "payoff_player_debt_partial":
-            continue
-        n += 1
-    return n
+# The matching lives in the importer of the supervised data (generic_import_1822), so its labels are these.
+_in_range = gi22._in_range
+_key = gi22.action_key  # the outcome-relevant parameters of a wire action (state BEFORE it)
+_price = gi22.action_price
+matches = gi22.matches  # how many generated moves the human action matches
 
 
 def audit_game(path: str) -> dict:
@@ -204,10 +118,7 @@ def audit_game(path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def matching(g, human: dict, rows: list[dict]) -> list[dict]:
-    """The indexed legal moves (``rl_legal_moves_json`` rows) the human action matches (as
-    :func:`matches` counts them)."""
-    return [m for m in rows if matches(g, human, [m]) == 1]
+matching = gi22.matching  # the indexed legal moves the human action matches (as matches counts them)
 
 
 def _snapshot(g) -> str:
