@@ -15,9 +15,13 @@ business; the record replays the human's own routes). The layout is injective pe
 audits replay them -- Ruby's filtered actions, recorded auto-actions processed right after their parent,
 seats renumbered 1001..1000+N ("Player k"; the family's minors have numeric syms, ``SEAT_ID_BASE``), the
 engine seed from ``settings.seed`` / the game id. Scope: finished or archived games of the title, at the
-pipeline's player counts (``titles.TitleSpec``: 1822 / 1822CA 3-6, 1822PNW / 1822MX 3-5), **base rules
-only** (``TitleSpec.optional_rules`` is empty for the family); dropped and counted: ``title``,
-``status_<s>``, ``players_<n>``, ``optional_rules``, ``no_actions``.
+pipeline's player counts (``titles.TitleSpec``: 1822 / 1822CA 3-6, 1822PNW / 1822MX 3-5), whose optional rules
+are the title's ``TitleSpec.optional_rules`` (1822: 1822+, its No Removals / Single Stack modifiers and the
+multi-share tax haven -- any combination --; 1822PNW / 1822MX / 1822CA: base rules only); dropped and counted:
+``title``, ``status_<s>``, ``players_<n>``, ``optional_rules``, ``no_actions``. A game is replayed and recorded
+under its canonical rules (``TitleSpec.canonical_rules``: a modifier without 1822+ does nothing and is dropped);
+the record carries them (``optional_rules``), their combination name (``rules``, ``TitleSpec.rules_name``) and
+the export's own list (``settings_optional_rules``).
 
 Every human decision (auto-actions and actions after the game's end are not decisions) is matched against
 the **rules'** moves, as A4's index completeness (``scripts/g1822_completeness.py --index``); the position's
@@ -203,7 +207,8 @@ def player_range(title: str) -> Tuple[int, int]:
 
 def scope_reason(game: dict, title: str, allow_optional_rules: bool = False) -> Optional[str]:
     """Why a raw export is outside the importer's scope (None: in scope). Reasons are the drop keys of the
-    conversion's stats: ``title``, ``status_<status>``, ``players_<n>``, ``optional_rules``, ``no_actions``."""
+    conversion's stats: ``title``, ``status_<status>``, ``players_<n>``, ``optional_rules`` (a rule outside the
+    title's ``TitleSpec.optional_rules``; ``allow_optional_rules`` admits any), ``no_actions``."""
     if str(game.get("title")) != str(title):
         return "title"
     status = game.get("status")
@@ -213,8 +218,12 @@ def scope_reason(game: dict, title: str, allow_optional_rules: bool = False) -> 
     lo, hi = player_range(title)
     if not lo <= n <= hi:
         return f"players_{n}"
-    if (game.get("settings") or {}).get("optional_rules") and not allow_optional_rules:
-        return "optional_rules"
+    rules = (game.get("settings") or {}).get("optional_rules") or ()
+    if rules and not allow_optional_rules:
+        from rl18xx.agent.alphazero.titles import title_spec
+
+        if not title_spec(title).rules_in_scope(rules):
+            return "optional_rules"
     if not game.get("actions"):
         return "no_actions"
     return None
@@ -273,7 +282,8 @@ class Importer1822Family(TitleImporter):
         self.title = str(title)
         #: The policy of the positions' legal lists (None: the title's cross-player policy).
         self.legal_policy = legal_policy
-        #: Keep games with optional rules (measurements only; the pipeline's scope is base rules).
+        #: Keep games with any optional rules (measurements only; the pipeline's scope is the title's
+        #: ``TitleSpec.optional_rules``).
         self.allow_optional_rules = bool(allow_optional_rules)
         self._auto: List[bool] = []
         self._stopped: Optional[str] = None
@@ -285,7 +295,12 @@ class Importer1822Family(TitleImporter):
         return seat_players(len(game.get("players") or []))
 
     def optional_rules(self, game: dict) -> List[str]:
-        return list((game.get("settings") or {}).get("optional_rules") or []) if self.allow_optional_rules else []
+        """The rules a game is replayed and recorded under: its export's, canonical (``TitleSpec.canonical_rules``;
+        with ``allow_optional_rules`` rules the pipeline does not play are kept as given)."""
+        from rl18xx.agent.alphazero.titles import title_spec
+
+        rules = (game.get("settings") or {}).get("optional_rules") or []
+        return list(title_spec(self.title).canonical_rules(rules, strict=False)) if rules else []
 
     def seed(self, game: dict) -> Optional[int]:
         from tests.title_replay_harness import game_seed
@@ -355,7 +370,13 @@ class Importer1822Family(TitleImporter):
         return None if price is None else int(price)
 
     def record_extra(self, game: dict) -> dict:
-        return {"stopped": self._stopped}
+        from rl18xx.agent.alphazero.titles import rules_name
+
+        return {
+            "stopped": self._stopped,
+            "rules": rules_name(self.title, self.optional_rules(game)),
+            "settings_optional_rules": list((game.get("settings") or {}).get("optional_rules") or []),
+        }
 
 
 def register() -> None:

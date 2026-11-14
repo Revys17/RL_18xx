@@ -528,6 +528,7 @@ def cmd_policy_gradient_generic(args):
         run_name=args.run_name,
         num_players=args.num_players,
         player_mix=_by_players(args.player_mix, float, "--player-mix"),
+        rules_mix=args.rules_mix,
         max_decisions_by_players=_by_players(args.max_decisions_by_players, int, "--max-decisions-by-players"),
         auction_stall_by_players=_by_players(args.auction_stall_by_players, int, "--auction-stall-by-players"),
         workers=args.workers,
@@ -1261,8 +1262,10 @@ def build_parser():
     )
     p.add_argument(
         "--allow-optional-rules", action="store_true",
-        help="The 1822 family: also convert games with optional rules (1822+, MX's higher cert limit, ...), each "
-        "replayed under its own rules -- a measurement; the pipeline's scope is base rules (TitleSpec.optional_rules)",
+        help="The 1822 family: also convert games with optional rules the pipeline does not play (MX's higher cert "
+        "limit, PNW's starting packets, ...), each replayed under its own rules -- a measurement. Without it a game "
+        "is in scope when its rules are the title's TitleSpec.optional_rules (1822: 1822+ and the tax haven; the "
+        "other family titles: base rules only)",
     )
 
     # pretrain-generic (two-stage supervised pretraining of the generic model)
@@ -1365,6 +1368,12 @@ def build_parser():
     p.add_argument("--games-per-task", type=int, default=32)
     p.add_argument("--num-players", type=int, default=4)
     p.add_argument("--player-mix", type=str, default=None, help="<players>:<weight>,... (as policy-gradient)")
+    p.add_argument(
+        "--rules-mix", type=str, default=None,
+        help="Optional-rules combinations each game draws from: <name>:<weight>,... or one <name> (names: 'base', "
+        "1822's 'plus', 'plus+nr', 'plus+nr+ss+th', 'th', ...; titles.TitleSpec.rules_name); default: the title's "
+        "mix (1822: the human games' combinations, titles.TitleSpec.rules_mix; other titles: base rules)",
+    )
     p.add_argument("--max-decisions-by-players", type=str, default=None)
     p.add_argument("--auction-stall-by-players", type=str, default=None)
     p.add_argument("--learner-seats", type=int, default=None, help="Outside league mode (default: half the table)")

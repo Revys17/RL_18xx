@@ -48,6 +48,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import engine_rs  # noqa: E402
 
 from rl18xx.agent.alphazero import generic_import_1822 as gi22  # noqa: E402
+from rl18xx.agent.alphazero.titles import rules_name  # noqa: E402
 from tests.title_replay_harness import SEAT_ID_BASE, game_seed, ruby_filtered_actions  # noqa: E402
 
 TITLE = "1822"
@@ -205,6 +206,7 @@ def audit_game_index(path: str, apply_check: bool = True) -> dict:
     base = SEAT_ID_BASE.get(TITLE, 0)
     seat = {p["id"]: base + i + 1 for i, p in enumerate(game["players"])}
     rules = list((game.get("settings") or {}).get("optional_rules") or [])
+    out["rules"] = rules_name(TITLE, rules)
     try:
         g = engine_rs.BaseGame.new_titled(
             TITLE, {v: f"Player {v - base}" for v in seat.values()}, rules or None, game_seed(game)
@@ -212,6 +214,7 @@ def audit_game_index(path: str, apply_check: bool = True) -> dict:
     except ValueError as exc:
         out["error"] = f"construction: {exc}"
         return out
+    out["finished"] = False
     raw = json.loads(json.dumps(game["actions"]))
     for a in raw:
         a["_fid"] = a.get("id")
@@ -274,6 +277,7 @@ def audit_game_index(path: str, apply_check: bool = True) -> dict:
         except BaseException as exc:  # noqa: BLE001
             out["error"] = f"replay rejected file id {fid}: {exc}"[:300]
             return out
+    out["finished"] = bool(g.finished)
     return out
 
 
@@ -331,6 +335,34 @@ def summarize_census(rows: list[dict]) -> dict:
     return out
 
 
+def _by_rules(results: list, kinds: list) -> dict:
+    """Per rules combination (``titles.rules_name``): games in scope, games whose replay reaches the end, replay
+    errors by kind, decisions and decisions by kind, examples of misses."""
+    out: dict = {}
+    for r in results:
+        if not r.get("players"):
+            continue  # skipped / out of scope
+        c = out.setdefault(
+            r.get("rules", "?"),
+            {
+                "games": 0, "finished": 0, "errors": Counter(), "decisions": 0, "kinds": Counter(),
+                "missing_examples": [],
+            },  # fmt: skip
+        )
+        c["games"] += 1
+        c["finished"] += bool(r.get("finished"))
+        if r["error"]:
+            c["errors"][r["error"].split(":")[0]] += 1
+        for (block, kind), v in r["counts"].items():
+            c["decisions"] += v
+            c["kinds"][kind] += v
+            if kind != "exact" and kind != "policy" and len(c["missing_examples"]) < 6:
+                c["missing_examples"].extend(f"{r['id']}@{i}:{block}" for i in r["examples"].get((block, kind), [])[:2])
+    for c in out.values():
+        c["errors"], c["kinds"] = dict(c["errors"]), dict(c["kinds"])
+    return out
+
+
 def main_index(args, paths: list[str]) -> int:
     from functools import partial
 
@@ -367,6 +399,16 @@ def main_index(args, paths: list[str]) -> int:
         census.extend(r["census"])
         times.extend(r["times"])
     kinds = ["exact", "policy", "missing", "ambiguous", "decode_mismatch", "apply_mismatch"]
+    if args.by_rules:
+        by_rules = _by_rules(results, kinds)
+        head = f"{'rules':16} {'games':>5} {'finish':>6} {'errors':>6} {'decisions':>9} "
+        print(head + " ".join(f"{k[:9]:>9}" for k in kinds))
+        for name, r in sorted(by_rules.items(), key=lambda kv: -kv[1]["games"]):
+            print(
+                f"{name:16} {r['games']:5} {r['finished']:6} {sum(r['errors'].values()):6} {r['decisions']:9} "
+                + " ".join(f"{r['kinds'].get(k, 0):9}" for k in kinds)
+                + f"  {r['errors'] or ''} {r['missing_examples'][:3]}"
+            )
     in_scope = dict(sorted(by_players.items()))
     print(f"{TITLE}: {len(paths)} games ({in_scope} in scope by players); errors: {dict(errors)}")
     for key, ex in error_examples.items():
@@ -404,6 +446,7 @@ def main_index(args, paths: list[str]) -> int:
                 "examples": {f"{b}|{k}": v for (b, k), v in examples.items()},
                 "timing": timing,
                 "census": summary,
+                **({"by_rules": _by_rules(results, kinds)} if args.by_rules else {}),
             },
             open(args.json_out, "w"),
             indent=1,
@@ -429,6 +472,11 @@ def main() -> int:
         "apply checks), the human price census of the price-bearing indices and the generator's time per decision",
     )
     ap.add_argument("--no-apply-check", action="store_true", help="--index: skip the apply-by-index state check")
+    ap.add_argument(
+        "--by-rules",
+        action="store_true",
+        help="--index: also report per optional-rules combination (titles.rules_name)",
+    )
     ap.add_argument("--census-rows", default=None, help="--index: write every priced human decision (JSONL)")
     args = ap.parse_args()
     global TITLE

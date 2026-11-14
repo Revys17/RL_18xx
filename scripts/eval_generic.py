@@ -10,6 +10,12 @@ cell from the head over the legal range, a price inside it). Each side runs in t
 ``--server``, on a generic inference server (the GPU when there is one). Side A holds ``--a-seats`` of
 ``--num-players`` seats in every arrangement; equal strength scores ``a_seats / players``.
 
+Optional rules (1822's 1822+ / tax-haven combinations, ``titles.TitleSpec.rules_mix``): ``--rules <name>`` plays
+every game under one combination (``base``, ``plus``, ``plus+nr+ss+th``, ...), ``--rules-mix <name>:<weight>,...``
+draws each start's combination (seeded by the start index, like the start: every seat arrangement of a start plays
+the same rules); the default is the title's mix (1822: the human games' combinations; other titles: base rules).
+Records carry the combination (``rules``); the summary splits decisions and scores by it (``by_rules``).
+
     uv run python scripts/eval_generic.py --title 1830 --match <a.pth>@0.5 <b.pth>@0.5 --num-players 4 \\
         --a-seats 1 --games 400 --auction-start --out logs/eval/<name>
 """
@@ -69,6 +75,7 @@ def play_games(game_indices: list, settings: dict) -> list:
     from rl18xx.agent.alphazero.generic_inference import slice_positions
     from rl18xx.agent.alphazero.generic_play import replayed_start, title_play
     from rl18xx.agent.alphazero.generic_tokens import encode_batch
+    from rl18xx.agent.alphazero.titles import draw_rules, rules_name
 
     torch.set_num_threads(1)
     rng = np.random.default_rng()
@@ -79,13 +86,15 @@ def play_games(game_indices: list, settings: dict) -> list:
     games = []
     for idx in game_indices:
         start_rng = random.Random(f"{settings['seed']}:{idx // len(seatings)}")
+        rules = draw_rules(settings.get("rules_mix") or {"base": 1.0}, start_rng, title)
         start, raw, _ = replayed_start(
             title, n, settings["start_positions"], settings["random_start_fraction"], rng=start_rng,
-            auction_fraction=1.0 if settings["auction_start"] else 0.0, auction_unlock=False,
+            auction_fraction=1.0 if settings["auction_start"] else 0.0, auction_unlock=False, optional_rules=rules,
         )  # fmt: skip
         seats = list(seatings[idx % len(seatings)])
         g = gpg._Game(raw=raw, uid=str(idx), opponent="", seat_models=seats, start=start.label)
         g.seed, g.idx = start.seed, idx
+        g.rules = rules_name(title, start.optional_rules)
         g.seating = [int(p.id) for p in raw.players]  # (the 1822 family reorders raw.players every Stock Round)
         games.append(g)
 
@@ -145,6 +154,8 @@ def play_games(game_indices: list, settings: dict) -> list:
             "auction_decisions": g.auction_decisions,
             "termination": g.termination,
             "start": g.start,
+            "rules": g.rules,
+            "optional_rules": list(getattr(g.raw, "optional_rules", None) or []),
         }
         if g.rejected:
             record["rejected_move"] = g.rejected
@@ -187,6 +198,7 @@ def run_match(a_spec: str, b_spec: str, args) -> tuple:
         "price_eps": args.price_eps,
         "save_games": args.save_games,
         "arrangements": arrangements(args.a_seats, args.num_players),
+        "rules_mix": dict(args.rules_mix),
     }
     seatings = settings["arrangements"]
     num_games = math.ceil(args.games / len(seatings)) * len(seatings)
@@ -205,8 +217,33 @@ def run_match(a_spec: str, b_spec: str, args) -> tuple:
             handle.shutdown()
     summary = summarize(a_spec, b_spec, records)
     summary["title"] = args.title
+    summary["rules_mix"] = dict(args.rules_mix)
+    summary["by_rules"] = by_rules(records, args.a_seats / args.num_players)
     summary["seconds"] = round(time.time() - started, 1)
     return summary, records
+
+
+def by_rules(records: list, equal: float) -> dict:
+    """Per rules combination: games, decisions (median / p90 / max), terminations and side A's score (equal =
+    ``equal``)."""
+    out: dict = {}
+    for name in sorted({r.get("rules", "base") for r in records}):
+        rs = [r for r in records if r.get("rules", "base") == name]
+        decisions = np.array([r["decisions"] for r in rs])
+        a_score = [sum(w for w, side in zip(r["win_share"], r["seats"]) if side == "A") for r in rs]
+        terminations: dict = {}
+        for r in rs:
+            terminations[r["termination"]] = terminations.get(r["termination"], 0) + 1
+        out[name] = {
+            "games": len(rs),
+            "decisions_median": float(np.median(decisions)),
+            "decisions_p90": float(np.percentile(decisions, 90)),
+            "decisions_max": int(decisions.max()),
+            "terminations": terminations,
+            "A_score": float(np.mean(a_score)),
+            "A_score_equal": equal,
+        }
+    return out
 
 
 def save_game_logs(out: Path, match_index: int, a: str, b: str, title: str, records: list) -> None:
@@ -224,7 +261,7 @@ def save_game_logs(out: Path, match_index: int, a: str, b: str, title: str, reco
             "title": title,
             "description": f"eval_generic {a} vs {b}, game {r['idx']}",
             "players": [{"id": pid, "name": pname} for pid, pname in r.pop("players")],
-            "settings": {"optional_rules": [], "seed": r.get("seed") or 0},
+            "settings": {"optional_rules": list(r.get("optional_rules") or []), "seed": r.get("seed") or 0},
             "actions": actions,
             "rl18xx": {"version": GAME_RECORD_VERSION, "kind": "eval_generic", "match": f"{a} vs {b}", **r},
         }
@@ -246,6 +283,15 @@ def main():
     parser.add_argument("--random-start-fraction", type=float, default=0.2)
     parser.add_argument("--auction-start", action="store_true", help="Every game from the opening (real rules)")
     parser.add_argument("--auction-stall-decisions", type=int, default=150)
+    rules = parser.add_mutually_exclusive_group()
+    rules.add_argument(
+        "--rules", default=None, help="Every game under this rules combination (base, plus, plus+nr, ...)"
+    )
+    rules.add_argument(
+        "--rules-mix", default=None,
+        help="<name>:<weight>,... each start draws its rules from (default: the title's mix, "
+        "titles.TitleSpec.rules_mix)",
+    )
     parser.add_argument("--server", action="store_true", help="Each side on a generic inference server")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", default=None)
@@ -255,6 +301,10 @@ def main():
 
     spec = title_spec(args.title)
     spec.check_players(args.num_players)
+    try:
+        args.rules_mix = spec.parse_rules_mix(args.rules if args.rules is not None else args.rules_mix)
+    except ValueError as e:
+        parser.error(str(e))
     if args.a_seats is None:
         args.a_seats = args.num_players // 2
     if args.save_games and not args.out:
@@ -279,6 +329,13 @@ def main():
             f"{summary['seconds']:.0f}s)",
             flush=True,
         )
+        if len(summary["by_rules"]) > 1 or list(summary["by_rules"]) != ["base"]:
+            for name, r in summary["by_rules"].items():
+                print(
+                    f"    {name:16} {r['games']:4} games, decisions median {r['decisions_median']:.0f} / max "
+                    f"{r['decisions_max']}, {r['terminations']}, A {r['A_score']:.3f}",
+                    flush=True,
+                )
     if args.out:
         out = Path(args.out)
         out.mkdir(parents=True, exist_ok=True)

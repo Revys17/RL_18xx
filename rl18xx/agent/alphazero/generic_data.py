@@ -16,7 +16,8 @@ Layout::
     <dir>/data.mdb, lock.mdb   LMDB: b"g:<game id>" -> lz4(pickle(record)), b"__meta__" -> meta JSON
     <dir>/meta.json            title(s), layout (version, fingerprint), encoder version at conversion,
                                sources, split, counts, match / skip statistics
-    <dir>/games.jsonl          one line per game: id, source, split, players, decisions, actions, finished, skips
+    <dir>/games.jsonl          one line per game: id, source, split, players, optional rules (and their
+                               combination name), decisions, actions, finished, skips
     <dir>/dropped.jsonl        one line per dropped game: id, source, players, reason
 
 Records are made by a per-title :class:`TitleImporter`. 1830's is the legacy converter's own matching
@@ -521,6 +522,8 @@ def _convert_file(job: tuple) -> tuple:
         "source": str(Path(path).parent),
         "split": record["split"],
         "players": record["num_players"],
+        "optional_rules": list(record.get("optional_rules") or []),
+        "rules": record_rules_name(record),
         "decisions": record_decisions(record),
         "actions": record["num_actions"],
         "finished": record["finished"],
@@ -652,6 +655,7 @@ def convert_dataset(
                     str(n): sum(1 for e in index if e["players"] == n) for n in sorted({e["players"] for e in index})
                 },
                 "by_source": _counts_by_source(index),
+                "by_rules": _counts_by_rules(index),
                 "dropped_by_reason_and_players": _dropped_counts(dropped),
             },
             "stats": stats,
@@ -687,6 +691,30 @@ def _dropped_counts(dropped: List[dict]) -> dict:
         by_players = out.setdefault(e["reason"], {})
         by_players[str(e["players"])] = by_players.get(str(e["players"]), 0) + 1
     return out
+
+
+def record_rules_name(record: dict) -> str:
+    """A record's rules combination (``titles.TitleSpec.rules_name``: ``"base"``, 1822's ``"plus+nr+ss+th"``, ...)."""
+    if record.get("rules"):
+        return str(record["rules"])
+    from rl18xx.agent.alphazero.titles import rules_name
+
+    return rules_name(record["title"], record.get("optional_rules") or ())
+
+
+def _counts_by_rules(index: List[dict]) -> dict:
+    """Per rules combination: games and positions per split and per player count of a conversion's index."""
+    out: dict = {}
+    for e in index:
+        c = out.setdefault(
+            e.get("rules", "base"), {"games": {}, "positions": {}, "games_by_players": {}, "positions_by_players": {}}
+        )
+        for key, sub, n in (("games", e["split"], 1), ("positions", e["split"], e["decisions"])):
+            c[key][sub] = c[key].get(sub, 0) + n
+        p = str(e["players"])
+        c["games_by_players"][p] = c["games_by_players"].get(p, 0) + 1
+        c["positions_by_players"][p] = c["positions_by_players"].get(p, 0) + e["decisions"]
+    return dict(sorted(out.items(), key=lambda kv: -sum(kv[1]["games"].values())))
 
 
 def _counts_by_source(index: List[dict]) -> dict:
@@ -1221,6 +1249,7 @@ def loader_worker_init(_worker_id: int) -> None:
 
 
 __all__ = [
+    "record_rules_name",
     "DATA_FORMAT",
     "DEFAULT_VALIDATION_PERCENTAGE",
     "DataSource",
