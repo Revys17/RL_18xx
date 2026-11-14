@@ -91,6 +91,18 @@ pub const HEX_FEATURES: &[&str] = &[
     "extra_tokens",     // tokens outside slots / 2
     "reserved_slots",   // / 6
     "laid_this_turn",
+    // -- version 2 (the 1822 family's map state; 0 for 1830 / 1867) --------
+    "cubes",            // builder cubes on the hex's tile / 2 (1822PNW, 1822MX)
+    "forest",           // 1822PNW forest marker (+$10 a route crossing it; no upgrade)
+    "assigned",         // company assignments on the hex (1822PNW P15 / P17, 1822CA P13)
+    "assignment_bonus", // route bonus of the hex's assignments / forest / max stop revenue
+    "grain_elevator",   // 1822CA
+    "port_west",        // 1822CA
+    "port_east",        // 1822CA
+    "dest_tokens",      // destination tokens in the hex's slots / 2
+    "coal_tokens",      // 1822PNW coal tokens / 2
+    "token_for_sale",   // a token here is up for auction (1822MX NdeM tokens): its price / sc
+    "token_on_block",   // ... and is the one being bid on now
 ];
 
 /// Tile features (`rl_spec_info(title)["tile_feat"]`): a catalog tile at
@@ -160,6 +172,15 @@ pub const GLOBAL_FEATURES: &[&str] = &[
     "trainless_majors", // / 4
     "pending_tokens",   // / 2
     "crowded_corps",    // / 2
+    // -- version 2 (the 1822 family; 0 for 1830 / 1867) ---------------------
+    "sr_idle",          // in a stock round, nothing sold, bought or bid yet this game (the first SR ending so ends the game)
+    "debt_interest",    // player debt interest rate / 100
+    "bid_tokens",       // bidding tokens per player / 10
+    "bids_this_turn",   // bids placed this turn / bids allowed per turn
+    "upgraded_this_turn", // the operator has upgraded a tile this turn
+    "pullman_attached", // this turn's routes: the pullman is attached to a train
+    "grain_attached",   // 1822CA: the grain train is attached
+    "attach_skipped",   // 1822CA: pullman / grain attachment declined this turn, / 2
 ];
 
 pub const PLAYER_FEATURES: &[&str] = &[
@@ -179,6 +200,13 @@ pub const PLAYER_FEATURES: &[&str] = &[
     "presidencies",    // / 4
     "sold_corps",      // corporations sold this stock round / 4
     "debt",            // 1822 player debt / sc
+    // -- version 2 (the 1822 family; 0 for 1830 / 1867) ---------------------
+    "bid_tokens_left", // bidding tokens not on a company / tokens per player
+    "certs_with_bids", // certificates + winning bids / cert limit (the limit bids check)
+    "double_cash",     // chose double cash (P7 / P9) this round: cash counts twice for the order
+    "in_queue",        // in the current sub-step's queue (1822MX: NdeM tile layers, token choosers, bidders)
+    "queue_pos",       // position in that queue / (seats - 1)
+    "tax_haven_value", // the tax haven this player owns: its cash + shares / sc
 ];
 
 pub const CORPORATION_FEATURES: &[&str] = &[
@@ -235,6 +263,12 @@ pub const CORPORATION_FEATURES: &[&str] = &[
     "pct_seat_5",
     "pct_market",
     "pct_ipo",
+    // -- version 2 (the 1822 family; 0 for 1830 / 1867) ---------------------
+    "payouts",         // 1822PNW regionals: dividends paid / 2 (acquirable after two)
+    "winding_down",    // 1822MX: the NdeM is being privatized
+    "subject",         // the current decision is about it (merger, acquisition, conversion, auction)
+    "token_abilities", // live corporation token abilities / 2 (1822: SECR's channel token, minor 14's)
+    "pending_token",   // a home / float token waits to be placed
 ];
 
 pub const COMPANY_FEATURES: &[&str] = &[
@@ -266,6 +300,16 @@ pub const COMPANY_FEATURES: &[&str] = &[
     "bid_seat_3",
     "bid_seat_4",
     "bid_seat_5",
+    // -- version 2 (the 1822 family; 0 for 1830 / 1867) ---------------------
+    "cash",            // the company's own money (tax haven, phase-revenue privates) / sc
+    "holdings_value",  // shares it holds (the tax haven) at market / sc
+    "bidbox_slot",     // its place in its bid-box row: (k + 1) / boxes, 0 = in none
+    "bidbox_first",    // the first minor box (unbid: removed with a train; 1822MX: the NdeM's)
+    "uses_left",       // remaining ability uses / 3 (an ability without a count: 1)
+    "used_this_or",    // per-OR uses spent / allowed (1822CA P14-P18)
+    "assigned",        // its assignment is on the map (`ent_hex` home = that hex)
+    "subject",         // the current decision is about it (a company mid-use, the sawmill's choice)
+    "holds_train",     // reserves a train for its buyer (`trains` relation to the type)
 ];
 
 pub const TRAIN_FEATURES: &[&str] = &[
@@ -315,7 +359,10 @@ pub const PHASE_FEATURES: &[&str] = &[
 
 /// `ent_ptr` columns. Per type:
 /// * global: acting entity, priority-deal seat, current phase, current lot
-///   (company or corporation being auctioned);
+///   (company or corporation being auctioned; the 1822 family: the entity
+///   the current decision is about, the corporation / company with the
+///   `subject` feature first named -- 1822MX's NdeM in its token auction,
+///   1822PNW's new major in a merger, an acquisition's selected minor, ...);
 /// * player: -, -, -, -;
 /// * corporation: president seat (owner), linked entity (1822PNW: the
 ///   associated major of a minor; 1822: the concession that founds a
@@ -328,7 +375,9 @@ pub const PHASE_FEATURES: &[&str] = &[
 pub const ENT_PTR_COLUMNS: &[&str] = &["owner", "link", "phase_a", "phase_b"];
 
 /// `ent_hex` columns: home hex, destination hex (corporations), the first
-/// hex of the company's map ability (companies).
+/// hex of the company's map ability (companies; once an assignable company
+/// is assigned -- 1822PNW's P15 / P17, 1822CA's P13 -- the hex it is
+/// assigned to).
 pub const ENT_HEX_COLUMNS: &[&str] = &["home", "destination"];
 
 /// `meta` columns.

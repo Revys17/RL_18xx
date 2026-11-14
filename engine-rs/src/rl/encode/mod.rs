@@ -40,7 +40,19 @@ pub use spec::{rl_spec_for, RlSpec};
 
 /// Bumped whenever a feature's meaning, order or normalization changes
 /// (checkpoints record it; a mismatch must refuse to load).
-pub const ENCODER_VERSION: u32 = 1;
+///
+/// * 1 (B1, 2026-11-13): the first schema.
+/// * 2 (2026-11-13): the 1822 family's state. Appended columns -- hex 11
+///   (builder cubes, assignments, grain / ports, token kinds, the NdeM token
+///   auction), global 8, player 6, corporation 5, company 9 -- are 0 for
+///   1830 and 1867, whose v1 columns are unchanged bit for bit (cargo
+///   `v1_columns_of_1830_and_1867_unchanged`); relations from a company
+///   (the tax haven's shares, a train private's train) and to 1822MX's NdeM
+///   (its token auction's high bid); 1822MX's NdeM typed national; the
+///   family's game-end flags, committed cash, cert count, net worth, the
+///   global lot pointer (the decision's subject) and an assigned company's
+///   hex now follow the family's own rules (`docs/rl_encoder.md`).
+pub const ENCODER_VERSION: u32 = 2;
 
 /// Seat tokens per position (= the value head's width, `encoder::MAX_PLAYERS`).
 pub const MAX_SEATS: usize = crate::encoder::MAX_PLAYERS;

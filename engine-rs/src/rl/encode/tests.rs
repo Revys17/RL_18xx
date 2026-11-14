@@ -225,6 +225,7 @@ fn check(g: &BaseGame, enc: &TokenEncoding, stats: &mut Stats) {
     }
 
     // relations
+    let is_family = g.g1822.is_some();
     let n_rel = enc.num_relations();
     stats.relations += n_rel;
     stats.max_relations = stats.max_relations.max(n_rel);
@@ -234,11 +235,14 @@ fn check(g: &BaseGame, enc: &TokenEncoding, stats: &mut Stats) {
         assert!(valid(s) && valid(d), "{ctx}: relation {r} ({s}, {d}, {k})");
         assert!(k > REL_PAD && (k as usize) < RELATION_KINDS.len());
         assert!(seen.insert((s, d, k)), "{ctx}: duplicate relation ({s}, {d}, {k})");
+        let is_company = |x: i32| matches!(enc.ent_type[x as usize], ENT_PRIVATE | ENT_CONCESSION | ENT_MINOR_PROXY);
         match k {
-            REL_SHARES => assert!(is_corp(d) && (is_seat(s) || is_corp(s))),
+            // a company holds shares only as the 1822 family's tax haven
+            REL_SHARES => assert!(is_corp(d) && (is_seat(s) || is_corp(s) || (is_family && is_company(s)))),
             REL_PRESIDENT => assert!(is_seat(s) && is_corp(d)),
-            REL_OWNS => assert!(matches!(enc.ent_type[d as usize], ENT_PRIVATE | ENT_CONCESSION | ENT_MINOR_PROXY)),
-            REL_TRAINS => assert!(is_corp(s) && enc.ent_type[d as usize] == ENT_TRAIN),
+            REL_OWNS => assert!(is_company(d)),
+            // a company holds a train only as an 1822 train private
+            REL_TRAINS => assert!((is_corp(s) || (is_family && is_company(s))) && enc.ent_type[d as usize] == ENT_TRAIN),
             REL_BID | REL_SOLD => assert!(is_seat(s)),
             _ => {}
         }
@@ -280,7 +284,9 @@ fn check(g: &BaseGame, enc: &TokenEncoding, stats: &mut Stats) {
     // seating order (BaseGame.players), as the descriptor vocabulary
     for s in 0..np {
         let pid = ids[(s + m[5] as usize) % np];
-        let want = (g.num_certs_internal(pid) as f32 / (g.cert_limit as f32).max(1.0)).clamp(-FEATURE_CLIP, FEATURE_CLIP);
+        // the 1822 family counts its own way (`g1822_num_certs`)
+        let n = if is_family { g.g1822_num_certs(pid) as f32 } else { g.num_certs_internal(pid) as f32 };
+        let want = (n / (g.cert_limit as f32).max(1.0)).clamp(-FEATURE_CLIP, FEATURE_CLIP);
         assert_eq!(enc.ent_feat[(1 + s) * F_ENT + certs_col], want, "{ctx}: seat {s} certs");
     }
     // seat 0 is the mover
@@ -631,6 +637,113 @@ fn random_walks_1822_family() {
     }
 }
 
+/// Version 2's 1822-family features on longer walks: which ones the walks
+/// reach (printed), their consistency with the engine (bid boxes, scores,
+/// the subject pointer, the tax haven's shares, train privates), and the
+/// ones every title must show.
+#[test]
+fn g1822_family_v2_features() {
+    let col = |list: &[&str], name: &str| list.iter().position(|x| *x == name).unwrap();
+    let v1 = |t: i32| v1_entity_width(t);
+    for title in ["1822", "1822PNW", "1822MX", "1822CA"] {
+        let spec = rl_spec_for(title);
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        let mut note = |k: String| *seen.entry(k).or_insert(0) += 1;
+        let mut positions = 0usize;
+        let range = player_range(title);
+        for players in [*range.start(), *range.end()] {
+            for seed in 1..=2u64 {
+                let mut g = new_game(title, players, seed + 20);
+                let mut rng = StdRng::seed_from_u64(seed * 31 + players as u64);
+                for _ in 0..2500 {
+                    let enc = g.encode_tokens();
+                    positions += 1;
+                    let ctx = format!("{title} {players}p seed {seed} move {}", g.action_log.len());
+                    for i in 0..enc.num_hexes {
+                        for c in V1_F_HEX..F_HEX {
+                            if enc.hex_feat[i * F_HEX + c] != 0.0 {
+                                note(format!("hex.{}", HEX_FEATURES[c]));
+                            }
+                        }
+                    }
+                    for j in 0..enc.num_entities {
+                        let t = enc.ent_type[j];
+                        let names = entity_features(t);
+                        for c in v1(t)..names.len() {
+                            if enc.ent_feat[j * F_ENT + c] != 0.0 {
+                                note(format!("{}.{}", ENTITY_TYPES[t as usize], names[c]));
+                            }
+                        }
+                    }
+                    for r in 0..enc.num_relations() {
+                        let (s, d, k) = (enc.rel[r * 3] as usize, enc.rel[r * 3 + 1] as usize, enc.rel[r * 3 + 2]);
+                        let company = |x: usize| matches!(enc.ent_type[x], ENT_PRIVATE | ENT_CONCESSION | ENT_MINOR_PROXY);
+                        if k == REL_SHARES && company(s) {
+                            note("rel.tax_haven_shares".into());
+                            assert_eq!(spec.companies[s - spec.e_company0].sym, g.fam().company_osth, "{ctx}");
+                        }
+                        if k == REL_TRAINS && company(s) {
+                            note("rel.company_train".into());
+                        }
+                        if k == REL_BID && matches!(enc.ent_type[d], ENT_MAJOR | ENT_MINOR | ENT_NATIONAL) {
+                            note("rel.bid_on_corporation".into());
+                        }
+                    }
+                    // the lot pointer names a subject
+                    let lot = enc.ent_ptr[3];
+                    if lot >= 0 {
+                        note("global.lot".into());
+                        let t = enc.ent_type[lot as usize];
+                        let c = col(entity_features(t), "subject");
+                        assert_eq!(enc.ent_feat[lot as usize * F_ENT + c], 1.0, "{ctx}: lot without the subject flag");
+                    }
+                    // a company is up for auction exactly when it sits in a bid box
+                    let in_sr = g.g1822.as_ref().unwrap().round.kind == crate::g1822::RoundKind::Stock;
+                    for k in 0..spec.companies.len() {
+                        let j = spec.e_company0 + k;
+                        let f = &enc.ent_feat[j * F_ENT..(j + 1) * F_ENT];
+                        let up = f[col(COMPANY_FEATURES, "up_for_auction")];
+                        let slot = f[col(COMPANY_FEATURES, "bidbox_slot")];
+                        if in_sr {
+                            assert_eq!(up > 0.0, slot > 0.0, "{ctx}: {} up {up} slot {slot}", spec.companies[k].sym);
+                        }
+                        assert!((0.0..=1.0).contains(&slot));
+                    }
+                    // the player's net worth is the engine's score
+                    let rot = enc.meta[5] as usize;
+                    let np = g.players.len();
+                    for s in 0..np {
+                        let pid = g.players[(s + rot) % np].id;
+                        let want = (g.g1822_player_value(pid) as f32 / g.starting_cash as f32 / 4.0).clamp(-FEATURE_CLIP, FEATURE_CLIP);
+                        let got = enc.ent_feat[(1 + s) * F_ENT + col(PLAYER_FEATURES, "net_worth")];
+                        assert!((got - want).abs() < 1e-5, "{ctx}: seat {s} net worth {got} vs {want}");
+                        let left = enc.ent_feat[(1 + s) * F_ENT + col(PLAYER_FEATURES, "bid_tokens_left")];
+                        assert!((0.0..=1.0).contains(&left), "{ctx}: bid tokens left {left}");
+                    }
+                    if !step(&mut g, &mut rng) {
+                        break;
+                    }
+                }
+            }
+        }
+        let mut keys: Vec<_> = seen.iter().collect();
+        keys.sort();
+        eprintln!("{title}: {positions} positions; v2 features seen (positions): {keys:?}");
+        for k in [
+            "global.debt_interest",
+            "global.bid_tokens",
+            "global.sr_idle",
+            "player.bid_tokens_left",
+            "player.certs_with_bids",
+            "minor_proxy.bidbox_slot",
+            "minor_proxy.bidbox_first",
+            "private.uses_left",
+        ] {
+            assert!(seen.contains_key(k), "{title}: the walks never showed {k}");
+        }
+    }
+}
+
 /// Mixed titles and player counts stack into one padded batch.
 #[test]
 fn batch_stacks_mixed_titles() {
@@ -702,6 +815,124 @@ fn seat_rotation_moves_seats_only() {
 }
 
 // ---------------------------------------------------------------------------
+// version 1's columns of 1830 and 1867 stay bit-identical
+// ---------------------------------------------------------------------------
+
+/// Version 1's widths: hex features, entity features per type, entity and hex
+/// pointers, meta. Columns appended since are zero (pointers -1) for 1830 and
+/// 1867.
+const V1_F_HEX: usize = 106;
+const V1_P_ENT: usize = 4;
+const V1_P_HEX: usize = 2;
+const V1_META: usize = 8;
+fn v1_entity_width(t: i32) -> usize {
+    match t {
+        ENT_GLOBAL => 29,
+        ENT_PLAYER => 16,
+        ENT_MAJOR | ENT_MINOR | ENT_NATIONAL => 53,
+        ENT_PRIVATE | ENT_CONCESSION | ENT_MINOR_PROXY => 28,
+        ENT_TRAIN => 17,
+        ENT_PHASE => 22,
+        _ => 0,
+    }
+}
+
+struct Digest(u64);
+impl Digest {
+    fn new() -> Self {
+        Digest(0xcbf2_9ce4_8422_2325)
+    }
+    fn u(&mut self, v: u64) {
+        for b in v.to_le_bytes() {
+            self.0 = (self.0 ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    fn f(&mut self, v: f32) {
+        self.u(v.to_bits() as u64)
+    }
+    fn i(&mut self, v: i32) {
+        self.u(v as u32 as u64)
+    }
+}
+
+/// Digest of version 1's columns of one encoding; asserts the columns
+/// appended since are zero / -1 (1830 and 1867 have none of the 1822 family's
+/// state).
+fn v1_digest(enc: &TokenEncoding, d: &mut Digest) {
+    let (h, e) = (enc.num_hexes, enc.num_entities);
+    d.i(enc.title_id);
+    for i in 0..h {
+        let row = &enc.hex_feat[i * F_HEX..(i + 1) * F_HEX];
+        row[..V1_F_HEX].iter().for_each(|v| d.f(*v));
+        assert!(row[V1_F_HEX..].iter().all(|v| *v == 0.0), "hex {i}: appended columns not zero");
+    }
+    for v in [&enc.hex_ptr, &enc.hex_res, &enc.hex_slot_city, &enc.hex_ids] {
+        v.iter().for_each(|x| d.i(*x));
+    }
+    for j in 0..e {
+        let t = enc.ent_type[j];
+        d.i(t);
+        let row = &enc.ent_feat[j * F_ENT..(j + 1) * F_ENT];
+        let w = v1_entity_width(t);
+        row[..w].iter().for_each(|v| d.f(*v));
+        assert!(row[w..].iter().all(|v| *v == 0.0), "entity {j}: appended columns not zero");
+        let p = &enc.ent_ptr[j * P_ENT..(j + 1) * P_ENT];
+        p[..V1_P_ENT].iter().for_each(|x| d.i(*x));
+        assert!(p[V1_P_ENT..].iter().all(|x| *x == PTR_NONE));
+        let p = &enc.ent_hex[j * P_HEX..(j + 1) * P_HEX];
+        p[..V1_P_HEX].iter().for_each(|x| d.i(*x));
+        assert!(p[V1_P_HEX..].iter().all(|x| *x == PTR_NONE));
+    }
+    d.u(enc.num_relations() as u64);
+    enc.rel.iter().for_each(|x| d.i(*x));
+    enc.rel_val.iter().for_each(|v| d.f(*v));
+    enc.meta[..V1_META].iter().for_each(|x| d.i(*x));
+    assert!(enc.meta[V1_META..].iter().all(|x| *x == 0));
+}
+
+fn walk_digest(title: &str, players: usize, seed: u64, max_moves: usize) -> (u64, usize) {
+    let mut g = new_game(title, players, seed);
+    let mut rng = StdRng::seed_from_u64(seed * 7919 + players as u64);
+    let mut d = Digest::new();
+    let mut n = 0;
+    for _ in 0..max_moves {
+        v1_digest(&g.encode_tokens(), &mut d);
+        n += 1;
+        if !step(&mut g, &mut rng) {
+            break;
+        }
+    }
+    v1_digest(&g.encode_tokens(), &mut d);
+    (d.0, n + 1)
+}
+
+/// 1830's and 1867's encodings are version 1's, bit for bit, on fixed random
+/// walks (the digests were taken from version 1's encoder, 1757bbf / 46c879b);
+/// every column appended since is zero (pointers -1) for them. A rules or
+/// generator change that moves these walks changes the digests too: re-take
+/// them from the previous encoder then.
+#[test]
+fn v1_columns_of_1830_and_1867_unchanged() {
+    let cases: &[(&str, usize, u64, u64)] = &[
+        ("1830", 3, 11, 0xf13b5fd4c3b71fee), // 1201 positions
+        ("1830", 4, 12, 0xeb716bac08b0d1ee), // 1201 positions
+        ("1830", 6, 13, 0xfb108a95c06046b3), // 572 positions
+        ("1867", 3, 11, 0x6a9d8cfe150c499d), // 1102 positions
+        ("1867", 4, 12, 0xebde5d1d8daac446), // 1056 positions
+        ("1867", 6, 13, 0xf704ab16dc35a2f7), // 1174 positions
+    ];
+    let mut got = Vec::new();
+    for &(title, players, seed, want) in cases {
+        let (digest, n) = walk_digest(title, players, seed, 1200);
+        eprintln!("(\"{title}\", {players}, {seed}, 0x{digest:016x}), // {n} positions");
+        got.push((title, players, seed, digest, want));
+    }
+    for (title, players, seed, digest, want) in got {
+        assert_eq!(digest, want, "{title} {players}p seed {seed}: version 1's columns changed");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // throughput (ignored): `cargo test --release --no-default-features
 // rl::encode::tests::bench -- --ignored --nocapture`
 // ---------------------------------------------------------------------------
@@ -723,6 +954,10 @@ fn collect_positions(title: &str, players: usize, seeds: u64, per_game: usize) -
     out
 }
 
+fn g1822_family(title: &str) -> bool {
+    crate::title::resolve(title).is_g1822_family()
+}
+
 fn time_per_position<F: FnMut(&BaseGame)>(games: &[BaseGame], reps: usize, mut f: F) -> f64 {
     let t = std::time::Instant::now();
     for _ in 0..reps {
@@ -736,7 +971,7 @@ fn time_per_position<F: FnMut(&BaseGame)>(games: &[BaseGame], reps: usize, mut f
 #[test]
 #[ignore]
 fn bench_encoders() {
-    for (title, players) in [("1830", 4), ("1867", 4), ("1822", 4), ("1822CA", 5)] {
+    for (title, players) in [("1830", 4), ("1867", 4), ("1822", 4), ("1822PNW", 4), ("1822MX", 4), ("1822CA", 5)] {
         let games = collect_positions(title, players, 3, 1500);
         let tok = time_per_position(&games, 5, |g| {
             std::hint::black_box(g.encode_tokens());
@@ -747,6 +982,13 @@ fn bench_encoders() {
             tok * 1e6,
             1.0 / tok
         );
+        if g1822_family(title) {
+            // the part of an encoding that evaluates Ruby's active step
+            let st = time_per_position(&games, 5, |g| {
+                std::hint::black_box(g.g1822_active_step());
+            });
+            line += &format!(" [active step {:.1} us]", st * 1e6);
+        }
         if title == "1830" {
             let legacy = time_per_position(&games, 5, |g| {
                 std::hint::black_box(g.encode_canonical());

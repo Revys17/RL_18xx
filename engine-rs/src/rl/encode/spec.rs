@@ -320,11 +320,16 @@ impl RlSpec {
         let corp_index: HashMap<&'static str, usize> =
             corp_defs.iter().enumerate().map(|(i, c)| (c.sym, i)).collect();
         let concessions: &[(&str, &str)] = family.map_or(&[], |f| f.concessions);
+        // 1822MX's NdeM is a major in the title data, but no player presides
+        // it: the pool owns it, its shareholders lay its track, it pays out
+        // by itself (1867's CN is the other such corporation). Encoder v2.
+        let mx = family.map_or(false, |f| f.variant == crate::g1822::family::Variant::Mx);
         let corps: Vec<CorpSpec> = corp_defs
             .iter()
             .map(|c| CorpSpec {
                 sym: c.sym,
                 ent_type: match c.corp_type {
+                    CorpType::Major if mx && c.sym == crate::g1822::mx::NDEM => ENT_NATIONAL,
                     CorpType::Major => ENT_MAJOR,
                     CorpType::Minor => ENT_MINOR,
                     CorpType::National => ENT_NATIONAL,

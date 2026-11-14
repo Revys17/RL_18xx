@@ -136,11 +136,35 @@ struct Holdings {
     other_pct: u16,
     /// (holding corporation entity, percent)
     corp_holders: Vec<(i32, u16)>,
+    /// (holding company entity, percent): the 1822 family's tax haven.
+    company_holders: Vec<(i32, u16)>,
 }
 
 /// A slot reservation: (spec hex, city or -1 = the hex, slot or -1 = the
 /// first free slot, corporation entity).
 type Reservation = (usize, i32, i32, i32);
+
+/// The 1822 family's per-position state beyond the shared engine's
+/// (encoder version 2), gathered once per encoding.
+struct FamilyState {
+    /// Corporations / companies the current decision is about, in order of
+    /// importance (`subject` features; the first is the global lot pointer).
+    subject_corps: Vec<String>,
+    subject_companies: Vec<String>,
+    /// Players in the current sub-step's queue, in order.
+    queue: Vec<u32>,
+    /// Bid boxes: (company, slot k, boxes in its row, the first minor box).
+    bidbox: Vec<(String, usize, usize, bool)>,
+    /// Hex assignments: (spec hex, key: a company sym or "forest").
+    assignments: Vec<(usize, String)>,
+    /// 1822MX's NdeM token auction while it runs: (spec hex, price) of each
+    /// token for sale, the one up for bid, the high bid and its bidder.
+    tokens_for_sale: Vec<(usize, i32)>,
+    token_up: Option<usize>,
+    high_bid: Option<(u32, i32)>,
+    /// 1822PNW's paper-mill bonus in this phase.
+    mill_amount: i32,
+}
 
 struct Ctx<'a> {
     g: &'a BaseGame,
@@ -157,6 +181,8 @@ struct Ctx<'a> {
     /// game corporation index -> spec corporation index.
     corp_spec: Vec<i32>,
     phase_idx: i32,
+    /// The 1822 family's extra state (None for other titles).
+    fam: Option<FamilyState>,
 }
 
 impl<'a> Ctx<'a> {
@@ -203,6 +229,21 @@ impl BaseGame {
     /// `g1822_acting_player`'s for the 1822 family. None when the game is
     /// over or nobody acts.
     pub(crate) fn rl_mover_id(&self) -> Option<u32> {
+        self.rl_mover_at(self.rl_g1822_active_step())
+    }
+
+    /// The 1822 family's active step (Ruby `active_step`), None for other
+    /// titles or a finished game. An encoding evaluates it once and hands it
+    /// to the mover and step-kind readers (each evaluation runs the steps'
+    /// `actions`: ~10-17 us).
+    fn rl_g1822_active_step(&self) -> Option<usize> {
+        if self.g1822.is_none() || self.finished {
+            return None;
+        }
+        self.g1822_active_step()
+    }
+
+    fn rl_mover_at(&self, active: Option<usize>) -> Option<u32> {
         if self.finished {
             return None;
         }
@@ -210,7 +251,7 @@ impl BaseGame {
             return self.acting_player_id_pub();
         }
         use crate::g1822::Ent;
-        let bi = self.g1822_active_step()?;
+        let bi = active?;
         match self.g1822_step_current_entity(bi)? {
             Ent::Player(p) => Some(p),
             Ent::Corp(c) if self.g1822_mx_is_ndem(&c) => self.g1822_mx_ndem_acting_player(),
@@ -243,12 +284,16 @@ impl BaseGame {
     /// pending home tokens, discards, a DH teleport), then the round's own
     /// step / the operating turn's program counter.
     pub(crate) fn rl_step_kind(&self) -> &'static str {
+        self.rl_step_kind_at(self.rl_g1822_active_step())
+    }
+
+    fn rl_step_kind_at(&self, active: Option<usize>) -> &'static str {
         if self.finished {
             return "none";
         }
         if self.g1822.is_some() {
             use crate::g1822::Step as S;
-            let Some(i) = self.g1822_active_step() else { return "none" };
+            let Some(i) = active else { return "none" };
             return match self.rnd().steps[i] {
                 S::DiscardTrain => "DiscardTrain",
                 S::BuySellParShares => "BuySellParShares",
@@ -339,6 +384,120 @@ impl BaseGame {
         }
     }
 
+    /// The 1822 family's extra state for version 2's features.
+    fn rl_family_state(&self, spec: &RlSpec, active: Option<usize>) -> Option<FamilyState> {
+        use crate::g1822::{mx, AcquireState, MergeState, Step};
+        let st = self.g1822.as_deref()?;
+        let r = &st.round;
+        let fam = self.fam();
+        let active_step = active.map(|i| r.steps[i]);
+        let ndem_auction = r.ndem_auction.as_ref().filter(|_| self.g1822_mx_auction_active());
+
+        let mut subject_corps: Vec<String> = Vec::new();
+        let mut subject_companies: Vec<String> = Vec::new();
+        let add = |s: &Option<String>, v: &mut Vec<String>| {
+            if let Some(s) = s {
+                if !v.contains(s) {
+                    v.push(s.clone());
+                }
+            }
+        };
+        if ndem_auction.is_some() {
+            add(&Some(mx::NDEM.to_string()), &mut subject_corps);
+        }
+        if r.merge_state != MergeState::None {
+            for s in [&r.merge_new, &r.merge_assoc, &r.merge_unassoc] {
+                add(s, &mut subject_corps);
+            }
+        }
+        if r.acquire_state != AcquireState::SelectMinor {
+            add(&r.selected_minor, &mut subject_corps);
+        }
+        if active_step == Some(Step::AcquisitionTrack) {
+            add(&r.ca.acquiring_major, &mut subject_corps);
+        }
+        add(&r.converting_major, &mut subject_corps);
+        add(&r.p20_minor, &mut subject_corps);
+        add(&r.special_track_company, &mut subject_companies);
+        add(&r.special_choose_company, &mut subject_companies);
+        if r.ca.sawmill_state == crate::g1822::ca::SawmillState::Assigned {
+            add(&Some(crate::g1822::ca::COMPANY_SAWMILL.to_string()), &mut subject_companies);
+        }
+
+        // the sub-step's queue of deciding players (1822MX's NdeM)
+        let mut queue: Vec<u32> = Vec::new();
+        let mut tokens_for_sale = Vec::new();
+        let (mut token_up, mut high_bid) = (None, None);
+        if let Some(a) = ndem_auction {
+            queue = if a.up.is_some() { a.remaining_bidders.clone() } else { a.remaining_choosers.clone() };
+            for (k, t) in a.available.iter().enumerate() {
+                if let Some(&hi) = spec.hex_index.get(t.hex.as_str()) {
+                    tokens_for_sale.push((hi, t.cost));
+                    if a.up == Some(k) {
+                        token_up = Some(hi);
+                    }
+                }
+            }
+            if let (Some(_), Some(p)) = (a.up, a.high_bidder) {
+                high_bid = Some((p, a.high_bid));
+            }
+        } else if active_step == Some(Step::Track)
+            && self.g1822_is_mx()
+            && self.g1822_operator().as_deref() == Some(mx::NDEM)
+        {
+            queue = r.ndem_layers.clone();
+        }
+
+        // bid boxes: minors, concessions, privates
+        let mut bidbox = Vec::new();
+        if r.kind == crate::g1822::RoundKind::Stock {
+            let rows = [
+                (self.bidbox_minors(), fam.bidding_box_minor_count),
+                (self.bidbox_concessions(), fam.bidding_box_concession_count),
+                (self.bidbox_privates(), fam.bidding_box_private_count),
+            ];
+            for (row, (list, size)) in rows.into_iter().enumerate() {
+                let size = size.max(list.len()).max(1);
+                for (k, co) in list.into_iter().enumerate() {
+                    bidbox.push((co, k, size, row == 0 && k == 0));
+                }
+            }
+        }
+
+        let mut assignments = Vec::new();
+        for (hex, keys) in &st.hex_assignments {
+            if let Some(&hi) = spec.hex_index.get(hex.as_str()) {
+                assignments.extend(keys.iter().map(|k| (hi, k.clone())));
+            }
+        }
+        let mill_amount = if crate::g1822::operating::ruby_to_i(&self.phase.name) < 5 { 10 } else { 30 };
+        Some(FamilyState {
+            subject_corps,
+            subject_companies,
+            queue,
+            bidbox,
+            assignments,
+            tokens_for_sale,
+            token_up,
+            high_bid,
+            mill_amount,
+        })
+    }
+
+    /// Route bonus of an 1822 hex assignment (the router's values): a
+    /// 1822PNW forest $10 a crossing, its ski haus (P17) $30, its paper mill
+    /// (P15) the phase's mill amount, 1822CA's sawmill (P13) its chosen bonus.
+    fn rl_assignment_bonus(&self, key: &str, fs: &FamilyState) -> i32 {
+        let ca = self.g1822_is_ca();
+        match key {
+            "forest" => 10,
+            "P17" if !ca => 30,
+            "P15" if !ca => fs.mill_amount,
+            k if ca && k == crate::g1822::ca::COMPANY_SAWMILL => self.g1822.as_deref().map_or(0, |st| st.ca.sawmill_bonus),
+            _ => 0,
+        }
+    }
+
     fn rl_priority_deal_player(&self) -> u32 {
         match &self.round {
             Round::Stock(s) if self.g1822.is_none() => s.priority_deal_player,
@@ -357,7 +516,8 @@ impl BaseGame {
         // seats: the seating order (`BaseGame.players`, the descriptor vocabulary's
         // players), rotated so that seat 0 is the mover
         let seat_ids: Vec<u32> = self.players.iter().map(|p| p.id).collect();
-        let mover = self.rl_mover_id();
+        let active = self.rl_g1822_active_step();
+        let mover = self.rl_mover_at(active);
         let rotation = mover.and_then(|m| seat_ids.iter().position(|&x| x == m)).unwrap_or(0);
 
         // Game index -> spec index: the same order on every game of a title
@@ -397,6 +557,7 @@ impl BaseGame {
             company_ent,
             corp_spec,
             phase_idx,
+            fam: self.rl_family_state(spec, active),
         };
 
         let h = spec.num_hexes();
@@ -435,7 +596,7 @@ impl BaseGame {
         out.meta = [
             spec.title_id,
             round_kind_id(self.rl_round_kind()),
-            step_kind_id(self.rl_step_kind()),
+            step_kind_id(self.rl_step_kind_at(active)),
             if self.finished { PTR_NONE } else { acting },
             np as i32,
             rotation as i32,
@@ -451,6 +612,11 @@ impl BaseGame {
     // -- holdings ------------------------------------------------------------
 
     fn rl_holdings(&self, ctx: &Ctx) -> Vec<Holdings> {
+        // the 1822 family's tax haven holds shares for its company's owner
+        let tax_haven = match self.g1822 {
+            Some(_) if !self.fam().company_osth.is_empty() => ctx.company_ent_sym(self.fam().company_osth),
+            _ => PTR_NONE,
+        };
         self.corporations
             .iter()
             .map(|c| {
@@ -485,6 +651,12 @@ impl BaseGame {
                         }
                     } else {
                         h.other_pct += pct;
+                        if tax_haven >= 0 && o == crate::g1822::TAX_HAVEN_OWNER {
+                            match h.company_holders.iter_mut().find(|(e, _)| *e == tax_haven) {
+                                Some(x) => x.1 += pct,
+                                None => h.company_holders.push((tax_haven, pct)),
+                            }
+                        }
                     }
                 }
                 h
@@ -597,6 +769,7 @@ impl BaseGame {
             let mut city_first_slot = [usize::MAX; 8];
             let mut city_slots = [0usize; 8];
             let (mut n_tokens, mut n_neutral, mut n_extra, mut free) = (0usize, 0usize, 0usize, 0usize);
+            let (mut n_dest, mut n_coal) = (0usize, 0usize);
             for (ci, city) in tile.cities.iter().enumerate() {
                 if ci < 8 {
                     city_first_slot[ci] = k;
@@ -617,6 +790,11 @@ impl BaseGame {
                             n_tokens += 1;
                             if ent == PTR_NEUTRAL {
                                 n_neutral += 1;
+                            }
+                            match t.token_type.as_str() {
+                                "destination" => n_dest += 1,
+                                "coal" => n_coal += 1,
+                                _ => {}
                             }
                         }
                         None => free += 1,
@@ -739,6 +917,37 @@ impl BaseGame {
             w.put(n_extra as f32 / 2.0);
             w.put(n_reserved as f32 / 6.0);
             w.flag(laid.iter().any(|h| h == coord));
+            // -- version 2: the 1822 family's map state (0 elsewhere) ---------------
+            match (ctx.fam.as_ref(), self.g1822.as_deref()) {
+                (Some(fs), Some(st)) => {
+                    use crate::g1822::ca::{EAST_PORTS, GRAIN_ELEVATORS, WEST_PORTS};
+                    w.put(st.builder_cubes.get(&tile.id).copied().unwrap_or(0) as f32 / 2.0);
+                    let (mut forest, mut n_assigned, mut bonus) = (false, 0usize, 0i32);
+                    for (_, key) in fs.assignments.iter().filter(|a| a.0 == i) {
+                        if key == "forest" {
+                            forest = true;
+                        } else {
+                            n_assigned += 1;
+                        }
+                        bonus += self.rl_assignment_bonus(key, fs);
+                    }
+                    w.flag(forest);
+                    w.put(n_assigned as f32);
+                    w.put(bonus as f32 / ms);
+                    let ca = self.g1822_is_ca();
+                    w.flag(ca && GRAIN_ELEVATORS.contains(&coord));
+                    w.flag(ca && WEST_PORTS.contains(&coord));
+                    w.flag(ca && EAST_PORTS.contains(&coord));
+                    w.put(n_dest as f32 / 2.0);
+                    w.put(n_coal as f32 / 2.0);
+                    let sale = fs.tokens_for_sale.iter().filter(|t| t.0 == i).map(|t| t.1).max();
+                    w.put(sale.unwrap_or(0) as f32 / ctx.sc);
+                    w.flag(fs.token_up == Some(i));
+                }
+                _ => {
+                    w.slice(11);
+                }
+            }
             w.done(F_HEX);
         }
         reserved_corps
@@ -820,8 +1029,18 @@ impl BaseGame {
             let mut w = W::new(&mut out.ent_feat[0..F_ENT]);
             w.put(self.bank.cash as f32 / spec.bank_cash);
             w.flag(self.bank_broken);
-            w.flag(self.game_end_triggered);
-            w.flag(self.final_turn.is_some());
+            match g1822 {
+                // the family latches its own trigger: "current_or" ends the
+                // game after this (or the next) OR, "full_or" after the set
+                Some(st) => {
+                    w.flag(st.game_end_trigger.is_some());
+                    w.flag(st.game_end_trigger.as_ref().map_or(false, |(_, t)| t == "current_or"));
+                }
+                None => {
+                    w.flag(self.game_end_triggered);
+                    w.flag(self.final_turn.is_some());
+                }
+            }
             w.flag(self.finished);
             w.put(self.turn as f32 / 20.0);
             let (rn, tot) = match &self.round {
@@ -890,6 +1109,25 @@ impl BaseGame {
                 _ => 0,
             };
             w.put(crowded as f32 / 2.0);
+            // -- version 2: the 1822 family (0 elsewhere) ------------------------------
+            match g1822 {
+                Some(st) => {
+                    let f = self.fam();
+                    let r = &st.round;
+                    let stock = r.kind == crate::g1822::RoundKind::Stock;
+                    w.flag(stock && st.nothing_sold_in_sr);
+                    w.put(f.player_loan_interest_rate as f32 / 100.0);
+                    w.put((f.bidding_tokens)(np) as f32 / 10.0);
+                    w.ratio(if stock { r.bid_actions as f32 } else { 0.0 }, f.bidding_tokens_per_action as f32);
+                    w.flag(r.upgraded_track);
+                    w.flag(r.pullman_train.is_some());
+                    w.flag(r.ca.grain_train.is_some());
+                    w.put((r.ca.skipped_pullman as u8 + r.ca.skipped_grain as u8) as f32 / 2.0);
+                }
+                None => {
+                    w.slice(8);
+                }
+            }
             w.done(GLOBAL_FEATURES.len());
         }
         let lot = if let Some(a) = auction {
@@ -899,6 +1137,13 @@ impl BaseGame {
             }
         } else if let Some(ba) = stock.and_then(|s| s.bid_auction.as_ref()) {
             ctx.corp_ent_sym(&ba.corporation_sym)
+        } else if let Some(fs) = ctx.fam.as_ref() {
+            // the 1822 family: the entity the decision is about
+            match (fs.subject_corps.first(), fs.subject_companies.first()) {
+                (Some(c), _) => ctx.corp_ent_sym(c),
+                (None, Some(co)) => ctx.company_ent_sym(co),
+                _ => PTR_NONE,
+            }
         } else {
             PTR_NONE
         };
@@ -967,6 +1212,21 @@ impl BaseGame {
                 _ => 0,
             };
             let debt = if g1822.is_some() { self.player_debt(pid) as f32 } else { 0.0 };
+            // the 1822 family: its own cert count (P16 / P11 -1, the NdeM and
+            // owner-only companies exempt), Ruby's committed cash (winning
+            // bids only) and its score (debt off, the tax haven on)
+            let (certs, committed_v, net_worth) = match g1822 {
+                Some(_) => (
+                    self.g1822_num_certs(pid) as f32,
+                    self.g1822_committed_cash(pid),
+                    self.g1822_player_value(pid) as f32,
+                ),
+                None => (
+                    certs,
+                    committed.get(&pid).copied().unwrap_or(0),
+                    player.cash as f32 + share_value + company_value,
+                ),
+            };
             let mut w = W::new(&mut out.ent_feat[ent * F_ENT..(ent + 1) * F_ENT]);
             w.put(1.0);
             w.flag(seat == 0 && ctx.mover.is_some());
@@ -975,8 +1235,8 @@ impl BaseGame {
             w.put((cl - certs) / cl);
             w.flag(pid == priority);
             w.put(order_pos.map_or(0.0, |p| p / ((np as f32 - 1.0).max(1.0))));
-            w.put(committed.get(&pid).copied().unwrap_or(0) as f32 / sc);
-            w.put((player.cash as f32 + share_value + company_value) / sc / 4.0);
+            w.put(committed_v as f32 / sc);
+            w.put(net_worth / sc / 4.0);
             w.put(share_value / sc / 4.0);
             w.put(company_value / sc);
             w.flag(player.bankrupt);
@@ -984,6 +1244,25 @@ impl BaseGame {
             w.put(presidents.iter().filter(|p| **p == Some(pid)).count() as f32 / 4.0);
             w.put(sold_corps as f32 / 4.0);
             w.put(debt / sc);
+            // -- version 2: the 1822 family (0 elsewhere) ------------------------------
+            match (g1822, ctx.fam.as_ref()) {
+                (Some(st), Some(fs)) => {
+                    let tokens = (self.fam().bidding_tokens)(np) as f32;
+                    let my_bids = st.round.bids.values().filter(|bs| bs.iter().any(|b| b.player == pid)).count() as f32;
+                    w.ratio(tokens - my_bids, tokens);
+                    w.put(self.g1822_num_certs_with_bids(pid) as f32 / cl);
+                    w.flag(st.double_cash_choice == Some(pid));
+                    let q = fs.queue.iter().position(|&p| p == pid);
+                    w.flag(q.is_some());
+                    w.put(q.map_or(0.0, |p| p as f32 / ((np as f32 - 1.0).max(1.0))));
+                    let osth = self.fam().company_osth;
+                    let haven = !osth.is_empty() && !self.co_closed(osth) && self.co_owner(osth) == pid_eid;
+                    w.put(if haven { self.g1822_tax_haven_value() as f32 / sc } else { 0.0 });
+                }
+                _ => {
+                    w.slice(6);
+                }
+            }
             w.done(PLAYER_FEATURES.len());
         }
 
@@ -1069,6 +1348,20 @@ impl BaseGame {
             }
             w.put(h.market_pct as f32 / 100.0);
             w.put(h.ipo_pct as f32 / 100.0);
+            // -- version 2: the 1822 family (0 elsewhere) ------------------------------
+            match (g1822, ctx.fam.as_ref()) {
+                (Some(st), Some(fs)) => {
+                    let sym = corp.sym.as_str();
+                    w.put(st.regional_payout_count.get(sym).copied().unwrap_or(0) as f32 / 2.0);
+                    w.flag(self.g1822_mx_is_ndem(sym) && st.ndem_state == crate::g1822::mx::NdemState::Closing);
+                    w.flag(fs.subject_corps.iter().any(|s| s == sym));
+                    w.put(st.corp_token_abilities.get(sym).map_or(0, |v| v.len()) as f32 / 2.0);
+                    w.flag(st.round.pending_tokens.iter().any(|p| p.corp == sym));
+                }
+                _ => {
+                    w.slice(5);
+                }
+            }
             w.done(CORPORATION_FEATURES.len());
 
             // pointers
@@ -1168,10 +1461,61 @@ impl BaseGame {
                     seat_bids[s] = *price as f32 / sc;
                 }
             }
+            // -- version 2: the 1822 family (0 elsewhere) ------------------------------
+            let mut owner = owner;
+            let mut ability_hex = cs.ability_hex;
+            match (g1822, ctx.fam.as_ref()) {
+                (Some(st), Some(fs)) => {
+                    let sym = co.sym.as_str();
+                    let f = self.fam();
+                    let haven = !f.company_osth.is_empty() && sym == f.company_osth;
+                    let cash = if haven {
+                        st.tax_haven_cash
+                    } else {
+                        st.phase_revenue.get(sym).copied().flatten().unwrap_or(0)
+                    };
+                    w.put(cash as f32 / sc);
+                    w.put(if haven { (self.g1822_tax_haven_value() - st.tax_haven_cash) as f32 / sc } else { 0.0 });
+                    match fs.bidbox.iter().find(|b| b.0 == sym) {
+                        Some((_, k, size, first)) => {
+                            w.put((k + 1) as f32 / *size as f32);
+                            w.flag(*first);
+                        }
+                        None => {
+                            w.slice(2);
+                        }
+                    }
+                    let abilities = st.abilities.get(sym).map(|v| v.as_slice()).unwrap_or(&[]);
+                    let mut uses: i32 = abilities.iter().filter(|a| !a.used).map(|a| a.count.unwrap_or(1).max(0)).sum();
+                    if sym == f.company_lcdr && st.lcdr_token_ability {
+                        uses += 1;
+                    }
+                    w.put(uses as f32 / 3.0);
+                    let per_or: i32 = abilities.iter().filter_map(|a| a.count_per_or).sum();
+                    let this_or: i32 = abilities.iter().filter(|a| a.count_per_or.is_some()).map(|a| a.count_this_or).sum();
+                    w.ratio(this_or as f32, per_or as f32);
+                    let assigned = fs.assignments.iter().find(|a| a.1 == sym);
+                    w.flag(assigned.is_some());
+                    if let Some((hi, _)) = assigned {
+                        ability_hex = *hi as i32;
+                    }
+                    w.flag(fs.subject_companies.iter().any(|s| s == sym));
+                    w.flag(st.company_trains.contains_key(sym));
+                    // 1822CA: a closed sawmill pays its bonus to the corporation that assigned it
+                    if self.g1822_is_ca() && sym == crate::g1822::ca::COMPANY_SAWMILL {
+                        if let Some(o) = &st.ca.sawmill_owner {
+                            owner = ctx.corp_ent_sym(o);
+                        }
+                    }
+                }
+                _ => {
+                    w.slice(9);
+                }
+            }
             w.done(COMPANY_FEATURES.len());
             out.ent_ptr[ent * P_ENT] = owner;
             out.ent_ptr[ent * P_ENT + 1] = cs.link.as_deref().map_or(PTR_NONE, |s| ctx.corp_ent_sym(s));
-            out.ent_hex[ent * P_HEX] = cs.ability_hex;
+            out.ent_hex[ent * P_HEX] = ability_hex;
         }
 
         // -- train types --------------------------------------------------------------
@@ -1286,7 +1630,7 @@ impl BaseGame {
                     push(RlSpec::seat_entity(s) as i32, ce, REL_SHARES, h.seat_pct[s] as f32 / 100.0);
                 }
             }
-            for &(holder, pct) in &h.corp_holders {
+            for &(holder, pct) in h.corp_holders.iter().chain(&h.company_holders) {
                 push(holder, ce, REL_SHARES, pct as f32 / 100.0);
             }
             if let Some(p) = corp.president_id() {
@@ -1314,6 +1658,18 @@ impl BaseGame {
             }
             push(ctx.owner_ent(&co.owner), ent, REL_OWNS, 1.0);
         }
+        // the 1822 family's train privates: the train each reserves
+        if let Some(st) = self.g1822.as_deref() {
+            for (gi, co) in self.companies.iter().enumerate() {
+                let ent = ctx.company_ent[gi];
+                if co.closed || ent < 0 {
+                    continue;
+                }
+                if let Some(&ti) = st.company_trains.get(&co.sym).and_then(|t| spec.train_index.get(t.name.as_str())) {
+                    push(ent, (spec.e_train0 + ti) as i32, REL_TRAINS, 1.0 / 4.0);
+                }
+            }
+        }
         // standing bids
         match (&self.round, self.g1822.as_deref()) {
             (_, Some(st)) => {
@@ -1323,6 +1679,10 @@ impl BaseGame {
                             push(ctx.seat_ent(b.player), ctx.company_ent[gi], REL_BID, b.price as f32 / sc);
                         }
                     }
+                }
+                // 1822MX: the high bid for the NdeM token up for auction
+                if let Some((p, price)) = ctx.fam.as_ref().and_then(|fs| fs.high_bid) {
+                    push(ctx.seat_ent(p), ctx.corp_ent_sym(crate::g1822::mx::NDEM), REL_BID, price as f32 / sc);
                 }
             }
             (Round::Auction(a), None) => {
