@@ -1707,7 +1707,18 @@ round; leave it 0). Its opening auction is SR1, where every bid locks cash and m
    points, so these games carry no gradient toward bidding: wasted starts. Proposal: the generator redraws a start
    whose game ends in its opening Stock Round (a generator policy, not a rules change; counted like
    `skipped_starts`), or the family starts from SR1-end and mid-game positions only (`--auction-fraction 0`).
-   No later Stock Round ended this way in these games.
+   No later Stock Round ended this way in these games. **Decided (the user, 2026-11-14: "Ya probably just
+   redraw"), done for all four titles**: `generic_play.all_pass_opening(title, raw)` (finished, end reason `dnf`,
+   in the first Stock Round -- only that one can end so: any purchase, sale or bid clears Ruby's flag for the rest of
+   the game) marks such a game; `policy-gradient-generic` drops it (no rows, no league credit, no score) and its
+   slot plays a fresh draw (rules, start, seats), counted per update as `all_pass_redrawn` / `all_pass_rate` (and
+   `p<n>_all_pass_redrawn` with a player mix); `scripts/eval_generic.py` replays it from the start index's next
+   draw (`<seed>:<start>:r<k>`), so ties do not dilute the score (records `all_pass_redrawn`, summary total). A slot
+   keeps the 21st all-pass opening in a row (`MAX_ALL_PASS_REDRAWS` 20, termination `all_pass`: a policy that
+   always passes must not spin a worker). `--no-redraw-all-pass` / `--keep-all-pass` turn it off. The rule itself is
+   unchanged: replay, human import and the engine stay Ruby-faithful. Tests: `test_all_pass_opening_is_recognized`,
+   `test_pg_redraws_an_all_pass_opening`, `test_eval_redraws_an_all_pass_opening`
+   (`tests/agent/alphazero/test_generic_1822_rules.py`).
 2. **1822MX's Ruby dead end**: "the NdeM has no token left for the minor's home (Ruby raises)" in a late Stock Round
    (turn 10-11): Ruby crashes there too, and the engine mirrors it. Never in the 229 human games; 18 of 39 T 0.5
    self-play games (10 of 12 at 3p), 9 of 48 PG games, none of 8 at T 1.0. `generic_pg._advance` now ends such a
@@ -1769,7 +1780,9 @@ choices, 1 payoff above cash -- A4's documented PNW misses); MX 9 / 9 / 2 / 0; 1
    (`plus_expansion` and its variants, `tax_haven_multiple`); the engine and A4's layout support all four rules (A4's
    fuzz and completeness ran them). Admit 1822+ -- and 1822MX's `higher_cert_limit` (51 games), PNW's
    `starting_packet` / `remove_three_ls` / `remove_two_ls` (65)? `convert-generic --allow-optional-rules` converts
-   them (a measurement); self-play would need them in `TitleSpec.optional_rules`.
+   them (a measurement); self-play would need them in `TitleSpec.optional_rules`. **Decided for 1822 (the user,
+   2026-11-14: "Yes 1822+ please")**: 1822 imports and plays all four options, see "1822+: the optional rules"
+   below; PNW / MX / CA stay on base rules.
 2. **The start**: the end of SR1 as the family's human start (above).
 3. **Caps and the three early endings** (above).
 4. **Random openings** play SR1 uniformly (bids `[lo, 2 lo]`, privates `[0, 20 steps]`): keep?
@@ -1793,3 +1806,278 @@ choices, 1 payoff above cash -- A4's documented PNW misses); MX 9 / 9 / 2 / 0; 1
 * `scripts/g1822_completeness.py`'s `_in_range` raised on a missing price (it now shares the importer's matching).
 * `rl_title_status(t)["encoder_ready"]` is False for the family: the legacy flat encoder's flag (encoder v2 encodes the
   family).
+
+## 1822+: the optional rules (2026-11-14)
+
+The user (2026-11-14: "Yes 1822+ please"): 1822's RL data and self-play move onto the 1822+ rules. Of the scrape's
+683 1822 games at 3-6 players, 586 use an optional rule; base rules alone left 84 finished games. 1822PNW / 1822MX /
+1822CA stay on base rules (their optional-rules games are minorities: PNW 65, MX 51, CA 0).
+
+Code: `titles.py` (1822's `TitleSpec.optional_rules` = the four options, `rule_requires`, `rules_mix`;
+`canonical_rules`, `rules_name`, `rules_from_name`, `parse_rules_mix`, `draw_rules`), encoder version 3
+(`docs/rl_encoder.md` "Version 3"), `generic_import_1822.py` (scope and records), `generic_data.py` (games.jsonl /
+meta by rules), `generic_play.py` (start lines and sampling per combination), `generic_pg.py` (`--rules-mix`),
+`scripts/eval_generic.py` (`--rules` / `--rules-mix`), `scripts/build_generic_start_positions.py`,
+`scripts/g1822_completeness.py --by-rules`. Tests: `tests/agent/alphazero/test_generic_1822_rules.py`; the other
+generic suites pass unchanged. Scratch area: `<g1822plus>` =
+`/tmp/claude-1000/-home-revys-workspace-RL-18xx--claude-worktrees-1830-rl-analysis-ea948b/48dd27c6-ebff-40c4-8d11-59fd0cf94716/scratchpad/g1822plus`
+(dataset, start files, runs, evals, PG runs, logs, the driver scripts in `scripts/`).
+
+### The options and their combinations
+
+| rule | short name | what it changes (Ruby `g_1822/meta.rb`) |
+|---|---|---|
+| `plus_expansion` | `plus` | 1822+: six more minors (25-30), three more privates (P19 AEC, P20 C&WR, P21 HSBC), the privates in three category bid boxes; three privates removed at setup |
+| `plus_expansion_no_removals` | `nr` | (1822+) all 21 privates stay |
+| `plus_expansion_single_stack` | `ss` | (1822+) the privates in one stack filling the three boxes, as base 1822 |
+| `tax_haven_multiple` | `th` | P16 (tax haven) may buy one share per SR with its cash, several in all |
+
+A combination is named by its canonical rules (`TitleSpec.rules_name`): `base`, `th`, and `plus` with any of
+`nr` / `ss` / `th` (`plus+nr+ss+th`, ...) -- ten combinations. No Removals and Single Stack do nothing without 1822+
+(Ruby checks both; so does the engine), so the pipeline drops them from such a game's rules
+(`TitleSpec.canonical_rules`): 12 of the scrape's base games and 15 of its `th` games carry them alone. Records,
+start lines and saved games carry the canonical rules (the importer's records also the export's own list,
+`settings_optional_rules`); the replay is the same either way.
+
+### Support: every combination replays, every move has its index
+
+`scripts/g1822_completeness.py --index --by-rules` over the whole 2026-10 scrape (743 files; 683 at 3-6 players,
+every decision of every game against the layout's indexed moves, decode and apply checks; 6 processes, ~30 min on
+the shared cores):
+
+| rules | games | replay to the end | replay errors | decisions | exactly one index (policy-excluded) | missing | ambiguous / decode / apply mismatch |
+|---|---|---|---|---|---|---|---|
+| plus+nr+ss+th | 188 | 123 | 0 | 159,937 | 159,913 (2) | 24 | 0 |
+| base | 111 | 95 | 0 | 114,155 | 114,143 (10) | 12 | 0 |
+| plus+th | 93 | 60 | 0 | 77,879 | 77,870 (2) | 9 | 0 |
+| plus | 88 | 73 | 0 | 82,336 | 82,323 (1) | 13 | 0 |
+| plus+nr | 61 | 56 | 0 | 58,938 | 58,930 (1) | 8 | 0 |
+| plus+nr+th | 52 | 37 | 0 | 47,823 | 47,818 (2) | 5 | 0 |
+| plus+nr+ss | 37 | 29 | 0 | 36,203 | 36,201 | 2 | 0 |
+| th | 30 | 26 | 0 | 27,591 | 27,589 | 2 | 0 |
+| plus+ss+th | 11 | 10 | 0 | 11,859 | 11,856 | 3 | 0 |
+| plus+ss | 12 | 9 | 0 | 10,785 | 10,784 | 1 | 0 |
+| **all** | 683 | 518 | 0 | 627,506 | 627,427 (18) = 99.9874% | 79 | 0 |
+
+No record of any combination is rejected (the games that do not reach the end are records that stop early:
+abandoned games the site lists as finished). The 79 misses are A4's documented replay-only classes (§9 of
+`docs/rl_descriptors.md`, the same corpus): 72 out-of-order discards, 2 re-acquisitions, 2 UI-stale choices, 1 raise
+of one's own bid, 1 out-of-turn tax-haven buy, 1 `run_routes` by a corporation not operating -- spread over the
+combinations in proportion, none specific to an option. **The layout needs nothing**: it was built from 1822's
+title data, which lists the plus entities (30 minors, 21 privates, their bid-box and ability blocks), and the
+fingerprint stays `e14224b87f0bceda`. **The encoder's vocabularies cover them**: 1822's entity list already holds
+minors 25-30, P19-P21 and the minor proxies M25-M30 (127 entities; base rules close the plus ones at setup), tiles
+and labels are the title's; encoding every position of 112 games across all titles and 1822's 16 recorded rule sets
+raised nothing.
+
+### Can the network tell the rules? Encoder version 3
+
+Partly from the state (1822+'s extra entities are open at setup; No Removals shows only at setup), not at all for
+Single Stack and the multi-share tax haven. Encoder version 3 appends four global flags (`rule_plus_expansion`,
+`rule_plus_no_removals`, `rule_plus_single_stack`, `rule_tax_haven_multiple`), 0 for every other title and base
+1822, whose encodings are version 2's bit for bit (105,169 positions compared array by array; `docs/rl_encoder.md`
+"Version 3"). The packed width does not change, so version 2 checkpoints load (the flags meet untrained weights).
+
+### The rules mix
+
+`TitleSpec.rules_mix` is a title's default mix of combinations for self-play and evals; each game draws its
+combination by weight (`titles.draw_rules`), then its start under those rules. 1822's default is proportional to the
+finished human games per combination -- the 518 scrape games of the dataset below at 3-6 players (base rules
+included): `plus+nr+ss+th` 123, `base` 95, `plus` 73, `plus+th` 60, `plus+nr` 56, `plus+nr+th` 37, `plus+nr+ss` 29,
+`th` 26, `plus+ss+th` 10, `plus+ss` 9 (23.7% / 18.3% / 14.1% / 11.6% / 10.8% / 7.1% / 5.6% / 5.0% / 1.9% / 1.7%).
+Every other title's default is base rules only.
+
+* `policy-gradient-generic --rules-mix <name>:<weight>,...` (or one `<name>`; default the title's mix): the run's
+  config holds the resolved mix; a resume keeps it unless `--rules-mix` is given (a run from before the mix keeps
+  base rules). Games record their combination (`rules`), saved games their `settings.optional_rules`; the history
+  adds `rules_<name>_games`, `_mean_decisions`, `_max_decisions_game`, `_not_finished`, `_max_length` per update.
+  PFSP and the league stay per player count (`--player-mix` as before).
+* Starts: a drawn combination takes a human SR1-end start or mid-game cut **of that combination and count**, else
+  (none there) falls through as a count without starts does (random opening); auction starts and random openings
+  are fresh games under it.
+* `scripts/eval_generic.py --rules <name>` (every game) or `--rules-mix ...` (default the title's mix): the start
+  index draws the rules, so every seat arrangement of a start plays the same rules; the summary adds `by_rules`
+  (games, decisions median / p90 / max, terminations, side A's score per combination).
+
+### The dataset (finished games only)
+
+```bash
+CUDA_VISIBLE_DEVICES= taskset -c 24-31,56-63 nice -19 uv run python main.py convert-generic --title 1822 \
+    --data-dir human_games/1822 human_games/scrape_2026_10/1822 --output <dir> --workers 5
+```
+
+`<g1822plus>/datasets/1822_v2` (26 min, 5 workers, the shared cores at load ~40-50): **525 games (496 train / 29
+validation), 566,756 positions (534,873 / 31,883)** -- against base rules alone 84 games (81 / 3), 92,633 positions:
+6.1x the positions, 8x the validation games. 518 games come from the scrape, 7 from the 2020-22 corpus (1 base, 6
+`plus`).
+
+| rules | games (train / val) | positions | 3p games (positions) | 4p | 5p | 6p |
+|---|---|---|---|---|---|---|
+| plus+nr+ss+th | 123 (118 / 5) | 136,123 | 31 (32,798) | 75 (82,731) | 11 (13,421) | 6 (7,173) |
+| base | 96 (93 / 3) | 106,247 | 23 (24,393) | 51 (56,218) | 18 (21,400) | 4 (4,236) |
+| plus | 79 (72 / 7) | 77,843 | 24 (20,041) | 24 (23,102) | 28 (31,386) | 3 (3,314) |
+| plus+th | 60 (56 / 4) | 66,305 | 5 (4,970) | 28 (30,785) | 23 (25,619) | 4 (4,931) |
+| plus+nr | 56 (51 / 5) | 56,742 | 33 (30,889) | 15 (16,077) | 6 (7,210) | 2 (2,566) |
+| plus+nr+th | 37 (34 / 3) | 42,665 | 3 (3,452) | 27 (31,247) | 5 (5,626) | 2 (2,340) |
+| plus+nr+ss | 29 (27 / 2) | 33,211 | 6 (6,212) | 20 (23,419) | 1 (994) | 2 (2,586) |
+| th | 26 (26 / 0) | 26,940 | 16 (16,083) | 8 (8,429) | 2 (2,428) | - |
+| plus+ss+th | 10 (10 / 0) | 10,751 | 5 (5,227) | 3 (3,067) | 1 (1,195) | 1 (1,262) |
+| plus+ss | 9 (9 / 0) | 9,929 | 3 (3,389) | 3 (3,277) | 3 (3,263) | - |
+| **all** | 525 (496 / 29) | 566,756 | 149 (147,454) | 254 (278,352) | 98 (112,542) | 24 (28,408) |
+
+Validation games by (rules, players): plus+nr 3p 4 / 4p 1; plus 3p 2 / 4p 3 / 5p 2; plus+th 5p 3 / 6p 1; base 3p 1 /
+4p 2; plus+nr+th 4p 3; plus+nr+ss+th 3p 1 / 4p 2 / 5p 2; plus+nr+ss 3p 1 / 4p 1 (the split is the game-id hash: `th`,
+`plus+ss`, `plus+ss+th` have none).
+
+**Dropped** (`dropped.jsonl`): `unfinished_replay_rejected` 2,512 (all 2020-22: older rules, A4), `unfinished_record_ends`
+345 (2020-22 196, scrape 149), `no_actions` 262, `status_active` 236, `players_7` 51, `players_2` 39, `status_new` 6;
+no game of the scrape is rejected, and none is out of scope for its rules any more (`optional_rules` 0; base rules
+alone dropped 2,837 here). **Labels skipped** (never guessed): `policy` 12 (4 private acquisitions, 4 train buys, 4
+minor acquisitions across players), `replay_only:out_of_turn` 71 (69 discards, 1 tax-haven choice, 1 run),
+`replay_only:reacquire_owned` 2, `unmatched` 3 (1 raise of one's own bid, 2 UI-stale choices); `ambiguous` 0. Recorded
+auto-actions applied as non-decisions 46,932; forced positions kept 115,474 (20.4%); price targets 80,292, none
+outside its range or off its grid.
+
+**Human decisions per game** (several legal rows or an open price; median / p99 / max), by combination: 1822+
+games are not longer than base games --
+
+| rules | 3p | 4p | 5p | 6p |
+|---|---|---|---|---|
+| plus+nr+ss+th | 853 / 1,095 / 1,127 | 887 / 1,096 / 1,105 | 969 / 1,099 / 1,106 | 928 / 1,093 / 1,099 |
+| base | 844 / 955 / 962 | 876 / 1,105 / 1,138 | 876 / 1,128 / 1,139 | 807 / 911 / 914 |
+| plus | 767 / 1,046 / 1,060 | 812 / 1,070 / 1,078 | 860 / 1,087 / 1,118 | 873 / 885 / 885 |
+| plus+th | 842 / 910 / 913 | 877 / 1,086 / 1,115 | 860 / 1,043 / 1,044 | 930 / 1,070 / 1,072 |
+| plus+nr | 745 / 857 / 867 | 839 / 960 / 969 | 962 / 1,131 / 1,132 | 974 / 1,039 / 1,040 |
+| plus+nr+th | 950 / 1,031 / 1,033 | 943 / 1,057 / 1,060 | 929 / 1,132 / 1,140 | 914 / 1,004 / 1,006 |
+| plus+nr+ss | 836 / 963 / 964 | 947 / 1,211 / 1,224 | 792 | 1,032 / 1,117 / 1,119 |
+| th | 804 / 955 / 968 | 820 / 944 / 947 | 920 / 964 / 965 | - |
+| plus+ss+th | 836 / 1,024 / 1,029 | 817 / 840 / 840 | 908 | 953 |
+| plus+ss | 905 / 988 / 990 | 852 / 948 / 950 | 825 / 852 / 853 | - |
+| **all** | 809 / 1,047 / 1,127 | 881 / 1,126 / 1,224 | 876 / 1,139 / 1,140 | 912 / 1,114 / 1,119 |
+
+### Start files (`*_v2`)
+
+```bash
+CUDA_VISIBLE_DEVICES= taskset -c 24-31,56-63 nice -19 uv run python scripts/build_generic_start_positions.py \
+    --title 1822 --source human_games/1822 --source human_games/scrape_2026_10/1822 --out-dir human_games \
+    --suffix _v2 --jobs 3
+```
+
+`<g1822plus>/starts/{start,midgame}_positions_1822_<N>p_v2.jsonl` (1822's `TitleSpec` templates now name the `_v2`
+files; the v1 files, base rules only, keep their names): one file per player count holding every combination, each
+line with its canonical `optional_rules` (`[]` = base). As before the builder keeps any replayable game that gets
+past SR1 (abandoned `active` games and records that end early give starts too), so it has more games than the dataset.
+
+| rules | 3p SR1-end / mid-game | 4p | 5p | 6p |
+|---|---|---|---|---|
+| plus+nr+ss+th | 37 / 37 | 107 / 107 | 13 / 13 | 6 / 6 |
+| base | 27 / 26 | 54 / 54 | 22 / 21 | 5 / 5 |
+| plus | 27 / 26 | 25 / 24 | 28 / 28 | 5 / 5 |
+| plus+th | 10 / 10 | 39 / 39 | 25 / 25 | 4 / 4 |
+| plus+nr | 36 / 36 | 17 / 17 | 6 / 6 | 2 / 2 |
+| plus+nr+th | 6 / 6 | 33 / 33 | 5 / 5 | 2 / 2 |
+| plus+nr+ss | 7 / 7 | 24 / 24 | 1 / 1 | 2 / 2 |
+| th | 16 / 16 | 9 / 9 | 2 / 2 | - |
+| plus+ss | 3 / 3 | 5 / 5 | 3 / 3 | - |
+| plus+ss+th | 5 / 5 | 4 / 4 | 1 / 1 | 1 / 1 |
+| **all** | 174 / 172 | 317 / 316 | 106 / 105 | 27 / 27 |
+
+Mid-game cuts SR2 / SR3 / SR4 / SR5 / SR6: 620 / 613 / 605 / 592 / 581. Excluded: replay failed 2,719 (2020-22),
+never past SR1 268, no actions 264, player count 95, `new` 6. Thin cells (a combination at 5-6 players: 0-6 games)
+fall through to random openings under the drawn rules, as 1822's 6-player games did before (3 starts; now 27).
+
+### CPU smoke (2026-11-14, `CUDA_VISIBLE_DEVICES=`, cores 24-31,56-63 shared with other jobs at load ~40-55)
+
+Drivers in `<g1822plus>/scripts/` (`smoke_pretrain.sh`, `smoke_eval.sh`, `smoke_pg.sh`; reports `eval_by_rules.py`,
+`pretrain_report.py`, `eval_report.py`, `replay_saved.py`).
+
+**Supervised** (`pretrain-generic --model-preset small`, 154,494 parameters, batch 64, 2,000 steps = 128k positions
+= 0.24 epochs, eval every 1,000 on all 29 validation games, 3 loader workers, value refit 400 steps; 13 min joint +
+refit; `<g1822plus>/runs/1822_v2_sl_s2000/`): train loss 1.831 -> 1.283 (top-1 0.563 -> 0.672); validation
+(31,883 positions) **top-1 0.679 / top-5 0.919 against chance 0.369**, policy NLL 1.011, price NLL 0.985, win CE
+1.188 (equal odds 1.382; after the refit 1.077, winner 0.505). By combination (validation games; top-1 vs chance,
+win CE vs equal odds) -- every combination well above chance, none behind:
+
+| rules | games (positions) | top-1 / top-5 | chance | policy NLL | win CE (equal odds) |
+|---|---|---|---|---|---|
+| plus | 7 (7,235) | 0.677 / 0.922 | 0.370 | 1.015 | 1.014 (1.386) |
+| plus+nr | 5 (4,843) | 0.692 / 0.914 | 0.375 | 0.992 | 0.878 (1.162) |
+| plus+nr+ss+th | 5 (5,789) | 0.674 / 0.921 | 0.365 | 1.023 | 1.245 (1.418) |
+| plus+th | 4 (4,922) | 0.689 / 0.921 | 0.381 | 0.988 | 1.431 (1.659) |
+| base | 3 (3,225) | 0.667 / 0.903 | 0.384 | 1.087 | 0.628 (1.302) |
+| plus+nr+th | 3 (3,526) | 0.686 / 0.924 | 0.342 | 0.969 | 0.999 (1.386) |
+| plus+nr+ss | 2 (2,343) | 0.665 / 0.921 | 0.357 | 1.019 | 1.264 (1.262) |
+
+By player count: 3p 0.674, 4p 0.681, 5p 0.675, 6p 0.728 (1,326 positions). The base-rules validation games are the
+base-only dataset's 3 (the same id hash): 0.667 / NLL 1.087 here against 0.666 / 1.089 for the base-only smoke model
+(1,500 steps on 1.07 epochs of base data) -- training on the mix costs base-rules play nothing at this size. Per
+family (all validation games) above chance: Pass 0.892 vs 0.446, Bid.company 0.361 vs 0.119, LayTile 0.258 vs 0.044,
+Dividend, BuyShares 0.569 vs 0.051, Choose, BuyTrain.depot, Merge, BuyTrain.exchange, DiscardTrain, RedeemShares,
+PayoffPlayerDebt; below (the smoke model passes there, as the base smoke): AcquireCompany 0.311 vs 0.356 (527),
+PlaceToken 0.024 vs 0.116 (415), BuyTrain.corp 0.142 vs 0.281 (289), Par 0.000 vs 0.049 (262), SellShares 0.026 vs
+0.126 (151), ChooseAbility, IssueShares (< 100).
+
+**Policy-only self-play** (`scripts/eval_generic.py --title 1822 --match M@0.5 M@0.5 --a-seats 1 --auction-start
+--max-decisions 8000 --auction-stall-decisions 0`, the default rules mix, every game from the fresh game, 3 workers,
+in-process CPU inference, every game saved; `<g1822plus>/evals/1822plus_t05_<N>p/`):
+
+| players | games (start indices) | wall | terminations | decisions median / p90 / max | all-pass redrawn | A's score (fair) |
+|---|---|---|---|---|---|---|
+| 3 | 60 (20) | 8 min | finished 60 | 1,029 / 1,194 / 1,330 | 0 | 0.400 +- 0.064 (0.33) |
+| 4 | 64 (16) | 8 min | finished 64 | 1,036 / 1,201 / 1,493 | 0 | 0.250 +- 0.055 (0.25) |
+| 5 | 60 (12) | 6 min | finished 60 | 1,122 / 1,315 / 1,458 | 0 | 0.233 +- 0.055 (0.20) |
+| 6 | 60 (10) | 5 min | finished 60 | 1,080 / 1,286 / 1,452 | 0 | 0.133 +- 0.044 (0.17) |
+
+Decisions by combination over the four counts (games: median / max): plus 72: 1,090 / 1,452; plus+th 45: 1,065 /
+1,335; plus+nr+ss 36: 1,064 / 1,458; plus+nr+ss+th 36: 1,069 / 1,346; plus+nr 18: 1,104 / 1,340; base 17: 1,016 /
+1,493; th 10: 1,120 / 1,205; plus+nr+th 7: 1,030 / 1,041; plus+ss 3: 1,267 / 1,330 (no plus+ss+th start was
+drawn; the start index seeds the draw, so every count drew from the same sequence). Every game finished; no Ruby
+dead end, no refused move, no all-pass opening (the base smoke models passed all around in ~10% of fresh games). All
+244 saved games replay from the fresh game under their recorded `settings.optional_rules` and seed and end finished.
+1822+ games are not longer than base games in self-play either (the longest is a base 4-player game); this model's
+games run longer than the base smoke model's (max 1,289 at T 0.5) and than the humans' (max 1,224).
+
+**Policy gradient** (`main.py policy-gradient-generic --title 1822`, the smoke model as policy, critic and SL
+opponent, player mix 3:1,4:2,5:1,6:1, the default rules mix, placement reward, T 0.5 / 0.5, KL 0.02 -> target 0.08,
+anchor every 2, starts auction 0.3 / mid-game 0.3 / random 0.2 / else human SR1-end starts (the `_v2` files above),
+`--max-decisions 8000`, 4 workers x 2 games, 16 rows per seat, 500 rows per update, CPU servers with 1 thread, every
+4th game saved, then a **resume** from snapshot 3 to 5; `<g1822plus>/pg/1822plus_smoke/`):
+
+| updates | games | terminations | starts: auction / human / mid-game / random | rules drawn | decisions per count (mean), max | approx_kl, \|log ratio\| | KL to anchor | critic CE | games/h (decisions/s) |
+|---|---|---|---|---|---|---|---|---|---|
+| 5 (3, then a resume to 5) | 84 | finished 84 | 24 / 28 / 20 / 12 | plus+nr+ss+th 21, base 16, plus+nr 13, plus+th 11, plus 7, plus+nr+ss 6, plus+nr+th 6, th 3, plus+ss+th 1 | 751-1,315; 1,390 | <= 6e-4, <= 0.0074 | <= 3e-4 | 0.93-1.27 | 650-940 (177-274) |
+
+Losses finite, `skipped_starts` 0, `all_pass_redrawn` 0, the resume continued from snapshot 3 (optimizer, anchor,
+pool, the resolved rules mix from the run's config). The history's `rules_<name>_*` fields carried every drawn
+combination. Saved PG games of SR1-end, mid-game and random starts did not replay from the fresh game -- a bug of
+the family's PG worker and evals since the seat fix (the seating was read off `raw.players` after the start's
+actions, which the family reorders every Stock Round; 49 of the four family titles' base smoke runs' 73 saved
+games, 9 of this run's 21): fixed (5b6c369, `test_saved_pg_games_from_later_starts_replay`); the games saved before
+the fix keep the wrong order.
+
+### Decision caps (proposal, for the user to decide)
+
+| | human (finished) max, 3/4/5/6p | self-play T 0.5 max (evals 3/4/5/6p; PG) | current `--max-decisions-by-players` | proposal |
+|---|---|---|---|---|
+| 1822 (all combinations) | 1,127 / 1,224 / 1,140 / 1,119 | 1,330 / 1,493 / 1,458 / 1,452; PG 1,390 | 3:2000,4:2000,5:2000,6:2200 | **3:2200,4:2200,5:2200,6:2200** |
+
+(A3's rule: ~1.5x the longest self-play game, at least ~1.6x the human maximum.) 1822+ games are not longer than base
+games, by humans or in self-play; the raise comes from this smoke model's longer games (the longest is a base game),
+which put the current 2,000 at 1.34x. The family's other caps are unchanged by this work.
+
+### Open questions (the user's decisions)
+
+1. **The default mix**: proportional to the finished human games (base 18%, `th` 5%, 1822+ 77%). Alternatives:
+   uniform over the ten combinations (more practice on the thin ones: `plus+ss` 9 games), or base-heavy.
+2. **Encoder v2 checkpoints load under v3** (`model_generic.COMPATIBLE_ENCODER_VERSIONS`): they see exactly their old
+   inputs everywhere but 1822's optional-rules games, where the flags meet untrained weights. Keep, or make the
+   version strict as before (a v2 checkpoint then needs no change to be refused)?
+3. **Inert modifiers are dropped** from a game's rules (`canonical_rules`): the records, starts and saved games say
+   `base` / `th` for the 27 scrape games that carried No Removals / Single Stack without 1822+ (Ruby ignores them).
+4. **Copy** `<g1822plus>/datasets/1822_v2` (as `human_games/generic_1822_v2`) and the `_v2` start files into
+   `human_games/` (1822's `TitleSpec` templates already name `human_games/{start,midgame}_positions_1822_<N>p_v2.jsonl`;
+   until they are copied a run needs `--start-positions` / `--midgame-positions`).
+5. **Caps** (above).
+6. **PNW's and MX's options** (`starting_packet` / `remove_three_ls` / `remove_two_ls`, 65 PNW games;
+   `higher_cert_limit`, 51 MX games) stay out; the same machinery (a `rules_mix`, flags appended to
+   `schema::RULE_FLAGS`) would take them.

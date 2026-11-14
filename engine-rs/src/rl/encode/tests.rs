@@ -745,6 +745,62 @@ fn g1822_family_v2_features() {
     }
 }
 
+/// Version 3's rule flags: 1822's optional rules as global flags (a modifier
+/// without 1822+ reads 0, as it does nothing), on every position of walks under
+/// each combination; 0 for base 1822 and every other title. A fresh game under
+/// the tax-haven option encodes as the base game's apart from its flag (the
+/// option changes nothing until the haven buys).
+#[test]
+fn rule_flags_follow_the_options() {
+    let col = |name: &str| GLOBAL_FEATURES.iter().position(|x| *x == name).unwrap();
+    let flags = |enc: &TokenEncoding| -> Vec<f32> { RULE_FLAGS.iter().map(|(f, _, _)| enc.ent_feat[col(f)]).collect() };
+    let build = |rules: &[&str], seed: u64| {
+        let ids: Vec<u32> = (1001..1005).collect();
+        let names: HashMap<u32, String> = ids.iter().map(|&i| (i, format!("Player {}", i - 1000))).collect();
+        BaseGame::build_seeded("1822", ids, names, rules.iter().map(|r| r.to_string()).collect(), Some(seed))
+    };
+    let cases: &[(&[&str], [f32; 4])] = &[
+        (&[], [0.0, 0.0, 0.0, 0.0]),
+        (&["plus_expansion"], [1.0, 0.0, 0.0, 0.0]),
+        (&["plus_expansion", "plus_expansion_no_removals"], [1.0, 1.0, 0.0, 0.0]),
+        (&["plus_expansion", "plus_expansion_single_stack", "tax_haven_multiple"], [1.0, 0.0, 1.0, 1.0]),
+        (&["plus_expansion", "plus_expansion_no_removals", "plus_expansion_single_stack", "tax_haven_multiple"], [1.0; 4]),
+        (&["tax_haven_multiple"], [0.0, 0.0, 0.0, 1.0]),
+        (&["plus_expansion_no_removals", "plus_expansion_single_stack"], [0.0, 0.0, 0.0, 0.0]),
+    ];
+    for (k, (rules, want)) in cases.iter().enumerate() {
+        let mut g = build(rules, 40 + k as u64);
+        let mut rng = StdRng::seed_from_u64(k as u64);
+        for _ in 0..400 {
+            assert_eq!(flags(&g.encode_tokens()), want.to_vec(), "{rules:?} at move {}", g.action_log.len());
+            if !step(&mut g, &mut rng) {
+                break;
+            }
+        }
+    }
+    // the option alone: the fresh game's encoding is the base game's but for the flag
+    let base = build(&[], 7).encode_tokens();
+    let th = build(&["tax_haven_multiple"], 7).encode_tokens();
+    let flag = col("rule_tax_haven_multiple");
+    assert_eq!(th.ent_feat[flag], 1.0);
+    let mut masked = th.ent_feat.clone();
+    masked[flag] = 0.0;
+    assert_eq!(masked, base.ent_feat);
+    assert_eq!((&th.hex_feat, &th.rel, &th.rel_val, &th.meta), (&base.hex_feat, &base.rel, &base.rel_val, &base.meta));
+    // every other title: 0 (also covered for 1830 / 1867 by the version-1 digests)
+    for title in ["1830", "1867", "1822PNW", "1822MX", "1822CA"] {
+        let range = player_range(title);
+        let mut g = new_game(title, *range.start(), 5);
+        let mut rng = StdRng::seed_from_u64(9);
+        for _ in 0..200 {
+            assert!(flags(&g.encode_tokens()).iter().all(|v| *v == 0.0), "{title}");
+            if !step(&mut g, &mut rng) {
+                break;
+            }
+        }
+    }
+}
+
 /// Mixed titles and player counts stack into one padded batch.
 #[test]
 fn batch_stacks_mixed_titles() {

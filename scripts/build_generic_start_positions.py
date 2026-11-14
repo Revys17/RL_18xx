@@ -5,11 +5,16 @@ count, for any title with a human-game replay (``generic_play.replay_human_game`
 Generalizes ``scripts/build_start_positions.py`` / ``build_midgame_positions.py``: each usable game is
 replayed by the engine, its own action log (``raw_actions``) is cut where Stock Rounds begin
 (``generic_play.stock_round_cuts``), and every prefix is replayed again strictly and must stop at an
-unfinished Stock Round. Games with optional rules are left out (starts are played under the base rules).
-Lines carry ``title`` and, for titles whose engine takes a seed (1867, the 1822 family), ``seed``::
+unfinished Stock Round. Games with optional rules are left out (starts are played under the base rules), except
+for a title that plays a rules mix (``titles.TitleSpec.rules_mix``: 1822's 1822+ and tax-haven combinations), whose
+games under any combination of its ``optional_rules`` are kept, each line with its canonical ``optional_rules``
+(``[]`` for base rules: a run draws a game's combination first, then a start of that combination). Lines carry
+``title`` and, for titles whose engine takes a seed (1867, the 1822 family), ``seed``::
 
-    start_positions_<title>_<N>p<suffix>.jsonl    {"id", "title", "num_players", ["seed",] "actions"}
-    midgame_positions_<title>_<N>p<suffix>.jsonl  {"id", "title", "num_players", ["seed",] "actions", "cuts"}
+    start_positions_<title>_<N>p<suffix>.jsonl    {"id", "title", "num_players", ["seed",] ["optional_rules",]
+                                                   "actions"}
+    midgame_positions_<title>_<N>p<suffix>.jsonl  {"id", "title", "num_players", ["seed",] ["optional_rules",]
+                                                   "actions", "cuts"}
 
 Sources: 1830 reads cleaned exports (``main.py clean``; replayed as the generic importer replays them,
 ``--raw-dir`` consulted for optional rules as the legacy builders do); 1867 and the 1822 family read raw
@@ -25,7 +30,7 @@ Random starts and auction starts need no file.
         --out-dir human_games --suffix _generic --num-players 4
     uv run python scripts/build_generic_start_positions.py --title 1867 \\
         --source human_games/1867 --source human_games/scrape_2026_10/1867 --out-dir human_games --jobs 8
-    uv run python scripts/build_generic_start_positions.py --title 1822 \\
+    uv run python scripts/build_generic_start_positions.py --title 1822 --suffix _v2 \\
         --source human_games/1822 --source human_games/scrape_2026_10/1822 --out-dir human_games --jobs 8
 """
 
@@ -76,8 +81,10 @@ def _init(args):
 def process(path: str) -> tuple:
     """``(game id, n, start record or None, midgame record or None, excluded reason or None)``."""
     from rl18xx.agent.alphazero.generic_play import replay_human_game, start_records
+    from rl18xx.agent.alphazero.titles import title_spec
 
     args = _ARGS
+    spec = title_spec(args.title)
     gid = Path(path).stem
     try:
         game = json.loads(Path(path).read_text())
@@ -96,7 +103,8 @@ def process(path: str) -> tuple:
     n = len(game.get("players") or [])
     if args.num_players and n not in args.num_players:
         return gid, n, None, None, "player_count"
-    if (game.get("settings") or {}).get("optional_rules"):
+    rules = (game.get("settings") or {}).get("optional_rules")
+    if rules and not (spec.rules_mix and spec.rules_in_scope(rules)):
         return gid, n, None, None, "optional_rules"
     if args.title == "1830" and args.raw_dir:
         rules = raw_optional_rules(gid, args.raw_dir)
@@ -107,7 +115,7 @@ def process(path: str) -> tuple:
     replayed, reason = replay_human_game(args.title, game)
     if replayed is None:
         return gid, n, None, None, (reason or "replay_failed").split(":")[0]
-    if replayed.optional_rules:
+    if replayed.optional_rules and not (spec.rules_mix and spec.rules_in_scope(replayed.optional_rules)):
         return gid, n, None, None, "optional_rules"
     start, midgame, reason = start_records(args.title, replayed, args.first_round, args.last_round)
     return gid, n, start, midgame, reason
@@ -158,6 +166,7 @@ def main():
     excluded = collections.Counter()
     starts, midgames = collections.defaultdict(list), collections.defaultdict(list)
     rounds = collections.Counter()
+    by_rules = collections.defaultdict(collections.Counter)  # rules name -> {(kind, n): lines}
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.jobs, initializer=_init, initargs=(args,)) as pool:
         for gid, n, start, midgame, reason in pool.imap_unordered(process, [str(f) for f in files], chunksize=8):
@@ -166,11 +175,14 @@ def main():
                 continue
             if reason:
                 excluded[f"sr1_{reason}"] += 1
+            name = spec.rules_name((start or midgame).get("optional_rules"))
             if start is not None:
                 starts[n].append(start)
+                by_rules[name][("start", n)] += 1
             if midgame is not None:
                 midgames[n].append(midgame)
                 rounds.update(midgame["cuts"].keys())
+                by_rules[name][("midgame", n)] += 1
 
     def key(r):
         return (0, int(r["id"]), "") if str(r["id"]).isdigit() else (1, 0, str(r["id"]))
@@ -187,6 +199,13 @@ def main():
         _write(m_path, sorted(midgames[n], key=key))
         kind = "SR1-end" if starts[n] and starts[n][0].get("start") == "sr1_end" else "SR1"
         print(f"{n}p: {len(starts[n])} {kind} starts -> {s_path}; {len(midgames[n])} mid-game games -> {m_path}")
+    if spec.rules_mix or len(by_rules) > 1:
+        counts = sorted(args.num_players)
+        print("starts / mid-game games by rules combination and player count:")
+        print(f"  {'rules':16} " + " ".join(f"{str(n) + 'p':>9}" for n in counts))
+        for name, c in sorted(by_rules.items(), key=lambda kv: -sum(kv[1].values())):
+            cells = " ".join(f"{c[('start', n)]:4}/{c[('midgame', n)]:<4}" for n in counts)
+            print(f"  {name:16} {cells}")
 
 
 if __name__ == "__main__":

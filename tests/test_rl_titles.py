@@ -46,7 +46,23 @@ def test_1830_optional_rules_are_the_importers():
 
     assert set(title_spec("1830").optional_rules) == set(ENGINE_OPTIONAL_RULES)
     for title in NEW_TITLES:
-        assert title_spec(title).optional_rules == (), "new titles train on the base rules"
+        if title == "1822":  # 1822+ and the tax haven (the user, 2026-11-14): imported and played (a rules mix)
+            assert title_spec(title).optional_rules == (
+                "plus_expansion", "plus_expansion_no_removals", "plus_expansion_single_stack", "tax_haven_multiple"
+            )  # (engine-rs/src/title/g1822.rs OPTIONAL_RULES)
+            assert title_spec(title).rules_mix
+            continue
+        assert title_spec(title).optional_rules == (), "the other new titles train on the base rules"
+        assert title_spec(title).default_rules_mix() == {"base": 1.0}
+
+
+def test_1822_optional_rules_reach_the_engine():
+    rules = ["plus_expansion", "plus_expansion_no_removals", "plus_expansion_single_stack", "tax_haven_multiple"]
+    assert list(new_game("1822", 4, optional_rules=rules, seed=3).optional_rules) == rules
+    # a modifier without 1822+ does nothing: dropped (canonical rules)
+    assert list(new_game("1822", 4, optional_rules=["plus_expansion_single_stack"], seed=3).optional_rules) == []
+    with pytest.raises(ValueError, match="not used by the pipeline"):
+        new_game("1822PNW", 4, optional_rules=["remove_three_ls"])
 
 
 def test_data_paths():

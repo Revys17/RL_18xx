@@ -20,6 +20,17 @@ its eval defaults. :func:`new_game` builds an empty game of any registered title
 Player counts follow the user's decisions (``docs/rl_bridge_design.md``, 2026-10-16 / 2026-11-13):
 3-6 for every new title, 2-6 for 1830 (its 2-player game is trained since 2026-11-07).
 
+**Optional rules** (``docs/rl_model.md`` "1822+: the optional rules"): :attr:`TitleSpec.optional_rules` are the
+rules the pipeline imports human games with -- 1830's two engine rules, 1822's four (1822+, its No Removals /
+Single Stack modifiers, the multi-share tax haven; the user, 2026-11-14: "Yes 1822+ please") -- and the other
+titles none. 1822 also *plays* them: :attr:`TitleSpec.rules_mix` is its default **rules mix**, the combinations
+each self-play / eval game draws from (:func:`draw_rules`; ``policy-gradient-generic --rules-mix``,
+``eval_generic.py --rules`` / ``--rules-mix``), weighted by the finished human games of each combination; every
+other title plays base rules. A combination is named by :meth:`TitleSpec.rules_name` (``"base"``, ``"plus"``,
+``"plus+nr+ss+th"``, ...) over its canonical rules (:meth:`TitleSpec.canonical_rules`: a modifier without the
+rule it needs changes nothing and is dropped); records, start lines and saved games carry the rules, and the
+token encoder flags them (encoder v3, ``docs/rl_encoder.md``).
+
 The generic pipeline (package C, ``docs/rl_bridge_work_packages.md``) reads it: player ranges and start-file
 templates in ``generic_pg`` / ``generic_play`` / ``scripts/eval_generic.py`` /
 ``scripts/build_generic_start_positions.py``, new games in ``generic_play.new_title_game``.
@@ -34,6 +45,48 @@ from typing import Optional, Sequence, Tuple
 # 1830's optional rules that both engines implement (= ``pretraining.ENGINE_OPTIONAL_RULES``, which
 # filters a recorded game's rules to these; a test keeps the two equal).
 _1830_OPTIONAL_RULES = ("multiple_brown_from_ipo", "optional_6_train")
+
+# 1822's optional rules (Ruby ``g_1822/meta.rb`` OPTIONAL_RULES; ``engine-rs/src/title/g1822.rs``): 1822+ (six
+# more minors, three more privates, the privates in three category bid boxes, three privates removed at setup),
+# its No Removals / Single Stack modifiers (inert without 1822+, as in Ruby) and the multi-share Tax Haven.
+_1822_OPTIONAL_RULES = (
+    "plus_expansion",
+    "plus_expansion_no_removals",
+    "plus_expansion_single_stack",
+    "tax_haven_multiple",
+)
+#: A modifier rule -> the rule it needs (without it the modifier does nothing: Ruby checks both).
+_1822_RULE_REQUIRES = (
+    ("plus_expansion_no_removals", "plus_expansion"),
+    ("plus_expansion_single_stack", "plus_expansion"),
+)
+#: Short names of optional rules in rules-combination names (``rules_name``); a rule without one keeps its own.
+RULE_SHORT_NAMES = {
+    "plus_expansion": "plus",
+    "plus_expansion_no_removals": "nr",
+    "plus_expansion_single_stack": "ss",
+    "tax_haven_multiple": "th",
+}
+#: The name of the base rules (no optional rule) in rules-combination names.
+BASE_RULES = "base"
+# 1822's default rules mix for self-play and evals: each combination in proportion to the finished human games of
+# the 2026-10 scrape under it -- games at the pipeline's player counts (3-6) whose record replays to the game's end
+# in our engine, i.e. the 518 scrape games of the 1822+ dataset (``docs/rl_model.md`` "1822+: the optional
+# rules"); a modifier without 1822+ does nothing, so such games count under the combination without it (12 of the
+# 95 "base" games carry No Removals / Single Stack alone, 15 of the 26 "th" ones). All ten canonical combinations
+# (base, th, and 1822+ with any of nr / ss / th) have finished games.
+_1822_RULES_MIX = (
+    ("plus+nr+ss+th", 123),
+    ("base", 95),
+    ("plus", 73),
+    ("plus+th", 60),
+    ("plus+nr", 56),
+    ("plus+nr+th", 37),
+    ("plus+nr+ss", 29),
+    ("th", 26),
+    ("plus+ss+th", 10),
+    ("plus+ss", 9),
+)
 
 # New titles train at 3-6 players (the user's decision), within each title's own Ruby range: the
 # engine accepts 1867 at 2-6 and 1822 / 1822CA at 2-7 (the pipeline trains 3-6), but 1822PNW
@@ -53,8 +106,16 @@ class TitleSpec:
     min_players: int
     max_players: int
     #: Optional rules the pipeline imports human games with and may play with (a subset of what the
-    #: engine implements; ``BaseGame`` raises ValueError for any other). New titles: base rules only.
+    #: engine implements; ``BaseGame`` raises ValueError for any other). 1830: its two engine rules
+    #: (imported; self-play plays base rules); 1822: the four 1822+ / tax-haven rules (imported and played,
+    #: :attr:`rules_mix`); 1867 and the other 1822-family titles: base rules only.
     optional_rules: Tuple[str, ...] = ()
+    #: ``(modifier, needed)`` pairs: a modifier rule that does nothing without another (1822's No Removals /
+    #: Single Stack without 1822+). :meth:`canonical_rules` drops such a modifier.
+    rule_requires: Tuple[Tuple[str, str], ...] = ()
+    #: The default rules mix of self-play and evals: ``((combination name, weight), ...)``
+    #: (:meth:`rules_name`; each game draws its combination by weight). Empty: base rules only.
+    rules_mix: Tuple[Tuple[str, float], ...] = ()
     #: Seat ids of a new game start here ("Player 1" gets this id). The 1822 family's minors have
     #: numeric syms ("1".."30"), so its seats start above them.
     first_player_id: int = 1
@@ -118,6 +179,72 @@ class TitleSpec:
         """Whether the title has an RL action layout (index space + descriptors)."""
         return bool(self.status()["layout_ready"])
 
+    # -- optional rules and rules combinations -------------------------------------------------------
+
+    def canonical_rules(self, rules: Optional[Sequence[str]], strict: bool = True) -> Tuple[str, ...]:
+        """``rules`` as the pipeline records and plays them: in :attr:`optional_rules` order, without
+        duplicates or modifiers whose needed rule is absent (:attr:`rule_requires`: they change nothing).
+        ``strict``: ValueError for a rule outside :attr:`optional_rules`; else such rules are kept, after the
+        known ones, in their own order (the importers' measurement path, ``--allow-optional-rules``)."""
+        given = [str(r) for r in (rules or ())]
+        unknown = [r for r in dict.fromkeys(given) if r not in self.optional_rules]
+        if unknown and strict:
+            raise ValueError(
+                f"{self.title}: optional rules {unknown} are not used by the pipeline ({self.optional_rules})"
+            )
+        present = set(given)
+        needs = dict(self.rule_requires)
+        known = tuple(r for r in self.optional_rules if r in present and needs.get(r, r) in present)
+        return known + tuple(unknown)
+
+    def rules_in_scope(self, rules: Optional[Sequence[str]]) -> bool:
+        """Whether a recorded game's optional rules are all ones the pipeline imports and plays."""
+        return all(str(r) in self.optional_rules for r in (rules or ()))
+
+    def rules_name(self, rules: Optional[Sequence[str]]) -> str:
+        """The combination name of ``rules`` (canonical, :meth:`canonical_rules` non-strict): ``"base"``, or the
+        rules' short names (:data:`RULE_SHORT_NAMES`) joined by ``+`` -- 1822's ``"plus+nr+ss+th"``."""
+        canon = self.canonical_rules(rules, strict=False)
+        return "+".join(RULE_SHORT_NAMES.get(r, r) for r in canon) if canon else BASE_RULES
+
+    def rules_from_name(self, name: str) -> Tuple[str, ...]:
+        """The canonical rules of a combination name (:meth:`rules_name`'s inverse; full rule names are accepted
+        too); ValueError for a rule the pipeline does not use."""
+        name = str(name).strip()
+        if name in ("", BASE_RULES):
+            return ()
+        by_short = {RULE_SHORT_NAMES.get(r, r): r for r in self.optional_rules}
+        rules = [by_short.get(part, part) for part in name.split("+")]
+        canon = self.canonical_rules(rules)
+        if self.rules_name(canon) != self.rules_name(rules) or len(canon) != len(set(rules)):
+            raise ValueError(f"{self.title}: rules combination {name!r} has a modifier without the rule it needs")
+        return canon
+
+    def default_rules_mix(self) -> dict:
+        """``{combination name: weight}`` of :attr:`rules_mix` (``{"base": 1.0}`` when the title has none)."""
+        return {str(k): float(v) for k, v in self.rules_mix} if self.rules_mix else {BASE_RULES: 1.0}
+
+    def parse_rules_mix(self, spec) -> dict:
+        """A rules mix from the command line or a config: None / ``"default"`` -> :meth:`default_rules_mix`;
+        a dict ``{name: weight}``; or a string ``"name:weight,name:weight"`` / ``"name"`` (one combination).
+        Names are checked (:meth:`rules_from_name`) and normalized; weights must be positive."""
+        if spec is None or (isinstance(spec, str) and spec.strip() in ("", "default")):
+            return self.default_rules_mix()
+        if isinstance(spec, str):
+            items = {}
+            for part in spec.split(","):
+                name, _, weight = part.strip().partition(":")
+                items[name.strip()] = float(weight) if weight else 1.0
+        else:
+            items = {str(k): float(v) for k, v in dict(spec).items()}
+        out: dict = {}
+        for name, weight in items.items():
+            if weight <= 0:
+                raise ValueError(f"{self.title}: rules mix weight of {name!r} must be positive ({weight})")
+            key = self.rules_name(self.rules_from_name(name))
+            out[key] = out.get(key, 0.0) + weight
+        return out
+
 
 def _scrape(title: str) -> str:
     return f"human_games/scrape_2026_10/{title}"
@@ -152,10 +279,16 @@ TITLE_SPECS = {
             family="1822",
             min_players=NEW_TITLE_PLAYERS[0],
             max_players=NEW_TITLE_PLAYERS[1],
+            # 1822+ and the tax-haven variant (the user, 2026-11-14: "Yes 1822+ please"): imported, and played by
+            # self-play / evals through the rules mix.
+            optional_rules=_1822_OPTIONAL_RULES,
+            rule_requires=_1822_RULE_REQUIRES,
+            rules_mix=_1822_RULES_MIX,
             first_player_id=1001,
             human_games_dirs=("human_games/1822", _scrape("1822")),
-            start_positions_template="human_games/start_positions_1822_{n}p.jsonl",
-            midgame_positions_template="human_games/midgame_positions_1822_{n}p.jsonl",
+            # v2: every rules combination, each line with its ``optional_rules`` (v1, base rules only: no suffix)
+            start_positions_template="human_games/start_positions_1822_{n}p_v2.jsonl",
+            midgame_positions_template="human_games/midgame_positions_1822_{n}p_v2.jsonl",
             supervised_finished_only=True,
         ),
         TitleSpec(
@@ -228,6 +361,22 @@ def titles() -> Tuple[str, ...]:
     return tuple(TITLE_SPECS)
 
 
+def rules_name(title: str, rules: Optional[Sequence[str]]) -> str:
+    """:meth:`TitleSpec.rules_name` of ``title`` (``"base"``, ``"plus+nr+ss+th"``, ...)."""
+    return title_spec(title).rules_name(rules)
+
+
+def draw_rules(mix: dict, rng, title: str) -> Tuple[str, ...]:
+    """One game's optional rules drawn from a rules mix ``{combination name: weight}`` (``rng``: a
+    ``random.Random``), canonical; a one-combination mix draws nothing from ``rng``."""
+    spec = title_spec(title)
+    names = sorted(mix)
+    if len(names) == 1:
+        return spec.rules_from_name(names[0])
+    weights = [float(mix[k]) for k in names]
+    return spec.rules_from_name(rng.choices(names, weights=weights, k=1)[0])
+
+
 def title_spec(title: str) -> TitleSpec:
     """The spec of ``title``; ValueError for a title the pipeline does not know."""
     try:
@@ -251,7 +400,8 @@ def new_game(
     on unless ``no_buyback_rule`` is False; ``auction_unlock`` as given), with ``optional_rules`` (a
     subset of :attr:`TitleSpec.optional_rules`) when any are asked for. Other titles: the raw
     ``engine_rs.BaseGame`` from ``BaseGame.new_titled`` (``seed`` reaches the engine's RNG; the
-    1830-only ``auction_unlock`` / ``no_buyback_rule`` raise ValueError if set).
+    1830-only ``auction_unlock`` / ``no_buyback_rule`` raise ValueError if set), its ``optional_rules``
+    canonical (:meth:`TitleSpec.canonical_rules`: 1822's inert modifiers dropped).
     """
     spec = title_spec(title)
     n = spec.check_players(num_players)
@@ -259,6 +409,8 @@ def new_game(
     unknown = [r for r in rules if r not in spec.optional_rules]
     if unknown:
         raise ValueError(f"{spec.title}: optional rules {unknown} are not used by the pipeline ({spec.optional_rules})")
+    if spec.title != "1830":
+        rules = spec.canonical_rules(rules)
 
     if spec.title == "1830":
         from rl18xx.agent.alphazero.start_positions import new_game as new_1830_game

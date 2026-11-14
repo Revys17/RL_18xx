@@ -528,6 +528,7 @@ def cmd_policy_gradient_generic(args):
         run_name=args.run_name,
         num_players=args.num_players,
         player_mix=_by_players(args.player_mix, float, "--player-mix"),
+        rules_mix=args.rules_mix,
         max_decisions_by_players=_by_players(args.max_decisions_by_players, int, "--max-decisions-by-players"),
         auction_stall_by_players=_by_players(args.auction_stall_by_players, int, "--auction-stall-by-players"),
         workers=args.workers,
@@ -559,6 +560,7 @@ def cmd_policy_gradient_generic(args):
         auction_fraction=args.auction_fraction,
         auction_unlock=args.auction_unlock,
         auction_stall_decisions=args.auction_stall_decisions,
+        redraw_all_pass=args.redraw_all_pass,
         inference_batch_size=args.inference_batch_size,
         server_replicas=args.server_replicas,
         server_pipeline=args.server_pipeline,
@@ -1261,8 +1263,10 @@ def build_parser():
     )
     p.add_argument(
         "--allow-optional-rules", action="store_true",
-        help="The 1822 family: also convert games with optional rules (1822+, MX's higher cert limit, ...), each "
-        "replayed under its own rules -- a measurement; the pipeline's scope is base rules (TitleSpec.optional_rules)",
+        help="The 1822 family: also convert games with optional rules the pipeline does not play (MX's higher cert "
+        "limit, PNW's starting packets, ...), each replayed under its own rules -- a measurement. Without it a game "
+        "is in scope when its rules are the title's TitleSpec.optional_rules (1822: 1822+ and the tax haven; the "
+        "other family titles: base rules only)",
     )
 
     # pretrain-generic (two-stage supervised pretraining of the generic model)
@@ -1365,6 +1369,12 @@ def build_parser():
     p.add_argument("--games-per-task", type=int, default=32)
     p.add_argument("--num-players", type=int, default=4)
     p.add_argument("--player-mix", type=str, default=None, help="<players>:<weight>,... (as policy-gradient)")
+    p.add_argument(
+        "--rules-mix", type=str, default=None,
+        help="Optional-rules combinations each game draws from: <name>:<weight>,... or one <name> (names: 'base', "
+        "1822's 'plus', 'plus+nr', 'plus+nr+ss+th', 'th', ...; titles.TitleSpec.rules_name); default: the title's "
+        "mix (1822: the human games' combinations, titles.TitleSpec.rules_mix; other titles: base rules)",
+    )
     p.add_argument("--max-decisions-by-players", type=str, default=None)
     p.add_argument("--auction-stall-by-players", type=str, default=None)
     p.add_argument("--learner-seats", type=int, default=None, help="Outside league mode (default: half the table)")
@@ -1394,6 +1404,11 @@ def build_parser():
     p.add_argument("--no-auction-unlock", dest="auction_unlock", action="store_false",
                    help="1830 auction starts under the real rules")
     p.add_argument("--auction-stall-decisions", type=int, default=0)
+    p.add_argument(
+        "--no-redraw-all-pass", dest="redraw_all_pass", action="store_false",
+        help="The 1822 family: keep games whose opening Stock Round ends with nothing bought, sold or bid (Ruby ends "
+        "them, every seat tied); by default they are dropped and replaced by a fresh draw",
+    )
     p.add_argument("--inference-batch-size", type=int, default=512, help="Positions per server batch")
     p.add_argument("--server-replicas", type=int, default=1, help="Learner server processes")
     p.add_argument("--server-pipeline", action="store_true", help="Servers merge the next batch on a collector thread")

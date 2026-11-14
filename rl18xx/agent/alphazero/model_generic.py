@@ -56,6 +56,11 @@ ARCHITECTURE = "GenericTokenModel"
 #: Version of this module's checkpoint payload (``generic_meta``), not of the encoder.
 CHECKPOINT_FORMAT = 1
 NUM_CELLS = price_pmf.NUM_CELLS
+#: Running encoder version -> older encoder versions whose checkpoints load: the newer version only appends
+#: columns inside the packed widths, and they are 0 wherever the older one could encode (version 3 appends 1822's
+#: rule flags to the global token: a version 2 network sees exactly its old inputs for every title and base-rules
+#: 1822, and untrained weights on the flags of 1822's optional-rules games -- fine-tune it on those).
+COMPATIBLE_ENCODER_VERSIONS = {3: (2,)}
 #: Large negative logit for masked entries: finite under bf16 / fp16, ``exp`` underflows to 0 in fp32.
 MASKED = -1e4
 
@@ -1520,13 +1525,15 @@ class CheckpointMismatch(ValueError):
 
 
 def check_checkpoint_meta(meta: dict, check_layouts: bool = True) -> None:
-    """Raise :class:`CheckpointMismatch` unless ``meta`` fits the running engine: same encoder version,
+    """Raise :class:`CheckpointMismatch` unless ``meta`` fits the running engine: same encoder version (or one
+    of :data:`COMPATIBLE_ENCODER_VERSIONS`),
     every saved vocabulary a prefix of the current one (append-only), same layout fingerprint for every
     title that had a layout."""
     if meta.get("format") != CHECKPOINT_FORMAT:
         raise CheckpointMismatch(f"checkpoint format {meta.get('format')} != {CHECKPOINT_FORMAT}")
     current = int(schema()["version"])
-    if int(meta.get("encoder_version", -1)) != current:
+    saved_version = int(meta.get("encoder_version", -1))
+    if saved_version != current and saved_version not in COMPATIBLE_ENCODER_VERSIONS.get(current, ()):
         raise CheckpointMismatch(
             f"checkpoint encoder version {meta.get('encoder_version')} != running encoder {current}"
         )
@@ -1581,6 +1588,7 @@ def load_checkpoint(
 
 __all__ = [
     "ARCHITECTURE",
+    "COMPATIBLE_ENCODER_VERSIONS",
     "CheckpointMismatch",
     "GenericModelConfig",
     "GenericPolicyValueModel",

@@ -205,9 +205,10 @@ V1_WIDTHS = {"hex": 106, "global": 29, "player": 16, "major": 53, "minor": 53, "
 
 
 def test_v2_columns_are_zero_for_1830_and_1867(positions):
-    """Version 2 appends the 1822 family's state; for 1830 and 1867 every appended column is 0 (their
-    version-1 columns are pinned bit for bit by the cargo test ``v1_columns_of_1830_and_1867_unchanged``)."""
-    assert SCHEMA["version"] == 2
+    """Version 2 appends the 1822 family's state, version 3 1822's rule flags; for 1830 and 1867 every appended
+    column is 0 (their version-1 columns are pinned bit for bit by the cargo test
+    ``v1_columns_of_1830_and_1867_unchanged``)."""
+    assert SCHEMA["version"] == 3
     games = [g for key in sorted(positions) for g in positions[key][::7]]
     arrays = encode_batch(games)
     assert not arrays["hex_feat"][..., V1_WIDTHS["hex"] :].any()
@@ -255,6 +256,38 @@ def test_g1822_family_encodes(positions):
     seat = arrays["ent_type"] == SCHEMA["entity_types"].index("player")
     left = arrays["ent_feat"][seat][:, SCHEMA["entity_features"]["player"].index("bid_tokens_left")]
     assert ((left >= 0) & (left <= 1)).all() and (left > 0).any()
+
+
+RULE_FLAGS = ("rule_plus_expansion", "rule_plus_no_removals", "rule_plus_single_stack", "rule_tax_haven_multiple")
+
+
+def test_v3_rule_flags_name_the_1822_options():
+    """Version 3: 1822's optional rules are global flags (a modifier without 1822+ reads 0); every other
+    title's and base-rules 1822's flags are 0; the rest of a fresh game's encoding is the same under the
+    tax-haven option (it changes nothing until the haven buys)."""
+    cols = [SCHEMA["entity_features"]["global"].index(f) for f in RULE_FLAGS]
+    assert cols == list(range(37, 41))  # appended after version 2's 37 global columns
+    players = {1000 + i + 1: f"Player {i + 1}" for i in range(4)}
+    cases = {
+        (): (0, 0, 0, 0),
+        ("plus_expansion",): (1, 0, 0, 0),
+        ("plus_expansion", "plus_expansion_no_removals", "tax_haven_multiple"): (1, 1, 0, 1),
+        ("plus_expansion", "plus_expansion_single_stack"): (1, 0, 1, 0),
+        ("plus_expansion_no_removals", "plus_expansion_single_stack", "tax_haven_multiple"): (0, 0, 0, 1),
+    }
+    for rules, want in cases.items():
+        game = engine_rs.BaseGame.new_titled("1822", players, list(rules) or None, 3)
+        flags = encode_batch([game])["ent_feat"][0, 0, cols]
+        assert tuple(flags.tolist()) == want, rules
+    base = encode_batch([engine_rs.BaseGame.new_titled("1822", players, None, 3)])
+    th = encode_batch([engine_rs.BaseGame.new_titled("1822", players, ["tax_haven_multiple"], 3)])
+    th["ent_feat"][0, 0, cols[3]] = 0.0
+    for key, value in base.items():
+        if value is not None:
+            assert np.array_equal(value, th[key]), key
+    for title in ("1867", "1822PNW", "1822MX", "1822CA"):
+        game = engine_rs.BaseGame.new_titled(title, players, None, 3)
+        assert not encode_batch([game])["ent_feat"][0, 0, cols].any(), title
 
 
 def test_descriptors_address_tokens(positions):

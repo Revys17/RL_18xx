@@ -36,8 +36,21 @@ the rolling scores (``_Scores``) and resume semantics (``resume_overrides``). Wh
   ``<out_dir>/<run>/{learner,critic}/<update>.pth``; every ``snapshot_every``-th kept, with ``state.json`` and
   ``optimizer.pth`` (``--resume``); league members and fixed opponents must be generic checkpoints of the
   run's title (legacy 1830 checkpoints are refused: they need the legacy encoder and server).
+- **Rules mix** (``rules_mix``; 1822's optional rules, ``titles.TitleSpec.rules_mix``): each game draws its rules
+  combination by weight (``titles.draw_rules``; default the title's mix -- 1822: the human games' combinations --,
+  base rules for every other title) and starts under it (``generic_play.replayed_start(optional_rules=)``: human /
+  mid-game starts of that combination, fresh and random openings under it); the network reads the rules from the
+  encoder's rule flags (encoder v3). PFSP and the league stay per player count; the history counts games,
+  decisions and terminations per combination (``rules_<name>_*``).
+- **All-pass openings** (the 1822 family; ``redraw_all_pass``, on by default): a game whose opening Stock Round
+  ends with nothing bought, sold or bid ends by Ruby's rule with every seat tied (``generic_play.all_pass_opening``)
+  and teaches nothing: it is dropped (no rows, no league credit, no score) and its slot starts a new game from a
+  fresh draw (rules, start, seats; at most ``generic_play.MAX_ALL_PASS_REDRAWS`` in a row, then it is kept with
+  termination ``all_pass``). The history counts them (``all_pass_redrawn``, ``p<n>_all_pass_redrawn``). The rule
+  itself is unchanged (the user, 2026-11-14).
 - **Saved games** (``save_game_every``): ``<run>/games/u<update>_<id>.json`` with the title, players, seed,
-  rule variants, layout version / fingerprint and encoder version under ``"rl18xx"``.
+  optional rules (``settings.optional_rules`` and the combination's name), rule variants, layout version /
+  fingerprint and encoder version under ``"rl18xx"``.
 
 Progress is logged per update to ``<run>/history.jsonl`` (and TensorBoard ``runs/generic_pg/<run>``, ``GPG/*``):
 the learner's score against the league as a multiple of a fair share (or vs the fixed opponent / pool), the
@@ -89,6 +102,9 @@ class GenericPGConfig:
     run_name: Optional[str] = None
     num_players: int = NUM_PLAYERS
     player_mix: Optional[dict] = None
+    #: ``{rules combination name: weight}`` (``titles.TitleSpec.parse_rules_mix``); None: the title's default mix
+    #: (1822: the human games' combinations; others: base rules). A new run writes the resolved mix to its config.
+    rules_mix: Optional[dict] = None
     max_decisions_by_players: Optional[dict] = None
     auction_stall_by_players: Optional[dict] = None
     # Generation
@@ -121,6 +137,9 @@ class GenericPGConfig:
     auction_fraction: float = 0.0
     auction_unlock: bool = True
     auction_stall_decisions: int = 0
+    #: The 1822 family: drop a game whose opening Stock Round ends with nothing bought, sold or bid (Ruby ends it,
+    #: every seat tied) and play a fresh draw in its place (``generic_play.all_pass_opening``).
+    redraw_all_pass: bool = True
     # Inference servers
     inference_batch_size: int = 512
     server_replicas: int = 1
@@ -165,6 +184,7 @@ class GenericPGConfig:
 
 # What a resume may change (``policy_gradient.RESUME_SETTINGS`` plus the generic run's server settings).
 RESUME_SETTINGS = tuple(s for s in pg.RESUME_SETTINGS if s != "value_follow") + (
+    "rules_mix",
     "workers",
     "inference_batch_size",
     "server_replicas",
@@ -205,6 +225,10 @@ def check_config(cfg: GenericPGConfig) -> None:
         except ValueError as e:
             raise SystemExit(str(e)) from None
     pg.check_players(cfg)
+    try:
+        cfg.rules_mix = spec.parse_rules_mix(cfg.rules_mix)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
     parse_reward(cfg.reward)
     if cfg.anchor_every and cfg.anchor_every % cfg.snapshot_every:
         raise SystemExit("--anchor-every must be a multiple of --snapshot-every (the anchor's checkpoint is kept)")
@@ -318,6 +342,10 @@ class _Game:
     seat_members: dict = field(default_factory=dict)
     slot_versions: dict = field(default_factory=dict)
     league_mixed: bool = False
+    #: The game's rules combination (``titles.rules_name``: "base", 1822's "plus+nr+ss+th", ...).
+    rules: str = "base"
+    #: All-pass openings this game slot redrew before this game (``redraw_all_pass``).
+    redraws: int = 0
     #: A generated move the engine refused (``apply_move``): the game ends there as it stands (``rejected_move``).
     rejected: Optional[dict] = None
 
@@ -463,12 +491,20 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
     from rl18xx.agent.alphazero import model_generic as mg
     from rl18xx.agent.alphazero.generic_data import seat_order
     from rl18xx.agent.alphazero.generic_inference import slice_positions
-    from rl18xx.agent.alphazero.generic_play import replayed_start, title_play
+    from rl18xx.agent.alphazero.generic_play import (
+        ALL_PASS,
+        MAX_ALL_PASS_REDRAWS,
+        all_pass_opening,
+        replayed_start,
+        title_play,
+    )
     from rl18xx.agent.alphazero.generic_tokens import encode_batch
+    from rl18xx.agent.alphazero.titles import draw_rules, rules_name
 
     rng = np.random.default_rng()
     py_rng = random.Random()
     title = settings["title"]
+    rules_mix = settings.get("rules_mix") or {"base": 1.0}
     play = title_play(title)
     k_keep = settings["positions_per_seat"]
     n_players = int(settings["num_players"])
@@ -477,7 +513,11 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
     stats = Counter()
 
     games, skipped_starts = [], 0
-    for _ in range(num_games):
+    redraw_all_pass = settings.get("redraw_all_pass", True)
+
+    def new_game(redraws: int = 0) -> _Game:
+        nonlocal skipped_starts
+        rules = draw_rules(rules_mix, py_rng, title)
         start, raw, skipped = replayed_start(
             title,
             n_players,
@@ -488,13 +528,18 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
             midgame_fraction=settings.get("midgame_fraction", 0.0),
             auction_fraction=settings.get("auction_fraction", 0.0),
             auction_unlock=settings.get("auction_unlock", True),
+            optional_rules=rules,
         )
         skipped_starts += skipped
         learner, seat_models, seat_members = pg._deal_seats(settings, py_rng)
         opponent = "league" if settings.get("league") else seat_models[min(set(range(n_players)) - learner)]
         g = _Game(raw=raw, uid=uuid.uuid4().hex, opponent=opponent, seat_models=seat_models, start=start.label)
         g.seed = start.seed
-        g.seating = [int(p.id) for p in raw.players]
+        g.rules = rules_name(title, start.optional_rules)
+        # the seating order is the new game's (``titles.new_game`` numbers the seats in order), not raw.players after
+        # the start's actions: the 1822 family reorders its players every Stock Round, and saved games replay from
+        # the fresh game in this order
+        g.seating = sorted(int(p.id) for p in raw.players)
         g.learner = set(learner)
         g.seat_members = seat_members
         if seat_members:
@@ -503,18 +548,31 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
             g.league_mixed = any(v is not None and v != dealt.get(slot, v) for slot, v in g.slot_versions.items())
         for seat in learner:
             g.seen[seat], g.reservoir[seat] = 0, []
-        games.append(g)
+        g.redraws = redraws
+        return g
 
-    finished, active, decisions_total = [], list(games), 0
+    games = [new_game() for _ in range(num_games)]
+    finished, active, decisions_total, all_pass_redrawn = [], list(games), 0, 0
     t_encode = t_wait = t_play = 0.0
     while active:
         pending = []
-        for g in active:
+        queue = list(active)
+        while queue:
+            g = queue.pop(0)
             legal = _advance(g, play, settings)
-            if legal is None:
-                finished.append(g)
-            else:
+            if legal is not None:
                 pending.append((g, legal))
+            elif redraw_all_pass and all_pass_opening(title, g.raw):
+                if g.redraws < MAX_ALL_PASS_REDRAWS:
+                    # nothing bought, sold or bid in the opening Stock Round: Ruby ends the game, every seat tied --
+                    # dropped (no rows, no credit) and replaced by a fresh draw
+                    all_pass_redrawn += 1
+                    queue.append(new_game(g.redraws + 1))
+                else:
+                    g.termination = ALL_PASS
+                    finished.append(g)
+            else:
+                finished.append(g)
         active = [g for g, _ in pending]
         if not pending:
             break
@@ -614,6 +672,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
             "auction_decisions": g.auction_decisions,
             "learner_decisions": sum(g.seen.values()),
             "termination": g.termination,
+            "rules": g.rules,
             "start_kind": g.start.split(":")[0] if g.start else None,
             "auction_prices": _auction_prices(title, g.start, g.termination, g.raw),
             "first_values": {},
@@ -653,6 +712,8 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
         "games": records,
         "decisions": decisions_total,
         "skipped_starts": skipped_starts,
+        "all_pass_redrawn": all_pass_redrawn,
+        "num_players": n_players,
         "seconds": time.time() - start_time,
         "worker_seconds": {"encode_send": t_encode, "wait": t_wait, "play": t_play},
         "stats": dict(stats),
@@ -692,6 +753,7 @@ def save_game(run_dir: Path, record: dict, update: int, learner_checkpoint: str,
         "learner_temperature": cfg.learner_temperature,
         "opponent_temperature": cfg.opponent_temperature,
         "start": saved["start"],
+        "rules": record.get("rules", "base"),
         "termination": record["termination"],
         **({"rejected_move": record["rejected_move"]} if record.get("rejected_move") else {}),
         "decisions": record["decisions"],
@@ -1001,7 +1063,11 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
     if resume:
         run_dir = Path(resume)
         state = json.loads((run_dir / "state.json").read_text())
+        # a run from before the rules mix played base rules: its resume does too (unless --rules-mix is given)
+        state["config"].setdefault("rules_mix", {"base": 1.0})
         overrides = pg.resume_overrides(cfg, state["config"], RESUME_SETTINGS, explicit)
+        if overrides.get("rules_mix", "") is None:  # (a caller without a command line: only a mix it sets)
+            overrides.pop("rules_mix")
         cfg = GenericPGConfig(**{**state["config"], **overrides})
         check_config(cfg)
         update = int(state["snapshot_update"])
@@ -1106,12 +1172,14 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
             "opponent_price_eps": cfg.opponent_price_eps,
             "max_decisions": max_decisions,
             "start_positions": pg.count_path(cfg.start_positions, n),
+            "rules_mix": dict(cfg.rules_mix),
             "random_start_fraction": cfg.random_start_fraction,
             "midgame_positions": pg.count_path(cfg.midgame_positions, n),
             "midgame_fraction": cfg.midgame_fraction,
             "auction_fraction": cfg.auction_fraction,
             "auction_unlock": cfg.auction_unlock,
             "auction_stall_decisions": stall,
+            "redraw_all_pass": cfg.redraw_all_pass,
             "save_game_every": cfg.save_game_every,
             "reward": cfg.reward,
             "compress_requests": cfg.compress_requests,
@@ -1134,6 +1202,9 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
     worker_seconds = Counter()
     prices = defaultdict(list)
     by_count = defaultdict(lambda: defaultdict(list))
+    by_rules = defaultdict(lambda: defaultdict(list))
+    rules_mixed = len(cfg.rules_mix) > 1
+    all_pass_by_count = Counter()
     try:
         executor = ProcessPoolExecutor(
             max_workers=cfg.workers, initializer=worker_init, initargs=(queues, slot_versions)
@@ -1149,6 +1220,8 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                     result = future.result()
                     gen["decisions"] += result["decisions"]
                     gen["skipped_starts"] += result.get("skipped_starts", 0)
+                    gen["all_pass_redrawn"] += result.get("all_pass_redrawn", 0)
+                    all_pass_by_count[int(result.get("num_players", 0))] += result.get("all_pass_redrawn", 0)
                     gen.update({f"worker_{k}": v for k, v in (result.get("stats") or {}).items()})
                     worker_seconds.update(result.get("worker_seconds") or {})
                     for record in result["games"]:
@@ -1165,6 +1238,11 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                             prices[company].append(price)
                         lengths.append(record["decisions"])
                         auction_lengths.append(record.get("auction_decisions", 0))
+                        if rules_mixed:
+                            r = by_rules[record.get("rules", "base")]
+                            r["decisions"].append(record["decisions"])
+                            r["finished"].append(record["termination"] == "finished")
+                            r["max_length"].append(record["termination"] == "max_length")
                         if mixed:
                             c = by_count[players]
                             c["decisions"].append(record["decisions"])
@@ -1276,6 +1354,8 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                     **{f"auction_price_{c}": float(np.mean(v)) for c, v in sorted(prices.items())},
                     "auction_stalls": terminations.get("auction_stall", 0),
                     "skipped_starts": gen["skipped_starts"],
+                    "all_pass_redrawn": gen["all_pass_redrawn"],
+                    "all_pass_rate": gen["all_pass_redrawn"] / max(1, gen["all_pass_redrawn"] + gen["games"]),
                     "learner_decisions": gen["worker_learner_decisions"],
                     "learner_price_decisions": gen["worker_learner_price_decisions"],
                     "worker_seconds": {k: round(v, 1) for k, v in worker_seconds.items()},
@@ -1300,12 +1380,23 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                     record[f"p{n}_auction_stalls"] = int(sum(c["auction_stall"]))
                     if c["score"]:
                         record[f"p{n}_score_vs_league_update"] = float(np.mean(c["score"]))
+                if mixed:
+                    for n in sorted(by_count):
+                        record[f"p{n}_all_pass_redrawn"] = int(all_pass_by_count.get(n, 0))
+                for name, r in sorted(by_rules.items()):
+                    record[f"rules_{name}_games"] = len(r["decisions"])
+                    record[f"rules_{name}_mean_decisions"] = float(np.mean(r["decisions"]))
+                    record[f"rules_{name}_max_decisions_game"] = int(max(r["decisions"]))
+                    record[f"rules_{name}_not_finished"] = int(len(r["finished"]) - sum(r["finished"]))
+                    record[f"rules_{name}_max_length"] = int(sum(r["max_length"]))
                 gen.clear()
                 worker_seconds.clear()
                 gen_started = time.time()
                 terminations, lengths, starts, auction_lengths = Counter(), [], Counter(), []
                 prices = defaultdict(list)
                 by_count = defaultdict(lambda: defaultdict(list))
+                by_rules = defaultdict(lambda: defaultdict(list))
+                all_pass_by_count = Counter()
                 history.write(json.dumps(record) + "\n")
                 history.flush()
                 if writer is not None:
