@@ -374,11 +374,16 @@ pub fn diff_walk(
         }
         let m = choose(&moves, &mut rng);
         if let Err(e) = g.g1822_apply_move(&m) {
+            // (a price inside a move's range can lead into a Ruby dead end
+            // the engine mirrors -- e.g. 1822MX's ranged payoff ending the
+            // round into the NdeM's 11th home: Ruby raises there too)
+            let dead_end = e.to_string().contains("(Ruby raises)");
             return DiffReport {
                 states,
                 moves_compared: compared,
                 finished: false,
-                error: Some(format!("{title} {players}p seed {seed} move {n}: {:?} rejected: {e}", m.action)),
+                error: (!dead_end)
+                    .then(|| format!("{title} {players}p seed {seed} move {n}: {:?} rejected: {e}", m.action)),
             };
         }
     }
@@ -679,4 +684,116 @@ fn offered_tile_instance_is_rubys() {
         eprintln!("{title}: {n} offered lays checked against Ruby's supply order ({changed} where the old rule differs)");
         assert!(n > 0);
     }
+}
+
+/// Every generated tile lay applies (`process_action` on a clone accepts
+/// it): random walks of `G1822_LAYS_TITLE` (default 1822CA) at 3-6 players,
+/// `G1822_LAYS_SEEDS` seeds (default 6) from `G1822_LAYS_FIRST` (1) under
+/// each policy; prints every refused lay. A corporation's own lays skip the
+/// generator's apply filter (pre-validated), so a refusal is a generator
+/// bug. `cargo test --release --no-default-features every_generated_lay_applies -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn every_generated_lay_applies() {
+    let env = |k: &str| std::env::var(k).ok();
+    let title = env("G1822_LAYS_TITLE").unwrap_or_else(|| "1822CA".to_string());
+    let seeds: u64 = env("G1822_LAYS_SEEDS").and_then(|s| s.parse().ok()).unwrap_or(6);
+    let first: u64 = env("G1822_LAYS_FIRST").and_then(|s| s.parse().ok()).unwrap_or(1);
+    let players: Vec<usize> = if title == "1822PNW" || title == "1822MX" { vec![3, 4, 5] } else { vec![3, 4, 5, 6] };
+    let (mut states, mut lays, mut refused) = (0usize, 0usize, Vec::new());
+    for &p in &players {
+        for seed in first..first + seeds {
+            for policy in [CrossPlayerPolicy::RESTRICTED, CrossPlayerPolicy::RULES] {
+                let mut g = new_game_titled(&title, p, seed, diff_rules(&title, seed));
+                let mut rng = Rng::new(seed ^ 0x5A5A ^ (p as u64));
+                for n in 0..4000 {
+                    if g.finished {
+                        break;
+                    }
+                    let moves = g.g1822_legal_moves_with(policy);
+                    if moves.is_empty() {
+                        break;
+                    }
+                    states += 1;
+                    for m in moves.iter().filter(|m| matches!(m.action, crate::actions::Action::LayTile { .. })) {
+                        lays += 1;
+                        let mut c = g.clone_for_search();
+                        if let Err(e) = c.g1822_apply_move(m) {
+                            refused.push(format!("{title} {p}p seed {seed} {policy:?} move {n}: {:?} validated={}: {e}", m.action, m.validated));
+                        }
+                    }
+                    let m = choose(&moves, &mut rng);
+                    if g.g1822_apply_move(&m).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("{title}: {states} states, {lays} generated lays applied, {} refused", refused.len());
+    for r in refused.iter().take(30) {
+        eprintln!("  {r}");
+    }
+    assert!(refused.is_empty());
+}
+
+/// The policy-gradient path between the generator and the apply: the RL
+/// legal rows (`rl_g1822_indexed_moves`, their wires) and the encoder
+/// (`encode_tokens`) leave the state as it was, and every generated lay
+/// then applies. Same walks and env as [`every_generated_lay_applies`].
+#[test]
+#[ignore]
+fn rl_path_keeps_state() {
+    use crate::rl::generator::GenMove;
+    let env = |k: &str| std::env::var(k).ok();
+    let title = env("G1822_LAYS_TITLE").unwrap_or_else(|| "1822CA".to_string());
+    let seeds: u64 = env("G1822_LAYS_SEEDS").and_then(|s| s.parse().ok()).unwrap_or(6);
+    let first: u64 = env("G1822_LAYS_FIRST").and_then(|s| s.parse().ok()).unwrap_or(1);
+    let players: Vec<usize> = if title == "1822PNW" || title == "1822MX" { vec![3, 4, 5] } else { vec![3, 4, 5, 6] };
+    let (mut states, mut lays, mut bad) = (0usize, 0usize, Vec::new());
+    for &p in &players {
+        for seed in first..first + seeds {
+            let policy = CrossPlayerPolicy::RESTRICTED;
+            let mut g = new_game_titled(&title, p, seed, diff_rules(&title, seed));
+            let mut rng = Rng::new(seed ^ 0xA5A5 ^ (p as u64));
+            for n in 0..4000 {
+                if g.finished {
+                    break;
+                }
+                let f0 = g.g1822_state_fingerprint();
+                let Ok(rows) = g.rl_g1822_indexed_moves(policy) else { break };
+                if rows.is_empty() {
+                    break;
+                }
+                let _wires: Vec<_> = rows.iter().map(|x| Move::wire(&g, &x.mv)).collect();
+                let f1 = g.g1822_state_fingerprint();
+                let _enc = g.encode_tokens();
+                let f2 = g.g1822_state_fingerprint();
+                if f1 != f0 {
+                    bad.push(format!("{title} {p}p seed {seed} move {n}: the RL legal rows changed the state"));
+                }
+                if f2 != f1 {
+                    bad.push(format!("{title} {p}p seed {seed} move {n}: the encoder changed the state"));
+                }
+                states += 1;
+                for x in rows.iter().filter(|x| matches!(x.mv.action, crate::actions::Action::LayTile { .. })) {
+                    lays += 1;
+                    let mut c = g.clone_for_search();
+                    if let Err(e) = c.g1822_apply_move(&x.mv) {
+                        bad.push(format!("{title} {p}p seed {seed} move {n}: {:?}: {e}", x.mv.action));
+                    }
+                }
+                let moves: Vec<Move> = rows.into_iter().map(|x| x.mv).collect();
+                let m = choose(&moves, &mut rng);
+                if g.g1822_apply_move(&m).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    eprintln!("{title}: {states} states, {lays} lays, {} problems", bad.len());
+    for r in bad.iter().take(30) {
+        eprintln!("  {r}");
+    }
+    assert!(bad.is_empty());
 }

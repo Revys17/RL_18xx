@@ -439,6 +439,30 @@ impl BaseGame {
         Ok(self.g1822_reference_diff_both_policies())
     }
 
+    /// Debug: every generated move of type `action_type` (None: all) under
+    /// `policy` applied to a clone: `[(move, error)]` for those the process
+    /// refuses (a generator bug for pre-validated moves).
+    #[pyo3(signature = (action_type=None, policy=None))]
+    fn g1822_refused_generated_moves(
+        &mut self,
+        action_type: Option<&str>,
+        policy: Option<&str>,
+    ) -> PyResult<Vec<(String, String)>> {
+        if self.g1822.is_none() {
+            return Err(pyo3::exceptions::PyValueError::new_err("not an 1822-family game"));
+        }
+        let p = crate::g1867::py::policy_of(self, policy)?;
+        let moves = self.g1822_legal_moves_with(p);
+        let mut out = Vec::new();
+        for m in moves.iter().filter(|m| action_type.map_or(true, |t| m.action.action_type() == t)) {
+            let mut c = self.clone_for_search();
+            if let Err(e) = c.g1822_apply_move(m) {
+                out.push((format!("{:?} validated={}", m.action, m.validated), e.to_string()));
+            }
+        }
+        Ok(out)
+    }
+
     /// Run this thread's 1822-family generator through the reference paths
     /// (the code before the 2026-11-14 speed-ups) or the fast ones; returns
     /// the previous setting. Every caller of the generator follows it

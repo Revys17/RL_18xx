@@ -244,7 +244,7 @@ impl BaseGame {
     /// The state the generator must leave as it found it (the family's
     /// state incl. the route latch and Ruby's graph cache, the map, the
     /// corporations, the players).
-    fn g1822_state_fingerprint(&self) -> String {
+    pub(crate) fn g1822_state_fingerprint(&self) -> String {
         format!(
             "{}|{}|{}|{}",
             serde_json::to_string(&self.g1822).unwrap_or_default(),
