@@ -118,7 +118,11 @@ enum Entry {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Kind {
-    Local { lp: bool },
+    /// An L / LP: one city and one town, or a single city (`local?`).
+    /// `no_local`: an 1822CA L / LP left with the grain train's name and
+    /// `no_local` (`g1822_ca_route_setup`): the same rows, never a single
+    /// city, not in the local-city check.
+    Local { lp: bool, no_local: bool },
     Numeric(u32),
     E,
     Pullman(u32),
@@ -548,10 +552,20 @@ impl BaseGame {
                     return Kind::CaPullman(t.distance);
                 }
             }
-            if t.name.len() > 1 && t.name.ends_with('G') {
-                let base = t.name.strip_suffix("-G").or_else(|| t.name.strip_suffix('G')).unwrap_or(&t.name);
+            let base = Self::g1822_ca_ungrained(&t.name);
+            if base != t.name {
                 let local = base == "L" || base == "LP";
-                return Kind::CaGrain { d: if local { 2 } else { t.distance }, local };
+                if !self.g1822_ca_left_grain_name(t) {
+                    return Kind::CaGrain { d: if local { 2 } else { t.distance }, local };
+                }
+                // A grain name Route#setup left behind: Ruby's train keeps
+                // `no_local` and the grain row of its distance, but its stops
+                // are typed as usual (`stop_type` reads `@train_with_grain`)
+                // and its bonus is any train's -- an L / LP that is not local.
+                // (Only a corporation's last local train can be left renamed.)
+                if local {
+                    return Kind::Local { lp: base == "LP", no_local: true };
+                }
             }
         }
         Self::g1822_train_kind(t)
@@ -580,7 +594,7 @@ impl BaseGame {
 
     fn g1822_train_kind(t: &crate::entities::Train) -> Kind {
         if t.name == "L" || t.name == "LP" {
-            Kind::Local { lp: t.name == "LP" }
+            Kind::Local { lp: t.name == "LP", no_local: false }
         } else if t.name == "E" {
             Kind::E
         } else if t.name.ends_with('+') {
@@ -881,7 +895,7 @@ impl BaseGame {
             }
         }
         // single-city local runs
-        if kinds.iter().any(|k| matches!(k, Kind::Local { .. })) {
+        if kinds.iter().any(|k| matches!(k, Kind::Local { no_local: false, .. })) {
             let mut ts: Vec<Node> = tokens.iter().copied().collect();
             ts.sort();
             for t in ts {
@@ -1333,7 +1347,7 @@ impl BaseGame {
                 && (id == fam.english_channel_hex || id == fam.france_hex)
         };
         let channel = stops.iter().filter(|n| channel_hex(n)).count();
-        let local = matches!(kind, Kind::Local { .. });
+        let local = matches!(kind, Kind::Local { no_local: false, .. });
         // (a grain-attached L / LP has no_local)
         // a single-node route is a local train's only
         if stops.len() < 2 && !local {
@@ -1528,7 +1542,7 @@ impl Search<'_> {
                 }
             }
         }
-        if matches!(self.kinds[t], Kind::Local { .. }) {
+        if matches!(self.kinds[t], Kind::Local { no_local: false, .. }) {
             for n in &r.stops {
                 if n.kind == NodeKind::City && self.local_cities.contains(n) {
                     return false;
@@ -1574,7 +1588,7 @@ impl Search<'_> {
                 }
             }
         }
-        if matches!(self.kinds[t], Kind::Local { .. }) {
+        if matches!(self.kinds[t], Kind::Local { no_local: false, .. }) {
             for n in &r.stops {
                 if n.kind == NodeKind::City {
                     if sign > 0 {
@@ -2717,7 +2731,7 @@ impl BaseGame {
                     }
                 }
             }
-            if matches!(k, Kind::Local { .. }) {
+            if matches!(k, Kind::Local { no_local: false, .. }) {
                 for &t in &tokens {
                     // Route#connection_data rebuilds a ["local", hex] run on
                     // the hex's FIRST node the corporation tokened: in a
@@ -3029,7 +3043,7 @@ impl BaseGame {
             dense: &dense,
             kind_of: &kind_of,
             e: kinds.iter().map(|k| *k == Kind::E).collect(),
-            local: kinds.iter().map(|k| matches!(k, Kind::Local { .. })).collect(),
+            local: kinds.iter().map(|k| matches!(k, Kind::Local { no_local: false, .. })).collect(),
             caps: &caps,
             used_normal: vec![0; caps.len()],
             used_e: vec![0; caps.len()],

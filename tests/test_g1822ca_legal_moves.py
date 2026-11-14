@@ -15,12 +15,72 @@ import pytest
 
 import engine_rs
 
+from rl18xx.agent.alphazero.action_descriptors import action_descriptors
 from scripts.g1822_fuzz import pick, walk
 from tests.title_replay_harness import supported_titles
 
 pytestmark = pytest.mark.skipif("1822CA" not in supported_titles(), reason="engine lacks 1822CA")
 
 FIXTURES = Path(__file__).parent / "fixtures" / "g1822_generator"
+# 1822CA EXTRA_TRAINS: the companies' trains, `buyable: false` in Ruby (their card ids are "<type>-<n>")
+COMPANY_TRAINS = ("2P", "P", "LP", "G")
+
+
+def _replay_fixture(name: str):
+    data = json.loads((FIXTURES / name).read_text())
+    players = {p["id"]: p["name"] for p in data["players"]}
+    return data["actions"], engine_rs.BaseGame.new_titled("1822CA", players, None, data["settings"]["seed"])
+
+
+def _icr_trains(g) -> list:
+    return sorted(json.loads(g.g1822_snapshot())["corps"]["ICR"]["tr"])
+
+
+def test_grain_name_left_on_a_train():
+    """Attaching the grain train to a corporation's last local train when it has no route on the graph takes away
+    its run (`can_run_route?` asks for an L / LP by name): its Route step is skipped, run_routes never detaches the
+    grain train and Route#setup drops it with the name left on ("LP-G" for good). Ruby HEAD does exactly this (the
+    fixture replays there with zero divergence). The engine mirrors it, its memoized crowded_corps (the LP still an
+    extra train until trains next move), the later grain / pullman offers on the "LP-G" and its runs; the RL
+    descriptors name the train's type, "LP" (a 2026-11-14 policy game died on 'Choose.grain ["route:grain",
+    "LP-G", "0"] is not in the layout'), and no corporation is offered another's company train."""
+    actions, g = _replay_fixture("1822CA_grain_name_left_ICR.json")
+    d = action_descriptors("1822CA")
+    for a in actions[:593]:
+        g.process_action(dict(a))
+    assert _icr_trains(g) == ["3", "3", "G", "LP", "P"]
+    grain = {m["wire"]["choice"]: m for m in json.loads(g.rl_legal_moves_json()) if m["block"] == "Choose.grain"}
+    row = d.describe(grain["2"]["index"])
+    assert (row["choice"], row["ent0"], row["param"]) == ("route:grain", ("train", "LP"), 0)
+    g.process_action(dict(actions[593]))
+    snap = json.loads(g.g1822_snapshot())
+    assert snap["step"] != "Route" and "LP-G" in _icr_trains(g), "the attachment took ICR's run"
+    for a in actions[594:596]:
+        g.process_action(dict(a))
+    snap = json.loads(g.g1822_snapshot())
+    # not made to discard (Ruby's crowded_corps memo predates the rename): the next corporation operates
+    assert (snap["ent"], snap["step"]) == ("CPR", "AcquireCompany") and "LP-G" in _icr_trains(g)
+
+    offered = {"Choose.grain": 0, "Choose.pullman": 0}
+    corp_buys = 0
+    for a in actions[596:]:
+        for policy in (None, "rules"):
+            for m in json.loads(g.rl_legal_moves_json(policy)):
+                wire = m["wire"]
+                if m["block"] == "BuyTrain.corp":
+                    corp_buys += 1
+                    assert wire["train"].split("-")[0] not in COMPANY_TRAINS, wire
+                if wire["type"] == "discard_train":
+                    assert wire["train"] != "LP-0", "no variant left for it in the pool: Ruby breaks"
+                if m["block"] in offered and wire["entity"] == "ICR" and policy is None:
+                    row = d.describe(m["index"])
+                    assert row["ent0"][1] != "LP-G" and not row["ent0"][1].endswith("G"), row
+                    if row["ent0"] == ("train", "LP"):
+                        offered[m["block"]] += 1
+        g.process_action(dict(a))
+    assert offered["Choose.grain"] > 0 and offered["Choose.pullman"] > 0, offered
+    assert corp_buys > 0
+    assert "LP-G" in _icr_trains(g)
 
 
 @pytest.mark.parametrize("players,seed", [(3, 21), (4, 22), (5, 23), (6, 24)])

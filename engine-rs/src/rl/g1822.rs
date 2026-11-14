@@ -628,11 +628,27 @@ pub(crate) fn tile_name(id: &str) -> &str {
     }
 }
 
-/// The name of a train by id: a corporation's, the depot's or the pool's.
+/// The type a train name stands for in the descriptors: 1822CA's grain
+/// suffixes removed. A grain name can outlive its attachment (Ruby's
+/// Route#setup drops `@grain_train` without detaching it when the attachment
+/// left the corporation without a run: `g1822_ca_route_setup`), and the train
+/// is then offered under it -- to the grain or the pullman, from another
+/// corporation, to discard (a 2026-11-14 policy game: "Choose.grain
+/// ["route:grain", "LP-G", "0"] is not in the layout").
+pub(crate) fn train_type(g: &BaseGame, name: &str) -> String {
+    if g.g1822_is_ca() {
+        BaseGame::g1822_ca_ungrained(name).to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// The type of a train by id ([`train_type`] of its name): a corporation's,
+/// the depot's or the pool's.
 fn train_name(g: &BaseGame, id: &str) -> Option<String> {
     for c in &g.corporations {
         if let Some(t) = c.trains.iter().find(|t| t.id == id) {
-            return Some(t.name.clone());
+            return Some(train_type(g, &t.name));
         }
     }
     g.depot
@@ -640,23 +656,23 @@ fn train_name(g: &BaseGame, id: &str) -> Option<String> {
         .iter()
         .chain(g.depot.discarded.iter())
         .find(|t| t.id == id)
-        .map(|t| t.name.clone())
+        .map(|t| train_type(g, &t.name))
 }
 
 /// A train's type in the Route step: an attachment renames its train for the
 /// run (the pullman "<name>+" / CA "<name>+<2d>", CA's grain train
 /// "<name>G" / "<name>-G"; corpus 255116 @1481 offers the pullman to a
-/// grain-attached "LP-G") -- the type is the name before it.
+/// grain-attached "LP-G") -- the type is the name before it ([`train_type`]).
 pub(crate) fn route_train_type(g: &BaseGame, id: &str) -> Option<String> {
     let r = g.rnd();
     if r.pullman_train.as_deref() == Some(id) {
         if let Some((name, _)) = &r.pullman_original {
-            return Some(name.clone());
+            return Some(train_type(g, name));
         }
     }
     if r.ca.grain_train.as_deref() == Some(id) {
         if let Some(name) = &r.ca.grain_original {
-            return Some(name.clone());
+            return Some(train_type(g, name));
         }
     }
     train_name(g, id)
@@ -887,7 +903,8 @@ pub fn move_key(g: &BaseGame, m: &Move) -> Result<(String, Vec<String>), GameErr
             ..
         } => {
             let name = variant
-                .clone()
+                .as_deref()
+                .map(|v| train_type(g, v))
                 .or_else(|| train_name(g, id))
                 .ok_or_else(|| err("unknown train"))?;
             if from != "depot" {

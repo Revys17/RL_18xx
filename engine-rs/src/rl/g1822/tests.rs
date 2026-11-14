@@ -162,6 +162,8 @@ fn the_index_paths_stay_apart() {
 // The index function against the generator
 // ---------------------------------------------------------------------------
 
+/// A train's type: its name, but an 1822CA grain name left on it
+/// (`super::train_type`) names its card's type.
 fn train_name(g: &BaseGame, id: &str) -> Option<String> {
     g.corporations
         .iter()
@@ -169,7 +171,7 @@ fn train_name(g: &BaseGame, id: &str) -> Option<String> {
         .chain(g.depot.trains.iter())
         .chain(g.depot.discarded.iter())
         .find(|t| t.id == id)
-        .map(|t| t.name.clone())
+        .map(|t| super::train_type(g, &t.name))
 }
 
 /// Whether descriptor `d` (of the index `m` maps to) says what `m` does.
@@ -402,10 +404,8 @@ fn agrees(lo: &RlLayout, d: &Descriptor, g: &BaseGame, m: &Move) -> Result<(), S
             let pool = g.depot.discarded.iter().any(|t| t.id == *id);
             let fam_ok = (d.family_enum() == Family::BuyTrainPool) == pool
                 || g.g1822_active_step().map(|i| g.rnd().steps[i]) == Some(crate::g1822::Step::FirstTurnHousekeeping);
-            check(
-                from == "depot" && fam_ok && e0 == variant.as_deref(),
-                "depot / pool train",
-            )
+            let ty = variant.as_deref().map(|v| super::train_type(g, v));
+            check(from == "depot" && fam_ok && e0 == ty.as_deref(), "depot / pool train")
         }
         (
             Family::BuyTrainExchange,

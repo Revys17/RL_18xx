@@ -69,6 +69,8 @@ impl BaseGame {
                 t.operated = false;
                 let ci = self.ci(c);
                 self.corporations[ci].trains.push(t);
+                // (Game#buy_train: the crowded_corps memo resets)
+                self.g1822_trains_moved();
             }
             self.close_company(company);
         }
@@ -552,6 +554,8 @@ impl BaseGame {
             t.owner = EntityId::corporation(c);
             self.corporations[cix].trains.push(t);
         }
+        // (transfer(:trains), even of none: the crowded_corps memo resets)
+        self.g1822_trains_moved();
         if self.g1822_is_pnw() {
             // PNW extra_transfers: the coal token
             self.g1822_pnw_move_coal_token(m, c);

@@ -26,6 +26,31 @@ impl BaseGame {
         t.name == "G"
     }
 
+    /// A train name without the grain attachment's suffixes:
+    /// `attach_grain_train` appends "-G" after a P and "G" otherwise
+    /// ("LP" -> "LP-G", "3" -> "3G"), and the name can outlive the
+    /// attachment ([`Self::g1822_ca_route_setup`]): "LP-G" -> "LP", "LG" ->
+    /// "L", "LP-GG" (a left-over name attached again) -> "LP". The grain
+    /// train "G" itself and every other name are returned unchanged.
+    pub(crate) fn g1822_ca_ungrained(name: &str) -> &str {
+        let mut n = name;
+        loop {
+            if let Some(b) = n.strip_suffix("-G").filter(|b| b.ends_with('P')) {
+                n = b;
+            } else if let Some(b) = n.strip_suffix('G').filter(|b| !b.is_empty() && !b.ends_with('-')) {
+                n = b;
+            } else {
+                return n;
+            }
+        }
+    }
+
+    /// A grain name left on a train that is not (any more) the Route step's
+    /// grain-attached train ([`Self::g1822_ca_route_setup`]).
+    pub(crate) fn g1822_ca_left_grain_name(&self, t: &Train) -> bool {
+        Self::g1822_ca_ungrained(&t.name) != t.name && self.rnd().ca.grain_train.as_deref() != Some(t.id.as_str())
+    }
+
     /// CA Route#grain_train_choices: route trains but the E-train and the
     /// pullman-attached one (train ids).
     pub(crate) fn g1822_ca_grain_choices(&self, c: &str) -> Vec<String> {
@@ -92,6 +117,10 @@ impl BaseGame {
                 // attach_grain_train: "<name>G" ("<name>-G" after a P)
                 let orig = t.name.clone();
                 t.name = if orig.ends_with('P') { format!("{orig}-G") } else { format!("{orig}G") };
+                // (the memoized crowded_corps still counts it as `orig`)
+                if !self.g().ca.crowd_memo_names.iter().any(|(id, _)| *id == tid) {
+                    self.gm().ca.crowd_memo_names.push((tid.clone(), orig.clone()));
+                }
                 self.gm().round.ca.grain_original = Some(orig);
                 self.gm().round.ca.grain_train = Some(tid);
             }
@@ -107,11 +136,41 @@ impl BaseGame {
         if let Some(t) = self.corporations.iter_mut().flat_map(|co| co.trains.iter_mut()).find(|t| t.id == tid) {
             t.name = name;
         }
+        self.gm().ca.crowd_memo_names.retain(|(id, _)| *id != tid);
         self.rndm().ca.grain_train = None;
         self.rndm().ca.grain_original = None;
     }
 
-    /// CA Route#setup (each operator).
+    /// Trains moved: Ruby resets the memoized `crowded_corps` (Game#buy_train,
+    /// #remove_train of a corporation's train, #transfer(:trains),
+    /// #rust_trains!), which from now on counts every train under its name.
+    pub(crate) fn g1822_trains_moved(&mut self) {
+        if !self.g().ca.crowd_memo_names.is_empty() {
+            self.gm().ca.crowd_memo_names.clear();
+        }
+    }
+
+    /// The name the memoized `crowded_corps` counts a train under: its name
+    /// before a grain attachment newer than the memo, else its name.
+    pub(crate) fn g1822_crowd_memo_name<'a>(&'a self, t: &'a Train) -> &'a str {
+        self.g()
+            .ca
+            .crowd_memo_names
+            .iter()
+            .find(|(id, _)| *id == t.id)
+            .map_or(t.name.as_str(), |(_, n)| n.as_str())
+    }
+
+    /// CA Route#setup (each operator). Ruby drops `@grain_train` here
+    /// without `detach_grain_train`: when attaching the grain train took a
+    /// corporation's last local train (L / LP -> "LG" / "LP-G";
+    /// `can_run_route?` asks for a LOCAL_TRAINS name) and it has no route on
+    /// the graph, its Route step has nothing left to offer and is skipped —
+    /// no `run_routes`, so no detach — and the train keeps the grain name
+    /// (with `no_local`) for the rest of the game. Mirrored: the name stays;
+    /// the router runs such a train as Ruby does (an L / LP that is not
+    /// local, `g1822_train_kind_of`), the RL descriptors name its base type
+    /// (`rl::g1822::train_type`), and it rusts as its base type.
     pub(crate) fn g1822_ca_route_setup(&mut self) {
         let r = &mut self.rndm().ca;
         r.skipped_pullman = false;
@@ -163,5 +222,32 @@ impl BaseGame {
             }
         }
         total
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::game::BaseGame;
+
+    /// `attach_grain_train` appends "-G" after a P and "G" otherwise; a name
+    /// left on and attached again gets a second suffix.
+    #[test]
+    fn grain_suffixes_come_off() {
+        for (name, base) in [
+            ("LP-G", "LP"),
+            ("2P-G", "2P"),
+            ("5P-G", "5P"),
+            ("LG", "L"),
+            ("3G", "3"),
+            ("LP-GG", "LP"),
+            ("LGG", "L"),
+            ("G", "G"),
+            ("LP", "LP"),
+            ("P", "P"),
+            ("3+6", "3+6"),
+            ("E", "E"),
+        ] {
+            assert_eq!(BaseGame::g1822_ca_ungrained(name), base, "{name}");
+        }
     }
 }

@@ -39,21 +39,17 @@ impl BaseGame {
     /// train when it was a 2P) until run_routes detaches it: the memo
     /// still holds the pre-attachment answer, so judge the attached
     /// train by its original name (233265: "2P+" must not crowd LNWR).
+    /// 1822CA's grain attachment likewise ("<name>G"), until trains next move
+    /// (`CaState::crowd_memo_names`: the attachment can outlive the turn).
     pub(crate) fn g1822_crowded_corp(&self, c: &str) -> bool {
         let co = &self.corporations[self.ci(c)];
         let attached = self.rnd().pullman_train.as_deref();
         let original = self.rnd().pullman_original.as_ref().map(|(n, _)| n.as_str());
-        // (1822CA: the grain-attached train likewise, "<name>G")
-        let grain = self.rnd().ca.grain_train.as_deref();
-        let grain_orig = self.rnd().ca.grain_original.as_deref();
         let name_of = |t: &Train| -> String {
+            let memo = self.g1822_crowd_memo_name(t);
             match (attached, original) {
-                (Some(id), Some(orig)) if t.id == id => return orig.to_string(),
-                _ => {}
-            }
-            match (grain, grain_orig) {
-                (Some(id), Some(orig)) if t.id == id => orig.to_string(),
-                _ => t.name.clone(),
+                (Some(id), Some(orig)) if t.id == id && memo == t.name => orig.to_string(),
+                _ => memo.to_string(),
             }
         };
         let normal = co.trains.iter().filter(|t| !self.g1822_is_extra_train(&name_of(t))).count() as u32;
@@ -111,7 +107,7 @@ impl BaseGame {
                 continue;
             }
             for t in &co.trains {
-                if Self::g1822_train_buyable(t) {
+                if self.g1822_train_buyable(t) {
                     out.push((co.sym.clone(), t.clone()));
                 }
             }
@@ -119,10 +115,18 @@ impl BaseGame {
         out
     }
 
-    /// Ruby `train.buyable`: the company-issued 2P/LP/P+ (and 1822MX's
-    /// 3/2P) are not.
-    pub(crate) fn g1822_train_buyable(t: &Train) -> bool {
-        !(t.name == "2P" || t.name == "LP" || t.name == "P+" || t.name == "3/2P" || t.name.ends_with('+'))
+    /// Ruby `train.buyable`: the trains the companies bring
+    /// (`find_and_remove_train_by_id(id, buyable: false)`) never are -- each
+    /// title's EXTRA_TRAINS: 2P / P+ / LP, 1822MX's 3/2P, 1822CA's P (its
+    /// pullman) and G (the grain train); 5P-0 is buyable. The flag belongs
+    /// to the card, so it is read from the train's id, not its name (an
+    /// attachment renames a train: 1822CA's "LP-G" is still LP-0). Before
+    /// 2026-11-14 a name list missed CA's P and G, and the generator offered
+    /// them from other corporations, which Ruby's UI never does (Ruby's
+    /// process accepts such a buy only with a `variant`: `Train#variant=`
+    /// resets `@buyable`; the UI sends none for another corporation's train).
+    pub(crate) fn g1822_train_buyable(&self, t: &Train) -> bool {
+        !self.fam().extra_trains.contains(&Self::g1822_base_name(t))
     }
 
     /// A depot card's variants (name, price): the card's own list, but a
@@ -582,7 +586,18 @@ impl BaseGame {
             .iter()
             .position(|t| t.id == train_id)
             .ok_or_else(|| GameError::new(format!("{c} does not own {train_id}")))?;
+        // 1822CA: a train left with the grain train's name ("LP-G",
+        // `g1822_ca_route_setup`) is no extra train, so it goes to the pool,
+        // where `remove_variants!` leaves its card no variant (none is named
+        // "LP-G"): Ruby's next Depot#min_price compares nil and raises
+        // (every 2026-11-14 walk that discarded one; the generator does not
+        // offer it).
+        if self.g1822_is_ca() && self.g1822_ca_left_grain_name(&self.corporations[ci].trains[pos]) {
+            return err("a train left with the grain train's name has no variant in the pool (Ruby raises)");
+        }
         let mut t = self.corporations[ci].trains.remove(pos);
+        // (Game#remove_train / Depot#reclaim_train: the crowded_corps memo resets)
+        self.g1822_trains_moved();
         // MX remove_discarded_train?: the NdeM's trains leave the game too
         let removed = self.fam().extra_train_permanents.contains(&t.name.as_str())
             || t.name == self.fam().extra_train_pullman
@@ -622,6 +637,8 @@ impl BaseGame {
 
     /// Phase#buying_train!(entity, train, source).
     pub(crate) fn g1822_phase_buying_train(&mut self, train: &Train, _source: Option<&str>) {
+        // (rust_trains! resets the crowded_corps memo, rusted or not)
+        self.g1822_trains_moved();
         let sym = Self::g1822_base_name(train).to_string();
         self.g1822_phase_advance_on(&sym);
         self.g1822_rust_trains(&sym);
@@ -649,10 +666,13 @@ impl BaseGame {
         let fam = self.fam();
         let rusts = |t: &Train| -> bool {
             let base = Self::g1822_base_name(t);
-            let rusts_on = if t.name == base {
+            // (Ruby reads the train's rusts_on, not its name: an 1822CA L
+            // left named "LG" by the grain train rusts as an L)
+            let name = Self::g1822_ca_ungrained(&t.name);
+            let rusts_on = if name == base {
                 (fam.trains)().into_iter().find(|d| d.name == base).and_then(|d| d.rusts_on)
             } else {
-                (fam.train_variant)(base, &t.name).and_then(|v| v.3)
+                (fam.train_variant)(base, name).and_then(|v| v.3)
             };
             rusts_on == Some(sym)
         };

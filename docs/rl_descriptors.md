@@ -633,6 +633,14 @@ par prices = every market cell of a par type, percents = every share unit up to 
   picking another instance of the same type is the same index (the states differ only in the
   order of identical trains -- or, in PNW, in the builder cubes a reused tile instance brings
   back: see the verification below).
+- **A train's type is its card's, not its current name** (`rl::g1822::train_type`): an
+  attachment renames a train for the run (the pullman "<name>+" / CA "<name>+<2d>", CA's grain
+  train "<name>G" / "<name>-G"), and in 1822CA the grain name can stay on for good -- Ruby skips the
+  Route step when the attachment took the corporation's last L / LP and it has no route, so nothing
+  detaches it (`g1822_remaining_work.md` CA known issues, 2026-11-14). Choose.grain /
+  Choose.pullman / BuyTrain.* / DiscardTrain name an "LP-G" (or "LP-GG", "LG") as "LP" ("L"). Before
+  that fix a policy game died on `Choose.grain ["route:grain", "LP-G", "0"] is not in the layout`;
+  the layouts did not change.
 - **Indices mean the same move under either cross-player policy**: the title's policy only
   removes moves.
 - **Not in the layout**: the generator's replay-only classes (`g1822_remaining_work.md`

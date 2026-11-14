@@ -21,6 +21,21 @@ pub struct CaState {
     pub sawmill_bonus: i32,
     /// `@destinated` (the corporations whose destination token is down).
     pub destinated: Vec<String>,
+    /// Trains the grain attachment renamed since G1822's memoized
+    /// `crowded_corps` was last computed: (train id, the name the memo
+    /// counted). Ruby resets the memo only when trains move (Game#buy_train,
+    /// #remove_train of a corporation's train, #transfer(:trains),
+    /// #rust_trains! -- every Phase#buying_train!:
+    /// [`BaseGame::g1822_trains_moved`] clears the list) and
+    /// `attach_grain_train` renames without a reset, so until trains next
+    /// move the memo still counts the train under its old name (an "LP",
+    /// an extra train). Normally run_routes restores the name first; when
+    /// the attachment left the corporation without a run (its Route step is
+    /// skipped, `g1822_ca_route_setup`) the stale memo lasts to the next
+    /// train movement, and from then on the "LP-G" counts against the train
+    /// limit.
+    #[serde(default)]
+    pub crowd_memo_names: Vec<(String, String)>,
 }
 
 /// AssignSawmill `@sawmill_state`.

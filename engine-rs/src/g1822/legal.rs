@@ -1144,6 +1144,13 @@ impl BaseGame {
             if seen.contains(&t.name) {
                 continue;
             }
+            // 1822CA: a train left with the grain train's name goes to the
+            // pool without a variant, and Ruby breaks at its next price
+            // (`g1822_process_discard_train`); the crowded corporation has
+            // another train to discard (it holds more than its limit).
+            if self.g1822_is_ca() && self.g1822_ca_left_grain_name(t) {
+                continue;
+            }
             seen.push(t.name.clone());
             out.push(Move::plain(Action::DiscardTrain {
                 entity_id: c.to_string(),

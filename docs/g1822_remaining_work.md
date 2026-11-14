@@ -870,6 +870,64 @@ filtered).
 
 ### CA known issues
 
+* **Fixed 2026-11-14: a grain name left on a train** (a policy game, the SL smoke checkpoint at T 0.5,
+  died on `Choose.grain ["route:grain", "LP-G", "0"] is not in the layout`: GT was offered the grain
+  train for a train still named "LP-G"). **The cause is Ruby's, and the engine mirrors it.**
+  `attach_grain_train` renames the train ("LP" -> "LP-G", "L" -> "LG", `no_local` on), and G1822's
+  `can_run_route?` asks for a LOCAL_TRAINS name (L / LP) or a route on the graph. So when the grain
+  train goes onto a corporation's last L / LP and the corporation has no route on the graph
+  (`route_available` false: e.g. its track reaches no second stop yet), its Route step has no action
+  left right after the `choose` and is skipped: no `run_routes`, so no `detach_grain_train`, and the
+  next operator's `Route#setup` drops `@grain_train` with the name left on -- for the rest of the game.
+  Ruby HEAD does exactly this: a walk (the generator, acquisitions and attachments favoured; 3
+  players, seed 4) in which ICR (3, 3, P, LP, G; no graph route) attaches the grain train to its LP,
+  and 8 random continuations of it (660-825 actions each; in the four counted, ICR runs routes with
+  the "LP-G" 13-18 times and attaches the pullman -- "LP-G+2" -- and the grain train again -- "LP-GG"
+  -- to it), replay in Ruby with zero divergence, city tokens included. Never in human games (the CA scrape: 0 of 148 replayed games); in targeted
+  random walks about 1 in 100-200. What the engine did not mirror, all fixed:
+  * the RL descriptors named the train by its current name, which no layout axis holds:
+    `rl::g1822::train_type` names its type (the grain suffixes off) for Choose.grain / Choose.pullman
+    / BuyTrain.* / DiscardTrain. **The layouts and their fingerprints do not change.**
+  * the router took any CA name ending in "G" for a grain-attached train: now only the Route step's
+    attached train is one; a left-over "LG" / "LP-G" runs as in Ruby (`stop_type` reads
+    `@train_with_grain`): an L / LP that is not `local?` -- one city and one town, never a single
+    city, outside the local-city check, the ordinary grain / port bonus (`Kind::Local { no_local }`).
+  * G1822 memoizes `crowded_corps` and resets the memo only when trains move (Game#buy_train,
+    #remove_train of a corporation's train, #transfer(:trains), #rust_trains! -- every
+    Phase#buying_train!). The rename resets nothing, so until trains next move the memo still counts
+    the train as an LP (an extra train); the engine counted the new name at once and made ICR discard
+    (the walk's first divergence from Ruby). `CaState::crowd_memo_names` (the grain-attached trains
+    newer than the memo), cleared by `g1822_trains_moved`; it also replaces the round-only grain
+    branch of `g1822_crowded_corp`.
+  * a left-over "LG" rusts as an L (`g1822_rust_trains` read the name; Ruby reads `rusts_on`).
+  * discarding a left-over train: it is no extra train, so it goes to the pool, where
+    `remove_variants!` leaves its card no variant (none is named "LP-G"), and Ruby's next
+    Depot#min_price compares nil and raises (5 of 6 earlier continuations; the sixth raised when a
+    minor bought it from the pool with variant "LP-G"). The process raises "(Ruby raises)" and the
+    generator leaves the discard out (a crowded corporation holds more than its limit, so another
+    train is always there to discard) -- the one move the generator drops that Ruby's UI shows,
+    because Ruby cannot continue after it.
+  Residual (not seen): a left-over "LG" is buyable from another corporation like any L (Ruby's
+  flag); a seller holding an L and an "LG" would offer two moves with one BuyTrain.corp index (it
+  needs a corporation whose last local train is an L, a grain train and no route, in phase 2).
+  Regression: `tests/test_g1822ca_legal_moves.py::test_grain_name_left_on_a_train` (the walk, cut
+  after 1,135 actions: `tests/fixtures/g1822_generator/1822CA_grain_name_left_ICR.json`), the cargo
+  test `ca_route::tests::grain_suffixes_come_off`. A self-play-only alternative -- not offering a
+  grain attachment that takes away the corporation's run -- would keep agents out of the state; not
+  done (the move is legal on the site and merely bad).
+* **Fixed 2026-11-14: other corporations' P / G trains were offered for purchase.** Ruby creates
+  every company train with `buyable: false` (each title's EXTRA_TRAINS: 2P, P+ / CA's pullman P, LP,
+  MX's 3/2P, CA's grain train G) and its BuyTrain view never shows them from another corporation. The
+  engine's buyability was a name list that missed CA's P and G, so the generator offered them (46 of
+  48 random CA walks reached such an offer, usually a G for $1 from a same-president corporation).
+  Ruby's *process* accepts such a buy only when the action carries a `variant`
+  (`Train#variant=` copies the variant hash over the train, `buyable: true` included; the UI sends no
+  variant for another corporation's train, and without one Ruby raises "Not a buyable train: G-1" --
+  both checked in the rig). Buyability is now the card's (`g1822_train_buyable`: the id's type not in
+  EXTRA_TRAINS), which a rename cannot change; the process refuses such a buy as it did for 2P / LP /
+  P+. 1822 / PNW / MX offer the same moves as before (in-crate fuzz and generator-reference tests);
+  the CA layout keeps its BuyTrain.corp rows for P and G (now unused). Self-play / eval games saved
+  before the fix that bought one no longer replay.
 * **Fixed 2026-11-14: lays on a destination hex** (a policy-gradient smoke game died on "216-1
   is not legally rotated for 512"). The generator skips its apply filter for a corporation's
   own lays, but `preprocess_action` picks a destination hex's destination tokens up BEFORE the
