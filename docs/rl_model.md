@@ -23,8 +23,9 @@ policy gradient against a league, on generic inference servers. Milestone A3 ("1
 smoke") gives 1867 its human importer, a supervised dataset, start files, legal prices on every sampling path and an
 end-to-end CPU smoke; C3 ("Mixed-title training and the sharing probe") trains on several datasets at once. The last
 section ("1822 family: data, starts, caps and the CPU smoke", 2026-11-14) does A3's work for 1822, 1822PNW, 1822MX
-and 1822CA -- and fixes the seat bookkeeping for titles that reorder their players. The frozen 1830 model
-(`model_transformer.py`) is untouched.
+and 1822CA -- and fixes the seat bookkeeping for titles that reorder their players; "1822+: the optional rules" moves
+1822 onto its optional rules; "GPU run queue" (2026-11-14) holds the GPU recipes of every new title, their CPU dry runs,
+the GPU estimates and the recommended order. The frozen 1830 model (`model_transformer.py`) is untouched.
 
 ## API
 
@@ -1690,7 +1691,7 @@ Decisions per game (several legal rows or an open price), every game played to i
 |---|---|---|---|---|
 | 1822 | 962 / 1,138 / 1,139 / 914 | 1,289 / 1,104 / 1,004 / 1,229; PG 1,313 | 1,389 | 3:2000,4:2000,5:2000,6:2200 |
 | 1822PNW | 1,099 / 1,155 / 1,027 | 1,116 / 1,190 / 1,209; PG 1,096 | - | 3:1800,4:1800,5:1800 |
-| 1822MX | 947 / 960 / 939 | 736 / 912 / 867; PG 990 | 1,238 | 3:1600,4:1600,5:1600 |
+| 1822MX | 947 / 960 / 939 | 736 / 912 / 867; PG 990 | 1,238 | 3:1600,4:1600,5:1600 (re-measured after the NdeM fix: 1,650, "GPU run queue") |
 | 1822CA | 1,371 / 1,287 / 1,196 / 1,088 | 2,017 / 1,737 / 1,848 / 1,936; PG 1,873 | - | 3:3000,4:3000,5:3000,6:3000 |
 
 (~1.5x the longest self-play game and at least ~1.6x the human maximum, A3's rule for 1867. A cap that fires on more
@@ -2081,3 +2082,211 @@ which put the current 2,000 at 1.34x. The family's other caps are unchanged by t
 6. **PNW's and MX's options** (`starting_packet` / `remove_three_ls` / `remove_two_ls`, 65 PNW games;
    `higher_cert_limit`, 51 MX games) stay out; the same machinery (a `rules_mix`, flags appended to
    `schema::RULE_FLAGS`) would take them.
+
+## GPU run queue (2026-11-14: recipes for 1867 and the 1822 family, NOT LAUNCHED)
+
+Ready-to-run GPU recipes for every new title, each dry-run on the CPU (below), and the order to run them in when the
+GPU frees up. Scripts in `scripts/launch/2026-11/bridge/`:
+
+| script | what |
+|---|---|
+| `title_1867.sh`, `title_1822.sh` (the 1822+ rules mix), `title_1822PNW.sh`, `title_1822MX.sh`, `title_1822CA.sh` | the per-title settings (the header names every departure from gen6), then the shared steps |
+| `title_recipe.sh` | the shared steps, sourced: `pretrain`, `pg`, `evals`, `evalloop` (no step = `pretrain pg`) |
+| `panel_status.py` | panel means per eval round and the plateau rule (printed, never acted on) |
+| `search_value_gen6.sh` | the pending gen6 search-value check (legacy engine and models, `scripts/eval_head_to_head.py`) |
+| `scripts/generic_sl_report.py` | a `pretrain-generic` run's top-1 per descriptor family vs chance (the `pretrain` step writes `<sl run>/family_report.txt`) |
+
+```bash
+# from a checkout with human_games/ (the main checkout); CPUS / WORKERS / DEVICE / TAG / HG override the defaults
+bash scripts/launch/2026-11/bridge/title_1867.sh pretrain           # -> model_checkpoints_generic/bridge_1867_sl_20261114/
+nohup bash scripts/launch/2026-11/bridge/title_1867.sh pg > logs/gpg1867.log 2>&1 &        # re-running it resumes
+nohup bash scripts/launch/2026-11/bridge/title_1867.sh evalloop > logs/gpg1867_evals.log 2>&1 &   # -> logs/eval/gpg1867_20261114/
+# PG runs land in model_checkpoints_generic_pg/gpg<title>_20261114/ (STOP file to stop, as the legacy runs)
+DRY=1 DRY_ROOT=<scratch> HG=<main checkout>/human_games bash scripts/launch/2026-11/bridge/title_1867.sh pretrain pg evals
+ECHO=1 SL_OUT=<scratch>/sl OUT_DIR=<scratch>/pg bash scripts/launch/2026-11/bridge/title_1867.sh pretrain pg  # print the commands
+```
+
+The real (non-dry) commands of every title were also printed with `ECHO=1`, parsed by `main.py`'s own parser and run
+through `generic_pg.check_config` (title, player counts, start files of every count, rules mix, reward, anchor vs
+snapshot cadence, policy and league checkpoints): all five pass.
+
+### The steps
+
+* **`pretrain`**: `pretrain-generic --model-preset default` on the title's dataset with the 1830 GPU check's settings
+  (= SL ckpt 10's recipe: 10 epochs, batch 256, lr 1e-3 cosine, patience 4, label smoothing 0.03, value / score / price
+  weights 0.1, the value refit on the frozen best), `--final-eval`, 6 loader workers; then `generic_sl_report.py`: train
+  windows, every validation, the refit, top-1 per player count and **top-1 per descriptor family against chance** (mean
+  1 / legal count over the same validation games; `BELOW` = under chance with >= 20 positions). Judge the run by that
+  table (the CPU smokes' tables above are the reference points). An existing `final.pth` is kept; pretraining has no
+  resume (a failed run restarts into a fresh `SL_OUT`).
+* **`pg`**: `policy-gradient-generic --policy <SL final.pth>` with gen6's recipe adapted (next section); re-running the
+  step resumes from `state.json` (`RESUME_MAX_UPDATES` sets a resume's new `--max-updates`). The league file
+  `model_checkpoints_generic_pg/populations/league_generic_<title>_v1.json` is created holding the SL checkpoint.
+* **`evals`**: one round for the newest snapshot at a multiple of `EVAL_EVERY` (or `EVAL_UPDATE`): policy-only
+  `scripts/eval_generic.py`, each side on a GPU server, T 0.5, every game from the opening (`--auction-start`: 1867's
+  auction, the family's fresh game with seeded bid boxes; 1822 under its rules mix), the title's cap for the count, 400
+  games per match (`EVAL_GAMES`), 6 saved per match, seed 0 (the same starts every round):
+  1. **the fixed panel** (the plateau judge): 4 players, the learner alone against three copies (fair 0.25) of SL@0.5,
+     SL@1.0 and the run's frozen snapshots `PANEL_UPDATES` (copied to `model_checkpoints_generic_pg/panels/<run>/`
+     once they exist);
+  2. **every player count vs SL@0.5**: alone at 3 / 5 / 6 players (1v2, 1v4, 1v5), 2v2 at 4;
+  3. **within-family progress**: 4p 2v2 vs the snapshot 200 updates back.
+
+  Results append to `logs/eval/<run>/results.txt`; `panel_status.py` writes `panel_status.txt`. `evalloop` runs a round
+  for every new multiple of `EVAL_EVERY` until the run stops (STOP file or max updates).
+
+**The panel and the plateau rule (a proposal, for the user to decide).** No other agents exist for these titles, so
+the panel is made of what stays fixed: the supervised start at two temperatures (T 0.5 = how the evals play; T 1.0 = a
+broader, more human-like opponent) and two frozen early PG snapshots, which the run's later policies keep meeting
+unchanged (gen5 / gen6's lesson: within-family matches keep finding gains after an outside panel is flat). 1867:
+snapshots u200 / u500, rounds every 200 updates; the 1822 family (4-6x dearer updates): u100 / u250, rounds every 100.
+Plateau = over the rounds with the complete panel, the last two both fail to beat the best earlier panel mean (gen6's
+stop: u2200 .621 and u2400 .618 did not beat u2000's .632); the earliest call is the third complete round (1867 u1000,
+the family u500). `panel_status.py` prints it; the user stops a run (`touch <run>/STOP`) and picks the checkpoint.
+
+### Per-title settings
+
+Common (gen6's `run.sh`, `docs/training_runs_2026_11.md`): placement reward (gen6's per-count tables), learner and
+opponent temperature 0.5, KL to an anchor moved every 50 updates (coefficient 0.02 adapted toward 0.08, floor 0.005),
+lr 2e-5 / critic 3e-5 (pg3's, from SL ckpt 10), PPO clip 0.2, one epoch, 65,536 rows per update (32 per learner
+seat), minibatch 2,048, league = the SL checkpoint + the learner's own snapshots (every 50, the latest 4) with
+per-count PFSP (power 2, 3 opponent slots per count, refreshed every 2 updates), snapshot every 10, every 20th game
+saved, 32 workers, the learner server in 2 replicas. Starts: `--auction-fraction 0.5 --midgame-fraction 0.3
+--random-start-fraction 0.2` (gen6's) = ~50% from the opening (1867's auction; the family's fresh game), ~15% mid-game
+cuts (SR2-SR6), ~7% random openings, ~28% human starts (1867: SR1 after the human auction; the family: the end of the
+human SR1), from the title's start files. `--auction-stall-decisions 0` (1867's auction cannot lock; the family has no
+Auction round); the family's all-pass openings are redrawn (the default). Departures from gen6, named in every script:
+the start (the generic SL checkpoint; its value heads start the critic), the league (no other agents of the title), the
+player mix (human shares; gen6 flattened its mix), microbatch / server batch / games per task per title (activation
+memory: "Model fit across titles").
+
+| title | dataset (train / validation positions) | player mix = finished human games per count | rules | decision caps | microbatch / server batch / games per task |
+|---|---|---|---|---|---|
+| 1867 | `generic_1867_finished_v1` (508,051 / 29,311) | 3:24,4:61,5:13,6:2 (205 / 509 / 109 / 17 of 840) | base | 3:1200,4:1200,5:1400,6:1500 (A3) | 1024 / 1024 / 64 |
+| 1822 | `generic_1822_v2` (534,873 / 31,883) | 3:28,4:48,5:19,6:5 (149 / 254 / 98 / 24 of 525) | the default mix (1822+ 77%, base 18%, `th` 5%) | 2,200 at every count (1822+) | 256 / 512 / 32 |
+| 1822PNW | `generic_1822PNW_v1` (413,741 / 23,293) | 3:36,4:49,5:15 (150 / 204 / 63 of 417) | base | 1,800 (family proposal) | 512 / 512 / 32 |
+| 1822MX | `generic_1822MX_v1` (214,582 / 10,937) | 3:34,4:50,5:16 (78 / 114 / 37 of 229) | base | **1,650** (re-measured, below) | 512 / 512 / 32 |
+| 1822CA | `generic_1822CA_v1` (145,928 / 12,896) | 3:21,4:55,5:19,6:5 (26 / 68 / 23 / 7 of 124) | base | 3,000 (family proposal) | 256 / 512 / 24 |
+
+Max updates (a backstop; the plateau rule decides): 1867 3,000, the family 1,000 each. Every line of every start file
+replays on the current engine (checked 2026-11-14: each SR1 / SR1-end start to its end and each mid-game game to its
+last cut, all five titles, 0 failures), so `skipped_starts` should stay 0.
+
+### 1822MX's cap, re-measured after the NdeM fix
+
+The NdeM fix (06afad3: a new NdeM token for an 11th+ station) lets the MX games that used to end in Ruby's crash run to
+their real end (`g1822_remaining_work.md`: 72-383 decisions longer). Re-measured with the family smoke's SL checkpoint
+(`1822MX_sl_s1500`, the small model) against itself, every game from the fresh game (`eval_generic.py
+--auction-start`, the model playing the opening SR1), 2026-11-14:
+
+| T | players | games | terminations | decisions median / p90 / max |
+|---|---|---|---|---|
+| 0.5 | 3 | 45 | finished 45 (3 all-pass openings redrawn) | 726 / 824 / 1,010 |
+| 0.5 | 4 | 48 | finished 48 (3 redrawn) | 811 / 920 / 964 |
+| 0.5 | 5 | 45 | finished 45 | 829 / 942 / 1,088 |
+| 1.0 | 3 | 15 | finished 15 | 948 / 1,114 / 1,140 |
+| 1.0 | 4 | 16 | finished 16 | 1,008 / 1,273 / 1,419 |
+| 1.0 | 5 | 15 | finished 15 | 879 / 1,205 / 1,359 |
+
+No dead end in 184 games (before the fix: 18 of 39 T 0.5 eval games and 9 of 48 PG games). The longest T 0.5 game is
+1,088 decisions (before: 736 / 912 / 867 in the evals, 990 in PG): **cap 1,650 at every count** (1.5 x 1,088, A3's
+rule; 1.7x the human maximum, 960; the T 1.0 games fit under it), up from 1,600.
+
+### CPU dry run (2026-11-14)
+
+Every script ran end to end on the CPU (`CUDA_VISIBLE_DEVICES=`, cores 24-31,56-63 at load ~17-20) through its own
+`DRY=1` mode: the same commands with a tiny model and tiny counts -- `pretrain` (small preset, 60 steps of 32, the
+first 30 training games, 2 validation games, a 20-step refit, the report), `pg` to update 2, `pg` again with
+`RESUME_MAX_UPDATES=3` (a resume from `state.json`), `evals` of update 3 with the panel's snapshots at u1 / u2 and the
+chain back 1 (one game per seat arrangement); CPU servers, 3 workers x 2 games, 8 rows per seat, 200 rows per update,
+own snapshots every update. The real datasets and start files (`HG` = the main checkout's `human_games/`), the real
+player mixes, rules mix and decision caps. Outputs in the work's scratch area (`gpurecipes/dry/`), nothing in the
+repository.
+
+| title | pretrain (val top-1 vs chance after 60 steps) | pg: updates 1-2, resume to 3 | PG games (all finished) | starts auction / human / mid-game / random | all-pass redrawn | longest game | evals: matches (games), all finished | wall: pretrain / pg / resume / evals |
+|---|---|---|---|---|---|---|---|---|
+| 1867 | 0.636 vs 0.419 | ok, resumed from snapshot 2 | 52 | 28 / 15 / 8 / 1 | 0 | 778 | 9 (42) | 32 / 71 / 51 / 138 s |
+| 1822 | 0.568 vs 0.386 | ok | 50, nine rules combinations drawn | 24 / 12 / 5 / 9 | 4 | 1,404 | 9 (42) | 74 / 180 / 120 / 285 s |
+| 1822PNW | 0.540 vs 0.372 | ok | 50 | 19 / 21 / 7 / 3 | 1 | 1,027 | 8 (36) | 52 / 104 / 66 / 137 s |
+| 1822MX | 0.560 vs 0.391 | ok | 48 | 16 / 19 / 7 / 6 | 0 | 908 | 8 (36) | 51 / 92 / 60 / 133 s |
+| 1822CA | 0.547 vs 0.335 | ok | 46 | 25 / 16 / 3 / 2 | 3 | 1,410 | 9 (42) | 93 / 141 / 103 / 234 s |
+
+In every run: losses finite, `skipped_starts` 0, the league per count = the SL checkpoint + the learner's own snapshots
+(PFSP), games saved, the panel's snapshots frozen into `panels/`, `panel_status.txt` written (one complete round),
+`family_report.txt` written. `search_value_gen6.sh` ran its four matches with tiny stand-in legacy checkpoints (6 games
+each at 8 readouts, 66 s; `AUCTION=1` from the private auction, 18 s): the specs parse (`<policy>+<value>@N/0.05:...`,
+`:sample=T`), the composite servers load, `summary.json` and `results.txt` are written. (The real gen6 / lr1 paths are
+the ones `swap_bots.sh` / `advisor_service.sh` use; this work did not open anything under `/home/revys/longrun`.)
+
+### GPU estimates (not measured: no GPU)
+
+* **Supervised**: SL ckpt 10's two-stage run took ~3.5 GPU h for ~2.4M positions x 10 epochs; the generic model costs
+  ~1.4x per position (C1) -> 0.735 ms per position-pass for generic 1830, scaled per title by the CPU training cost per
+  position ("Model fit across titles": 1830 17.4, 1867 21.5, 1822 61.6, PNW 42.8, MX 34.1, CA 84.7 ms), + validation and
+  the refit (0.15-0.4 h). The loader is not the limit: one loader process replays and encodes ~1.9k 1822 / ~1.5k 1822CA
+  positions/s (measured on the shared cores); the GPU needs ~400 / ~280.
+* **Policy gradient**: one GPU does the inference (every seat's decisions) and the update. Inference: generic 1830
+  0.096 ms per position (gen6's 15.6k positions/s -- 125k games/h x 450 decisions -- taken as GPU-bound, x1.5 for the
+  generic model, C2), scaled per title by the CPU inference cost per position (1830 5.5, 1867 6.4, 1822 16.5, PNW 12.9,
+  MX 12.4, CA 21.7 ms). Update: 65,536 rows x 0.72 x the SL cost per position (gen6: ~25 s per update against SL ckpt
+  10's 0.525 ms per position). Games per update = 65,536 / (32 x the mix's mean learner seats, 1.69-1.78) = 1,150-1,215.
+  Decisions per game (mixed starts, from the CPU smokes' PG games; MX re-measured): 1867 550, 1822 1,000, PNW 850, MX
+  800, CA 1,250. Worker CPU per decision (the generator after its speed-ups + ~0.2 ms to encode, compress and play):
+  1867 1.4, 1822 9.2, PNW 10.2, MX 5.7, CA 7.2 ms. A run goes at the slower of the GPU and the workers: ~28
+  core-equivalents for 32 workers when the machine is free, ~9 on the pinned 24-31,56-63 (8 cores and their
+  hyperthreads, shared with the servers' and the trainer's CPU work).
+
+| title | SL (10 epochs) | PG GPU s per update (inference + update) | worker CPU s per update | 100 updates, whole machine | 100 updates, pinned CPUs | games/h, whole machine |
+|---|---|---|---|---|---|---|
+| 1830 (the generic check, for scale) | ~5.3 h (C1: ~6-7 h with compare and evals) | 52 + 36 = 88 | ~110 | 2.4 h | 2.4 h | ~49k |
+| 1867 | ~1.4 h | 72 + 43 = 115 | 906 | 3.2 h (GPU-bound) | 3.2 h (GPU) | ~37k |
+| 1822 | ~4.2 h | 337 + 123 = 460 | 10,745 | 12.8 h (GPU) | 33 h (CPU) | ~9k |
+| 1822PNW | ~2.3 h | 233 + 85 = 318 | 10,532 | 10.4 h (CPU) | 32 h (CPU) | ~12k |
+| 1822MX | ~1.0 h | 209 + 68 = 277 | 5,506 | 7.7 h (GPU) | 17 h (CPU) | ~16k |
+| 1822CA | ~1.7 h | 545 + 169 = 714 | 10,346 | 19.8 h (GPU) | 32 h (CPU) | ~6k |
+
+Read the real rates off the first updates (`games_per_hour_run` and `worker_seconds` in `history.jsonl`;
+`RL18XX_SERVER_PROFILE=60` splits the servers' time) and rescale. If gen6 was worker-bound rather than GPU-bound, the
+inference terms are smaller (1867 and 1822MX gain the most). On the pinned cores the family's PG is bound by its rules
+generator, not the network: give it the machine when the GPU is ours (e.g. `CPUS=0-63 WORKERS=48`), or expect ~2.5x
+the wall clock. C2 / A3's games-per-hour figures (~80k generic 1830, ~90-100k 1867) counted generation alone; these
+charge the update to the same GPU.
+
+### Recommended queue
+
+| # | run | command | GPU h (machine free; pinned CPUs) |
+|---|---|---|---|
+| 1 | the 1830 generic GPU check (validates the generic model against SL ckpt 10) | `gpu_check_1830.sh` | ~6-7 |
+| 2 | the gen6 search-value check: gen6 u2400 + critic/2400 vs + lr1 promoted/4 vs policy-only, @200, 4p 2v2, 480 games each, + a greediness control | `search_value_gen6.sh` | ~3-3.5 |
+| 3 | 1867 SL + family report | `title_1867.sh pretrain` | ~1.4 |
+| 4 | 1867 PG to the plateau rule (earliest call u1000; ~1,000 updates budgeted) + eval rounds | `title_1867.sh pg` + `evalloop` | ~32 + ~2 |
+| 5 | the family's SL runs: 1822, PNW, MX, CA | `title_<t>.sh pretrain` | 4.2 + 2.3 + 1.0 + 1.7 = ~9.2 |
+| 6 | the family's PG runs, a first pass to u300 each (1822, PNW, MX, CA), then on for those whose panel still climbs | `MAX_UPDATES=300 title_<t>.sh pg` (later `RESUME_MAX_UPDATES=...`) + `evalloop` | 38 + 31 + 23 + 59 = ~152 (~345) |
+
+Total to the end of step 6's first pass: **~205 GPU hours (~8.5 days) with the machine's CPUs, ~400 (~17 days) on the
+pinned cores**; the four family runs to ~600 updates each instead: ~305 GPU h for step 6 (~360 in all). The SL runs
+are cheap and independent: they can also go back to back right after step 1 (steps 3 + 5, ~11 h), so every title's
+family report is in before PG time is spent. The generic 1830 PG (`pg_generic_1830.sh`, ~2.4 h per 100 updates) is not
+in this queue: it waits for step 1's verdict and the user's call.
+
+### Decisions for the user
+
+1. **Player mix** by the human shares (as asked) puts 1867's 6-player games at 2% (17 human games) and 1822's / CA's
+   at 5%; gen6 flattened its mix on purpose (2-player training did not transfer). A floor (e.g. 5% per count) would
+   cost the 4-player share little.
+2. **Start mix**: gen6's auction 0.5 / mid-game 0.3 / random 0.2 for every title (A3's 1867 outline had auction 0.2,
+   ~80% human starts); half the games from the opening is how gen5 / gen6 learned auctions.
+3. **CPUs for the GPU runs**: the scripts default to the pinned cores (as `pg_generic_1830.sh`); the family's PG is
+   2-3x slower there. `CPUS` / `WORKERS` when the machine is ours.
+4. **Budgets and the plateau rule**: the panel (SL@0.5, SL@1.0, frozen u100 / u250 or u200 / u500), its cadence and the
+   rule above; the family's first pass to u300.
+5. **Rows per game**: 32 per learner seat (gen6) samples ~3% of a family game's decisions against ~7% of an 1830
+   game's; scaling it with game length would halve the generation cost per training row (fewer, more correlated games
+   per update). Not done.
+6. **Model size**: the family's PG costs ~3-4x 1830's GPU time per position at the default size; `fusion_layers=1` /
+   `hex_layers=3` would cut it but need their own SL runs (quality not measured).
+7. **The gen6 search check's starts**: human SR1 starts (default: the bots search with v4 after the auction) or the
+   private auction (`AUCTION=1`).
+8. **1822CA's supervised selection**: 114 training games; C3 found that at ~100 games early stopping on the total
+   validation loss is decided by the value side memorizing. The recipe keeps the legacy selection; selecting on policy
+   CE would need a flag.
