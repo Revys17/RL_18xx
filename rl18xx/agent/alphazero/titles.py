@@ -69,21 +69,23 @@ RULE_SHORT_NAMES = {
 }
 #: The name of the base rules (no optional rule) in rules-combination names.
 BASE_RULES = "base"
-# 1822's default rules mix for self-play and evals: each combination in proportion to the finished human games
-# of the 2026-10 scrape that replay to their end in our engine at the pipeline's player counts (3-6), inert
-# modifiers dropped (``docs/rl_model.md`` "1822+: the optional rules"). Combinations under 10 games are left
-# out (plus+nr+th+... variants are all listed; "nr" / "ss" without 1822+ count as base / th).
+# 1822's default rules mix for self-play and evals: each combination in proportion to the finished human games of
+# the 2026-10 scrape under it -- games at the pipeline's player counts (3-6) whose record replays to the game's end
+# in our engine, i.e. the 518 scrape games of the 1822+ dataset (``docs/rl_model.md`` "1822+: the optional
+# rules"); a modifier without 1822+ does nothing, so such games count under the combination without it (12 of the
+# 95 "base" games carry No Removals / Single Stack alone, 15 of the 26 "th" ones). All ten canonical combinations
+# (base, th, and 1822+ with any of nr / ss / th) have finished games.
 _1822_RULES_MIX = (
-    ("plus+nr+ss+th", 188),
-    ("base", 111),
-    ("plus+th", 93),
-    ("plus", 88),
-    ("plus+nr", 61),
-    ("plus+nr+th", 52),
-    ("plus+nr+ss", 37),
-    ("th", 30),
-    ("plus+ss", 12),
-    ("plus+ss+th", 11),
+    ("plus+nr+ss+th", 123),
+    ("base", 95),
+    ("plus", 73),
+    ("plus+th", 60),
+    ("plus+nr", 56),
+    ("plus+nr+th", 37),
+    ("plus+nr+ss", 29),
+    ("th", 26),
+    ("plus+ss+th", 10),
+    ("plus+ss", 9),
 )
 
 # New titles train at 3-6 players (the user's decision), within each title's own Ruby range: the
