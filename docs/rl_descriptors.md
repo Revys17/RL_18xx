@@ -696,6 +696,10 @@ par prices = every market cell of a par type, percents = every share unit up to 
   | 1822CA | 151 (31/84/26/10) | 171,365 | 171,343 (99.9872%) | 0 | 0 / 0 | 12 (5 privates, 4 trains, 3 minors) | 22 |
 
   "Exactly one index" counts the policy-excluded decisions (legal under the rules, one index).
+  The games in scope include every optional rule; 1822's per rules combination (`--by-rules`, 2026-11-14,
+  same totals on the final layout): every one of its ten combinations (base, `th`, 1822+ with any of No
+  Removals / Single Stack / `th`) replays without a rejection and has only these replay-only misses
+  (`docs/rl_model.md` "1822+: the optional rules").
   Every miss is one of the generator's documented replay-only classes or a record Ruby HEAD
   rejects (`g1822_remaining_work.md`): 1822: 72 out-of-order discards, 2 re-acquisitions of an
   owned company, 2 UI-stale minor-acquisition choices, 1 raise of one's own highest bid, 1
