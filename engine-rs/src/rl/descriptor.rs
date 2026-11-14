@@ -64,10 +64,14 @@ pub enum Family {
     Assign,
     PayoffPlayerDebt,
     PayoffPlayerDebtPartial,
+    /// A bid on a map token the state puts up for auction (1822MX's NdeM
+    /// token auction: `bid` names no company). `hex` / `city` = the token's
+    /// city; price `bid`. Not a map family: one such index is legal at a time.
+    BidToken,
 }
 
 /// Every family in id order (the id is the position).
-pub const FAMILIES: [Family; 30] = [
+pub const FAMILIES: [Family; 31] = [
     Family::Pass,
     Family::BidCompany,
     Family::BidCorporation,
@@ -98,6 +102,7 @@ pub const FAMILIES: [Family; 30] = [
     Family::Assign,
     Family::PayoffPlayerDebt,
     Family::PayoffPlayerDebtPartial,
+    Family::BidToken,
 ];
 
 impl Family {
@@ -140,6 +145,7 @@ impl Family {
             Family::Assign => "Assign",
             Family::PayoffPlayerDebt => "PayoffPlayerDebt",
             Family::PayoffPlayerDebtPartial => "PayoffPlayerDebtPartial",
+            Family::BidToken => "Bid.token",
         }
     }
 
@@ -205,8 +211,11 @@ pub enum PriceKind {
     /// A private company bought by a corporation: "BuyCompany" cells
     /// (atoms at lo and hi, plus range bins).
     CompanyPurchase,
-    /// An amount paid on a debt (1822 partial player-debt payoff): cells to
-    /// be fixed from a human price census when the family is first used.
+    /// An amount paid on a debt (the 1822 family's partial player-debt
+    /// payoff, `PayoffPlayerDebtPartial`): "BuyTrain" cells (atoms at lo, hi
+    /// -- everything the player can pay: 78% of human payments -- and hi -
+    /// 1, plus 20 bins), from the family's human price census
+    /// (`docs/rl_descriptors.md` §9).
     Amount,
     /// A bid priced by range-relative cells: "BuyTrain" cells (atoms at lo,
     /// hi and hi - 1, plus 20 bins over the range), in step units. 1867's
@@ -247,7 +256,7 @@ impl PriceKind {
             PriceKind::Bid => Some("Bid"),
             PriceKind::TrainTransfer => Some("BuyTrain"),
             PriceKind::CompanyPurchase => Some("BuyCompany"),
-            PriceKind::Amount => None,
+            PriceKind::Amount => Some("BuyTrain"),
             PriceKind::BidRange => Some("BuyTrain"),
         }
     }
@@ -256,7 +265,7 @@ impl PriceKind {
 /// Categorical options of a family, one global vocabulary (append-only):
 /// share sources, dividend kinds, named choices, a trade-in's train
 /// source. A family uses at most one.
-pub const CHOICES: [&str; 8] = [
+pub const CHOICES: [&str; 32] = [
     "source:ipo",
     "source:market",
     "dividend:payout",
@@ -267,6 +276,49 @@ pub const CHOICES: [&str; 8] = [
     // be both in the depot and in the discard pool, two distinct moves).
     "train_source:depot",
     "train_source:pool",
+    // -- the 1822 family (`1822-v1`, `1822PNW-v1`, `1822MX-v1`, `1822CA-v1`;
+    // docs/rl_descriptors.md §9). Named choices of the generator's `choose`
+    // / `choose_ability` moves; `via` names the company the choice is about
+    // wherever one is.
+    // The choices round's double cash (1822 P9, MX / CA P7).
+    "choose:double",
+    // Company ability choices: EGR (1822 P8) keeps its token or its
+    // discount; CHPR / LCDR / PNW P21 use or gain an exchange token
+    // ("exchange" / "available"); MX P16 closes.
+    "ability:token",
+    "ability:discount",
+    "ability:exchange",
+    "ability:available",
+    "ability:close",
+    // LUR (1822 P17) / PNW P21: a bank company (ent0) to the top or the
+    // bottom of its stack.
+    "stack:top",
+    "stack:bottom",
+    // The Route step: attach the pullman / the grain train (CA) to a train
+    // (ent0 = its type, param = its rank among the corporation's trains of
+    // that type), or skip the attachment (CA "None").
+    "route:pullman",
+    "route:grain",
+    "route:skip",
+    // A minor's acquisition (MinorAcquisition; PNW's Merger round): how the
+    // major pays, and what happens to the minor's token.
+    "merge_pay:money",
+    "merge_pay:one_share",
+    "merge_pay:two_shares",
+    "merge_token:replace",
+    "merge_token:exchange",
+    "merge_token:remove",
+    // 1822PNW: a conversion's share count (param), a merger's par (param
+    // $) and share count (param), P20's associated minor to replace (ent0).
+    "convert:shares",
+    "merge:par",
+    "merge:shares",
+    "choose:replace_minor",
+    // 1822CA's sawmill (P13), once assigned.
+    "sawmill:open",
+    "sawmill:closed",
+    // A destination token (1822 `hex_token`, 1822CA's city choice).
+    "token:destination",
 ];
 
 /// The choice id of a vocabulary string (panics on an unknown one: the
@@ -288,8 +340,13 @@ pub mod flags {
     /// index: 1830's single depot slot (the depot's next train) and its D
     /// trade-in (which owned train is traded).
     pub const TRAIN_FROM_STATE: i32 = 2;
+    /// The index buys the corporation's president's certificate (since
+    /// `1822MX-v1`: the presidentless NdeM's first certificate is a 10%
+    /// share the market offers beside its plain ones, two distinct moves).
+    pub const PRESIDENT_CERT: i32 = 4;
 
-    pub const ALL: [(&str, i32); 2] = [("dead", DEAD), ("train_from_state", TRAIN_FROM_STATE)];
+    pub const ALL: [(&str, i32); 3] =
+        [("dead", DEAD), ("train_from_state", TRAIN_FROM_STATE), ("president_cert", PRESIDENT_CERT)];
 }
 
 /// One index's meaning. Every field is [`NONE`] unless the family uses it.
@@ -413,6 +470,7 @@ mod tests {
                 "Assign",
                 "PayoffPlayerDebt",
                 "PayoffPlayerDebtPartial",
+                "Bid.token",
             ]
         );
         for (i, f) in FAMILIES.iter().enumerate() {
@@ -430,10 +488,41 @@ mod tests {
         assert_eq!(choice_id("choose:nationalize"), 5);
         assert_eq!(choice_id("train_source:depot"), 6);
         assert_eq!(choice_id("train_source:pool"), 7);
+        // The 1822 family's choices (ids 8-31).
+        assert_eq!(
+            CHOICES[8..],
+            [
+                "choose:double",
+                "ability:token",
+                "ability:discount",
+                "ability:exchange",
+                "ability:available",
+                "ability:close",
+                "stack:top",
+                "stack:bottom",
+                "route:pullman",
+                "route:grain",
+                "route:skip",
+                "merge_pay:money",
+                "merge_pay:one_share",
+                "merge_pay:two_shares",
+                "merge_token:replace",
+                "merge_token:exchange",
+                "merge_token:remove",
+                "convert:shares",
+                "merge:par",
+                "merge:shares",
+                "choose:replace_minor",
+                "sawmill:open",
+                "sawmill:closed",
+                "token:destination",
+            ]
+        );
         assert_eq!(flags::DEAD, 1);
         assert_eq!(flags::TRAIN_FROM_STATE, 2);
+        assert_eq!(flags::PRESIDENT_CERT, 4);
         // Every price kind used by a layout prices through price_pmf cells.
-        for k in [PriceKind::Bid, PriceKind::TrainTransfer, PriceKind::CompanyPurchase, PriceKind::BidRange] {
+        for k in PRICE_KINDS {
             assert!(crate::price_pmf::layout(k.cell_type().unwrap()).is_some(), "{k:?}");
         }
     }

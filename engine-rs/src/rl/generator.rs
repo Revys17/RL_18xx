@@ -1,22 +1,31 @@
 //! The index API of the titles whose legal moves come from their own
-//! generator (`RlLayoutKind::Generator`; 1867, layout `1867-v1`): a state's
-//! legal indices, index -> move (with its price), apply by index, the
-//! price range of an index -- in Rust and in Python (`rl_legal_indices`,
-//! `rl_legal_moves_json`, `rl_decode_index`, `rl_apply_index`,
-//! `rl_price_range`).
+//! generator (`RlLayoutKind::Generator`; 1867, layout `1867-v1`; the 1822
+//! family, layouts `1822-v1`, `1822PNW-v1`, `1822MX-v1`, `1822CA-v1`): a
+//! state's legal indices, index -> move (with its price), apply by index,
+//! the price range of an index -- in Rust and in Python
+//! (`rl_legal_indices`, `rl_legal_moves_json`, `rl_decode_index`,
+//! `rl_apply_index`, `rl_price_range`).
 //!
 //! An index means the same move whatever the cross-player policy: the
 //! policy only removes moves (`policy=None` = the title's own policy,
 //! `"rules"` = everything Ruby accepts). A price-bearing index is ONE
 //! index; its legal `[lo, hi]` and step come from the move
 //! (`PriceRange`), never from the layout.
+//!
+//! The two generators have their own move types (`g1867::legal::Move`,
+//! `g1822::legal::Move`); [`GenMove`] is what the API needs from either.
+//! The Rust methods without a title in their name (`rl_indexed_moves`,
+//! `rl_move_for_index`, `rl_apply_index`, ...) are 1867's (typed on its
+//! `Move`); the 1822 family's are `rl_g1822_*`. The Python methods serve
+//! every generator title.
 
 use pyo3::prelude::*;
 use serde_json::{json, Value};
 
 use super::layout::RlLayout;
-use crate::actions::GameError;
-use crate::g1867::legal::Move;
+use crate::actions::{Action, GameError};
+use crate::g1822::legal::Move as G1822Move;
+use crate::g1867::legal::{Move, PriceRange};
 use crate::game::BaseGame;
 use crate::title::{CrossPlayerPolicy, GameTitle, RlLayoutKind};
 
@@ -24,6 +33,7 @@ use crate::title::{CrossPlayerPolicy, GameTitle, RlLayoutKind};
 pub(crate) fn registry_layout(title: &'static dyn GameTitle) -> Result<RlLayout, String> {
     match title.name() {
         "1867" => super::g1867::registry(title),
+        "1822" | "1822PNW" | "1822MX" | "1822CA" => super::g1822::registry(title),
         other => Err(format!("{other}: no generator layout")),
     }
 }
@@ -32,39 +42,125 @@ pub(crate) fn registry_layout(title: &'static dyn GameTitle) -> Result<RlLayout,
 /// kind's `price_pmf` cell type over the move's range in STEP UNITS, `k =
 /// (p - lo) / step` in `[0, (hi - lo) / step]`, so every cell holds legal
 /// prices only. `None` for a kind without fixed cells.
-pub fn price_cells(kind: super::PriceKind, r: crate::g1867::legal::PriceRange) -> Option<crate::price_pmf::PriceCells> {
+pub fn price_cells(kind: super::PriceKind, r: PriceRange) -> Option<crate::price_pmf::PriceCells> {
     let top = ((r.hi - r.lo) / r.step.max(1)) as i64;
     crate::price_pmf::PriceCells::new(kind.cell_type()?, 0, top, 1)
 }
 
 /// The price of step `k` of a range (the inverse of [`price_step`]).
-pub fn price_at(r: crate::g1867::legal::PriceRange, k: i64) -> i32 {
+pub fn price_at(r: PriceRange, k: i64) -> i32 {
     r.lo + r.step.max(1) * k as i32
 }
 
 /// The step of a legal price of a range (`None` off the range or its grid).
-pub fn price_step(r: crate::g1867::legal::PriceRange, p: i32) -> Option<i64> {
+pub fn price_step(r: PriceRange, p: i32) -> Option<i64> {
     let s = r.step.max(1);
     (r.lo <= p && p <= r.hi && (p - r.lo) % s == 0).then(|| ((p - r.lo) / s) as i64)
 }
 
+/// What the index API needs from a title generator's move: its action, its
+/// price range, the move at another price -- and, per title, how to
+/// generate, index, write and apply such moves.
+pub trait GenMove: Clone + std::fmt::Debug + Sized {
+    fn action(&self) -> &Action;
+    /// The price-bearing parameter's range (the action holds `lo`).
+    fn price_range(&self) -> Option<PriceRange>;
+    /// The move with its price-bearing parameter set to `p`.
+    fn with_price(&self, p: i32) -> Self;
+    /// The state's legal moves under `policy`.
+    fn generate(g: &mut BaseGame, policy: CrossPlayerPolicy) -> Result<Vec<Self>, GameError>;
+    /// The move's index in the game's layout `lo` (the state names what the
+    /// move refers to by id).
+    fn index(g: &BaseGame, lo: &RlLayout, m: &Self) -> Result<u32, GameError>;
+    /// The 18xx.games action dict (state BEFORE the move).
+    fn wire(g: &BaseGame, m: &Self) -> Value;
+    /// Apply the move (without logging it).
+    fn apply(g: &mut BaseGame, m: &Self) -> Result<(), GameError>;
+    /// The step that offers the move (diagnostics).
+    fn step_name(g: &BaseGame, m: &Self) -> String;
+}
+
+impl GenMove for Move {
+    fn action(&self) -> &Action {
+        &self.action
+    }
+    fn price_range(&self) -> Option<PriceRange> {
+        self.price
+    }
+    fn with_price(&self, p: i32) -> Self {
+        Move::with_price(self, p)
+    }
+    fn generate(g: &mut BaseGame, policy: CrossPlayerPolicy) -> Result<Vec<Self>, GameError> {
+        match g.title.as_str() {
+            "1867" => Ok(g.g1867_legal_moves_with(policy)),
+            t => Err(GameError::new(format!("{t}: not a 1867 game"))),
+        }
+    }
+    fn index(g: &BaseGame, lo: &RlLayout, m: &Self) -> Result<u32, GameError> {
+        super::g1867::move_index(lo, g, m)
+    }
+    fn wire(g: &BaseGame, m: &Self) -> Value {
+        g.g1867_move_wire(m)
+    }
+    fn apply(g: &mut BaseGame, m: &Self) -> Result<(), GameError> {
+        g.process_action_internal(&m.action)
+    }
+    fn step_name(_g: &BaseGame, m: &Self) -> String {
+        format!("{:?}", m.step)
+    }
+}
+
+impl GenMove for G1822Move {
+    fn action(&self) -> &Action {
+        &self.action
+    }
+    fn price_range(&self) -> Option<PriceRange> {
+        self.price
+    }
+    fn with_price(&self, p: i32) -> Self {
+        G1822Move::with_price(self, p)
+    }
+    fn generate(g: &mut BaseGame, policy: CrossPlayerPolicy) -> Result<Vec<Self>, GameError> {
+        if g.g1822.is_none() {
+            return Err(GameError::new(format!("{}: not an 1822-family game", g.title)));
+        }
+        Ok(g.g1822_legal_moves_with(policy))
+    }
+    fn index(g: &BaseGame, lo: &RlLayout, m: &Self) -> Result<u32, GameError> {
+        super::g1822::move_index(lo, g, m)
+    }
+    fn wire(g: &BaseGame, m: &Self) -> Value {
+        g.g1822_move_wire(m)
+    }
+    fn apply(g: &mut BaseGame, m: &Self) -> Result<(), GameError> {
+        g.g1822_apply_move(m)
+    }
+    fn step_name(g: &BaseGame, _m: &Self) -> String {
+        g.g1822_active_step()
+            .map_or_else(|| "-".to_string(), |i| format!("{:?}", g.rnd().steps[i]))
+    }
+}
+
 /// A legal move and its index.
 #[derive(Clone, Debug)]
-pub struct IndexedMove {
+pub struct IndexedMove<M = Move> {
     pub index: u32,
-    pub mv: Move,
+    pub mv: M,
 }
 
 /// `m` with its price set to `price` (checked against the move's range and
 /// step); `None` keeps the range's low end (the move as generated). A move
 /// without a price ignores `price`.
-pub fn priced(m: Move, price: Option<i32>) -> Result<Move, GameError> {
-    match (m.price, price) {
+pub fn priced<M: GenMove>(m: M, price: Option<i32>) -> Result<M, GameError> {
+    match (m.price_range(), price) {
         (Some(r), Some(p)) => {
             if p < r.lo || p > r.hi || (p - r.lo) % r.step.max(1) != 0 {
                 Err(GameError::new(format!(
                     "price {p} is outside the move's range [{}, {}] step {} ({:?})",
-                    r.lo, r.hi, r.step, m.action
+                    r.lo,
+                    r.hi,
+                    r.step,
+                    m.action()
                 )))
             } else {
                 Ok(m.with_price(p))
@@ -76,8 +172,7 @@ pub fn priced(m: Move, price: Option<i32>) -> Result<Move, GameError> {
 
 impl BaseGame {
     /// The game's generator layout; an error for a title of another kind
-    /// (1830 indexes through `factored_legal_indices`; the 1822 family has
-    /// no layout yet).
+    /// (1830 indexes through `factored_legal_indices`).
     pub fn rl_generator_layout(&self) -> Result<&'static RlLayout, GameError> {
         let kind = self.title_def().rl_layout_kind();
         if kind != RlLayoutKind::Generator {
@@ -95,58 +190,58 @@ impl BaseGame {
         super::rl_layout(&self.title)
     }
 
-    fn rl_generator_moves(&mut self, policy: CrossPlayerPolicy) -> Result<Vec<Move>, GameError> {
-        match self.title.as_str() {
-            "1867" => Ok(self.g1867_legal_moves_with(policy)),
-            t => Err(GameError::new(format!("{t}: no legal-move generator behind the RL index API"))),
-        }
-    }
+    // -- generic over the title's move type ---------------------------------
 
-    /// The index of one of the title generator's moves (the state names
-    /// what the move refers to by id).
-    pub fn rl_index_of_move(&self, m: &Move) -> Result<u32, GameError> {
+    /// The index of one of the title generator's moves.
+    pub fn rl_index_of<M: GenMove>(&self, m: &M) -> Result<u32, GameError> {
         let lo = self.rl_generator_layout()?;
-        match self.title.as_str() {
-            "1867" => super::g1867::move_index(lo, self, m),
-            t => Err(GameError::new(format!("{t}: no generator index function"))),
-        }
+        M::index(self, lo, m)
     }
 
     /// Every legal move under `policy` with its index, ascending by index.
     /// Errs if a move has no index or two moves share one: either is a
     /// layout bug, which the fuzz and corpus checks rule out.
-    pub fn rl_indexed_moves(&mut self, policy: CrossPlayerPolicy) -> Result<Vec<IndexedMove>, GameError> {
-        self.rl_generator_layout()?;
-        let moves = self.rl_generator_moves(policy)?;
+    pub fn rl_indexed_moves_of<M: GenMove>(
+        &mut self,
+        policy: CrossPlayerPolicy,
+    ) -> Result<Vec<IndexedMove<M>>, GameError> {
+        let lo = self.rl_generator_layout()?;
+        let moves = M::generate(self, policy)?;
         let t = crate::g1867::legal::stats::start();
         let mut out = Vec::with_capacity(moves.len());
         for mv in moves {
-            out.push(IndexedMove { index: self.rl_index_of_move(&mv)?, mv });
+            out.push(IndexedMove {
+                index: M::index(self, lo, &mv)?,
+                mv,
+            });
         }
         crate::g1867::legal::stats::stop(t, || "rl:index".into());
         out.sort_by_key(|x| x.index);
         if let Some(w) = out.windows(2).find(|w| w[0].index == w[1].index) {
             return Err(GameError::new(format!(
                 "{}: index {} names two legal moves: {:?} and {:?}",
-                self.title, w[0].index, w[0].mv.action, w[1].mv.action
+                self.title,
+                w[0].index,
+                w[0].mv.action(),
+                w[1].mv.action()
             )));
         }
         Ok(out)
     }
 
     /// The legal move of index `idx` with its price set ([`priced`]).
-    pub fn rl_move_for_index(
+    pub fn rl_move_for_index_of<M: GenMove>(
         &mut self,
         idx: u32,
         price: Option<i32>,
         policy: CrossPlayerPolicy,
-    ) -> Result<Move, GameError> {
+    ) -> Result<M, GameError> {
         let total = self.rl_generator_layout()?.total;
         if idx >= total {
             return Err(GameError::new(format!("index {idx} out of bounds (0-{})", total - 1)));
         }
         let mv = self
-            .rl_indexed_moves(policy)?
+            .rl_indexed_moves_of::<M>(policy)?
             .into_iter()
             .find(|x| x.index == idx)
             .ok_or_else(|| GameError::new(format!("index {idx} is not legal at the current state")))?
@@ -154,34 +249,142 @@ impl BaseGame {
         priced(mv, price)
     }
 
-    /// The 18xx.games action dict of a generator move (state BEFORE it).
-    pub fn rl_move_wire(&self, m: &Move) -> Result<Value, GameError> {
-        match self.title.as_str() {
-            "1867" => Ok(self.g1867_move_wire(m)),
-            t => Err(GameError::new(format!("{t}: no wire form for generator moves"))),
-        }
-    }
-
     /// Apply a generator move and append its wire dict to the action log
     /// (so `raw_actions` replays the game, as after `process_action`).
     /// Returns the dict.
-    pub fn rl_apply_move(&mut self, m: &Move) -> Result<Value, GameError> {
-        let wire = self.rl_move_wire(m)?;
-        self.process_action_internal(&m.action)?;
+    pub fn rl_apply_move_of<M: GenMove>(&mut self, m: &M) -> Result<Value, GameError> {
+        let wire = M::wire(self, m);
+        M::apply(self, m)?;
         self.action_log.push(wire.clone());
         Ok(wire)
     }
 
-    /// Apply the move of index `idx` at `price` ([`BaseGame::rl_move_for_index`],
-    /// [`BaseGame::rl_apply_move`]).
+    /// Apply the move of index `idx` at `price`.
+    pub fn rl_apply_index_of<M: GenMove>(
+        &mut self,
+        idx: u32,
+        price: Option<i32>,
+        policy: CrossPlayerPolicy,
+    ) -> Result<Value, GameError> {
+        let m = self.rl_move_for_index_of::<M>(idx, price, policy)?;
+        self.rl_apply_move_of(&m)
+    }
+
+    // -- 1867 (its `Move`) ---------------------------------------------------
+
+    /// The index of one of 1867's generator moves.
+    pub fn rl_index_of_move(&self, m: &Move) -> Result<u32, GameError> {
+        self.rl_index_of(m)
+    }
+
+    /// 1867: every legal move with its index ([`BaseGame::rl_indexed_moves_of`]).
+    pub fn rl_indexed_moves(&mut self, policy: CrossPlayerPolicy) -> Result<Vec<IndexedMove>, GameError> {
+        self.rl_indexed_moves_of::<Move>(policy)
+    }
+
+    /// 1867: the legal move of index `idx` with its price set.
+    pub fn rl_move_for_index(
+        &mut self,
+        idx: u32,
+        price: Option<i32>,
+        policy: CrossPlayerPolicy,
+    ) -> Result<Move, GameError> {
+        self.rl_move_for_index_of::<Move>(idx, price, policy)
+    }
+
+    /// 1867: the 18xx.games action dict of a generator move (state BEFORE it).
+    pub fn rl_move_wire(&self, m: &Move) -> Result<Value, GameError> {
+        match self.title.as_str() {
+            "1867" => Ok(self.g1867_move_wire(m)),
+            t => Err(GameError::new(format!("{t}: no wire form for 1867 generator moves"))),
+        }
+    }
+
+    /// 1867: apply a generator move and log its wire dict.
+    pub fn rl_apply_move(&mut self, m: &Move) -> Result<Value, GameError> {
+        self.rl_move_wire(m)?;
+        self.rl_apply_move_of(m)
+    }
+
+    /// 1867: apply the move of index `idx` at `price`.
     pub fn rl_apply_index(
         &mut self,
         idx: u32,
         price: Option<i32>,
         policy: CrossPlayerPolicy,
     ) -> Result<Value, GameError> {
-        let m = self.rl_move_for_index(idx, price, policy)?;
-        self.rl_apply_move(&m)
+        self.rl_apply_index_of::<Move>(idx, price, policy)
+    }
+
+    // -- the 1822 family (its `Move`) ------------------------------------------
+
+    /// The 1822 family: every legal move with its index.
+    pub fn rl_g1822_indexed_moves(
+        &mut self,
+        policy: CrossPlayerPolicy,
+    ) -> Result<Vec<IndexedMove<G1822Move>>, GameError> {
+        self.rl_indexed_moves_of::<G1822Move>(policy)
+    }
+
+    /// The 1822 family: the legal move of index `idx` with its price set.
+    pub fn rl_g1822_move_for_index(
+        &mut self,
+        idx: u32,
+        price: Option<i32>,
+        policy: CrossPlayerPolicy,
+    ) -> Result<G1822Move, GameError> {
+        self.rl_move_for_index_of::<G1822Move>(idx, price, policy)
+    }
+
+    /// The 1822 family: apply the move of index `idx` at `price` and log
+    /// its wire dict.
+    pub fn rl_g1822_apply_index(
+        &mut self,
+        idx: u32,
+        price: Option<i32>,
+        policy: CrossPlayerPolicy,
+    ) -> Result<Value, GameError> {
+        self.rl_apply_index_of::<G1822Move>(idx, price, policy)
+    }
+
+    // -- Python helpers ---------------------------------------------------------
+
+    /// The legal moves as `rl_legal_moves_json` rows.
+    fn rl_moves_rows<M: GenMove>(&mut self, policy: CrossPlayerPolicy) -> Result<Vec<Value>, GameError> {
+        let lo = self.rl_generator_layout()?;
+        let moves = self.rl_indexed_moves_of::<M>(policy)?;
+        let t = crate::g1867::legal::stats::start();
+        let mut out: Vec<Value> = Vec::with_capacity(moves.len());
+        for x in moves {
+            out.push(json!({
+                "index": x.index,
+                "block": lo.block_of(x.index).map(|b| b.spec.name.as_str()),
+                "wire": M::wire(self, &x.mv),
+                "range": x.mv.price_range().map(|r| vec![r.lo, r.hi, r.step]),
+                "step": M::step_name(self, &x.mv),
+            }));
+        }
+        crate::g1867::legal::stats::stop(t, || "rl:wire_json".into());
+        Ok(out)
+    }
+
+    fn rl_decode_wire<M: GenMove>(
+        &mut self,
+        idx: u32,
+        price: Option<i32>,
+        policy: CrossPlayerPolicy,
+    ) -> Result<Value, GameError> {
+        let m = self.rl_move_for_index_of::<M>(idx, price, policy)?;
+        Ok(M::wire(self, &m))
+    }
+
+    fn rl_range_of<M: GenMove>(
+        &mut self,
+        idx: u32,
+        policy: CrossPlayerPolicy,
+    ) -> Result<Option<(i32, i32, i32)>, GameError> {
+        let m = self.rl_move_for_index_of::<M>(idx, None, policy)?;
+        Ok(m.price_range().map(|r| (r.lo, r.hi, r.step)))
     }
 }
 
@@ -194,12 +397,16 @@ fn policy(game: &BaseGame, p: Option<&str>) -> PyResult<CrossPlayerPolicy> {
 #[pymethods]
 impl BaseGame {
     /// The state's legal indices in the title's RL layout (a generator
-    /// title: 1867), ascending. `policy`: None = the title's cross-player
-    /// policy, "rules" = every move Ruby accepts.
+    /// title: 1867, the 1822 family), ascending. `policy`: None = the
+    /// title's cross-player policy, "rules" = every move Ruby accepts.
     #[pyo3(signature = (policy=None))]
     fn rl_legal_indices(&mut self, policy: Option<&str>) -> PyResult<Vec<u32>> {
         let p = self::policy(self, policy)?;
-        Ok(self.rl_indexed_moves(p)?.into_iter().map(|x| x.index).collect())
+        Ok(if self.g1822.is_some() {
+            self.rl_g1822_indexed_moves(p)?.into_iter().map(|x| x.index).collect()
+        } else {
+            self.rl_indexed_moves(p)?.into_iter().map(|x| x.index).collect()
+        })
     }
 
     /// The legal moves with their indices, as JSON: `[{"index", "block",
@@ -209,22 +416,12 @@ impl BaseGame {
     #[pyo3(signature = (policy=None))]
     pub(crate) fn rl_legal_moves_json(&mut self, policy: Option<&str>) -> PyResult<String> {
         let p = self::policy(self, policy)?;
-        let lo = self.rl_generator_layout()?;
-        let mut out: Vec<Value> = Vec::new();
-        let moves = self.rl_indexed_moves(p)?;
-        let t = crate::g1867::legal::stats::start();
-        for x in moves {
-            out.push(json!({
-                "index": x.index,
-                "block": lo.block_of(x.index).map(|b| b.spec.name.as_str()),
-                "wire": self.rl_move_wire(&x.mv)?,
-                "range": x.mv.price.map(|r| vec![r.lo, r.hi, r.step]),
-                "step": format!("{:?}", x.mv.step),
-            }));
-        }
-        let json = serde_json::to_string(&out).unwrap_or_default();
-        crate::g1867::legal::stats::stop(t, || "rl:wire_json".into());
-        Ok(json)
+        let rows = if self.g1822.is_some() {
+            self.rl_moves_rows::<G1822Move>(p)?
+        } else {
+            self.rl_moves_rows::<Move>(p)?
+        };
+        Ok(serde_json::to_string(&rows).unwrap_or_default())
     }
 
     /// The move of a legal index as an 18xx.games action dict (JSON), with
@@ -233,8 +430,12 @@ impl BaseGame {
     #[pyo3(signature = (idx, price=None, policy=None))]
     fn rl_decode_index(&mut self, idx: u32, price: Option<i32>, policy: Option<&str>) -> PyResult<String> {
         let p = self::policy(self, policy)?;
-        let m = self.rl_move_for_index(idx, price, p)?;
-        Ok(self.rl_move_wire(&m)?.to_string())
+        let w = if self.g1822.is_some() {
+            self.rl_decode_wire::<G1822Move>(idx, price, p)?
+        } else {
+            self.rl_decode_wire::<Move>(idx, price, p)?
+        };
+        Ok(w.to_string())
     }
 
     /// Apply the move of a legal index (at `price` for a price-bearing one)
@@ -242,15 +443,20 @@ impl BaseGame {
     #[pyo3(name = "rl_apply_index", signature = (idx, price=None, policy=None))]
     fn rl_apply_index_py(&mut self, idx: u32, price: Option<i32>, policy: Option<&str>) -> PyResult<()> {
         let p = self::policy(self, policy)?;
-        self.rl_apply_index(idx, price, p)?;
+        if self.g1822.is_some() {
+            self.rl_g1822_apply_index(idx, price, p)?;
+        } else {
+            self.rl_apply_index(idx, price, p)?;
+        }
         Ok(())
     }
 
     /// `(lo, hi, step)` of a legal index of ANY layout; None for an index
     /// without a price; RuntimeError if the index is not legal.
     ///
-    /// * A generator layout (1867): the move's `PriceRange`; legal prices
-    ///   are `lo + step * k <= hi` (the layout's `price_units` "step").
+    /// * A generator layout (1867, the 1822 family): the move's
+    ///   `PriceRange`; legal prices are `lo + step * k <= hi` (the layout's
+    ///   `price_units` "step").
     /// * 1830 (factored): `(lo, hi)` exactly as `price_range_for_index`
     ///   (a depot train's degenerate `lo == hi` included), and `step` the
     ///   price head's ladder: the title's `bid_price_step` ($5) for a bid,
@@ -263,11 +469,18 @@ impl BaseGame {
             let la = self
                 .legal_action_for_index(idx)?
                 .ok_or_else(|| GameError::new(format!("index {idx} is not legal at the current state")))?;
-            let step = if la.action_type == "Bid" { self.title_def().bid_price_step() as i32 } else { 1 };
+            let step = if la.action_type == "Bid" {
+                self.title_def().bid_price_step() as i32
+            } else {
+                1
+            };
             return Ok(la.price_range.map(|(lo, hi)| (lo as i32, hi as i32, step)));
         }
         let p = self::policy(self, policy)?;
-        let m = self.rl_move_for_index(idx, None, p)?;
-        Ok(m.price.map(|r| (r.lo, r.hi, r.step)))
+        Ok(if self.g1822.is_some() {
+            self.rl_range_of::<G1822Move>(idx, p)?
+        } else {
+            self.rl_range_of::<Move>(idx, p)?
+        })
     }
 }

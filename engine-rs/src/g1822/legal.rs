@@ -31,13 +31,10 @@ use super::track::AbKind;
 use super::family::Family;
 use super::{AcquireState, Ent, RoundKind, Step};
 
-/// An inclusive price range with a step (`lo + k*step <= hi`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PriceRange {
-    pub lo: i32,
-    pub hi: i32,
-    pub step: i32,
-}
+/// An inclusive price range with a step (`lo + k*step <= hi`): the same
+/// type as 1867's generator, so the RL index API (`rl::generator`) prices
+/// both titles' moves alike.
+pub use crate::g1867::legal::PriceRange;
 
 /// One legal move.
 #[derive(Clone, Debug)]

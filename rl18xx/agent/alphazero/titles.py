@@ -10,11 +10,12 @@ its eval defaults. :func:`new_game` builds an empty game of any registered title
 * **1867 and the 1822 family** (1822, 1822PNW, 1822MX, 1822CA) get the raw ``engine_rs.BaseGame``
   (``BaseGame.new_titled``): new titles bypass the adapter, whose proxies are 1830's (design §5.3).
   Their legal moves come from the title's own generator (``g1867_legal_moves_json`` /
-  ``g1822_legal_moves_json``). 1867's moves have indices in its RL layout ``1867-v1`` (layout kind
-  "generator": ``rl_legal_moves_json``, ``rl_legal_indices``, ``rl_decode_index``, ``rl_apply_index``,
-  ``rl_price_range``; ``docs/rl_descriptors.md``); the 1822 family's layout is not built yet. The
-  1830 index path (``factored_legal_indices``, ``apply_action_index``, the Rust MCTS) refuses both
-  (:meth:`TitleSpec.layout_ready`, :func:`layout_metadata`).
+  ``g1822_legal_moves_json``), and have indices in the title's RL layout (``1867-v1``; ``1822-v1``,
+  ``1822PNW-v1``, ``1822MX-v1``, ``1822CA-v1``; layout kind "generator": ``rl_legal_moves_json``,
+  ``rl_legal_indices``, ``rl_decode_index``, ``rl_apply_index``, ``rl_price_range``;
+  ``docs/rl_descriptors.md``). The 1830 index path (``factored_legal_indices``,
+  ``apply_action_index``, the Rust MCTS) refuses them (:meth:`TitleSpec.layout_ready`,
+  :func:`layout_metadata`).
 
 Player counts follow the user's decisions (``docs/rl_bridge_design.md``, 2026-10-16 / 2026-11-13):
 3-6 for every new title, 2-6 for 1830 (its 2-player game is trained since 2026-11-07).

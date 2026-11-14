@@ -235,7 +235,7 @@ def importer_for(title: str) -> TitleImporter:
     except KeyError:
         raise UnsupportedTitle(
             f"no human-game importer for {title!r} yet (have: {', '.join(_IMPORTERS)}; the 1822 family "
-            "needs its RL layout first)"
+            "has its RL layouts since A4: its importer is next)"
         ) from None
     return factory()
 

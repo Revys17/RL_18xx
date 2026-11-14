@@ -401,7 +401,8 @@ def add_legal_inputs(
 
 def price_cells_for(price_kind: int, lo: int, hi: int, step: int, grid: bool = False):
     """The cell partition of a legal range for a descriptor ``price_kind`` (its ``price_cell_types``
-    entry: "Bid" ladder at ``step``, "BuyTrain", "BuyCompany"; ``amount`` has no cells yet).
+    entry, from the engine's vocabulary: "Bid" ladder at ``step``, "BuyTrain", "BuyCompany"; since the
+    1822 family's layouts every kind has one -- ``amount``, the partial debt payoff, "BuyTrain").
     ``grid`` False (1830): ``price_pmf.price_cells(cell_type, lo, hi, step)``, the legacy cells.
     ``grid`` True (a generator layout): the cells in step units, so they hold legal prices only
     (``action_descriptors.RangePriceCells``; ``cell_of`` / ``member`` in prices either way)."""
@@ -1536,6 +1537,11 @@ def check_checkpoint_meta(meta: dict, check_layouts: bool = True) -> None:
             if list(saved) != list(now)[: len(saved)]:
                 raise CheckpointMismatch(f"map families changed: {saved} vs {now}")
             continue
+        if key == "price_cell_types":
+            # A price kind without cells when the checkpoint was written gaining them later (``amount``,
+            # since the 1822 family's layouts) changes nothing the checkpoint trained on: it never priced
+            # that kind. Any other change of a kind's cells does.
+            saved = [s if s is not None else n for s, n in zip(saved, now)] + list(saved)[len(now) :]
         if list(saved) != list(now)[: len(saved)]:
             raise CheckpointMismatch(f"vocabulary {key!r} is not an append-only extension of the checkpoint's")
     if check_layouts:

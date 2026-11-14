@@ -31,7 +31,7 @@ pub mod family;
 pub mod graph;
 pub mod legal;
 #[cfg(test)]
-mod fuzz;
+pub(crate) mod fuzz;
 pub mod mx;
 pub mod mx_legal;
 pub mod operating;

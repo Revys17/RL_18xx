@@ -593,9 +593,29 @@ def test_build_inputs_checks_vocab(mixed):
     bad["legal_rows"][0, mg.C_FAMILY] = model.config.num_families
     with pytest.raises(ValueError, match="family"):
         mg.check_inputs(model.config, bad)
-    la = mg.LegalActions(rows=np.array([[0] * 12 + [3, 0]], dtype=np.int32), price_range=np.array([[1, 10, 1]]))
-    with pytest.raises(NotImplementedError, match="amount"):
-        mg.build_inputs([mixed[0][0]], [la])
+    bad = {**arrays, "legal_rows": arrays["legal_rows"].copy()}
+    bad["legal_rows"][0, mg.C_PRICE_KIND] = len(mg.vocab()["price_kinds"])
+    with pytest.raises(ValueError, match="price kind"):
+        mg.check_inputs(model.config, bad)
+
+
+def test_amount_prices_have_cells(mixed):
+    """``amount`` (the 1822 family's partial debt payoff, ``docs/rl_descriptors.md`` §9 price census)
+    prices through "BuyTrain" cells: atoms at the lowest payment, the highest (everything the player
+    can pay) and one below it, plus 20 bins, in step units on a generator layout's grid."""
+    v = mg.vocab()
+    amount = v["price_kinds"].index("amount")
+    assert v["price_cell_types"][amount] == "BuyTrain"
+    cells = mg.price_cells_for(amount, 1, 160, 1, grid=True)
+    assert int(cells.counts.sum()) == 160
+    for p in (1, 159, 160):
+        assert cells.counts[cells.cell_of(p)] == 1, p
+    la = mg.LegalActions(
+        rows=np.array([[0] * 12 + [amount, 0]], dtype=np.int32), price_range=np.array([[1, 160, 1]]), price_grid=True
+    )
+    arrays = mg.build_inputs([mixed[0][0]], [la])
+    assert arrays["price_rows"].tolist() == [0]
+    assert (arrays["price_cell_mask"][0] == cells.nonempty).all()
 
 
 def test_checkpoint_round_trip_and_refusals(mixed, tmp_path):
@@ -635,6 +655,19 @@ def test_checkpoint_round_trip_and_refusals(mixed, tmp_path):
         lambda p: p["generic_meta"]["vocab"].__setitem__("families", p["generic_meta"]["vocab"]["families"][:-1])
     )
     mg.load_checkpoint(ok)
+    # a checkpoint written while ``amount`` had no cells loads (it never priced that kind); a kind
+    # whose cells changed does not
+    amount = mg.vocab()["price_kinds"].index("amount")
+
+    def cells_were(value):
+        def edit(p):
+            p["generic_meta"]["vocab"]["price_cell_types"][amount] = value
+
+        return edit
+
+    mg.load_checkpoint(tampered(cells_were(None)))
+    with pytest.raises(mg.CheckpointMismatch):
+        mg.load_checkpoint(tampered(cells_were("Bid")))
 
 
 def test_overfits_a_fixed_action_and_price(walks):

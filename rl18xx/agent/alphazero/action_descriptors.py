@@ -109,8 +109,10 @@ class ActionDescriptors:
 @lru_cache(maxsize=None)
 def action_descriptors(title: str) -> ActionDescriptors:
     """The descriptor table of ``title``'s RL layout. RuntimeError "not bridge-ready" for a title
-    without one (the 1822 family until its layout lands). 1867's layout (``1867-v1``, kind
-    "generator") indexes its legal-move generator's moves: ``game.rl_legal_indices()``."""
+    without one. 1867's layout (``1867-v1``) and the 1822 family's (``1822-v1``, ``1822PNW-v1``,
+    ``1822MX-v1``, ``1822CA-v1``), kind "generator", index their legal-move generator's moves:
+    ``game.rl_legal_indices()``. (1822's table holds 0.75M rows, ~42 MB: most of them company tile
+    lays and their combos, ``docs/rl_descriptors.md`` §9.)"""
     import engine_rs
 
     info = engine_rs.rl_layout_info(title)

@@ -102,18 +102,14 @@ def test_new_titles_build_raw_rust_games(title, n):
         new_game(title, n, auction_unlock=True)
     with pytest.raises(ValueError, match="1830 rule variants"):
         new_game(title, n, no_buyback_rule=True)
-    # 1867 has its generator layout; the 1822 family has none yet.
-    if title == "1867":
-        assert spec.layout_ready()
-        assert spec.status() == {
-            "title": "1867",
-            "layout_ready": True,
-            "layout_kind": "generator",
-            "encoder_ready": False,
-        }
-    else:
-        assert not spec.layout_ready()
-        assert spec.status()["layout_kind"] == "none"
+    # 1867 and the 1822 family have generator layouts.
+    assert spec.layout_ready()
+    assert spec.status() == {
+        "title": title,
+        "layout_ready": True,
+        "layout_kind": "generator",
+        "encoder_ready": False,
+    }
 
 
 @pytest.mark.parametrize("title", NEW_TITLES)
@@ -149,7 +145,9 @@ def test_layout_metadata():
     assert meta["layout_kind"] == "generator" and meta["layout_version"] == "1867-v1"
     assert meta["layout_fingerprint"] == engine_rs.rl_layout_info("1867")["fingerprint"]
     for title in ("1822", "1822PNW", "1822MX", "1822CA"):
-        assert layout_metadata(title) is None
+        meta = layout_metadata(title)
+        assert meta["layout_kind"] == "generator" and meta["layout_version"] == f"{title}-v1"
+        assert meta["layout_fingerprint"] == engine_rs.rl_layout_info(title)["fingerprint"]
     with pytest.raises(ValueError):
         layout_metadata("1899")
 
@@ -166,4 +164,4 @@ def test_game_records_carry_the_title_and_layout():
     assert r67["rl18xx"]["layout"] == layout_metadata("1867")
     assert [p["name"] for p in r67["players"]] == [f"Player {i}" for i in range(1, 6)]
     r22 = make_game_record([], 3, title="1822")
-    assert r22["rl18xx"]["layout"] is None and r22["players"][0]["id"] == 1001
+    assert r22["rl18xx"]["layout"] == layout_metadata("1822") and r22["players"][0]["id"] == 1001

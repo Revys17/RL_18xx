@@ -120,6 +120,13 @@ impl GameTitle for G1822Pnw {
     fn alphazero_bridge_ready(&self) -> bool {
         false
     }
+    /// The RL layout `<title>-v1` (`crate::rl::g1822`): a registry layout
+    /// over the family's legal-move generator. The legacy flat encoder
+    /// stays unavailable (`rl_encoder_ready` follows
+    /// `alphazero_bridge_ready`).
+    fn rl_layout_kind(&self) -> super::RlLayoutKind {
+        super::RlLayoutKind::Generator
+    }
     fn is_g1822_family(&self) -> bool {
         true
     }

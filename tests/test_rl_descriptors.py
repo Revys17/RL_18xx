@@ -19,7 +19,9 @@ from rl18xx.rust_adapter import RustGameAdapter
 logging.disable(logging.CRITICAL)
 
 FINGERPRINT_1830 = "e721aa6520116e2a"  # pinned in engine-rs/src/rl/tests.rs too
-NOT_READY = ("1822", "1822PNW", "1822MX", "1822CA")  # 1867: tests/test_rl_g1867_index.py
+# Titles without a layout: none since the 1822 family's (tests/test_rl_g1822_index.py; 1867:
+# tests/test_rl_g1867_index.py). The seam test below stays for the next title.
+NOT_READY: tuple = ()
 
 
 @pytest.fixture(scope="module")
