@@ -986,6 +986,13 @@ CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=1 taskset -c 24-31,56-63 nice -19 .venv/bi
   policy gradient will be bound by the workers' CPU: at ~9 ms per decision, 32 workers give ~3.5k decisions/s,
   **~20-25k games/h** (gen6 made ~125k 1830 games/h) unless the generator gets faster
   (`docs/g1867_remaining_work.md` "Generator speed": cache the graph walk per state).
+* **Update 2026-11-13 (generator speed-up, `docs/g1867_remaining_work.md` "Generator speed")**: the same moves
+  (differential tests: 0 differences on every human decision and 80 fuzz walks) for ~5x less CPU — human
+  decisions 6.5 -> 1.05 ms mean (p50 1.8 -> 0.5, p99 58 -> 7.9; thread CPU, same positions). `TitlePlay.fixed_price`
+  also ran the generator a second time for every position the PG worker played (`rl_price_range` re-enumerates);
+  it now reads the legal list's ranges. Worker calls per position on whole games: 8.5 -> 1.2 ms. Expected with
+  GPU servers: ~90-100k games/h on 32 workers (the server becomes the limit); the router (`run_routes`) is now the
+  largest rules cost.
 
 ### Decision caps and auction stalls (proposal, for the user to decide)
 
