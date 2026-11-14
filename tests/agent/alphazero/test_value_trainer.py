@@ -161,6 +161,9 @@ def test_an_encode_task_returns_positions_with_their_games_outcomes(generated):
     for i, g in enumerate(games):
         rows = out["game"] == 100 + i
         pos = vt.game_positions(g.meta, g.actions, 3, 7)
+        if pos is None:  # a game with no position to keep: the task returns none of its rows either
+            assert not rows.any()
+            continue
         assert np.array_equal(out["game_states"][rows], pos["game_states"])
         assert np.allclose(out["win"][rows].sum(1), 1.0)
 
