@@ -306,6 +306,28 @@ def test_dataset_round_trip_and_loader(tmp_path):
     assert seen == ds.num_positions() > 500
 
 
+def test_value_targets_follow_the_reordered_players(records):
+    """The family reorders ``BaseGame.players`` every Stock Round and the encoder's seats follow the current order
+    (seat 0 = the mover): an item's targets name each seat's player by id, not by a rotation of the seating order."""
+    record, _, _ = records["1822"]
+    seating = [pid for pid, _ in record["players"]]
+    reordered = 0
+    for k, game in gd.replay(record, range(0, gd.record_decisions(record), 3)):
+        item = gd.position_item(record, k, game)
+        current = [p.id for p in game.players]
+        rot = int(item["enc"]["meta"][0][5])
+        n = len(seating)
+        for seat in range(n):
+            pid = current[(seat + rot) % n]
+            assert item["win"][seat] == record["win_share"][seating.index(pid)]
+            assert item["score"][seat] == record["placement"][seating.index(pid)]
+        mover = game.g1822_acting_player()
+        if mover is not None:
+            assert current[rot] == mover
+        reordered += current != seating
+    assert reordered > 20  # the replay passes Stock Rounds that reorder the players
+
+
 def test_collate_equals_build_inputs(records):
     record, _, _ = records["1822CA"]
     picks = sorted(random.Random(4).sample(range(gd.record_decisions(record)), 48))
@@ -526,3 +548,10 @@ def test_family_pg_games_and_the_trainers_probabilities(title, clients, random_m
         out = random_model(batch["inputs"])
         losses = gpg.generic_pg_losses(out, out, batch, clip=0.2, kl_coef=0.02, entropy_coef=0.0, temperature=0.5)
     assert float(losses["log_ratio_abs_mean"]) < 1e-4
+    # seats: the reservoir's seat is the mover's seating seat, encoder seat 0 is the mover, and the targets name
+    # players by id (the family reorders its players every Stock Round: the seat frame need not be a rotation)
+    for g in result["games"]:
+        for r in g["rows"]:
+            assert r.order[0] == r.seat and sorted(r.order.tolist()) == list(range(3))
+            assert r.win[0] == g["win_share"][r.seat] and r.advantage == g["reward"][r.seat]
+            assert r.win[:3].tolist() == [g["win_share"][i] for i in r.order]

@@ -863,13 +863,34 @@ def _apply_logged(game, action: dict) -> None:
     game.process_action(action)
 
 
-def seat_frame(values: np.ndarray, rotation: int, num_players: int) -> np.ndarray:
+def seat_frame(
+    values: np.ndarray, rotation: int, num_players: int, order: Optional[Sequence[int]] = None
+) -> np.ndarray:
     """Seating-order per-player ``values`` (n,) in the encoder's seat frame, padded to ``MAX_SEATS``:
-    seat k is player ``(k + rotation) mod n`` (``docs/rl_encoder.md`` "Seats")."""
+    seat k is player ``(k + rotation) mod n`` (``docs/rl_encoder.md`` "Seats") -- of the game's *current* player
+    order, which is the seating order unless the title reorders its players (the 1822 family does, by cash, every
+    Stock Round): then ``order`` (:func:`seat_order`) gives each encoder seat's seating index."""
     out = np.zeros(MAX_SEATS, dtype=np.float32)
     n = int(num_players)
-    out[:n] = np.asarray(values, dtype=np.float32)[(np.arange(n) + int(rotation)) % n]
+    idx = (np.arange(n) + int(rotation)) % n if order is None else np.asarray(order, dtype=np.int64)
+    out[:n] = np.asarray(values, dtype=np.float32)[idx]
     return out
+
+
+def seat_order(game, seating: Sequence[int], rotation: int) -> np.ndarray:
+    """(n,) the seating index (in ``seating``, the player ids in seating order) of each encoder seat of a position
+    with ``rotation``: the encoder's seat k is player ``(k + rotation) mod n`` of ``BaseGame.players`` as they stand
+    -- the 1822 family reorders them every Stock Round; 1830 and 1867 never do, where this is
+    ``(arange(n) + rotation) mod n``."""
+    current = [int(p.id) for p in raw_players(game)]
+    where = {int(pid): i for i, pid in enumerate(seating)}
+    n = len(current)
+    return np.array([where[current[(k + int(rotation)) % n]] for k in range(n)], dtype=np.int64)
+
+
+def raw_players(game):
+    """``BaseGame.players`` of a game or an adapter's engine game."""
+    return getattr(game, "_game", game).players
 
 
 def position_item(record: dict, decision: int, game, descriptors=None) -> dict:
@@ -894,6 +915,7 @@ def position_item(record: dict, decision: int, game, descriptors=None) -> dict:
     indices = record["legal_indices"][lo:hi]
     n = int(record["num_players"])
     rot = int(m[5])
+    order = seat_order(game, [int(pid) for pid, _ in record["players"]], rot)
     return {
         "enc": enc,
         "rows": d.gather(indices),
@@ -904,8 +926,8 @@ def position_item(record: dict, decision: int, game, descriptors=None) -> dict:
         "price": int(record["price"][decision]),
         "family": int(record["family"][decision]),
         "num_players": n,
-        "win": seat_frame(record["win_share"], rot, n),
-        "score": seat_frame(record["placement"], rot, n),
+        "win": seat_frame(record["win_share"], rot, n, order),
+        "score": seat_frame(record["placement"], rot, n, order),
         "game": record["id"],
         "decision": int(decision),
     }
@@ -1224,4 +1246,5 @@ __all__ = [
     "register_importer",
     "replay",
     "seat_frame",
+    "seat_order",
 ]

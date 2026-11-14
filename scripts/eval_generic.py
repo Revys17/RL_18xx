@@ -86,6 +86,7 @@ def play_games(game_indices: list, settings: dict) -> list:
         seats = list(seatings[idx % len(seatings)])
         g = gpg._Game(raw=raw, uid=str(idx), opponent="", seat_models=seats, start=start.label)
         g.seed, g.idx = start.seed, idx
+        g.seating = [int(p.id) for p in raw.players]  # (the 1822 family reorders raw.players every Stock Round)
         games.append(g)
 
     def client(side):
@@ -109,7 +110,7 @@ def play_games(game_indices: list, settings: dict) -> list:
         rotation = enc["meta"][:, 5]
         by_side = defaultdict(list)
         for i, (g, _) in enumerate(pending):
-            by_side[g.seat_models[int(rotation[i])]].append(i)
+            by_side[g.seat_models[gpg.mover_seat(g.raw, g.seating, int(rotation[i]))]].append(i)
         sent = {}
         for side, rows in by_side.items():
             arrays = mg.add_legal_inputs(slice_positions(enc, rows), [pending[i][1] for i in rows])
@@ -134,7 +135,7 @@ def play_games(game_indices: list, settings: dict) -> list:
 
     records = []
     for g in finished:
-        worth, win_share, fractions = gpg.game_outcome(g.raw)
+        worth, win_share, fractions = gpg.game_outcome(g.raw, g.seating)
         record = {
             "idx": g.idx,
             "seats": list(g.seat_models),
@@ -148,7 +149,7 @@ def play_games(game_indices: list, settings: dict) -> list:
         if g.idx < settings.get("save_games", 0):
             record["net_worth"] = worth.tolist()
             record["seed"] = g.seed
-            record["players"] = [[int(p.id), str(p.name)] for p in g.raw.players]
+            record["players"] = gpg.seating_players(g.raw, g.seating)
             record["raw_actions"] = [dict(a) for a in g.raw.raw_actions]
         records.append(record)
     return records
