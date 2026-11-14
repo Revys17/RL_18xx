@@ -140,6 +140,8 @@ def bench_worker(games: list, reps: int = 5, title: str = "1830", reference: boo
     sizes = []
     rng = random.Random(0)
     previous = engine_rs.BaseGame.g1867_set_reference_generator(reference)
+    # (the 1822 family's generator has its own reference paths, 2026-11-14)
+    previous_1822 = engine_rs.BaseGame.g1822_set_reference_generator(reference)
     try:
         for _ in range(reps):
             t0 = time.perf_counter()
@@ -182,6 +184,7 @@ def bench_worker(games: list, reps: int = 5, title: str = "1830", reference: boo
                 t["apply"] += time.perf_counter() - t6
     finally:
         engine_rs.BaseGame.g1867_set_reference_generator(previous)
+        engine_rs.BaseGame.g1822_set_reference_generator(previous_1822)
     raw = sum(v.nbytes for v in enc.values() if isinstance(v, np.ndarray))
     out = {f"{k}_us_per_position": round(v / reps / n * 1e6, 1) for k, v in t.items()}
     parts_ = ("legal", "encode", "split_legal_inputs", "compress") + (("fixed_price", "apply") if title != "1830" else ())
@@ -319,7 +322,9 @@ def main():
     parser.add_argument("--server-threads", type=int, default=2)
     parser.add_argument("--configs", nargs="+", default=["plain", "compress", "compress+pipeline"])
     parser.add_argument("--threads", type=int, default=2, help="torch threads for the forward mode")
-    parser.add_argument("--title", default="1830", help="worker mode: 1830 (default) or a generator title (1867)")
+    parser.add_argument(
+        "--title", default="1830", help="worker mode: 1830 (default) or a generator title (1867, 1822, 1822PNW, ...)"
+    )
     parser.add_argument(
         "--reference", action="store_true",
         help="worker mode, generator titles: also time the generator's reference (pre-2026-11-13) paths",

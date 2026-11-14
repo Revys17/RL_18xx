@@ -1255,7 +1255,9 @@ impl BaseGame {
         if self.finished {
             return err("Game is already finished");
         }
-        let backup = self.clone_for_search();
+        // (the rollback copy leaves out the JSON action log: processing
+        // never reads or writes it, so the live one is put back)
+        let backup = self.clone_for_search_without_log();
         match self.g1822_process_inner(action) {
             Ok(()) => {
                 self.move_number += 1;
@@ -1263,7 +1265,9 @@ impl BaseGame {
                 Ok(())
             }
             Err(e) => {
+                let log = std::mem::take(&mut self.action_log);
                 *self = backup;
+                self.action_log = log;
                 Err(e)
             }
         }
