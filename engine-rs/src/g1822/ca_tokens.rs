@@ -237,17 +237,36 @@ impl BaseGame {
 
     // -- destination tokens across lays (preprocess_action / action_processed)
 
+    /// CA `@destination_hexes.include?(hex.id)`: some corporation's
+    /// destination.
+    pub(crate) fn g1822_ca_destination_hex(&self, hi: usize) -> bool {
+        let hex_id = self.hexes[hi].id.as_str();
+        self.corporations.iter().any(|c| self.g1822_destination(&c.sym).as_deref() == Some(hex_id))
+    }
+
+    /// Whether a lay on hex `hi` picks up destination tokens before it is
+    /// checked (CA `preprocess_action`, [`BaseGame::g1822_ca_preprocess_lay`]):
+    /// the lay's rotation check then reads the graph without them (Ruby's
+    /// fresh compute in a strict replay), so the legal-move generator, which
+    /// finds the rotations on the graph as it stands (Ruby's UI), must apply
+    /// such a lay to know it is legal.
+    pub(crate) fn g1822_ca_lay_picks_up_tokens(&self, hi: usize) -> bool {
+        self.g1822_is_ca()
+            && self.g1822_ca_destination_hex(hi)
+            && self.hexes[hi]
+                .tile
+                .cities
+                .iter()
+                .any(|c| c.tokens.iter().flatten().any(|t| t.token_type == "destination" && t.cheater))
+    }
+
     /// CA `preprocess_action(LayTile)`: on a destination hex, the cheater
     /// destination tokens are picked up (their slot becomes nil) before the
     /// lay; returns (corporation, token serial, its city on the new tile).
     pub(crate) fn g1822_ca_preprocess_lay(&mut self, action: &Action) -> Vec<(String, u32, Option<usize>)> {
         let Action::LayTile { hex_id, tile_id, rotation, .. } = action else { return Vec::new() };
         let Some(&hi) = self.hex_idx.get(hex_id.as_str()) else { return Vec::new() };
-        let is_dest = self
-            .corporations
-            .iter()
-            .any(|c| self.g1822_destination(&c.sym).as_deref() == Some(hex_id.as_str()));
-        if !is_dest {
+        if !self.g1822_ca_destination_hex(hi) {
             return Vec::new();
         }
         let base = tile_id.split('-').next().unwrap_or(tile_id);

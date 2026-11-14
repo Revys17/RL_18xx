@@ -1390,8 +1390,15 @@ impl BaseGame {
         // A corporation's own lay (Track step): every process-side check is
         // the generator's (slot rules, supply, rotation) except the cost,
         // checked here, so the lay skips the apply-on-a-clone filter.
-        // (1822PNW: every lay goes through the apply filter)
-        let own = restrict && entity == operator && combo.is_empty() && !self.g1822_is_pnw();
+        // (1822PNW: every lay goes through the apply filter; 1822CA: so does
+        // a lay on a destination hex holding destination tokens -- the
+        // process picks them up first and checks the rotation on the graph
+        // without them)
+        let own = restrict
+            && entity == operator
+            && combo.is_empty()
+            && !self.g1822_is_pnw()
+            && !self.g1822_ca_lay_picks_up_tokens(hi);
         let cash = self.corp_idx.get(operator).map_or(0, |&i| self.corporations[i].cash);
         let mut out = Vec::new();
         for (t, rots) in with_rot {
