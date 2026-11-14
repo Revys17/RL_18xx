@@ -547,3 +547,36 @@ def test_start_files_skip_games_the_replay_rejects():
     game["actions"] = game["actions"][:600] + [bad] + game["actions"][600:]
     replayed, reason = gp.replay_human_game("1867", game)
     assert replayed is None and reason.startswith("replay_failed")
+
+
+def test_1867_fixed_price_from_the_legal_list_is_rl_price_range():
+    """``TitlePlay.fixed_price`` on 1867 reads the legal list's ranges (no second generator run): for every row
+    of every position of random walks at 3-6 players it equals ``rl_price_range``'s low end (None for a move
+    without a price), and every move the generator gives a range has a price-kind row (so the list holds it)."""
+    from rl18xx.agent.alphazero.generic_play import title_play
+    from rl18xx.agent.alphazero.model_generic import C_PRICE_KIND
+
+    play = title_play("1867")
+    rng = random.Random(1)
+    checked = priced = 0
+    for n, seed in ((3, 11), (4, 12), (5, 13), (6, 14)):
+        raw = new_game("1867", n, seed=seed)
+        for _ in range(250):
+            if raw.finished:
+                break
+            legal = play.legal(raw)
+            ranged = {m["index"] for m in json.loads(raw.rl_legal_moves_json()) if m["range"] is not None}
+            for k in range(len(legal)):
+                index = int(legal.indices[k])
+                r = raw.rl_price_range(index)
+                assert play.fixed_price(raw, legal, k) == (None if r is None else int(r[0])), index
+                assert (index in ranged) == (legal.rows[k, C_PRICE_KIND] >= 0), index
+                checked += 1
+                priced += r is not None
+            k = rng.randrange(len(legal))
+            price = play.fixed_price(raw, legal, k)
+            if play.open_price(legal, k):
+                lo, hi, step = (int(x) for x in legal.price_range[k])
+                price = lo + step * rng.randrange((hi - lo) // step + 1)
+            play.apply(raw, legal, k, price)
+    assert checked > 2000 and priced > 50

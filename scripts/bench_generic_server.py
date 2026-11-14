@@ -41,12 +41,32 @@ SMALL = dict(
 )  # fmt: skip
 
 
-def positions(count: int, seed: int = 0) -> list:
+def positions(count: int, seed: int = 0, title: str = "1830") -> list:
     from rl18xx.agent.alphazero.generic_tokens import raw_game
     from rl18xx.agent.alphazero.titles import new_game
 
     rng = random.Random(seed)
     out = []
+    if title != "1830":
+        # A generator layout (1867): random walks through the title's own play adapter, 3-6 players.
+        from rl18xx.agent.alphazero.generic_play import title_play
+
+        play = title_play(title)
+        while len(out) < count:
+            game = raw_game(new_game(title, rng.choice((3, 4, 4, 5, 6)), seed=rng.randrange(1 << 30)))
+            for step in range(rng.randrange(100, 900)):
+                if game.finished:
+                    break
+                legal = play.legal(game)
+                k = rng.randrange(len(legal))
+                price = play.fixed_price(game, legal, k)
+                if play.open_price(legal, k):
+                    lo, hi, st = (int(x) for x in legal.price_range[k])
+                    price = lo + st * rng.randrange((hi - lo) // st + 1)
+                play.apply(game, legal, k, price)
+                if step % 13 == 0 and play.is_decision(play.legal(game)):
+                    out.append(game.pickle_clone())
+        return out[:count]
     while len(out) < count:
         n = rng.choice((2, 3, 4, 4, 5, 6))
         game = raw_game(new_game("1830", n, auction_unlock=True))
@@ -98,44 +118,74 @@ def null_factory(_path):
     return NullModel().eval()
 
 
-def bench_worker(games: list, reps: int = 5) -> dict:
+def bench_worker(games: list, reps: int = 5, title: str = "1830", reference: bool = False) -> dict:
+    """Per position: ``legal`` (the legal list: for a generator layout the generator itself, ``reference``
+    = its pre-2026-11-13 paths, ``engine_rs.BaseGame.g1867_set_reference_generator``), encode, split,
+    compress; for a generator layout also ``fixed_price`` (the worker's price of a row without an open
+    price, on every row) and ``apply`` (one random row applied, on a clone made outside the timing)."""
     from rl18xx.agent.alphazero import model_generic as mg
     from rl18xx.agent.alphazero.generic_inference import pack_batch, slice_positions
     from rl18xx.agent.alphazero.generic_play import title_play
     from rl18xx.agent.alphazero.generic_tokens import encode_batch
-    from rl18xx.agent.alphazero.mcts import _rust_encode
-    from rl18xx.rust_adapter import RustGameAdapter
 
-    play = title_play("1830")
+    import engine_rs
+
+    play = title_play(title)
     n = len(games)
-    t = {"legal": 0.0, "encode": 0.0, "split_legal_inputs": 0.0, "compress": 0.0, "legacy_encode": 0.0}
+    t = {"legal": 0.0, "encode": 0.0, "split_legal_inputs": 0.0, "compress": 0.0}
+    if title == "1830":
+        t["legacy_encode"] = 0.0
+    else:
+        t["fixed_price"] = t["apply"] = 0.0
     sizes = []
-    for _ in range(reps):
-        t0 = time.perf_counter()
-        legal = [play.legal(g) for g in games]
-        t1 = time.perf_counter()
-        enc = encode_batch(games)
-        t2 = time.perf_counter()
-        half = list(range(0, n, 2)), list(range(1, n, 2))
-        parts = [mg.add_legal_inputs(slice_positions(enc, idx), [legal[i] for i in idx]) for idx in half]
-        t3 = time.perf_counter()
-        blobs = [pack_batch(p) for p in parts]
-        t4 = time.perf_counter()
-        adapters = [RustGameAdapter(g) for g in games]
-        t5 = time.perf_counter()
-        [_rust_encode(a) for a in adapters]
-        t6 = time.perf_counter()
-        t["legal"] += t1 - t0
-        t["encode"] += t2 - t1
-        t["split_legal_inputs"] += t3 - t2
-        t["compress"] += t4 - t3
-        t["legacy_encode"] += t6 - t5
-        sizes = [len(b.blob) for b in blobs]
+    rng = random.Random(0)
+    previous = engine_rs.BaseGame.g1867_set_reference_generator(reference)
+    try:
+        for _ in range(reps):
+            t0 = time.perf_counter()
+            legal = [play.legal(g) for g in games]
+            t1 = time.perf_counter()
+            enc = encode_batch(games)
+            t2 = time.perf_counter()
+            half = list(range(0, n, 2)), list(range(1, n, 2))
+            parts = [mg.add_legal_inputs(slice_positions(enc, idx), [legal[i] for i in idx]) for idx in half]
+            t3 = time.perf_counter()
+            blobs = [pack_batch(p) for p in parts]
+            t4 = time.perf_counter()
+            t["legal"] += t1 - t0
+            t["encode"] += t2 - t1
+            t["split_legal_inputs"] += t3 - t2
+            t["compress"] += t4 - t3
+            sizes = [len(b.blob) for b in blobs]
+            if title == "1830":
+                from rl18xx.agent.alphazero.mcts import _rust_encode
+                from rl18xx.rust_adapter import RustGameAdapter
+
+                t5 = time.perf_counter()
+                adapters = [RustGameAdapter(g) for g in games]
+                [_rust_encode(a) for a in adapters]
+                t["legacy_encode"] += time.perf_counter() - t5
+                continue
+            for g, lg in zip(games, legal):
+                ks = [rng.randrange(len(lg)) for _ in range(1)]
+                t5 = time.perf_counter()
+                if reference:
+                    # before 2026-11-13 fixed_price asked the engine (another generator run)
+                    rs = [g.rl_price_range(int(lg.indices[k])) for k in ks]
+                    prices = [None if r is None else int(r[0]) for r in rs]
+                else:
+                    prices = [play.fixed_price(g, lg, k) for k in ks]
+                t["fixed_price"] += time.perf_counter() - t5
+                c = g.pickle_clone()
+                t6 = time.perf_counter()
+                play.apply(c, lg, ks[0], prices[0])
+                t["apply"] += time.perf_counter() - t6
+    finally:
+        engine_rs.BaseGame.g1867_set_reference_generator(previous)
     raw = sum(v.nbytes for v in enc.values() if isinstance(v, np.ndarray))
     out = {f"{k}_us_per_position": round(v / reps / n * 1e6, 1) for k, v in t.items()}
-    out["generic_total_us_per_position"] = round(
-        sum(out[f"{k}_us_per_position"] for k in ("legal", "encode", "split_legal_inputs", "compress")), 1
-    )
+    parts_ = ("legal", "encode", "split_legal_inputs", "compress") + (("fixed_price", "apply") if title != "1830" else ())
+    out["generic_total_us_per_position"] = round(sum(out[f"{k}_us_per_position"] for k in parts_), 1)
     out["token_bytes_per_position"] = round(raw / n)
     out["request_bytes_per_position_lz4"] = round(sum(sizes) / n)
     return out
@@ -269,14 +319,21 @@ def main():
     parser.add_argument("--server-threads", type=int, default=2)
     parser.add_argument("--configs", nargs="+", default=["plain", "compress", "compress+pipeline"])
     parser.add_argument("--threads", type=int, default=2, help="torch threads for the forward mode")
+    parser.add_argument("--title", default="1830", help="worker mode: 1830 (default) or a generator title (1867)")
+    parser.add_argument(
+        "--reference", action="store_true",
+        help="worker mode, generator titles: also time the generator's reference (pre-2026-11-13) paths",
+    )
     args = parser.parse_args()
     torch.set_num_threads(args.threads)
-    games = positions(args.positions)
+    games = positions(args.positions, title=args.title)
     print(json.dumps({"positions": len(games), "players": sorted({len(g.players) for g in games})}))
     model = make_model(args.model)
     print(json.dumps({"model": args.model, "parameters": model.num_parameters()}))
     if "worker" in args.modes:
-        print(json.dumps({"worker": bench_worker(games[:256])}))
+        print(json.dumps({"worker": bench_worker(games[:256], title=args.title)}))
+        if args.reference and args.title != "1830":
+            print(json.dumps({"worker_reference_generator": bench_worker(games[:256], title=args.title, reference=True)}))
     if "forward" in args.modes:
         print(json.dumps({"forward_positions_per_second": bench_forward(model, games, args.batch)}))
     if "server" in args.modes:

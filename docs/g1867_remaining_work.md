@@ -293,6 +293,137 @@ Replay-neutral: the 300-game sample (206/60/3/4/27), the 2026-10 scrape
   first player at $0. The wire fuzzer keeps $5 back once every other player
   is below $5.
 
+## Generator speed (2026-11-13): same moves, ~5x less CPU
+
+The generator was the 1867 policy-gradient workers' bottleneck (~8 ms per
+decision on human positions vs ~0.03 ms for 1830's enumeration). It is now
+several times faster with **exactly the same move lists**: the code it
+replaced stays callable as the **reference generator**
+(`g1867::legal::reference`: a thread-local flag; `g1867_legal_moves_reference`,
+Python `g1867_moves_debug(policy, reference=True)`,
+`rl_legal_moves_json_with(policy, reference)`, `g1867_reference_diff(policy)`,
+`BaseGame.g1867_set_reference_generator(on)`), and differential tests compare
+the two state by state.
+
+### Where the time went (before; `scripts/g1867_generator_profile.py --mode profile`)
+
+Human positions (a 10% sample of the corpus, 57k positions, per-section
+profile `g1867_profile`): tile lays 41% — `check_track_restrictions!` ran one
+full Ruby graph walk per upgrade candidate (1.1M walks, ~76 µs each) —; the
+apply-on-a-clone validation 24% for the clones alone (`clone_for_search`
+copied the game's JSON action log, most of a late clone) plus the processing
+on each clone, chiefly the replay graph (`map::compute_corp_graph`, ~0.7 ms)
+recomputed in EVERY clone (the gate and handler of a token, a Track pass);
+the router 7-13% (5+5E walks: 241 calls, 9 s); `step_offers` 2-5%. The
+Track gate (`track_has_layable_tile`) itself is cheap once its graph is
+cached. Per position (thread CPU, before, all 572,633 human positions):
+mean 5.7 ms, p50 1.46, p99 54; Track positions mean 10.8 ms (p99 113),
+stock-round 9.8 ms, Token 21 ms (p99 180), Route 4.5 ms (p99 56).
+
+### What changed (all in `g1867/`, plus a hook in `map.rs`)
+
+* **Tile lays** (`legal.rs` `g67_gen_lays_fast`, `fastwalk.rs`,
+  `tile_rules.rs` `*_fast`): catalog tiles' facts (`TV`, exits, city/town
+  edges, path ends, the laid `Tile`) per rotation once per game
+  (`g1867_catalog_facts`, keyed by the catalog's `Arc`); each hex's facts once
+  per call; supply/phase filters and the map's tile ids once per call.
+  `check_track_restrictions!` is split (`g1867_track_restriction_targets_fast`):
+  its verdict needs the walk only when the laid tile has a path that is new
+  track or changes a revenue (`mask`); then a breadth-first pass over the
+  walk's moves WITHOUT its dynamic limits (`WalkMap::may_reach`: every path
+  the walk records is reachable this way, so "unreachable" = not connected;
+  it settles ~60% of the walks) and, if needed, Ruby's walk itself on arrays
+  precomputed once per state (`WalkMap::reaches`: same calls in the same
+  order as `graph.rs`, stopping at the first recorded target — the recorded
+  set only grows).
+* **Validation** (`g1867_validate_inner`): the clone omits the JSON action
+  log (`g1867_validation_clone`; processing never reads it); dedup by a set;
+  the replay graph is memoised for the whole call (`legal::graph_memo`,
+  installed by the fast path only: a result is reused only for EQUAL inputs —
+  corporation, token cities, reservations and the full hex vector, compared;
+  `compute_corp_graph` is a pure function of them); and **validation
+  classes** (`g67_validation_class`): members succeed iff the class's shared
+  conditions (gate, turn, round-level refusals — the same for every member)
+  and the member's own checks (the handler's per-member refusals, evaluated on
+  the unchanged state) hold, so one member is applied on a clone and the rest
+  are decided by their own checks: `Par` and `MinorOpeningBid` (no own checks),
+  `StockSell` (`validate_sell_bundle`, parred), `TokenPlace` (tokenable on the
+  fresh graph, slot, distance price, empty slot), `StockHomeToken` (slot). The
+  proof of each is in the function's doc.
+* **RL / PG path**: `TitlePlay.fixed_price` on a generator layout reads the
+  legal list's ranges instead of `rl_price_range` (which ran the generator a
+  second time for EVERY position the PG worker played); tested equal on
+  random walks (`test_1867_fixed_price_from_the_legal_list_is_rl_price_range`).
+
+### Differential tests (zero differences required)
+
+* Corpus: `scripts/g1867_generator_diff.py` — every human decision of every
+  in-scope game (the importer's replay), the title's policy AND the rules',
+  move for move (step, action, price range, certificates, in list order) and
+  at the index level (`1867-v1` index, wire dict, range). 2026-11-13, both
+  corpora (`human_games/1867`, `human_games/scrape_2026_10/1867`; 1,394 files,
+  993 games in scope): 572,633 positions × 2 policies = 1,145,266 comparisons,
+  22,992,242 moves compared, **0 differences** (25 min on 8 jobs).
+* Fuzz: `cargo test --release --no-default-features generator_matches_reference`
+  (3-6 players, a walk under each policy, both policies compared at every
+  state) and the long `g1867_diff_long -- --ignored` (`G1867_DIFF_SEEDS`,
+  `_FIRST`, `_PLAYERS`, `_POLICY`). 2026-11-13: 3-6 players × seeds 101-110
+  × a walk under each policy = 80 walks, every one played to its end,
+  100,379 states, 1,410,650 moves compared (each state under both
+  policies), **0 differences**.
+* `scripts/g1867_generator_profile.py --mode ab` times both generators on the
+  same positions and also checks their `rl_legal_moves_json` outputs equal.
+
+### Speed (same positions, thread CPU time, cores 24-31,56-63 shared)
+
+`rl_legal_moves_json(None)` (what a PG worker calls: generator + RL indices
++ wire dicts) at every human position of both corpora (572,633; `--mode ab`,
+reference and fast interleaved; outputs identical at every position):
+
+| positions | before p50 / p90 / p99 / mean (ms) | after p50 / p90 / p99 / mean (ms) |
+|---|---|---|
+| all 572,633 | 1.46 / 13.5 / 54.4 / 5.72 | 0.44 / 1.95 / 10.8 / 1.24 |
+| decisions (457,683: several moves or a price) | 1.80 / 16.4 / 57.6 / 6.49 | 0.50 / 1.98 / 7.93 / 1.05 |
+| Track (131,850) | 2.53 / 24.1 / 113 / 10.8 | 0.96 / 4.79 / 14.8 / 2.08 |
+| BuySellParShares (72,385) | 3.62 / 27.3 / 54.2 / 9.78 | 0.41 / 1.26 / 1.76 / 0.62 |
+| Token (13,709) | 9.82 / 41.2 / 180 / 21.4 | 1.06 / 3.15 / 17.7 / 2.04 |
+| Route (61,891; the router) | 1.05 / 6.84 / 56.2 / 4.52 | 0.39 / 4.49 / 53.1 / 3.59 |
+| BuyTrain (75,262) | 1.10 / 5.16 / 13.1 / 2.07 | 0.38 / 0.78 / 1.38 / 0.44 |
+| Dividend (34,129) | 3.65 / 7.19 / 10.6 / 4.05 | 0.51 / 0.85 / 1.60 / 0.59 |
+
+(Wall time, same run: decisions mean 7.17 -> 1.13 ms, p99 71 -> 9.6.)
+
+The PG worker's calls per position (`TitlePlay.legal`, `fixed_price`, `apply`,
+plus encode / split / compress for a decision), whole random games at 3-6
+players (8 games, 9,511 positions, the same moves both ways): **8.50 -> 1.23 ms
+per position** (legal 3.90 -> 0.79, fixed_price 3.88 -> 0.004 — it was a second
+generator run —, apply 0.15 -> 0.05). `scripts/bench_generic_server.py worker
+--title 1867 --reference` (256 random-walk decisions): 4.23 -> 0.99 ms per
+decision (legal 1.84 -> 0.63, fixed_price 1.99 -> 0.003, apply 0.20 -> 0.14,
+encode 0.13, split 0.03, compress 0.05).
+
+Expected PG throughput when the workers' CPU bounds it (GPU servers): ~660
+positions a game (`docs/rl_model.md`: ~520 decisions + 20% forced) at ~1.6 ms
+of worker CPU each with the PG loop's own Python (~12 ms before on human-like
+positions: the generator twice + the rest) is ~1.1 s per game: ~3k games/h per
+worker, **~90-100k games/h on 32 workers** (A3's estimate before: 20-25k), so
+the inference server, not the rules, becomes the limit. In A3's CPU smoke
+(8 workers, 1-thread CPU servers, 124-186 decisions/s) most of a decision's
+43-65 ms was the CPU server; the ~10-14 ms these changes remove per decision
+put that setup at roughly 1.1-1.7k games/h (not re-run).
+
+### Left
+
+* The router (`run_routes`): now the largest single cost on human positions
+  (~a third of the generator's time: Route positions mean 3.6 ms, p99 53;
+  the 5+5E walks, ~4% of the router's calls, take about half of its time,
+  up to ~0.6 s each). Its 20M-step budget is never reached on the corpus.
+  Untouched here.
+* The replay graph on the state itself (one `compute_corp_graph` per OR
+  position whose corporation's graph the previous action invalidated, ~0.4
+  ms) and the remaining clones (single candidates — passes, `run_routes`,
+  dividends, train purchases — ~0.1 ms each).
+
 ## Replay seams of 2026-10-15 (one commit each, all Ruby-probed)
 
 1. **Water borders** — `border=...type:water,cost:80` charged by the lay
@@ -335,7 +466,9 @@ Replay-neutral: the 300-game sample (206/60/3/4/27), the 2026-10 scrape
    the layout fingerprint (contract items 2 and 6). Constraint: the 1830
    layout is FROZEN (checkpoint-compatible). The cross-player questions are
    decided (mergers of one player's minors only; orphan trains leave play).
-2. **Generator speed for self-play**: ~2 ms per decision in the fuzz
+2. **Generator speed for self-play** — done 2026-11-13 (section "Generator
+   speed" above: same moves, ~5x less CPU; the router is what is left). The
+   original item: ~2 ms per decision in the fuzz
    (tile lays dominate: one Ruby graph walk per upgrade candidate; offers
    recompute the Track gate). Fine for fuzzing; an MCTS hot loop would want
    the walk cached per state and the clone-validation of share moves

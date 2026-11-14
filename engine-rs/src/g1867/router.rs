@@ -1721,6 +1721,14 @@ impl BaseGame {
             routes.push(walk.route_data(&w, &trains[ti].0, price));
         }
         debug_assert_eq!(total, best, "the fast pricer disagrees with price_bucketed_stops");
+        {
+            // the generator's profile (`g1867_profile`): walk / combine / the rest
+            use crate::g1867::legal::stats;
+            let x = if kinds.iter().any(|k| k.express) { ":5+5E" } else { "" };
+            stats::record(|| format!("route:walk{x}"), (t1 - t0).as_nanos() as u64);
+            stats::record(|| format!("route:combine{x}"), (t2 - t1).as_nanos() as u64);
+            stats::record(|| "route:finish".into(), t2.elapsed().as_nanos() as u64);
+        }
         AutoRoutes {
             routes,
             revenue: total,

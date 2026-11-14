@@ -81,6 +81,28 @@ impl Move {
     }
 }
 
+/// Candidates whose validation outcome is shared
+/// (`BaseGame::g67_validation_class`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ValidationClass {
+    Par = 0,
+    MinorOpeningBid = 1,
+    TokenPlace = 2,
+    StockHomeToken = 3,
+    StockSell = 4,
+}
+
+impl ValidationClass {
+    const COUNT: usize = 5;
+}
+
+/// Per-state data the validation classes' own checks share.
+#[derive(Default)]
+struct ClassCtx {
+    /// A corporation's tokenable cities on its freshly computed graph.
+    tokenable: Option<(String, Vec<(String, usize)>)>,
+}
+
 /// Whether a (step, action type) pair has a generator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GenStatus {
@@ -141,6 +163,204 @@ pub mod stats {
     pub fn get(c: &AtomicU64) -> u64 {
         c.load(Ordering::Relaxed)
     }
+
+    // -- the profile (off by default): (count, ns) per named section --------
+    use std::collections::BTreeMap;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Mutex;
+    static PROFILING: AtomicBool = AtomicBool::new(false);
+    static PROFILE: Mutex<BTreeMap<String, (u64, u64)>> = Mutex::new(BTreeMap::new());
+    /// Turn the per-section profile on or off (`g1867_profile` in Python).
+    pub fn set_profiling(on: bool) {
+        PROFILING.store(on, Ordering::Relaxed);
+    }
+    #[inline]
+    pub fn profiling() -> bool {
+        PROFILING.load(Ordering::Relaxed)
+    }
+    /// A section's start (None while the profile is off).
+    #[inline]
+    pub fn start() -> Option<std::time::Instant> {
+        profiling().then(std::time::Instant::now)
+    }
+    /// Credit the time since `t0` to section `key` (a no-op while off).
+    pub fn stop(t0: Option<std::time::Instant>, key: impl FnOnce() -> String) {
+        let Some(t0) = t0 else { return };
+        record(key, t0.elapsed().as_nanos() as u64);
+    }
+    /// Credit `ns` to section `key` (a no-op while off).
+    pub fn record(key: impl FnOnce() -> String, ns: u64) {
+        if !profiling() {
+            return;
+        }
+        let mut p = PROFILE.lock().unwrap_or_else(|e| e.into_inner());
+        let e = p.entry(key()).or_insert((0, 0));
+        e.0 += 1;
+        e.1 += ns;
+    }
+    /// Count an event in section `key` without time.
+    pub fn count(key: impl FnOnce() -> String) {
+        if !profiling() {
+            return;
+        }
+        let mut p = PROFILE.lock().unwrap_or_else(|e| e.into_inner());
+        p.entry(key()).or_insert((0, 0)).0 += 1;
+    }
+    /// The profile so far, then cleared: `(section, count, ns)`.
+    pub fn take() -> Vec<(String, u64, u64)> {
+        let mut p = PROFILE.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *p).into_iter().map(|(k, (c, ns))| (k, c, ns)).collect()
+    }
+}
+
+/// The reference generator: the code paths as they were before the
+/// 2026-11-13 speed-ups, kept callable so a differential test can compare
+/// the two move lists state by state (`g1867_legal_moves_reference`;
+/// Python `g1867_moves_debug(policy, reference=True)`). Thread-local, so
+/// parallel cargo tests don't see each other's flag.
+pub mod reference {
+    use std::cell::Cell;
+    thread_local! {
+        static ON: Cell<bool> = const { Cell::new(false) };
+    }
+    /// Whether the reference paths are in force on this thread.
+    #[inline]
+    pub fn on() -> bool {
+        ON.with(|c| c.get())
+    }
+    /// Set the flag on this thread (until set again); returns the previous.
+    pub fn set(enabled: bool) -> bool {
+        ON.with(|c| c.replace(enabled))
+    }
+    /// Run `f` with the reference paths on (or off); the flag is restored
+    /// afterwards, also on a panic.
+    pub fn with<T>(enabled: bool, f: impl FnOnce() -> T) -> T {
+        struct Restore(bool);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                ON.with(|c| c.set(self.0));
+            }
+        }
+        let _restore = Restore(ON.with(|c| c.replace(enabled)));
+        f()
+    }
+}
+
+/// Memoised replay-graph computations while the generator runs (the fast
+/// path installs it for a whole `g1867_legal_moves_with` call): every
+/// validation clone of one state starts from the state's map, and each
+/// recomputed the operating corporation's graph (`map::GraphCache` is per
+/// game, empty in a clone; the state itself computes it too when its cache
+/// was cleared) — ~0.4-0.7 ms apiece on a late map.
+/// `map::compute_corp_graph` is a pure function of its inputs
+/// (the corporation, the hexes, the static hex index and adjacency, the
+/// token cities, the reservations); a memoised result is handed out only
+/// for inputs EQUAL to the ones it was computed from (the hexes compared
+/// in full), so it is the graph the clone would have computed. Only active
+/// while a [`graph_memo::Guard`] lives (thread-local): never for 1830 or
+/// replay.
+pub mod graph_memo {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use crate::graph::Hex;
+    use crate::map::CorpGraph;
+
+    type Tokens = Vec<(String, usize)>;
+    type Reservations = Vec<(String, usize, String)>;
+
+    struct Memo {
+        /// The map every entry was computed on: the map of the first
+        /// computation made while the memo is installed (copied then, so a
+        /// state that computes no graph pays nothing).
+        hexes: Option<Vec<Hex>>,
+        hex_idx: *const HashMap<String, usize>,
+        hex_adjacency: *const HashMap<String, HashMap<u8, String>>,
+        entries: Vec<(String, Tokens, Reservations, CorpGraph)>,
+    }
+
+    thread_local! {
+        static MEMO: RefCell<Option<Memo>> = const { RefCell::new(None) };
+    }
+
+    /// While the guard lives, graph computations on the game's static hex
+    /// index and adjacency are memoised. Dropping it restores the previous
+    /// memo (none).
+    pub struct Guard(Option<Memo>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            MEMO.with(|m| *m.borrow_mut() = prev);
+        }
+    }
+
+    /// Install a memo for graphs computed with `hex_idx` / `hex_adjacency`
+    /// (only compared by address: the game's `Arc`s, shared by its clones).
+    pub fn install(
+        hex_idx: &HashMap<String, usize>,
+        hex_adjacency: &HashMap<String, HashMap<u8, String>>,
+    ) -> Guard {
+        let memo = Memo { hexes: None, hex_idx, hex_adjacency, entries: Vec::new() };
+        Guard(MEMO.with(|m| m.borrow_mut().replace(memo)))
+    }
+
+    /// `compute()` = `compute_corp_graph(corp, hexes, hex_idx, hex_adjacency,
+    /// tokens, reservations)`, or the memoised result for the same inputs.
+    pub fn get_or(
+        corp: &str,
+        hexes: &[Hex],
+        hex_idx: &HashMap<String, usize>,
+        hex_adjacency: &HashMap<String, HashMap<u8, String>>,
+        tokens: &[(String, usize)],
+        reservations: &[(String, usize, String)],
+        compute: impl FnOnce() -> CorpGraph,
+    ) -> CorpGraph {
+        // None: no memo (or another game's); Some(false): the memo is of
+        // another map; Some(true): usable.
+        let usable = MEMO.with(|m| {
+            m.borrow_mut().as_mut().and_then(|memo| {
+                if !std::ptr::eq(memo.hex_idx, hex_idx) || !std::ptr::eq(memo.hex_adjacency, hex_adjacency) {
+                    return None;
+                }
+                Some(match &memo.hexes {
+                    Some(h) => h.as_slice() == hexes,
+                    None => {
+                        memo.hexes = Some(hexes.to_vec());
+                        true
+                    }
+                })
+            })
+        });
+        if usable != Some(true) {
+            let t = super::stats::start();
+            let g = compute();
+            super::stats::stop(t, || {
+                if usable.is_some() { "graph:validation_changed_map" } else { "graph:outside_validation" }.into()
+            });
+            return g;
+        }
+        let hit = MEMO.with(|m| {
+            m.borrow().as_ref().and_then(|memo| {
+                memo.entries
+                    .iter()
+                    .find(|(c, t, r, _)| c == corp && t.as_slice() == tokens && r.as_slice() == reservations)
+                    .map(|(_, _, _, g)| g.clone())
+            })
+        });
+        if let Some(g) = hit {
+            super::stats::count(|| "graph_memo:hit".into());
+            return g;
+        }
+        let t = super::stats::start();
+        let g = compute();
+        super::stats::stop(t, || "graph:validation_memo_miss".into());
+        MEMO.with(|m| {
+            if let Some(memo) = m.borrow_mut().as_mut() {
+                memo.entries.push((corp.to_string(), tokens.to_vec(), reservations.to_vec(), g.clone()));
+            }
+        });
+        g
+    }
 }
 
 fn base_name(id: &str) -> &str {
@@ -168,6 +388,10 @@ impl BaseGame {
         if self.finished || self.title != "1867" {
             return Vec::new();
         }
+        let t_all = stats::start();
+        // The fast paths share their (pure) replay-graph computations — this
+        // state's own and its validation clones' (`graph_memo`).
+        let _memo = (!reference::on()).then(|| graph_memo::install(&self.hex_idx, &self.hex_adjacency));
         let cands = self.g1867_candidates();
         let (kept, dropped): (Vec<Move>, Vec<Move>) =
             cands.into_iter().partition(|m| !self.g1867_cross_player_excluded(m, policy));
@@ -180,8 +404,25 @@ impl BaseGame {
         }
         // A deterministic order (some candidate sources iterate hash sets):
         // the same state always lists the same moves in the same order.
+        let t = stats::start();
         out.sort_by_cached_key(|m| format!("{:?}|{:?}", m.step, m.action));
+        stats::stop(t, || "sort".into());
+        stats::stop(t_all, || "total".into());
         out
+    }
+
+    /// [`BaseGame::g1867_legal_moves_with`] through the reference paths
+    /// (the generator before the 2026-11-13 speed-ups): the differential
+    /// test's oracle. Same moves, same order — or a bug in the fast paths.
+    pub fn g1867_legal_moves_reference(&mut self, policy: CrossPlayerPolicy) -> Vec<Move> {
+        reference::with(true, || self.g1867_legal_moves_with(policy))
+    }
+
+    /// A move list as one comparable string per move (step, action, price
+    /// range, certificate ids — everything a move carries but the internal
+    /// `validated` flag), in list order.
+    pub fn g1867_moves_strings(moves: &[Move]) -> Vec<String> {
+        moves.iter().map(|m| format!("{:?}|{:?}|{:?}|{:?}", m.step, m.action, m.price, m.shares)).collect()
     }
 
     /// Every candidate before the apply filter, with its error (debug).
@@ -198,7 +439,9 @@ impl BaseGame {
 
     fn g1867_candidates(&mut self) -> Vec<Move> {
         let t0 = std::time::Instant::now();
+        let t = stats::start();
         let offers = self.step_offers();
+        stats::stop(t, || "offers".into());
         stats::add(&stats::OFFERS_NS, t0.elapsed().as_nanos() as u64);
         let t0 = std::time::Instant::now();
         let out = self.g1867_candidates_for(offers);
@@ -210,7 +453,9 @@ impl BaseGame {
         let mut out = Vec::new();
         for o in offers {
             for t in &o.types {
+                let t0 = stats::start();
                 out.extend(self.g1867_gen(o.kind, &o.entity, t));
+                stats::stop(t0, || format!("gen:{:?}/{t}", o.kind));
             }
         }
         out
@@ -261,14 +506,220 @@ impl BaseGame {
     }
 
     /// Keep the candidates that apply (on a clone); dedup.
-    fn g1867_validate(&self, cands: Vec<Move>) -> Vec<Move> {
+    fn g1867_validate(&mut self, cands: Vec<Move>) -> Vec<Move> {
         let t0 = std::time::Instant::now();
-        let out = self.g1867_validate_inner(cands);
+        let out = if reference::on() { self.g1867_validate_reference(cands) } else { self.g1867_validate_inner(cands) };
         stats::add(&stats::VALIDATE_NS, t0.elapsed().as_nanos() as u64);
         out
     }
 
-    fn g1867_validate_inner(&self, cands: Vec<Move>) -> Vec<Move> {
+    /// The candidates in order, each kept unless an equal action was
+    /// already kept (the first kept wins); a `validated` one as is, any
+    /// other only if it applies on a clone (and, in the Merge step, the
+    /// merge set can still finish) — or, for a member of a validation class
+    /// (`g67_validation_class`) whose class is already known to pass, if its
+    /// own checks pass.
+    fn g1867_validate_inner(&mut self, cands: Vec<Move>) -> Vec<Move> {
+        stats::add(&stats::CANDS, cands.len() as u64);
+        let mut out: Vec<Move> = Vec::new();
+        // Keys of the KEPT moves (a rejected candidate's duplicate is
+        // checked again, as the reference does).
+        let mut kept: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Per class: do its shared conditions hold (None: not known yet)?
+        let mut class_ok: [Option<bool>; ValidationClass::COUNT] = [None; ValidationClass::COUNT];
+        let mut ctx = ClassCtx::default();
+        for m in cands {
+            let key = format!("{:?}", m.action);
+            if kept.contains(&key) {
+                continue;
+            }
+            if m.validated {
+                kept.insert(key);
+                out.push(m);
+                continue;
+            }
+            let class = self.g67_validation_class(&m, &mut ctx);
+            let ok = match class {
+                // An own check fails: the handler refuses it whatever the
+                // shared part (each own check is one of its refusals).
+                Some((c, Some(false))) => {
+                    stats::count(|| format!("validate:class_own_fails:{c:?}"));
+                    false
+                }
+                Some((c, Some(true))) if class_ok[c as usize].is_some() => {
+                    stats::count(|| format!("validate:class:{c:?}"));
+                    class_ok[c as usize] == Some(true)
+                }
+                _ => {
+                    let t = stats::start();
+                    let mut g = self.g1867_validation_clone();
+                    stats::stop(t, || "validate:clone".into());
+                    let t = stats::start();
+                    let ok = g.process_action_internal(&m.action).is_ok();
+                    stats::stop(t, || format!("validate:process:{:?}/{}", m.step, m.action.action_type()));
+                    let t = stats::start();
+                    let ok = ok && (m.step != StepKind::Merge || g.g67_merge_can_finish(0));
+                    if m.step == StepKind::Merge {
+                        stats::stop(t, || "validate:merge_can_finish".into());
+                    }
+                    // valid = shared ∧ own: a member whose own checks pass
+                    // tells whether the shared conditions hold.
+                    if let Some((c, Some(true))) = class {
+                        class_ok[c as usize] = Some(ok);
+                    }
+                    ok
+                }
+            };
+            if ok {
+                kept.insert(key);
+                out.push(m);
+            } else {
+                stats::add(&stats::REJECTED, 1);
+            }
+        }
+        out
+    }
+
+    /// The validation class of candidate `m` and its OWN checks: for the
+    /// members of a class, as the generator builds them, the process
+    /// succeeds iff the class's SHARED conditions hold (the same for every
+    /// member: they read only the state and the action's type and entity)
+    /// and the member's own checks pass. `(class, None)`: own checks not
+    /// decidable here (the member is applied on a clone). The shared part
+    /// of every class: the dispatch gate (it reads the action's type and
+    /// `action_step_entity`, one entity per class); `process_action_internal`'s
+    /// hooks (trainless choices take only `pass`/`choose`, company
+    /// exchanges a company's `buy_shares`, company abilities a company
+    /// entity: none of these members); and nothing after a handler returns
+    /// an error (`skip_steps`, `stock_after_process`, `stock_next_entity`,
+    /// `check_game_end`, the round transitions return no `Result`).
+    ///
+    /// * `Par` (`g67_gen_pars`; own checks: none): `process_stock_action`
+    ///   rejects every par alike while a home token is pending or a minor
+    ///   auction is live; `stock_process_par` checks the turn,
+    ///   `bought_this_turn` and the cert limit (player-level), and per member:
+    ///   a known major (`corp_type` Major — the generator's filter),
+    ///   startable in this phase, not parred, not closed (its filters, the
+    ///   same predicates), a par cell of the price (the generator takes the
+    ///   price from that same cell list) and `price × president units ≤
+    ///   cash` (its filter; `player_cash` = the player's cash).
+    /// * `MinorOpeningBid` (no auction live; `g67_gen_minor_bids`, all at
+    ///   $100; own checks: none): `process_corporation_bid` checks the
+    ///   pending home tokens, the turn, `bought/parred_this_turn` and the
+    ///   `minors_cannot_start` event (player- or game-level), and per
+    ///   member: a minor, not started, not closed, startable (the
+    ///   generator's filters) and `validate_corp_bid` at $100 (the minimum,
+    ///   on the grid, ≤ `stock_bid_max` — the generator's `hi ≥
+    ///   MINOR_MIN_BID`); `stock_bid_resolve` has no error path.
+    /// * `StockSell` (`g67_gen_player_sales`): shared — `process_stock_action`'s
+    ///   pending-home-token and live-auction refusals, `validate_stock_turn`;
+    ///   own — `validate_sell_bundle` (a `&self` check the handler runs on
+    ///   the unchanged state: ownership, sale timing, the pool cap, dump
+    ///   legality), the corporation known and parred. The handler has no
+    ///   refusal after it starts moving certificates.
+    /// * `TokenPlace` (the Token step's `place_token`s): shared —
+    ///   `process_operating_action`'s crowded-corps refusal, the OO
+    ///   re-placement branch (pending tokens: no Token-step offer then),
+    ///   `or_process_place_token`'s step, operator, one-token-a-turn, an
+    ///   unplaced token and its base price; own — [`Self::g67_token_place_own_checks`].
+    /// * `StockHomeToken` (a stock round's HomeToken `place_token`s): shared —
+    ///   `process_stock_home_token`'s pending token and its corporation;
+    ///   own — the hex, a slot (`token_slot_for`), the city, the slot empty.
+    fn g67_validation_class(&mut self, m: &Move, ctx: &mut ClassCtx) -> Option<(ValidationClass, Option<bool>)> {
+        match (&m.action, &self.round) {
+            (Action::Par { .. }, Round::Stock(_)) if m.step == StepKind::BuySellParShares => {
+                Some((ValidationClass::Par, Some(true)))
+            }
+            (Action::CorporationBid { price, .. }, Round::Stock(s))
+                if m.step == StepKind::BuySellParShares && s.bid_auction.is_none() && *price == MINOR_MIN_BID =>
+            {
+                Some((ValidationClass::MinorOpeningBid, Some(true)))
+            }
+            (Action::SellShares { entity_id, corporation_sym, percent, share_indices, .. }, Round::Stock(_))
+                if m.step == StepKind::BuySellParShares =>
+            {
+                let own = entity_id.parse::<u32>().is_ok_and(|pid| {
+                    self.validate_sell_bundle(pid, corporation_sym, *percent, share_indices, None).is_ok()
+                }) && self.corp_idx.get(corporation_sym.as_str()).is_some_and(|&ci| self.corporations[ci].share_price.is_some());
+                Some((ValidationClass::StockSell, Some(own)))
+            }
+            (Action::PlaceToken { entity_id, hex_id, city_index }, Round::Operating(_)) if m.step == StepKind::Token => {
+                let own = self.g67_token_place_own_checks(entity_id, hex_id, *city_index as usize, ctx);
+                Some((ValidationClass::TokenPlace, own))
+            }
+            (Action::PlaceToken { entity_id, hex_id, city_index }, Round::Stock(_)) if m.step == StepKind::HomeToken => {
+                let city = *city_index as usize;
+                let own = self.hex_idx.get(hex_id.as_str()).is_some_and(|&hi| {
+                    self.token_slot_for(hex_id, city, entity_id).is_some_and(|slot| {
+                        self.hexes[hi].tile.cities.get(city).is_some_and(|c| c.tokens.get(slot).is_some_and(|t| t.is_none()))
+                    })
+                });
+                Some((ValidationClass::StockHomeToken, Some(own)))
+            }
+            _ => None,
+        }
+    }
+
+    /// A Token-step `place_token`'s own checks — `or_process_place_token`'s
+    /// per-city ones, in its order, on the state before the action (the
+    /// handler mutates nothing before them): the city is among the
+    /// corporation's tokenable cities (`tokenable_cities_for` on the
+    /// replay graph computed afresh — the graph the handler reads), it has
+    /// a slot for the corporation (`token_slot_for`), the corporation can
+    /// pay the distance price (`token_price_by_distance`: the next token's
+    /// price × the distance from its nearest placed token, 1 if none), the
+    /// city exists and that slot is empty. `None` where the handler would
+    /// take `process_operating_action`'s home-token branch instead (an
+    /// unplaced first token on the corporation's fixed home hex; 1867
+    /// corporations have none).
+    fn g67_token_place_own_checks(&mut self, corp: &str, hex_id: &str, city: usize, ctx: &mut ClassCtx) -> Option<bool> {
+        let &ci = self.corp_idx.get(corp)?;
+        let c = &self.corporations[ci];
+        let needs_home = !c.tokens.is_empty() && !c.tokens[0].used;
+        let fixed_home = self.title_def().corporations().iter().find(|cd| cd.sym == corp).map(|cd| cd.home_hex);
+        if needs_home && fixed_home.map_or(true, |h| h == hex_id) {
+            return None;
+        }
+        let Some(&hi) = self.hex_idx.get(hex_id) else { return Some(false) };
+        if ctx.tokenable.as_ref().map_or(true, |(c, _)| c != corp) {
+            // A pristine clone's cache is empty: its graph is computed
+            // afresh (or taken from the memo of this very map).
+            let mut g = self.g1867_validation_clone();
+            let v = g.tokenable_cities_for(corp);
+            ctx.tokenable = Some((corp.to_string(), v));
+        }
+        if !ctx.tokenable.as_ref().is_some_and(|(_, v)| v.iter().any(|(h, x)| h == hex_id && *x == city)) {
+            return Some(false);
+        }
+        let Some(slot) = self.token_slot_for(hex_id, city, corp) else { return Some(false) };
+        let Some(ti) = self.corporations[ci].next_token_index() else { return Some(false) };
+        let base = self.corporations[ci].tokens[ti].price;
+        let cost = if self.title_def().token_price_by_distance() {
+            base * self.min_token_hex_distance(ci, hex_id).unwrap_or(1)
+        } else {
+            base
+        };
+        if self.corporations[ci].cash < cost {
+            return Some(false);
+        }
+        Some(self.hexes[hi].tile.cities.get(city).is_some_and(|x| x.tokens.get(slot).is_some_and(|t| t.is_none())))
+    }
+
+    /// `clone_for_search` without the JSON action log, for applying a
+    /// candidate to see whether it is legal: processing never reads the
+    /// log (only `process_action` and the RL apply path append to it), and
+    /// copying it was most of a late-game clone.
+    fn g1867_validation_clone(&mut self) -> BaseGame {
+        let log = std::mem::take(&mut self.action_log);
+        let g = self.clone_for_search();
+        self.action_log = log;
+        g
+    }
+
+    /// The validation before 2026-11-13 (the differential test's
+    /// reference): a full `clone_for_search` per candidate, dedup by a scan
+    /// of the kept moves.
+    fn g1867_validate_reference(&self, cands: Vec<Move>) -> Vec<Move> {
         stats::add(&stats::CANDS, cands.len() as u64);
         let mut out: Vec<Move> = Vec::new();
         for m in cands {
@@ -936,6 +1387,19 @@ impl BaseGame {
     /// Tracker#upgradeable_tiles: potential tiles × legal rotations, the
     /// max-exits filter, then check_track_restrictions! on the laid tile).
     fn g67_gen_lays(&mut self, c: &str) -> Vec<Move> {
+        if reference::on() {
+            self.g67_gen_lays_reference(c)
+        } else {
+            self.g67_gen_lays_fast(c)
+        }
+    }
+
+    /// The Track generator before 2026-11-13 (the differential test's
+    /// reference; [`BaseGame::g67_gen_lays_fast`] must give the same moves):
+    /// Track step lays (Ruby Track#available_hex → tracker_available_hex,
+    /// Tracker#upgradeable_tiles: potential tiles × legal rotations, the
+    /// max-exits filter, then check_track_restrictions! on the laid tile).
+    fn g67_gen_lays_reference(&mut self, c: &str) -> Vec<Move> {
         use crate::title::UpgradeAllowance;
         let Round::Operating(s) = &self.round else { return Vec::new() };
         let laid = s.num_laid_track as usize;
@@ -1034,6 +1498,184 @@ impl BaseGame {
             stats::add(&stats::LAY_CHECK_NS, tc.elapsed().as_nanos() as u64);
         }
         out
+    }
+
+
+    /// [`BaseGame::g67_gen_lays_reference`] computed once per state where it
+    /// recomputed per hex or per candidate: the catalog tiles' facts per
+    /// rotation (`g1867_catalog_facts`), each hex's facts once, the tiles in
+    /// supply and colour once, the map's tile ids once (tile instances), and
+    /// `check_track_restrictions!` on one precomputed walk map: the
+    /// candidates whose verdict needs the walk are first put to a cheap
+    /// over-approximation of it (`WalkMap::may_reach`: unreachable even
+    /// without the walk's limits = not connected), then to the exact walk,
+    /// stopping at the first connected path that decides the lay. Same
+    /// moves, same order.
+    fn g67_gen_lays_fast(&mut self, c: &str) -> Vec<Move> {
+        use super::tile_rules::{HexFacts, TrackRestriction};
+        use crate::title::UpgradeAllowance;
+        let Round::Operating(s) = &self.round else { return Vec::new() };
+        let laid = s.num_laid_track as usize;
+        let upgraded = s.upgraded_this_turn;
+        let laid_hexes = s.laid_hexes.clone();
+        let Some(slot) = self.title_def().tile_lays().get(laid).copied() else { return Vec::new() };
+        let upgrade_ok = match slot.upgrade {
+            UpgradeAllowance::Yes => true,
+            UpgradeAllowance::No => false,
+            UpgradeAllowance::NotIfUpgraded => !upgraded,
+        };
+        let Some(&ci) = self.corp_idx.get(c) else { return Vec::new() };
+        let power = self.corp_buying_power_full(ci);
+        let blocked = self.g1867_blocked_hexes();
+        let tp = stats::start();
+        let graph = self.g1867_graph(c);
+        stats::stop(tp, || "lay:graph".into());
+        let cat = self.g1867_catalog_facts();
+        // Tracker#potential_tiles' supply and phase filters (per state).
+        let avail: Vec<&str> = cat
+            .sorted
+            .iter()
+            .filter(|n| self.tile_counts_remaining.get(*n).copied().unwrap_or(0) > 0)
+            .filter(|n| self.phase.tiles.iter().any(|col| col == cat.tiles[*n].color_name))
+            .map(|n| n.as_str())
+            .collect();
+        let on_map: std::collections::HashSet<&str> = self.hexes.iter().map(|h| h.tile.id.as_str()).collect();
+        let mut walk: Option<super::fastwalk::WalkMap> = None;
+        let mut out = Vec::new();
+        for (&hi, edges) in &graph.connected_hexes {
+            let hex_id = self.hexes[hi].id.clone();
+            if blocked.contains(hex_id.as_str()) {
+                continue;
+            }
+            let white = self.hexes[hi].tile.color == crate::tiles::TileColor::White;
+            if (white && !slot.lay) || (!white && !upgrade_ok) {
+                continue;
+            }
+            if slot.cannot_reuse_same_hex && laid_hexes.contains(&hex_id) {
+                continue;
+            }
+            let tp = stats::start();
+            let nb = self.passable_exits_for(&hex_id);
+            let hf = HexFacts::of(&self.hexes[hi].tile);
+            let mut with_rot: Vec<(&str, Vec<u8>)> = Vec::new();
+            for &t in &avail {
+                let tf = &cat.tiles[t];
+                if !self.g1867_upgrades_to_fast(hi, &hf, &tf.def, &tf.rot[0]) {
+                    continue;
+                }
+                let rots: Vec<u8> = (0..6u8)
+                    .filter(|&r| self.g1867_legal_rotation_fast(hi, &hf, &tf.rot[r as usize], edges, &nb))
+                    .collect();
+                if !rots.is_empty() {
+                    with_rot.push((t, rots));
+                }
+            }
+            let keep = self.g1867_max_exits(hi, with_rot.iter().map(|(t, _)| t.to_string()).collect());
+            stats::stop(tp, || "lay:search".into());
+            let tp = stats::start();
+            let terrain: i32 = self.hexes[hi].tile.upgrades.iter().map(|u| u.cost).sum();
+            let untiled = self.hexes[hi].tile.paths.is_empty();
+            for (t, rots) in with_rot {
+                if !keep.iter().any(|k| k == t) {
+                    continue;
+                }
+                let tf = &cat.tiles[t];
+                let inst = (0..10_000u32)
+                    .map(|n| format!("{t}-{n}"))
+                    .find(|id| !on_map.contains(id.as_str()))
+                    .unwrap_or_else(|| format!("{t}-0"));
+                for r in rots {
+                    let (border, _) = self.tile_border_cost(&hex_id, t, r);
+                    if terrain + slot.cost + border > power {
+                        continue;
+                    }
+                    let mut m = Move::plain(
+                        StepKind::Track,
+                        Action::LayTile { entity_id: c.to_string(), hex_id: hex_id.clone(), tile_id: inst.clone(), rotation: r },
+                    );
+                    m.validated = true;
+                    if untiled {
+                        out.push(m);
+                        continue;
+                    }
+                    let rf = &tf.rot[r as usize];
+                    if !self.g67_lay_changes_reached_city_fast(hi, &hf, rf, &graph.connected_nodes) {
+                        let tw = stats::start();
+                        let ok = match super::tile_rules::g1867_track_restriction_targets_fast(&hf, rf) {
+                            TrackRestriction::Decided(v) => {
+                                stats::count(|| format!("lay:restr:decided_{v}"));
+                                v
+                            }
+                            TrackRestriction::IfReached(mask) => {
+                                let laid = self.g67_tile_as_laid_from(hi, &rf.tile);
+                                let walk = walk.get_or_insert_with(|| {
+                                    let t = stats::start();
+                                    let w = super::fastwalk::WalkMap::new(self, c, self.g1867_neighbor_table());
+                                    stats::stop(t, || "lay:walkmap".into());
+                                    w
+                                });
+                                let over = super::fastwalk::WalkMap::hex_facts(&laid, hi, walk.corp());
+                                let target = |h: usize, p: usize| h == hi && mask.get(p).copied().unwrap_or(false);
+                                let t = stats::start();
+                                let may = walk.may_reach(Some((hi, &over)), &target);
+                                stats::stop(t, || format!("lay:restr:bfs_{may}"));
+                                may && {
+                                    let t = stats::start();
+                                    let v = walk.reaches(Some((hi, &over)), &target);
+                                    stats::stop(t, || format!("lay:restr:walk_{v}"));
+                                    v
+                                }
+                            }
+                        };
+                        stats::stop(tw, || "lay:restriction_walk".into());
+                        if !ok {
+                            continue;
+                        }
+                    }
+                    out.push(m);
+                }
+            }
+            stats::stop(tp, || "lay:check".into());
+        }
+        out
+    }
+
+    /// [`BaseGame::g67_tile_as_laid`] from the tile `tile_from_def` gives.
+    fn g67_tile_as_laid_from(&self, hi: usize, fresh: &crate::graph::Tile) -> crate::graph::Tile {
+        let old = &self.hexes[hi].tile;
+        let mut t = fresh.clone();
+        let map = super::tile_rules::g1867_city_map(old, &t);
+        for (oi, ni) in map.iter().enumerate() {
+            let Some(ni) = ni else { continue };
+            for tok in old.cities[oi].tokens.iter().flatten() {
+                let city = &mut t.cities[*ni];
+                match city.tokens.iter().position(|x| x.is_none()) {
+                    Some(i) => city.tokens[i] = Some(tok.clone()),
+                    None => city.tokens.push(Some(tok.clone())),
+                }
+            }
+        }
+        t
+    }
+
+    /// [`BaseGame::g67_lay_changes_reached_city`] on precomputed facts.
+    fn g67_lay_changes_reached_city_fast(
+        &self,
+        hi: usize,
+        hf: &super::tile_rules::HexFacts,
+        rf: &super::tile_rules::RotFacts,
+        reached: &std::collections::HashSet<super::graph::Node>,
+    ) -> bool {
+        let hex = &self.hexes[hi];
+        let map = super::tile_rules::g1867_city_map(&hex.tile, &rf.tile);
+        if !super::tile_rules::cities_towns_kept(&hf.tv, &rf.tv) {
+            return false;
+        }
+        map.iter().enumerate().any(|(oi, ni)| {
+            let Some(ni) = ni else { return false };
+            let node = super::graph::Node { hex: hi, kind: super::graph::NodeKind::City, index: oi };
+            reached.contains(&node) && hex.tile.cities[oi].revenue != rf.tile.cities[*ni].revenue
+        })
     }
 
     /// The tile `name` at `rotation` as Hex#lay leaves it on hex `hi`: the

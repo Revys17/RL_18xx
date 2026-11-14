@@ -90,13 +90,17 @@ impl GraphCache {
         reservations: &[(String, usize, String)], // (hex_id, city_index, reserving_corp)
     ) -> &CorpGraph {
         if !self.cache.contains_key(corp_sym) {
-            let graph = compute_corp_graph(
+            // While the 1867 generator runs, it and its validation clones
+            // share one memo of these (pure) computations; anywhere else
+            // `get_or` just computes.
+            let graph = crate::g1867::legal::graph_memo::get_or(
                 corp_sym,
                 hexes,
                 hex_idx,
                 hex_adjacency,
                 corp_token_hexes,
                 reservations,
+                || compute_corp_graph(corp_sym, hexes, hex_idx, hex_adjacency, corp_token_hexes, reservations),
             );
             self.cache.insert(corp_sym.to_string(), graph);
         }

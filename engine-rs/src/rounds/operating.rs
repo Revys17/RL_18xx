@@ -985,7 +985,7 @@ impl BaseGame {
 
     /// Straight-line hex distance from the corp's nearest placed token to
     /// `target_hex` (Ruby Hex#distance via [`hex_crow_distance`]).
-    fn min_token_hex_distance(&self, corp_idx: usize, target_hex: &str) -> Option<i32> {
+    pub(crate) fn min_token_hex_distance(&self, corp_idx: usize, target_hex: &str) -> Option<i32> {
         let flat = self.title_def().hex_layout() == crate::title::HexLayout::Flat;
         self.corporations[corp_idx]
             .tokens

@@ -479,6 +479,282 @@ impl BaseGame {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The same predicates on facts computed once (the Track generator's fast
+// path): a catalog tile's facts per rotation once per game, a hex's once per
+// generator call. Each `*_fast` function is its namesake above with the
+// values it would compute passed in.
+// ---------------------------------------------------------------------------
+
+/// A catalog tile at one rotation: `TV::from_def(def, r)` and what the
+/// predicates derive from it, `tile_from_def(def, r)` and its `TV`.
+pub(crate) struct RotFacts {
+    pub tv: TV,
+    pub exits: Vec<u8>,
+    ct: Vec<(Ct, Vec<u8>)>,
+    /// `tv.ends(i)` of every path.
+    ends: Vec<Vec<End>>,
+    pub tile: Tile,
+    /// `TV::from_tile(&tile)` (tokens, which a lay moves onto the tile, are
+    /// not part of a `TV`) and its paths' ends.
+    pub tv_tile: TV,
+    ends_tile: Vec<Vec<End>>,
+}
+
+/// A catalog tile's facts.
+pub(crate) struct TileFacts {
+    pub def: TileDef,
+    pub color_name: &'static str,
+    pub rot: Vec<RotFacts>,
+}
+
+/// The tile catalog's facts: names sorted (`g1867_potential_tiles` order).
+pub(crate) struct CatalogFacts {
+    pub sorted: Vec<String>,
+    pub tiles: std::collections::HashMap<String, TileFacts>,
+}
+
+type CatalogKey = std::sync::Arc<std::collections::HashMap<String, TileDef>>;
+
+thread_local! {
+    /// The facts of one catalog (keyed by the game's `Arc`, held so the
+    /// allocation — and with it the key — stays unique while cached).
+    static CATALOG: std::cell::RefCell<Option<(CatalogKey, std::rc::Rc<CatalogFacts>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A hex's tile as the predicates read it (`TV::from_tile` and its
+/// `ct_edges`), once per generator call.
+pub(crate) struct HexFacts {
+    pub tv: TV,
+    ct: Vec<(Ct, Vec<u8>)>,
+    /// `tv.ends(i)` of every path, and of `tv.rotated(r)` for r in 0..6.
+    ends: Vec<Vec<End>>,
+    rot_ends: Vec<Vec<Vec<End>>>,
+}
+
+impl HexFacts {
+    pub fn of(t: &Tile) -> HexFacts {
+        let tv = TV::from_tile(t);
+        let ct = tv.ct_edges();
+        let ends = all_ends(&tv);
+        let rot_ends = (0..6u8).map(|r| all_ends(&tv.rotated(r))).collect();
+        HexFacts { tv, ct, ends, rot_ends }
+    }
+}
+
+/// `Path#ends` of each path of `tv`.
+fn all_ends(tv: &TV) -> Vec<Vec<End>> {
+    (0..tv.paths.len()).map(|i| tv.ends(i)).collect()
+}
+
+/// [`path_le`] on the two paths' precomputed ends.
+#[inline]
+fn le_ends(a: &[End], b: &[End]) -> bool {
+    a.iter().all(|t| b.iter().any(|o| t == o))
+}
+
+/// [`paths_are_subset_of`]`(from, to)` with `from`'s rotations' ends and
+/// `to`'s ends precomputed.
+fn paths_are_subset_of_fast(from: &HexFacts, to: &TV, to_ends: &[Vec<End>]) -> bool {
+    if from.tv.has_junction() && to.paths.iter().any(path_junction) {
+        let other: Vec<u8> = to.exits();
+        let exits = from.tv.exits();
+        return (0..6u8).any(|ticks| {
+            let rot: Vec<u8> = other.iter().map(|e| (e + ticks) % 6).collect();
+            exits.iter().all(|e| rot.contains(e))
+        });
+    }
+    (0..6usize).any(|ticks| {
+        let fe = &from.rot_ends[ticks];
+        fe.iter().all(|a| to_ends.iter().any(|b| le_ends(a, b)))
+    })
+}
+
+/// The walk-free part of [`g1867_track_restrictions_ok_for`] for laying
+/// `rot`'s tile on the hex of `hex` (`old` = `TV::from_tile` of the hex's
+/// tile, `new` = of the laid one, path ends precomputed): that function is
+/// `cities_towns_kept(old, new) && (old.paths.is_empty() ||
+/// connected_paths.any(|np| mask[np]))` with `mask[np]` = "path `np` sets
+/// `used_new_track` or `changed_city`" (no old path covers it, or the first
+/// old path covering it has other revenues) — each a property of the two
+/// tiles alone.
+pub(crate) fn g1867_track_restriction_targets_fast(hex: &HexFacts, rot: &RotFacts) -> TrackRestriction {
+    let (old, new) = (&hex.tv, &rot.tv_tile);
+    if !cities_towns_kept(old, new) {
+        return TrackRestriction::Decided(false);
+    }
+    if old.paths.is_empty() {
+        return TrackRestriction::Decided(true);
+    }
+    let mask: Vec<bool> = (0..new.paths.len())
+        .map(|np| match (0..old.paths.len()).find(|&o| le_ends(&rot.ends_tile[np], &hex.ends[o])) {
+            None => true,
+            Some(o) => old.path_revenues(o) != new.path_revenues(np),
+        })
+        .collect();
+    if mask.iter().any(|&m| m) {
+        TrackRestriction::IfReached(mask)
+    } else {
+        TrackRestriction::Decided(false)
+    }
+}
+
+impl BaseGame {
+    /// The facts of this game's tile catalog (built once per catalog).
+    pub(crate) fn g1867_catalog_facts(&self) -> std::rc::Rc<CatalogFacts> {
+        if let Some(f) = CATALOG.with(|c| {
+            c.borrow()
+                .as_ref()
+                .filter(|(k, _)| std::sync::Arc::ptr_eq(k, &self.tile_catalog))
+                .map(|(_, f)| f.clone())
+        }) {
+            return f;
+        }
+        let mut sorted: Vec<String> = self.tile_catalog.keys().cloned().collect();
+        sorted.sort();
+        let tiles = self
+            .tile_catalog
+            .iter()
+            .map(|(name, d)| {
+                let rot = (0..6u8)
+                    .map(|r| {
+                        let tv = TV::from_def(d, r);
+                        let exits = tv.exits();
+                        let ct = tv.ct_edges();
+                        let ends = all_ends(&tv);
+                        let tile = BaseGame::tile_from_def(d, r);
+                        let tv_tile = TV::from_tile(&tile);
+                        let ends_tile = all_ends(&tv_tile);
+                        RotFacts { tv, exits, ct, ends, tile, tv_tile, ends_tile }
+                    })
+                    .collect();
+                (name.clone(), TileFacts { def: d.clone(), color_name: color_name(d.color), rot })
+            })
+            .collect();
+        let f = std::rc::Rc::new(CatalogFacts { sorted, tiles });
+        CATALOG.with(|c| *c.borrow_mut() = Some((self.tile_catalog.clone(), f.clone())));
+        f
+    }
+
+    /// [`BaseGame::g1867_upgrades_to`] with `from` = the hex's facts and
+    /// `to_tv` = `TV::from_def(to, 0)`.
+    pub(crate) fn g1867_upgrades_to_fast(&self, hi: usize, from: &HexFacts, to: &TileDef, to0: &RotFacts) -> bool {
+        let to_tv = &to0.tv;
+        let hex = from;
+        let from_ct = &from.ct;
+        let from = &from.tv;
+        let step_ok = match (color_index(from.color), color_index(to.color)) {
+            (Some(a), Some(b)) => b == a + 1,
+            _ => false,
+        };
+        if !step_ok {
+            return false;
+        }
+        if !paths_are_subset_of_fast(hex, to_tv, &to0.ends) {
+            return false;
+        }
+        let label_ok = match self.g1867_future_label(hi) {
+            Some((label, color)) if color_name(to.color) == color => to.label.as_deref() == Some(label),
+            _ => from.label == to.label,
+        };
+        if !label_ok {
+            return false;
+        }
+        if from.towns.len() != to_tv.towns.len() {
+            return false;
+        }
+        if from.label.is_none() && from.cities.len() != to_tv.cities.len() {
+            return false;
+        }
+        if from.cities.len() > 1 && to_tv.cities.len() > 1 && !cte_subset_ct(from_ct, &to0.ct) {
+            return false;
+        }
+        if from.label.is_some() && !from.cities.is_empty() && to_tv.cities.is_empty() {
+            return false;
+        }
+        if from.color == TileColor::White && from.label.as_deref() == Some("OO") && from.cities.len() != to_tv.cities.len()
+        {
+            return false;
+        }
+        true
+    }
+
+    /// [`BaseGame::g1867_legal_rotation`] with the hex's facts and the
+    /// catalog tile's facts at `rotation`.
+    pub(crate) fn g1867_legal_rotation_fast(
+        &self,
+        hi: usize,
+        from: &HexFacts,
+        rf: &RotFacts,
+        connected: &[u8],
+        nb_exits: &[u8],
+    ) -> bool {
+        let hex = &self.hexes[hi];
+        let to = &rf.tv;
+        let new_exits = &rf.exits;
+        if hex.tile.id.starts_with("preprinted_") || hex.tile.name.is_empty() || hex.tile.name == hex.id {
+            for (h, e) in STUBS {
+                if *h == hex.id && !new_exits.contains(e) {
+                    return false;
+                }
+            }
+        }
+        let old_ct = &from.ct;
+        let new_ct = &rf.ct;
+        let from_ends = &from.ends;
+        let from = &from.tv;
+        let added_cities = new_ct.len().saturating_sub(old_ct.len());
+        let multi_city_upgrade = to.cities.len() > 1 && from.cities.len() > 1;
+        if !new_exits.iter().all(|e| nb_exits.contains(e)) {
+            return false;
+        }
+        if !new_exits.iter().any(|e| connected.contains(e)) {
+            return false;
+        }
+        if !from_ends.iter().all(|a| rf.ends.iter().any(|b| le_ends(a, b))) {
+            return false;
+        }
+        let fresh = new_ct
+            .iter()
+            .filter(|(_, n)| old_ct.iter().all(|(_, o)| !n.iter().any(|e| o.contains(e))))
+            .count();
+        if added_cities < fresh {
+            return false;
+        }
+        if multi_city_upgrade {
+            let ok = old_ct.iter().all(|(_, o)| {
+                let uniq: HashSet<u8> = o.iter().copied().collect();
+                let no_dups = uniq.len() == o.len();
+                new_ct.iter().filter(|(_, n)| no_dups && o.iter().all(|e| n.contains(e))).count() == 1
+            });
+            if !ok {
+                return false;
+            }
+        }
+        let slots: HashSet<u8> = from.cities.iter().map(|c| c.1).collect();
+        if slots.len() > 1 {
+            let map = g1867_city_map(&hex.tile, &rf.tile);
+            for (oi, m) in map.iter().enumerate() {
+                if let Some(ni) = m {
+                    if to.cities[*ni].1 < from.cities[oi].1 {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+}
+
+/// [`cte_subset`] on precomputed `ct_edges`.
+fn cte_subset_ct(cte: &[(Ct, Vec<u8>)], other: &[(Ct, Vec<u8>)]) -> bool {
+    (0..6u8).any(|rot| {
+        cte.iter()
+            .all(|(_, city)| other.iter().any(|(_, oc)| city.iter().all(|e| oc.contains(&((e + rot) % 6)))))
+    })
+}
+
 /// `check_track_restrictions!` (:semi_restrictive, no town removal) for
 /// `new` replacing `old`, evaluated AFTER the lay: `connected_paths` are the
 /// corporation's walked paths on the hex with `new` laid (Ruby clears the
@@ -507,6 +783,18 @@ pub(crate) fn g1867_track_restrictions_ok_for(old: &Tile, new: &Tile, connected_
         }
         used_new_track || changed_city
     }
+}
+
+/// [`g1867_track_restrictions_ok_for`] split around its one input that needs
+/// a graph walk (`connected_paths`, the corporation's walked paths on the
+/// hex after the lay).
+pub(crate) enum TrackRestriction {
+    /// The verdict, whatever the walk finds.
+    Decided(bool),
+    /// Legal iff the walk reaches a path `np` of the new tile with
+    /// `mask[np]` (track no old path covers, or a different revenue than the
+    /// first old path covering it).
+    IfReached(Vec<bool>),
 }
 
 /// Ruby `Hex#city_map_for(tile)`: old city index → new city index.

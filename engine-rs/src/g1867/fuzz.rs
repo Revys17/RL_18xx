@@ -92,6 +92,70 @@ pub fn walk(players: usize, seed: u64, max_moves: usize, policy: CrossPlayerPoli
     rep
 }
 
+/// One differential walk's outcome.
+#[derive(Debug, Default)]
+pub struct DiffReport {
+    pub states: usize,
+    /// States × policies compared.
+    pub compared: usize,
+    pub moves_compared: usize,
+    pub finished: bool,
+    /// The first difference (state, policy, the two lists' symmetric
+    /// difference), or a walk error.
+    pub error: Option<String>,
+}
+
+/// A random walk (as [`walk`], moves of `policy`) that, at EVERY state,
+/// compares the generator's move list with the reference generator's
+/// (`g1867_legal_moves_reference`: the code before the 2026-11-13
+/// speed-ups) under both cross-player policies — step, action, price range
+/// and certificates of every move, in order. Stops at the first difference.
+pub fn diff_walk(players: usize, seed: u64, max_moves: usize, policy: CrossPlayerPolicy) -> DiffReport {
+    let mut g = new_game(players);
+    let mut rng = StdRng::seed_from_u64(seed * 1_000_003 + players as u64);
+    let mut rep = DiffReport::default();
+    for n in 0..max_moves {
+        if g.finished {
+            break;
+        }
+        rep.states += 1;
+        let mut chosen = None;
+        for p in [CrossPlayerPolicy::RESTRICTED, CrossPlayerPolicy::RULES] {
+            let fast = g.g1867_legal_moves_with(p);
+            let slow = g.g1867_legal_moves_reference(p);
+            let (a, b) = (BaseGame::g1867_moves_strings(&fast), BaseGame::g1867_moves_strings(&slow));
+            rep.compared += 1;
+            rep.moves_compared += a.len();
+            if a != b {
+                let only_fast: Vec<&String> = a.iter().filter(|x| !b.contains(x)).collect();
+                let only_slow: Vec<&String> = b.iter().filter(|x| !a.contains(x)).collect();
+                rep.error = Some(format!(
+                    "move {n} ({p:?}): {} vs {} moves; only new: {only_fast:#?}; only reference: {only_slow:#?}; {}",
+                    a.len(),
+                    b.len(),
+                    g.g1867_debug_state()
+                ));
+                return rep;
+            }
+            if p == policy {
+                chosen = Some(fast);
+            }
+        }
+        let moves = chosen.unwrap_or_default();
+        if moves.is_empty() {
+            rep.error = Some(format!("move {n}: no legal moves ({})", g.g1867_debug_state()));
+            return rep;
+        }
+        let m = pick(&moves, &mut rng);
+        if let Err(e) = g.g1867_apply_move(&m) {
+            rep.error = Some(format!("move {n}: generated move rejected: {:?}: {e}", m.action));
+            return rep;
+        }
+    }
+    rep.finished = g.finished;
+    rep
+}
+
 impl BaseGame {
     /// One-line state summary for failure messages.
     pub fn g1867_debug_state(&self) -> String {
@@ -202,6 +266,56 @@ mod tests {
             stats::get(&stats::CANDS),
             stats::get(&stats::REJECTED)
         );
+    }
+
+    fn run_diff(players: &[usize], seeds: std::ops::RangeInclusive<u64>, max_moves: usize, policy: CrossPlayerPolicy) {
+        let mut failures = Vec::new();
+        let (mut states, mut moves, mut finished) = (0, 0, 0);
+        for &p in players {
+            for seed in seeds.clone() {
+                match std::panic::catch_unwind(|| diff_walk(p, seed, max_moves, policy)) {
+                    Ok(rep) => {
+                        states += rep.states;
+                        moves += rep.moves_compared;
+                        finished += rep.finished as usize;
+                        if let Some(e) = rep.error {
+                            failures.push(format!("{p}p seed {seed}: {e}"));
+                        }
+                    }
+                    Err(_) => failures.push(format!("{p}p seed {seed}: PANIC")),
+                }
+            }
+        }
+        eprintln!("diff walks {policy:?}: {states} states, {moves} moves compared x2 policies, {finished} finished");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// The generator's move lists equal the reference generator's at every
+    /// state of a walk (both policies compared at each state; the walk
+    /// follows the title's policy, then the rules'), 3-6 players.
+    #[test]
+    fn generator_matches_reference_on_walks() {
+        run_diff(&[3, 4, 5, 6], 11..=11, 4000, CrossPlayerPolicy::RESTRICTED);
+        run_diff(&[3, 4, 5, 6], 12..=12, 4000, CrossPlayerPolicy::RULES);
+    }
+
+    /// The long differential run: `G1867_DIFF_SEEDS` seeds (default 10) per
+    /// player count and policy. `cargo test --release g1867_diff_long --
+    /// --ignored`.
+    #[test]
+    #[ignore]
+    fn g1867_diff_long() {
+        let seeds: u64 = std::env::var("G1867_DIFF_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
+        let first: u64 = std::env::var("G1867_DIFF_FIRST").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
+        let players: Vec<usize> = std::env::var("G1867_DIFF_PLAYERS")
+            .ok()
+            .map(|s| s.split(',').filter_map(|x| x.parse().ok()).collect())
+            .unwrap_or_else(|| vec![3, 4, 5, 6]);
+        let policy = match std::env::var("G1867_DIFF_POLICY").as_deref() {
+            Ok("rules") => CrossPlayerPolicy::RULES,
+            _ => CrossPlayerPolicy::RESTRICTED,
+        };
+        run_diff(&players, first..=first + seeds - 1, 4000, policy);
     }
 
     #[test]
