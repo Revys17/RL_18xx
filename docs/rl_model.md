@@ -1147,7 +1147,7 @@ seed): 1830's bit-identical; 1867's differ exactly in `price_cell_mask`, `price_
 `price_log_count` (in one batch of 128: 1 of 92 price cells, 3 log counts, 80 of 2,208 mask entries). So the three
 1830-only `c_pre` cells were reused (`runs/C_PRE_REUSED.txt`). Four pre-fix full-size cells had finished (a s0,
 b s0-s2); they are kept (`probe_1867_prefix`) to show how much the wrong price targets moved policy CE, top-1 and win
-CE (below).
+CE ("Results" below).
 
 #### Decision rule (fixed 2026-11-13, before any 1867 cell ran)
 
@@ -1175,6 +1175,60 @@ n: gain = mean CE(a) - mean CE(X); noise = the larger of the two spreads. X **pa
 
 The harness writes the per-cell runs under `<out>/runs/`, `report.md` / `report.json` (the table per arm x size with
 mean and half the seed range, per-family top-1, the 1830 interference rows, each pass / fail and the verdict).
+
+#### Results (2026-11-13, `probe_1867_fixed`, code 882dd81 = C3 + A3's price-grid fix)
+
+All 27 cells finished (24 run in 4.8 hours wall at 7 at a time, + the three reused `c_pre` cells, 47 minutes each).
+1867 validation, 50 games / 30,938 positions (chance top-1 of a uniform policy over the legal moves 0.396; A3's
+own small model reached top-1 0.729 after 4,000 steps); mean +- half the seed range:
+
+| arm | 1867 games | seeds | policy CE | top-1 | top-5 | win CE (equal odds 1.368) | winner acc | best / last step |
+|---|---|---|---|---|---|---|---|---|
+| a: 1867 only | 100 | 3 | 0.958 +- 0.043 | 0.710 +- 0.018 | 0.923 | 1.260 +- 0.162 | 0.375 | 728 / ~2,000 (stopped) |
+| b: joint 50/50 | 100 | 3 | 0.976 +- 0.046 | 0.703 +- 0.019 | 0.922 | 1.231 +- 0.162 | 0.461 | 1,165 / ~3,800 (stopped) |
+| c: 1830 then 1867 | 100 | 3 | 0.968 +- 0.041 | 0.705 +- 0.015 | 0.923 | 1.368 +- 0 | 0.284 | 583 / ~1,900 (stopped) |
+| a | 300 | 2 | 0.890 +- 0.007 | 0.730 | 0.932 | 1.094 +- 0.036 | 0.522 | 2,343 / 4,686 (stopped) |
+| b | 300 | 2 | 0.878 +- 0.011 | 0.733 | 0.933 | 1.037 +- 0.071 | 0.565 | 5,000 (cap) |
+| c | 300 | 2 | 0.876 +- 0.011 | 0.733 | 0.935 | 1.077 +- 0.001 | 0.534 | 2,343 / 4,686 (stopped) |
+| a | 885 | 3 | **0.856 +- 0.002** | 0.735 | 0.937 | 0.900 +- 0.039 | 0.600 | 5,000 (cap) |
+| b | 885 | 3 | 0.877 +- 0.008 | 0.732 | 0.934 | 0.961 +- 0.054 | 0.576 | 5,000 (cap) |
+| c | 885 | 3 | **0.856 +- 0.013** | 0.737 | 0.935 | 0.927 +- 0.064 | 0.597 | 5,000 (cap) |
+
+The rule (gain > 2 x the larger seed range): size 885 -- b -0.021 vs range 0.016, c -0.000 vs 0.026; size 300 -- b
++0.013 vs 0.023, c +0.014 vs 0.022; size 100 -- b -0.018 vs 0.091, c -0.010 vs 0.086; no win-CE loss beyond noise
+anywhere. **Verdict: no sharing signal at any size -- keep per-title models (the default).** At the full size the
+1830-pretrained start ends where 1867 alone does (c = a within 0.001), and the joint run, which sees half the 1867
+positions at the same step cap, is 0.021 worse (not beyond its noise); at 300 games both shared arms are ~0.013
+better, under the noise of two seeds. Top-1 per family moves by a few points either way with no consistent arm
+(e.g. at 885: Bid.company a 0.703 / b 0.675 / c 0.721, Merge 0.217 / 0.173 / 0.232, LayTile 0.252 / 0.244 / 0.253).
+Every full-size cell ended at the cap with its best checkpoint the last evaluation (cosine schedule): the
+comparison is at 5,000 steps.
+
+1830 validation (30 games): `c_pre` (1830 only, 2,500 steps) 0.834 policy CE; the joint model 0.828 at 300 / 885
+games (no interference: 1867 in the batch did not hurt 1830 at this size), 0.902 at 100 (stopped early); c after
+fine-tuning on 1867 1.00-1.02 (it forgets 1830).
+
+Caveats, recorded after the results (none changes the pre-set verdict):
+
+* **At 100 games the selection, not the data, decided.** Early stopping uses C1's dev total loss, which includes
+  0.1 x the win CE; on 100 games the value side memorizes within one or two evaluations, so every 100-game cell kept
+  a checkpoint from 437-1,748 steps and stopped soon after while its dev policy CE was still falling (e.g. a s0: 1.014, 0.928, 0.915, 0.904,
+  0.893 at 437 .. 2,185 steps; best by total at 874). Seeds that kept the 437-step checkpoint have validation policy
+  CE ~1.0, those that kept 874 ~0.92: hence the +-0.04 ranges. Exploratory (dev, not validation): the lowest dev
+  policy CE each 100-game run reached was a 0.904 (range 0.029), b 0.888 (0.031), c 0.893 (0.025) -- the shared arms
+  ~0.01-0.015 ahead, inside the noise. The value refit on 100 games never beat equal odds on dev in 7 of 9 cells
+  (fresh heads kept: win CE = 1.368). A small-data rerun should select on dev policy CE (or train the value heads
+  detached); not done here.
+* Small model (0.54M), one budget (5,000 steps), one joint share (0.5), fine-tuning at the from-scratch learning
+  rate: a signal, not proof, for the default-size models (design §4.2.3: transfer grows with model size).
+* **The wrong 1867 price targets (pre-fix code) moved the policy little.** The four full-size cells that finished
+  on master's code before the fix (`probe_1867_prefix`), against the same seeds after it: policy CE a s0 0.8597 ->
+  0.8551, b s0 / s1 / s2 0.8891 / 0.8713 / 0.8916 -> 0.8763 / 0.8686 / 0.8849 (0.003-0.013 lower after the fix),
+  top-1 within 0.001, price NLL 1.70-1.75 -> 1.41-1.46; win CE 0.03-0.10 higher after the fix in all four, inside
+  its seed range at that size (0.08-0.13: the refit selects on 30 dev games). None of the pre-fix cells is used above.
+
+Artifacts: `<scratchpad>/c3/probe_1867_fixed/` (`plan.json`, `splits/`, `runs/<cell>/` with checkpoints, history and
+summary, `report.md`, `report.json`); the pre-fix cells in `probe_1867_prefix/`.
 
 #### Harness validation on 1830 alone (2026-11-13)
 
