@@ -2675,17 +2675,28 @@ impl BaseGame {
                 distinct.push(*k);
             }
         }
+        let tp = super::prof::start();
         let ctx = Ctx::new(self, c);
         let graph = self.g1822_graph(c);
         let rg = RG::build(self, &ctx, c, &graph.connected_nodes);
         let tokens: Vec<usize> = (0..rg.nodes.len()).filter(|&i| rg.tok[i]).collect();
+        super::prof::stop(tp, || "router:build".into());
 
         // one kind's walk (+ the E tours / single-city local runs):
         // (list, routes, list cut or walk exhausted, best-single bound)
         let walk = |k: Kind, thr: i32, cap: usize| -> (KindList, Vec<Walked>, bool, i32) {
             let t_walk = std::time::Instant::now();
+            let tp = super::prof::start();
             let mut w = KWalk::new(self, &ctx, &rg, k, thr, cap);
             w.run();
+            super::prof::stop(tp, || format!("router:walk:{}", match k {
+                Kind::Local { .. } => "local",
+                Kind::Numeric(_) => "numeric",
+                Kind::Pullman(_) => "pullman",
+                Kind::E => "e",
+                Kind::CaPullman(_) => "ca_pullman",
+                Kind::CaGrain { .. } => "ca_grain",
+            }));
             if k == Kind::E {
                 for mut t in self.g1822_e_tours(&ctx, &graph.connected_nodes) {
                     let th = w.eff_thr();
@@ -2779,7 +2790,9 @@ impl BaseGame {
         // 1822MX revenue_for: a 3/2P train earns half (after bonuses,
         // rounded to 10)
         let half: Vec<bool> = trains.iter().map(|t| t.name.starts_with("3/2P")).collect();
+        let tp = super::prof::start();
         let (mut pick, mut lb) = self.g1822_combine(&ctx, &kinds, &distinct, &lists, &half);
+        super::prof::stop(tp, || "router:combine:scout".into());
         if router_debug() {
             eprintln!("  scout combine: lb {} in {:?}; best single {:?}", lb, t0.elapsed(), best_single);
         }
@@ -2817,7 +2830,9 @@ impl BaseGame {
             let mut improved = false;
             if changed {
                 let t0 = std::time::Instant::now();
+                let tp = super::prof::start();
                 let (p2, t2) = self.g1822_combine(&ctx, &kinds, &distinct, &lists, &half);
+                super::prof::stop(tp, || "router:combine:full".into());
                 if router_debug() {
                     eprintln!("  full combine: {} in {:?}", t2, t0.elapsed());
                 }
