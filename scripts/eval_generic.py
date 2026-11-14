@@ -105,7 +105,10 @@ def play_games(game_indices: list, settings: dict) -> list:
         g = gpg._Game(raw=raw, uid=str(idx), opponent="", seat_models=seats, start=start.label)
         g.seed, g.idx = start.seed, idx
         g.rules = rules_name(title, start.optional_rules)
-        g.seating = [int(p.id) for p in raw.players]  # (the 1822 family reorders raw.players every Stock Round)
+        # the seating order is the new game's (``titles.new_game`` numbers the seats in order), not raw.players after
+        # the start's actions: the 1822 family reorders its players every Stock Round, and saved games replay from
+        # the fresh game in this order
+        g.seating = sorted(int(p.id) for p in raw.players)
         g.redraws = redraws
         return g
 

@@ -535,7 +535,10 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
         g = _Game(raw=raw, uid=uuid.uuid4().hex, opponent=opponent, seat_models=seat_models, start=start.label)
         g.seed = start.seed
         g.rules = rules_name(title, start.optional_rules)
-        g.seating = [int(p.id) for p in raw.players]
+        # the seating order is the new game's (``titles.new_game`` numbers the seats in order), not raw.players after
+        # the start's actions: the 1822 family reorders its players every Stock Round, and saved games replay from
+        # the fresh game in this order
+        g.seating = sorted(int(p.id) for p in raw.players)
         g.learner = set(learner)
         g.seat_members = seat_members
         if seat_members:

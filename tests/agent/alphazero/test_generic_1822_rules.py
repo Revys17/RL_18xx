@@ -324,6 +324,35 @@ def test_pg_redraws_an_all_pass_opening(clients, tmp_path, monkeypatch):
 _REAL_REPLAYED_START = gp.replayed_start
 
 
+def test_saved_pg_games_from_later_starts_replay(clients, tmp_path):
+    """A saved game of a mid-game start replays from the fresh game under its rules and seed: its players are in
+    seating order (the family reorders ``raw.players`` every Stock Round; before, the order after the start's
+    actions was saved and such games did not replay)."""
+    from rl18xx.agent.alphazero import generic_pg as gpg
+
+    replayed, _ = gp.replay_human_game("1822", load("33845.json"))
+    _, midgame, _ = gp.start_records("1822", replayed)
+    mfile, empty = tmp_path / "m.jsonl", tmp_path / "s.jsonl"
+    mfile.write_text(json.dumps(midgame) + "\n")
+    empty.write_text("")
+    settings = {
+        "title": "1822", "num_players": 4, "positions_per_seat": 4, "learner_seats": 2,
+        "sl_opponent_fraction": 0.5, "pool_ready": False, "pool_label": None, "learner_temperature": 1.0,
+        "opponent_temperature": 1.0, "opponent_price_eps": 0.0, "max_decisions": 12, "start_positions": str(empty),
+        "random_start_fraction": 0.0, "midgame_positions": str(mfile), "midgame_fraction": 1.0, "reward": "placement",
+        "league": None, "save_game_every": 1, "rules_mix": {"plus": 1.0},
+    }  # fmt: skip
+    result = gpg.play_generic_pg_games(2, settings)
+    for g in result["games"]:
+        saved = g["saved_game"]
+        assert saved["start"].startswith("midgame:33845:sr") and saved["optional_rules"] == ["plus_expansion"]
+        assert [pid for pid, _ in saved["players"]] == [1001, 1002, 1003, 1004]
+        game = engine_rs.BaseGame.new_titled("1822", dict(saved["players"]), saved["optional_rules"], saved["seed"])
+        for action in saved["raw_actions"]:
+            game.process_action(dict(action))
+        assert len(game.raw_actions) == len(saved["raw_actions"])
+
+
 def test_eval_redraws_an_all_pass_opening(tmp_path, monkeypatch):
     import sys
 
