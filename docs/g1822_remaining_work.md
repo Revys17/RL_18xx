@@ -732,7 +732,79 @@ The title uses the family default (`RESTRICTED`). MX adds:
 
 * The NdeM running out of tokens and the NdeM holding cash at close are
   Ruby dead ends the engine mirrors (see above); real games come close
-  (2 of 363 used all ten tokens).
+  (2 of 363 used all ten tokens). The first is common in self-play: see
+  "The NdeM's eleventh home" below (a proposal, undecided).
+
+### The NdeM's eleventh home (2026-11-14: findings and a proposal -- the user decides)
+
+In the 1822MX CPU smoke, "the NdeM has no token left for the minor's home (Ruby raises)" ended 18 of
+39 eval games at T 0.5 (3 players 10 of 12, 4 players 3 of 12, 5 players 5 of 15; 0 of 8 at T 1.0) and
+9 of 48 policy-gradient games. It never occurs in human games.
+
+**The sequence.** At the end of every Stock Round while the NdeM is open (until the first 7 / E-train
+privatizes it), the minor in the first minor bid box that nobody bid on is removed
+(`remove_minor_and_first_train`): the next depot train goes to the NdeM (`send_train_to_ndem`) and
+`replace_minor_with_ndem` deletes the minor's company, drops its home reservation, places an NdeM
+token in that city (unless the NdeM already has one there) and adds a 10% NdeM share to the pool.
+The NdeM starts with one such home (setup: the earliest of M14 / M15 / M17 in the stack) and Ruby
+gives it ten tokens (`tokens: [0] * 10`, `g_1822_mx/entities.rb`). At the eleventh replacement
+`ndem.find_token_by_type` is nil and `city.place_token(ndem, nil, check_tokenable: false)` raises
+NoMethodError; the engine raises "(Ruby raises)" at the same place. The Stock Round's last pass,
+the only move left, ends the game there (`g1822_ruby_dead_end`, termination `dead_end`).
+
+Every dead end among the 41 smoke games that replay past SR1 (34 eval, 7 PG -- PG games saved before
+the seat fix do not replay; scratch: `<g1822data>/../g1822followup/analyze_mx.py`, the eval and PG
+collections of `rl_model.md`'s smoke): 19, all this one; at Stock Round 10-13, in phase 3-6 (12 in
+phase 5), with the NdeM's ten tokens on the map and the first box's minor unbid. Ruby HEAD replays one
+(`1822MX_t05_3p` game m0_5, 773 actions) with zero divergence and raises
+``undefined method `place' for nil:NilClass`` at its final pass, where the engine raises.
+
+**Why humans never hit it.** Not a move they avoid: humans also leave the first box's minor unbid in
+most Stock Rounds (1,341 of 1,687 Stock Rounds from SR2 to phase 7, 79%; the bots 321 of 357, 90%),
+so their NdeM grows the same way. But human games reach phase 7 after a median 8 Stock Rounds (7-8
+in 82% of 264 replayed scrape games), the bots' after a median 10 (9-12): the bots buy trains later,
+and every Stock Round before the 7 costs the NdeM another token. Human NdeMs peak at 7 tokens
+(modal), at 10 in 2 of 264 games, never 11; the bots' reach 10 in 29 of 41 games.
+
+**The printed rules** (1822MX, All-Aboard Games; the BGG file Ruby links, read via
+rulespal.com/1822mx/rulebook): 4.4.2 "the NdeM may claim stations in minor company home locations and
+replace the minor company's certificate with an NdeM certificate"; 5.12.5 the Bid Box 1 minor
+unsold at the end of the Stock Round is removed from play; 5.12.6 "While the NdeM is open, any minor
+company that is removed by the game is turned into an NdeM station" -- "flip the token to the NdeM
+side and place it in the minor's home city" (the NdeM "may have multiple unconnected stations on a
+hex/tile"); 6.22.5 stations not sold at privatization "remain on the board as blocking tokens". The
+NdeM's stations are the removed minors' own home tokens turned over (each has an NdeM side, 2.1.7);
+the rules state no limit and the components have no separate NdeM tokens. **So the published game
+has no cap -- Ruby's ten tokens are an implementation limit, and Ruby is wrong there (it crashes the
+site's game).**
+
+**Options.**
+* (a) *Rules-faithful fix*: when the NdeM has no unused token, give it one more (in Ruby terms
+  `ndem.tokens << Token.new(ndem, price: 0)`) and place it. It departs from Ruby HEAD only where Ruby
+  has no continuation (no site game or record goes past the crash), so replay, the corpora and the
+  human datasets are unaffected; MX games run to their real end (7-trains, the privatization auction
+  -- which then auctions every station -- and the bank). A few lines in
+  `g1822_mx_replace_minor_with_ndem`; the 10 -> 11 step is checkable against the rules, the states
+  after it against nothing (Ruby crashes); worth a check that the encoder's NdeM token features
+  accept more than ten; an upstream issue to tobymao/18xx is optional.
+* (b) *A self-play-only deviation in the legal-move lists* (as 1830's train-shuffle rule): there is
+  no natural one. The trigger is a Stock Round ending with the first box's minor unbid; keeping
+  self-play out of it means forcing a bid on that minor (taking away the last pass), which some
+  players cannot afford and which distorts what the agents learn about the bid boxes. Closing the
+  minor without a station once the ten are out (as after privatization) is a process change, not a
+  legal-move filter, and matches neither Ruby nor the rules.
+* (c) *Score the game as it stands* (today): the game ends 0-3 Stock Rounds before phase 7, its
+  economic end never comes, the outcome is mid-game net worth, and it is an end condition the game
+  does not have -- a player ahead can end the game by letting the first minor go, something no real
+  game rewards.
+* (d) *Drop such games' rows*: wastes a fifth (PG) to a half (T 0.5 evals) of MX self-play at the
+  current strength, keeps a biased sample (the games where the 7 came in time) and still needs a rule
+  for evals.
+
+**Recommendation: (a).** It is the printed rule, it changes nothing Ruby can replay, and it removes
+the commonest MX termination. Until it is decided, MX self-play behaves as (c). (The other MX dead
+end, the NdeM holding cash at `close!`, needs a train bought from the NdeM -- a cross-player
+purchase the title's policy excludes -- and did not occur in the smoke.)
 * `G1822::Step::Choose#auto_actions` (an inconsequential double-cash choice
   is passed automatically) is not mirrored by the generator, which offers
   `choose` / `pass` (both legal).

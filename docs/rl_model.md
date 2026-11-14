@@ -1713,7 +1713,12 @@ round; leave it 0). Its opening auction is SR1, where every bid locks cash and m
    self-play games (10 of 12 at 3p), 9 of 48 PG games, none of 8 at T 1.0. `generic_pg._advance` now ends such a
    game as it stands (termination `dead_end`) instead of crashing the worker. Options: keep that (biased: the game
    is cut late and scored on net worth), drop those games' rows, or a self-play rule deviation (e.g. the NdeM skips a
-   home token it does not have), as the user chose for 1830's train shuffling.
+   home token it does not have), as the user chose for 1830's train shuffling. *Follow-up (2026-11-14,
+   `g1822_remaining_work.md` "The NdeM's eleventh home")*: the eleventh unbid first-box minor before the first
+   7-train; humans let that minor go as often (79% of Stock Rounds vs the bots' 90%) but reach phase 7 two Stock
+   Rounds sooner (median 8 vs 10). The printed rules have no cap (each removed minor's own token turns into an NdeM
+   station); Ruby's ten tokens are an implementation limit. Recommended: give the NdeM a token per removed minor
+   (rules-faithful; differs from Ruby only where Ruby crashes) -- undecided.
 3. **A generated move the engine refuses** (a generator bug): one 1822CA PG game hit "216-1 is not legally rotated
    for 512" -- the generator offered the upgrade of tile 216 to 512 at a rotation `process_action` (the strict
    tile-lay rules) refuses -- and the pool task, i.e. the whole run, died. `generic_pg.apply_move` (and
