@@ -85,3 +85,6 @@ Status (2026-11-13): C1 (dataset, supervised training, policy-only player, 1830 
 (generic inference server, policy-gradient trainer, per-title starts and start-file builder, title-generic
 eval, 1830 PG recipe) are built and CPU-tested (`docs/rl_model.md`); nothing has run on the GPU. Open for 1867:
 A2's layout and importer, then the start files, supervised run and PG run of `docs/rl_model.md` "1867 outline".
+C3 (2026-11-13): mixed-title supervised training (`pretrain-generic --data A --data B --mix ...`, `--init`
+fine-tuning) and the CPU weight-sharing probe (`scripts/sharing_probe.py`); result on 0.54M-parameter models: no
+sharing signal for 1867 at 100 / 300 / 885 games by the pre-set rule (`docs/rl_model.md` "The sharing probe").

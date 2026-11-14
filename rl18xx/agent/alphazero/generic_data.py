@@ -30,12 +30,15 @@ Reading: :class:`GenericDataset` (meta, index, records); :func:`replay` (a recor
 :func:`position_item` (one decision's encoding, legal rows and targets in the encoder's seat frame);
 :func:`collate` (items -> one batch in ``model_generic.build_inputs``' flat legal layout, plus targets);
 :class:`PositionBatches` (a ``torch`` ``IterableDataset`` of collated batches: games sharded over loader
-workers, positions mixed through an LZ4-compressed shuffle buffer).
+workers, positions mixed through an LZ4-compressed shuffle buffer); :class:`MixedPositionBatches` (an endless
+stream mixing several :class:`DataSource` s -- titles too -- at given shares of the positions, milestone C3);
+:func:`load_splits` / :func:`nested_subset` (split overrides such as a ``dev`` split, nested game subsets).
 """
 
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import logging
 import math
@@ -692,11 +695,36 @@ def _quiet_worker():
 # ---------------------------------------------------------------------------------------------------
 
 
+def load_splits(splits) -> Optional[Dict[str, List[str]]]:
+    """A split override: None, a dict ``{split name: [game ids]}`` or the path of a JSON file holding one."""
+    if splits is None:
+        return None
+    if isinstance(splits, (str, Path)):
+        splits = json.loads(Path(splits).read_text())
+    if not isinstance(splits, dict):
+        raise ValueError(f"a split override is a {{split: [game ids]}} dict, got {type(splits).__name__}")
+    return {str(k): [str(g) for g in v] for k, v in splits.items()}
+
+
+def nested_subset(ids: Sequence[str], n: Optional[int], seed: int = 0) -> List[str]:
+    """``n`` of ``ids`` in a fixed pseudo-random order (sha1 of ``"<seed>:<id>"``, stable across processes),
+    returned in that order: the subsets for growing ``n`` are nested, and ``n`` None (or >= len) is the
+    whole list in that order."""
+    order = sorted(ids, key=lambda g: hashlib.sha1(f"{seed}:{g}".encode()).hexdigest())
+    return order if n is None else order[: int(n)]
+
+
 class GenericDataset:
     """A converted dataset: ``meta``, the per-game ``index`` and the records (LMDB opened lazily, so
-    the object pickles into loader workers before it is used)."""
+    the object pickles into loader workers before it is used).
 
-    def __init__(self, path, check_layouts: bool = True):
+    ``splits`` (:func:`load_splits`: a ``{split name: [game ids]}`` dict or JSON file) overrides the
+    converted train / validation assignment: :meth:`game_ids` / :meth:`num_positions` of a split then
+    list exactly the games named for it (in the index's order; names other than train / validation are
+    allowed, e.g. a ``dev`` split carved out of the training games), and a game named in no split is
+    in none. Every named game must be in the dataset, and in at most one split."""
+
+    def __init__(self, path, check_layouts: bool = True, splits=None):
         self.path = Path(path)
         self.meta = json.loads((self.path / "meta.json").read_text())
         if self.meta.get("format") != DATA_FORMAT:
@@ -704,8 +732,28 @@ class GenericDataset:
         with open(self.path / "games.jsonl") as f:
             self.index = [json.loads(line) for line in f if line.strip()]
         self._env = None
+        self.splits = load_splits(splits)
+        self._split_of: Optional[Dict[str, str]] = None
+        if self.splits is not None:
+            known = {e["id"] for e in self.index}
+            self._split_of = {}
+            for name, ids in self.splits.items():
+                for gid in ids:
+                    if gid not in known:
+                        raise DatasetMismatch(f"{path}: split {name!r} names game {gid}, not in the dataset")
+                    if self._split_of.setdefault(gid, name) != name:
+                        raise ValueError(f"{path}: game {gid} is in splits {self._split_of[gid]!r} and {name!r}")
         if check_layouts:
             self.check_layouts()
+
+    def split_of(self, entry: dict) -> Optional[str]:
+        """The split a games.jsonl entry is in (the override's, else the converted one)."""
+        if self._split_of is None:
+            return entry["split"]
+        return self._split_of.get(entry["id"])
+
+    def split_names(self) -> List[str]:
+        return list(self.splits) if self.splits is not None else list(SPLITS)
 
     def check_layouts(self) -> None:
         """Refuse a dataset whose layout indices mean something else in the running engine."""
@@ -738,10 +786,18 @@ class GenericDataset:
         return list(self.meta["titles"])
 
     def game_ids(self, split: Optional[str] = None) -> List[str]:
-        return [e["id"] for e in self.index if split is None or e["split"] == split]
+        if self._split_of is None:
+            return [e["id"] for e in self.index if split is None or e["split"] == split]
+        return [e["id"] for e in self.index if (self.split_of(e) == split if split else self.split_of(e))]
 
     def num_positions(self, split: Optional[str] = None) -> int:
-        return sum(e["decisions"] for e in self.index if split is None or e["split"] == split)
+        if self._split_of is None:
+            return sum(e["decisions"] for e in self.index if split is None or e["split"] == split)
+        return sum(e["decisions"] for e in self.index if (self.split_of(e) == split if split else self.split_of(e)))
+
+    def decisions(self) -> Dict[str, int]:
+        """``{game id: decisions}`` from the index."""
+        return {e["id"]: int(e["decisions"]) for e in self.index}
 
     def record(self, game_id: str) -> dict:
         with self._open().begin() as txn:
@@ -937,7 +993,8 @@ class PositionBatches(_IterableDataset):
     through a shuffle buffer of ``buffer_positions`` items (LZ4-compressed, ~5 KB each for 1830), so a
     batch mixes ~buffer / (positions per game) games; a worker's trailing partial batch is dropped
     (``drop_last``, default with shuffle). Without ``shuffle`` the order is fixed (validation).
-    ``max_games`` truncates the game list (smoke runs, partial evals)."""
+    ``max_games`` truncates the game list (smoke runs, partial evals). ``splits`` overrides the
+    dataset's split assignment (:class:`GenericDataset`); ``split`` may then be any of its names."""
 
     def __init__(
         self,
@@ -951,10 +1008,14 @@ class PositionBatches(_IterableDataset):
         max_games: Optional[int] = None,
         drop_last: Optional[bool] = None,
         config=None,
+        splits=None,
     ):
         super().__init__()
-        if split not in SPLITS:
+        self.splits = load_splits(splits)
+        if self.splits is None and split not in SPLITS:
             raise ValueError(f"split must be one of {SPLITS}")
+        if self.splits is not None and split not in self.splits:
+            raise ValueError(f"split {split!r} is not in the override's splits {sorted(self.splits)}")
         self.path = str(path)
         self.split = split
         self.batch_size = int(batch_size)
@@ -983,7 +1044,7 @@ class PositionBatches(_IterableDataset):
 
         info = torch.utils.data.get_worker_info()
         wid, nw = (info.id, info.num_workers) if info is not None else (0, 1)
-        dataset = GenericDataset(self.path, check_layouts=False)
+        dataset = GenericDataset(self.path, check_layouts=False, splits=self.splits)
         ids = self.game_order(dataset)[wid::nw]
         rng = random.Random(f"{self.seed}:{self.epoch}:{wid}")
         if not self.shuffle:
@@ -1016,6 +1077,103 @@ def _draw(buffer: List[bytes], rng: random.Random) -> dict:
     return pickle.loads(lz4.frame.decompress(buffer.pop()))
 
 
+@dataclass
+class DataSource:
+    """One dataset of a training run that may mix several (``docs/rl_model.md`` "Mixed-title training").
+
+    ``label`` names it in mixes, metrics and selection (the dataset's title by default); ``weight`` is its
+    share of the training positions (normalized over the run's sources; 0 = evaluated, never trained on);
+    ``splits`` overrides its split assignment (:func:`load_splits`); ``max_games`` keeps the first N games of
+    its training split (index order); ``val_max_games`` / ``report_max_games`` the first N games of the
+    split evaluated during training / at the end."""
+
+    path: str
+    label: str
+    weight: float = 1.0
+    splits: object = None
+    max_games: Optional[int] = None
+    val_max_games: Optional[int] = None
+    report_max_games: Optional[int] = None
+
+    def dataset(self, check_layouts: bool = True) -> GenericDataset:
+        return GenericDataset(self.path, check_layouts=check_layouts, splits=self.splits)
+
+    def train_ids(self, dataset: Optional[GenericDataset] = None, split: str = "train") -> List[str]:
+        ids = (dataset or self.dataset(check_layouts=False)).game_ids(split)
+        return ids[: self.max_games] if self.max_games else ids
+
+
+class MixedPositionBatches(_IterableDataset):
+    """An endless stream of collated training batches drawn from several :class:`DataSource` s (titles may
+    differ: ``collate`` pads every title's encoding to the batch maxima).
+
+    Each item of a batch comes from source k with probability ``weight_k / sum(weights)`` -- a mix by
+    positions. Per source, a loader worker reads every W-th game of the source's game order (permuted per
+    seed, label and pass), replays and encodes it into that source's LZ4 shuffle buffer and draws from it;
+    the buffer is capped at ``buffer_positions`` and at the worker's share of the source's positions, so a
+    small source's buffer holds its whole shard. A source that runs out starts its next pass in a new
+    order, so small sources cycle (sampling with replacement across passes) while large ones are still in
+    their first. Batches carry ``source`` (B,): each item's source index. The stream never ends: stop by
+    step count."""
+
+    def __init__(
+        self,
+        sources: Sequence[DataSource],
+        batch_size: int,
+        split: str = "train",
+        buffer_positions: int = 32768,
+        seed: int = 0,
+        config=None,
+    ):
+        super().__init__()
+        self.sources = [s if isinstance(s, DataSource) else DataSource(**s) for s in sources]
+        weights = np.array([float(s.weight) for s in self.sources], dtype=np.float64)
+        if not len(weights) or (weights < 0).any() or weights.sum() <= 0:
+            raise ValueError(f"source weights must be >= 0 with a positive sum, got {weights.tolist()}")
+        self.cum = np.cumsum(weights / weights.sum())
+        self.batch_size = int(batch_size)
+        self.split = split
+        self.buffer_positions = max(int(buffer_positions), 1)
+        self.seed = int(seed)
+        self.config = config
+
+    def _items(self, source: DataSource, wid: int, nw: int) -> Iterator[dict]:
+        dataset = source.dataset(check_layouts=False)
+        ids = source.train_ids(dataset, self.split)
+        decisions = dataset.decisions()
+        if not ids or sum(decisions[g] for g in ids) == 0:
+            raise ValueError(f"source {source.label!r}: no {self.split} positions")
+        rng = random.Random(f"{self.seed}:{source.label}:{wid}")
+        buffer: List[bytes] = []
+        for passes in itertools.count():
+            order = list(ids)
+            random.Random(f"{self.seed}:{source.label}:pass{passes}").shuffle(order)
+            shard = order[wid::nw] if len(order) >= nw else order
+            if sum(decisions[g] for g in shard) == 0:
+                shard = order
+            cap = max(1, min(self.buffer_positions, sum(decisions[g] for g in shard)))
+            for gid in shard:
+                for item in iter_items(dataset.record(gid)):
+                    buffer.append(lz4.frame.compress(pickle.dumps(item, protocol=5)))
+                    if len(buffer) >= cap:
+                        yield _draw(buffer, rng)
+
+    def __iter__(self) -> Iterator[dict]:
+        import torch
+
+        info = torch.utils.data.get_worker_info()
+        wid, nw = (info.id, info.num_workers) if info is not None else (0, 1)
+        streams = [self._items(s, wid, nw) if s.weight > 0 else None for s in self.sources]
+        rng = random.Random(f"{self.seed}:mix:{wid}")
+        last = len(self.cum) - 1
+        while True:
+            picks = [min(int(np.searchsorted(self.cum, rng.random(), side="right")), last) for _ in range(self.batch_size)]
+            items = [next(streams[k]) for k in picks]
+            batch = collate(items, self.config)
+            batch["source"] = np.asarray(picks, dtype=np.int64)
+            yield batch
+
+
 def loader_worker_init(_worker_id: int) -> None:
     """``DataLoader`` worker init: one torch / BLAS thread per loader worker."""
     import torch
@@ -1027,6 +1185,7 @@ def loader_worker_init(_worker_id: int) -> None:
 __all__ = [
     "DATA_FORMAT",
     "DEFAULT_VALIDATION_PERCENTAGE",
+    "DataSource",
     "DatasetMismatch",
     "GenericDataset",
     "Importer1830",
@@ -1040,6 +1199,9 @@ __all__ = [
     "convert_game",
     "importer_for",
     "iter_items",
+    "load_splits",
+    "MixedPositionBatches",
+    "nested_subset",
     "new_engine_game",
     "outcome_targets",
     "position_item",
