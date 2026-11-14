@@ -627,10 +627,12 @@ par prices = every market cell of a par type, percents = every share unit up to 
 - **Percents** run to 200%: 1822MX's NdeM gains a 10% share for every minor it replaces and
   redeemed 110% in the fuzz.
 - **Which train or tile instance**: the generator offers one move per train type (a discard,
-  another corporation's train) and one instance per tile (the lowest-numbered free one), and the
-  index names the type; a human picking another instance of the same type is the same index (the
-  states differ only in the order of identical trains -- or, in PNW, in the builder cubes a reused
-  tile instance brings back: see the verification below).
+  another corporation's train) and one instance per tile (since 2026-11-14 the one Ruby's UI
+  offers: the first of the name in Ruby's supply order, `g1822_remaining_work.md` "Tile
+  instances"; before, the lowest-numbered free one), and the index names the type; a human
+  picking another instance of the same type is the same index (the states differ only in the
+  order of identical trains -- or, in PNW, in the builder cubes a reused tile instance brings
+  back: see the verification below).
 - **Indices mean the same move under either cross-player policy**: the title's policy only
   removes moves.
 - **Not in the layout**: the generator's replay-only classes (`g1822_remaining_work.md`
@@ -711,7 +713,8 @@ par prices = every market cell of a par type, percents = every share unit up to 
   cubes and brings their discount back when laid again, so the two lays cost $10 apart
   (232649 @1168, 237656 @637, 248980 @893, 249210 @809, 251260 @914, 256962 @1213, ...). Same
   index either way (the descriptor names the tile type); the generator should pick the instance
-  Ruby's UI offers. Two apply mismatches the first run found were the same
+  Ruby's UI offers -- it does since 2026-11-14 (the PNW rerun: 0 apply mismatches, the rest
+  unchanged). Two apply mismatches the first run found were the same
   state with a corporation's identical trains in another order (a human discarding / buying the
   other instance of a type the generator offers once), now compared as multisets; one layout bug
   it found is fixed (CA: the pullman offered to a grain-attached train, renamed "LP-G" for the run
@@ -772,6 +775,16 @@ lays checked by applying them to a
 clone, PNW's on every lay; minor acquisitions' connection checks; CA's router). The corpus runs
 above, 16-22 processes on 16 logical cores, measured 2-3x these numbers (1822: mean 38 ms, p99
 577 ms, max 8.7 s; CA: max 17 s). Worth a dedicated speed-up before self-play, as 1867 had.
+
+**Since 2026-11-14** (`g1822_remaining_work.md` "Generator speed": the same moves, the old code
+kept as the reference generator and compared state by state on every corpus decision and on
+fuzz walks), the same samples (more decisions than above; `scripts/g1822_generator_profile.py`, thread
+CPU, the machine under load ~45-60): per human decision before -> after, p50 / p99 / mean ms --
+1822 4.6 / 413 / 31.4 -> 1.3 / 51 / 4.4 (7x); 1822PNW 3.8 / 1,129 / 54.0 -> 0.9 / 66 / 4.5 (12x);
+1822MX 3.6 / 189 / 16.1 -> 0.9 / 24 / 2.4 (7x); 1822CA 7.2 / 332 / 33.8 -> 1.7 / 40 / 5.3 (6x; the
+router still takes ~30 ms a call on average and up to 5-9 s on the densest maps). The
+self-play worker's legal list per random-walk position: 1822 22.8 -> 5.6 ms, PNW 42.0 -> 7.5,
+MX 7.6 -> 3.7, CA 10.5 -> 4.1.
 
 ## 10. What the schema cannot express yet
 

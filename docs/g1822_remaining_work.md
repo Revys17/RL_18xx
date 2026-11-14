@@ -181,6 +181,197 @@ legacy walk stays as `g1822_best_routes_legacy` / the pymethod
   every such price equals `g1822_price_route` (the fuzz runs it).
 * `G1822_ROUTER_DEBUG=1` prints per-call walk/combination timings.
 
+## Generator speed (2026-11-14): same moves, ~7-15x less CPU
+
+The generator was the RL bridge's self-play bottleneck (2026-11-13: 14-25 ms per human
+decision on average, p99 up to 0.6 s, a CA position up to 7 s; 1867's generator: 1.2 ms). It
+is now several times faster with **exactly the same move lists**: the code it replaced stays
+callable as the **reference generator** (`g1822::legal::reference`, a thread-local flag:
+`g1822_legal_moves_reference`, Python `BaseGame.g1822_set_reference_generator(on)`), and the
+differential tests compare the two state by state.
+
+### Where the time went (before; `scripts/g1822_generator_profile.py --mode profile`)
+
+A sample of each title's 2026-10 scrape (every 6th / 5th / 4th / 2nd game for 1822 / PNW / MX /
+CA: 117k / 107k / 74k / 102k positions), `rl_legal_moves_json()` per human decision, thread CPU
+on the shared cores (load ~45 on the box, so ~2x the layout agent's numbers):
+
+| Title | decisions | p50 | p90 | p99 | max | mean (ms) | where |
+|---|---|---|---|---|---|---|---|
+| 1822 | 93,191 | 4.6 | 71 | 413 | 4,790 | 31.4 | Track 63% (111 ms a decision), stock round 20%, Token 8% |
+| 1822PNW | 83,253 | 3.8 | 59 | 1,129 | 3,472 | 54.0 | Track 88% (256 ms) |
+| 1822MX | 57,328 | 3.6 | 36 | 189 | 1,838 | 16.1 | Track 55% (42 ms), stock round 27% |
+| 1822CA | 81,456 | 7.2 | 69 | 332 | 91,311 | 33.8 | stock round 34%, Track 29%, Token 18% (190 ms; one position 91 s), Route (all positions: 20% of the time, the router up to 24-34 s a call) |
+
+By section: the validation clones (`clone_for_search` copied the JSON action log, most of a
+late clone: ~1.2 ms each, 0.8-2M per sample) were 40-80% of the time; the graph walk
+(`g1822_graph_fresh`, 0.35-3.6M computes per sample, uncached — every gate, lay, token and every
+validation clone computed it again; on CA's dense late maps up to ~0.8 s a walk); the neighbour
+map (`g1822_neighbors`, recomputed per call through linear `hex_dsl` scans: 0.67 ms, 1.2M calls
+on the 1822 sample); the restriction walk of a lay (clone + apply with a second rollback copy +
+graph: ~10 ms, 125k calls on the 1822 sample); PNW applied every lay twice (restriction check,
+then validation); the candidate dedup formatted every pair (quadratic); minor acquisition's
+dead-end lookahead ran the whole generator on each choice's next state; CA's router.
+
+### What changed (`g1822/`, plus `game.rs`' log-free clone and the titles' DSL lookups)
+
+Every item keeps its old code on the reference path (`reference::on()`), except two pure
+changes shared by both: the `hex_dsl` / `tile_dsl` lookups are hash indexes (the same first
+row as the linear scans) and the action's rollback copy omits the log (below).
+
+* **Clones without the JSON action log** (`BaseGame::clone_for_search_without_log`,
+  `g1822_validation_clone`): the family's processing never reads the log (1822 4p after 944
+  actions: a clone took 5.2 ms with it, 0.28 ms without). The restriction walk applies on its
+  clone without a rollback copy, and `g1822_process_action`'s own rollback copy (every applied
+  move, replay included) leaves the log out — a refused action puts the live log back.
+* **Graph memo** (`graph::graph_memo`, installed for a whole `g1822_legal_moves_with` call):
+  `g1822_graph_fresh` is a pure function of the corporation, the hexes (tiles, paths, tokens)
+  and PNW / MX's opened neighbour links; a result is handed out only for inputs EQUAL to the
+  ones it was computed from (hexes compared in full). Two maps are kept: the first one seen
+  (the state's) and the latest other one (a lay's clone computes its new map's graph two or
+  three times).
+* **The graph walk on tables** (`fastgraph.rs`): the same walk as `graph.rs` (`node_walk` /
+  `path_walk`: same calls, same order, same visited and counter rules) reading a path copy's
+  exits, lanes, nodes and flags, a hex's paths per edge, junction paths, converging exits and
+  the paths through each node from per-hex tables cached per (title, hex, tile) instead of
+  re-deriving and allocating them at every step; the `ignore:1` / `track:thin` flags and the
+  DSL's lane specs are read once per title. CA's 91 s Token position: 0.3 s.
+* **Neighbour map** (`g1822_neighbors`, now an `Arc`): a per-title table of the static part
+  and a thread-local memo keyed by the dynamic part (whether each impassable-coloured
+  neighbour's current tile has track towards the hex; PNW / MX: the opened links).
+* **Candidate dedup by a set** of `same_move`'s key.
+* **1822PNW lays**: one apply decides both the restrictions and the validity (the reference
+  applies every lay twice), and plain lays are decided without applying them
+  (`g1822_pnw_lay_prevalidate`: the Track step's portage gate, the slot rules (an upgrade = a
+  non-white colour), forest / `upgrades_to?` / supply, Hex#lay's token move, the cost with the
+  builder cubes the laid instance carries; None — apply it — for token cities, an old blue /
+  gray / red tile, H11 / H13, the PNW tiles, H19's city+town tiles, multi-lane track around the
+  hex, a corporation Ruby's graph cache answers stale), then checked like 1822's own lays
+  (restriction shortcuts, else apply + walk). Test builds assert every verdict against the
+  apply on the walks.
+* **Stock round**: pars of a corporation `can_par?` refuses are not generated (`process_par`
+  rejects every price); the bid-box bids form one validation class (`g1822_bid_own_checks`:
+  a member applies iff its own price checks pass and the class's shared conditions hold — the
+  proof is in its doc — so one member is applied on a clone).
+* **Minor acquisition's dead-end lookahead** (`g1822_has_legal_move`): a choice's next state
+  has a legal move if a pass the generator would offer there applies (`g1822_pass_probe`;
+  BuyTrain's pass excluded: its validity reads the route latch); else the whole generator.
+* **Router**: a route that cannot reach the walk's threshold even with every extra at its cap
+  is not priced (the price would be dropped anyway: the same routes kept, the same steps
+  counted), and the combination search scans each kind's routes in list order with their track
+  as bitsets (`fits`: some track already at capacity = the bitset meets the `full` set) — the
+  same search, the same step counts. CA's worst calls (259628 @1954 / @2019): ~24 s → 5-9 s;
+  `G1822_ROUTER_DEBUG=1` now prints each walk's time and the combination's step count.
+
+### Differential tests (zero differences required)
+
+* `BaseGame.g1822_reference_diff(policy)` / Rust `g1822_reference_diff_with`: the fast and the
+  reference generator's moves at one state, sorted (action, combo, share price, price range,
+  certificate ids), the RL index rows of both lists (index, wire dict, range; every move an
+  index, no index twice), and the state (the family's state incl. the route latch and Ruby's
+  graph cache, the map, corporations, players) unchanged by either call.
+  `g1822_graph_check()`: the fast walk against the reference walk for every tokened
+  corporation, and the neighbour map's table + memo against the walk over every hex.
+* Corpus: `scripts/g1822_generator_diff.py --title <t>` — every human decision of the title's
+  2026-10 scrape, under the title's policy AND the rules' (`--both-once`: the reference runs once,
+  under the rules', and the title's list is derived from it as the generator derives it -- the
+  moves the policy excludes dropped unless nothing else is left). The final code, 2026-11-14:
+
+  | Title | games (stop at a record the replay rejects) | positions | moves compared | differences |
+  |---|---|---|---|---|
+  | 1822 | 743 (0) | 677,938 | 30,743,140 | 0 |
+  | 1822PNW | 597 (8) | 533,995 | 18,533,640 | 0 |
+  | 1822MX | 363 (0) | 303,868 | 9,344,779 | 0 |
+  | 1822CA | 187 (9) | 196,831 | 10,711,158 | 0 |
+
+  (MX, CA and 1822 also passed on earlier versions of the change with two reference runs.)
+* Fuzz: `cargo test --release --no-default-features generator_matches_reference` (three walks
+  per title) and the long `g1822_diff_long -- --ignored` (`G1822_DIFF_TITLES`, `_SEEDS`,
+  `_FIRST`, `_PLAYERS`, `_POLICY`, `_MOVES`; a move the rules let Ruby raise on, e.g. a ranged
+  payoff Ruby can't take, ends the walk as a dead end). Long walks at 3 to the title's maximum
+  players, each state compared under both policies, 0 differences: 1822 16 walks (15,632
+  states, 394,126 moves), PNW 18 (14,137 / 262,333), MX 12 (7,576 / 99,561), CA 16 (18,919 /
+  453,516).
+* `tests/test_g1822_generator_reference.py`: one Ruby fixture per title, every third decision.
+
+### Speed (after; the same positions)
+
+The same samples and script after the change (thread CPU per human decision, ms; the machine
+under more load than for "before", ~60, so these are conservative):
+
+| Title | before p50 / p90 / p99 / max / mean | after p50 / p90 / p99 / max / mean | total | all positions, mean |
+|---|---|---|---|---|
+| 1822 | 4.6 / 71 / 413 / 4,790 / 31.4 | 1.3 / 8.9 / 51 / 372 / 4.4 | 7.1x | 26.0 → 3.8 |
+| 1822PNW | 3.8 / 59 / 1,129 / 3,472 / 54.0 | 0.9 / 7.7 / 66 / 194 / 4.5 | 12.0x | 43.6 → 3.8 |
+| 1822MX | 3.6 / 36 / 189 / 1,838 / 16.1 | 0.9 / 4.9 / 24 / 142 / 2.4 | 6.7x | 12.9 → 2.0 |
+| 1822CA | 7.2 / 69 / 332 / 91,311 / 33.8 | 1.7 / 10 / 40 / 5,532 / 5.3 | 6.4x | 32.2 → 6.5 |
+
+(A third of the sample profiled again before and after at the same time: 1822 10.3x on the
+decisions.) What is left, per decision: 1822 Track 14.6 ms (58%: the restriction walks' clone +
+apply, company lays), stock round 2.5 ms (23%); PNW Track 18.9 ms (78%: lays still applied —
+token cities, impassable old colours, multi-lane hexes — and company lays); MX Track 6.5 ms (57%);
+CA stock round 3.3 ms, Track 9.3 ms, Token 15 ms, Route 53 ms on its decisions — and the router
+is most of CA's time on all positions (`run_routes`-only positions included): ~30 ms a call on
+average, 5-9 s at the densest late positions (results unchanged; a faster router would have to
+change which routes the step budgets let it find).
+
+Self-play worker per position (`scripts/bench_generic_server.py worker --title <t> --reference`,
+128 random-walk positions, the TitlePlay path: legal list + encode + split + compress + fixed
+price + apply; ms, fast vs reference generator, under load):
+
+| Title | legal | apply | total |
+|---|---|---|---|
+| 1822 | 5.6 vs 22.8 | 1.6 vs 2.5 | 8.6 vs 26.4 |
+| 1822PNW | 7.5 vs 42.0 | 1.4 vs 1.3 | 9.9 vs 44.0 |
+| 1822MX | 3.7 vs 7.6 | 1.1 vs 1.2 | 5.5 vs 9.4 |
+| 1822CA | 4.1 vs 10.5 | 1.7 vs 2.4 | 6.9 vs 14.0 |
+
+(the reference column takes the TitlePlay path's fixed price from the legal list, as the fast
+one; the script's own reference total also re-runs the generator for it.)
+
+## Tile instances (2026-11-14): the instance Ruby's UI offers
+
+Ruby's UI offers, for each tile name, the FIRST instance of that name in the supply
+(`Tracker#potential_tiles` keeps `@game.tiles.uniq(&:name)`; G1822 / PNW / MX override the
+colours, not the order), and a lay sends that instance's id. The supply (`@tiles`) starts as
+`<name>-0..` per TILES entry (an unlimited tile: one instance) and `update_tile_lists` changes it
+at every lay: an unlimited tile adds an instance one past its highest (`add_extra_tile`), the
+laid instance leaves, the old tile (unless preprinted) goes LAST. The generator laid the
+lowest-numbered instance off the map instead — a tile upgraded away, or for an unlimited tile
+(the 7 / 8 / 9 of 1822, PNW and CA) the instance laid first, came back before the fresh ones.
+In 1822PNW that is a different move: an instance upgraded off the map keeps its builder cubes
+and brings their £40 discounts back when laid again.
+
+The engine now keeps Ruby's supply order (`G1822State::tile_supply_tail`: the instances
+appended since setup, in order — maintained by `g1822_lay_tile` for every lay, replay
+included) and the generator offers the first instance of the name (`tile_instance_for`: the
+initial instances still unlaid in index order, then the tail). The layouts do not change (an
+index names the tile, not the instance).
+
+Checks: `scripts/g1822_tile_instance_check.py --title <t>` (every human lay of the corpus: the
+instance the human's UI sent against the generator's; `--ruby` asks Ruby HEAD for its first
+instance, `scripts/g1822_tile_instance_ruby.rb`) and the in-crate walk test
+`offered_tile_instance_is_rubys` (every offered lay at every state of 3-6p walks of each title
+against an independently kept model of Ruby's supply list). 2026-11-14, every human lay of the
+2026-10 scrapes (all player counts):
+
+| Title | human lays | new instance == human | old rule == human | decisions with lays where the offered instance changes |
+|---|---|---|---|---|
+| 1822 | 86,266 | 86,265 | 68,378 | 63,255 of 94,458 (2,670,913 lay moves) |
+| 1822PNW | 60,721 | 60,721 | 52,543 | 37,916 of 74,912 (1,097,700) |
+| 1822MX | 34,853 | 34,853 | 26,465 | 29,429 of 45,718 (1,039,453) |
+| 1822CA | 28,109 | 28,109 | 22,499 | 20,480 of 30,785 (1,089,958) |
+
+The one miss (230019 @985, 1822) is the human's, not the generator's: Ruby HEAD's first instance
+there is 8-3 (the generator's), the human sent 8-13 (and laid 8-3 next). Ruby HEAD
+(`--ruby`) agrees with the generator at every human lay of 20 affected PNW games (2,293 lays; the
+old rule: 349 differ) and of 230019 (133). Six PNW wire fuzz games from the new generator
+(`scripts/g1822_fuzz.py`, 3-5p) replay in Ruby HEAD with zero divergence, Ruby's first instance =
+the generator's at all 850 lays. The walk test checks 104,818 offered lays (38,335 where the old
+rule differs). The PNW index-level completeness rerun (`scripts/g1822_completeness.py --index
+--title 1822PNW`): 533,995 decisions, 533,960 with exactly one index (16 of them policy-excluded),
+the same 35 replay-only misses, 0 ambiguous, 0 decode and **0 apply mismatches** (were 10).
+
 ## Cross-player purchases (confirmed by the user, 2026-10-17)
 
 The project disallows, in self-play, buying trains from corporations run
@@ -409,18 +600,16 @@ The title uses the family default (`RESTRICTED`). PNW adds:
 
 ### PNW known issues
 
-* **Tile instance** (found by the RL layout's corpus check, 2026-11-13,
-  `docs/rl_descriptors.md` §9): the generator lays the lowest-numbered
-  free instance of a tile (`tile_instance_for`), Ruby's UI a fresh one;
-  in PNW an instance upgraded off the map keeps its builder cubes and
-  brings their discount back when laid again, so 10 of the scrape's
-  64,507 corporation lays cost $10 less by the generator's instance
-  (232649 @1168: the human laid 9-13, the generator offers 9-2). Both are
-  legal; the generator should offer the instance Ruby's UI offers.
-* The generator applies every PNW lay to a clone (no pre-validated fast
-  path as in 1822): ~11 ms per state on average, Track 64 ms (1822: 47).
-  (2026-11-13, one process on the shared cores: 24.9 ms per human
-  decision on average, Track 141 ms, p99 0.6 s.)
+* ~~**Tile instance**~~ fixed 2026-11-14 (see "Tile instances" below):
+  the generator laid the lowest-numbered free instance of a tile, Ruby's
+  UI the first of the name in its supply; in PNW an instance upgraded off
+  the map keeps its builder cubes and brings their discount back when laid
+  again (232649 @1168: the human laid 9-13, the generator offered 9-2,
+  $10 cheaper). The generator now offers Ruby's instance.
+* PNW lays: since 2026-11-14 plain lays are pre-validated
+  (`g1822_pnw_lay_prevalidate`, "Generator speed" above); token cities,
+  impassable old colours, H11 / H13, the PNW tiles and multi-lane hexes are
+  still applied to a clone (once).
 * The Ruby graph-cache emulation is entered only where Rust mirrors a full
   Ruby compute (the Merger round's connection checks); a graph Ruby
   caches elsewhere and later reads stale would still be fresh here (none
@@ -723,6 +912,15 @@ CUDA_VISIBLE_DEVICES="" uv run python scripts/ruby_diff.py --title 1822PNW --ref
 # 1822CA: likewise (3-6 players; the rig loads scripts/ruby_shims.rb — MRI vs Opal on check_distance)
 CUDA_VISIBLE_DEVICES="" uv run python scripts/g1822_fuzz.py --title 1822CA --players 3 4 5 6 --seeds 1-5 --out /tmp/fzc [--policy rules]
 CUDA_VISIBLE_DEVICES="" uv run python scripts/ruby_diff.py --title 1822CA --tokens --refresh --work /tmp/rdc /tmp/fzc
+# generator speed (2026-11-14): per-section profile, the corpus differential test (fast vs the
+# reference generator, both policies; --both-once runs the reference once per position), the
+# fuzz differential walks, the tile instance against the human records / Ruby HEAD
+CUDA_VISIBLE_DEVICES="" taskset -c 24-31,56-63 nice -19 uv run python -P scripts/g1822_generator_profile.py --title 1822PNW --every 5 --jobs 8 --out /tmp/p.jsonl.gz
+uv run python -P scripts/g1822_generator_profile.py --summary /tmp/p.jsonl.gz --decisions
+CUDA_VISIBLE_DEVICES="" taskset -c 24-31,56-63 nice -19 uv run python -P scripts/g1822_generator_diff.py --title 1822PNW --jobs 8 --both-once
+(cd engine-rs && cargo test --release --no-default-features generator_matches_reference)
+(cd engine-rs && G1822_DIFF_TITLES=1822PNW G1822_DIFF_SEEDS=3 cargo test --release --no-default-features g1822_diff_long -- --ignored --nocapture)
+CUDA_VISIBLE_DEVICES="" uv run python -P scripts/g1822_tile_instance_check.py --title 1822PNW --jobs 8 [--ruby]
 # per-commit gates: see docs/g1867_remaining_work.md (cargo test, pytest,
 # parity_runner --random 0:100, tests/g1867_corpus_audit.py --limit 300).
 ```
