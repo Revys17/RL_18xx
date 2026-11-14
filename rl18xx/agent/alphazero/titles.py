@@ -63,11 +63,12 @@ class TitleSpec:
     #: Supervised-data LMDB (None until one is converted).
     lmdb: Optional[str] = None
     #: ``convert-generic``'s default for ``finished_only``: keep only human games whose record replays to the
-    #: game's end in our engine (1867: the user's decision of 2026-11-13, "just for correctness"; 1830 keeps its
-    #: unfinished games, as SL checkpoint 10's data did).
+    #: game's end in our engine (1867 and the 1822 family: the user's decision of 2026-11-13, "just for
+    #: correctness"; 1830 keeps its unfinished games, as SL checkpoint 10's data did).
     supervised_finished_only: bool = False
-    #: Start files per player count (``{n}``): post-auction human positions, mid-game cuts. New
-    #: titles' files are not built yet (package C).
+    #: Start files per player count (``{n}``): post-opening human positions (1830 / 1867: the first Stock
+    #: Round after the auction; the 1822 family, which opens with its bid-box Stock Round: the end of that
+    #: Stock Round, ``generic_play.opening_end``), mid-game cuts (Stock Rounds 2-6).
     start_positions_template: Optional[str] = None
     midgame_positions_template: Optional[str] = None
     #: Eval defaults: the player count head-to-heads run at, and side A's seat counts at that table
@@ -155,6 +156,7 @@ TITLE_SPECS = {
             human_games_dirs=("human_games/1822", _scrape("1822")),
             start_positions_template="human_games/start_positions_1822_{n}p.jsonl",
             midgame_positions_template="human_games/midgame_positions_1822_{n}p.jsonl",
+            supervised_finished_only=True,
         ),
         TitleSpec(
             title="1822PNW",
@@ -165,6 +167,7 @@ TITLE_SPECS = {
             human_games_dirs=(_scrape("1822PNW"),),
             start_positions_template="human_games/start_positions_1822PNW_{n}p.jsonl",
             midgame_positions_template="human_games/midgame_positions_1822PNW_{n}p.jsonl",
+            supervised_finished_only=True,
         ),
         TitleSpec(
             title="1822MX",
@@ -175,6 +178,7 @@ TITLE_SPECS = {
             human_games_dirs=(_scrape("1822MX"),),
             start_positions_template="human_games/start_positions_1822MX_{n}p.jsonl",
             midgame_positions_template="human_games/midgame_positions_1822MX_{n}p.jsonl",
+            supervised_finished_only=True,
         ),
         TitleSpec(
             title="1822CA",
@@ -185,6 +189,7 @@ TITLE_SPECS = {
             human_games_dirs=(_scrape("1822CA"),),
             start_positions_template="human_games/start_positions_1822CA_{n}p.jsonl",
             midgame_positions_template="human_games/midgame_positions_1822CA_{n}p.jsonl",
+            supervised_finished_only=True,
         ),
     )
 }

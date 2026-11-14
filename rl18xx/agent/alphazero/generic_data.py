@@ -23,8 +23,9 @@ Records are made by a per-title :class:`TitleImporter`. 1830's is the legacy con
 (``pretraining._action_dict_to_factored_index`` on the replayed ``RustGameAdapter``), so its labels are
 the legacy converter's, index for index. 1867's (``generic_import_1867``, milestone A3) reads raw
 18xx.games exports and matches each human decision against the layout's indexed moves
-(``rl_legal_moves_json``, the matching of ``scripts/g1867_completeness.py --index``). Titles without an
-importer (the 1822 family) raise :class:`UnsupportedTitle`.
+(``rl_legal_moves_json``, the matching of ``scripts/g1867_completeness.py --index``); the 1822 family's
+(``generic_import_1822``) likewise, with ``scripts/g1822_completeness.py --index``'s matching. Titles without
+an importer raise :class:`UnsupportedTitle`.
 
 Reading: :class:`GenericDataset` (meta, index, records); :func:`replay` (a record's decision positions);
 :func:`position_item` (one decision's encoding, legal rows and targets in the encoder's seat frame);
@@ -219,25 +220,33 @@ def _importer_1867():
     return Importer1867()
 
 
-_IMPORTERS = {"1830": Importer1830, "1867": _importer_1867}
+def _importer_1822_family(title: str, **options):
+    from rl18xx.agent.alphazero.generic_import_1822 import Importer1822Family
+
+    return Importer1822Family(title, **options)
+
+
+_IMPORTERS = {
+    "1830": Importer1830,
+    "1867": _importer_1867,
+    **{t: (lambda t=t, **kw: _importer_1822_family(t, **kw)) for t in ("1822", "1822PNW", "1822MX", "1822CA")},
+}
 
 
 def register_importer(title: str, factory) -> None:
     """Register a title's importer (a :class:`TitleImporter` subclass or factory). 1830's is the legacy
-    converter's matching; 1867's (``generic_import_1867``, milestone A3) matches against the layout's
-    indexed moves (``rl_legal_moves_json``)."""
+    converter's matching; 1867's (``generic_import_1867``, milestone A3) and the 1822 family's
+    (``generic_import_1822``) match against the layout's indexed moves (``rl_legal_moves_json``)."""
     _IMPORTERS[str(title)] = factory
 
 
-def importer_for(title: str) -> TitleImporter:
+def importer_for(title: str, **options) -> TitleImporter:
+    """A new importer of ``title``; ``options`` go to its factory (the 1822 family's ``allow_optional_rules``)."""
     try:
         factory = _IMPORTERS[str(title)]
     except KeyError:
-        raise UnsupportedTitle(
-            f"no human-game importer for {title!r} yet (have: {', '.join(_IMPORTERS)}; the 1822 family "
-            "has its RL layouts since A4: its importer is next)"
-        ) from None
-    return factory()
+        raise UnsupportedTitle(f"no human-game importer for {title!r} (have: {', '.join(_IMPORTERS)})") from None
+    return factory(**options) if options else factory()
 
 
 def new_engine_game(title: str, players: Dict[int, str], optional_rules: Sequence[str] = (), seed=None):
@@ -474,6 +483,7 @@ def list_game_files(sources: Sequence[str]) -> List[Path]:
 
 
 _WORKER_IMPORTER: Optional[TitleImporter] = None
+_WORKER_IMPORTER_KEY: Optional[tuple] = None
 #: Skip statuses of :func:`convert_game` (plus a title's ``replay_only:<class>``), per game in ``games.jsonl``.
 _SKIP_KEYS = ("unmatched", "ambiguous", "not_legal", "policy")
 
@@ -486,11 +496,13 @@ def _drop_entry(gid: str, path, game: Optional[dict], stats: dict) -> dict:
 
 
 def _convert_file(job: tuple) -> tuple:
-    path, title, validation_percentage, skip_forced, finished_only = job
-    global _WORKER_IMPORTER
-    if _WORKER_IMPORTER is None or _WORKER_IMPORTER.title != title:
+    path, title, validation_percentage, skip_forced, finished_only, options = job
+    global _WORKER_IMPORTER, _WORKER_IMPORTER_KEY
+    key = (title, tuple(sorted((options or {}).items())))
+    if _WORKER_IMPORTER is None or _WORKER_IMPORTER_KEY != key:
         logging.getLogger("rl18xx").setLevel(logging.ERROR)
-        _WORKER_IMPORTER = importer_for(title)
+        _WORKER_IMPORTER = importer_for(title, **(options or {}))
+        _WORKER_IMPORTER_KEY = key
     gid = Path(path).stem
     game = None
     try:
@@ -541,19 +553,22 @@ def convert_dataset(
     skip_forced: bool = False,
     progress_every: int = 200,
     finished_only: Optional[bool] = None,
+    importer_options: Optional[dict] = None,
 ) -> dict:
     """Convert cleaned human games (JSON files under ``sources``) of ``title`` into a dataset directory
     ``out`` (must not exist yet). ``limit`` takes the first N game files by id. ``finished_only`` drops every
     game whose log does not reach the game's end in our engine (None: the title's
     ``TitleSpec.supervised_finished_only`` -- 1867 yes, 1830 no). Every dropped game is listed in
     ``dropped.jsonl`` (id, source, players, reason) and counted by reason and player count in the meta.
-    Returns the meta dict (also written to ``meta.json``)."""
+    ``importer_options`` go to the title's importer (:func:`importer_for`; the 1822 family's
+    ``allow_optional_rules``, a measurement). Returns the meta dict (also written to ``meta.json``)."""
     import lmdb
 
     from rl18xx.agent.alphazero.action_descriptors import action_descriptors
     from rl18xx.agent.alphazero.generic_tokens import schema
 
-    importer_for(title)  # fail early for a title without an importer
+    importer_options = dict(importer_options or {})
+    importer_for(title, **importer_options)  # fail early for a title without an importer
     if finished_only is None:
         from rl18xx.agent.alphazero.titles import title_spec
 
@@ -566,7 +581,7 @@ def convert_dataset(
     files = list_game_files(sources)
     if limit:
         files = files[:limit]
-    jobs = [(str(f), title, validation_percentage, skip_forced, finished_only) for f in files]
+    jobs = [(str(f), title, validation_percentage, skip_forced, finished_only, importer_options) for f in files]
     LOGGER.info("Converting %d %s games from %s into %s (%d workers)", len(jobs), title, list(sources), out, workers)
     env = lmdb.open(str(out), map_size=_LMDB_MAP_SIZE, subdir=True, max_dbs=0)
     stats: dict = {}
@@ -621,6 +636,7 @@ def convert_dataset(
             "skip_forced": skip_forced,
             "finished_only": finished_only,
             "sources": [str(s) for s in sources],
+            **({"importer_options": importer_options} if importer_options else {}),
             "limit": limit,
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "git_commit": _git_commit(),
@@ -847,13 +863,34 @@ def _apply_logged(game, action: dict) -> None:
     game.process_action(action)
 
 
-def seat_frame(values: np.ndarray, rotation: int, num_players: int) -> np.ndarray:
+def seat_frame(
+    values: np.ndarray, rotation: int, num_players: int, order: Optional[Sequence[int]] = None
+) -> np.ndarray:
     """Seating-order per-player ``values`` (n,) in the encoder's seat frame, padded to ``MAX_SEATS``:
-    seat k is player ``(k + rotation) mod n`` (``docs/rl_encoder.md`` "Seats")."""
+    seat k is player ``(k + rotation) mod n`` (``docs/rl_encoder.md`` "Seats") -- of the game's *current* player
+    order, which is the seating order unless the title reorders its players (the 1822 family does, by cash, every
+    Stock Round): then ``order`` (:func:`seat_order`) gives each encoder seat's seating index."""
     out = np.zeros(MAX_SEATS, dtype=np.float32)
     n = int(num_players)
-    out[:n] = np.asarray(values, dtype=np.float32)[(np.arange(n) + int(rotation)) % n]
+    idx = (np.arange(n) + int(rotation)) % n if order is None else np.asarray(order, dtype=np.int64)
+    out[:n] = np.asarray(values, dtype=np.float32)[idx]
     return out
+
+
+def seat_order(game, seating: Sequence[int], rotation: int) -> np.ndarray:
+    """(n,) the seating index (in ``seating``, the player ids in seating order) of each encoder seat of a position
+    with ``rotation``: the encoder's seat k is player ``(k + rotation) mod n`` of ``BaseGame.players`` as they stand
+    -- the 1822 family reorders them every Stock Round; 1830 and 1867 never do, where this is
+    ``(arange(n) + rotation) mod n``."""
+    current = [int(p.id) for p in raw_players(game)]
+    where = {int(pid): i for i, pid in enumerate(seating)}
+    n = len(current)
+    return np.array([where[current[(k + int(rotation)) % n]] for k in range(n)], dtype=np.int64)
+
+
+def raw_players(game):
+    """``BaseGame.players`` of a game or an adapter's engine game."""
+    return getattr(game, "_game", game).players
 
 
 def position_item(record: dict, decision: int, game, descriptors=None) -> dict:
@@ -878,6 +915,7 @@ def position_item(record: dict, decision: int, game, descriptors=None) -> dict:
     indices = record["legal_indices"][lo:hi]
     n = int(record["num_players"])
     rot = int(m[5])
+    order = seat_order(game, [int(pid) for pid, _ in record["players"]], rot)
     return {
         "enc": enc,
         "rows": d.gather(indices),
@@ -888,8 +926,8 @@ def position_item(record: dict, decision: int, game, descriptors=None) -> dict:
         "price": int(record["price"][decision]),
         "family": int(record["family"][decision]),
         "num_players": n,
-        "win": seat_frame(record["win_share"], rot, n),
-        "score": seat_frame(record["placement"], rot, n),
+        "win": seat_frame(record["win_share"], rot, n, order),
+        "score": seat_frame(record["placement"], rot, n, order),
         "game": record["id"],
         "decision": int(decision),
     }
@@ -1208,4 +1246,5 @@ __all__ = [
     "register_importer",
     "replay",
     "seat_frame",
+    "seat_order",
 ]

@@ -397,6 +397,7 @@ def cmd_convert_generic(args):
         validation_percentage=args.validation_percentage,
         skip_forced=args.skip_forced,
         finished_only=args.finished_only,
+        importer_options={"allow_optional_rules": True} if args.allow_optional_rules else None,
     )
     stats = {k: v for k, v in meta["stats"].items() if k != "dropped_detail"}
     print(json.dumps({"counts": meta["counts"], "stats": stats}, indent=2))
@@ -1251,11 +1252,17 @@ def build_parser():
     finished.add_argument(
         "--finished-only", dest="finished_only", action="store_const", const=True, default=None,
         help="Drop every game whose record does not reach the game's end in our engine (replay rejections, records "
-        "that end early); default: the title's TitleSpec.supervised_finished_only (1867 on, 1830 off)",
+        "that end early); default: the title's TitleSpec.supervised_finished_only (1867 and the 1822 family on, "
+        "1830 off)",
     )
     finished.add_argument(
         "--keep-unfinished", dest="finished_only", action="store_const", const=False,
         help="Keep games whose record ends before the game does (1830's default)",
+    )
+    p.add_argument(
+        "--allow-optional-rules", action="store_true",
+        help="The 1822 family: also convert games with optional rules (1822+, MX's higher cert limit, ...), each "
+        "replayed under its own rules -- a measurement; the pipeline's scope is base rules (TitleSpec.optional_rules)",
     )
 
     # pretrain-generic (two-stage supervised pretraining of the generic model)

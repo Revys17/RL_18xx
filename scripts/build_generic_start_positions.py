@@ -14,8 +14,9 @@ Lines carry ``title`` and, for titles whose engine takes a seed (1867, the 1822 
 Sources: 1830 reads cleaned exports (``main.py clean``; replayed as the generic importer replays them,
 ``--raw-dir`` consulted for optional rules as the legacy builders do); 1867 and the 1822 family read raw
 18xx.games exports (replayed as the corpus audits do, ``tests/title_replay_harness``: run from the repository
-root). A title whose game opens with a Stock Round (the 1822 family) has empty SR1 starts (a fresh game):
-only its mid-game file is useful.
+root). A title whose opening auction is its first Stock Round (the 1822 family's bid boxes) gets the position
+where that Stock Round ends instead (OR1, or the Choices round before it; ``generic_play.opening_end_cut``;
+lines carry ``"start": "sr1_end"``): what an SR1 start is to 1830's and 1867's auctions.
 
 Random openings are not built here: generators play them at run time (``generic_play.random_opening_actions``).
 Random starts and auction starts need no file.
@@ -24,6 +25,8 @@ Random starts and auction starts need no file.
         --out-dir human_games --suffix _generic --num-players 4
     uv run python scripts/build_generic_start_positions.py --title 1867 \\
         --source human_games/1867 --source human_games/scrape_2026_10/1867 --out-dir human_games --jobs 8
+    uv run python scripts/build_generic_start_positions.py --title 1822 \\
+        --source human_games/1822 --source human_games/scrape_2026_10/1822 --out-dir human_games --jobs 8
 """
 
 from __future__ import annotations
@@ -182,7 +185,8 @@ def main():
         m_path = out_dir / f"midgame_positions_{args.title}_{n}p{args.suffix}.jsonl"
         _write(s_path, sorted(starts[n], key=key))
         _write(m_path, sorted(midgames[n], key=key))
-        print(f"{n}p: {len(starts[n])} SR1 starts -> {s_path}; {len(midgames[n])} mid-game games -> {m_path}")
+        kind = "SR1-end" if starts[n] and starts[n][0].get("start") == "sr1_end" else "SR1"
+        print(f"{n}p: {len(starts[n])} {kind} starts -> {s_path}; {len(midgames[n])} mid-game games -> {m_path}")
 
 
 if __name__ == "__main__":

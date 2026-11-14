@@ -65,7 +65,7 @@ def records(importer):
 def test_registered():
     assert isinstance(gd.importer_for("1867"), gi67.Importer1867)
     with pytest.raises(gd.UnsupportedTitle):
-        gd.importer_for("1822")
+        gd.importer_for("1899")
 
 
 @pytest.mark.parametrize("name", GAMES)

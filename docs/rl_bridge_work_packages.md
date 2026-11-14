@@ -88,3 +88,6 @@ A2's layout and importer, then the start files, supervised run and PG run of `do
 C3 (2026-11-13): mixed-title supervised training (`pretrain-generic --data A --data B --mix ...`, `--init`
 fine-tuning) and the CPU weight-sharing probe (`scripts/sharing_probe.py`); result on 0.54M-parameter models: no
 sharing signal for 1867 at 100 / 300 / 885 games by the pre-set rule (`docs/rl_model.md` "The sharing probe").
+The 1822 family (2026-11-14): importer, datasets, start files (the opening is the bid-box Stock Round: human starts
+are its end), price-grid checks and a CPU smoke per title, plus the seat fix for titles that reorder their players
+(`docs/rl_model.md` "1822 family: data, starts, caps and the CPU smoke").

@@ -12,6 +12,9 @@ fixed-price move, and applying a legal row at a price. The default reads the tit
 **Starts** (design §5.6): as 1830's ``start_positions``, a game starts at the opening (``auction``), at the
 first Stock Round from a recorded human game (``human:<id>``) or from a random opening played through legal
 moves (``random``), or at the start of a later Stock Round of a recorded human game (``midgame:<id>:sr<k>``).
+A title whose opening auction *is* its first Stock Round (the 1822 family's bid boxes,
+:data:`OPENS_WITH_STOCK_ROUND`) starts at the fresh game (``auction``) or where that Stock Round ends
+(``human:<id>``, ``random``).
 Start files hold one title's games, one per line::
 
     {"id": "...", "title": "1867", "num_players": 4, "seed": 1234, "actions": [...]}                (SR1 starts)
@@ -45,11 +48,35 @@ HUMAN_START_PREFIX = "human:"
 MIDGAME_PREFIX = "midgame:"
 STOCK_ROUND = "Stock"
 AUCTION_ROUND = "Auction"
+#: Titles whose game opens with a Stock Round: the 1822 family's first Stock Round is its opening auction (bids
+#: on the bid boxes' minors, concessions and privates, resolved as the round ends). Their "auction" start is
+#: the fresh game, and their human / random starts are the position where that Stock Round has just ended
+#: (the first position of another round: OR1, or the Choices round before it) -- what 1830's and 1867's
+#: first-Stock-Round starts are to their auctions.
+OPENS_WITH_STOCK_ROUND = frozenset({"1822", "1822PNW", "1822MX", "1822CA"})
 
 
 def raw_game(game):
     """The ``engine_rs.BaseGame`` behind a game (an adapter's, or itself)."""
     return getattr(game, "_game", game)
+
+
+def price_field(wire: dict) -> str:
+    """The field of a generated action dict that holds its price: ``price`` (bids, trains, companies), or
+    ``amount`` for the 1822 family's partial debt payoff (``payoff_player_debt_partial``)."""
+    return "amount" if wire.get("type") == "payoff_player_debt_partial" else "price"
+
+
+def opens_with_stock_round(title: str) -> bool:
+    return str(title) in OPENS_WITH_STOCK_ROUND
+
+
+def opening_done(title: str, raw) -> bool:
+    """Whether a game that began at the fresh position has played its opening: 1830 / 1867 are at a Stock
+    Round (the auction is over); a title that opens with a Stock Round (:data:`OPENS_WITH_STOCK_ROUND`) is
+    past it (another round)."""
+    is_stock = raw.round.round_type == STOCK_ROUND
+    return not is_stock if opens_with_stock_round(title) else is_stock
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -126,7 +153,7 @@ class TitlePlay:
             lo, hi, step = (int(x) for x in legal.price_range[k])
             if lo < 0 or not (lo <= int(price) <= hi and (int(price) - lo) % max(step, 1) == 0):
                 raise ValueError(f"price {price} is not legal for index {int(legal.indices[k])}: ({lo}, {hi}, {step})")
-            wire["price"] = int(price)
+            wire[price_field(wire)] = int(price)
         raw.process_action(wire)
 
     def generator_moves(self, raw) -> Optional[list]:
@@ -204,9 +231,13 @@ def apply_actions(game, actions: Sequence[dict]):
 # ---------------------------------------------------------------------------------------------------
 
 
-def _random_price(lo: int, hi: int, step: int, rng: random.Random, max_price_multiple: float) -> int:
+def _random_price(
+    lo: int, hi: int, step: int, rng: random.Random, max_price_multiple: float, zero_floor_steps: int = 0
+) -> int:
     step = max(1, int(step or 1))
     top = min(int(hi), max(int(lo), int(lo * max_price_multiple)))
+    if zero_floor_steps and int(lo) <= 0:  # [0, 2 * 0] would always bid $0
+        top = min(int(hi), int(lo) + zero_floor_steps * step)
     count = (top - int(lo)) // step + 1
     return int(lo) + step * rng.randrange(count)
 
@@ -222,7 +253,9 @@ def random_opening_actions(
     """Actions that take a fresh ``title`` game through its opening to the first Stock Round by uniformly
     random legal moves (1830: ``start_positions.random_start_actions``, which realizes a random allocation of
     the privates). Ranged prices are uniform multiples of the range's step in ``[lo, max_price_multiple * lo]``
-    (clipped to the range). A title that opens with a Stock Round (the 1822 family) returns ``[]``."""
+    (clipped to the range; a range from $0 -- a private's opening bid in the 1822 family -- takes
+    ``[lo, lo + 20 steps]``). A title that opens with a Stock Round (the 1822 family) plays that Stock Round,
+    its opening auction, to its end (:func:`opening_done`)."""
     rng = rng or random.Random()
     if str(title) == "1830":
         from rl18xx.agent.alphazero.start_positions import random_start_actions
@@ -230,8 +263,9 @@ def random_opening_actions(
         return random_start_actions(num_players, rng, max_price_multiple)
     play = title_play(title)
     raw = raw_game(new_title_game(title, num_players, seed=seed))
+    zero_steps = 20 if opens_with_stock_round(title) else 0
     for _ in range(max_actions):
-        if raw.finished or raw.round.round_type == STOCK_ROUND:
+        if raw.finished or opening_done(title, raw):
             return [dict(a) for a in raw.raw_actions]
         moves = play.generator_moves(raw)
         if moves is not None:
@@ -240,9 +274,11 @@ def random_opening_actions(
             move = rng.choice(moves)
             action = dict(move.get("wire", move))
             span = move.get("range")
-            if span and "price" in action:
+            if span and price_field(action) in action:
                 step = span[2] if len(span) > 2 else 1
-                action["price"] = _random_price(span[0], span[1], step, rng, max_price_multiple)
+                action[price_field(action)] = _random_price(
+                    span[0], span[1], step, rng, max_price_multiple, zero_steps
+                )
             raw.process_action(action)
             continue
         legal = play.legal(raw)
@@ -250,7 +286,7 @@ def random_opening_actions(
         price = None
         if play.open_price(legal, k):
             lo, hi, step = (int(x) for x in legal.price_range[k])
-            price = _random_price(lo, hi, step, rng, max_price_multiple)
+            price = _random_price(lo, hi, step, rng, max_price_multiple, zero_steps)
         elif len(legal):
             price = play.fixed_price(raw, legal, k)
         play.apply(raw, legal, k, price)
@@ -334,6 +370,10 @@ def sample_start(
     probability ``random_fraction`` (always without human starts of this count), else a human SR1 start."""
     rng = rng or random.Random()
     if auction_fraction > 0 and rng.random() < auction_fraction:
+        if opens_with_stock_round(title):
+            # the 1822 family's setup shuffles the company stacks by the engine seed (None = 0: every opening
+            # would deal the same bid boxes)
+            return GenericStart(AUCTION_START, (), rng.randrange(1 << 31))
         return GenericStart(AUCTION_START, ())
     if midgame_path and midgame_fraction > 0 and rng.random() < midgame_fraction:
         games = load_midgame_file(midgame_path, title).get(int(num_players), [])
@@ -432,12 +472,36 @@ def stock_round_cuts(
     return cuts
 
 
-def check_cut(title: str, num_players: int, actions: Sequence[dict], seed: Optional[int] = None) -> Optional[str]:
-    """None if ``actions`` replay strictly on a fresh game to an unfinished Stock Round."""
+def opening_end_cut(
+    title: str, num_players: int, actions: Sequence[dict], seed: Optional[int] = None
+) -> Optional[int]:
+    """The prefix length after which a title that opens with a Stock Round (:data:`OPENS_WITH_STOCK_ROUND`) has
+    played that Stock Round -- the first position whose round is not a Stock Round (OR1, or the Choices round
+    before it) --, or None if the log never gets there. Replays the log on a fresh game."""
+    raw = raw_game(new_title_game(title, num_players, seed=seed))
+    for i in range(len(actions) + 1):
+        if raw.finished:
+            return None
+        if raw.round.round_type != STOCK_ROUND:
+            return i
+        if i < len(actions):
+            raw.process_action(dict(actions[i]))
+    return None
+
+
+def check_cut(
+    title: str, num_players: int, actions: Sequence[dict], seed: Optional[int] = None, opening_end: bool = False
+) -> Optional[str]:
+    """None if ``actions`` replay strictly on a fresh game to an unfinished Stock Round (``opening_end``: to an
+    unfinished round that is not a Stock Round, the end of an opening Stock Round)."""
     try:
         raw = raw_game(apply_actions(new_title_game(title, num_players, seed=seed), actions))
     except Exception:
         return "strict_replay_error"
+    if opening_end:
+        if raw.finished:
+            return "cut_at_finished_game"
+        return "cut_at_stock_round" if raw.round.round_type == STOCK_ROUND else None
     if raw.finished or raw.round.round_type != STOCK_ROUND:
         return "cut_not_at_stock_round"
     return None
@@ -517,12 +581,19 @@ def replay_human_game(title: str, game: dict) -> Tuple[Optional[ReplayedGame], O
 def start_records(
     title: str, replayed: ReplayedGame, first_round: int = 2, last_round: int = 6
 ) -> Tuple[Optional[dict], Optional[dict], Optional[str]]:
-    """The SR1 start record and the mid-game record (Stock Rounds ``first_round``..``last_round``) of a
-    replayed human game, each prefix checked to replay strictly to a Stock Round; ``(start, midgame,
-    reason)`` with None for a part the game has not got."""
+    """The start record and the mid-game record (Stock Rounds ``first_round``..``last_round``) of a replayed
+    human game, each prefix checked to replay strictly to a Stock Round; ``(start, midgame, reason)`` with
+    None for a part the game has not got. The start is SR1's beginning (1830, 1867: after the auction) or, for
+    a title that opens with a Stock Round (the 1822 family), SR1's end (:func:`opening_end_cut`; such a record
+    carries ``"start": "sr1_end"``)."""
     n = replayed.num_players
     try:
         cuts = stock_round_cuts(title, n, replayed.actions, replayed.seed, last_round)
+        first = (
+            opening_end_cut(title, n, replayed.actions, replayed.seed)
+            if opens_with_stock_round(title)
+            else cuts.get(1)
+        )
     except Exception as e:  # a log that does not replay on a fresh game
         return None, None, f"log_replay_error: {type(e).__name__}"
     if 1 not in cuts:
@@ -531,9 +602,14 @@ def start_records(
     if replayed.seed is not None:
         base["seed"] = int(replayed.seed)
     start = None
-    reason = check_cut(title, n, replayed.actions[: cuts[1]], replayed.seed)
+    if first is None:
+        reason = "no_sr1_end"
+    else:
+        reason = check_cut(title, n, replayed.actions[:first], replayed.seed, opening_end=opens_with_stock_round(title))
     if reason is None:
-        start = {**base, "actions": replayed.actions[: cuts[1]]}
+        start = {**base, "actions": replayed.actions[:first]}
+        if opens_with_stock_round(title):
+            start["start"] = "sr1_end"
     later = {k: v for k, v in cuts.items() if first_round <= k <= last_round}
     for k, length in sorted(later.items()):
         if check_cut(title, n, replayed.actions[:length], replayed.seed) is not None:
@@ -552,9 +628,13 @@ __all__ = [
     "GeneratorTitlePlay",
     "ReplayedGame",
     "TitlePlay",
+    "OPENS_WITH_STOCK_ROUND",
     "load_midgame_file",
     "load_start_file",
     "new_title_game",
+    "opening_done",
+    "opening_end_cut",
+    "opens_with_stock_round",
     "random_opening_actions",
     "register_replay_loader",
     "register_title_play",

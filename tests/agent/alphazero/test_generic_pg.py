@@ -356,7 +356,10 @@ def test_random_openings_reach_the_first_stock_round():
         raw = gp.apply_actions(gp.new_title_game(title, n, seed=7), actions)
         assert raw.round.round_type == "Stock" and not raw.finished
         assert actions
-    assert gp.random_opening_actions("1822", 4, random.Random(0), seed=1) == []  # opens with a Stock Round
+    # the 1822 family opens with its bid-box Stock Round: a random opening plays it to its end
+    actions = gp.random_opening_actions("1822", 4, random.Random(0), seed=1)
+    raw = gp.apply_actions(gp.new_title_game("1822", 4, seed=1), actions)
+    assert actions and raw.round.round_type != "Stock" and not raw.finished
 
 
 def test_start_records_from_a_replayed_game(tmp_path):

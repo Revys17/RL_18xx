@@ -111,7 +111,11 @@ seat 0 is the player deciding the current move -- the mover rule of 1830's canon
 `acting_for_entity` (`g1822_acting_player`'s logic: a company's owner, the NdeM's chooser, ...). With nobody to move
 (a finished game) the rotation is 0. `meta[5]` is the rotation: seat k is player `(k + rotation) mod n` of the seating
 order. (1830's legacy encoder rotates the players sorted by id; every game `titles.new_game` builds numbers its
-players 1..n in seating order, so the two agree there.) Seats beyond the player count are padding (type 0, masked).
+players 1..n in seating order, so the two agree there.) The 1822 family reorders `BaseGame.players` every Stock Round
+(by cash, Ruby's `reorder_players`), so there the rotation indexes the order *as it stands*, not the order the game
+started in: per-player values kept in the starting order (outcomes, rewards) reach the seats by player id
+(`generic_data.seat_order`; `docs/rl_model.md` "1822 family", "Seats"). Seats beyond the player count are padding
+(type 0, masked).
 Every per-seat column (`pct_seat_k`, `bid_seat_k`) and seat pointer uses the rotated seats. `MAX_SEATS` stays 6.
 
 ### Feature schemas

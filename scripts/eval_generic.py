@@ -86,6 +86,7 @@ def play_games(game_indices: list, settings: dict) -> list:
         seats = list(seatings[idx % len(seatings)])
         g = gpg._Game(raw=raw, uid=str(idx), opponent="", seat_models=seats, start=start.label)
         g.seed, g.idx = start.seed, idx
+        g.seating = [int(p.id) for p in raw.players]  # (the 1822 family reorders raw.players every Stock Round)
         games.append(g)
 
     def client(side):
@@ -109,7 +110,7 @@ def play_games(game_indices: list, settings: dict) -> list:
         rotation = enc["meta"][:, 5]
         by_side = defaultdict(list)
         for i, (g, _) in enumerate(pending):
-            by_side[g.seat_models[int(rotation[i])]].append(i)
+            by_side[g.seat_models[gpg.mover_seat(g.raw, g.seating, int(rotation[i]))]].append(i)
         sent = {}
         for side, rows in by_side.items():
             arrays = mg.add_legal_inputs(slice_positions(enc, rows), [pending[i][1] for i in rows])
@@ -129,12 +130,12 @@ def play_games(game_indices: list, settings: dict) -> list:
                 else:
                     price = play.fixed_price(g.raw, legal, k)
                 g.auction_decisions += g.raw.round.round_type == "Auction"
-                play.apply(g.raw, legal, k, price)
-                g.decisions += 1
+                if gpg.apply_move(g, play, legal, k, price):  # (a refused move ends the game: "rejected_move")
+                    g.decisions += 1
 
     records = []
     for g in finished:
-        worth, win_share, fractions = gpg.game_outcome(g.raw)
+        worth, win_share, fractions = gpg.game_outcome(g.raw, g.seating)
         record = {
             "idx": g.idx,
             "seats": list(g.seat_models),
@@ -145,10 +146,12 @@ def play_games(game_indices: list, settings: dict) -> list:
             "termination": g.termination,
             "start": g.start,
         }
-        if g.idx < settings.get("save_games", 0):
+        if g.rejected:
+            record["rejected_move"] = g.rejected
+        if g.idx < settings.get("save_games", 0) or g.rejected:
             record["net_worth"] = worth.tolist()
             record["seed"] = g.seed
-            record["players"] = [[int(p.id), str(p.name)] for p in g.raw.players]
+            record["players"] = gpg.seating_players(g.raw, g.seating)
             record["raw_actions"] = [dict(a) for a in g.raw.raw_actions]
         records.append(record)
     return records
@@ -266,7 +269,7 @@ def main():
     for match_index, (a, b) in enumerate(args.match):
         summary, records = run_match(a, b, args)
         summaries.append(summary)
-        if args.save_games:
+        if args.out and (args.save_games or any(r.get("rejected_move") for r in records)):
             save_game_logs(Path(args.out), match_index, a, b, args.title, records)
         all_records.extend({"match": f"{a} vs {b}", **r} for r in records)
         print(

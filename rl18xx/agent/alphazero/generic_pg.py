@@ -287,12 +287,15 @@ class PGRow:
     choice: int  # the played row's index in the legal list
     old_logp: float  # log-probability it was sampled with: move at the learner's temperature + price cell
     price_cell: int  # the played row's price cell (-1: no open price)
-    seat: int  # the mover's seat (seating order) = the encoder's rotation
+    seat: int  # the mover's seat (seating order; the encoder's rotation unless the title reorders its players)
     num_players: int
     advantage: float = 0.0  # the seat's reward, then reward - V(s) (subtract_baselines)
     win: Optional[np.ndarray] = None  # (6,) win share, seat frame
     score: Optional[np.ndarray] = None  # (6,) score-head target (placement points / reward), seat frame
     price_grid: bool = False  # the legal list's price grid (1867: cells in step units, as the server's mask)
+    #: (n,) each encoder seat's seating index (``generic_data.seat_order``; None: ``(arange(n) + seat) mod n``). The
+    #: 1822 family reorders its players every Stock Round, so the seat frame is not a rotation of the seating order.
+    order: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -303,6 +306,9 @@ class _Game:
     seat_models: list
     start: str
     seed: Optional[int] = None
+    #: Player ids in seating order (the game's start): seats, rewards and saved games use it, not the
+    #: engine's current ``players`` (which the 1822 family reorders every Stock Round).
+    seating: list = field(default_factory=list)
     decisions: int = 0
     auction_decisions: int = 0  # decisions taken in an Auction round (1830 waterfall, 1867 single-item auction)
     termination: Optional[str] = None
@@ -312,6 +318,8 @@ class _Game:
     seat_members: dict = field(default_factory=dict)
     slot_versions: dict = field(default_factory=dict)
     league_mixed: bool = False
+    #: A generated move the engine refused (``apply_move``): the game ends there as it stands (``rejected_move``).
+    rejected: Optional[dict] = None
 
 
 def tempered_logp(logp: np.ndarray, temperature: float) -> np.ndarray:
@@ -344,11 +352,34 @@ def _decompress(blob: bytes):
     return pickle.loads(lz4.frame.decompress(blob))
 
 
+def apply_move(g: _Game, play, legal, k: int, price) -> bool:
+    """Apply legal row ``k`` at ``price``; a move the title's generator offered but the engine refuses (a generator
+    bug: 2026-11-14, an 1822CA tile lay "216-1 is not legally rotated for 512") ends the game as it stands
+    (``termination`` "rejected_move", the move and the error in ``g.rejected``) instead of the whole pool task."""
+    try:
+        play.apply(g.raw, legal, k, price)
+        return True
+    except RuntimeError as e:
+        wires = getattr(legal, "wires", None)
+        g.rejected = {
+            "index": int(legal.indices[k]),
+            "wire": dict(wires[k]) if wires is not None else None,
+            "price": None if price is None else int(price),
+            "error": str(e)[:300],
+            "action_count": len(g.raw.raw_actions),
+        }
+        g.termination = "rejected_move"
+        LOGGER.warning("Game %s: the engine refused a generated move (%s); the game ends here", g.uid, g.rejected)
+        return False
+
+
 def _advance(g: _Game, play, settings: dict):
     """Apply forced moves until a decision (its ``LegalActions``) or the end (None): a finished game, the
-    decision cap (scored on net worth as it stands) or an auction stall."""
+    decision cap (scored on net worth as it stands), an auction stall, a Ruby dead end or a refused move."""
     raw = g.raw
     while True:
+        if g.termination == "rejected_move":
+            return None
         if raw.finished:
             g.termination = g.termination or "finished"
             return None
@@ -361,16 +392,23 @@ def _advance(g: _Game, play, settings: dict):
             return None
         legal = play.legal(raw)
         if len(legal) == 0:
+            if raw.g1822_ruby_dead_end():
+                # The 1822 family: a state Ruby cannot continue either (it raises on the only way on, e.g. 1822MX's
+                # NdeM out of tokens for an 11th home; g1822_remaining_work.md "Known issues"): scored as it stands.
+                g.termination = "dead_end"
+                return None
             raise RuntimeError(f"game {g.uid}: no legal action in an unfinished game")
         if play.is_decision(legal):
             return legal
-        play.apply(raw, legal, 0, play.fixed_price(raw, legal, 0))
+        apply_move(g, play, legal, 0, play.fixed_price(raw, legal, 0))
 
 
-def game_outcome(raw) -> tuple:
-    """``(net worth, win share, net-worth fractions)`` per seat in seating order (``raw.result()``)."""
+def game_outcome(raw, seating: Optional[Sequence[int]] = None) -> tuple:
+    """``(net worth, win share, net-worth fractions)`` per seat in seating order (``raw.result()``); ``seating`` = the
+    player ids in seating order (default: ``raw.players`` as they stand, which the 1822 family reorders)."""
     result = raw.result()
-    worth = np.array([float(result.get(p.id, 0)) for p in raw.players], dtype=np.float64)
+    ids = list(seating) if seating else [p.id for p in raw.players]
+    worth = np.array([float(result.get(pid, 0)) for pid in ids], dtype=np.float64)
     winners = worth >= worth.max() - 1e-6
     win_share = (winners / winners.sum()).astype(np.float32)
     clipped = worth.clip(min=0)
@@ -391,10 +429,22 @@ def _ahead(mine: float, theirs: float) -> float:
     return 1.0 if mine > theirs else 0.5 if mine == theirs else 0.0
 
 
-def _seat_frame(values, rotation: int, n: int) -> np.ndarray:
+def _seat_frame(values, rotation: int, n: int, order=None) -> np.ndarray:
     from rl18xx.agent.alphazero.generic_data import seat_frame
 
-    return seat_frame(values, rotation, n)
+    return seat_frame(values, rotation, n, order)
+
+
+def mover_seat(raw, seating: Sequence[int], rotation: int) -> int:
+    """The seating index of the player the encoder put at seat 0 (``meta[:, 5]`` is the mover's index in the
+    engine's current ``players``; equal to the seating index unless the title reorders its players)."""
+    return list(seating).index(int(raw.players[int(rotation)].id))
+
+
+def seating_players(raw, seating: Sequence[int]) -> list:
+    """``[[id, name]]`` in seating order (saved games replay from it)."""
+    names = {int(p.id): str(p.name) for p in raw.players}
+    return [[int(pid), names[int(pid)]] for pid in seating]
 
 
 def _auction_prices(title: str, start: str, termination: Optional[str], raw) -> Optional[dict]:
@@ -410,6 +460,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
     """Pool task: play ``num_games`` concurrent games of one title and player count on the generic servers
     and return the learner's kept decisions (rewards filled in) and each game's result."""
     from rl18xx.agent.alphazero import model_generic as mg
+    from rl18xx.agent.alphazero.generic_data import seat_order
     from rl18xx.agent.alphazero.generic_inference import slice_positions
     from rl18xx.agent.alphazero.generic_play import replayed_start, title_play
     from rl18xx.agent.alphazero.generic_tokens import encode_batch
@@ -442,6 +493,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
         opponent = "league" if settings.get("league") else seat_models[min(set(range(n_players)) - learner)]
         g = _Game(raw=raw, uid=uuid.uuid4().hex, opponent=opponent, seat_models=seat_models, start=start.label)
         g.seed = start.seed
+        g.seating = [int(p.id) for p in raw.players]
         g.learner = set(learner)
         g.seat_members = seat_members
         if seat_members:
@@ -468,9 +520,10 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
         t0 = time.monotonic()
         enc = encode_batch([g.raw for g, _ in pending])
         rotation = enc["meta"][:, 5]
+        movers = [mover_seat(g.raw, g.seating, int(rotation[i])) for i, (g, _) in enumerate(pending)]
         by_model = defaultdict(list)
         for i, (g, _) in enumerate(pending):
-            by_model[g.seat_models[int(rotation[i])]].append(i)
+            by_model[g.seat_models[movers[i]]].append(i)
         sent = {}
         for name, rows in by_model.items():
             arrays = mg.add_legal_inputs(slice_positions(enc, rows), [pending[i][1] for i in rows])
@@ -502,7 +555,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
                 else:
                     price = play.fixed_price(g.raw, legal, k)
                 if is_learner:
-                    seat = int(rotation[i])
+                    seat = movers[i]
                     g.seen[seat] += 1
                     keep = len(g.reservoir[seat]) < k_keep
                     slot = len(g.reservoir[seat])
@@ -520,6 +573,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
                             seat=seat,
                             num_players=n_players,
                             price_grid=bool(legal.price_grid),
+                            order=seat_order(g.raw, g.seating, int(rotation[i])),
                         )
                         if slot < len(g.reservoir[seat]):
                             g.reservoir[seat][slot] = row
@@ -528,22 +582,22 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
                     stats["learner_decisions"] += 1
                     stats["learner_price_decisions"] += cell >= 0
                 g.auction_decisions += g.raw.round.round_type == "Auction"
-                play.apply(g.raw, legal, k, price)
-                g.decisions += 1
-                decisions_total += 1
+                if apply_move(g, play, legal, k, price):
+                    g.decisions += 1
+                    decisions_total += 1
             t_play += time.monotonic() - tp
 
     records = []
     save_every = settings.get("save_game_every", 0)
     for g in finished:
-        worth, win_share, fractions = game_outcome(g.raw)
+        worth, win_share, fractions = game_outcome(g.raw, g.seating)
         reward, placement = seat_rewards(settings["reward"], worth, win_share)
         rows = []
         for seat, kept in g.reservoir.items():
             for row in kept:
                 row.advantage = float(reward[seat])
-                row.win = _seat_frame(win_share, row.seat, n_players)
-                row.score = _seat_frame(placement, row.seat, n_players)
+                row.win = _seat_frame(win_share, row.seat, n_players, row.order)
+                row.score = _seat_frame(placement, row.seat, n_players, row.order)
                 rows.append(row)
         record = {
             "uid": g.uid,
@@ -579,14 +633,16 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
                     for seat, member in g.seat_members.items()
                 ]
             )
-        if save_every and py_rng.random() * save_every < 1.0:
+        if g.rejected:
+            record["rejected_move"] = g.rejected
+        if (save_every and py_rng.random() * save_every < 1.0) or g.rejected:  # (a refused move: always kept)
             record["saved_game"] = {
                 "start": g.start,
                 "seed": g.seed,
                 "net_worth": worth.tolist(),
                 "worth_share": fractions.tolist(),
                 "raw_actions": [dict(a) for a in g.raw.raw_actions],
-                "players": [[int(p.id), str(p.name)] for p in g.raw.players],
+                "players": seating_players(g.raw, g.seating),
                 "optional_rules": list(getattr(g.raw, "optional_rules", None) or []),
                 "auction_unlock": bool(g.raw.auction_unlock) if hasattr(g.raw, "auction_unlock") else False,
                 "no_buyback_rule": bool(g.raw.no_buyback_rule) if hasattr(g.raw, "no_buyback_rule") else False,
@@ -636,6 +692,7 @@ def save_game(run_dir: Path, record: dict, update: int, learner_checkpoint: str,
         "opponent_temperature": cfg.opponent_temperature,
         "start": saved["start"],
         "termination": record["termination"],
+        **({"rejected_move": record["rejected_move"]} if record.get("rejected_move") else {}),
         "decisions": record["decisions"],
         "win_share": record["win_share"],
         "net_worth": saved["net_worth"],
