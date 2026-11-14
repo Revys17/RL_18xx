@@ -40,19 +40,23 @@ def _config(start_file, **overrides) -> sl.SearchLearningConfig:
     return cfg
 
 
-def _generate(cfg, seconds=6.0):
+def _generate(cfg, seconds=6.0, min_games=1):
     """Generator games (HashNet), with each finished game's search values and search records
-    as the generator held them."""
-    gen = sl.Generator(sl.worker_settings(cfg, version=7), {"learner": ModelEvaluator(HashNet())})
-    kept = {}
-    finish = gen._finish
+    as the generator held them: runs of ``seconds`` until at least ``min_games`` games (at most 8 runs) --
+    a fixed time alone plays too few games on a loaded machine (the pre-push gate beside other jobs)."""
+    games, kept = [], {}
+    for _ in range(8):
+        gen = sl.Generator(sl.worker_settings(cfg, version=7), {"learner": ModelEvaluator(HashNet())})
+        finish = gen._finish
 
-    def keep(g):
-        kept[g.uid] = (list(g.search_values), list(g.searches))
-        return finish(g)
+        def keep(g, finish=finish):
+            kept[g.uid] = (list(g.search_values), list(g.searches))
+            return finish(g)
 
-    gen._finish = keep
-    games = gen.run(seconds)["games"]
+        gen._finish = keep
+        games += gen.run(seconds)["games"]
+        if len(games) >= min_games:
+            break
     assert games and all("saved" in g for g in games)
     return games, kept
 
@@ -147,7 +151,7 @@ def _digest(path) -> str:
 
 def test_a_crash_mid_shard_keeps_the_earlier_shards_and_recovers_the_journal(tmp_path, start_file):
     cfg = _config(start_file)
-    games, _ = _generate(cfg, seconds=4.0)
+    games, _ = _generate(cfg, seconds=4.0, min_games=7)
     assert len(games) >= 7
     directory = tmp_path / "data"
     writer = sd.SearchDataWriter(directory, dataclasses.asdict(cfg), shard_games=2)

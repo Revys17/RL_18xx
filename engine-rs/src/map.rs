@@ -343,6 +343,11 @@ fn compute_corp_graph(
         }
     }
 
+    // The walk visits nodes through hash sets, so the order cities were found in changes from run to
+    // run; sort them (hex id, then city) so every caller, and the move lists built from them, see one
+    // order (the Python ActionHelper sorts its token moves too). The set itself is unchanged.
+    tokenable.sort_by(|a, b| (a.hex_id.as_str(), a.city_index).cmp(&(b.hex_id.as_str(), b.city_index)));
+
     CorpGraph {
         connected_hexes: visited_hexes,
         connected_nodes: visited_nodes,

@@ -34,12 +34,7 @@ def generated(tmp_path_factory):
     cfg = _config(str(start), n_fast=2, auction_fraction=0.3)
     # At least 24 games, not a fixed 8 s: on a loaded machine (the pre-push gate beside other jobs) 8 s plays
     # too few, and cycles then run out of positions (2 steps) or fail their gate.
-    games = []
-    for _ in range(6):
-        more, _ = _generate(cfg, seconds=8.0)
-        games.extend(more)
-        if len(games) >= 24:
-            break
+    games, _ = _generate(cfg, seconds=8.0, min_games=24)
     assert len(games) >= 12
     half = len(games) // 2
     data = root / "data"
