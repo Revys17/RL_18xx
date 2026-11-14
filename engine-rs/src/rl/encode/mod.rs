@@ -52,7 +52,16 @@ pub use spec::{rl_spec_for, RlSpec};
 ///   family's game-end flags, committed cash, cert count, net worth, the
 ///   global lot pointer (the decision's subject) and an assigned company's
 ///   hex now follow the family's own rules (`docs/rl_encoder.md`).
-pub const ENCODER_VERSION: u32 = 2;
+/// * 3 (2026-11-14): 1822's optional rules as global flags (`schema::RULE_FLAGS`:
+///   1822+, its No Removals / Single Stack modifiers, the multi-share tax
+///   haven), appended to the global token inside the packed width (`F_ENT`
+///   unchanged). 0 for every other title and for base-rules 1822, whose
+///   encodings are version 2's bit for bit (cargo
+///   `v1_columns_of_1830_and_1867_unchanged`, `rule_flags_follow_the_options`;
+///   `docs/rl_encoder.md` "Version 3"). Version 2 checkpoints load
+///   (`model_generic.COMPATIBLE_ENCODER_VERSIONS`): their inputs are unchanged
+///   wherever no rule flag is set.
+pub const ENCODER_VERSION: u32 = 3;
 
 /// Seat tokens per position (= the value head's width, `encoder::MAX_PLAYERS`).
 pub const MAX_SEATS: usize = crate::encoder::MAX_PLAYERS;

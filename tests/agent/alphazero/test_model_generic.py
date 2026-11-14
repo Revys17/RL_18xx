@@ -650,6 +650,13 @@ def test_checkpoint_round_trip_and_refusals(mixed, tmp_path):
     for name, edit in cases.items():
         with pytest.raises(mg.CheckpointMismatch):
             mg.load_checkpoint(tampered(edit))
+    # an older encoder version listed as compatible loads (version 3 only appends 1822's rule flags); an
+    # older one that is not does not
+    current = schema()["version"]
+    for old in mg.COMPATIBLE_ENCODER_VERSIONS.get(current, ()):
+        mg.load_checkpoint(tampered(lambda p, old=old: p["generic_meta"].__setitem__("encoder_version", old)))
+    with pytest.raises(mg.CheckpointMismatch):
+        mg.load_checkpoint(tampered(lambda p: p["generic_meta"].__setitem__("encoder_version", 1)))
     # an appended vocabulary entry is fine (the saved list is a prefix of the current one)
     ok = tampered(
         lambda p: p["generic_meta"]["vocab"].__setitem__("families", p["generic_meta"]["vocab"]["families"][:-1])

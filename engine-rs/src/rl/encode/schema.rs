@@ -181,6 +181,22 @@ pub const GLOBAL_FEATURES: &[&str] = &[
     "pullman_attached", // this turn's routes: the pullman is attached to a train
     "grain_attached",   // 1822CA: the grain train is attached
     "attach_skipped",   // 1822CA: pullman / grain attachment declined this turn, / 2
+    // -- version 3 (1822's optional rules; 0 for every other title and for base rules) ---
+    "rule_plus_expansion",     // 1822+ is in play (six more minors, three more privates, category bid boxes)
+    "rule_plus_no_removals",   // 1822+ without the setup removal of three privates
+    "rule_plus_single_stack",  // 1822+ privates in one stack filling the three boxes (not by category)
+    "rule_tax_haven_multiple", // the tax haven (P16) may own several shares
+];
+
+/// Version 3's rule flags: (global feature, the optional rule, the rule it needs). A flag is 1 when the
+/// game's optional rules hold the rule and the rule it needs (a modifier without 1822+ does nothing, as in
+/// Ruby): 1822's options only, so every other title's flags are 0 (1822CA's built-in multi-share tax haven
+/// is its title's rule, not an option).
+pub const RULE_FLAGS: &[(&str, &str, Option<&str>)] = &[
+    ("rule_plus_expansion", "plus_expansion", None),
+    ("rule_plus_no_removals", "plus_expansion_no_removals", Some("plus_expansion")),
+    ("rule_plus_single_stack", "plus_expansion_single_stack", Some("plus_expansion")),
+    ("rule_tax_haven_multiple", "tax_haven_multiple", None),
 ];
 
 pub const PLAYER_FEATURES: &[&str] = &[

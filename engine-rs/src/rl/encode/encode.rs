@@ -1124,6 +1124,15 @@ impl BaseGame {
                     w.slice(8);
                 }
             }
+            // -- version 3: 1822's optional rules (0 elsewhere) ------------------------
+            if self.title == "1822" {
+                let has = |r: &str| self.optional_rules.iter().any(|x| x == r);
+                for (_, rule, needs) in RULE_FLAGS {
+                    w.flag(has(rule) && needs.map_or(true, |n| has(n)));
+                }
+            } else {
+                w.slice(RULE_FLAGS.len());
+            }
             w.done(GLOBAL_FEATURES.len());
         }
         let lot = if let Some(a) = auction {

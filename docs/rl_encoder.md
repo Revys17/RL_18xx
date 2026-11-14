@@ -1,9 +1,11 @@
 # Title-generic token encoder (RL bridge milestone B1)
 
 *2026-11-13. Design: `docs/rl_bridge_design.md` §3 (and the user's decisions of 2026-11-13 at its top);
-package B of `docs/rl_bridge_work_packages.md`. Encoder version 2 (`ENCODER_VERSION`): version 2 added the
+package B of `docs/rl_bridge_work_packages.md`. Encoder version 3 (`ENCODER_VERSION`): version 2 added the
 1822 family's state (section "Version 2: the 1822 family"); 1830's and 1867's encodings are version 1's
-bit for bit, with every appended column 0.*
+bit for bit, with every appended column 0. Version 3 (2026-11-14) appended 1822's optional rules as four global
+flags (section "Version 3: 1822's optional rules"); every other title's and base-rules 1822's encodings are
+version 2's bit for bit.*
 
 The 1830 encoder (`engine-rs/src/encoder.rs`, `encoder.py`) is a flat vector whose layout is tied to 1830's
 corporations, privates and map; it stays frozen for the 1830 models. This encoder turns a position of **any**
@@ -127,7 +129,7 @@ The values are in `rl_spec_info(title)["normalizers"]`.
 
 Version 2's columns (marked v2) come after version 1's in every schema and are 0 for 1830 and 1867.
 
-**global** (37)
+**global** (41)
 
 | feature | value |
 |---|---|
@@ -148,6 +150,7 @@ Version 2's columns (marked v2) come after version 1's in every schema and are 0
 | bids_this_turn (v2) | bids this stock turn / bids allowed per turn (`bidding_tokens_per_action`) |
 | upgraded_this_turn (v2) | the operator has upgraded a tile this turn |
 | pullman_attached, grain_attached, attach_skipped (v2) | this turn's route choices: the pullman / 1822CA's grain train attached; attachments declined / 2 |
+| rule_plus_expansion, rule_plus_no_removals, rule_plus_single_stack, rule_tax_haven_multiple (v3) | 1822's optional rules in play (`schema::RULE_FLAGS`): 1822+, its No Removals / Single Stack modifiers (0 without 1822+, which they need), the multi-share tax haven; 0 for every other title |
 
 **player** (22): present, is_mover, cash (/ sc), certs (/ cert limit, counted as the engine's
 `num_certs_internal`; the 1822 family: `g1822_num_certs`, which takes P16 / P11 off and leaves the NdeM and owner-only
@@ -440,6 +443,43 @@ choice the family's generators offer points at an existing token -- no new token
 
 A multi-step decision's other party (the minor being acquired, the merger's new major, the auctioned NdeM) is marked
 `subject` and named by the global lot pointer, so a descriptor row need not carry it.
+
+## Version 3: 1822's optional rules (2026-11-14)
+
+The user moved 1822's data and self-play onto the 1822+ rules (2026-11-14, `docs/rl_model.md` "1822+: the optional
+rules"), so one 1822 network plays every combination of 1822's four options (Ruby `g_1822/meta.rb`): 1822+
+(`plus_expansion`: six more minors, three more privates, the privates in three category bid boxes, three privates
+removed at setup), its modifiers No Removals (`plus_expansion_no_removals`) and Single Stack
+(`plus_expansion_single_stack`), and the multi-share tax haven (`tax_haven_multiple`). What the state already shows
+and what it does not:
+
+| option | visible in a version 2 encoding? |
+|---|---|
+| 1822+ | partly: base rules close minors 25-30 and P19-P21 at setup (their tokens read `closed`), but closed companies are common later (bought minors, phase closures), so late positions do not tell |
+| No Removals | at setup only (three privates closed), and its effect ends there |
+| Single Stack | no: which private fills an emptied box (one stack vs the next of the same category) is a rule, not state |
+| tax haven multiple | no: whether P16 may buy more shares is a rule |
+
+Version 3 appends one global flag per option (`schema::RULE_FLAGS`, global columns 37-40): 1 when the game's
+`optional_rules` hold it and, for the modifiers, 1822+ too (a modifier without 1822+ changes nothing in Ruby or the
+engine: it reads 0, and the pipeline drops it from a game's rules, `titles.TitleSpec.canonical_rules`). Flags are
+read from 1822 games only: 1822CA's built-in multi-share tax haven is its title's rule, and 1830's / PNW's / MX's
+own options are not flags (those titles play base rules), so every other title's flags are 0. The packed entity
+width `F_ENT` (58) does not change (the global token's 41 columns fit), so model shapes do not either, and a
+version 2 checkpoint loads under version 3 (`model_generic.COMPATIBLE_ENCODER_VERSIONS`): its inputs are unchanged
+everywhere it was trained; the flags meet untrained weights (fine-tune on 1822+ data before use there).
+
+**Bit-identity.** Before the change 105,169 positions were encoded by version 2 and again by version 3 and
+compared array by array (every token array, the global token's columns from 37 on aside): the replays of up to 8
+fixtures of every title (1830, 1867, 1822 including its 1822+ fixtures, PNW, MX, CA), 4 scrape games of each of
+1822's 16 recorded rules combinations (inert modifiers included) and 6 scrape games each of PNW, MX (3 with
+`higher_cert_limit`) and CA. Every version 2 column was identical; the new columns were 0 except 1822's flags,
+which named each game's options exactly (16 combinations; a modifier without 1822+ read 0). Tests: cargo
+`rule_flags_follow_the_options` (walks under seven combinations, the flags on every position; a fresh game under
+the tax-haven option encodes as the base game but for its flag; other titles' flags 0) and
+`v1_columns_of_1830_and_1867_unchanged` (its digests unchanged, appended columns 0); pytest
+`test_v3_rule_flags_name_the_1822_options`, `test_v2_columns_are_zero_for_1830_and_1867` (now also the v3 columns),
+`test_checkpoint_round_trip_and_refusals` (a version 2 checkpoint loads, version 1 does not).
 
 ## Open points for B2 and later
 
