@@ -677,9 +677,12 @@ engine does for each:
   token's identity, `Token::serial`, MX only) and Hex#lay does not sort
   cheaters (Ruby's `transform_values` sort is a no-op); the tokens up for
   auction are those at the NdeM's turn start, following their city through
-  upgrades; Ruby crashes (nil.place) when the NdeM must take an 11th home
-  with all ten tokens out, and on `close!` when the NdeM holds cash (a
-  train bought from it) — the engine raises "(Ruby raises)" there too.
+  upgrades; Ruby crashes on `close!` when the NdeM holds cash (a train
+  bought from it) — the engine raises "(Ruby raises)" there too. Ruby also
+  crashes (nil.place) when the NdeM must take an 11th home with all ten
+  tokens out; since 2026-11-14 the engine follows the printed rules there
+  instead and gives the NdeM another token (an intentional deviation: "The
+  NdeM's eleventh home" below).
 * Preprinted tile ids are "<coord>-<index in its HEXES group>" (Ruby
   init_hexes); the wire city ids use them (`Family::hex_index`, generated;
   1822 / PNW keep index 0 as validated).
@@ -709,8 +712,9 @@ engine does for each:
   walks, both policies, higher_cert_limit on even seeds); wire walks: 30
   under the title's policy (seeds 1-5) and 30 under the rules' (seeds
   6-10), 3-5p × base / higher_cert_limit, 42,579 moves — 26 finished, the
-  rest at the Ruby dead ends above (the NdeM's 11th home, its cash at
-  close!, a ranged payoff that ends the round into the 11th home); 25
+  rest at the Ruby dead ends above (the NdeM's 11th home -- no longer a
+  dead end since 2026-11-14 --, its cash at close!, a ranged payoff that
+  ends the round into the 11th home); 25
   reach the NdeM auction. Ruby HEAD replays all 60 with zero divergence
   (token slots included) and zero rejections. Bugs the walks found, fixed:
   wire city ids of preprinted hexes, a port tile upgraded to a city tile,
@@ -730,12 +734,16 @@ The title uses the family default (`RESTRICTED`). MX adds:
 
 ### MX known issues
 
-* The NdeM running out of tokens and the NdeM holding cash at close are
-  Ruby dead ends the engine mirrors (see above); real games come close
-  (2 of 363 used all ten tokens). The first is common in self-play: see
-  "The NdeM's eleventh home" below (a proposal, undecided).
+* The NdeM holding cash at close is a Ruby dead end the engine mirrors
+  (see above). The NdeM running out of tokens was one too until
+  2026-11-14 (real games come close: 2 of 363 used all ten tokens; common
+  in self-play); it now follows the printed rules -- an intentional
+  deviation from Ruby, see "The NdeM's eleventh home" below.
+* `G1822::Step::Choose#auto_actions` (an inconsequential double-cash choice
+  is passed automatically) is not mirrored by the generator, which offers
+  `choose` / `pass` (both legal).
 
-### The NdeM's eleventh home (2026-11-14: findings and a proposal -- the user decides)
+### The NdeM's eleventh home (2026-11-14: findings, the options, the user's decision: (a))
 
 In the 1822MX CPU smoke, "the NdeM has no token left for the minor's home (Ruby raises)" ended 18 of
 39 eval games at T 0.5 (3 players 10 of 12, 4 players 3 of 12, 5 players 5 of 15; 0 of 8 at T 1.0) and
@@ -802,12 +810,39 @@ site's game).**
   for evals.
 
 **Recommendation: (a).** It is the printed rule, it changes nothing Ruby can replay, and it removes
-the commonest MX termination. Until it is decided, MX self-play behaves as (c). (The other MX dead
-end, the NdeM holding cash at `close!`, needs a train bought from the NdeM -- a cross-player
-purchase the title's policy excludes -- and did not occur in the smoke.)
-* `G1822::Step::Choose#auto_actions` (an inconsequential double-cash choice
-  is passed automatically) is not mirrored by the generator, which offers
-  `choose` / `pass` (both legal).
+the commonest MX termination. (The other MX dead end, the NdeM holding cash at `close!`, needs a
+train bought from the NdeM -- a cross-player purchase the title's policy excludes -- and did not
+occur in the smoke.)
+
+**Decided (a) by the user (2026-11-14: "just give ndem more tokens"); implemented.** An intentional
+deviation from Ruby HEAD, made to follow the printed rules (5.12.6), in the engine's processing
+(replay and self-play alike -- Ruby has no state there to be faithful to): when
+`replace_minor_with_ndem` needs a station and the NdeM has no unused token, the NdeM gets a new token
+of its normal type (price 0, appended to its tokens: Ruby's `ndem.tokens << Token.new(ndem)` would
+do the same) and places it (`g1822_mx_replace_minor_with_ndem`); it is the only place the NdeM gains
+a station. Nothing else changes: the RL layout (`1822MX-v1`, fingerprint `3e7e94f94384898b`:
+PlaceToken / RemoveToken / Bid.token are indexed by city slot, not by token), the encoder (token
+counts are plain ratios, hex token counts per slot), the router (the NdeM's graph is its map tokens)
+and the privatization auction (every station on the map is a lot) take any number of stations.
+Checks:
+* **Up to the tenth station nothing changed.** The MX scrape at index level gives A4's numbers
+  (287,921 of 287,936, 0 ambiguous, 0 decode / apply mismatches); the 6 Ruby fixtures replay
+  (`tests/test_g1822mx_fixture_replay.py`). 18 wire walks (`scripts/g1822_fuzz.py --title 1822MX
+  --players 3 4 5 --seeds 1-6 --rules base`), all finished: Ruby HEAD replays the 13 that never need
+  an eleventh station with zero divergence (token slots included, the same final scores), and the
+  other 5 (11-12 stations) with zero divergence up to the action placing the eleventh, where Ruby
+  raises ``undefined method `place' for nil:NilClass``.
+* **Past it.** The smoke game above (eval `1822MX_t05_3p` m0_5), continued from its last pass by
+  random generator moves: an eleventh and a twelfth station, the privatization auction of the
+  stations in phase 7, the bank breaks at action 1,501; at every one of its 727 continued positions
+  every generated move applies under both policies (`g1822_refused_generated_moves`) and the RL index
+  API lists distinct indices. Regression: `tests/test_g1822mx_legal_moves.py::
+  test_ndem_takes_an_eleventh_station` (the game: `tests/fixtures/g1822_generator/
+  1822MX_ndem_twelve_stations.json`; also encodes the 11- and 12-station positions).
+* **The smoke's games.** Of the 41 that replay (34 eval, 7 PG), the 22 that had finished replay to
+  the same end; the 19 that had dead-ended were continued from their last recorded action by the SL
+  policy at T 0.5 in every seat: all 19 reach the game's end (18 by the bank, 1 by the stock market;
+  72-383 more decisions), with 11-14 NdeM stations at the peak, no refused move.
 
 ## 1822CA (2026-10-18)
 

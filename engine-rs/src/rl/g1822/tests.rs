@@ -581,8 +581,7 @@ pub(crate) fn index_walk(
                     let mut c = g.clone_for_search();
                     match c.g1822_apply_move(&x.mv.with_price(p)) {
                         Ok(()) => {}
-                        // A Ruby dead end the engine mirrors (1822MX: a payoff
-                        // that ends the round into the NdeM's 11th home).
+                        // A Ruby dead end the engine mirrors.
                         Err(e) if e.message.contains("(Ruby raises)") => st.ruby_dead_end_prices += 1,
                         Err(e) => {
                             return Err(format!(
@@ -629,8 +628,8 @@ pub(crate) fn index_walk(
         let mut by_move = g.clone_for_search();
         match by_move.g1822_apply_move(&chosen) {
             Ok(()) => {}
-            // The chosen price runs into a Ruby dead end (1822MX: a payoff
-            // that ends the round into the NdeM's 11th home): Ruby stops too.
+            // The chosen price runs into a Ruby dead end the engine mirrors:
+            // Ruby stops too.
             Err(e) if e.message.contains("(Ruby raises)") => {
                 st.ruby_dead_ends += 1;
                 return Ok(st);

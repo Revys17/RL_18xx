@@ -154,6 +154,14 @@ impl BaseGame {
     /// stacks (deleted, not closed), its home reservation goes, an NdeM
     /// token takes the city unless the NdeM is already there, and a new 10%
     /// NdeM share enters the pool.
+    ///
+    /// **Intentional deviation from Ruby (the user's choice, 2026-11-14):**
+    /// Ruby gives the NdeM ten tokens and crashes at an eleventh station
+    /// (`ndem.find_token_by_type` is nil: `nil.place`). The printed rules
+    /// (5.12.6) turn the removed minor's own home token into the NdeM
+    /// station, with no cap, so the NdeM gets one more token of its normal
+    /// type (price 0, appended: Ruby's `ndem.tokens << Token.new(ndem)`)
+    /// whenever it has none left. Up to the tenth station nothing changes.
     pub(crate) fn g1822_mx_replace_minor_with_ndem(&mut self, company: &str) -> Result<(), GameError> {
         self.delete_company(company);
         let minor = Self::minor_of_company(company);
@@ -173,10 +181,16 @@ impl BaseGame {
                         }
                     }
                     if !self.g1822_city_tokened_by(hi, c, NDEM) {
-                        // `ndem.find_token_by_type` is nil once its ten
-                        // tokens are out: place_token crashes (nil.place)
-                        let Some(t) = self.g1822_find_token(NDEM, "normal") else {
-                            return err("the NdeM has no token left for the minor's home (Ruby raises)");
+                        // (Ruby: `ndem.find_token_by_type` is nil once its
+                        // ten tokens are out and place_token crashes; the
+                        // rules flip the minor's own token: one more token)
+                        let t = match self.g1822_find_token(NDEM, "normal") {
+                            Some(t) => t,
+                            None => {
+                                let ci = self.ci(NDEM);
+                                self.corporations[ci].tokens.push(Token::new(NDEM.to_string(), 0));
+                                self.corporations[ci].tokens.len() - 1
+                            }
                         };
                         self.g1822_put_token(NDEM, t, hi, c, false)?;
                         self.g1822_ruby_graph_clear();

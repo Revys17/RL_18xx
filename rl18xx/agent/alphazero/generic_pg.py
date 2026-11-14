@@ -394,7 +394,8 @@ def _advance(g: _Game, play, settings: dict):
         if len(legal) == 0:
             if raw.g1822_ruby_dead_end():
                 # The 1822 family: a state Ruby cannot continue either (it raises on the only way on, e.g. 1822MX's
-                # NdeM out of tokens for an 11th home; g1822_remaining_work.md "Known issues"): scored as it stands.
+                # NdeM holding cash at its close; g1822_remaining_work.md "Known issues"): scored as it stands. (The
+                # NdeM's eleventh station, the commonest before 2026-11-14, now follows the printed rules.)
                 g.termination = "dead_end"
                 return None
             raise RuntimeError(f"game {g.uid}: no legal action in an unfinished game")

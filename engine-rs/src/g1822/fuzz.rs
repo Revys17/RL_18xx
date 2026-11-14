@@ -375,8 +375,7 @@ pub fn diff_walk(
         let m = choose(&moves, &mut rng);
         if let Err(e) = g.g1822_apply_move(&m) {
             // (a price inside a move's range can lead into a Ruby dead end
-            // the engine mirrors -- e.g. 1822MX's ranged payoff ending the
-            // round into the NdeM's 11th home: Ruby raises there too)
+            // the engine mirrors: Ruby raises there too)
             let dead_end = e.to_string().contains("(Ruby raises)");
             return DiffReport {
                 states,

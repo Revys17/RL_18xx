@@ -1717,8 +1717,9 @@ round; leave it 0). Its opening auction is SR1, where every bid locks cash and m
    `g1822_remaining_work.md` "The NdeM's eleventh home")*: the eleventh unbid first-box minor before the first
    7-train; humans let that minor go as often (79% of Stock Rounds vs the bots' 90%) but reach phase 7 two Stock
    Rounds sooner (median 8 vs 10). The printed rules have no cap (each removed minor's own token turns into an NdeM
-   station); Ruby's ten tokens are an implementation limit. Recommended: give the NdeM a token per removed minor
-   (rules-faithful; differs from Ruby only where Ruby crashes) -- undecided.
+   station); Ruby's ten tokens are an implementation limit. **Decided by the user and implemented the same day**:
+   the NdeM gets a new token per removed minor (rules-faithful; differs from Ruby only where Ruby crashes), so this
+   ending is gone.
 3. **A generated move the engine refuses** (a generator bug): one 1822CA PG game hit "216-1 is not legally rotated
    for 512" -- the generator offered the upgrade of tile 216 to 512 at a rotation `process_action` (the strict
    tile-lay rules) refuses -- and the pool task, i.e. the whole run, died. `generic_pg.apply_move` (and

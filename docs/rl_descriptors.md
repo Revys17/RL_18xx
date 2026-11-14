@@ -681,7 +681,9 @@ par prices = every market cell of a par type, percents = every share unit up to 
   Ruby dead ends are states the engine mirrors from a Ruby crash (`g1822::fuzz::ruby_dead_end`;
   `g1822_remaining_work.md`: MX's NdeM out of tokens for an 11th home or holding cash at `close!`,
   a ranged payoff that ends the round into the 11th home, ...); the walk stops there as the
-  generator's own fuzz does. Every
+  generator's own fuzz does. (Since 2026-11-14 the NdeM's 11th home follows the printed rules -- a
+  new token, an intentional deviation from Ruby -- and is no dead end; the layout did not change:
+  its token blocks are indexed by city slot.) Every
   block of every title was offered and played except blocks no walk reached (1822: none; PNW:
   `ChooseAbility` (P21's exchange token); MX: none; CA: none). The defaults (`index_fuzz_1822`,
   `..._1822pnw`, `..._1822mx`, `..._1822ca`: one seed per player count and policy) run in ~1 min
