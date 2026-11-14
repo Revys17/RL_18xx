@@ -419,7 +419,12 @@ impl BaseGame {
         add(&r.converting_major, &mut subject_corps);
         add(&r.p20_minor, &mut subject_corps);
         add(&r.special_track_company, &mut subject_companies);
-        add(&r.special_choose_company, &mut subject_companies);
+        if active_step == Some(Step::SpecialChoose) {
+            // the just-acquired company still holding its choices (P8)
+            if let Some(op) = self.g1822_operator() {
+                add(&self.g1822_special_choose_company(&op), &mut subject_companies);
+            }
+        }
         if r.ca.sawmill_state == crate::g1822::ca::SawmillState::Assigned {
             add(&Some(crate::g1822::ca::COMPANY_SAWMILL.to_string()), &mut subject_companies);
         }
