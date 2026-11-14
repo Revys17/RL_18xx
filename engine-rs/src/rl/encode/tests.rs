@@ -47,10 +47,14 @@ fn step(g: &mut BaseGame, rng: &mut StdRng) -> bool {
     match g.title.as_str() {
         "1830" => {
             let choices = g.get_factored_choices_impl();
-            let applicable: Vec<_> = choices
+            let mut applicable: Vec<_> = choices
                 .iter()
                 .filter(|c| !(c.action_type == "PlaceToken" && c.params.get("slot").map_or(false, |s| s.is_null())))
                 .collect();
+            // the factored enumeration's order is not the same run to run (a
+            // token's city choices come out of a hash map): sort by layout
+            // index so a seeded walk is reproducible
+            applicable.sort_by_key(|c| crate::action_index::legal_action_to_index(c));
             if applicable.is_empty() {
                 return false;
             }
@@ -904,16 +908,18 @@ fn walk_digest(title: &str, players: usize, seed: u64, max_moves: usize) -> (u64
 }
 
 /// 1830's and 1867's encodings are version 1's, bit for bit, on fixed random
-/// walks (the digests were taken from version 1's encoder, 1757bbf / 46c879b);
-/// every column appended since is zero (pointers -1) for them. A rules or
-/// generator change that moves these walks changes the digests too: re-take
-/// them from the previous encoder then.
+/// walks (the digests were taken from version 1's encoder, 46c879b's
+/// `rl/encode` sources with this file, the same on six runs); every column
+/// appended since is zero (pointers -1) for them. The 1830 walk sorts the
+/// factored choices (their order varies run to run). A rules or generator
+/// change that moves these walks changes the digests too: re-take them from
+/// the previous encoder then.
 #[test]
 fn v1_columns_of_1830_and_1867_unchanged() {
     let cases: &[(&str, usize, u64, u64)] = &[
-        ("1830", 3, 11, 0xf13b5fd4c3b71fee), // 1201 positions
-        ("1830", 4, 12, 0xeb716bac08b0d1ee), // 1201 positions
-        ("1830", 6, 13, 0xfb108a95c06046b3), // 572 positions
+        ("1830", 3, 11, 0x4e5ffe06818115bc), // 1201 positions
+        ("1830", 4, 12, 0x5286124f68fa3a35), // 1013 positions
+        ("1830", 6, 13, 0x819db69a44ebc66d), // 1029 positions
         ("1867", 3, 11, 0x6a9d8cfe150c499d), // 1102 positions
         ("1867", 4, 12, 0xebde5d1d8daac446), // 1056 positions
         ("1867", 6, 13, 0xf704ab16dc35a2f7), // 1174 positions

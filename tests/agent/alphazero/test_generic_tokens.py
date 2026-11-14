@@ -199,6 +199,64 @@ def test_mixed_batch_pads_to_the_largest(positions):
     assert arrays["ent_feat"].shape[1] == spec_info("1867")["num_entities"]
 
 
+# Encoder version 1's widths: version 2's appended columns are the 1822 family's state (docs/rl_encoder.md).
+V1_WIDTHS = {"hex": 106, "global": 29, "player": 16, "major": 53, "minor": 53, "national": 53, "private": 28,
+             "concession": 28, "minor_proxy": 28, "train_type": 17, "phase": 22}  # fmt: skip
+
+
+def test_v2_columns_are_zero_for_1830_and_1867(positions):
+    """Version 2 appends the 1822 family's state; for 1830 and 1867 every appended column is 0 (their
+    version-1 columns are pinned bit for bit by the cargo test ``v1_columns_of_1830_and_1867_unchanged``)."""
+    assert SCHEMA["version"] == 2
+    games = [g for key in sorted(positions) for g in positions[key][::7]]
+    arrays = encode_batch(games)
+    assert not arrays["hex_feat"][..., V1_WIDTHS["hex"] :].any()
+    for t, name in enumerate(SCHEMA["entity_types"]):
+        if t == 0:
+            continue
+        sel = arrays["ent_type"] == t
+        assert not arrays["ent_feat"][sel][:, V1_WIDTHS[name] :].any(), name
+
+
+def walk_1822_family(title: str, num_players: int, seed: int, steps: int = 300, every: int = 10) -> list:
+    from scripts.g1822_fuzz import pick as pick_1822
+
+    rng = random.Random(seed * 1_000_003 + num_players)
+    ids = {1000 + i + 1: f"Player {i + 1}" for i in range(num_players)}
+    game = engine_rs.BaseGame.new_titled(title, ids, None, seed)
+    out = []
+    for step in range(steps):
+        if game.finished:
+            break
+        moves = json.loads(game.g1822_legal_moves_json(None))
+        if not moves:
+            break
+        if step % every == 0:
+            out.append(game.pickle_clone())
+        game.process_action(dict(pick_1822(moves, rng)))
+    return out
+
+
+def test_g1822_family_encodes(positions):
+    """The 1822 family's positions (version 2's family state) batch with 1830's: shapes, masks,
+    pointers, relations, determinism; the family's bid boxes and bidding tokens are on the tokens."""
+    family = [g for k, t in enumerate(("1822", "1822PNW", "1822MX", "1822CA")) for g in walk_1822_family(t, 4, k + 1)]
+    games = family + positions[("1830", 4)][:3]
+    for dedupe in (False, True):
+        check_batch(encode_batch(games, dedupe_maps=dedupe), games)
+    arrays = encode_batch(family)
+    again = encode_batch(family)
+    for key, value in arrays.items():
+        if value is not None:
+            assert np.array_equal(value, again[key]), key
+    comp = SCHEMA["entity_features"]["minor_proxy"]
+    proxy = arrays["ent_type"] == SCHEMA["entity_types"].index("minor_proxy")
+    assert (arrays["ent_feat"][proxy][:, comp.index("bidbox_slot")] > 0).any()
+    seat = arrays["ent_type"] == SCHEMA["entity_types"].index("player")
+    left = arrays["ent_feat"][seat][:, SCHEMA["entity_features"]["player"].index("bid_tokens_left")]
+    assert ((left >= 0) & (left <= 1)).all() and (left > 0).any()
+
+
 def test_descriptors_address_tokens(positions):
     """A legal 1830 index's descriptor (milestone A1) names the hex / entity tokens
     of the same position: its hex is a real hex token, a PlaceToken's city exists on
