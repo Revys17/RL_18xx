@@ -1707,7 +1707,18 @@ round; leave it 0). Its opening auction is SR1, where every bid locks cash and m
    points, so these games carry no gradient toward bidding: wasted starts. Proposal: the generator redraws a start
    whose game ends in its opening Stock Round (a generator policy, not a rules change; counted like
    `skipped_starts`), or the family starts from SR1-end and mid-game positions only (`--auction-fraction 0`).
-   No later Stock Round ended this way in these games.
+   No later Stock Round ended this way in these games. **Decided (the user, 2026-11-14: "Ya probably just
+   redraw"), done for all four titles**: `generic_play.all_pass_opening(title, raw)` (finished, end reason `dnf`,
+   in the first Stock Round -- only that one can end so: any purchase, sale or bid clears Ruby's flag for the rest of
+   the game) marks such a game; `policy-gradient-generic` drops it (no rows, no league credit, no score) and its
+   slot plays a fresh draw (rules, start, seats), counted per update as `all_pass_redrawn` / `all_pass_rate` (and
+   `p<n>_all_pass_redrawn` with a player mix); `scripts/eval_generic.py` replays it from the start index's next
+   draw (`<seed>:<start>:r<k>`), so ties do not dilute the score (records `all_pass_redrawn`, summary total). A slot
+   keeps the 21st all-pass opening in a row (`MAX_ALL_PASS_REDRAWS` 20, termination `all_pass`: a policy that
+   always passes must not spin a worker). `--no-redraw-all-pass` / `--keep-all-pass` turn it off. The rule itself is
+   unchanged: replay, human import and the engine stay Ruby-faithful. Tests: `test_all_pass_opening_is_recognized`,
+   `test_pg_redraws_an_all_pass_opening`, `test_eval_redraws_an_all_pass_opening`
+   (`tests/agent/alphazero/test_generic_1822_rules.py`).
 2. **1822MX's Ruby dead end**: "the NdeM has no token left for the minor's home (Ruby raises)" in a late Stock Round
    (turn 10-11): Ruby crashes there too, and the engine mirrors it. Never in the 229 human games; 18 of 39 T 0.5
    self-play games (10 of 12 at 3p), 9 of 48 PG games, none of 8 at T 1.0. `generic_pg._advance` now ends such a

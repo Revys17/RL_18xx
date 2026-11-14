@@ -243,3 +243,105 @@ def test_eval_summary_by_rules():
     assert out["plus"]["games"] == 2 and out["plus"]["decisions_max"] == 30 and out["plus"]["A_score"] == 0.5
     assert out["base"]["terminations"] == {"dead_end": 1} and out["base"]["A_score"] == 1.0
     assert np.isclose(out["base"]["A_score_equal"], 1 / 3)
+
+
+# ---------------------------------------------------------------------------------------------------
+# All-pass openings: redrawn in self-play and evals (the rule itself unchanged)
+# ---------------------------------------------------------------------------------------------------
+
+
+def all_pass_game(title: str, n: int = 3, seed: int = 5):
+    """A family game whose opening Stock Round everybody passed: Ruby ends it ("dnf"), every seat tied."""
+    raw = gp.raw_game(gp.new_title_game(title, n, seed=seed))
+    while not raw.finished:
+        moves = json.loads(raw.g1822_legal_moves_json(None))
+        raw.process_action(dict(next(m for m in moves if m["wire"]["type"] == "pass")["wire"]))
+    return raw
+
+
+def test_all_pass_opening_is_recognized():
+    for title in ("1822", "1822PNW", "1822MX", "1822CA"):
+        raw = all_pass_game(title)
+        assert raw.finished and len(raw.raw_actions) == 3 and gp.all_pass_opening(title, raw), title
+        fresh = gp.raw_game(gp.new_title_game(title, 3, seed=5))
+        assert not gp.all_pass_opening(title, fresh)
+    # a finished human game ends otherwise; 1830 / 1867 never open with a Stock Round
+    from tests.title_replay_harness import replay_game
+
+    captured = {}
+    game = load("discard_trains_after_sr_export.json")
+    replay_game(game, on_action=lambda rust, i, a: captured.setdefault("g", rust))
+    assert captured["g"].finished and not gp.all_pass_opening("1822", captured["g"])
+    assert not gp.all_pass_opening("1867", gp.raw_game(gp.new_title_game("1867", 3, seed=1)))
+
+
+def _redraw_first_start(monkeypatch, title: str, n: int):
+    """``generic_play.replayed_start`` whose first start is an all-pass opening (later ones: the real starts)."""
+    real = gp.replayed_start
+    calls = {"n": 0}
+
+    def fake(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return gp.GenericStart(gp.AUCTION_START, (), 5), all_pass_game(title, n), 0
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(gp, "replayed_start", fake)
+    return calls
+
+
+def test_pg_redraws_an_all_pass_opening(clients, tmp_path, monkeypatch):
+    """A game whose opening Stock Round ends with nothing bought is dropped (no record, no rows) and its slot
+    plays a fresh draw, counted in ``all_pass_redrawn``; with ``redraw_all_pass`` off it is kept; normal games are
+    unaffected."""
+    from rl18xx.agent.alphazero import generic_pg as gpg
+
+    empty = tmp_path / "starts.jsonl"
+    empty.write_text("")
+    settings = {
+        "title": "1822MX", "num_players": 3, "positions_per_seat": 8, "learner_seats": 1,
+        "sl_opponent_fraction": 0.5, "pool_ready": False, "pool_label": None, "learner_temperature": 0.5,
+        "opponent_temperature": 1.0, "opponent_price_eps": 0.05, "max_decisions": 20, "start_positions": str(empty),
+        "random_start_fraction": 1.0, "auction_fraction": 1.0, "reward": "placement", "league": None,
+    }  # fmt: skip
+    calls = _redraw_first_start(monkeypatch, "1822MX", 3)
+    result = gpg.play_generic_pg_games(2, settings)
+    assert result["all_pass_redrawn"] == 1 and calls["n"] == 3 and result["num_players"] == 3
+    assert len(result["games"]) == 2
+    for g in result["games"]:
+        assert g["termination"] == "max_length" and g["decisions"] == 20 and g["rows"]
+    # kept when switched off: a 0-decision game with every seat tied
+    _redraw_first_start(monkeypatch, "1822MX", 3)
+    result = gpg.play_generic_pg_games(1, dict(settings, redraw_all_pass=False))
+    assert result["all_pass_redrawn"] == 0 and result["games"][0]["termination"] == "finished"
+    assert result["games"][0]["decisions"] == 0 and len(set(result["games"][0]["win_share"])) == 1
+    # normal games: nothing redrawn
+    monkeypatch.setattr(gp, "replayed_start", _REAL_REPLAYED_START)
+    result = gpg.play_generic_pg_games(2, settings)
+    assert result["all_pass_redrawn"] == 0 and [g["termination"] for g in result["games"]] == ["max_length"] * 2
+
+
+_REAL_REPLAYED_START = gp.replayed_start
+
+
+def test_eval_redraws_an_all_pass_opening(tmp_path, monkeypatch):
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
+    from eval_generic import play_games
+    from eval_policy_only import arrangements
+
+    torch.manual_seed(2)
+    path = tmp_path / "m.pth"
+    mg.save_checkpoint(mg.GenericPolicyValueModel(mg.GenericModelConfig(**SMALL)), path, titles=["1822PNW"])
+    settings = {
+        "title": "1822PNW", "paths": {"A": str(path), "B": str(path)}, "temperatures": {"A": 1.0, "B": 1.0},
+        "server": False, "seed": 0, "start_positions": None, "random_start_fraction": 1.0, "auction_start": True,
+        "max_decisions": 15, "auction_stall_decisions": 0, "price_eps": 0.0, "save_games": 0,
+        "arrangements": arrangements(1, 3),
+    }  # fmt: skip
+    _redraw_first_start(monkeypatch, "1822PNW", 3)
+    records = play_games([0, 1, 2], settings)
+    assert sorted(r["idx"] for r in records) == [0, 1, 2]
+    assert sorted(r["all_pass_redrawn"] for r in records) == [0, 0, 1]
+    assert all(r["termination"] == "max_length" and r["decisions"] == 15 for r in records)

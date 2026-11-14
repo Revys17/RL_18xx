@@ -560,6 +560,7 @@ def cmd_policy_gradient_generic(args):
         auction_fraction=args.auction_fraction,
         auction_unlock=args.auction_unlock,
         auction_stall_decisions=args.auction_stall_decisions,
+        redraw_all_pass=args.redraw_all_pass,
         inference_batch_size=args.inference_batch_size,
         server_replicas=args.server_replicas,
         server_pipeline=args.server_pipeline,
@@ -1403,6 +1404,11 @@ def build_parser():
     p.add_argument("--no-auction-unlock", dest="auction_unlock", action="store_false",
                    help="1830 auction starts under the real rules")
     p.add_argument("--auction-stall-decisions", type=int, default=0)
+    p.add_argument(
+        "--no-redraw-all-pass", dest="redraw_all_pass", action="store_false",
+        help="The 1822 family: keep games whose opening Stock Round ends with nothing bought, sold or bid (Ruby ends "
+        "them, every seat tied); by default they are dropped and replaced by a fresh draw",
+    )
     p.add_argument("--inference-batch-size", type=int, default=512, help="Positions per server batch")
     p.add_argument("--server-replicas", type=int, default=1, help="Learner server processes")
     p.add_argument("--server-pipeline", action="store_true", help="Servers merge the next batch on a collector thread")

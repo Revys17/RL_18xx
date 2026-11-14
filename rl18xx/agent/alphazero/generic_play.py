@@ -79,6 +79,26 @@ def opening_done(title: str, raw) -> bool:
     return not is_stock if opens_with_stock_round(title) else is_stock
 
 
+#: A redrawn all-pass opening's termination when a game slot keeps drawing them (:func:`all_pass_opening`).
+ALL_PASS = "all_pass"
+#: How many all-pass openings in a row a self-play / eval game slot redraws before it keeps one (termination
+#: :data:`ALL_PASS`): a policy that always passes must not spin a worker forever.
+MAX_ALL_PASS_REDRAWS = 20
+
+
+def all_pass_opening(title: str, raw) -> bool:
+    """Whether a game of a title that opens with a Stock Round (the 1822 family) ended in that Stock Round with
+    nothing bought, sold or bid -- Ruby's ``GAME_END_ON_NOTHING_SOLD_IN_SR1`` (``nothing_sold_in_sr``, end reason
+    ``dnf``; the encoder's ``sr_idle``): every seat tied after a few passes, no learning signal. Self-play
+    (``generic_pg``) and evals (``scripts/eval_generic.py``) redraw such games (the user, 2026-11-14); the rule
+    itself is unchanged (replay, human import and the engine stay Ruby-faithful). Only the game's first Stock Round
+    can end this way: any purchase, sale or bid clears the flag for the rest of the game."""
+    if not opens_with_stock_round(title) or not raw.finished:
+        return False
+    snap = json.loads(raw.g1822_snapshot())
+    return snap.get("game_end_reason") == "dnf" and snap.get("round") == STOCK_ROUND and int(snap.get("turn") or 0) <= 1
+
+
 # ---------------------------------------------------------------------------------------------------
 # Play
 # ---------------------------------------------------------------------------------------------------
@@ -693,7 +713,10 @@ def start_records(
 
 
 __all__ = [
+    "ALL_PASS",
     "AUCTION_START",
+    "MAX_ALL_PASS_REDRAWS",
+    "all_pass_opening",
     "GenericStart",
     "GeneratorTitlePlay",
     "ReplayedGame",
