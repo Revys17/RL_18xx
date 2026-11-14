@@ -555,3 +555,35 @@ def test_family_pg_games_and_the_trainers_probabilities(title, clients, random_m
             assert r.order[0] == r.seat and sorted(r.order.tolist()) == list(range(3))
             assert r.win[0] == g["win_share"][r.seat] and r.advantage == g["reward"][r.seat]
             assert r.win[:3].tolist() == [g["win_share"][i] for i in r.order]
+
+
+def test_a_refused_generated_move_ends_only_its_game(clients, tmp_path, monkeypatch):
+    """A move the generator offers but the engine refuses (a generator bug; 2026-11-14 an 1822CA tile lay) ends
+    that game as it stands -- termination ``rejected_move``, the move kept in the record and the game saved --
+    instead of failing the pool task."""
+    from rl18xx.agent.alphazero import generic_pg as gpg
+
+    play = gp.title_play("1822MX")
+    original = type(play).apply
+    calls = {"n": 0}
+
+    def flaky(self, raw, legal, k, price):
+        calls["n"] += 1
+        if calls["n"] == 40:
+            raise RuntimeError("216-1 is not legally rotated for 512")
+        return original(self, raw, legal, k, price)
+
+    monkeypatch.setattr(type(play), "apply", flaky)
+    empty = tmp_path / "starts.jsonl"
+    empty.write_text("")
+    settings = {
+        "title": "1822MX", "num_players": 3, "positions_per_seat": 8, "learner_seats": 1,
+        "sl_opponent_fraction": 0.5, "pool_ready": False, "pool_label": None, "learner_temperature": 0.5,
+        "opponent_temperature": 1.0, "opponent_price_eps": 0.05, "max_decisions": 60, "start_positions": str(empty),
+        "random_start_fraction": 1.0, "auction_fraction": 0.0, "reward": "placement", "league": None,
+    }  # fmt: skip
+    result = gpg.play_generic_pg_games(2, settings)
+    assert sorted(g["termination"] for g in result["games"]) == ["max_length", "rejected_move"]
+    bad = next(g for g in result["games"] if g["termination"] == "rejected_move")
+    assert bad["rejected_move"]["error"].startswith("216-1") and bad["rejected_move"]["wire"]
+    assert len(bad["saved_game"]["raw_actions"]) == bad["rejected_move"]["action_count"] > 0

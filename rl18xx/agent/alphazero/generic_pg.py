@@ -318,6 +318,8 @@ class _Game:
     seat_members: dict = field(default_factory=dict)
     slot_versions: dict = field(default_factory=dict)
     league_mixed: bool = False
+    #: A generated move the engine refused (``apply_move``): the game ends there as it stands (``rejected_move``).
+    rejected: Optional[dict] = None
 
 
 def tempered_logp(logp: np.ndarray, temperature: float) -> np.ndarray:
@@ -350,11 +352,34 @@ def _decompress(blob: bytes):
     return pickle.loads(lz4.frame.decompress(blob))
 
 
+def apply_move(g: _Game, play, legal, k: int, price) -> bool:
+    """Apply legal row ``k`` at ``price``; a move the title's generator offered but the engine refuses (a generator
+    bug: 2026-11-14, an 1822CA tile lay "216-1 is not legally rotated for 512") ends the game as it stands
+    (``termination`` "rejected_move", the move and the error in ``g.rejected``) instead of the whole pool task."""
+    try:
+        play.apply(g.raw, legal, k, price)
+        return True
+    except RuntimeError as e:
+        wires = getattr(legal, "wires", None)
+        g.rejected = {
+            "index": int(legal.indices[k]),
+            "wire": dict(wires[k]) if wires is not None else None,
+            "price": None if price is None else int(price),
+            "error": str(e)[:300],
+            "action_count": len(g.raw.raw_actions),
+        }
+        g.termination = "rejected_move"
+        LOGGER.warning("Game %s: the engine refused a generated move (%s); the game ends here", g.uid, g.rejected)
+        return False
+
+
 def _advance(g: _Game, play, settings: dict):
     """Apply forced moves until a decision (its ``LegalActions``) or the end (None): a finished game, the
-    decision cap (scored on net worth as it stands) or an auction stall."""
+    decision cap (scored on net worth as it stands), an auction stall, a Ruby dead end or a refused move."""
     raw = g.raw
     while True:
+        if g.termination == "rejected_move":
+            return None
         if raw.finished:
             g.termination = g.termination or "finished"
             return None
@@ -375,7 +400,7 @@ def _advance(g: _Game, play, settings: dict):
             raise RuntimeError(f"game {g.uid}: no legal action in an unfinished game")
         if play.is_decision(legal):
             return legal
-        play.apply(raw, legal, 0, play.fixed_price(raw, legal, 0))
+        apply_move(g, play, legal, 0, play.fixed_price(raw, legal, 0))
 
 
 def game_outcome(raw, seating: Optional[Sequence[int]] = None) -> tuple:
@@ -557,9 +582,9 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
                     stats["learner_decisions"] += 1
                     stats["learner_price_decisions"] += cell >= 0
                 g.auction_decisions += g.raw.round.round_type == "Auction"
-                play.apply(g.raw, legal, k, price)
-                g.decisions += 1
-                decisions_total += 1
+                if apply_move(g, play, legal, k, price):
+                    g.decisions += 1
+                    decisions_total += 1
             t_play += time.monotonic() - tp
 
     records = []
@@ -608,7 +633,9 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
                     for seat, member in g.seat_members.items()
                 ]
             )
-        if save_every and py_rng.random() * save_every < 1.0:
+        if g.rejected:
+            record["rejected_move"] = g.rejected
+        if (save_every and py_rng.random() * save_every < 1.0) or g.rejected:  # (a refused move: always kept)
             record["saved_game"] = {
                 "start": g.start,
                 "seed": g.seed,
@@ -665,6 +692,7 @@ def save_game(run_dir: Path, record: dict, update: int, learner_checkpoint: str,
         "opponent_temperature": cfg.opponent_temperature,
         "start": saved["start"],
         "termination": record["termination"],
+        **({"rejected_move": record["rejected_move"]} if record.get("rejected_move") else {}),
         "decisions": record["decisions"],
         "win_share": record["win_share"],
         "net_worth": saved["net_worth"],
