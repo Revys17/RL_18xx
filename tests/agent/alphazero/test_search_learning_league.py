@@ -271,7 +271,9 @@ def test_a_frozen_run_with_a_followed_value_and_league_seats(tmp_path, start_fil
         policy_checkpoint=str(policy), value_checkpoint="", value_follow=str(value_run), freeze_policy=True,
         out_dir=str(tmp_path / "runs"), run_name="frozen", p_full=0.5, n_full=4, parallel_readouts=2, workers=2,
         games_per_worker=3, task_seconds=2.0, max_decisions=16, start_positions=start_file,
-        random_start_fraction=1.0, inference_batch_size=64, rows_per_update=8, max_updates=3, snapshot_every=1,
+        # rows_per_update 16 (was 8): the searcher's seats search, so its games finish last; on a loaded machine
+        # (the pre-push gate beside other jobs) 3 updates of 8 rows could end before any of them did.
+        random_start_fraction=1.0, inference_batch_size=64, rows_per_update=16, max_updates=3, snapshot_every=1,
         anchor_every=0, save_data=str(tmp_path / "saved"), save_data_shard_games=2, population=population,
         league_share=1.0, league_seat_weights={1: 1.0}, league_snapshot_hours=1e-9, league_snapshot_slots=1,
         league_readouts=3,
