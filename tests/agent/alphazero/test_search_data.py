@@ -227,7 +227,8 @@ def test_a_tiny_cpu_run_saves_every_game_and_its_rows(tmp_path, start_file, monk
     assert len(saved) >= history[-1]["games_total"] and history[-1]["saved_games"] >= history[-1]["games_total"]
     assert saved[0].config["run_name"] == "tiny" and saved[0].config["value_lambda"] == 0.9
     rebuilt = [row for game in saved for row in sd.rebuild_rows(game)]
-    assert len(rebuilt) == len(added) > 10
+    # >= 10: the one update waits for rows_per_update (10) rows; how many more arrive before the run stops is timing.
+    assert len(rebuilt) == len(added) >= 10
     for a, b in zip(added, rebuilt):
         assert_same_row(a, b)
 
