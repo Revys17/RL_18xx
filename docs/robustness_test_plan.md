@@ -18,6 +18,7 @@ Already done: the live bots search the critic's placement-points head (`--play-v
 ## Measurement first (build before any arm runs)
 
 Every arm is judged on the same four instruments, all policy-only or with the live bots' search settings.
+Built 2026-11-15 (M1-M3, Step 0; usage, baselines, costs): `docs/robustness_measurement.md`, `scripts/robustness/`.
 
 | | Instrument | What it measures | Built from |
 |---|---|---|---|

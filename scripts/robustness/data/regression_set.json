@@ -1,0 +1,3819 @@
+{
+ "version": 1,
+ "description": "M1 regression set (docs/robustness_test_plan.md, docs/robustness_measurement.md): positions from Caleb's games against the bots just before each bot mistake.",
+ "default_search": "@400/0.05:mean,dedupe,par=8,ptemp=0.5",
+ "positions": [
+  {
+   "id": "g21-a2",
+   "weakness": "auction",
+   "kind": "contest",
+   "criterion": "choose_preferred",
+   "game": 21,
+   "file": "caleb_games/21.json.gz",
+   "site_action_id": 2,
+   "action_index": 1,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 1"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "company": "CS",
+    "entity": 2,
+    "entity_type": "player",
+    "id": 2,
+    "price": 45,
+    "type": "bid"
+   },
+   "played_desc": "bid CS $45",
+   "bad_moves": [
+    {
+     "company": "CS",
+     "entity": 2,
+     "entity_type": "player",
+     "id": 2,
+     "price": 45,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "company": "MH",
+     "entity": 2,
+     "entity_type": "player",
+     "price": 120,
+     "type": "bid",
+     "id": 2
+    },
+    {
+     "company": "CA",
+     "entity": 2,
+     "entity_type": "player",
+     "price": 165,
+     "type": "bid",
+     "id": 2
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "after Caleb's MH $115 (CA still free): bids CS $45; probe: policy 0.55 on CA $165"
+  },
+  {
+   "id": "g21-a3",
+   "weakness": "auction",
+   "kind": "contest",
+   "criterion": "choose_preferred",
+   "game": 21,
+   "file": "caleb_games/21.json.gz",
+   "site_action_id": 3,
+   "action_index": 2,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 3"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "company": "DH",
+    "entity": 3,
+    "entity_type": "player",
+    "id": 3,
+    "price": 75,
+    "type": "bid"
+   },
+   "played_desc": "bid DH $75",
+   "bad_moves": [
+    {
+     "company": "DH",
+     "entity": 3,
+     "entity_type": "player",
+     "id": 3,
+     "price": 75,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "company": "MH",
+     "entity": 3,
+     "entity_type": "player",
+     "price": 120,
+     "type": "bid",
+     "id": 3
+    },
+    {
+     "company": "CA",
+     "entity": 3,
+     "entity_type": "player",
+     "price": 165,
+     "type": "bid",
+     "id": 3
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "after Caleb's MH $115 and a CS bid: bids DH $75 (starts a DH war to $215)"
+  },
+  {
+   "id": "g21-a6",
+   "weakness": "auction",
+   "kind": "contest",
+   "criterion": "choose_preferred",
+   "game": 21,
+   "file": "caleb_games/21.json.gz",
+   "site_action_id": 6,
+   "action_index": 5,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 1"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "company": "SV",
+    "entity": 2,
+    "entity_type": "player",
+    "id": 6,
+    "price": 20,
+    "type": "bid"
+   },
+   "played_desc": "bid SV $20",
+   "bad_moves": [
+    {
+     "company": "SV",
+     "entity": 2,
+     "entity_type": "player",
+     "id": 6,
+     "price": 20,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "company": "MH",
+     "entity": 2,
+     "entity_type": "player",
+     "price": 120,
+     "type": "bid",
+     "id": 6
+    },
+    {
+     "company": "CA",
+     "entity": 2,
+     "entity_type": "player",
+     "price": 170,
+     "type": "bid",
+     "id": 6
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "after Caleb's MH $115 + CA $165: buys SV"
+  },
+  {
+   "id": "g20-a4",
+   "weakness": "auction",
+   "kind": "contest",
+   "criterion": "choose_preferred",
+   "game": 20,
+   "file": "caleb_games/20.json.gz",
+   "site_action_id": 4,
+   "action_index": 3,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 2"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "company": "CS",
+    "entity": 4,
+    "entity_type": "player",
+    "id": 4,
+    "price": 50,
+    "type": "bid"
+   },
+   "played_desc": "bid CS $50",
+   "bad_moves": [
+    {
+     "company": "CS",
+     "entity": 4,
+     "entity_type": "player",
+     "id": 4,
+     "price": 50,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "company": "MH",
+     "entity": 4,
+     "entity_type": "player",
+     "price": 120,
+     "type": "bid",
+     "id": 4
+    },
+    {
+     "company": "CA",
+     "entity": 4,
+     "entity_type": "player",
+     "price": 165,
+     "type": "bid",
+     "id": 4
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "after Caleb's MH $115: bids CS $50 (Caleb later takes CA at $160 unopposed)"
+  },
+  {
+   "id": "g19-a3",
+   "weakness": "auction",
+   "kind": "contest",
+   "criterion": "choose_preferred",
+   "game": 19,
+   "file": "caleb_games/19.json.gz",
+   "site_action_id": 3,
+   "action_index": 2,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 1"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 3,
+    "entity_type": "player",
+    "id": 3,
+    "type": "pass"
+   },
+   "played_desc": "pass",
+   "bad_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "id": 3,
+     "type": "pass"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "company": "MH",
+     "entity": 3,
+     "entity_type": "player",
+     "price": 120,
+     "type": "bid",
+     "id": 3
+    },
+    {
+     "company": "CA",
+     "entity": 3,
+     "entity_type": "player",
+     "price": 165,
+     "type": "bid",
+     "id": 3
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "after Caleb's MH $115: passes"
+  },
+  {
+   "id": "g19-a4",
+   "weakness": "auction",
+   "kind": "contest",
+   "criterion": "choose_preferred",
+   "game": 19,
+   "file": "caleb_games/19.json.gz",
+   "site_action_id": 4,
+   "action_index": 3,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 3"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "company": "CS",
+    "entity": 4,
+    "entity_type": "player",
+    "id": 4,
+    "price": 50,
+    "type": "bid"
+   },
+   "played_desc": "bid CS $50",
+   "bad_moves": [
+    {
+     "company": "CS",
+     "entity": 4,
+     "entity_type": "player",
+     "id": 4,
+     "price": 50,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "company": "MH",
+     "entity": 4,
+     "entity_type": "player",
+     "price": 120,
+     "type": "bid",
+     "id": 4
+    },
+    {
+     "company": "CA",
+     "entity": 4,
+     "entity_type": "player",
+     "price": 165,
+     "type": "bid",
+     "id": 4
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "after Caleb's MH $115: bids CS $50 (a CS war to $150 follows)"
+  },
+  {
+   "id": "g19-a7",
+   "weakness": "auction",
+   "kind": "contest",
+   "criterion": "choose_preferred",
+   "game": 19,
+   "file": "caleb_games/19.json.gz",
+   "site_action_id": 7,
+   "action_index": 6,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 1"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "company": "SV",
+    "entity": 3,
+    "entity_type": "player",
+    "id": 7,
+    "price": 20,
+    "type": "bid"
+   },
+   "played_desc": "bid SV $20",
+   "bad_moves": [
+    {
+     "company": "SV",
+     "entity": 3,
+     "entity_type": "player",
+     "id": 7,
+     "price": 20,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "company": "MH",
+     "entity": 3,
+     "entity_type": "player",
+     "price": 120,
+     "type": "bid",
+     "id": 7
+    },
+    {
+     "company": "CA",
+     "entity": 3,
+     "entity_type": "player",
+     "price": 170,
+     "type": "bid",
+     "id": 7
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "after Caleb's MH $115 + CA $165: buys SV"
+  },
+  {
+   "id": "g18-a3",
+   "weakness": "auction",
+   "kind": "contest",
+   "criterion": "choose_preferred",
+   "game": 18,
+   "file": "caleb_games/18.json.gz",
+   "site_action_id": 3,
+   "action_index": 2,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 2"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "company": "DH",
+    "entity": 3,
+    "entity_type": "player",
+    "id": 3,
+    "price": 75,
+    "type": "bid"
+   },
+   "played_desc": "bid DH $75",
+   "bad_moves": [
+    {
+     "company": "DH",
+     "entity": 3,
+     "entity_type": "player",
+     "id": 3,
+     "price": 75,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "company": "MH",
+     "entity": 3,
+     "entity_type": "player",
+     "price": 115,
+     "type": "bid",
+     "id": 3
+    },
+    {
+     "company": "CA",
+     "entity": 3,
+     "entity_type": "player",
+     "price": 170,
+     "type": "bid",
+     "id": 3
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "after Caleb's CA $165: bids DH $75 (starts a DH war to $195)"
+  },
+  {
+   "id": "g18-a4",
+   "weakness": "auction",
+   "kind": "contest",
+   "criterion": "choose_preferred",
+   "game": 18,
+   "file": "caleb_games/18.json.gz",
+   "site_action_id": 4,
+   "action_index": 3,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 3"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "company": "DH",
+    "entity": 4,
+    "entity_type": "player",
+    "id": 4,
+    "price": 80,
+    "type": "bid"
+   },
+   "played_desc": "bid DH $80",
+   "bad_moves": [
+    {
+     "company": "DH",
+     "entity": 4,
+     "entity_type": "player",
+     "id": 4,
+     "price": 80,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "company": "MH",
+     "entity": 4,
+     "entity_type": "player",
+     "price": 115,
+     "type": "bid",
+     "id": 4
+    },
+    {
+     "company": "CA",
+     "entity": 4,
+     "entity_type": "player",
+     "price": 170,
+     "type": "bid",
+     "id": 4
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "after Caleb's CA $165 and a DH bid: bids DH $80"
+  },
+  {
+   "id": "g13-a6",
+   "weakness": "auction",
+   "kind": "contest",
+   "criterion": "choose_preferred",
+   "game": 13,
+   "file": "caleb_games/13.json.gz",
+   "site_action_id": 6,
+   "action_index": 5,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 3"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "entity": 2,
+    "entity_type": "player",
+    "id": 6,
+    "type": "pass"
+   },
+   "played_desc": "pass",
+   "bad_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "id": 6,
+     "type": "pass"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "company": "MH",
+     "entity": 2,
+     "entity_type": "player",
+     "price": 115,
+     "type": "bid",
+     "id": 6
+    },
+    {
+     "company": "CA",
+     "entity": 2,
+     "entity_type": "player",
+     "price": 170,
+     "type": "bid",
+     "id": 6
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "after Caleb's DH $75 / CA $165: passes"
+  },
+  {
+   "id": "g10-a2",
+   "weakness": "auction",
+   "kind": "contest",
+   "criterion": "choose_preferred",
+   "game": 10,
+   "file": "caleb_games/10.json.gz",
+   "site_action_id": 2,
+   "action_index": 1,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 3"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "entity": 2,
+    "entity_type": "player",
+    "id": 2,
+    "type": "pass"
+   },
+   "played_desc": "pass",
+   "bad_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "id": 2,
+     "type": "pass"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "company": "MH",
+     "entity": 2,
+     "entity_type": "player",
+     "price": 115,
+     "type": "bid",
+     "id": 2
+    },
+    {
+     "company": "CA",
+     "entity": 2,
+     "entity_type": "player",
+     "price": 170,
+     "type": "bid",
+     "id": 2
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "Caleb's CA $165 opening (games 5, 10, 11, 14, 15): passes"
+  },
+  {
+   "id": "g10-a3",
+   "weakness": "auction",
+   "kind": "contest",
+   "criterion": "choose_preferred",
+   "game": 10,
+   "file": "caleb_games/10.json.gz",
+   "site_action_id": 3,
+   "action_index": 2,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 1"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "company": "DH",
+    "entity": 3,
+    "entity_type": "player",
+    "id": 3,
+    "price": 75,
+    "type": "bid"
+   },
+   "played_desc": "bid DH $75",
+   "bad_moves": [
+    {
+     "company": "DH",
+     "entity": 3,
+     "entity_type": "player",
+     "id": 3,
+     "price": 75,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "company": "MH",
+     "entity": 3,
+     "entity_type": "player",
+     "price": 115,
+     "type": "bid",
+     "id": 3
+    },
+    {
+     "company": "CA",
+     "entity": 3,
+     "entity_type": "player",
+     "price": 170,
+     "type": "bid",
+     "id": 3
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "Caleb's CA $165, a pass: bids DH $75 (games 5, 10, 11; DH wars to $185)"
+  },
+  {
+   "id": "g14-a3",
+   "weakness": "auction",
+   "kind": "contest",
+   "criterion": "choose_preferred",
+   "game": 14,
+   "file": "caleb_games/14.json.gz",
+   "site_action_id": 3,
+   "action_index": 2,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 2"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "company": "CS",
+    "entity": 3,
+    "entity_type": "player",
+    "id": 3,
+    "price": 50,
+    "type": "bid"
+   },
+   "played_desc": "bid CS $50",
+   "bad_moves": [
+    {
+     "company": "CS",
+     "entity": 3,
+     "entity_type": "player",
+     "id": 3,
+     "price": 50,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "company": "MH",
+     "entity": 3,
+     "entity_type": "player",
+     "price": 115,
+     "type": "bid",
+     "id": 3
+    },
+    {
+     "company": "CA",
+     "entity": 3,
+     "entity_type": "player",
+     "price": 170,
+     "type": "bid",
+     "id": 3
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "Caleb's CA $165, a CS bid: bids CS $50 (games 14, 15; CS wars to $110)"
+  },
+  {
+   "id": "g21-a20",
+   "weakness": "auction",
+   "kind": "war",
+   "criterion": "avoid_bad",
+   "game": 21,
+   "file": "caleb_games/21.json.gz",
+   "site_action_id": 20,
+   "action_index": 19,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 2"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "company": "DH",
+    "entity": 4,
+    "entity_type": "player",
+    "id": 20,
+    "price": 150,
+    "type": "bid"
+   },
+   "played_desc": "bid DH $150",
+   "bad_moves": [
+    {
+     "company": "DH",
+     "entity": 4,
+     "entity_type": "player",
+     "id": 20,
+     "price": 150,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 20
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "DH war: raises to $150 (face $70); probe: critic prefers pass"
+  },
+  {
+   "id": "g21-a33",
+   "weakness": "auction",
+   "kind": "war",
+   "criterion": "avoid_bad",
+   "game": 21,
+   "file": "caleb_games/21.json.gz",
+   "site_action_id": 33,
+   "action_index": 32,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 3"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "company": "DH",
+    "entity": 3,
+    "entity_type": "player",
+    "id": 33,
+    "price": 215,
+    "type": "bid"
+   },
+   "played_desc": "bid DH $215",
+   "bad_moves": [
+    {
+     "company": "DH",
+     "entity": 3,
+     "entity_type": "player",
+     "id": 33,
+     "price": 215,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 33
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "DH war: raises to $215; probe: prior 0.996 on the raise beat the critic's pass"
+  },
+  {
+   "id": "g20-a29",
+   "weakness": "auction",
+   "kind": "war",
+   "criterion": "avoid_bad",
+   "game": 20,
+   "file": "caleb_games/20.json.gz",
+   "site_action_id": 29,
+   "action_index": 28,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 2"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "company": "CS",
+    "entity": 4,
+    "entity_type": "player",
+    "id": 29,
+    "price": 175,
+    "type": "bid"
+   },
+   "played_desc": "bid CS $175",
+   "bad_moves": [
+    {
+     "company": "CS",
+     "entity": 4,
+     "entity_type": "player",
+     "id": 29,
+     "price": 175,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 29
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "CS war: raises to $175 (face $40)"
+  },
+  {
+   "id": "g19-a26",
+   "weakness": "auction",
+   "kind": "war",
+   "criterion": "avoid_bad",
+   "game": 19,
+   "file": "caleb_games/19.json.gz",
+   "site_action_id": 26,
+   "action_index": 25,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 3"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "company": "CS",
+    "entity": 4,
+    "entity_type": "player",
+    "id": 26,
+    "price": 150,
+    "type": "bid"
+   },
+   "played_desc": "bid CS $150",
+   "bad_moves": [
+    {
+     "company": "CS",
+     "entity": 4,
+     "entity_type": "player",
+     "id": 26,
+     "price": 150,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 26
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "CS war: raises to $150"
+  },
+  {
+   "id": "g18-a27",
+   "weakness": "auction",
+   "kind": "war",
+   "criterion": "avoid_bad",
+   "game": 18,
+   "file": "caleb_games/18.json.gz",
+   "site_action_id": 27,
+   "action_index": 26,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 3"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "company": "DH",
+    "entity": 4,
+    "entity_type": "player",
+    "id": 27,
+    "price": 190,
+    "type": "bid"
+   },
+   "played_desc": "bid DH $190",
+   "bad_moves": [
+    {
+     "company": "DH",
+     "entity": 4,
+     "entity_type": "player",
+     "id": 27,
+     "price": 190,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 27
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "DH war: raises to $190"
+  },
+  {
+   "id": "g15-a14",
+   "weakness": "auction",
+   "kind": "war",
+   "criterion": "avoid_bad",
+   "game": 15,
+   "file": "caleb_games/15.json.gz",
+   "site_action_id": 14,
+   "action_index": 13,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 2"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "company": "CS",
+    "entity": 3,
+    "entity_type": "player",
+    "id": 14,
+    "price": 100,
+    "type": "bid"
+   },
+   "played_desc": "bid CS $100",
+   "bad_moves": [
+    {
+     "company": "CS",
+     "entity": 3,
+     "entity_type": "player",
+     "id": 14,
+     "price": 100,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 14
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "CS war: raises to $100"
+  },
+  {
+   "id": "g5-a30",
+   "weakness": "auction",
+   "kind": "war",
+   "criterion": "avoid_bad",
+   "game": 5,
+   "file": "caleb_games/5.json.gz",
+   "site_action_id": 30,
+   "action_index": 29,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 2"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "company": "DH",
+    "entity": 3,
+    "entity_type": "player",
+    "id": 30,
+    "price": 185,
+    "type": "bid"
+   },
+   "played_desc": "bid DH $185",
+   "bad_moves": [
+    {
+     "company": "DH",
+     "entity": 3,
+     "entity_type": "player",
+     "id": 30,
+     "price": 185,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 30
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 555
+   },
+   "note": "DH war: raises to $185"
+  },
+  {
+   "id": "g11-a40",
+   "weakness": "auction",
+   "kind": "war",
+   "criterion": "avoid_bad",
+   "game": 11,
+   "file": "caleb_games/11.json.gz",
+   "site_action_id": 40,
+   "action_index": 39,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 1"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "company": "DH",
+    "entity": 4,
+    "entity_type": "player",
+    "id": 40,
+    "price": 170,
+    "type": "bid"
+   },
+   "played_desc": "bid DH $170",
+   "bad_moves": [
+    {
+     "company": "DH",
+     "entity": 4,
+     "entity_type": "player",
+     "id": 40,
+     "price": 170,
+     "type": "bid"
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 40
+    }
+   ],
+   "context": {
+    "round": "Auction",
+    "phase": "2",
+    "mover_cash": 600
+   },
+   "note": "DH war: raises to $170"
+  },
+  {
+   "id": "g21-a132",
+   "weakness": "loot_dump",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 21,
+   "file": "caleb_games/21.json.gz",
+   "site_action_id": 132,
+   "action_index": 123,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 3"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "entity": 3,
+    "entity_type": "player",
+    "id": 124,
+    "percent": 10,
+    "shares": [
+     "C&O_4"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% C&O",
+   "bad_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "C&O_4"
+     ],
+     "type": "buy_shares",
+     "id": 124
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 124
+    }
+   ],
+   "context": {
+    "round": "Stock Round 4",
+    "phase": "2",
+    "mover_cash": 113,
+    "corp": {
+     "name": "C&O",
+     "cash": 510,
+     "trains": [
+      "2",
+      "2"
+     ],
+     "president": 1,
+     "share_price": 82
+    }
+   },
+   "note": "buys C&O (Caleb's; $510, 2+2); looted OR5.1, dumped [343], $630 contributed"
+  },
+  {
+   "id": "g21-a235",
+   "weakness": "loot_dump",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 21,
+   "file": "caleb_games/21.json.gz",
+   "site_action_id": 235,
+   "action_index": 222,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 3"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "entity": 3,
+    "entity_type": "player",
+    "id": 223,
+    "percent": 10,
+    "shares": [
+     "C&O_6"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% C&O",
+   "bad_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "C&O_6"
+     ],
+     "type": "buy_shares",
+     "id": 223
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 223
+    }
+   ],
+   "context": {
+    "round": "Stock Round 5",
+    "phase": "3",
+    "mover_cash": 187,
+    "corp": {
+     "name": "C&O",
+     "cash": 680,
+     "trains": [
+      "2"
+     ],
+     "president": 1,
+     "share_price": 82
+    }
+   },
+   "note": "buys C&O (Caleb's; $680, a 2); probe: prior 0.998; dumped [343]"
+  },
+  {
+   "id": "g19-a297",
+   "weakness": "loot_dump",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 19,
+   "file": "caleb_games/19.json.gz",
+   "site_action_id": 297,
+   "action_index": 286,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 1"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 3,
+    "entity_type": "player",
+    "id": 291,
+    "percent": 10,
+    "shares": [
+     "NYC_1"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% NYC",
+   "bad_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_5"
+     ],
+     "type": "buy_shares",
+     "id": 554
+    },
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_1"
+     ],
+     "type": "buy_shares",
+     "id": 554
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 554
+    }
+   ],
+   "context": {
+    "round": "Stock Round 6",
+    "phase": "4",
+    "mover_cash": 292,
+    "corp": {
+     "name": "NYC",
+     "cash": 700,
+     "trains": [
+      "4"
+     ],
+     "president": 2,
+     "share_price": 76
+    }
+   },
+   "note": "buys NYC (Caleb's; $700, a 4); looted OR6, dumped [436], buyer bankrupt"
+  },
+  {
+   "id": "g19-a319",
+   "weakness": "loot_dump",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 19,
+   "file": "caleb_games/19.json.gz",
+   "site_action_id": 319,
+   "action_index": 308,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 1"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 3,
+    "entity_type": "player",
+    "id": 313,
+    "percent": 10,
+    "shares": [
+     "NYC_6"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% NYC",
+   "bad_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_6"
+     ],
+     "type": "buy_shares",
+     "id": 554
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 554
+    }
+   ],
+   "context": {
+    "round": "Stock Round 6",
+    "phase": "4",
+    "mover_cash": 516,
+    "corp": {
+     "name": "NYC",
+     "cash": 700,
+     "trains": [
+      "4"
+     ],
+     "president": 2,
+     "share_price": 76
+    }
+   },
+   "note": "buys NYC again (3rd share); dumped [436], buyer bankrupt"
+  },
+  {
+   "id": "g19-a334",
+   "weakness": "loot_dump",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 19,
+   "file": "caleb_games/19.json.gz",
+   "site_action_id": 334,
+   "action_index": 323,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 1"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 3,
+    "entity_type": "player",
+    "id": 328,
+    "percent": 10,
+    "shares": [
+     "NYC_8"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% NYC",
+   "bad_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_8"
+     ],
+     "type": "buy_shares",
+     "id": 554
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 554
+    }
+   ],
+   "context": {
+    "round": "Stock Round 6",
+    "phase": "4",
+    "mover_cash": 316,
+    "corp": {
+     "name": "NYC",
+     "cash": 700,
+     "trains": [
+      "4"
+     ],
+     "president": 2,
+     "share_price": 76
+    }
+   },
+   "note": "buys NYC again (5th share); dumped [436], buyer bankrupt"
+  },
+  {
+   "id": "g15-a402",
+   "weakness": "loot_dump",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 15,
+   "file": "caleb_games/15.json.gz",
+   "site_action_id": 402,
+   "action_index": 403,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 1"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 2,
+    "entity_type": "player",
+    "id": 406,
+    "percent": 10,
+    "shares": [
+     "NYC_6"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% NYC",
+   "bad_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_6"
+     ],
+     "type": "buy_shares",
+     "id": 406
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 406
+    }
+   ],
+   "context": {
+    "round": "Stock Round 7",
+    "phase": "4",
+    "mover_cash": 451,
+    "corp": {
+     "name": "NYC",
+     "cash": 640,
+     "trains": [
+      "3"
+     ],
+     "president": 1,
+     "share_price": 126
+    }
+   },
+   "note": "buys NYC (Caleb's; $640, a 3); looted OR7.2, dumped [507], buyer bankrupt"
+  },
+  {
+   "id": "g15-a420",
+   "weakness": "loot_dump",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 15,
+   "file": "caleb_games/15.json.gz",
+   "site_action_id": 420,
+   "action_index": 421,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 1"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 2,
+    "entity_type": "player",
+    "id": 424,
+    "percent": 10,
+    "shares": [
+     "NYC_7"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% NYC",
+   "bad_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_7"
+     ],
+     "type": "buy_shares",
+     "id": 424
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 424
+    }
+   ],
+   "context": {
+    "round": "Stock Round 7",
+    "phase": "4",
+    "mover_cash": 291,
+    "corp": {
+     "name": "NYC",
+     "cash": 640,
+     "trains": [
+      "3"
+     ],
+     "president": 1,
+     "share_price": 126
+    }
+   },
+   "note": "buys NYC again; dumped [507], buyer bankrupt"
+  },
+  {
+   "id": "g15-a425",
+   "weakness": "loot_dump",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 15,
+   "file": "caleb_games/15.json.gz",
+   "site_action_id": 425,
+   "action_index": 426,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 1"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 2,
+    "entity_type": "player",
+    "id": 429,
+    "percent": 10,
+    "shares": [
+     "NYC_8"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% NYC",
+   "bad_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_8"
+     ],
+     "type": "buy_shares",
+     "id": 429
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 429
+    }
+   ],
+   "context": {
+    "round": "Stock Round 7",
+    "phase": "4",
+    "mover_cash": 191,
+    "corp": {
+     "name": "NYC",
+     "cash": 640,
+     "trains": [
+      "3"
+     ],
+     "president": 1,
+     "share_price": 126
+    }
+   },
+   "note": "buys NYC again (3rd share); dumped [507], buyer bankrupt"
+  },
+  {
+   "id": "g10-a377",
+   "weakness": "loot_dump",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 10,
+   "file": "caleb_games/10.json.gz",
+   "site_action_id": 377,
+   "action_index": 357,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 3"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "entity": 2,
+    "entity_type": "player",
+    "id": 358,
+    "percent": 10,
+    "shares": [
+     "NYC_6"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% NYC",
+   "bad_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_6"
+     ],
+     "type": "buy_shares",
+     "id": 358
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 358
+    }
+   ],
+   "context": {
+    "round": "Stock Round 8",
+    "phase": "3",
+    "mover_cash": 280,
+    "corp": {
+     "name": "NYC",
+     "cash": 1000,
+     "trains": [],
+     "president": 1,
+     "share_price": 100
+    }
+   },
+   "note": "buys NYC (Caleb's; $1000); looted OR8.1 ($1000 2-train), dumped [576], bankrupt"
+  },
+  {
+   "id": "g10-a412",
+   "weakness": "loot_dump",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 10,
+   "file": "caleb_games/10.json.gz",
+   "site_action_id": 412,
+   "action_index": 365,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 3"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "entity": 2,
+    "entity_type": "player",
+    "id": 366,
+    "percent": 10,
+    "shares": [
+     "NYC_8"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% NYC",
+   "bad_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_8"
+     ],
+     "type": "buy_shares",
+     "id": 366
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 366
+    }
+   ],
+   "context": {
+    "round": "Stock Round 8",
+    "phase": "3",
+    "mover_cash": 180,
+    "corp": {
+     "name": "NYC",
+     "cash": 1000,
+     "trains": [],
+     "president": 1,
+     "share_price": 100
+    }
+   },
+   "note": "buys NYC again; dumped [576], buyer bankrupt"
+  },
+  {
+   "id": "g5-a633",
+   "weakness": "loot_dump",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 5,
+   "file": "caleb_games/5.json.gz",
+   "site_action_id": 633,
+   "action_index": 555,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 3"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "entity": 4,
+    "entity_type": "player",
+    "id": 567,
+    "percent": 10,
+    "shares": [
+     "C&O_6"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% C&O",
+   "bad_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "C&O_6"
+     ],
+     "type": "buy_shares",
+     "id": 567
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 567
+    }
+   ],
+   "context": {
+    "round": "Stock Round 9",
+    "phase": "6",
+    "mover_cash": 677,
+    "corp": {
+     "name": "C&O",
+     "cash": 186,
+     "trains": [
+      "4"
+     ],
+     "president": 1,
+     "share_price": 170
+    }
+   },
+   "note": "buys C&O (Caleb's; $186, a 4 that rusts on the D) -- dumped two actions later"
+  },
+  {
+   "id": "g21-a398",
+   "weakness": "sellout",
+   "kind": "sellout",
+   "criterion": "avoid_bad",
+   "game": 21,
+   "file": "caleb_games/21.json.gz",
+   "site_action_id": 398,
+   "action_index": 378,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 1"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "entity": 2,
+    "entity_type": "player",
+    "id": 382,
+    "percent": 10,
+    "shares": [
+     "NYC_0"
+    ],
+    "type": "sell_shares"
+   },
+   "played_desc": "sell 10% NYC",
+   "bad_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_0"
+     ],
+     "type": "sell_shares",
+     "id": 382
+    },
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 20,
+     "shares": [
+      "NYC_0"
+     ],
+     "type": "sell_shares",
+     "id": 382
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 382
+    }
+   ],
+   "context": {
+    "round": "Stock Round 6",
+    "phase": "4",
+    "mover_cash": 102,
+    "corp": {
+     "name": "NYC",
+     "cash": 900,
+     "trains": [],
+     "president": 2,
+     "share_price": 82
+    }
+   },
+   "note": "sells NYC ($900, parred this SR): presidency to Bot 2, who passes it to Caleb"
+  },
+  {
+   "id": "g21-a408",
+   "weakness": "sellout",
+   "kind": "sellout",
+   "criterion": "avoid_bad",
+   "game": 21,
+   "file": "caleb_games/21.json.gz",
+   "site_action_id": 408,
+   "action_index": 388,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 2"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "entity": 4,
+    "entity_type": "player",
+    "id": 392,
+    "percent": 10,
+    "shares": [
+     "NYC_0"
+    ],
+    "type": "sell_shares"
+   },
+   "played_desc": "sell 10% NYC",
+   "bad_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_0"
+     ],
+     "type": "sell_shares",
+     "id": 392
+    },
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 20,
+     "shares": [
+      "NYC_0"
+     ],
+     "type": "sell_shares",
+     "id": 392
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 392
+    }
+   ],
+   "context": {
+    "round": "Stock Round 6",
+    "phase": "4",
+    "mover_cash": 2,
+    "corp": {
+     "name": "NYC",
+     "cash": 900,
+     "trains": [],
+     "president": 4,
+     "share_price": 76
+    }
+   },
+   "note": "sells NYC ($900): Caleb becomes president; probe: prior 0.000, search sold"
+  },
+  {
+   "id": "g20-a198",
+   "weakness": "sellout",
+   "kind": "sellout",
+   "criterion": "avoid_bad",
+   "game": 20,
+   "file": "caleb_games/20.json.gz",
+   "site_action_id": 198,
+   "action_index": 170,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 1"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "entity": 2,
+    "entity_type": "player",
+    "id": 171,
+    "percent": 40,
+    "shares": [
+     "PRR_3",
+     "PRR_4",
+     "PRR_0"
+    ],
+    "type": "sell_shares"
+   },
+   "played_desc": "sell 40% PRR",
+   "bad_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 30,
+     "shares": [
+      "PRR_3",
+      "PRR_0"
+     ],
+     "type": "sell_shares",
+     "id": 171
+    },
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 40,
+     "shares": [
+      "PRR_3",
+      "PRR_4",
+      "PRR_0"
+     ],
+     "type": "sell_shares",
+     "id": 171
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 171
+    }
+   ],
+   "context": {
+    "round": "Stock Round 4",
+    "phase": "2",
+    "mover_cash": 30,
+    "corp": {
+     "name": "PRR",
+     "cash": 670,
+     "trains": [],
+     "president": 2,
+     "share_price": 67
+    }
+   },
+   "note": "sells PRR 40% ($670, no trains): Caleb becomes president"
+  },
+  {
+   "id": "g19-a117",
+   "weakness": "sellout",
+   "kind": "sellout",
+   "criterion": "avoid_bad",
+   "game": 19,
+   "file": "caleb_games/19.json.gz",
+   "site_action_id": 117,
+   "action_index": 116,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 1"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 3,
+    "entity_type": "player",
+    "id": 117,
+    "percent": 50,
+    "shares": [
+     "NYNH_2",
+     "NYNH_4",
+     "NYNH_5",
+     "NYNH_0"
+    ],
+    "type": "sell_shares"
+   },
+   "played_desc": "sell 50% NYNH",
+   "bad_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 30,
+     "shares": [
+      "NYNH_2",
+      "NYNH_4",
+      "NYNH_5"
+     ],
+     "type": "sell_shares",
+     "id": 117
+    },
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 40,
+     "shares": [
+      "NYNH_2",
+      "NYNH_4",
+      "NYNH_0"
+     ],
+     "type": "sell_shares",
+     "id": 117
+    },
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 50,
+     "shares": [
+      "NYNH_2",
+      "NYNH_4",
+      "NYNH_5",
+      "NYNH_0"
+     ],
+     "type": "sell_shares",
+     "id": 117
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 117
+    }
+   ],
+   "context": {
+    "round": "Stock Round 4",
+    "phase": "2",
+    "mover_cash": 118,
+    "corp": {
+     "name": "NYNH",
+     "cash": 390,
+     "trains": [
+      "2",
+      "2"
+     ],
+     "president": 3,
+     "share_price": 76
+    }
+   },
+   "note": "sells NYNH ($390): Caleb becomes president"
+  },
+  {
+   "id": "g18-a101",
+   "weakness": "sellout",
+   "kind": "sellout",
+   "criterion": "avoid_bad",
+   "game": 18,
+   "file": "caleb_games/18.json.gz",
+   "site_action_id": 101,
+   "action_index": 100,
+   "num_players": 4,
+   "mover": {
+    "player_id": 1,
+    "name": "Bot 1"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 1,
+    "entity_type": "player",
+    "id": 101,
+    "percent": 40,
+    "shares": [
+     "C&O_3",
+     "C&O_6",
+     "C&O_0"
+    ],
+    "type": "sell_shares"
+   },
+   "played_desc": "sell 40% C&O",
+   "bad_moves": [
+    {
+     "entity": 1,
+     "entity_type": "player",
+     "percent": 20,
+     "shares": [
+      "C&O_3",
+      "C&O_6"
+     ],
+     "type": "sell_shares",
+     "id": 101
+    },
+    {
+     "entity": 1,
+     "entity_type": "player",
+     "percent": 30,
+     "shares": [
+      "C&O_3",
+      "C&O_0"
+     ],
+     "type": "sell_shares",
+     "id": 101
+    },
+    {
+     "entity": 1,
+     "entity_type": "player",
+     "percent": 40,
+     "shares": [
+      "C&O_3",
+      "C&O_6",
+      "C&O_0"
+     ],
+     "type": "sell_shares",
+     "id": 101
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 1,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 101
+    }
+   ],
+   "context": {
+    "round": "Stock Round 4",
+    "phase": "2",
+    "mover_cash": 317,
+    "corp": {
+     "name": "C&O",
+     "cash": 590,
+     "trains": [
+      "2"
+     ],
+     "president": 1,
+     "share_price": 90
+    }
+   },
+   "note": "sells C&O ($590): Caleb becomes president"
+  },
+  {
+   "id": "g15-a155",
+   "weakness": "sellout",
+   "kind": "sellout",
+   "criterion": "avoid_bad",
+   "game": 15,
+   "file": "caleb_games/15.json.gz",
+   "site_action_id": 155,
+   "action_index": 150,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 3"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 4,
+    "entity_type": "player",
+    "id": 153,
+    "percent": 40,
+    "shares": [
+     "C&O_2",
+     "C&O_3",
+     "C&O_0"
+    ],
+    "type": "sell_shares"
+   },
+   "played_desc": "sell 40% C&O",
+   "bad_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 20,
+     "shares": [
+      "C&O_2",
+      "C&O_3"
+     ],
+     "type": "sell_shares",
+     "id": 153
+    },
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 30,
+     "shares": [
+      "C&O_2",
+      "C&O_3",
+      "C&O_7"
+     ],
+     "type": "sell_shares",
+     "id": 153
+    },
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 40,
+     "shares": [
+      "C&O_2",
+      "C&O_3",
+      "C&O_0"
+     ],
+     "type": "sell_shares",
+     "id": 153
+    },
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 50,
+     "shares": [
+      "C&O_2",
+      "C&O_3",
+      "C&O_7",
+      "C&O_0"
+     ],
+     "type": "sell_shares",
+     "id": 153
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 153
+    }
+   ],
+   "context": {
+    "round": "Stock Round 5",
+    "phase": "3",
+    "mover_cash": 221,
+    "corp": {
+     "name": "C&O",
+     "cash": 590,
+     "trains": [
+      "2"
+     ],
+     "president": 4,
+     "share_price": 90
+    }
+   },
+   "note": "sells C&O ($590): Caleb becomes president"
+  },
+  {
+   "id": "g15-a345",
+   "weakness": "sellout",
+   "kind": "sellout",
+   "criterion": "avoid_bad",
+   "game": 15,
+   "file": "caleb_games/15.json.gz",
+   "site_action_id": 345,
+   "action_index": 346,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 2"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 3,
+    "entity_type": "player",
+    "id": 349,
+    "percent": 50,
+    "shares": [
+     "B&M_1",
+     "B&M_2",
+     "B&M_3",
+     "B&M_0"
+    ],
+    "type": "sell_shares"
+   },
+   "played_desc": "sell 50% B&M",
+   "bad_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 30,
+     "shares": [
+      "B&M_1",
+      "B&M_2",
+      "B&M_3"
+     ],
+     "type": "sell_shares",
+     "id": 349
+    },
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 40,
+     "shares": [
+      "B&M_1",
+      "B&M_2",
+      "B&M_3",
+      "B&M_4"
+     ],
+     "type": "sell_shares",
+     "id": 349
+    },
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 50,
+     "shares": [
+      "B&M_1",
+      "B&M_2",
+      "B&M_3",
+      "B&M_0"
+     ],
+     "type": "sell_shares",
+     "id": 349
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 349
+    }
+   ],
+   "context": {
+    "round": "Stock Round 7",
+    "phase": "4",
+    "mover_cash": 288,
+    "corp": {
+     "name": "B&M",
+     "cash": 340,
+     "trains": [
+      "3"
+     ],
+     "president": 3,
+     "share_price": 111
+    }
+   },
+   "note": "sells B&M ($340): Caleb becomes president"
+  },
+  {
+   "id": "g11-a175",
+   "weakness": "sellout",
+   "kind": "sellout",
+   "criterion": "avoid_bad",
+   "game": 11,
+   "file": "caleb_games/11.json.gz",
+   "site_action_id": 175,
+   "action_index": 155,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 2"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "entity": 3,
+    "entity_type": "player",
+    "id": 156,
+    "percent": 40,
+    "shares": [
+     "C&O_3",
+     "C&O_6",
+     "C&O_0"
+    ],
+    "type": "sell_shares"
+   },
+   "played_desc": "sell 40% C&O",
+   "bad_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 20,
+     "shares": [
+      "C&O_3",
+      "C&O_6"
+     ],
+     "type": "sell_shares",
+     "id": 156
+    },
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 30,
+     "shares": [
+      "C&O_3",
+      "C&O_0"
+     ],
+     "type": "sell_shares",
+     "id": 156
+    },
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 40,
+     "shares": [
+      "C&O_3",
+      "C&O_6",
+      "C&O_0"
+     ],
+     "type": "sell_shares",
+     "id": 156
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 156
+    }
+   ],
+   "context": {
+    "round": "Stock Round 5",
+    "phase": "2",
+    "mover_cash": 317,
+    "corp": {
+     "name": "C&O",
+     "cash": 590,
+     "trains": [
+      "2"
+     ],
+     "president": 3,
+     "share_price": 112
+    }
+   },
+   "note": "sells C&O ($590): Caleb becomes president"
+  },
+  {
+   "id": "g10-a318",
+   "weakness": "sellout",
+   "kind": "sellout",
+   "criterion": "avoid_bad",
+   "game": 10,
+   "file": "caleb_games/10.json.gz",
+   "site_action_id": 318,
+   "action_index": 317,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 1"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "entity": 3,
+    "entity_type": "player",
+    "id": 318,
+    "percent": 40,
+    "shares": [
+     "C&O_3",
+     "C&O_7",
+     "C&O_0"
+    ],
+    "type": "sell_shares"
+   },
+   "played_desc": "sell 40% C&O",
+   "bad_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "C&O_3"
+     ],
+     "type": "sell_shares",
+     "id": 318
+    },
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 20,
+     "shares": [
+      "C&O_3",
+      "C&O_7"
+     ],
+     "type": "sell_shares",
+     "id": 318
+    },
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 30,
+     "shares": [
+      "C&O_3",
+      "C&O_0"
+     ],
+     "type": "sell_shares",
+     "id": 318
+    },
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 40,
+     "shares": [
+      "C&O_3",
+      "C&O_7",
+      "C&O_0"
+     ],
+     "type": "sell_shares",
+     "id": 318
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 318
+    }
+   ],
+   "context": {
+    "round": "Stock Round 8",
+    "phase": "3",
+    "mover_cash": 349,
+    "corp": {
+     "name": "C&O",
+     "cash": 590,
+     "trains": [
+      "2"
+     ],
+     "president": 3,
+     "share_price": 160
+    }
+   },
+   "note": "sells C&O ($590): Caleb becomes president"
+  },
+  {
+   "id": "g21-a360",
+   "weakness": "doomed",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 21,
+   "file": "caleb_games/21.json.gz",
+   "site_action_id": 360,
+   "action_index": 340,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 2"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "entity": 4,
+    "entity_type": "player",
+    "id": 344,
+    "percent": 10,
+    "shares": [
+     "C&O_1"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% C&O",
+   "bad_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "C&O_1"
+     ],
+     "type": "buy_shares",
+     "id": 344
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 344
+    }
+   ],
+   "context": {
+    "round": "Stock Round 6",
+    "phase": "4",
+    "mover_cash": 122,
+    "corp": {
+     "name": "C&O",
+     "cash": 1,
+     "trains": [],
+     "president": 3,
+     "share_price": 100
+    }
+   },
+   "note": "buys C&O (Bot 3's; $1, trainless, phase 4)"
+  },
+  {
+   "id": "g21-a399",
+   "weakness": "doomed",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 21,
+   "file": "caleb_games/21.json.gz",
+   "site_action_id": 399,
+   "action_index": 379,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 1"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "entity": 2,
+    "entity_type": "player",
+    "id": 383,
+    "percent": 10,
+    "shares": [
+     "C&O_2"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% C&O",
+   "bad_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "C&O_2"
+     ],
+     "type": "buy_shares",
+     "id": 383
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 383
+    }
+   ],
+   "context": {
+    "round": "Stock Round 6",
+    "phase": "4",
+    "mover_cash": 184,
+    "corp": {
+     "name": "C&O",
+     "cash": 1,
+     "trains": [],
+     "president": 3,
+     "share_price": 100
+    }
+   },
+   "note": "buys C&O (Bot 3's; $1, trainless, phase 4)"
+  },
+  {
+   "id": "g21-a416",
+   "weakness": "doomed",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 21,
+   "file": "caleb_games/21.json.gz",
+   "site_action_id": 416,
+   "action_index": 396,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 2"
+   },
+   "era": "gen6",
+   "bots_played_with": "gen6 u2400 + gen6 critic 2400",
+   "played": {
+    "entity": 4,
+    "entity_type": "player",
+    "id": 400,
+    "percent": 10,
+    "shares": [
+     "C&O_5"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% C&O",
+   "bad_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "C&O_5"
+     ],
+     "type": "buy_shares",
+     "id": 400
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 400
+    }
+   ],
+   "context": {
+    "round": "Stock Round 6",
+    "phase": "4",
+    "mover_cash": 108,
+    "corp": {
+     "name": "C&O",
+     "cash": 1,
+     "trains": [],
+     "president": 3,
+     "share_price": 100
+    }
+   },
+   "note": "buys C&O again (Bot 3's; $1, trainless)"
+  },
+  {
+   "id": "g19-a432",
+   "weakness": "doomed",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 19,
+   "file": "caleb_games/19.json.gz",
+   "site_action_id": 432,
+   "action_index": 411,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 3"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 4,
+    "entity_type": "player",
+    "id": 417,
+    "percent": 10,
+    "shares": [
+     "B&O_1"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% B&O",
+   "bad_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "B&O_1"
+     ],
+     "type": "buy_shares",
+     "id": 554
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 554
+    }
+   ],
+   "context": {
+    "round": "Stock Round 7",
+    "phase": "6",
+    "mover_cash": 170,
+    "corp": {
+     "name": "B&O",
+     "cash": 26,
+     "trains": [],
+     "president": 1,
+     "share_price": 100
+    }
+   },
+   "note": "buys B&O ($26, trainless, phase 6, next a D) and becomes its president"
+  },
+  {
+   "id": "g19-a441",
+   "weakness": "doomed",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 19,
+   "file": "caleb_games/19.json.gz",
+   "site_action_id": 441,
+   "action_index": 420,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 3"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 4,
+    "entity_type": "player",
+    "id": 426,
+    "percent": 10,
+    "shares": [
+     "NYC_3"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% NYC",
+   "bad_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_3"
+     ],
+     "type": "buy_shares",
+     "id": 554
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 554
+    }
+   ],
+   "context": {
+    "round": "Stock Round 7",
+    "phase": "6",
+    "mover_cash": 70,
+    "corp": {
+     "name": "NYC",
+     "cash": 1,
+     "trains": [],
+     "president": 3,
+     "share_price": 62
+    }
+   },
+   "note": "buys NYC (Bot 1's; $1, trainless, phase 6)"
+  },
+  {
+   "id": "g19-a443",
+   "weakness": "doomed",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 19,
+   "file": "caleb_games/19.json.gz",
+   "site_action_id": 443,
+   "action_index": 422,
+   "num_players": 4,
+   "mover": {
+    "player_id": 1,
+    "name": "Bot 2"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 1,
+    "entity_type": "player",
+    "id": 428,
+    "percent": 10,
+    "shares": [
+     "NYC_4"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% NYC",
+   "bad_moves": [
+    {
+     "entity": 1,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_4"
+     ],
+     "type": "buy_shares",
+     "id": 554
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 1,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 554
+    }
+   ],
+   "context": {
+    "round": "Stock Round 7",
+    "phase": "6",
+    "mover_cash": 109,
+    "corp": {
+     "name": "NYC",
+     "cash": 1,
+     "trains": [],
+     "president": 3,
+     "share_price": 62
+    }
+   },
+   "note": "buys NYC (Bot 1's; $1, trainless, phase 6)"
+  },
+  {
+   "id": "g15-a522",
+   "weakness": "doomed",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 15,
+   "file": "caleb_games/15.json.gz",
+   "site_action_id": 522,
+   "action_index": 517,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 3"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 4,
+    "entity_type": "player",
+    "id": 522,
+    "percent": 10,
+    "shares": [
+     "NYNH_1"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% NYNH",
+   "bad_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYNH_1"
+     ],
+     "type": "buy_shares",
+     "id": 522
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 522
+    }
+   ],
+   "context": {
+    "round": "Stock Round 8",
+    "phase": "6",
+    "mover_cash": 116,
+    "corp": {
+     "name": "NYNH",
+     "cash": 100,
+     "trains": [],
+     "president": 2,
+     "share_price": 100
+    }
+   },
+   "note": "buys NYNH (Bot 1's; $100, trainless, phase 6, next a D)"
+  },
+  {
+   "id": "g14-a720",
+   "weakness": "doomed",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 14,
+   "file": "caleb_games/14.json.gz",
+   "site_action_id": 720,
+   "action_index": 700,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 3"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 4,
+    "entity_type": "player",
+    "id": 708,
+    "percent": 10,
+    "shares": [
+     "B&O_1"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% B&O",
+   "bad_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "B&O_1"
+     ],
+     "type": "buy_shares",
+     "id": 708
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 708
+    }
+   ],
+   "context": {
+    "round": "Stock Round 9",
+    "phase": "D",
+    "mover_cash": 2238,
+    "corp": {
+     "name": "B&O",
+     "cash": 1,
+     "trains": [],
+     "president": 2,
+     "share_price": 185
+    }
+   },
+   "note": "buys B&O ($1, trainless, phase D) and becomes its president"
+  },
+  {
+   "id": "g10-a599",
+   "weakness": "doomed",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 10,
+   "file": "caleb_games/10.json.gz",
+   "site_action_id": 599,
+   "action_index": 502,
+   "num_players": 4,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 1"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "entity": 3,
+    "entity_type": "player",
+    "id": 504,
+    "percent": 10,
+    "shares": [
+     "NYC_2"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% NYC",
+   "bad_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "NYC_2"
+     ],
+     "type": "buy_shares",
+     "id": 504
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 504
+    }
+   ],
+   "context": {
+    "round": "Stock Round 9",
+    "phase": "5",
+    "mover_cash": 319,
+    "corp": {
+     "name": "NYC",
+     "cash": 0,
+     "trains": [],
+     "president": 2,
+     "share_price": 58
+    }
+   },
+   "note": "buys NYC (Bot 3's; $0, trainless, phase 5)"
+  },
+  {
+   "id": "g12-a1020",
+   "weakness": "doomed",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 12,
+   "file": "caleb_games/12.json.gz",
+   "site_action_id": 1020,
+   "action_index": 956,
+   "num_players": 6,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 5"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "entity": 4,
+    "entity_type": "player",
+    "id": 985,
+    "percent": 10,
+    "shares": [
+     "B&O_2"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% B&O",
+   "bad_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "B&O_2"
+     ],
+     "type": "buy_shares",
+     "id": 1084
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 1084
+    }
+   ],
+   "context": {
+    "round": "Stock Round 11",
+    "phase": "D",
+    "mover_cash": 1661,
+    "corp": {
+     "name": "B&O",
+     "cash": 1,
+     "trains": [],
+     "president": 3,
+     "share_price": 80
+    }
+   },
+   "note": "6 players: buys B&O (Bot 2's; $1, trainless, phase D)"
+  },
+  {
+   "id": "g18-a512",
+   "weakness": "suitcase",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 18,
+   "file": "caleb_games/18.json.gz",
+   "site_action_id": 512,
+   "action_index": 507,
+   "num_players": 4,
+   "mover": {
+    "player_id": 1,
+    "name": "Bot 1"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 1,
+    "entity_type": "player",
+    "id": 518,
+    "percent": 10,
+    "shares": [
+     "CPR_1"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% CPR",
+   "bad_moves": [
+    {
+     "entity": 1,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_1"
+     ],
+     "type": "buy_shares",
+     "id": 518
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 1,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 518
+    }
+   ],
+   "context": {
+    "round": "Stock Round 8",
+    "phase": "D",
+    "mover_cash": 75,
+    "corp": {
+     "name": "CPR",
+     "cash": 102,
+     "trains": [],
+     "president": 2,
+     "share_price": 62
+    }
+   },
+   "note": "buys CPR (Caleb's suitcase, trainless 9 ORs; $102, no route)"
+  },
+  {
+   "id": "g18-a662",
+   "weakness": "suitcase",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 18,
+   "file": "caleb_games/18.json.gz",
+   "site_action_id": 662,
+   "action_index": 653,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 3"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 4,
+    "entity_type": "player",
+    "id": 668,
+    "percent": 10,
+    "shares": [
+     "CPR_1"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% CPR",
+   "bad_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_5"
+     ],
+     "type": "buy_shares",
+     "id": 668
+    },
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_1"
+     ],
+     "type": "buy_shares",
+     "id": 668
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 668
+    }
+   ],
+   "context": {
+    "round": "Stock Round 9",
+    "phase": "D",
+    "mover_cash": 1123,
+    "corp": {
+     "name": "CPR",
+     "cash": 102,
+     "trains": [],
+     "president": 2,
+     "share_price": 34
+    }
+   },
+   "note": "buys CPR (Caleb's suitcase; $102, no route)"
+  },
+  {
+   "id": "g14-a615",
+   "weakness": "suitcase",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 14,
+   "file": "caleb_games/14.json.gz",
+   "site_action_id": 615,
+   "action_index": 595,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 1"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 2,
+    "entity_type": "player",
+    "id": 603,
+    "percent": 10,
+    "shares": [
+     "CPR_1"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% CPR",
+   "bad_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_5"
+     ],
+     "type": "buy_shares",
+     "id": 603
+    },
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_1"
+     ],
+     "type": "buy_shares",
+     "id": 603
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 603
+    }
+   ],
+   "context": {
+    "round": "Stock Round 8",
+    "phase": "D",
+    "mover_cash": 1083,
+    "corp": {
+     "name": "CPR",
+     "cash": 0,
+     "trains": [],
+     "president": 1,
+     "share_price": 41
+    }
+   },
+   "note": "buys CPR (Caleb's; $0, no route); dumped on it [624], then Caleb lays its route"
+  },
+  {
+   "id": "g14-a620",
+   "weakness": "suitcase",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 14,
+   "file": "caleb_games/14.json.gz",
+   "site_action_id": 620,
+   "action_index": 600,
+   "num_players": 4,
+   "mover": {
+    "player_id": 2,
+    "name": "Bot 1"
+   },
+   "era": "gen6+lr1v4",
+   "bots_played_with": "gen6 u2400 + lr1 v4 (play), gen6 critic 2400 (auction)",
+   "played": {
+    "entity": 2,
+    "entity_type": "player",
+    "id": 608,
+    "percent": 10,
+    "shares": [
+     "CPR_2"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% CPR",
+   "bad_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_5"
+     ],
+     "type": "buy_shares",
+     "id": 608
+    },
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_2"
+     ],
+     "type": "buy_shares",
+     "id": 608
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 2,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 608
+    }
+   ],
+   "context": {
+    "round": "Stock Round 8",
+    "phase": "D",
+    "mover_cash": 1042,
+    "corp": {
+     "name": "CPR",
+     "cash": 0,
+     "trains": [],
+     "president": 1,
+     "share_price": 41
+    }
+   },
+   "note": "buys CPR again; dumped [624], forced to buy a D after Caleb's route [697]"
+  },
+  {
+   "id": "g12-a908",
+   "weakness": "suitcase",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 12,
+   "file": "caleb_games/12.json.gz",
+   "site_action_id": 908,
+   "action_index": 852,
+   "num_players": 6,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 2"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "entity": 3,
+    "entity_type": "player",
+    "id": 875,
+    "percent": 10,
+    "shares": [
+     "CPR_4"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% CPR",
+   "bad_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_5"
+     ],
+     "type": "buy_shares",
+     "id": 1084
+    },
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_4"
+     ],
+     "type": "buy_shares",
+     "id": 1084
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 1084
+    }
+   ],
+   "context": {
+    "round": "Stock Round 10",
+    "phase": "D",
+    "mover_cash": 493,
+    "corp": {
+     "name": "CPR",
+     "cash": 1,
+     "trains": [],
+     "president": 2,
+     "share_price": 41
+    }
+   },
+   "note": "6 players: buys CPR (Caleb's; $1, no route)"
+  },
+  {
+   "id": "g12-a919",
+   "weakness": "suitcase",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 12,
+   "file": "caleb_games/12.json.gz",
+   "site_action_id": 919,
+   "action_index": 863,
+   "num_players": 6,
+   "mover": {
+    "player_id": 3,
+    "name": "Bot 2"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "entity": 3,
+    "entity_type": "player",
+    "id": 886,
+    "percent": 10,
+    "shares": [
+     "CPR_5"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% CPR",
+   "bad_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_5"
+     ],
+     "type": "buy_shares",
+     "id": 1084
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 3,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 1084
+    }
+   ],
+   "context": {
+    "round": "Stock Round 10",
+    "phase": "D",
+    "mover_cash": 425,
+    "corp": {
+     "name": "CPR",
+     "cash": 1,
+     "trains": [],
+     "president": 2,
+     "share_price": 27
+    }
+   },
+   "note": "6 players: buys CPR and takes it over; Caleb lays its route [996]"
+  },
+  {
+   "id": "g8-a528",
+   "weakness": "suitcase",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 8,
+   "file": "caleb_games/8.json.gz",
+   "site_action_id": 528,
+   "action_index": 492,
+   "num_players": 4,
+   "mover": {
+    "player_id": 4,
+    "name": "Bot 3"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "entity": 4,
+    "entity_type": "player",
+    "id": 499,
+    "percent": 10,
+    "shares": [
+     "CPR_1"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% CPR",
+   "bad_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_5"
+     ],
+     "type": "buy_shares",
+     "id": 499
+    },
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_1"
+     ],
+     "type": "buy_shares",
+     "id": 499
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 4,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 499
+    }
+   ],
+   "context": {
+    "round": "Stock Round 7",
+    "phase": "6",
+    "mover_cash": 659,
+    "corp": {
+     "name": "CPR",
+     "cash": 1,
+     "trains": [],
+     "president": 3,
+     "share_price": 55
+    }
+   },
+   "note": "buys CPR (Caleb's; $1, no route)"
+  },
+  {
+   "id": "g8-a560",
+   "weakness": "suitcase",
+   "kind": "buy",
+   "criterion": "avoid_bad",
+   "game": 8,
+   "file": "caleb_games/8.json.gz",
+   "site_action_id": 560,
+   "action_index": 524,
+   "num_players": 4,
+   "mover": {
+    "player_id": 1,
+    "name": "Bot 2"
+   },
+   "era": "gen4",
+   "bots_played_with": "gen4 rab_place/1800 + lr1 v4 (play), gen4 critic 1800 (auction)",
+   "played": {
+    "entity": 1,
+    "entity_type": "player",
+    "id": 531,
+    "percent": 10,
+    "shares": [
+     "CPR_3"
+    ],
+    "type": "buy_shares"
+   },
+   "played_desc": "buy 10% CPR",
+   "bad_moves": [
+    {
+     "entity": 1,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_5"
+     ],
+     "type": "buy_shares",
+     "id": 531
+    },
+    {
+     "entity": 1,
+     "entity_type": "player",
+     "percent": 10,
+     "shares": [
+      "CPR_3"
+     ],
+     "type": "buy_shares",
+     "id": 531
+    }
+   ],
+   "preferred_moves": [
+    {
+     "entity": 1,
+     "entity_type": "player",
+     "type": "pass",
+     "id": 531
+    }
+   ],
+   "context": {
+    "round": "Stock Round 7",
+    "phase": "6",
+    "mover_cash": 577,
+    "corp": {
+     "name": "CPR",
+     "cash": 1,
+     "trains": [],
+     "president": 3,
+     "share_price": 50
+    }
+   },
+   "note": "buys CPR and takes it over (Caleb's suitcase)"
+  }
+ ]
+}
