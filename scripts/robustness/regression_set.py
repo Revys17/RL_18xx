@@ -790,6 +790,8 @@ def score(args) -> list:
         print("note: no search for generic checkpoints yet -- policy and value only", flush=True)
     records = {}
     results = []
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     out = open(args.out, "a") if args.out else None
     for pos in positions:
         gid = pos["game"]
@@ -826,7 +828,9 @@ def main(argv=None):
     s.add_argument("--ids", nargs="*")
     s.add_argument("--limit", type=int, default=None)
     s.add_argument("--fixture", default=str(FIXTURE))
-    s.add_argument("--device", default="cpu")
+    s.add_argument("--device", default="cpu",
+                   help="generic checkpoints' device; legacy ones load where the checkpointer puts them (the GPU when "
+                   "one is visible: CUDA_VISIBLE_DEVICES= for CPU)")
     s.add_argument("--threads", type=int, default=int(os.environ.get("OMP_NUM_THREADS", "4") or 4))
     s.add_argument("--label", default=None)
     s.add_argument("--out", default=None, help="append each position's result to this JSONL")
