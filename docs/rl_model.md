@@ -25,7 +25,8 @@ end-to-end CPU smoke; C3 ("Mixed-title training and the sharing probe") trains o
 section ("1822 family: data, starts, caps and the CPU smoke", 2026-11-14) does A3's work for 1822, 1822PNW, 1822MX
 and 1822CA -- and fixes the seat bookkeeping for titles that reorder their players; "1822+: the optional rules" moves
 1822 onto its optional rules; "GPU run queue" (2026-11-14) holds the GPU recipes of every new title, their CPU dry runs,
-the GPU estimates and the recommended order. The frozen 1830 model (`model_transformer.py`) is untouched.
+the GPU estimates and the recommended order. "Serving generic checkpoints" (2026-11-15) lets the advisor and the bots
+play a generic 1830 checkpoint, policy-only or searched. The frozen 1830 model (`model_transformer.py`) is untouched.
 
 ## API
 
@@ -2290,3 +2291,121 @@ in this queue: it waits for step 1's verdict and the user's call.
 8. **1822CA's supervised selection**: 114 training games; C3 found that at ~100 games early stopping on the total
    validation loss is decided by the value side memorizing. The recipe keeps the legacy selection; selecting on policy
    CE would need a flag.
+
+## Serving generic checkpoints: the advisor and the bots (2026-11-15)
+
+Code: `rl18xx/agent/alphazero/game_network.py`, the advisor (`rl18xx/agent/advisor/advisor.py`, `app.py`), one hook in
+`RustMCTSPlayer.tree_search`; tests: `tests/agent/advisor/test_generic_play.py`; the service swap:
+`scripts/launch/2026-11/bridge/swap_bots_generic.sh`.
+
+`main.py advisor` serves a generic 1830 checkpoint in the seats it plays (hotseat autoplay, the bots): every `--play-*`
+option (`--play-policy`, `--play-value`, `--play-auction-policy`, `--play-auction-value`) takes `generic:<path>`, a
+`pretrain-generic` / `policy-gradient-generic` checkpoint, and generic and legacy parts mix (a generic policy searched
+with a legacy value works, which is what `--play-policy generic:...` alone gives: `--play-value` still defaults to
+`--search-value`). The advice (top moves, win estimates, "Think harder") stays on the legacy networks: `--policy`,
+`--auction-policy`, `--value` and `--search-value` refuse a generic checkpoint.
+
+* **`--play-mode search`** (the default, the legacy behaviour): every decision searched with the bots' settings
+  (`advisor.SEARCH_OVERRIDES`: mean Q, c_puct 0.05, 8 leaves per batch, each distinct leaf once), the most visited
+  move played, the tree kept for the model's next move (`KEPT_TREES`); priors at the policy's training temperature
+  (`learner_temperature` of the run's `config.json`, as for legacy learners), leaf values from the play value's head
+  (`--play-value-head win | score | blend=<w>`; a generic critic's score head learned placement points).
+* **`--play-mode policy`**: no search. `--play-temperature 0` (default) plays the policy's most likely move and, for an
+  open price, the middle price of its price head's most likely cell (the advice's recommended price); `T > 0` samples
+  the move from softmax(log p / T) (`policy_selfplay.tempered`, as `eval_policy_only.py`'s `generic:<path>@T` players)
+  and the price from the head's cells. Legacy policies play this way too. The move result's `kind` is `policy`, its
+  `share` the policy's probability for the move (the extension's panel says "no search").
+
+Everything around the move is the legacy play's: the site-format action (`autoplay.to_site_action`, the G19 city swap,
+`match_train_ids`), implicit passes (`autoplay.plan_move`), and the rule against train shuffling (the move is chosen at
+`autoplay.bot_position`'s copy, the followed game keeps the real rules); `/api/health` labels the play checkpoints
+`generic:<run>/learner/<n>` and the mode.
+
+### How a generic network meets the legacy search
+
+* **Moves and prices carry over one to one.** For 1830 a generic model's legal rows are the frozen layout's indices
+  (`mg.legal_actions` reads `factored_legal_indices`; A1's descriptor table), a priced row's range is the legacy price
+  slot's (`rl_price_range` = `price_head_slot_for_index`'s low and high) and its price cells are that slot's cells
+  (`price_pmf.price_cells`, the $5 bid ladder for bids) -- checked on the advisor's test game. So a generic policy's
+  probabilities scatter onto the dense prior vector the Rust tree reads, and each priced row's cell log-probabilities
+  become the legacy price head's row for its slot (`price_pmf.SLOT_INDEX`; one legal index per slot: cross-corporation
+  trains and companies use only the layout's first price offset). The tree samples and widens prices from them as
+  from the legacy head.
+* **Values**: the generic win / score heads are in the encoder's frame (seat 0 = the mover, `meta[5]` the rotation over
+  the seating order); `game_network.absolute_values` maps them to the players sorted by id, the tree's order (1830
+  numbers its players in seating order, so it equals the legacy `unrotate_value`; tested).
+* **`GameNetwork`** holds a policy per round (the auction policy for auction positions, as `advisor._RoundPolicy`) and a
+  value, each a `GenericNetwork` or a legacy model, and evaluates positions given as games: `evaluate` (probabilities
+  over the legal moves at T 1, the legacy price rows, absolute values) for the policy-only move, `run_many_games` for
+  the tree. A generic policy that is also the value gives both from one forward; a separate generic critic runs
+  value-only; a legacy part gets the legacy encoding. Generic forwards de-duplicate the batch's maps (`dedupe_maps`:
+  the map encoder was ~45% of a search's CPU time; with it a 400-readout search took 2.95 s instead of 3.5 s).
+* **The tree hook** (option (a) of the design question): a network with `evaluates_games` set gets the leaf games
+  (`RustMCTSPlayer.tree_search`: no `_rust_encode`, `run_many_games(leaf adapters, legal indices)`, values not
+  unrotated again); the root is evaluated by a one-leaf `tree_search` (as `suggest_move` does). Legacy networks never
+  take the branch: their search is unchanged (every advisor and Rust-MCTS test passes as before). A `GameNetwork` of
+  legacy parts gives the legacy composite's priors, prices and values (tested), so the hook is the only new path.
+
+### Cost per move (CPU, the bots' settings)
+
+400 readouts, 4 torch threads (`--cpu-threads 4`), `--play-value-head score`, default-size untrained networks (the
+cost depends only on the size: generic 8.6M parameters per network, learner + critic), the advisor's test game, the
+machine shared with other jobs (cores 24-31,56-63, nice 19), best of two:
+
+| position (legal moves) | legacy search | generic search, run 1 | generic search, run 2 (map dedupe) | generic policy-only |
+|---|---|---|---|---|
+| private auction, first bid (7) | 5.3 s / 9.2 s | 3.5 s | 3.5 s | 0.03 s |
+| private auction, 6th action (7) | 5.3 s / 9.6 s | 3.7 s | 3.2 s | 0.03 s |
+| stock round (29) | 5.1 s / 6.9 s | 3.4 s | 3.1 s | 0.03 s |
+| operating round, a track lay (9) | 5.2 s / 9.5 s | 3.5 s | 4.2 s | 0.04 s |
+
+Legacy = the bots' current kind of system (legacy learner + legacy critic), run 1 / run 2. The machine's load rose
+between the runs (load average ~26 during run 2; the legacy rows show it), so compare within a run: run 2 is the generic
+search with `dedupe_maps` (the default), which on the track-lay position under equal load took 2.95 s against 3.49 s
+without it (cProfile of one search: the map encoder 1.52 -> 0.85 s of the forwards' 3.2 -> 2.6 s). 400 readouts were
+400-404 leaf evaluations in ~52 batches.
+
+Policy-only play is one forward per move. A generic search is cheaper than a legacy one at the same budget because the
+legacy leaf encoding (`_rust_encode`) is Python-heavy; nearly all of a generic search is the two forwards per batch
+(policy, then the critic's value-only forward).
+
+### Switching a bot service to a generic checkpoint
+
+The services (`rl18xx-bot-backend` :5004, `rl18xx-advisor` :5002, `rl18xx-bot-backend-next` :5014) run from frozen
+deployments with their checkpoints on the command line; gen6's swaps (`longrun/experiments/gen6_20261110/swap_*.sh`)
+replace arguments in place. For a generic run:
+
+1. Pick the checkpoints: a `policy-gradient-generic` run's `<run>/learner/<u>.pth` and `<run>/critic/<u>.pth` (its
+   `config.json` beside them gives the learner temperature). Judge them first by the run's policy-only evals
+   (`pg_generic_1830.sh evals`: vs the generic SL and the outside panel); a generic *search* has no head-to-head eval
+   yet (below).
+2. Deploy code with this feature: `bash scripts/longrun/deploy.sh create <tag> /home/revys/longrun/deploy/advisor-<date>
+   --cpus 24-31,56-63` (a tagged commit at or after this one).
+3. Dry run: `scripts/launch/2026-11/bridge/swap_bots_generic.sh <deploy dir> <learner.pth> <critic.pth>
+   [--policy-only [T]]` prints each running unit's old and new command line: the deployment's python, the four
+   `--play-*` options as `generic:<learner>` (policies) / `generic:<critic>` (values), `--play-mode policy
+   --play-temperature T` with `--policy-only`; everything else (`--play-value-head score`, the legacy advice networks,
+   `--bots`, ports) kept.
+4. `... --apply` stops and restarts each unit with `systemd-run` (same unit, memory limit and environment as gen6's
+   swaps), waits for `/api/health` to answer with `generic:` labels, and logs the old command lines
+   (`~/longrun/experiments/swap_bots_generic.log`) for a rollback.
+
+Two generic networks take ~70 MB; nothing else about the services changes.
+
+### Not done / open
+
+1. **Lockstep search** (`lockstep.py`, `mcts_lockstep.rs`: `eval_head_to_head.py --games-per-task`, the search-learning
+   generator) encodes leaves natively for the legacy network and has no game-network path, and `RustMCTSPlayer`'s
+   inference-server path (`InferenceClient`) neither: a `GameNetwork` runs in-process only. To measure a generic
+   search's strength (`eval_head_to_head.py` players), the simplest route is the same hook in `lockstep.py` (fetch each
+   tree's leaf games for a `GameNetwork` key and call `run_many_games` in the worker; ~half a day); the fast route is a
+   native generic leaf request (`rl_encode_batch` on the leaf `BaseGame`s plus their descriptor rows and price ranges
+   in Rust, sent as a `GenericBatch` to a generic inference server, sparse priors scattered onto the tree's legal list,
+   price rows keyed by `price_head_entity_key`, values unrotated by `meta[5]`).
+2. **Which mode for the bots**: the generic PG learner is trained and evaluated policy-only; whether its critic
+   searches better than the policy alone (as gen4 + critic did over gen4) is unmeasured until (1) exists.
+3. **The advice** (top moves, win estimates) stays legacy; serving it from a generic checkpoint would need
+   `Advisor._analyse` / `_run_values` on `GameNetwork.evaluate` (small) and a decision on which checkpoint advises.
+4. **1867 / 1822** play needs the advisor's live game to follow those titles (`live_game.SUPPORTED_TITLE` is 1830),
+   their legal moves from `rl_legal_moves_json` instead of the 1830 layout, and no legacy price slots: the policy-only
+   mode is the natural first step there (`generic_policy.sample_price` already prices generator layouts).

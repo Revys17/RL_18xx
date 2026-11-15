@@ -122,6 +122,20 @@ it again); `autoplayDryRun` only shows the moves. See `bot/README.md`.
 Which networks play comes from the backend (`main.py advisor --play-policy /
 --play-value / --play-auction-policy / --play-auction-value`, by default the
 advice networks); "Run the backend" above has the strongest set measured.
+Every `--play-*` option also takes a title-generic checkpoint as
+`generic:<path>` (a `pretrain-generic` / `policy-gradient-generic` checkpoint;
+`docs/rl_model.md` "Serving generic checkpoints"), and `--play-mode policy`
+makes the seats play the policy's own move without searching (the most likely
+move and price, or sampled with `--play-temperature T`); the panel then shows
+"no search" and the policy's probability for the move:
+
+```bash
+uv run python main.py advisor --device cpu \
+  --play-policy generic:$RUN/learner/2000.pth --play-value generic:$RUN/critic/2000.pth \
+  --play-auction-policy generic:$RUN/learner/2000.pth --play-auction-value generic:$RUN/critic/2000.pth \
+  --play-value-head score            # searched (400 readouts: ~3 s on 4 CPU threads)
+# ... --play-mode policy             # or the policy alone (~0.02 s a move)
+```
 
 ## What the panel shows
 
