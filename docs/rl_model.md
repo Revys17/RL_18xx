@@ -2157,16 +2157,21 @@ cuts (SR2-SR6), ~7% random openings, ~28% human starts (1867: SR1 after the huma
 human SR1), from the title's start files. `--auction-stall-decisions 0` (1867's auction cannot lock; the family has no
 Auction round); the family's all-pass openings are redrawn (the default). Departures from gen6, named in every script:
 the start (the generic SL checkpoint; its value heads start the critic), the league (no other agents of the title), the
-player mix (human shares; gen6 flattened its mix), microbatch / server batch / games per task per title (activation
-memory: "Model fit across titles").
+player mix (human shares with a 10% floor per count; gen6 flattened its mix), microbatch / server batch / games per task
+per title (activation memory: "Model fit across titles").
 
-| title | dataset (train / validation positions) | player mix = finished human games per count | rules | decision caps | microbatch / server batch / games per task |
-|---|---|---|---|---|---|
-| 1867 | `generic_1867_finished_v1` (508,051 / 29,311) | 3:24,4:61,5:13,6:2 (205 / 509 / 109 / 17 of 840) | base | 3:1200,4:1200,5:1400,6:1500 (A3) | 1024 / 1024 / 64 |
-| 1822 | `generic_1822_v2` (534,873 / 31,883) | 3:28,4:48,5:19,6:5 (149 / 254 / 98 / 24 of 525) | the default mix (1822+ 77%, base 18%, `th` 5%) | 2,200 at every count (1822+) | 256 / 512 / 32 |
-| 1822PNW | `generic_1822PNW_v1` (413,741 / 23,293) | 3:36,4:49,5:15 (150 / 204 / 63 of 417) | base | 1,800 (family proposal) | 512 / 512 / 32 |
-| 1822MX | `generic_1822MX_v1` (214,582 / 10,937) | 3:34,4:50,5:16 (78 / 114 / 37 of 229) | base | **1,650** (re-measured, below) | 512 / 512 / 32 |
-| 1822CA | `generic_1822CA_v1` (145,928 / 12,896) | 3:21,4:55,5:19,6:5 (26 / 68 / 23 / 7 of 124) | base | 3,000 (family proposal) | 256 / 512 / 24 |
+**Player-count floor (2026-11-15)**: `title_recipe.sh` raises every count of the PG mix to at least `MIX_FLOOR` percent
+of the games (default 10, gen6 style: gen6's smallest count, 6p, had 10%) and scales the other counts down in proportion,
+repeating until none is under the floor (`floor_mix`; `MIX_FLOOR=0` = the human shares; `PLAYER_MIX` can be overridden
+too). The resulting PG mixes are in the table; the evals' per-count matches are unchanged.
+
+| title | dataset (train / validation positions) | human mix = finished human games per count | PG mix (10% floor) | rules | decision caps | microbatch / server batch / games per task |
+|---|---|---|---|---|---|---|
+| 1867 | `generic_1867_finished_v1` (508,051 / 29,311) | 3:24,4:61,5:13,6:2 (205 / 509 / 109 / 17 of 840) | **3:22,4:56,5:11.9,6:10** | base | 3:1200,4:1200,5:1400,6:1500 (A3) | 1024 / 1024 / 64 |
+| 1822 | `generic_1822_v2` (534,873 / 31,883) | 3:28,4:48,5:19,6:5 (149 / 254 / 98 / 24 of 525) | **3:26.5,4:45.5,5:18,6:10** | the default mix (1822+ 77%, base 18%, `th` 5%) | 2,200 at every count (1822+) | 256 / 512 / 32 |
+| 1822PNW | `generic_1822PNW_v1` (413,741 / 23,293) | 3:36,4:49,5:15 (150 / 204 / 63 of 417) | as is | base | 1,800 (family proposal) | 512 / 512 / 32 |
+| 1822MX | `generic_1822MX_v1` (214,582 / 10,937) | 3:34,4:50,5:16 (78 / 114 / 37 of 229) | as is | base | **1,650** (re-measured, below) | 512 / 512 / 32 |
+| 1822CA | `generic_1822CA_v1` (145,928 / 12,896) | 3:21,4:55,5:19,6:5 (26 / 68 / 23 / 7 of 124) | **3:19.9,4:52.1,5:18,6:10** | base | 3,000 (family proposal) | 256 / 512 / 24 |
 
 Max updates (a backstop; the plateau rule decides): 1867 3,000, the family 1,000 each. Every line of every start file
 replays on the current engine (checked 2026-11-14: each SR1 / SR1-end start to its end and each mid-game game to its
@@ -2272,8 +2277,8 @@ in this queue: it waits for step 1's verdict and the user's call.
 ### Decisions for the user
 
 1. **Player mix** by the human shares (as asked) puts 1867's 6-player games at 2% (17 human games) and 1822's / CA's
-   at 5%; gen6 flattened its mix on purpose (2-player training did not transfer). A floor (e.g. 5% per count) would
-   cost the 4-player share little.
+   at 5%; gen6 flattened its mix on purpose (2-player training did not transfer). **Done 2026-11-15**: a 10% floor per
+   count (`MIX_FLOOR`, table above; 1867's 4-player share 61% -> 56%).
 2. **Start mix**: gen6's auction 0.5 / mid-game 0.3 / random 0.2 for every title (A3's 1867 outline had auction 0.2,
    ~80% human starts); half the games from the opening is how gen5 / gen6 learned auctions.
 3. **CPUs for the GPU runs**: the scripts default to the pinned cores (as `pg_generic_1830.sh`); the family's PG is
@@ -2290,3 +2295,190 @@ in this queue: it waits for step 1's verdict and the user's call.
 8. **1822CA's supervised selection**: 114 training games; C3 found that at ~100 games early stopping on the total
    validation loss is decided by the value side memorizing. The recipe keeps the legacy selection; selecting on policy
    CE would need a flag.
+
+## Robustness mechanisms (2026-11-15: arms A1-A3 of `docs/robustness_test_plan.md`, NOT LAUNCHED)
+
+Training-side mechanisms for the robustness test plan (the bots' weaknesses against a human:
+`docs/bot_weaknesses_2026_11.md`), in `policy-gradient-generic`; the measurement side (M1-M3) is separate
+(`scripts/robustness/`). **Every one is off by default, and off the stage is C2's**: the loss takes C2's code path
+(`test_generic_robustness.py` compares it with a copy of C2's function, bit for bit), the start samplers draw exactly
+as before without a picker, the league loader returns the legacy keys and pins for files without the new fields. Code:
+`generic_pg.py` (config, league members, losses, run loop), `generic_play.py` (`StartPicker`, `StartPriorities`),
+`start_positions.py` (an optional `picker` in the legacy sampler, which generic 1830 runs use), `main.py` flags; tests
+`tests/agent/alphazero/test_generic_robustness.py` (10, ~25 s on CPU; two run `generic_pg.run` end to end: tempered
+members + reference KL + prioritized starts + population reload + seed with a resume, and the exploiter mode). The
+legacy trainer (`policy_gradient.py`) is untouched (its tests pass).
+
+### A1: human-imitation seats
+
+* **Tempered league members.** A population entry may carry `"temperature"`: the member's key in the league becomes
+  `<path>@<T>` (`member_key`; the eval specs' syntax), so one checkpoint can sit in the league twice, e.g. the SL
+  checkpoint at T 1.0 (its human-like spread) and at T 0.5. The slot's server loads the path; the workers sample that
+  slot's seats at its member's temperature (`seat_temperature`): a shared per-slot value the trainer sets as the slot
+  changes members (`_set_slot`: member-change counter, reload, temperature), the task's `slot_temperatures` as the
+  fallback. Members without one play at `--opponent-temperature`, as before. Moves answered between a reload and the
+  temperature change may be sampled at the previous member's temperature; such a game straddles a member change and
+  is not credited to PFSP anyway (the existing `league_mixed` rule).
+* **Pins per player count.** `min_share` and `min_share_players` work as in the legacy league (`CountLeague`: a pin
+  reserves that share of each count's slot draws -- over time that share of the opponent seats -- and PFSP splits the
+  rest); new `"min_share_by_players": {"2": 0.1, "4": 0.25}` pins a member at a different share per count (none at counts
+  it doesn't list). What A1 lacked was only the per-member temperature; per-count values are a convenience.
+* **Reference KL (piKL-style).** `--ref-kl-coef c` adds `c * KL(learner || reference)` to the loss, over the legal rows
+  and the played row's price cells; the reference is a fixed checkpoint (`--ref-checkpoint`, default the starting
+  policy, i.e. the SL checkpoint), loaded once, no grad, one more forward per microbatch (~+20% of the update's device
+  time). It sits on top of the moving anchor's adaptive KL (which keeps adapting on its own KL only); fixed coefficient,
+  as piKL's lambda. `--ref-temperature` defaults to the learner's T, so the KL is 0 at the start and measures drift from
+  the SL policy in the learner's own parametrization; 1.0 is piKL's form (the played policy against the human-imitation
+  policy's own spread), > 0 from the start: at T 0.5 against 1.0 it pulls the policy flatter from update 1. History:
+  `kl_ref`, `price_kl_ref`, `ref_kl_coef`.
+
+### A2: self-prioritized starts (prioritized level replay)
+
+`--start-priority`: prioritized level replay (Jiang, Grefenstette & Rocktaschel 2021) over the start library, per player
+count and per kind: the human SR1 starts (`human:<id>`; 1830 4p: 1,945) and the mid-game cuts (`midgame:<id>:sr<k>`;
+4p: 1,932 games x their SR2-SR6 cuts). Openings (auction) and random openings stay unprioritized, and **the kinds' shares
+stay the run's start mix** (only which human start or mid-game cut is chosen changes), so A2 differs from A0 in nothing
+else.
+
+* **Score** (the choice): the mean over the learner's kept rows of the games started there of `|reward - V(s)|`
+  (`abs_adv`, PLR's L1 value loss; with `gae_lambda` 1 it is the critic's absolute error on the learner's own positions;
+  gen6's `adv_abs_mean` was ~0.23), computed after each update's baseline pass and folded into the start's running score
+  with weight `--start-priority-ema` 0.5 (1.0 = PLR's replace). `pos_adv` (max(A, 0), PLR's positive value loss: where
+  the learner did better than its critic expected) is the alternative. |A| also rewards starts whose outcome is merely
+  uncertain (irreducible noise), PLR's known bias; the staleness and uniform terms bound it.
+* **Replay distribution** over the scored starts of a kind: `(1 - rho) * P_S + rho * P_C`; `P_S` rank-based,
+  proportional to `(1 / rank) ** (1 / beta)` (`--start-priority-temperature` beta 1.0, softer than PLR's 0.1 because a
+  score here comes from one or a few games), `P_C` proportional to the games of that count played since the start was
+  last played (PLR's staleness, `--start-priority-staleness` rho 0.3); recomputed after each update.
+* **Uniform share** `--start-priority-uniform` 0.3: that share of the draws is the run's own uniform choice (all of them
+  while nothing of a kind is scored); unscored starts enter the library this way.
+* **Plumbing**: per worker task the trainer draws, for the task's count, `games_per_task + 8` picks per kind
+  (`StartPriorities.picks`: a label, or None = uniform) into the task's settings; the worker's `StartPicker` hands them
+  out as its games draw a start of that kind (`sample_start(picker=)`; for 1830 the legacy
+  `start_positions.sample_start_position(picker=)`); a pick its game's rules combination lacks, or an exhausted list,
+  falls back to the uniform choice (counted). Every `PGRow` carries its game's start label; games report `start_label`.
+* **Persistence**: `<run>/start_priorities.json` (scores, play counts, last-played clocks per count), written with each
+  snapshot's `state.json` (which names it), loaded on a resume; starts the files no longer hold are dropped.
+* **History**: `start_priority` (per count and kind: library size, scored starts, mean score, the top 5 as
+  `[label, score, plays, replay probability]`), `start_picks` (draws prioritized / uniform / exhausted / missing this
+  update), `starts_scored_update`.
+* Cost: the trainer reads the start files' ids and cuts once (~2 s for 1830's); picks ~1 ms per task; no GPU.
+* Not done: extra "practice" positions (the ~300 loot-and-dump situations of the human corpus, Caleb's positions) as a
+  third library. The format would be an SR1-style start file (`{"id", "num_players", "actions"}`, cut anywhere); nothing
+  builds it yet.
+
+### A3: main exploiters
+
+* **Exploiter mode** (`--exploiter-of <checkpoint>`): every seat but the learner's is that checkpoint, frozen. Built on
+  the league: the run writes `<run>/exploiter_population.json` with the one member, adds none of its own snapshots
+  (`league_add_snapshots` off) and serves the member from one server (`main`) for every player count, never reloaded.
+  The learner's seats per game follow the per-count league weights (4p: 1 / 2 / 3 seats at .4 / .4 / .2), so it learns
+  to beat the main alone and with company, as it will meet the main in the main's league. `--population` is refused with
+  it. History: `p<n>_vs_main_rate` (the PFSP rate of finishing ahead of the main's seats, per count), `exploiter_of`. The
+  recipe (reward, temperature, entropy, KL) is the caller's flags; the arm uses placement, T 0.5 (the main's: it starts
+  at parity), `--entropy-coef 0.01`, `--kl-coef 0` (no KL, no anchor), lr 4e-5.
+* **Population reload** (`--population-reload-every N`, for the main): every N updates, if the population file changed,
+  members new to it join (at an even rate), members dropped from it leave (own snapshots never), and every count's pins
+  follow the file; a slot holding a member that left takes a new one at once (history `population_reloaded`). With the
+  flag the file is authoritative on a resume too (members neither in it nor own snapshots leave the restored league);
+  without it, the legacy semantics (new file members join on a resume, nothing leaves).
+* **Refresh loop** (`scripts/launch/2026-11/bridge/exploiter_loop.py`): every `--every` main updates (a multiple of its
+  snapshot interval), freeze the main's learner and critic of that update (copies in `<out>/<main>_frozen/`), train an
+  exploiter `<out>/<main>_mx<u>` from them (`--policy` / `--value` the frozen copies, `--exploiter-of` the frozen
+  learner) for `--updates`, then add its last snapshot to the main's population file (atomic write) with its learner T as
+  `"temperature"`, `--min-share` (optionally `--min-share-players`) and `"exploiter_loop": true`; only the newest
+  `--pinned-latest` keep their pins (older ones stay as plain PFSP members: gen6's lesson). One exploiter at a time beside
+  the main (both on the GPU); a late exploiter starts from the newest due snapshot (stale ones are skipped). State in
+  `<out>/<main>_exploiters.json`: re-running continues (an interrupted exploiter resumes from its `state.json`; one that
+  died before its first snapshot is set aside). It ends when the main has stopped and nothing is due; `--dry-run` prints.
+
+### Seed
+
+`--seed s` seeds the trainer's generator (league draws, PPO order, start picks), `torch`, every server's price-cell
+generator and each worker task (`[s, task index]`): task `i` of two runs with one seed draws the same seats, rules and
+starts until their policies (or A2's picks) differ -- common random numbers between arms, not reproducibility (tasks
+finish in any order).
+
+### The arm scripts (`scripts/launch/2026-11/bridge/robust_arm.sh <A0|A1|A2|A3|A4> [pg] [exploiters] [evals] [evalloop]`)
+
+All from the 1830 GPU check's generic SL checkpoint (`model_checkpoints_generic/bridge_1830_check_20261113/final.pth`),
+gen6's recipe exactly as `pg_generic_1830.sh` runs it (mix 2:15,3:20,4:35,5:20,6:10, its caps, 32 workers x 96 games,
+65,536 rows, minibatch 2,048 / microbatch 1,024, lr 2e-5 / critic 3e-5, KL 0.02 -> 0.08 with the anchor every 50,
+T 0.5 / 0.5, auction 0.5 real rules / mid-game 0.3 / random 0.2, 3 opponent slots per count, own snapshots every 50,
+4 kept), each with its own league file `model_checkpoints_generic_pg/populations/<run>.json`, `--seed 1830`,
+`--max-updates 300` (`RESUME_MAX_UPDATES=600` for a second pass); runs `robust_<arm>_20261115`:
+
+| arm | change | league file | extra flags |
+|---|---|---|---|
+| A0 | none (baseline) | the SL | -- |
+| A1 | human-imitation seats | the SL @1.0 and @0.5, each `min_share` 0.125 (25% of opponent seats at every count) | `REF_KL=<c>` (`REF_T`): `--ref-kl-coef c --ref-checkpoint <SL>`, run `..._refkl<c>` |
+| A2 | prioritized starts | the SL | `--start-priority` (abs_adv, uniform 0.3, staleness 0.3, beta 1, ema 0.5) |
+| A3 | main exploiters | the SL, + the loop's exploiters | `--population-reload-every 2`; step `exploiters`: `exploiter_loop.py --every 100 --updates 100 --min-share 0.1 --pinned-latest 2`, exploiters at T 0.5, entropy 0.01, no KL, lr 4e-5 |
+| A4 | A1 + A2 (`WITH_A3=1`: + A3, run `..._a3`) | as A1 (+ exploiters) | A1's + A2's (+ A3's) |
+
+`evals` / `evalloop` (every 100 updates): `pg_generic_1830.sh`'s round (policy-only, T 0.5, real-rules auction starts,
+400 games, generic players on GPU servers: vs the generic SL 4p 2v2 / 1v3 / 2p, SL ckpt 10 4p 2v2 / 1v3, gen6 u2400 at
+2-6 players) plus 4p 1v3 alone vs the SL at T 1.0 (M3's human-imitation opponent) and, with exploiters, vs each loop
+exploiter. M1, M2 and the full M3 panel are the measurement scripts' (`scripts/robustness/`).
+
+### GPU estimates per arm (not measured: no GPU)
+
+From the generic 1830 estimate above ("GPU run queue": ~88 GPU s per update, ~2.4 h per 100 updates, on the machine's
+CPUs or the pinned ones):
+
+| arm | first pass (300 updates) | why |
+|---|---|---|
+| A0 | ~7.3 h | the baseline |
+| A1 | ~7.3 h; ~7.9 h with `REF_KL` | the SL members are served like any member; the reference adds one forward per microbatch (~+7 s per update) |
+| A2 | ~7.3 h | trainer bookkeeping only (the start files' ids read once) |
+| A3 | ~12 h (+2.4 h) | the main plus two 100-update exploiters (from u100 and u200) at ~2.4 h each, sharing the GPU (each runs slower while they overlap); the loop also starts one from u300 when the main stops, useful only for a second pass |
+| A4 | ~7.9 h; ~12.5 h with `WITH_A3=1` | A1 + A2 (+ A3) |
+
+Evals: ~13 matches of 400 games per round (+ one per exploiter), mostly CPU-bound in the pool workers; rounds at
+u100 / u200 / u300 while the run trains. First pass of A0-A4 (A4 without A3): **~42 GPU h**, ~47 h with A4+A3; the two
+best arms to 600 updates: +15-25 h. (The plan's estimate was ~35-40 h + ~5 h per exploiter refresh.)
+
+### CPU dry run (2026-11-15, `CUDA_VISIBLE_DEVICES=`, cores 24-31,56-63 at load ~30)
+
+`DRY=1 DRY_ROOT=<scratch> HG=<main checkout>/human_games bash robust_arm.sh <arm> ...`: the same commands with tiny counts
+(3 workers x 2 games, 8 rows per seat, 200 rows per update, CPU servers, snapshots / anchor / own league snapshots every
+update, evals every update at one game per seat arrangement), a tiny generic SL model (`pretrain-generic` small preset,
+60 steps on the first 30 games of `generic_1830_clean_all_v1`, made by the script; C1's smoke checkpoint is encoder v1
+and no longer loads), tiny legacy stand-ins for SL ckpt 10 and gen6 (the real ones live under `/home/revys/longrun`), the
+real start files, player mix and caps. Outputs in the session scratchpad (`robust_train/dry/`), nothing in the
+repository.
+
+| arm | steps (wall) | updates | games (finished / at the cap) | the mechanism, as seen | eval matches |
+|---|---|---|---|---|---|
+| A0 | pg to 2 incl. the tiny SL (189 s); resume to 3 + evals (388 s) | 3 | 46 (46 / 0) | league = the SL + own snapshots | 11, all ran |
+| A1, `REF_KL=0.05` | pg to 3 + evals (493 s) | 3 | 50 (43 / 7) | league: SL@1 and SL@0.5 pinned 0.125 each at every count + own snapshots; `kl_ref` 2e-6 (= `kl_anchor` at u1) -> 3.1e-5 -> 5.7e-5 | 11 |
+| A2 | pg to 3 (135 s); resume to 4 + evals (255 s) | 4 | 64 (62 / 2) | library per count (4p: 1,945 SR1 starts + 9,072 mid-game cuts; 2p 184 + 802 ... 6p 197 + 915); 20 starts scored by u4; prioritized picks from u3 on; `start_priorities.json` carried through the resume | 11 |
+| A3 | pg to 2 (121 s); resume to 6 (206 s) with the loop beside it: exploiters from u2, u4, u6 (1 update each, 255 s); evals of u6 (+3 exploiter matches); resume to 7 (54 s) | 7 | 112 (108 / 3, 1 auction stall) | `mx2` joined the running main at u6 (`population_reloaded`); the u7 resume restored all three from the file, the newest two pinned at 0.1 and `mx2` unpinned; the exploiters' 4p rate vs the main 0.31-0.41 after their one update | 14 |
+| A4, `WITH_A3=1 REF_KL=0.05` | pg to 2 (98 s); exploiter from u2 (59 s); resume to 3 + evals (353 s) | 3 | 44 (41 / 3) | A1's league + the exploiter (pinned 0.1) joined on the resume; `kl_ref` 3e-6 -> 7.8e-5; prioritized picks | 12 |
+
+In every run: losses finite, `skipped_starts` 0, snapshots / `state.json` / resumes as the C2 stage, games saved. Also
+checked: every arm's real command (A0-A4, A1 with `REF_KL`, A4 with `WITH_A3` + `REF_KL` + `REF_T=1.0`) and the
+exploiter recipe, printed with `ECHO=1`, parsed by `main.py`'s parser and passed through `generic_pg.check_config` with
+the real start files (a stand-in SL checkpoint); and 1867's recipe under `DRY=1` (pretrain + 2 PG updates, 164 s) with
+the floored mix 3:22,4:56,5:11.9,6:10 (2 of 16 games per update at 6 players).
+
+### Decisions for the user
+
+1. **A1's numbers**: the SL at T 1.0 and 0.5, 12.5% pinned each (25% of opponent seats) at every count -- the plan's
+   guess. The reference KL is a variant (`REF_KL`), not part of A1 by default; if used, `--ref-temperature` = the
+   learner's T (drift from the SL, 0 at the start; the script's default) or 1.0 (piKL's form, pulls the policy flatter
+   from update 1), and a coefficient around the anchor's (0.02).
+2. **A2's score and shape**: |reward - V| (the critic's error; alternative: its positive part), rank temperature 1 (PLR
+   uses 0.1: much greedier), staleness 0.3, 30% uniform, EMA 0.5. A2 keeps A0's start mix, so only ~43% of games (28%
+   human SR1 + 15% mid-game) are prioritized; raising `--midgame-fraction` in A2 would test more of the library but
+   confounds the arm. A practice-position library (loot-and-dump situations) needs a builder first.
+3. **A3's exploiter recipe**: T 0.5 (the main's, so it starts at parity) with an entropy bonus 0.01 rather than a higher
+   T; no KL; lr 4e-5; 100 updates from the main's snapshot every 100 updates; pinned 10% (newest 2). In a 300-update
+   first pass the main meets only about two exploiters, late: `EXP_EVERY=50 EXP_UPDATES=50` or A3 straight to 600.
+   Exploiters run beside the main on the one GPU.
+4. **"Same seeds"** = `--seed 1830` for every arm (common random numbers per worker task); runs are still asynchronous,
+   so arm-to-arm differences of one seed are not exactly paired. Repeats with other seeds (the plan's "2x the seed
+   spread") cost a full run each.
+5. **Evals**: `pg_generic_1830.sh`'s round + 4p 1v3 vs SL@1.0 and vs each exploiter; M1, M2 and the full M3 panel come
+   from the measurement scripts and need wiring into `evalloop` once they exist.
+6. **A5** (targeted auction / looter exploiters) is not built: the plan keeps it for weaknesses A1-A4 leave.
