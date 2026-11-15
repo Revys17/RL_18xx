@@ -19,7 +19,8 @@
 # - League: the SL checkpoint alone at first, then the learner's own snapshots (every 50, the latest 4), PFSP per
 #   player count (CountLeague) -- no other 1867 agents exist (gen6: a 33-member league).
 # - Player mix by the human games' shares at 3-6 players: 3p 205, 4p 509, 5p 109, 6p 17 of 840 finished games ->
-#   3:24,4:61,5:13,6:2 (gen6: a flattened 2:15,3:20,4:35,5:20,6:10).
+#   3:24,4:61,5:13,6:2 (gen6: a flattened 2:15,3:20,4:35,5:20,6:10), each count raised to >= 10% of the games
+#   (title_recipe.sh MIX_FLOOR, 2026-11-15, gen6 style) -> PG mix 3:22,4:56,5:11.9,6:10 (MIX_FLOOR=0: the human shares).
 # - Decision caps 3:1200,4:1200,5:1400,6:1500 (A3's proposal: ~1.5x the longest T 1.0 game, ~1.7-2.4x the humans').
 # - Auction stalls off (--auction-stall-decisions 0): 1867's single-item auction cannot lock (A3); auction_unlock
 #   is 1830's.
@@ -28,7 +29,7 @@
 # - Learner server 2 replicas; games per task 64 (gen6: 96; 1867 games are ~1.2x 1830's).
 TITLE=1867
 DATA_NAME=generic_1867_finished_v1
-PLAYER_MIX=3:24,4:61,5:13,6:2
+PLAYER_MIX=${PLAYER_MIX:-3:24,4:61,5:13,6:2}
 CAPS=3:1200,4:1200,5:1400,6:1500
 MAX_DECISIONS=1500
 MICROBATCH=1024   # ~15 MB of fp32 activations per position (1830: 12.4): ~15 GB a microbatch

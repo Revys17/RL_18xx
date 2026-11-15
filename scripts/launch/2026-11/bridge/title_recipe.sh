@@ -18,7 +18,9 @@
 #
 # Environment (defaults in brackets): CPUS [24-31,56-63], WORKERS [32], DEVICE [cuda], TAG [20261114],
 # HG [human_games] (datasets and start files), SL_OUT / SL / OUT_DIR / PG_RUN / EVAL_OUT (paths), MAX_UPDATES,
-# RESUME_MAX_UPDATES (a resume's new --max-updates), EVAL_GAMES [400], EVAL_WORKERS [16], EVAL_UPDATE.
+# RESUME_MAX_UPDATES (a resume's new --max-updates), EVAL_GAMES [400], EVAL_WORKERS [16], EVAL_UPDATE,
+# MIX_FLOOR [10]: every player count of the PG mix gets at least this percent of the games (gen6 style; the counts
+# above it keep their proportions; 0 = the title's PLAYER_MIX as given; PLAYER_MIX itself can be overridden too).
 # DRY=1: the CPU dry run -- tiny model / steps / games, CPU servers, every output under DRY_ROOT (nothing in the
 # repository); the real settings are untouched by it.
 set -uo pipefail
@@ -107,6 +109,33 @@ PANEL_DIR=${PANEL_DIR:-$OUT_DIR/panels/$PG_RUN}
 RUN_DIR=$OUT_DIR/$PG_RUN
 COUNTS=$(echo "$PLAYER_MIX" | tr ',' '\n' | cut -d: -f1 | tr '\n' ' ')
 
+# PLAYER_MIX ("3:24,4:61,...", any weights) with every count raised to at least $2 percent of the games and the others
+# scaled down in proportion (repeated until none falls below the floor); one decimal. A floor of 0 returns the mix.
+floor_mix() {
+  echo "$1" | awk -v floor="$2" -F, '{
+    n = NF; total = 0
+    for (i = 1; i <= n; i++) { split($i, kv, ":"); key[i] = kv[1]; w[i] = kv[2] + 0; total += w[i]; pinned[i] = 0 }
+    if (floor <= 0) { print $0; exit }
+    if (floor * n > 100) { print "MIX_FLOOR " floor " x " n " counts > 100%" > "/dev/stderr"; exit 1 }
+    for (i = 1; i <= n; i++) w[i] = 100 * w[i] / total
+    changed = 1
+    while (changed) {
+      changed = 0; rest = 100; free = 0
+      for (i = 1; i <= n; i++) if (pinned[i]) rest -= floor; else free += w[i]
+      for (i = 1; i <= n; i++) {
+        if (pinned[i]) { v[i] = floor; continue }
+        v[i] = w[i] * rest / free
+        if (v[i] < floor) { pinned[i] = 1; changed = 1 }
+      }
+    }
+    out = ""
+    for (i = 1; i <= n; i++) { x = sprintf("%.1f", v[i]); sub(/\.0$/, "", x); out = out (i > 1 ? "," : "") key[i] ":" x }
+    print out
+  }'
+}
+MIX_FLOOR=${MIX_FLOOR:-10}
+PG_MIX=$(floor_mix "$PLAYER_MIX" "$MIX_FLOOR") || exit 1
+
 # The decision cap of an n-player game (CAPS "3:1200,4:1200,...", else MAX_DECISIONS).
 cap_for() {
   local kv
@@ -143,7 +172,7 @@ step_pg() {
   [ -f "$POP" ] || printf '{"note": "%s %s: the generic SL checkpoint (own snapshots join per run)", %s}\n' \
     "$TITLE" "$PG_RUN" "\"members\": [{\"path\": \"$SL\", \"note\": \"generic SL (pretrain step)\"}]" > "$POP"
   "${PY[@]}" main.py policy-gradient-generic --run-name "$PG_RUN" --out-dir "$OUT_DIR" --title "$TITLE" \
-    --policy "$SL" --player-mix "$PLAYER_MIX" "${rules[@]}" \
+    --policy "$SL" --player-mix "$PG_MIX" "${rules[@]}" \
     --max-decisions "$MAX_DECISIONS" --max-decisions-by-players "$CAPS" \
     "${PG_SCALE[@]}" --population "$POP" --pfsp-power 2.0 --reward placement \
     --ppo-epochs 1 --clip 0.2 --lr 2e-5 --critic-lr 3e-5 --kl-coef 0.02 --kl-target 0.08 --kl-coef-min 0.005 \
@@ -235,7 +264,7 @@ step_evalloop() {
 title_main() {
   local steps=("$@") s
   [ ${#steps[@]} -eq 0 ] && steps=(pretrain pg)
-  echo "$TITLE recipe: steps ${steps[*]}${DRY:+ (DRY RUN under $DRY_ROOT)}; SL $SL; PG run $RUN_DIR; counts $COUNTS"
+  echo "$TITLE recipe: steps ${steps[*]}${DRY:+ (DRY RUN under $DRY_ROOT)}; SL $SL; PG run $RUN_DIR; counts $COUNTS (PG mix $PG_MIX)"
   for s in "${steps[@]}"; do
     case "$s" in
       pretrain | pg | evals | evalloop) "step_$s" || { echo "$TITLE: step $s failed"; return 1; } ;;
