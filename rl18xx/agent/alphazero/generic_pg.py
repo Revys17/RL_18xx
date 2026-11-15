@@ -1682,6 +1682,20 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                 for path in previous:
                     if int(path.stem) % cfg.snapshot_every != 0 and path.parent.parent == run_dir and path.exists():
                         path.unlink()
+                reloaded = None  # (before the snapshot: state.json holds the reloaded league)
+                if league and cfg.population_reload_every and update % cfg.population_reload_every == 0:
+                    mtime = _mtime(cfg.population)
+                    if mtime != population_mtime:
+                        population_mtime = mtime
+                        reloaded = reload_population(league, cfg, run_dir, known_members)
+                        if reloaded["added"] or reloaded["removed"]:
+                            LOGGER.info(f"population {cfg.population} reloaded: {reloaded}")
+                        # a slot holding a member that left takes a new one now
+                        for n, slots in slot_names.items():
+                            for slot in slots:
+                                if slot_labels[slot] in reloaded["removed"]:
+                                    _set_slot(handles, slot, league.sample(n, rng), slot_labels, slot_versions,
+                                              slot_temperatures, cfg)
                 if update % cfg.snapshot_every == 0:
                     pool.append(str(current_learner))
                     if league and cfg.league_add_snapshots and update % cfg.league_snapshot_every == 0:
@@ -1714,20 +1728,6 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                 if not league and pool and update % cfg.pool_refresh_every == 0:
                     pool_label = pool[int(rng.integers(0, len(pool)))]
                     handles["pool"].reload(pool_label)
-                reloaded = None
-                if league and cfg.population_reload_every and update % cfg.population_reload_every == 0:
-                    mtime = _mtime(cfg.population)
-                    if mtime != population_mtime:
-                        population_mtime = mtime
-                        reloaded = reload_population(league, cfg, run_dir, known_members)
-                        if reloaded["added"] or reloaded["removed"]:
-                            LOGGER.info(f"population {cfg.population} reloaded: {reloaded}")
-                        # a slot holding a member that left takes a new one now
-                        for n, slots in slot_names.items():
-                            for slot in slots:
-                                if slot_labels[slot] in reloaded["removed"]:
-                                    _set_slot(handles, slot, league.sample(n, rng), slot_labels, slot_versions,
-                                              slot_temperatures, cfg)
                 if league and update % cfg.slot_refresh_every == 0 and not cfg.exploiter_of:
                     for n, slots in slot_names.items():
                         slot = slots[(update // cfg.slot_refresh_every) % len(slots)]
