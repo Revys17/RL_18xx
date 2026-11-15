@@ -13,7 +13,7 @@ of `docs/bot_weaknesses_2026_11.md` (Caleb's games against the bots): **1** auct
 | M4 | strength guard: gen6's `scripts/launch/2026-11/gen6_20261110/outfamily.sh` panel (not rebuilt here) | GPU | ~10 min GPU a checkpoint (4p) |
 
 Everything runs with `taskset -c 24-31,56-63 nice -19` (the scripts do it themselves) and `python -P`. Tests:
-`tests/robustness/` (13 tests, ~15 s).
+`tests/robustness/` (16 tests, ~15 s; the generic M1 search and `round_summary.py` included).
 
 ## M1: the regression set
 
@@ -56,7 +56,10 @@ so "bid on CA" matches at any price.
 uv run python -P scripts/robustness/regression_set.py score \
     --model <gen6 learner/2400.pth>+<gen6 critic/2400.pth>#score --out logs/robustness/m1_gen6_score.jsonl
 uv run python -P scripts/robustness/regression_set.py score --model <policy.pth> --no-search   # policy + value only
-uv run python -P scripts/robustness/regression_set.py score --model generic:<ckpt.pth>@0.5      # generic: no search yet
+# generic: eval_head_to_head's generic spec, searched in-process at the same settings (--search)
+uv run python -P scripts/robustness/regression_set.py score \
+    --model generic:<run>/learner/<u>.pth+generic:<run>/critic/<u>.pth#score --out logs/robustness/m1_<run>_u<u>.jsonl
+uv run python -P scripts/robustness/regression_set.py score --model generic:<ckpt.pth>@0.5 --no-search  # T 0.5 priors
 uv run python -P scripts/robustness/regression_set.py summary <results>.jsonl[.gz]... [--positions]
 uv run python -P scripts/robustness/regression_set.py list
 # rebuild: site exports (18xx.games-style; from the site DB with read-only SELECTs) -> data/caleb_games, then the fixture
@@ -68,14 +71,19 @@ uv run python -P scripts/robustness/regression_set.py build
 `summary` prints one table per `--label`; `--positions` adds a per-position pass/fail matrix across labels (which
 positions flipped between two checkpoints).
 
-**Generic checkpoints** (`model_generic`, `generic:<ckpt>[@prior temperature]`): `GenericSystem` gives the policy's
-probabilities over the legal moves (`generic_policy.GenericPolicy`; 1830's legal indices are the factored layout's, the
-same as the legacy model's) and the win / score heads for the mover (encoder seat `(i - meta[5]) mod n`). The scorer
-has no search for generic networks yet (TODO in `GenericSystem.search`): master gained one while this was built
-(`lockstep.GenericEvaluator`, `eval_head_to_head`'s `generic:<learner>+generic:<critic>[#head]@<n>` players);
-`GenericSystem.search` should run one tree on it and return the root's legal indices, visits, Q, priors and the
-chosen index, as `LegacySystem.search` does -- nothing else changes. Until then generic checkpoints are scored on the
-policy's argmax, and Step 0's matches can already take generic players.
+**Generic checkpoints** (`model_generic`): `generic:<policy.pth>[+generic:<value.pth>][#win|#score|#blend=<w>]`, the
+syntax of `eval_head_to_head`'s generic players (no `+value`: the policy network's own heads; the spec may carry its
+own `@<n>/<c>:<options>`, else `--search` applies; the older `generic:<ckpt>@0.5`, a decimal after `@`, still means
+the prior temperature). `GenericSystem` (2026-11-15) gives the policy's probabilities over the legal moves (1830's
+legal indices are the factored layout's, the legacy model's), the value network's win / score heads for the mover and
+the search's head, and **searches** at the same settings as the legacy systems: `game_network.GameNetwork` in-process
+(priors at T 1 tempered by the tree's `ptemp`, as eval_head_to_head's generic players; price cells as the legacy price
+rows; values in absolute seat order) through `RustMCTSPlayer.tree_search`'s `evaluates_games` hook, the root evaluated
+by a one-leaf batch as the advisor's generic searches; `#score` backs up placement points at finished games when the
+critic's run recorded a placement reward. Cost: default-size learner + critic ~12-17 ms of CPU a leaf (docs/rl_model.md
+"Head-to-head evals of generic searches"), ~5-7 s a position at 400 readouts on 4 threads, ~6 min for the 59 positions;
+`:sample=<t>` specs are policy-only. Tests: `tests/robustness/test_regression_set.py` (tiny generic learner + critic
+searched on the score head at 16 readouts, a 6-player position included; the CLI end to end).
 
 ### What the numbers mean
 
@@ -166,13 +174,16 @@ same `make_game_record` files (`generic_pg` / `eval_generic.py`), so their colle
 
 ```bash
 uv run python -P scripts/robustness/behaviour_stats.py run <collection or dir>... [--num-players 4] [--finished-only] \
-    [--min-update 2000] [--sample N] [--workers 6] --label <name> --out logs/robustness/m2_<name>
+    [--min-update 2000] [--max-update 2100] [--sample N] [--workers 6] --label <name> --out logs/robustness/m2_<name>
 uv run python -P scripts/robustness/behaviour_stats.py compare logs/robustness/m2_*/summary.json
 ```
 
 Each run prints its table next to the cached baselines (`scripts/robustness/data/behaviour_baselines.json`;
 `--save-baseline <name>` adds or replaces one). `--out` keeps per-game counts (`games.jsonl`; `--keep-events` adds the
-events) and `summary.json`.
+events) and `summary.json`. `--num-players` also drops, before `--sample` draws, the index records that name another
+count (a mixed-count run's `games.jsonl`). Games started at a practice position (`practice:<id>:sr<k>`) are counted
+from that Stock Round, as mid-game starts. `behaviour_stats.broke_dumps(events)` lists a game's broke dumps (looted or
+not, victim bankrupt or not): the practice-position builder reads it.
 
 ### Baselines (per game, 4 players)
 
@@ -278,6 +289,39 @@ between runs (all auction positions with near-even visits), one of them (g15-a14
 Dry run of the whole script (CPU, `DRY=1`: M1 on 3 positions at 16 readouts for each variant, the three matches at 8
 readouts, 6 games of max 300 decisions): every step ran and wrote its summary; a 6-game match took ~1.2 min.
 
+## In the arms' evals (2026-11-15)
+
+`scripts/launch/2026-11/bridge/robust_arm.sh <arm> evals` / `evalloop` runs the instruments on every eval round (each
+`EVAL_EVERY` 100 updates) after `pg_generic_1830.sh`'s matches (`MEASURE=1`, the default; `MEASURE=0`: the matches only,
+as before). Files under the arm's eval directory (`logs/eval/<run>/`):
+
+| Step | What | Output |
+|---|---|---|
+| M1 (CPU, in the background while M3 plays) | the round's learner alone (`generic:<run>/learner/<u>.pth@0.5 --no-search`: argmax, priors at T 0.5) and searched with its critic on the score head at the bots' settings (`generic:<learner>+generic:<run>/critic/<u>.pth#score`, `@400/0.05:mean,dedupe,par=8,ptemp=0.5`) | `u<u>_m1_policy.jsonl`, `u<u>_m1_search_score.jsonl` (+ `.log`) |
+| M3 | `exploiter_panel.sh` with `BOT=generic:<learner>@0.5`: SL ckpt 10 @1.0 / @0.5, gx2_bankrupt, gx2_rust, gen6 u2400, + every loop exploiter of the run (A3, A4 with `WITH_A3`) as `mx<u>`; 800 games a member, the generic bot on a generic inference server (`GENERIC_SERVER=1`, new: `--generic-server` instead of `--generic-device`); each member's 120 saved games through M2 by side | `u<u>_m3/` (`results.txt`, `<member>/`, `<member>.m2/`) |
+| M2 | (a) the round's saved 4p eval games: the matches' (`--save-games 6` each) and M3's (A = the arm); (b) the run's saved 4p PG games since the previous round (`--min-update` / new `--max-update`, a sample of 1,000 of them, A = the learner) | `u<u>_m2_eval/`, `u<u>_m2_pg/` |
+| summary | `scripts/robustness/round_summary.py`: the round's numbers (`round_u<u>.json`), one line per round (`rounds.txt`, like gen6's `outfamily.txt`: the matches, M1 pass / p(bad) / chose bad per weakness, M2 per-seat-game rates of the arm's side and CA / MH prices, M3 per member), and the rounds side by side with references (`robust_status.txt`: M1 of gen6 / SL ckpt 10, M2 of the human corpus / gen6) | `rounds.txt`, `robust_status.txt` |
+
+With exploiters, M3's 800-game matches replace the 400-game 1v3 per loop exploiter of the round. M1's searched variant
+uses the run's critic (`critic/<u>.pth`, saved with every learner snapshot); the M2 PG sample counts only 4-player games
+(the index names the seats). A failed step leaves a dash in the summary and a line in `results.txt`; the round goes on.
+`exploiter_panel.sh` and the M1 / M2 outputs are kept: re-running `evals` for a round redoes only what is missing.
+
+Per round, estimated for the GPU box (nothing measured on the GPU): the 11 matches ~10 min (400 games each, mostly
+pool-worker CPU), M3 ~8-12 min (5 members + exploiters, 800 games each: gen6's panel took 72-100 s a member) + ~15 s of
+M2 per member, M1 ~5 min CPU beside it (59 positions x ~4 s searched on 4 threads at load ~25, measured with
+default-size untrained networks: 3.0-6.8 s a position; ~20 s policy-only), M2 ~2-3 min (6 workers, ~650 eval / M3 games
+and 1,000 sampled 4p PG games): **~25-30 min a round**, ~20 of them holding the GPU servers; three rounds in
+a 300-update arm add ~1.5 h of wall time but little GPU time next to the ~7 h run (the PG run keeps training).
+
+CPU dry run (2026-11-15, `DRY=1`, cores 24-31,56-63 at load ~25; tiny generic SL and tiny legacy stand-ins for SL ckpt
+10, gen6, gx2_bankrupt and gx2_rust; M1 on one position per weakness at 16 readouts, M3 4 games of max 300 decisions a
+member, M2 on 20 sampled PG files): every step of every round ran and wrote its outputs. A0: two rounds (u1, u2: 283 s
+and 276 s each with the 11 matches; M3 ~12 s a member, M2 of 48 eval + M3 games), `rounds.txt` with both lines,
+`robust_status.txt` with both columns, the u2 PG window u2-u2 (after u1's). A5p: one round (273 s). A3: the loop
+exploiter (`mx2`) joined M3 as an extra member, M3 run with `M3_GENERIC_SERVER=1` (the generic bot on a CPU generic
+inference server against the legacy stand-ins on legacy servers: the GPU path's plumbing).
+
 ## Time and GPU estimates
 
 - M1: CPU, ~5 min a legacy system at 400 readouts (59 positions x ~5 s, 4 threads); policy + value only, 20 s.
@@ -299,7 +343,8 @@ readouts, 6 games of max 300 decisions): every step ran and wrote its summary; a
 - Route laying was looked for (a bot tile lay that gives Caleb's suitcase a route): none in Caleb's games -- Caleb laid
   the routes himself onto the bots' taken-over CPRs (games 12 [996], 14 [697]). The suitcase positions are therefore
   buy-ins and take-overs only.
-- Generic checkpoints get M1 policy/value numbers only until a generic search exists (see M1).
+- Generic checkpoints are searched in-process (CPU, ~6 min a system); a generic M1 on the GPU would need
+  `GenericNetwork(device="cuda")` (`--device cuda`: untested here, no GPU) or the lockstep `GenericEvaluator` on servers.
 - The analysis' probe output (`probes_gen6.txt` of session 48dd27c6) printed, for auction positions, policy
   probabilities that are SL ckpt 10's, not gen6's (g21 [2]: CA $165 0.55 = SL; gen6 gives DH $75 0.68, CA 0.02;
   g21 [33]: raise 0.718 = SL, gen6 0.941); its search priors in the same output are gen6's (`probes_gen6lr1.txt`'s

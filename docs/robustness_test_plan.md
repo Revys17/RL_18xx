@@ -54,6 +54,10 @@ the same seed set, and the same update budget: a first pass of 300 updates each,
 
 Practice positions from the human corpus (~300 loot-and-dump situations, plus Caleb's) are not an arm on their
 own: A2's library includes them, and A2 decides how often they matter.
+**Built 2026-11-15** (`docs/rl_model.md` "Practice positions and later mid-game cuts"): 842 positions (4p 560) one and
+two Stock Rounds before the corpus' and Caleb's looted-broke dumps, drawn by `--practice-fraction` (uniform, or as
+A2's third library); `robust_arm.sh A5p` runs them at 15% of starts (`WITH_A2=1`: through A2). Mid-game cuts to SR 10
+(`midgame_positions_1830_<N>p_v2_sr10.jsonl`) extend A2's library past SR 6.
 
 ## Step 2: confirm and carry over
 
@@ -97,6 +101,10 @@ own: A2's library includes them, and A2 decides how often they matter.
    evals + 4p 1v3 vs SL@1.0 and vs each exploiter), each arm dry-run on the CPU (`DRY=1`; results in
    `docs/rl_model.md` "Robustness mechanisms"). Also: the title recipes' player mixes now give every count >= 10%
    (`MIX_FLOOR`).
+7. Wire M1-M3 into the arms' evals; a generic search in M1. **Done 2026-11-15**: every eval round runs M1 (the
+   learner alone and searched with its critic's score head, `generic:` specs searched in-process), the M3 panel (+ the
+   arm's loop exploiters), M2 of the round's eval / M3 games and of the run's PG games, and writes `rounds.txt` /
+   `robust_status.txt` (`docs/robustness_measurement.md` "In the arms' evals").
 
 ## Open questions
 

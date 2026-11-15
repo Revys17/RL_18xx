@@ -2541,9 +2541,46 @@ else.
   `[label, score, plays, replay probability]`), `start_picks` (draws prioritized / uniform / exhausted / missing this
   update), `starts_scored_update`.
 * Cost: the trainer reads the start files' ids and cuts once (~2 s for 1830's); picks ~1 ms per task; no GPU.
-* Not done: extra "practice" positions (the ~300 loot-and-dump situations of the human corpus, Caleb's positions) as a
-  third library. The format would be an SR1-style start file (`{"id", "num_players", "actions"}`, cut anywhere); nothing
-  builds it yet.
+* Practice positions (below) join as a third library (`practice:<id>:sr<k>`) when a run has them; later mid-game cuts
+  (SR 7-10) as a drop-in mid-game file.
+
+### Practice positions and later mid-game cuts (2026-11-15; arm A5p)
+
+The A2 library's mid-game cuts stop at Stock Round 6 (`midgame_positions_1830_<N>p_v2.jsonl`), while the human
+loot-and-dumps happen around SR 6-9 (`docs/bot_weaknesses_2026_11.md`). Two new start files, both in the mid-game
+format (`{"id", "num_players", "actions", "cuts": {"<k>": prefix length}}`), built on CPU (written to the session
+scratchpad's `robust_prep/` for the user to copy into `human_games/`; the scripts default to `human_games/`):
+
+* **Later cuts**: `midgame_positions_1830_<N>p_v2_sr10.jsonl` (`scripts/build_generic_start_positions.py --title 1830
+  --last-round 10 --suffix _v2_sr10 --only midgame --strip-meta`, 42 s on 6 jobs): the v2 files' games with cuts at SR
+  2-10. Their SR 2-6 cuts and prefixes equal v2's for every game both hold (action `id` fields aside: the generic
+  importer numbers them differently); the generic importer drops 3 games the legacy builder kept (5p 30168, 6p 27054 /
+  29947). Cuts per count: 2p 1,117 (178 games; SR7-10: 315), 3p 2,581 (391; 735), 4p 11,989 (1,932; 2,917), 5p 2,735
+  (438; 683), 6p 1,223 (192; 318). A drop-in `--midgame-positions` (A2 then prioritizes over SR 2-10; the uniform draw
+  takes a game, then one of its cuts, so later cuts get the share of their game). Memory: a worker that loads the 4p
+  file holds ~740 MB (v2: ~410 MB); a mixed-count worker that loads all five ~1.2 GB (v2 ~0.65 GB).
+* **Practice positions**: `practice_positions_1830_<N>p_v1.jsonl` (`scripts/robustness/build_practice_positions.py`,
+  5 min on 6 workers): the start of the Stock Round one and two Stock Rounds before every looted-broke dump (M2's
+  `looted_broke_dump`, found by `behaviour_stats.broke_dumps` on the Python replay) of the cleaned corpus
+  (`1830_clean_20261017`, base-rules games as the start files) and of Caleb's games (`scripts/robustness/data/
+  caleb_games`), cut from the Rust engine's own log and checked to replay strictly to that Stock Round (Rust `turn` =
+  its number). Each line carries its `source` (`human` / `caleb`), the `dumps` (Stock Round, round, company, dumper,
+  victim, victim bankrupt) and which dump each cut precedes (`cut_dumps`). Positions (games): 2p 47 (23), 3p 135 (62),
+  4p 560 (264, 7 of them from 3 of Caleb's games), 5p 75 (37), 6p 25 (12): 842 positions, mostly SR 4-8. Four of
+  Caleb's games (8, 10, 11, 12) were played with `multiple_brown_from_ipo` and are left out with the 86 corpus games
+  under optional rules (`--allow-optional-rules` keeps their cuts that replay under the base rules: 985 positions, 4p
+  637 with 9 of Caleb's; counted, not written -- whether a position reached under `multiple_brown_from_ipo` belongs in
+  a base-rules run is the user's call).
+* **Drawing them** (`policy-gradient-generic --practice-positions <template> --practice-fraction f`, default 0: off,
+  not one random draw more, so every existing run starts exactly as before): a share `f` of games starts at a practice
+  cut, drawn before the rest of the start mix (the other kinds keep their ratios, scaled by `1 - f`); uniform over the
+  count's games and their cuts, or, with `--start-priority`, through A2's priorities as a third library (`practice`
+  kind: scored, replayed and summarized like the mid-game cuts). A count without practice games falls through to the
+  mix (a warning at the start). The template defaults to `human_games/practice_positions_1830_{n}p_v1.jsonl` for 1830
+  when only the fraction is given. Labels `practice:<id>:sr<k>`; M2 counts such games from that Stock Round. Code:
+  `start_positions.sample_start_position` / `replayed_start`, `generic_play.sample_start` / `replayed_start` /
+  `StartPicker.practice` / `start_labels`, `generic_pg` config + `check_practice`; tests in
+  `test_generic_robustness.py` (draws unchanged at 0, the picker, the library, the checks, a run end to end).
 
 ### A3: main exploiters
 
@@ -2577,7 +2614,7 @@ generator and each worker task (`[s, task index]`): task `i` of two runs with on
 starts until their policies (or A2's picks) differ -- common random numbers between arms, not reproducibility (tasks
 finish in any order).
 
-### The arm scripts (`scripts/launch/2026-11/bridge/robust_arm.sh <A0|A1|A2|A3|A4> [pg] [exploiters] [evals] [evalloop]`)
+### The arm scripts (`scripts/launch/2026-11/bridge/robust_arm.sh <A0|A1|A2|A3|A4|A5p> [pg] [exploiters] [evals] [evalloop]`)
 
 All from the 1830 GPU check's generic SL checkpoint (`model_checkpoints_generic/bridge_1830_check_20261113/final.pth`),
 gen6's recipe exactly as `pg_generic_1830.sh` runs it (mix 2:15,3:20,4:35,5:20,6:10, its caps, 32 workers x 96 games,
@@ -2593,11 +2630,16 @@ T 0.5 / 0.5, auction 0.5 real rules / mid-game 0.3 / random 0.2, 3 opponent slot
 | A2 | prioritized starts | the SL | `--start-priority` (abs_adv, uniform 0.3, staleness 0.3, beta 1, ema 0.5) |
 | A3 | main exploiters | the SL, + the loop's exploiters | `--population-reload-every 2`; step `exploiters`: `exploiter_loop.py --every 100 --updates 100 --min-share 0.1 --pinned-latest 2`, exploiters at T 0.5, entropy 0.01, no KL, lr 4e-5 |
 | A4 | A1 + A2 (`WITH_A3=1`: + A3, run `..._a3`) | as A1 (+ exploiters) | A1's + A2's (+ A3's) |
+| A5p | practice positions (2026-11-15) | the SL | `--practice-positions $PRACTICE` (`$HG/practice_positions_1830_{n}p_v1.jsonl`) `--practice-fraction 0.15` (`PRACTICE_FRACTION`), uniform; `WITH_A2=1`: + A2's flags, the practice cuts a third library (run `..._a2`) |
 
 `evals` / `evalloop` (every 100 updates): `pg_generic_1830.sh`'s round (policy-only, T 0.5, real-rules auction starts,
 400 games, generic players on GPU servers: vs the generic SL 4p 2v2 / 1v3 / 2p, SL ckpt 10 4p 2v2 / 1v3, gen6 u2400 at
-2-6 players) plus 4p 1v3 alone vs the SL at T 1.0 (M3's human-imitation opponent) and, with exploiters, vs each loop
-exploiter. M1, M2 and the full M3 panel are the measurement scripts' (`scripts/robustness/`).
+2-6 players) plus 4p 1v3 alone vs the SL at T 1.0 (M3's human-imitation opponent), then the measurements (`MEASURE=1`,
+the default; `MEASURE=0` = the round as before, with a 400-game 1v3 per loop exploiter): M1 of the round's learner
+alone and searched with its critic's score head (CPU, beside M3), the M3 panel with the run's loop exploiters as extra
+members (800 games each, the generic bot on a generic server), M2 of the round's 4p eval + M3 games and of the run's 4p
+PG games since the previous round, and `scripts/robustness/round_summary.py`'s line (`rounds.txt`) and table across
+rounds (`robust_status.txt`); details, files and cost in docs/robustness_measurement.md "In the arms' evals".
 
 ### GPU estimates per arm (not measured: no GPU)
 
@@ -2634,8 +2676,13 @@ repository.
 | A3 | pg to 2 (121 s); resume to 6 (206 s) with the loop beside it: exploiters from u2, u4, u6 (1 update each, 255 s); evals of u6 (+3 exploiter matches); resume to 7 (54 s) | 7 | 112 (108 / 3, 1 auction stall) | `mx2` joined the running main at u6 (`population_reloaded`); the u7 resume restored all three from the file, the newest two pinned at 0.1 and `mx2` unpinned; the exploiters' 4p rate vs the main 0.31-0.41 after their one update | 14 |
 | A4, `WITH_A3=1 REF_KL=0.05` | pg to 2 (98 s); exploiter from u2 (59 s); resume to 3 + evals (353 s) | 3 | 44 (41 / 3) | A1's league + the exploiter (pinned 0.1) joined on the resume; `kl_ref` 3e-6 -> 7.8e-5; prioritized picks | 12 |
 
-In every run: losses finite, `skipped_starts` 0, snapshots / `state.json` / resumes as the C2 stage, games saved. Also
-checked: every arm's real command (A0-A4, A1 with `REF_KL`, A4 with `WITH_A3` + `REF_KL` + `REF_T=1.0`) and the
+| A5p (2026-11-15) | pg to 2 (64 s, the SL reused); evals of u2 with M1 / M3 / M2 (273 s) | 2 | 30 (30 / 0) | 6 games started at practice cuts (2 + 4, e.g. `practice:258730:sr4`, `practice:67367:sr6`; 15% expected), all replayed (`skipped_starts` 0) | 11 + M3's 5 |
+
+The rounds with the measurements wired in (2026-11-15; A0 two rounds, A3 with its loop exploiter in M3, A5p) are in
+docs/robustness_measurement.md "In the arms' evals". In every run: losses finite, `skipped_starts` 0, snapshots /
+`state.json` / resumes as the C2 stage, games saved. A0-A4's printed commands (`ECHO=1`, pg and exploiters, with the
+variants above) are identical before and after the A5p / measurement changes; A5p's (and `WITH_A2=1`'s) pass
+`main.py`'s parser and `generic_pg.check_config` with the practice files. Also checked: every arm's real command (A0-A4, A1 with `REF_KL`, A4 with `WITH_A3` + `REF_KL` + `REF_T=1.0`) and the
 exploiter recipe, printed with `ECHO=1`, parsed by `main.py`'s parser and passed through `generic_pg.check_config` with
 the real start files (a stand-in SL checkpoint); and 1867's recipe under `DRY=1` (pretrain + 2 PG updates, 164 s) with
 the floored mix 3:22,4:56,5:11.9,6:10 (2 of 16 games per update at 6 players).
@@ -2649,7 +2696,8 @@ the floored mix 3:22,4:56,5:11.9,6:10 (2 of 16 games per update at 6 players).
 2. **A2's score and shape**: |reward - V| (the critic's error; alternative: its positive part), rank temperature 1 (PLR
    uses 0.1: much greedier), staleness 0.3, 30% uniform, EMA 0.5. A2 keeps A0's start mix, so only ~43% of games (28%
    human SR1 + 15% mid-game) are prioritized; raising `--midgame-fraction` in A2 would test more of the library but
-   confounds the arm. A practice-position library (loot-and-dump situations) needs a builder first.
+   confounds the arm. The practice library (loot-and-dump situations) and SR 7-10 cuts exist now ("Practice positions
+   and later mid-game cuts"): A5p runs them as an arm; A2 on the SR10 file would test the later cuts.
 3. **A3's exploiter recipe**: T 0.5 (the main's, so it starts at parity) with an entropy bonus 0.01 rather than a higher
    T; no KL; lr 4e-5; 100 updates from the main's snapshot every 100 updates; pinned 10% (newest 2). In a 300-update
    first pass the main meets only about two exploiters, late: `EXP_EVERY=50 EXP_UPDATES=50` or A3 straight to 600.
@@ -2657,6 +2705,8 @@ the floored mix 3:22,4:56,5:11.9,6:10 (2 of 16 games per update at 6 players).
 4. **"Same seeds"** = `--seed 1830` for every arm (common random numbers per worker task); runs are still asynchronous,
    so arm-to-arm differences of one seed are not exactly paired. Repeats with other seeds (the plan's "2x the seed
    spread") cost a full run each.
-5. **Evals**: `pg_generic_1830.sh`'s round + 4p 1v3 vs SL@1.0 and vs each exploiter; M1, M2 and the full M3 panel come
-   from the measurement scripts and need wiring into `evalloop` once they exist.
-6. **A5** (targeted auction / looter exploiters) is not built: the plan keeps it for weaknesses A1-A4 leave.
+5. **Evals**: `pg_generic_1830.sh`'s round + 4p 1v3 vs SL@1.0, then M1, M3 (the loop exploiters as members) and M2 of
+   every round (wired 2026-11-15; `MEASURE=0` turns them off).
+6. **A5** (targeted auction / looter exploiters) is not built: the plan keeps it for weaknesses A1-A4 leave. **A5p**
+   (practice positions at 15% of starts) is: whether it is an arm of its own, or A2's third library only
+   (`WITH_A2=1`), and the share (15% is a guess: ~1 game in 7 from 842 positions) are the user's call.
