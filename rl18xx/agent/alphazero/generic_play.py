@@ -36,9 +36,12 @@ from __future__ import annotations
 import json
 import logging
 import random
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
 
 LOGGER = logging.getLogger(__name__)
 
@@ -409,6 +412,7 @@ def sample_start(
     auction_fraction: float = 0.0,
     max_price_multiple: float = 2.0,
     optional_rules: Sequence[str] = (),
+    picker: Optional["StartPicker"] = None,
 ) -> GenericStart:
     """A start for a new ``title`` game (``start_positions.sample_start_position``'s mix for any title):
     the opening with probability ``auction_fraction``; else a mid-game cut with probability
@@ -418,7 +422,8 @@ def sample_start(
     ``optional_rules`` (canonical: ``titles.draw_rules``) is the game's rules combination: human and mid-game
     starts are drawn from the lines played under exactly those rules (a combination without lines of this count
     falls through to the next kind, as a count without lines does), auction and random starts are fresh games
-    under them."""
+    under them. ``picker`` (:class:`StartPicker`, prioritized starts) chooses which mid-game cut / human start of
+    the drawn kind (None from it: the uniform choice); the kinds' shares are unchanged."""
     rng = rng or random.Random()
     rules = tuple(optional_rules or ())
     if auction_fraction > 0 and rng.random() < auction_fraction:
@@ -430,13 +435,18 @@ def sample_start(
     if midgame_path and midgame_fraction > 0 and rng.random() < midgame_fraction:
         games = [g for g in load_midgame_file(midgame_path, title).get(int(num_players), []) if g[4] == rules]
         if games:
-            game_id, actions, cuts, seed, _ = rng.choice(games)
-            k = rng.choice(sorted(cuts))
+            picked = picker.midgame(games) if picker is not None else None
+            if picked is not None:
+                (game_id, actions, cuts, seed, _), k = picked
+            else:
+                game_id, actions, cuts, seed, _ = rng.choice(games)
+                k = rng.choice(sorted(cuts))
             return GenericStart(f"{MIDGAME_PREFIX}{game_id}:sr{k}", actions[: cuts[k]], seed, rules)
     human = load_start_file(path, title).get(int(num_players), []) if path else []
     human = [s for s in human if s.optional_rules == rules]
     if human and rng.random() >= random_fraction:
-        return rng.choice(human)
+        picked = picker.human(human) if picker is not None else None
+        return picked if picked is not None else rng.choice(human)
     seed = rng.randrange(1 << 31)
     actions = random_opening_actions(
         title, num_players, rng, seed=seed, max_price_multiple=max_price_multiple, optional_rules=rules
@@ -459,6 +469,7 @@ def replayed_start(
     auction_unlock: bool = True,
     max_draws: int = 100,
     optional_rules: Sequence[str] = (),
+    picker: Optional["StartPicker"] = None,
 ):
     """``(start, raw game, skipped)``: a start applied to a new game (under ``optional_rules``: the game's rules
     combination, :func:`sample_start`); recorded starts the engine no longer replays are skipped and counted
@@ -478,6 +489,7 @@ def replayed_start(
             midgame_fraction=midgame_fraction,
             auction_fraction=auction_fraction,
             auction_unlock=auction_unlock,
+            picker=picker,
         )
         return GenericStart(start.label, tuple(start.actions)), raw_game(game), skipped
     for skipped in range(max_draws):
@@ -491,6 +503,7 @@ def replayed_start(
             midgame_fraction=midgame_fraction,
             auction_fraction=auction_fraction,
             optional_rules=optional_rules,
+            picker=picker,
         )
         try:
             game = new_title_game(title, num_players, seed=start.seed, optional_rules=start.optional_rules)
@@ -502,6 +515,277 @@ def replayed_start(
             continue
         return start, raw, skipped
     raise RuntimeError(f"no {title} start replayed in {max_draws} draws ({path}, {midgame_path})")
+
+
+# ---------------------------------------------------------------------------------------------------
+# Prioritized starts (prioritized level replay over the start library; robustness arm A2)
+# ---------------------------------------------------------------------------------------------------
+
+#: The start kinds a prioritized run chooses by score; openings (auction) and random openings stay unprioritized.
+PRIORITIZED_KINDS = ("human", "midgame")
+#: A start's per-row score: ``abs_adv`` = |reward - V(s)| (PLR's "L1 value loss"; with ``gae_lambda`` 1 the
+#: critic's absolute error), ``pos_adv`` = max(reward - V(s), 0) (PLR's "positive value loss").
+START_SCORES = ("abs_adv", "pos_adv")
+
+
+def start_kind(label: Optional[str]) -> Optional[str]:
+    """The prioritized kind of a start label (``human`` / ``midgame``); None for openings and random openings."""
+    if not label:
+        return None
+    if label.startswith(HUMAN_START_PREFIX):
+        return "human"
+    if label.startswith(MIDGAME_PREFIX):
+        return "midgame"
+    return None
+
+
+def start_labels(path, midgame_path, num_players: int) -> Dict[str, List[str]]:
+    """The library a prioritized run chooses from at ``num_players``: every human SR1 start (``human:<id>``) of
+    ``path`` and every mid-game cut (``midgame:<id>:sr<k>``) of ``midgame_path``, of any rules combination (only
+    the labels are kept: the trainer never replays them; a worker falls back to the uniform choice for a label
+    its game's rules combination doesn't have)."""
+    out: Dict[str, List[str]] = {"human": [], "midgame": []}
+    for file, kind in ((path, "human"), (midgame_path, "midgame")):
+        if not file or not Path(file).is_file():
+            continue
+        with open(file) as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                if int(record["num_players"]) != int(num_players):
+                    continue
+                if kind == "human":
+                    out[kind].append(f"{HUMAN_START_PREFIX}{record['id']}")
+                else:
+                    out[kind] += [f"{MIDGAME_PREFIX}{record['id']}:sr{int(k)}" for k in sorted(record["cuts"], key=int)]
+    return out
+
+
+class StartPicker:
+    """A worker task's prioritized starts: per kind, the labels the trainer drew for it
+    (:meth:`StartPriorities.picks`), taken in order as the task's games draw a start of that kind. A None entry,
+    an exhausted list or a label the candidates lack (another rules combination; a rebuilt file) leaves the choice
+    to the uniform draw. ``counts``: per kind, the draws that were ``prioritized`` / ``uniform`` / ``exhausted``
+    (no pick left) / ``missing`` (a pick not among the candidates)."""
+
+    def __init__(self, picks: Optional[dict] = None):
+        self.picks = {kind: list(labels) for kind, labels in (picks or {}).items()}
+        self.taken: Counter = Counter()
+        self.counts: Counter = Counter()
+
+    def _take(self, kind: str) -> Optional[str]:
+        queue = self.picks.get(kind) or []
+        i = self.taken[kind]
+        if i >= len(queue):
+            self.counts[f"{kind}_exhausted"] += 1
+            return None
+        self.taken[kind] += 1
+        label = queue[i]
+        self.counts[f"{kind}_{'prioritized' if label else 'uniform'}"] += 1
+        return label
+
+    def human(self, starts):
+        """The picked start among ``starts`` (objects with a ``label``), or None (the caller's uniform choice)."""
+        label = self._take("human")
+        if label is None:
+            return None
+        found = next((s for s in starts if s.label == label), None)
+        if found is None:
+            self.counts["human_missing"] += 1
+        return found
+
+    def midgame(self, games):
+        """``(game, k)``: the picked game among ``games`` (tuples whose first item is the id and third the cuts)
+        and its Stock Round k, or None (the caller's uniform choice)."""
+        label = self._take("midgame")
+        if label is None:
+            return None
+        game_id, _, k = label[len(MIDGAME_PREFIX) :].rpartition(":sr")
+        game = next((g for g in games if str(g[0]) == game_id), None)
+        if game is None or not k.isdigit() or int(k) not in game[2]:
+            self.counts["midgame_missing"] += 1
+            return None
+        return game, int(k)
+
+
+class StartPriorities:
+    """Prioritized level replay (Jiang, Grefenstette & Rocktaschel 2021) over a run's start library, per player
+    count and kind (human SR1 starts, mid-game cuts); the share of each kind is the run's start mix, unchanged.
+
+    * **Score**: after each update's baselines, each start's mean row score over the learner's rows of the
+      games started from it (``abs_adv``: |reward - V(s)|, PLR's L1 value loss -- with ``gae_lambda`` 1 the
+      critic's absolute error on the learner's positions; ``pos_adv``: its positive part), folded into the
+      start's running score with weight ``ema`` (1.0: the latest update's mean replaces it, as PLR).
+    * **Replay distribution** over the scored starts of a kind: ``(1 - staleness) * P_S + staleness * P_C`` with
+      rank-based ``P_S`` proportional to ``(1 / rank) ** (1 / temperature)`` (rank 1 = the highest score) and
+      ``P_C`` proportional to the games of that count played since the start was last played (PLR's staleness,
+      so a score that went stale is refreshed); recomputed after each update.
+    * **Uniform share**: each draw is the run's own uniform choice with probability ``uniform`` (and always while
+      nothing of the kind is scored): unscored starts enter the library this way, and the base distribution
+      stays a fixed part of the mix.
+
+    The trainer draws per worker task (:meth:`picks`); the worker takes them through :class:`StartPicker`. Scores,
+    play counts and the staleness clock persist with the run (:meth:`state`, :meth:`load_state`)."""
+
+    def __init__(
+        self,
+        libraries: Dict[int, Dict[str, List[str]]],
+        uniform: float = 0.3,
+        staleness: float = 0.3,
+        temperature: float = 1.0,
+        ema: float = 0.5,
+        score: str = "abs_adv",
+    ):
+        if score not in START_SCORES:
+            raise ValueError(f"start score {score!r}: one of {START_SCORES}")
+        if not 0.0 <= uniform <= 1.0 or not 0.0 <= staleness <= 1.0 or temperature <= 0 or not 0.0 < ema <= 1.0:
+            raise ValueError("prioritized starts: uniform and staleness in [0, 1], temperature > 0, ema in (0, 1]")
+        self.libraries = {int(n): {k: list(v) for k, v in lib.items()} for n, lib in libraries.items()}
+        self.uniform = float(uniform)
+        self.staleness = float(staleness)
+        self.temperature = float(temperature)
+        self.ema = float(ema)
+        self.score = score
+        self.scores: Dict[int, Dict[str, float]] = {n: {} for n in self.libraries}
+        self.last_played: Dict[int, Dict[str, int]] = {n: {} for n in self.libraries}
+        self.plays: Dict[int, Counter] = {n: Counter() for n in self.libraries}
+        self.games: Counter = Counter()
+        self._known = {n: {label for labels in lib.values() for label in labels} for n, lib in self.libraries.items()}
+        self._dist: dict = {}
+
+    @classmethod
+    def for_run(cls, counts, start_template, midgame_template, **kwargs) -> "StartPriorities":
+        """The library of a run's player counts from its start-file templates (``{n}``: the count)."""
+
+        def fill(template, n):
+            return template.replace("{n}", str(int(n))) if template else template
+
+        libraries = {int(n): start_labels(fill(start_template, n), fill(midgame_template, n), n) for n in counts}
+        return cls(libraries, **kwargs)
+
+    def observe_game(self, num_players: int, label: Optional[str]) -> None:
+        """A finished game of ``num_players`` from start ``label``: ticks the count's staleness clock and, for a
+        prioritized kind, marks the start as just played."""
+        n = int(num_players)
+        if n not in self.libraries:
+            return
+        self.games[n] += 1
+        if start_kind(label) is not None and label in self._known[n]:
+            self.last_played[n][label] = int(self.games[n])
+            self.plays[n][label] += 1
+
+    def row_score(self, advantage: float) -> float:
+        return abs(advantage) if self.score == "abs_adv" else max(advantage, 0.0)
+
+    def observe_rows(self, rows) -> int:
+        """Fold this update's rows (``advantage`` = reward - V(s), ``start``, ``num_players``) into the scores of
+        the starts they came from; returns how many starts were scored."""
+        sums: dict = defaultdict(lambda: [0.0, 0])
+        for r in rows:
+            label = getattr(r, "start", None)
+            n = int(r.num_players)
+            if start_kind(label) is None or n not in self.libraries or label not in self._known[n]:
+                continue
+            entry = sums[(n, label)]
+            entry[0] += self.row_score(float(r.advantage))
+            entry[1] += 1
+        for (n, label), (total, count) in sums.items():
+            value = total / count
+            old = self.scores[n].get(label)
+            self.scores[n][label] = value if old is None else (1.0 - self.ema) * old + self.ema * value
+        self._dist.clear()
+        return len(sums)
+
+    def distribution(self, num_players: int, kind: str):
+        """``(labels, probabilities)`` of the replay distribution over the scored starts of ``kind``; None while
+        none is scored."""
+        n = int(num_players)
+        key = (n, kind)
+        if key not in self._dist:
+            scored = [(label, s) for label, s in self.scores.get(n, {}).items() if start_kind(label) == kind]
+            if not scored:
+                self._dist[key] = None
+            else:
+                labels = [label for label, _ in scored]
+                values = np.array([s for _, s in scored], dtype=np.float64)
+                ranks = np.empty(len(values))
+                ranks[np.argsort(-values, kind="stable")] = np.arange(1, len(values) + 1)
+                p = (1.0 / ranks) ** (1.0 / self.temperature)
+                p /= p.sum()
+                clock = int(self.games[n])
+                stale = np.array([clock - self.last_played[n].get(label, 0) for label in labels], dtype=np.float64)
+                if self.staleness > 0 and stale.sum() > 0:
+                    p = (1.0 - self.staleness) * p + self.staleness * stale / stale.sum()
+                self._dist[key] = (labels, p / p.sum())
+        return self._dist[key]
+
+    def picks(self, num_players: int, size: int, rng: np.random.Generator) -> dict:
+        """Per kind with a library at ``num_players``, ``size`` draws for one worker task: None (the uniform
+        choice) or a start label."""
+        n = int(num_players)
+        out = {}
+        for kind in PRIORITIZED_KINDS:
+            if not self.libraries.get(n, {}).get(kind):
+                continue
+            dist = self.distribution(n, kind)
+            if dist is None:
+                out[kind] = [None] * int(size)
+                continue
+            labels, p = dist
+            uniform = rng.random(int(size)) < self.uniform
+            chosen = rng.choice(len(labels), size=int(size), p=p)
+            out[kind] = [None if u else labels[int(i)] for u, i in zip(uniform, chosen)]
+        return out
+
+    def summary(self, top: int = 5) -> dict:
+        """Per count (``p<n>``) and kind: the library size, the scored starts, their mean score and the ``top``
+        starts by score as ``[label, score, plays, replay probability]``."""
+        out = {}
+        for n in sorted(self.libraries):
+            entry = {}
+            for kind in PRIORITIZED_KINDS:
+                size = len(self.libraries[n].get(kind, []))
+                if not size:
+                    continue
+                scored = {label: s for label, s in self.scores[n].items() if start_kind(label) == kind}
+                dist = self.distribution(n, kind)
+                prob = dict(zip(dist[0], dist[1])) if dist else {}
+                best = sorted(scored.items(), key=lambda kv: -kv[1])[:top]
+                entry[kind] = {
+                    "library": size,
+                    "scored": len(scored),
+                    "mean_score": float(np.mean(list(scored.values()))) if scored else None,
+                    "top": [
+                        [label, round(float(s), 4), int(self.plays[n][label]), round(float(prob.get(label, 0.0)), 4)]
+                        for label, s in best
+                    ],
+                }
+            out[f"p{n}"] = entry
+        return out
+
+    def state(self) -> dict:
+        return {
+            "score": self.score,
+            "scores": {str(n): dict(v) for n, v in self.scores.items()},
+            "last_played": {str(n): dict(v) for n, v in self.last_played.items()},
+            "plays": {str(n): dict(v) for n, v in self.plays.items()},
+            "games": {str(n): int(v) for n, v in self.games.items()},
+        }
+
+    def load_state(self, state: dict) -> None:
+        """Restore :meth:`state` (counts the run no longer plays and starts its files no longer hold are dropped)."""
+        for n in self.libraries:
+            known = self._known[n]
+
+            def saved(field):
+                return ((state.get(field) or {}).get(str(n)) or {}).items()
+
+            self.scores[n] = {k: float(v) for k, v in saved("scores") if k in known}
+            self.last_played[n] = {k: int(v) for k, v in saved("last_played") if k in known}
+            self.plays[n] = Counter({k: int(v) for k, v in saved("plays") if k in known})
+            self.games[n] = int((state.get("games") or {}).get(str(n), 0))
+        self._dist.clear()
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -722,6 +1006,10 @@ __all__ = [
     "ReplayedGame",
     "TitlePlay",
     "OPENS_WITH_STOCK_ROUND",
+    "PRIORITIZED_KINDS",
+    "START_SCORES",
+    "StartPicker",
+    "StartPriorities",
     "load_midgame_file",
     "load_start_file",
     "new_title_game",
@@ -734,6 +1022,8 @@ __all__ = [
     "replay_human_game",
     "replayed_start",
     "sample_start",
+    "start_kind",
+    "start_labels",
     "start_records",
     "stock_round_cuts",
     "title_play",
