@@ -125,5 +125,88 @@ def test_generic_policy_and_value(positions, records, tmp_path):
     assert probs.shape == (len(legal),) and np.isclose(probs.sum(), 1.0)
     v = system.values(game, p["mover"]["player_id"])
     assert 0.0 <= v["win"] <= 1.0 and set(v) == {"win", "score", "search"}
-    with pytest.raises(NotImplementedError):
-        system.search(game)
+    # the probabilities are the pool workers' (generic_policy.GenericPolicy)
+    from rl18xx.agent.alphazero.generic_policy import GenericPolicy
+
+    out = GenericPolicy(str(path), "cpu").evaluate([game], [legal])[0]
+    order = {int(i): k for k, i in enumerate(out.legal.indices)}
+    assert np.allclose(probs, [out.probs[order[i]] for i in legal], atol=1e-6)
+
+
+def _tiny_generic_run(tmp_path, reward="placement"):
+    """Tiny untrained generic checkpoints laid out as a generic PG run (learner/1.pth, critic/1.pth, config.json)."""
+    import json
+
+    from rl18xx.agent.alphazero import model_generic as mg
+
+    small = dict(d_model=32, num_heads=4, hex_layers=1, entity_layers=1, fusion_layers=1, d_trunk=64, trunk_blocks=1,
+                 d_head=32, d_edge=8, d_cond=16, d_id=8)
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "config.json").write_text(json.dumps({"learner_temperature": 0.5, "reward": reward}))
+    paths = {}
+    for seed, name in ((1, "learner"), (2, "critic")):
+        torch.manual_seed(seed)
+        model = mg.GenericPolicyValueModel(mg.GenericModelConfig(**small)).eval()
+        with torch.no_grad():
+            for prm in model.parameters():
+                if prm.abs().sum() == 0:
+                    prm.normal_(0, 0.1)
+        paths[name] = run / name / "1.pth"
+        mg.save_checkpoint(model, paths[name], titles=["1830"])
+    return paths
+
+
+def test_generic_search(positions, records, tmp_path):
+    """A generic learner + critic searched on the critic's score head, at the bots' settings (eval_head_to_head's
+    generic spec): the root has the budget, the root's moves are the legal moves, the search's value is the score
+    head, finished games back up placement points, and the old ``@<T>`` spec still means the prior temperature."""
+    paths = _tiny_generic_run(tmp_path)
+    spec = f"generic:{paths['learner']}+generic:{paths['critic']}#score"
+    system = rs.load_system(spec, "@16/0.05:mean,dedupe,par=8,ptemp=0.5")
+    assert system.kind == "generic" and system.can_search and system.prior_temperature == 0.5
+    assert system.value_head == "score" and system.value_net is not system.policy_net
+    assert system.overrides["mcts_mean_q"] and system.overrides["dedupe_leaves"]
+    assert system.overrides["terminal_score_weight"] == 1.0  # placement points at finished games
+    chosen = [p for p in positions if p["id"] in ("g21-a33", "g21-a408", "g12-a908")]  # auction, 4p SR, 6p SR
+    results = [rs.score_position(system, p, records[p["game"]]) for p in chosen]
+    for p, r in zip(chosen, results):
+        game = rs.rust_game_at(records[p["game"]], p["action_index"])
+        legal = sorted(i for i, _ in rs.legal_moves(game))
+        s = system.search(game, 16)
+        assert sorted(s["legal"]) == legal and s["chosen"] in legal
+        assert s["root_n"] >= 16 and sum(s["child_n"]) >= 15
+        assert r["search"]["readouts"] >= 16 and 0.0 <= r["search"]["share_bad"] <= 1.0
+        assert isinstance(r["pass"], bool) and r["pass"] == rs.passed(r)
+        v = r["value"]["before"]
+        assert set(v) == {"win", "score", "search"} and v["search"] == v["score"]
+    s = rs.summarize(results)
+    assert s["all"]["n"] == 3 and "search_chose_bad" in s["all"]
+    # no critic: the policy's own heads; the win head by default
+    own = rs.load_system(f"generic:{paths['learner']}", "@8/0.05:mean,dedupe,par=8,ptemp=0.5")
+    assert own.value_net is own.policy_net and own.value_head == "win"
+    game = rs.rust_game_at(records[21], chosen[1]["action_index"])
+    v = own.values(game, chosen[1]["mover"]["player_id"])
+    assert v["search"] == v["win"]
+    assert own.search(game)["root_n"] >= 8
+    # the older syntax: @<T> = the prior temperature, the search from --search
+    old = rs.load_system(f"generic:{paths['learner']}@1.0", "@8/0.05:mean,dedupe,par=8,ptemp=0.5")
+    assert old.prior_temperature == 1.0 and old.readouts == 8 and old.can_search
+    # policy only (sample=<t>): no search
+    po = rs.load_system(f"generic:{paths['learner']}:sample=0.5")
+    assert not po.can_search and po.prior_temperature == 0.5
+    with pytest.raises(ValueError):
+        po.search(game)
+
+
+def test_generic_score_cli(tmp_path):
+    """``score --model generic:<learner>+generic:<critic>#score`` end to end: JSONL results with the search."""
+    import json
+
+    paths = _tiny_generic_run(tmp_path)
+    out = tmp_path / "m1.jsonl"
+    rs.main(["score", "--model", f"generic:{paths['learner']}+generic:{paths['critic']}#score", "--ids", "g21-a408",
+             "--readouts", "8", "--threads", "2", "--label", "tiny", "--out", str(out)])
+    r = json.loads(out.read_text().splitlines()[0])
+    assert r["label"] == "tiny" and r["search"]["readouts"] >= 8
+    assert r["search_settings"].startswith("@400/0.05:") and "ptemp=0.5" in r["search_settings"]

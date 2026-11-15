@@ -18,6 +18,9 @@ Weaknesses (docs/bot_weaknesses_2026_11.md): ``auction`` (1), ``loot_dump`` (2),
         --model <policy.pth>+<critic.pth>[#score|#blend=0.5] [--search @400/0.05:mean,dedupe,par=8,ptemp=0.5] \
         --out logs/robustness/m1_<name>.jsonl
     uv run python scripts/robustness/regression_set.py score --model generic:<ckpt.pth> --no-search  # policy+value
+    # a generic learner + critic searched on the critic's placement-points head (eval_head_to_head's syntax)
+    uv run python scripts/robustness/regression_set.py score \
+        --model generic:<run>/learner/<u>.pth+generic:<run>/critic/<u>.pth#score --out logs/robustness/m1_<name>.jsonl
     uv run python scripts/robustness/regression_set.py summary logs/robustness/m1_*.jsonl
     uv run python scripts/robustness/regression_set.py list
     # rebuild the fixture (data/regression_set.json) from the curated list below
@@ -431,6 +434,7 @@ class LegacySystem:
     with ``RustMCTSPlayer`` under the search settings of ``eval_head_to_head``'s spec syntax."""
 
     kind = "legacy"
+    can_search = True
 
     def __init__(self, spec: str, search: str = DEFAULT_SEARCH, device: str = "cpu"):
         from eval_head_to_head import parse_player
@@ -551,58 +555,136 @@ class LegacySystem:
         }
 
 
-class GenericSystem:
-    """A title-generic checkpoint (``model_generic``): policy probabilities and values. Search: not yet.
+def _prior_temperature_suffix(spec: str):
+    """``(spec without it, T)`` when ``spec`` ends in ``@<T>`` with a decimal point (the M1 scorer's older generic
+    syntax ``generic:<ckpt>@0.5``: the prior temperature, the search settings from ``--search``), else
+    ``(spec, None)``; ``@<readouts>...`` is eval_head_to_head's search spec."""
+    head, at, tail = spec.rpartition("@")
+    if at and "." in tail:
+        try:
+            return head, float(tail)
+        except ValueError:
+            pass
+    return spec, None
 
-    TODO(generic search): when this was written no search evaluated ``model_generic`` networks; master has since
-    gained one (e503973: ``lockstep.GenericEvaluator`` answering ``engine_rs.mcts_collect_leaf_games``' leaves, used
-    by ``eval_head_to_head``'s ``generic:<learner>+generic:<critic>[#head]@<n>`` players, and the advisor's generic
-    serving). Implement :meth:`search` on it -- one tree, a ``LockstepSearcher`` with a ``GenericEvaluator`` on
-    in-process models -- with the same return shape as :meth:`LegacySystem.search` (root legal indices, visits, Q,
-    priors, chosen index); the scorer needs nothing else."""
+
+def _with_prior_temperature(search: str, temperature: float) -> str:
+    """``search`` (eval_head_to_head's ``@<n>[/<c>][:options]``) with its ``ptemp`` set to ``temperature``."""
+    budget, colon, options = search.partition(":")
+    kept = [o for o in options.split(",") if o and not o.startswith("ptemp=")]
+    return budget + ":" + ",".join(kept + [f"ptemp={temperature}"])
+
+
+class GenericSystem:
+    """Title-generic checkpoints (``model_generic``): ``generic:<policy.pth>[+generic:<value.pth>][#win|#score|
+    #blend=<w>]``, the syntax of ``eval_head_to_head``'s generic players, searched in-process (``game_network``) with
+    the legacy Rust tree under the same search settings as :class:`LegacySystem` (``--search``, default the live bots'
+    ``@400/0.05:mean,dedupe,par=8,ptemp=0.5``; a spec may carry its own ``@<n>...``). No ``+value``: the policy
+    network's own value heads. The older ``generic:<ckpt>@<T>`` (a decimal T) keeps meaning the prior temperature,
+    with the rest of the search from ``--search``.
+
+    Policy: probabilities at temperature 1 over the legal moves (1830's legal indices are the factored layout's, the
+    legacy model's). Values: the value network's win and score heads for the mover, and the search's head
+    (``search``). Search: :class:`game_network.GameNetwork` (priors at temperature 1, the tree tempering them with
+    ``ptemp``, as eval_head_to_head's generic players; the price head's cells as the legacy price rows; values in
+    absolute seat order) through ``RustMCTSPlayer.tree_search``'s ``evaluates_games`` hook, the root evaluated by a
+    one-leaf batch as the advisor's generic searches; ``#score`` backs up placement points at finished games when the
+    value's run recorded a placement reward (``parse_player``). ~12-17 ms of CPU per leaf for default-size networks
+    (docs/rl_model.md "Head-to-head evals of generic searches"): ~5 s a position at 400 readouts."""
 
     kind = "generic"
 
-    def __init__(self, path: str, device: str = "cpu", prior_temperature: float = 0.5):
-        from rl18xx.agent.alphazero.generic_policy import GenericPolicy
+    def __init__(self, spec: str, search: str = DEFAULT_SEARCH, device: str = "cpu"):
+        from eval_head_to_head import generic_parts, parse_player
 
-        self.spec = path
-        self.policy_model = GenericPolicy(path, device)
-        self.prior_temperature = prior_temperature
-        self.readouts = 0
+        from rl18xx.agent.alphazero.game_network import GameNetwork, GenericNetwork
+
+        self.spec = spec
+        body, temperature = _prior_temperature_suffix(spec)
+        if temperature is not None:
+            search = _with_prior_temperature(search, temperature)
+        self.search_spec = search
+        own = body.replace("+generic:", "+").partition("generic:")[2]  # the spec past its parts' prefixes
+        self.full_spec = body if ("@" in own or ":" in own) else body + search
+        key, self.overrides = parse_player(self.full_spec, default_readouts=400, num_players=4)
+        self.overrides_by_count = {4: dict(self.overrides)}
+        parts = generic_parts(key)
+        self.paths = parts
+        # "sample=<t>" (the policy alone in eval_head_to_head): no search, priors at t
+        self.can_search = "policy_temperature" not in self.overrides
+        self.prior_temperature = float(
+            self.overrides.get("prior_temperature", self.overrides.get("policy_temperature", 1.0)))
+        self.readouts = int(self.overrides.get("num_readouts", 0)) if self.can_search else 0
+        self.policy_net = GenericNetwork(parts["policy"], device)
+        self.value_net = GenericNetwork(parts["value"], device) if parts["value"] else self.policy_net
+        self.value_head = parts["value_head"]
+        # priors at temperature 1: the tree tempers them with the spec's ptemp (SelfPlayConfig.prior_temperature)
+        self.net = GameNetwork(self.policy_net, self.value_net, policy_temperature=1.0, value_head=self.value_head)
+
+    def _overrides(self, num_players: int) -> dict:
+        if num_players not in self.overrides_by_count:
+            from eval_head_to_head import parse_player
+
+            self.overrides_by_count[num_players] = parse_player(self.full_spec, 400, num_players)[1]
+        return self.overrides_by_count[num_players]
 
     def policy(self, game, legal: list) -> np.ndarray:
-        out = self.policy_model.evaluate([game], [legal])[0]
-        order = {int(i): k for k, i in enumerate(out.legal.indices)}
+        out = self.policy_net.forward([game], [legal])[0]
+        order = {int(i): k for k, i in enumerate(out.legal)}
         return np.asarray([out.probs[order[int(i)]] for i in legal], dtype=np.float64)
 
     def values(self, game, player_id: int) -> dict:
+        out = self.value_net.forward([game])[0]  # value-only; absolute order (players sorted by id)
+        seat = _abs_seat(game, player_id)
+        search = self.net._head(out.win, out.score)
+        return {"win": float(out.win[seat]), "score": float(out.score[seat]), "search": float(search[seat])}
+
+    def search(self, game, readouts: Optional[int] = None) -> dict:
+        """A fresh search at ``game`` (as :meth:`LegacySystem.search`): the root evaluated, then batches until it
+        has ``readouts`` visits; the root's statistics."""
+        if not self.can_search:
+            raise ValueError(f"{self.spec}: a policy-only spec (sample=<t>) has no search")
         import torch
 
-        from rl18xx.agent.alphazero import model_generic as mg
+        from rl18xx.agent.alphazero.config import SelfPlayConfig
+        from rl18xx.agent.alphazero.rust_mcts_player import RustMCTSPlayer
 
-        model = self.policy_model.model
-        arrays = mg.build_inputs([game], config=model.config)
-        with torch.no_grad():
-            out = model(mg.to_device(arrays, self.policy_model.device), value_only=True)
-        win = torch.softmax(out["win_logits"].float(), dim=-1)[0].cpu().numpy()
-        score = out["score"][0].float().cpu().numpy()
         n = len(game.players)
-        rotation = int(arrays["meta"][0, 5])
-        current = [int(p.id) for p in game._game.players]
-        seat = (current.index(int(player_id)) - rotation) % n  # the encoder's seat k = player (k + rotation) mod n
-        return {"win": float(win[seat]), "score": float(score[seat]), "search": float(win[seat])}
-
-    def search(self, game, readouts=None) -> dict:
-        raise NotImplementedError("no search for generic checkpoints yet (see GenericSystem's TODO)")
+        overrides = dict(self._overrides(n))
+        readouts = int(readouts or overrides.get("num_readouts", self.readouts))
+        overrides.update(num_readouts=readouts, min_readouts=readouts)
+        config = SelfPlayConfig(
+            network=self.net, dirichlet_noise_weight=0.0, enable_resign=False, noresign_holdout_rate=0.0,
+            player_count_distribution={n: 1.0}, auction_unlock=False, softpick_move_cutoff=0, **overrides,
+        )
+        player = RustMCTSPlayer(config)
+        player.initialize_game(game.pickle_clone())
+        tree = player._rust_player
+        with torch.no_grad():
+            player.tree_search(parallel_readouts=1)  # the root alone (the advisor's generic root evaluation)
+            while tree.n_at_root() < readouts:
+                before = tree.n_at_root()
+                player.tree_search()
+                if tree.n_at_root() <= before:
+                    break
+        st = tree.root_target_stats()
+        return {
+            "legal": [int(x) for x in st["legal"]],
+            "child_n": [float(x) for x in st["child_n"]],
+            "child_q": [float(x) for x in st["child_q"]],
+            "child_prior": [float(x) for x in st["child_prior"]],
+            "root_value": float(st["root_value"]),
+            "raw_value": float(st["raw_value"]),
+            "root_n": float(st["root_n"]),
+            "chosen": int(tree.pick_best_action()),
+        }
 
 
 def load_system(spec: str, search: str = DEFAULT_SEARCH, device: str = "cpu"):
     from rl18xx.agent.alphazero.generic_policy import GENERIC_PREFIX
 
     if spec.startswith(GENERIC_PREFIX):
-        path, _, temp = spec[len(GENERIC_PREFIX):].partition("@")
-        return GenericSystem(path, device, float(temp) if temp else 0.5)
+        return GenericSystem(spec, search, device)
     return LegacySystem(spec, search, device)
 
 
@@ -787,9 +869,9 @@ def score(args) -> list:
     if args.limit:
         positions = positions[: args.limit]
     system = load_system(args.model, args.search, args.device)
-    do_search = not args.no_search and system.kind == "legacy"
-    if not args.no_search and system.kind != "legacy":
-        print("note: no search for generic checkpoints yet -- policy and value only", flush=True)
+    do_search = not args.no_search and system.can_search
+    if not args.no_search and not system.can_search:
+        print("note: a policy-only spec (sample=<t>) -- policy and value only", flush=True)
     records = {}
     results = []
     if args.out:
@@ -801,7 +883,8 @@ def score(args) -> list:
             records[gid] = load_game_record(gid)
         r = score_position(system, pos, records[gid], do_search, args.readouts)
         r["label"] = args.label or args.model
-        r["search_settings"] = args.search if do_search else None
+        settings = args.search if system.kind == "legacy" else "@" + system.full_spec.partition("@")[2]
+        r["search_settings"] = settings if do_search else None
         results.append(r)
         print(format_result(r), flush=True)
         if out:
@@ -821,7 +904,9 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("score", help="score a model on the regression set")
     s.add_argument("--model", required=True,
-                   help="<policy.pth>+<value.pth>[#score|#blend=w] (legacy) or generic:<ckpt.pth>[@prior temperature]")
+                   help="<policy.pth>+<value.pth>[#score|#blend=w] (legacy) or "
+                   "generic:<policy.pth>[+generic:<value.pth>][#score|#blend=w] (generic; generic:<ckpt.pth>@<T>: "
+                   "prior temperature T)")
     s.add_argument("--search", default=DEFAULT_SEARCH,
                    help=f"search settings in eval_head_to_head's syntax (default {DEFAULT_SEARCH}: the live bots')")
     s.add_argument("--readouts", type=int, default=None, help="override the search budget")
