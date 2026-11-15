@@ -2394,18 +2394,77 @@ Two generic networks take ~70 MB; nothing else about the services changes.
 
 ### Not done / open
 
-1. **Lockstep search** (`lockstep.py`, `mcts_lockstep.rs`: `eval_head_to_head.py --games-per-task`, the search-learning
-   generator) encodes leaves natively for the legacy network and has no game-network path, and `RustMCTSPlayer`'s
-   inference-server path (`InferenceClient`) neither: a `GameNetwork` runs in-process only. To measure a generic
-   search's strength (`eval_head_to_head.py` players), the simplest route is the same hook in `lockstep.py` (fetch each
-   tree's leaf games for a `GameNetwork` key and call `run_many_games` in the worker; ~half a day); the fast route is a
-   native generic leaf request (`rl_encode_batch` on the leaf `BaseGame`s plus their descriptor rows and price ranges
-   in Rust, sent as a `GenericBatch` to a generic inference server, sparse priors scattered onto the tree's legal list,
-   price rows keyed by `price_head_entity_key`, values unrotated by `meta[5]`).
+1. **Head-to-head evals of generic searches: done** (2026-11-15, next section). The search-learning generator still has
+   no generic path (it is the legacy line's), nor does `RustMCTSPlayer`'s single-tree inference-server path.
 2. **Which mode for the bots**: the generic PG learner is trained and evaluated policy-only; whether its critic
-   searches better than the policy alone (as gen4 + critic did over gen4) is unmeasured until (1) exists.
+   searches better than the policy alone (as gen4 + critic did over gen4) is what the evals below measure.
 3. **The advice** (top moves, win estimates) stays legacy; serving it from a generic checkpoint would need
    `Advisor._analyse` / `_run_values` on `GameNetwork.evaluate` (small) and a decision on which checkpoint advises.
 4. **1867 / 1822** play needs the advisor's live game to follow those titles (`live_game.SUPPORTED_TITLE` is 1830),
    their legal moves from `rl_legal_moves_json` instead of the 1830 layout, and no legacy price slots: the policy-only
    mode is the natural first step there (`generic_policy.sample_price` already prices generator layouts).
+
+### Head-to-head evals of generic searches (`eval_head_to_head.py`, 2026-11-15)
+
+`scripts/eval_head_to_head.py` plays generic systems against legacy or generic ones: a player
+`generic:<policy.pth>[+generic:<value.pth>][#win|#score|#blend=<w>]` takes every legacy option (`@<readouts>`,
+`/<c_puct_init>`, `:mean,dedupe,par=8,ptemp=0.5,budget=total,gumbel=<k>,...`; `:sample=<t>` = the policy alone, as
+`eval_policy_only.py`'s `generic:<path>@<t>`), no second part = the policy network's own value heads, a `#score` on a
+placement-reward run backs finished games up as placement points (as legacy). `ptemp` is the run's
+`learner_temperature`, as for legacy learners (the priors are the policy at temperature 1). E.g. a generic learner +
+critic against gen6 + its critic, both on their score heads at the bots' settings:
+
+```bash
+G=model_checkpoints_generic_pg/gpg1830_20261113; L=$LR1/model_checkpoints_pg/gen6_20261110
+uv run python scripts/eval_head_to_head.py --games 480 --games-per-task 8 --start-positions default --dedupe-maps \
+  --match "generic:$G/learner/2000.pth+generic:$G/critic/2000.pth#score@400/0.05:mean,dedupe,par=8,ptemp=0.5" \
+          "$L/learner/2400.pth+$L/critic/2400.pth#score@400/0.05:mean,dedupe,par=8,ptemp=0.5" \
+  --match "generic:$G/learner/2000.pth+generic:$G/critic/2000.pth#score@400/0.05:mean,dedupe,par=8,ptemp=0.5" \
+          "generic:$G/learner/2000.pth:sample=0.5"
+```
+
+**Route: the generic inference servers, not in-process evaluation.** A 4-player eval game from the first Stock Round
+has ~650 decisions (the azf evals: median ~700), so a 480-game 2v2 match at 400 readouts gives each side ~60M leaf
+evaluations. In-process, a default-size generic learner + critic cost ~12-17 ms of CPU per leaf (one thread, batches
+of 8-64, the shared machine): ~200+ CPU-hours per match. So each generic checkpoint gets a generic inference server
+(`generic_inference.start_generic_inference_server`, the generic PG's: GPU, TF32, `--server-replicas`, `--batch-size`
+in positions), and its players search in lockstep:
+
+* `engine_rs.mcts_collect_leaf_games` selects every tree's batch exactly as `mcts_collect_leaves` and hands the leaves
+  over as games -- clones without the JSON action log (the generic encoder never reads it) -- with each leaf's frame;
+* `lockstep.GenericEvaluator` builds the inputs in the worker (`model_generic.build_inputs`, maps de-duplicated),
+  sends them to the policy's server (with the price cells' log-probabilities) and the same arrays to the critic's,
+  and answers in the legacy search's terms: legal priors at temperature 1, each priced row's cells in its legacy price
+  slot's row (index -> slot cached: it is static), the value head's output; `lockstep.to_tree_frames` moves the values
+  from the generic encoder's frame into each tree's before `mcts_apply_results`;
+* policy-only generic players' positions ride in the same requests (`PolicyRequest`), priced from the same rows.
+
+Generic players always play in lockstep (`--games-per-task` games per worker; 1 still works). Legacy players take the
+unchanged path (`mcts_collect_leaves`; their evaluators are the same `ClientEvaluator`s). Tests
+(`tests/agent/alphazero/test_generic_search_eval.py`): the games path builds the same trees as the legacy path bit
+for bit (one stand-in network through both), the evaluator's answers equal `GameNetwork`'s in-process ones, a generic
+system searches in lockstep, and a generic learner + critic finishes eval games against a legacy search and against
+its own policy alone in one lockstep worker.
+
+**CPU dry run** (2026-11-15, `CUDA_VISIBLE_DEVICES=`, cores 24-31,56-63, load ~25): default-size untrained generic
+learner + critic (`#score@16/0.05:mean,dedupe,par=8,ptemp=0.5`) against gen6 u2400 + its critic (same options) and
+against the generic learner's policy alone (`sample=0.5`), 6 games each (the six 2v2 arrangements, human SR1 starts,
+`--max-length 150`), 4 workers x 3 games, real spawned servers (one legacy composite, two generic): 12 games in 1.9
+min, every game to its decision cap, scores and summaries as for legacy matches.
+
+**Cost and throughput** (estimates where marked: no GPU here):
+
+* Worker CPU per leaf (selection, inputs, compression, applying results; instant stub networks): legacy ~190 us,
+  generic learner + critic ~365 us (two compressed requests). 48 workers feed ~130k generic leaves/s: not the limit.
+* GPU per leaf (estimate, the C2 estimate above: a generic forward ~1.5x a legacy one, ~0.096 ms per position):
+  a generic learner + critic leaf is two forwards, ~0.19 ms (~5k leaves/s per GPU); a legacy policy + critic leaf
+  ~0.085 ms. The generic requests' map de-duplication should cut some of that (the map encoder was ~45% of a CPU
+  forward), the critic's request carries the legal rows too (its policy heads, ~2% of a forward).
+* A 480-game 2v2 match at 400 readouts: each side ~60M leaf evaluations (~325 searched decisions per side per game x
+  ~400). Generic learner + critic vs a legacy policy + critic: ~3.2 + ~1.4 = **~4.5 GPU-hours** (estimate); vs the
+  generic policy alone ~3.2 h (the policy side is one forward per decision). At 200 readouts or 240 games, half.
+  Read the real rate off the progress lines' games per minute and `RL18XX_SERVER_PROFILE=60`.
+
+**On the GPU**: the generic servers have run only on the CPU so far (the generic PG's GPU path isn't launched either:
+TF32, pinned staged replies); generic checkpoints must match the deployment's layouts (`CheckpointMismatch`
+otherwise); one server process per generic checkpoint per replica (`--server-replicas` applies to every server).
