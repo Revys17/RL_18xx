@@ -34,7 +34,7 @@ Total: roughly 270-300 GPU h with all CPUs (11-12 days), much more on the pinned
 ## Known gaps / watch items
 
 - The generic inference server, generic search and generic PG have never run on CUDA: step 1b first.
-- Start files with SR 2-10 cuts and the practice library are large (~1.2 GB per mixed-count worker before lazy
-  loading; a lazy loader is in progress as of 2026-11-15).
+- Start files are read lazily (one line per draw; a mixed-count worker holds ~10 MB of start data instead of ~1.35 GB
+  with the SR 2-10 cuts and the practice library; same draws for the same seed).
 - M1 has 8-21 positions per weakness: one position moves a pass rate 5-12 points; M3/M4 carry the statistics.
 - The site only plays 1830; 1867 / 1822 bots need the site and the advisor's live game to support those titles.
