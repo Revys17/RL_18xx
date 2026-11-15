@@ -29,6 +29,13 @@ is expanded by a one-leaf round first (the eval's ``_expand_root``), where
 :class:`PolicyRequest` puts a position that needs only the network's policy
 (a policy player's move) into the same round. Not supported here (use
 ``suggest_move``): ``leaf_value_heuristic`` and PlayoutTrace recording.
+
+A network that reads positions rather than the legacy encoding -- a title-generic
+system, :class:`GenericEvaluator` (``takes_games``) -- gets its trees' leaves as games
+(``engine_rs.mcts_collect_leaf_games``: the same selection, log-free clones instead of
+encodings) and its policy requests' games; its values come back in the generic
+encoder's frame and are moved into each tree's (:func:`to_tree_frames`). Legacy
+evaluators take the unchanged path.
 """
 
 from __future__ import annotations
@@ -56,6 +63,10 @@ class EvalResult:
     values: np.ndarray  # (B, VALUE_SIZE) float32, each state's canonical frame
     price_logits: Optional[np.ndarray] = None  # (B, slots, cells) float32
     slot_index: Optional[dict] = None
+    # A games evaluator's frames (``takes_games``): each state's values have the player at seat
+    # ``rotations[b]`` of the seating order first; the searcher moves leaves' values into their tree's frame.
+    # None: the tree's own canonical frame (the legacy encoder's).
+    rotations: Optional[np.ndarray] = None
 
 
 class ClientEvaluator:
@@ -124,9 +135,93 @@ class ModelEvaluator:
         return pending
 
 
+_PRICE_SLOT: dict = {}  # layout index -> the legacy price head's slot (None: no slot); static per index
+
+
+def _price_slot(game, index: int) -> Optional[int]:
+    if index not in _PRICE_SLOT:
+        slot = game.price_head_slot_for_index(int(index))
+        _PRICE_SLOT[index] = None if slot is None else int(slot[0])
+    return _PRICE_SLOT[index]
+
+
+class GenericEvaluator:
+    """A title-generic system (``model_generic`` checkpoints) as a lockstep network: positions go to it as
+    games (``takes_games``: the searcher collects leaves with ``engine_rs.mcts_collect_leaf_games`` instead of
+    encoding them for the legacy model). :meth:`send_games` builds the generic inputs in the worker
+    (``model_generic.build_inputs``, maps de-duplicated) and sends them to the policy's client and, for a
+    separate critic, the same arrays to the value's client -- ``generic_inference.GenericInferenceClient`` s
+    (a generic inference server each, on the GPU in a real eval) or ``LocalGenericClient`` s (in-process:
+    tests, CPU). :meth:`receive` answers in the legacy search's terms: the legal priors at temperature 1
+    (the tree applies ``prior_temperature``), each priced row's cell log-probabilities in the legacy price
+    head's slot row (``price_pmf.SLOT_INDEX``; for 1830 a generic priced row's cells are its slot's), and the
+    value head's output -- ``value_head`` win, score or blend=<w>, of the critic or else the policy network's
+    own heads -- in the generic encoder's frame (``EvalResult.rotations``)."""
+
+    takes_games = True
+
+    def __init__(self, policy_client, value_client=None, value_head: str = "win", compress: bool = True):
+        from rl18xx.agent.alphazero.composite_model import parse_value_head
+
+        self.policy_client = policy_client
+        self.value_client = value_client
+        self.kind, self.blend = parse_value_head(value_head)
+        self.compress = compress
+        self.states = 0
+
+    def send_games(self, games: list, legal: list):
+        from rl18xx.agent.alphazero import model_generic as mg
+
+        legal_actions = [mg.legal_actions(g, ix) for g, ix in zip(games, legal)]
+        arrays = mg.build_inputs(games, legal_actions, dedupe_maps=True)
+        sent = self.policy_client.send_inputs(arrays, want_price_logp=True, compress=self.compress)
+        critic = None if self.value_client is None else self.value_client.send_inputs(arrays, compress=self.compress)
+        self.states += len(games)
+        return games, legal_actions, arrays, sent, critic
+
+    def receive(self, pending) -> EvalResult:
+        from rl18xx.agent.alphazero import price_pmf
+
+        games, legal_actions, arrays, sent, critic = pending
+        reply = self.policy_client.receive_outputs(sent)
+        values_reply = reply if critic is None else self.value_client.receive_outputs(critic)
+        win, score = values_reply.win, values_reply.score
+        if self.kind == "win":
+            values = win
+        elif self.kind == "score":
+            values = score
+        else:
+            values = (1.0 - self.blend) * win + self.blend * score
+        prices = np.zeros((len(games), price_pmf.NUM_SLOTS, price_pmf.NUM_CELLS), dtype=np.float32)
+        if reply.price_logp is not None and len(arrays["price_rows"]):
+            offsets, positions = arrays["legal_offsets"], arrays["legal_pos"]
+            for j, row in enumerate(arrays["price_rows"]):
+                b = int(positions[row])
+                slot = _price_slot(games[b], int(legal_actions[b].indices[int(row - offsets[b])]))
+                if slot is not None:
+                    prices[b, slot] = reply.price_logp[j]
+        return EvalResult(
+            priors=np.exp(np.asarray(reply.logp, dtype=np.float64)).astype(np.float32),
+            values=np.ascontiguousarray(values, dtype=np.float32),
+            price_logits=prices,
+            slot_index=dict(price_pmf.SLOT_INDEX),
+            rotations=np.asarray(arrays["meta"][:, 5], dtype=np.int64),
+        )
+
+
+def to_tree_frames(values: np.ndarray, rotations: np.ndarray, tree_rotations: np.ndarray, num_players: int):
+    """Values with seat ``rotations[b]`` of the seating order first, re-rotated so seat ``tree_rotations[b]``
+    is first (the frame ``mcts_apply_results`` unrotates by); padded seats untouched."""
+    out = np.array(values, dtype=np.float32, copy=True)
+    for b in np.flatnonzero(np.asarray(rotations) != np.asarray(tree_rotations)):
+        shift = int(tree_rotations[b] - rotations[b]) % num_players
+        out[b, :num_players] = np.roll(values[b, :num_players], -shift)
+    return out
+
+
 def evaluator_for(backend):
     """The evaluator for an inference client or an in-process network."""
-    if isinstance(backend, (ClientEvaluator, ModelEvaluator)):
+    if isinstance(backend, (ClientEvaluator, ModelEvaluator)) or getattr(backend, "takes_games", False) is True:
         return backend
     if isinstance(backend, InferenceClient):
         return ClientEvaluator(backend)
@@ -337,6 +432,28 @@ class LockstepSearcher:
         try:
             for (key, _), (group, reqs) in groups.items():
                 trees = [s.tree for s in group]
+                if getattr(self.evaluators[key], "takes_games", False) is True:
+                    # A network over games (GenericEvaluator): the leaves as games, no legacy encoding.
+                    batch = engine_rs.mcts_collect_leaf_games(
+                        trees,
+                        [s.leaves_wanted() for s in group],
+                        [s.dedupe for s in group],
+                        [s.use_score_values for s in group],
+                    )
+                    in_flight.append([key, group, trees, batch, reqs, None])
+                    stats.terminal_backups += int(batch["terminal"].sum())
+                    legal = split_legal(batch["legal"], batch["legal_lengths"])
+                    n_leaves = len(legal)
+                    games = list(batch["games"]) + [r.game for r in reqs]
+                    legal = legal + [np.asarray(r.legal, dtype=np.int32) for r in reqs]
+                    stats.maps += len(games)
+                    if not legal:
+                        continue  # only terminal leaves this round
+                    stats.requests += 1
+                    stats.leaves += n_leaves
+                    stats.policy_states += len(reqs)
+                    in_flight[-1][5] = (self.evaluators[key].send_games(games, legal), n_leaves)
+                    continue
                 batch = engine_rs.mcts_collect_leaves(
                     trees,
                     [s.leaves_wanted() for s in group],
@@ -377,10 +494,15 @@ class LockstepSearcher:
                 stats.wait_seconds += ta - tw
                 n_priors = int(batch["legal_lengths"].sum())
                 price = result.price_logits
+                leaf_values = result.values[:n_leaves]
+                if result.rotations is not None and n_leaves:
+                    leaf_values = to_tree_frames(
+                        leaf_values, result.rotations[:n_leaves], batch["rotations"], int(batch["num_players"])
+                    )
                 engine_rs.mcts_apply_results(
                     trees,
                     result.priors[:n_priors],
-                    result.values[:n_leaves],
+                    leaf_values,
                     [s.prior_temperature for s in group],
                     None if price is None or not n_leaves else np.ascontiguousarray(price[:n_leaves]),
                     result.slot_index if price is not None and n_leaves else None,

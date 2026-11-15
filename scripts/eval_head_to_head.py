@@ -77,6 +77,19 @@ round: it replaces SelfPlayConfig's per-round c_puct_by_round table) and
   1 + budget visits, inherited ones included (SelfPlayConfig.readout_budget;
   search learning's ``--reuse-tree total``)
 
+A title-generic system (``model_generic`` checkpoints) is ``generic:<policy.pth>[+generic:<value.pth>]``
+(no second part: the policy network's own value heads), with the same ``#<head>``, ``@``, ``/`` and ``:``
+options -- e.g. ``generic:<run>/learner/2000.pth+generic:<run>/critic/2000.pth#score@400:mean,dedupe,par=8,
+ptemp=0.5`` (``ptemp`` = the run's ``learner_temperature``: the priors are the policy at temperature 1, as for
+legacy players), or ``generic:<learner>:sample=0.5`` for its policy alone. Each generic checkpoint gets a generic
+inference server (``generic_inference``, maps de-duplicated, TF32 on the GPU); its players always play in
+lockstep (``lockstep.GenericEvaluator``: the leaves go to the servers as games, ``--games-per-task`` games per
+worker), against legacy or generic opponents.
+
+    uv run python scripts/eval_head_to_head.py --games 480 --games-per-task 8 --start-positions default \\
+      --match "generic:$G/learner/2000.pth+generic:$G/critic/2000.pth#score@400/0.05:mean,dedupe,par=8,ptemp=0.5" \\
+              "$L/learner/2400.pth+$L/critic/2400.pth#score@400/0.05:mean,dedupe,par=8,ptemp=0.5"
+
 Standard errors treat games as independent; the six arrangements of one start
 are correlated, which (over the 21 runs checked 2026-10-06) moved a
 start-clustered SE by 0.81-1.11x of the reported one.
@@ -149,8 +162,39 @@ def resolve_checkpoint(spec: str) -> Path:
     return matches[0].resolve()
 
 
+GENERIC = "generic:"
+
+
+def _strip_generic(spec: str) -> str:
+    """A generic player's spec without its parts' ``generic:`` prefixes (every part must have one: a system
+    is all generic or all legacy)."""
+    body = spec[len(GENERIC):]
+    prefixed = body.count("+" + GENERIC)
+    body = body.replace("+" + GENERIC, "+")
+    checkpoints = body.partition("@")[0].partition(":")[0].partition("#")[0]
+    if checkpoints.count("+") != prefixed or prefixed > 1:
+        raise SystemExit(f"{spec!r}: a generic player is generic:<policy>[+generic:<value>] (no legacy parts)")
+    return body
+
+
+def generic_parts(key: str) -> dict:
+    """``{"policy", "value" (None: the policy's own heads), "value_head"}`` of a generic player's server key
+    (``parse_player``'s ``generic:<policy>[+<value>][#<head>]``)."""
+    paths, _, value_head = key[len(GENERIC):].partition("#")
+    policy, _, value = paths.partition("+")
+    return {"policy": policy, "value": value or None, "value_head": value_head or "win"}
+
+
+def is_generic(key: str) -> bool:
+    return str(key).startswith(GENERIC)
+
+
 def parse_player(spec: str, default_readouts: int, num_players: int = NUM_PLAYERS) -> tuple:
-    """``(checkpoint path, SelfPlayConfig overrides)`` of a player spec (see the module docstring)."""
+    """``(checkpoint path, SelfPlayConfig overrides)`` of a player spec (see the module docstring); for a
+    generic player the "path" is ``generic:<policy>[+<value>][#<head>]`` (``generic_parts``)."""
+    generic = spec.startswith(GENERIC)
+    if generic:
+        spec = _strip_generic(spec)
     spec, _, options = spec.partition(":")
     checkpoint, _, search = spec.partition("@")
     readouts, _, c_puct = search.partition("/")
@@ -201,8 +245,17 @@ def parse_player(spec: str, default_readouts: int, num_players: int = NUM_PLAYER
             raise SystemExit(f"Unknown player option {option!r} in {spec!r}")
     if overrides.get("mcts_q_normalize") and not overrides.get("mcts_mean_q"):
         raise SystemExit(f"qnorm needs mean in {spec!r}")
+    if generic and "leaf_value_heuristic" in overrides:
+        raise SystemExit(f"value=networth: not for generic players ({spec!r})")
     checkpoint, hash_, value_head = checkpoint.partition("#")  # "<policy>+<value>#blend=<w>"
-    paths = "+".join(str(resolve_checkpoint(part)) for part in checkpoint.split("+"))
+    if generic:
+        parts = [Path(part).resolve() for part in checkpoint.split("+")]
+        for part in parts:
+            if not part.is_file():
+                raise SystemExit(f"No generic checkpoint at {part}")
+        paths = "+".join(str(part) for part in parts)
+    else:
+        paths = "+".join(str(resolve_checkpoint(part)) for part in checkpoint.split("+"))
     if value_head and "policy_temperature" not in overrides:
         # A search on the score head: finished games back up the same utility as its leaves,
         # placement points as the value network's run trained its score head on.
@@ -214,7 +267,7 @@ def parse_player(spec: str, default_readouts: int, num_players: int = NUM_PLAYER
         else:
             weight, points = terminal_utility(value_head, reward, num_players)
             overrides.update(terminal_score_weight=weight, terminal_score_points=points)
-    return paths + (hash_ + value_head if hash_ else ""), overrides
+    return (GENERIC if generic else "") + paths + (hash_ + value_head if hash_ else ""), overrides
 
 
 def model_factory(checkpoint_path):
@@ -231,6 +284,7 @@ _CLIENTS: dict = {}
 def worker_init(server_queues: dict, jobs=None, results=None):
     """Pool initializer: take one slot on every checkpoint's inference server
     (and, for lockstep tasks, the shared job and result queues)."""
+    from rl18xx.agent.alphazero.generic_inference import GenericInferenceClient
     from rl18xx.agent.alphazero.inference_server import InferenceClient
 
     global _JOBS, _RESULTS
@@ -238,7 +292,8 @@ def worker_init(server_queues: dict, jobs=None, results=None):
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     for name, (request_q, reply_qs, ticket_q) in server_queues.items():
         worker_id = ticket_q.get()
-        _CLIENTS[name] = InferenceClient(request_q=request_q, reply_q=reply_qs[worker_id], worker_id=worker_id)
+        client = GenericInferenceClient if is_generic(name) else InferenceClient  # generic:<path>: a generic server
+        _CLIENTS[name] = client(request_q=request_q, reply_q=reply_qs[worker_id], worker_id=worker_id)
     # Forked workers inherit the parent's INFO logging; per-move player logs would flood it.
     logging.getLogger().setLevel(logging.WARNING)
 
@@ -355,13 +410,15 @@ def _setup_game(game_idx: int, seat_names: tuple, settings: dict) -> tuple:
     players = {}
     for name in sorted(set(seat_names)):
         spec = settings["players"][name]
+        # A generic player is evaluated by its lockstep searcher's GenericEvaluator, never by a client of its own.
+        client = None if is_generic(spec["server"]) else _CLIENTS[spec["server"]]
         if "policy_temperature" in spec["overrides"]:
-            players[name] = PolicyPlayer(_CLIENTS[spec["server"]], spec["overrides"]["policy_temperature"])
+            players[name] = PolicyPlayer(client, spec["overrides"]["policy_temperature"])
             continue
         config = SelfPlayConfig(
             network=None,
-            use_inference_server=True,
-            inference_client=_CLIENTS[spec["server"]],
+            use_inference_server=client is not None,
+            inference_client=client,
             **spec["overrides"],
             softpick_move_cutoff=settings["softpick"],
             dirichlet_noise_weight=0.0,
@@ -528,6 +585,21 @@ _JOBS = None  # lockstep: the shared queue of games to play (worker_init)
 _RESULTS = None  # lockstep: finished games go back on this queue
 
 
+def make_evaluators(settings: dict) -> dict:
+    """A lockstep worker's networks by server key: each legacy server's client, and per generic player a
+    ``lockstep.GenericEvaluator`` on its checkpoints' generic servers (policy, and the critic if it has one)."""
+    from rl18xx.agent.alphazero.lockstep import ClientEvaluator, GenericEvaluator
+
+    evaluators = {name: ClientEvaluator(client) for name, client in _CLIENTS.items() if not is_generic(name)}
+    for spec in settings["players"].values():
+        key = spec["server"]
+        if is_generic(key) and key not in evaluators:
+            parts = generic_parts(key)
+            value = _CLIENTS[GENERIC + parts["value"]] if parts["value"] else None
+            evaluators[key] = GenericEvaluator(_CLIENTS[GENERIC + parts["policy"]], value, parts["value_head"])
+    return evaluators
+
+
 def serve_games(settings: dict, concurrency: int) -> int:
     """Pool task with ``--games-per-task`` > 1: play games from the shared job
     queue, ``concurrency`` at a time, until it is empty. Every game's pending
@@ -537,15 +609,12 @@ def serve_games(settings: dict, concurrency: int) -> int:
     finished game goes back on the results queue. Returns the games played."""
     import queue
 
-    from rl18xx.agent.alphazero.lockstep import ClientEvaluator, LockstepSearcher, PolicyRequest
+    from rl18xx.agent.alphazero.lockstep import LockstepSearcher, PolicyRequest
 
     seed = settings["seed"] * 100_003 + os.getpid()
     random.seed(seed)
     np.random.seed(seed % (2**32))
-    searcher = LockstepSearcher(
-        {name: ClientEvaluator(client) for name, client in _CLIENTS.items()},
-        dedupe_maps=bool(settings.get("dedupe_maps", False)),
-    )
+    searcher = LockstepSearcher(make_evaluators(settings), dedupe_maps=bool(settings.get("dedupe_maps", False)))
     runs, needs, labels = {}, {}, {}
     exhausted, slot, played = False, 0, 0
     while True:
@@ -726,7 +795,17 @@ def main():
         for spec in (a, b):
             path, overrides = parse_player(spec, args.readouts, args.num_players)
             players[spec] = {"server": str(path), "overrides": overrides}
-    paths = sorted({p["server"] for p in players.values()})
+    paths = sorted({p["server"] for p in players.values() if not is_generic(p["server"])})
+    # One generic inference server per generic checkpoint (a learner, a critic), shared by the players naming it.
+    generic_paths = sorted(
+        {
+            path
+            for p in players.values()
+            if is_generic(p["server"])
+            for path in (generic_parts(p["server"])["policy"], generic_parts(p["server"])["value"])
+            if path
+        }
+    )
     seatings = arrangements(args.a_seats, args.num_players)
     games_per_match = math.ceil(args.games / len(seatings)) * len(seatings)
     settings = {
@@ -761,6 +840,18 @@ def main():
             autocast_device=None,
             replicas=args.server_replicas,
         )
+    if generic_paths:
+        from rl18xx.agent.alphazero.generic_inference import start_generic_inference_server
+
+        for path in generic_paths:
+            LOGGER.info(f"Starting generic inference server for {path}")
+            servers[GENERIC + path] = start_generic_inference_server(
+                num_workers=args.workers,
+                checkpoint_path=path,
+                batch_size=args.batch_size,
+                batch_timeout_ms=2.0,
+                replicas=args.server_replicas,
+            )
     server_queues = {path: (h.request_q, h.reply_qs, h.ticket_q) for path, h in servers.items()}
 
     jobs = []
@@ -796,7 +887,8 @@ def main():
                                  f"± {s['A_score_se']:.3f}")
             LOGGER.info(f"[{done_count}/{len(jobs)} games, {elapsed / 60:.1f} min] " + "; ".join(lines))
 
-    lockstep = args.games_per_task > 1
+    # Generic players are evaluated only in lockstep (lockstep.GenericEvaluator), even one game per task.
+    lockstep = args.games_per_task > 1 or bool(generic_paths)
     if lockstep and any("leaf_value_heuristic" in p["overrides"] for p in players.values()):
         raise SystemExit("value=networth players need --games-per-task 1 (lockstep search has no leaf heuristic)")
     job_q = result_q = None

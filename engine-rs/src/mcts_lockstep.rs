@@ -351,6 +351,67 @@ pub fn mcts_collect_leaves<'py>(
     Ok(d)
 }
 
+/// ``mcts_collect_leaves`` for a network that reads the positions themselves
+/// (a title-generic checkpoint, ``lockstep.GenericEvaluator``): every tree
+/// selects its next batch exactly as there, but the leaves come back as games
+/// instead of the legacy encoding -- clones without the JSON action log (no
+/// generic encoder input reads it) -- with the frame ``mcts_apply_results``
+/// will unrotate their values by. Returns a dict: ``games`` (list of
+/// ``BaseGame``, one per pending leaf, trees in order), ``rotations`` (B,)
+/// int64 (each leaf's mover, ``active_player_index``: ``mcts_apply_results``
+/// takes values in the frame where that player is seat 0), ``num_players``,
+/// ``counts``, ``terminal``, ``legal`` and ``legal_lengths`` as
+/// ``mcts_collect_leaves``. Each tree keeps its leaves pending until
+/// ``mcts_apply_results``.
+#[pyfunction]
+#[pyo3(signature = (trees, max_leaves, dedupe, use_score_values))]
+pub fn mcts_collect_leaf_games<'py>(
+    py: Python<'py>,
+    trees: Vec<Bound<'py, RustMCTSPlayer>>,
+    max_leaves: Vec<usize>,
+    dedupe: Vec<bool>,
+    use_score_values: Vec<bool>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let t = trees.len();
+    if max_leaves.len() != t || dedupe.len() != t || use_score_values.len() != t {
+        return Err(PyValueError::new_err(
+            "mcts_collect_leaf_games: one max_leaves / dedupe / use_score_values per tree",
+        ));
+    }
+    let mut counts: Vec<i64> = Vec::with_capacity(t);
+    let mut terminal: Vec<i64> = Vec::with_capacity(t);
+    let mut legal: Vec<i32> = Vec::new();
+    let mut legal_lengths: Vec<i64> = Vec::new();
+    let mut rotations: Vec<i64> = Vec::new();
+    let mut games: Vec<PyObject> = Vec::new();
+    let mut num_players: Option<usize> = None;
+    for (k, tree) in trees.iter().enumerate() {
+        let mut tree = tree.borrow_mut();
+        terminal.push(tree.collect_pending(max_leaves[k], dedupe[k], use_score_values[k])? as i64);
+        counts.push(tree.pending.len() as i64);
+        let np = tree.num_players;
+        if *num_players.get_or_insert(np) != np {
+            return Err(PyValueError::new_err("mcts_collect_leaf_games: one player count per call"));
+        }
+        for &(idx, rotation) in tree.pending.iter() {
+            let node = &tree.arena[idx];
+            games.push(Py::new(py, node.game.clone_for_search_without_log())?.into_any());
+            rotations.push(rotation as i64);
+            legal.extend(node.legal_action_indices.iter().map(|&i| i as i32));
+            legal_lengths.push(node.legal_action_indices.len() as i64);
+        }
+    }
+    let d = PyDict::new(py);
+    d.set_item("games", games)?;
+    d.set_item("rotations", PyArray1::from_vec(py, rotations))?;
+    d.set_item("num_players", num_players.unwrap_or(0))?;
+    d.set_item("counts", PyArray1::from_vec(py, counts))?;
+    d.set_item("terminal", PyArray1::from_vec(py, terminal))?;
+    d.set_item("legal", PyArray1::from_vec(py, legal))?;
+    d.set_item("legal_lengths", PyArray1::from_vec(py, legal_lengths))?;
+    Ok(d)
+}
+
 /// Encode positions that are not search leaves (e.g. a policy player's
 /// moves) into the same stacked layout as ``mcts_collect_leaves``:
 /// ``game_states``, ``node_features``, ``round_types``, ``rotations``,

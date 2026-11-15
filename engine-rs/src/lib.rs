@@ -64,6 +64,7 @@ fn engine_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Rust MCTS (Phase 4a scaffold)
     m.add_class::<mcts::RustMCTSPlayer>()?;
     m.add_function(wrap_pyfunction!(mcts_lockstep::mcts_collect_leaves, m)?)?;
+    m.add_function(wrap_pyfunction!(mcts_lockstep::mcts_collect_leaf_games, m)?)?;
     m.add_function(wrap_pyfunction!(mcts_lockstep::mcts_apply_results, m)?)?;
     m.add_function(wrap_pyfunction!(mcts_lockstep::mcts_discard_pending, m)?)?;
     m.add_function(wrap_pyfunction!(mcts_lockstep::encode_games, m)?)?;
