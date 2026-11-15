@@ -178,12 +178,12 @@ def replay_rows(actions: list, num_players: int, optional_rules: Iterable[str] =
 def start_k(rows: list, start: Optional[str]) -> Optional[int]:
     """The first action index the recorded game's own players chose: 0 for a game from the auction (or a game with
     no start label), the first action of Stock Round 1 for a human / random post-auction start, and of Stock Round
-    N for ``midgame:...:srN``; None if the game never got there."""
+    N for ``midgame:...:srN`` / ``practice:...:srN``; None if the game never got there."""
     if not start or start == "auction":
         return 0
     if start.startswith("human") or start.startswith("random"):
         sr = 1
-    elif start.startswith("midgame"):
+    elif start.startswith("midgame") or start.startswith("practice"):
         m = re.search(r"sr(\d+)", start)
         sr = int(m.group(1)) if m else 1
     else:

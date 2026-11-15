@@ -185,9 +185,10 @@ def _game_files(directory: Path) -> list:
         ".json.gz")))
 
 
-def iter_sources(inputs, min_update: Optional[int] = None) -> Iterator[tuple]:
+def iter_sources(inputs, min_update: Optional[int] = None, max_update: Optional[int] = None) -> Iterator[tuple]:
     """``(path, index record, collection settings)`` of every game file under ``inputs`` (cheap: nothing is read
-    but the collections' indexes). ``min_update`` keeps policy-gradient games from that update on."""
+    but the collections' indexes). ``min_update`` / ``max_update`` keep policy-gradient games from / up to that
+    update (inclusive)."""
     for inp in inputs:
         p = Path(inp)
         if p.is_dir() and (p / "games.jsonl").exists() and (p / "games").is_dir():
@@ -204,6 +205,8 @@ def iter_sources(inputs, min_update: Optional[int] = None) -> Iterator[tuple]:
                     except ValueError:
                         continue
                     if min_update is not None and int(rec.get("update", min_update)) < min_update:
+                        continue
+                    if max_update is not None and int(rec.get("update", max_update)) > max_update:
                         continue
                     name = rec.get("game_file") or (
                         f"games/{rec['game_idx']}.json" if "game_idx" in rec else None)

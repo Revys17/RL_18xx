@@ -73,6 +73,40 @@ def _broke(corp: dict, depot_next: Optional[str]) -> bool:
     return bool(corp["floated"]) and not corp["trains"] and corp["cash"] < cheapest_train(depot_next)
 
 
+def is_looted(ev: dict, dump: dict) -> bool:
+    """Whether the dumper of ``dump`` (a ``pres_changes`` event) looted the company first: within the
+    ``LOOT_WINDOW`` actions before, it sold one of the company's trains to another of its companies for <= $10, or
+    had it buy one from another of its companies for >= 1.5x list."""
+    for x in ev["train_sales"]:
+        if x["site_id"] >= dump["site_id"] or x["site_id"] < dump["site_id"] - LOOT_WINDOW:
+            continue
+        if x["buyer_pres"] != x["seller_pres"] or x["buyer_pres"] != dump["from"]:
+            continue
+        lst = TRAIN_PRICE.get(x["train"], 0)
+        if (x["seller"] == dump["corp"] and x["price"] <= 10) or (
+                x["buyer"] == dump["corp"] and x["price"] >= 1.5 * lst):
+            return True
+    return False
+
+
+def victim_went_bankrupt(ev: dict, dump: dict) -> bool:
+    return any(b["player"] == dump["to"] and b["site_id"] >= dump["site_id"] for b in ev["bankruptcies"])
+
+
+def broke_dumps(ev: dict, start_k: int = 0) -> list:
+    """The game's ``broke_dump`` events (from action ``start_k`` on): each ``pres_changes`` event where a president
+    sold out of a floated, trainless company short of the next train, with ``looted`` (:func:`is_looted`) and
+    ``victim_bankrupt``. The practice-position builder reads these (``build_practice_positions.py``)."""
+    out = []
+    for p in ev["pres_changes"]:
+        if start_k and p.get("site_id", 0) < start_k:
+            continue
+        if p["cause"] != "sold" or not _broke(p["corp_after"], p.get("depot_next")):
+            continue
+        out.append({**p, "looted": is_looted(ev, p), "victim_bankrupt": victim_went_bankrupt(ev, p)})
+    return out
+
+
 # --------------------------------------------------------------------------------------------- per game
 def game_metrics(ev: dict, start_k: int = 0, group_of=lambda pid: None) -> Counter:
     """Counts of a game's events from action ``start_k`` on: ``"<metric>"`` for the game and
@@ -99,19 +133,9 @@ def game_metrics(ev: dict, start_k: int = 0, group_of=lambda pid: None) -> Count
                 add("broke_dump", p["to"])
                 if PHASE_ORDER.get(p["phase"], 0) >= 4:
                     add("broke_dump_p4", p["to"])
-                looted = False
-                for x in ev["train_sales"]:
-                    if x[sid_key] >= p[sid_key] or x[sid_key] < p[sid_key] - LOOT_WINDOW:
-                        continue
-                    if x["buyer_pres"] != x["seller_pres"] or x["buyer_pres"] != p["from"]:
-                        continue
-                    lst = TRAIN_PRICE.get(x["train"], 0)
-                    if (x["seller"] == p["corp"] and x["price"] <= 10) or (
-                            x["buyer"] == p["corp"] and x["price"] >= 1.5 * lst):
-                        looted = True
-                if looted:
+                if is_looted(ev, p):
                     add("looted_broke_dump", p["to"])
-                if any(b["player"] == p["to"] and b[sid_key] >= p[sid_key] for b in ev["bankruptcies"]):
+                if victim_went_bankrupt(ev, p):
                     add("broke_dump_victim_bankrupt", p["to"])
             if ca["floated"] and ca["cash"] >= 300:
                 add("handover_cash300", p["from"])
@@ -388,10 +412,22 @@ def save_baseline(name: str, summary: dict, source: str, path=BASELINES) -> None
 
 
 # ------------------------------------------------------------------------------------------------- CLI
+def _index_players(rec: dict) -> Optional[int]:
+    """A collection index record's player count (``num_players``, or its ``sides`` / ``seats`` list), else None."""
+    if rec.get("num_players"):
+        return int(rec["num_players"])
+    for key in ("sides", "seats"):
+        if isinstance(rec.get(key), list) and rec[key]:
+            return len(rec[key])
+    return None
+
+
 def run(args) -> dict:
     from robust_games import iter_sources
 
-    sources = list(iter_sources(args.inputs, min_update=args.min_update))
+    sources = list(iter_sources(args.inputs, min_update=args.min_update, max_update=args.max_update))
+    if args.num_players:  # a collection index that names the seats: other counts never sampled or read
+        sources = [s for s in sources if _index_players(s[1]) in (None, args.num_players)]
     if args.sample and len(sources) > args.sample:
         sources = random.Random(args.seed).sample(sources, args.sample)
     if args.limit:
@@ -445,6 +481,7 @@ def main(argv=None):
     p.add_argument("--num-players", type=int, default=None, help="keep games of this player count")
     p.add_argument("--finished-only", action="store_true", help="keep finished games only")
     p.add_argument("--min-update", type=int, default=None, help="policy-gradient collections: from this update on")
+    p.add_argument("--max-update", type=int, default=None, help="policy-gradient collections: up to this update")
     p.add_argument("--sample", type=int, default=None, help="a random sample of this many files")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--limit", type=int, default=None)

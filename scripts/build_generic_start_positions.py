@@ -32,6 +32,10 @@ Random starts and auction starts need no file.
         --source human_games/1867 --source human_games/scrape_2026_10/1867 --out-dir human_games --jobs 8
     uv run python scripts/build_generic_start_positions.py --title 1822 --suffix _v2 \\
         --source human_games/1822 --source human_games/scrape_2026_10/1822 --out-dir human_games --jobs 8
+    # 1830's mid-game cuts extended to Stock Round 10 (the v2 files' SR2-6 plus SR7-10; robustness arm A2's library
+    # reaches the loot-and-dumps of SR 6-9): human_games/midgame_positions_1830_<N>p_v2_sr10.jsonl, N = 2..6
+    uv run python scripts/build_generic_start_positions.py --title 1830 --last-round 10 --suffix _v2_sr10 \\
+        --only midgame --strip-meta --jobs 8
 """
 
 from __future__ import annotations
@@ -70,6 +74,8 @@ def game_files(sources: list) -> list:
 
 
 _ARGS = None
+#: Action fields the engine ignores (``--strip-meta`` drops them, as the legacy 1830 builders did).
+META_KEYS = ("created_at", "user")
 
 
 def _init(args):
@@ -118,6 +124,10 @@ def process(path: str) -> tuple:
     if replayed.optional_rules and not (spec.rules_mix and spec.rules_in_scope(replayed.optional_rules)):
         return gid, n, None, None, "optional_rules"
     start, midgame, reason = start_records(args.title, replayed, args.first_round, args.last_round)
+    if args.strip_meta:  # the legacy files' actions: no timestamps or user ids (half the size)
+        for record in (start, midgame):
+            if record is not None:
+                record["actions"] = [{k: v for k, v in a.items() if k not in META_KEYS} for a in record["actions"]]
     return gid, n, start, midgame, reason
 
 
@@ -147,6 +157,14 @@ def main():
     parser.add_argument("--suffix", default="", help="File name suffix, e.g. _generic or _v3")
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--limit", type=int, default=None, help="Only the first N files (by id)")
+    parser.add_argument(
+        "--only", choices=("start", "midgame"), default=None,
+        help="Write only the SR1 start files or only the mid-game files (default both)",
+    )
+    parser.add_argument(
+        "--strip-meta", action="store_true",
+        help="Drop the actions' created_at / user fields (the legacy 1830 files' form; the engine ignores them)",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING)
 
@@ -195,10 +213,16 @@ def main():
     for n in sorted(args.num_players):
         s_path = out_dir / f"start_positions_{args.title}_{n}p{args.suffix}.jsonl"
         m_path = out_dir / f"midgame_positions_{args.title}_{n}p{args.suffix}.jsonl"
-        _write(s_path, sorted(starts[n], key=key))
-        _write(m_path, sorted(midgames[n], key=key))
+        if args.only != "midgame":
+            _write(s_path, sorted(starts[n], key=key))
+        if args.only != "start":
+            _write(m_path, sorted(midgames[n], key=key))
         kind = "SR1-end" if starts[n] and starts[n][0].get("start") == "sr1_end" else "SR1"
-        print(f"{n}p: {len(starts[n])} {kind} starts -> {s_path}; {len(midgames[n])} mid-game games -> {m_path}")
+        cuts = collections.Counter(int(k) for m in midgames[n] for k in m["cuts"])
+        s_out = f" -> {s_path}" if args.only != "midgame" else " (not written)"
+        m_out = f" -> {m_path}" if args.only != "start" else " (not written)"
+        print(f"{n}p: {len(starts[n])} {kind} starts{s_out}; {len(midgames[n])} mid-game games, "
+              f"{sum(cuts.values())} cuts {dict(sorted(cuts.items()))}{m_out}")
     if spec.rules_mix or len(by_rules) > 1:
         counts = sorted(args.num_players)
         print("starts / mid-game games by rules combination and player count:")

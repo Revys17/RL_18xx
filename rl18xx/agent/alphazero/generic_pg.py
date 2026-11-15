@@ -68,6 +68,10 @@ mechanisms"; every one off by default, and off the run is exactly the C2 stage):
   KL, the reference a fixed checkpoint (default the starting policy) at ``ref_temperature``.
 - **Prioritized starts** (A2, ``start_priority``): prioritized level replay over the human SR1 and mid-game
   starts (``generic_play.StartPriorities``), scored from the learner's own rows; scores persist with the run.
+- **Practice positions** (A5p, ``practice_fraction`` > 0 with ``practice_positions``): that share of games starts
+  at a practice cut (``practice:<id>:sr<k>``: positions one and two Stock Rounds before the looted-broke dumps
+  of the human corpus and Caleb's games, ``scripts/robustness/build_practice_positions.py``), drawn before the
+  rest of the start mix; uniform, or through A2's priorities as a third library when ``start_priority`` is on.
 - **Main-exploiter mode** (A3, ``exploiter_of``): every seat but the learner's is a frozen checkpoint (one
   league member, no own snapshots joining); with ``population_reload_every`` a main run picks up members added
   to (or dropped from) its population file while it runs (``scripts/launch/2026-11/bridge/exploiter_loop.py``).
@@ -217,6 +221,11 @@ class GenericPGConfig:
     #: leave, pins follow the file; on a resume, members neither in the file nor own snapshots leave. 0: off (the
     #: legacy semantics: the file is read at the start and its new members join on a resume).
     population_reload_every: int = 0
+    #: A5p: practice starts -- a mid-game-format file template (``{n}``: the player count; None with a positive
+    #: fraction: ``start_positions.PRACTICE_TEMPLATE`` for 1830) and the share of games drawn from it, before the
+    #: rest of the start mix (0: off, no draw).
+    practice_positions: Optional[str] = None
+    practice_fraction: float = 0.0
     #: Seeds the trainer, the servers and each worker task (None: unseeded).
     seed: Optional[int] = None
 
@@ -245,6 +254,8 @@ RESUME_SETTINGS = tuple(s for s in pg.RESUME_SETTINGS if s != "value_follow") + 
     "start_priority_temperature",
     "start_priority_ema",
     "population_reload_every",
+    "practice_positions",
+    "practice_fraction",
 )
 
 
@@ -265,6 +276,38 @@ def default_start_templates(cfg: GenericPGConfig) -> None:
         cfg.start_positions = spec.start_positions_template
     if cfg.midgame_positions is None and cfg.midgame_fraction > 0:
         cfg.midgame_positions = spec.midgame_positions_template
+    default_practice_template(cfg)
+
+
+def default_practice_template(cfg: GenericPGConfig) -> None:
+    """With practice starts on and no file given: 1830's practice template (other titles have none)."""
+    if cfg.practice_fraction > 0 and not cfg.practice_positions and str(cfg.title) == "1830":
+        from rl18xx.agent.alphazero.start_positions import PRACTICE_TEMPLATE
+
+        cfg.practice_positions = PRACTICE_TEMPLATE
+
+
+def check_practice(cfg: GenericPGConfig) -> None:
+    """``practice_fraction`` in [0, 1); with it, a practice file template (``{n}`` in a mixed-count run) whose files
+    exist; a count without practice positions only warns (its games fall through to the rest of the mix)."""
+    if not 0.0 <= cfg.practice_fraction < 1.0:
+        raise SystemExit("--practice-fraction must be in [0, 1)")
+    if cfg.practice_fraction <= 0:
+        return
+    if not cfg.practice_positions:
+        raise SystemExit(f"--practice-fraction {cfg.practice_fraction}: --practice-positions is required ({cfg.title})")
+    if cfg.player_mix and "{n}" not in cfg.practice_positions:
+        raise SystemExit(
+            f"--practice-positions {cfg.practice_positions}: a --player-mix run needs a template with {{n}}"
+        )
+    from rl18xx.agent.alphazero.start_positions import file_player_counts
+
+    for n in pg.player_counts(cfg):
+        path = pg.count_path(cfg.practice_positions, n)
+        if not Path(path).is_file():
+            raise SystemExit(f"--practice-positions: no file {path}")
+        if not file_player_counts(path).get(int(n)):
+            LOGGER.warning("practice positions %s: no %d-player games; those games use the rest of the mix", path, n)
 
 
 def check_config(cfg: GenericPGConfig) -> None:
@@ -307,6 +350,7 @@ def check_config(cfg: GenericPGConfig) -> None:
             and 0.0 < cfg.start_priority_ema <= 1.0
         ):
             raise SystemExit("--start-priority-*: uniform and staleness in [0, 1], temperature > 0, ema in (0, 1]")
+    check_practice(cfg)
     if cfg.exploiter_of and not cfg.population:
         raise SystemExit("exploiter mode: the run's population is its frozen main (set up by generic_pg.run)")
     if cfg.population and not (cfg.exploiter_of and not Path(cfg.population).exists()):
@@ -758,6 +802,8 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
             auction_unlock=settings.get("auction_unlock", True),
             optional_rules=rules,
             picker=picker,
+            practice_path=settings.get("practice_positions"),
+            practice_fraction=settings.get("practice_fraction", 0.0),
         )
         skipped_starts += skipped
         learner, seat_models, seat_members = pg._deal_seats(settings, py_rng)
@@ -1398,7 +1444,10 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
         overrides = pg.resume_overrides(cfg, state["config"], RESUME_SETTINGS, explicit)
         if overrides.get("rules_mix", "") is None:  # (a caller without a command line: only a mix it sets)
             overrides.pop("rules_mix")
+        if "practice_positions" in overrides and not overrides["practice_positions"]:
+            overrides.pop("practice_positions")  # the run's own practice file unless one is given
         cfg = GenericPGConfig(**{**state["config"], **overrides})
+        default_practice_template(cfg)
         check_config(cfg)
         update = int(state["snapshot_update"])
         pool = list(state["pool"])
@@ -1511,13 +1560,14 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
         for i, (name, path) in enumerate(servers.items())
     }
     priorities = None
-    if cfg.start_priority:  # A2: prioritized level replay over the human and mid-game starts
+    if cfg.start_priority:  # A2: prioritized level replay over the human, mid-game (and practice) starts
         from rl18xx.agent.alphazero.generic_play import StartPriorities
 
         priorities = StartPriorities.for_run(
             pg.player_counts(cfg),
             cfg.start_positions,
             cfg.midgame_positions if cfg.midgame_fraction > 0 else None,
+            cfg.practice_positions if cfg.practice_fraction > 0 else None,
             uniform=cfg.start_priority_uniform,
             staleness=cfg.start_priority_staleness,
             temperature=cfg.start_priority_temperature,
@@ -1561,6 +1611,8 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
             "random_start_fraction": cfg.random_start_fraction,
             "midgame_positions": pg.count_path(cfg.midgame_positions, n),
             "midgame_fraction": cfg.midgame_fraction,
+            "practice_positions": pg.count_path(cfg.practice_positions, n) if cfg.practice_fraction > 0 else None,
+            "practice_fraction": cfg.practice_fraction,
             "auction_fraction": cfg.auction_fraction,
             "auction_unlock": cfg.auction_unlock,
             "auction_stall_decisions": stall,

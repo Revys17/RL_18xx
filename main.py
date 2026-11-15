@@ -594,6 +594,8 @@ def cmd_policy_gradient_generic(args):
         start_priority_staleness=args.start_priority_staleness,
         start_priority_temperature=args.start_priority_temperature,
         start_priority_ema=args.start_priority_ema,
+        practice_positions=args.practice_positions,
+        practice_fraction=args.practice_fraction,
         exploiter_of=args.exploiter_of,
         population_reload_every=args.population_reload_every,
         seed=args.seed,
@@ -1465,6 +1467,16 @@ def build_parser():
     p.add_argument("--start-priority-staleness", type=float, default=0.3, help="Weight of PLR's staleness term")
     p.add_argument("--start-priority-temperature", type=float, default=1.0, help="Rank temperature")
     p.add_argument("--start-priority-ema", type=float, default=0.5, help="Weight of an update's mean in a score")
+    p.add_argument(
+        "--practice-positions", type=str, default=None,
+        help="A5p: practice-position template ({n}: the player count; a mid-game-format file; default for 1830 "
+        "human_games/practice_positions_1830_{n}p_v1.jsonl when --practice-fraction > 0)",
+    )
+    p.add_argument(
+        "--practice-fraction", type=float, default=0.0,
+        help="A5p: share of games started at a practice position, drawn before the rest of the start mix (0: off); "
+        "uniform, or through --start-priority's scores",
+    )
     p.add_argument(
         "--exploiter-of", type=str, default=None,
         help="A3: main-exploiter mode -- every other seat is this frozen generic checkpoint (no --population)",

@@ -11,7 +11,10 @@ fixed-price move, and applying a legal row at a price. The default reads the tit
 
 **Starts** (design §5.6): as 1830's ``start_positions``, a game starts at the opening (``auction``), at the
 first Stock Round from a recorded human game (``human:<id>``) or from a random opening played through legal
-moves (``random``), or at the start of a later Stock Round of a recorded human game (``midgame:<id>:sr<k>``).
+moves (``random``), or at the start of a later Stock Round of a recorded human game (``midgame:<id>:sr<k>``);
+optionally (off by default) a share of games starts at a *practice* position (``practice:<id>:sr<k>``: a
+mid-game-format file of situations picked for a tactic, e.g. a Stock Round shortly before a loot-and-dump;
+robustness arm A5p).
 A title whose opening auction *is* its first Stock Round (the 1822 family's bid boxes,
 :data:`OPENS_WITH_STOCK_ROUND`) starts at the fresh game (``auction``) or where that Stock Round ends
 (``human:<id>``, ``random``).
@@ -49,6 +52,7 @@ AUCTION_START = "auction"
 RANDOM_START = "random"
 HUMAN_START_PREFIX = "human:"
 MIDGAME_PREFIX = "midgame:"
+PRACTICE_PREFIX = "practice:"
 STOCK_ROUND = "Stock"
 AUCTION_ROUND = "Auction"
 #: Titles whose game opens with a Stock Round: the 1822 family's first Stock Round is its opening auction (bids
@@ -413,11 +417,15 @@ def sample_start(
     max_price_multiple: float = 2.0,
     optional_rules: Sequence[str] = (),
     picker: Optional["StartPicker"] = None,
+    practice_path=None,
+    practice_fraction: float = 0.0,
 ) -> GenericStart:
     """A start for a new ``title`` game (``start_positions.sample_start_position``'s mix for any title):
-    the opening with probability ``auction_fraction``; else a mid-game cut with probability
-    ``midgame_fraction`` (when ``midgame_path`` has games of this count); else a random opening with
-    probability ``random_fraction`` (always without human starts of this count), else a human SR1 start.
+    a practice cut with probability ``practice_fraction`` (drawn first, when ``practice_path`` has games of this
+    count and rules; a mid-game-format file); else the opening with probability ``auction_fraction``; else a
+    mid-game cut with probability ``midgame_fraction`` (when ``midgame_path`` has games of this count); else a
+    random opening with probability ``random_fraction`` (always without human starts of this count), else a human
+    SR1 start.
 
     ``optional_rules`` (canonical: ``titles.draw_rules``) is the game's rules combination: human and mid-game
     starts are drawn from the lines played under exactly those rules (a combination without lines of this count
@@ -426,6 +434,16 @@ def sample_start(
     the drawn kind (None from it: the uniform choice); the kinds' shares are unchanged."""
     rng = rng or random.Random()
     rules = tuple(optional_rules or ())
+    if practice_path and practice_fraction > 0 and rng.random() < practice_fraction:
+        games = [g for g in load_midgame_file(practice_path, title).get(int(num_players), []) if g[4] == rules]
+        if games:
+            picked = picker.practice(games) if picker is not None else None
+            if picked is not None:
+                (game_id, actions, cuts, seed, _), k = picked
+            else:
+                game_id, actions, cuts, seed, _ = rng.choice(games)
+                k = rng.choice(sorted(cuts))
+            return GenericStart(f"{PRACTICE_PREFIX}{game_id}:sr{k}", actions[: cuts[k]], seed, rules)
     if auction_fraction > 0 and rng.random() < auction_fraction:
         if opens_with_stock_round(title):
             # the 1822 family's setup shuffles the company stacks by the engine seed (None = 0: every opening
@@ -470,6 +488,8 @@ def replayed_start(
     max_draws: int = 100,
     optional_rules: Sequence[str] = (),
     picker: Optional["StartPicker"] = None,
+    practice_path=None,
+    practice_fraction: float = 0.0,
 ):
     """``(start, raw game, skipped)``: a start applied to a new game (under ``optional_rules``: the game's rules
     combination, :func:`sample_start`); recorded starts the engine no longer replays are skipped and counted
@@ -490,6 +510,8 @@ def replayed_start(
             auction_fraction=auction_fraction,
             auction_unlock=auction_unlock,
             picker=picker,
+            practice_path=practice_path,
+            practice_fraction=practice_fraction,
         )
         return GenericStart(start.label, tuple(start.actions)), raw_game(game), skipped
     for skipped in range(max_draws):
@@ -504,6 +526,8 @@ def replayed_start(
             auction_fraction=auction_fraction,
             optional_rules=optional_rules,
             picker=picker,
+            practice_path=practice_path,
+            practice_fraction=practice_fraction,
         )
         try:
             game = new_title_game(title, num_players, seed=start.seed, optional_rules=start.optional_rules)
@@ -522,30 +546,40 @@ def replayed_start(
 # ---------------------------------------------------------------------------------------------------
 
 #: The start kinds a prioritized run chooses by score; openings (auction) and random openings stay unprioritized.
-PRIORITIZED_KINDS = ("human", "midgame")
+#: ``practice`` has a library only in a run with practice positions (``practice_fraction`` > 0).
+PRIORITIZED_KINDS = ("human", "midgame", "practice")
 #: A start's per-row score: ``abs_adv`` = |reward - V(s)| (PLR's "L1 value loss"; with ``gae_lambda`` 1 the
 #: critic's absolute error), ``pos_adv`` = max(reward - V(s), 0) (PLR's "positive value loss").
 START_SCORES = ("abs_adv", "pos_adv")
 
 
 def start_kind(label: Optional[str]) -> Optional[str]:
-    """The prioritized kind of a start label (``human`` / ``midgame``); None for openings and random openings."""
+    """The prioritized kind of a start label (``human`` / ``midgame`` / ``practice``); None for openings and random
+    openings."""
     if not label:
         return None
     if label.startswith(HUMAN_START_PREFIX):
         return "human"
     if label.startswith(MIDGAME_PREFIX):
         return "midgame"
+    if label.startswith(PRACTICE_PREFIX):
+        return "practice"
     return None
 
 
-def start_labels(path, midgame_path, num_players: int) -> Dict[str, List[str]]:
+def start_labels(path, midgame_path, num_players: int, practice_path=None) -> Dict[str, List[str]]:
     """The library a prioritized run chooses from at ``num_players``: every human SR1 start (``human:<id>``) of
-    ``path`` and every mid-game cut (``midgame:<id>:sr<k>``) of ``midgame_path``, of any rules combination (only
-    the labels are kept: the trainer never replays them; a worker falls back to the uniform choice for a label
-    its game's rules combination doesn't have)."""
+    ``path``, every mid-game cut (``midgame:<id>:sr<k>``) of ``midgame_path`` and, with ``practice_path``, every
+    practice cut (``practice:<id>:sr<k>``), of any rules combination (only the labels are kept: the trainer never
+    replays them; a worker falls back to the uniform choice for a label its game's rules combination doesn't
+    have)."""
     out: Dict[str, List[str]] = {"human": [], "midgame": []}
-    for file, kind in ((path, "human"), (midgame_path, "midgame")):
+    files = [(path, "human"), (midgame_path, "midgame")]
+    if practice_path:
+        out["practice"] = []
+        files.append((practice_path, "practice"))
+    prefix = {"midgame": MIDGAME_PREFIX, "practice": PRACTICE_PREFIX}
+    for file, kind in files:
         if not file or not Path(file).is_file():
             continue
         with open(file) as f:
@@ -558,7 +592,7 @@ def start_labels(path, midgame_path, num_players: int) -> Dict[str, List[str]]:
                 if kind == "human":
                     out[kind].append(f"{HUMAN_START_PREFIX}{record['id']}")
                 else:
-                    out[kind] += [f"{MIDGAME_PREFIX}{record['id']}:sr{int(k)}" for k in sorted(record["cuts"], key=int)]
+                    out[kind] += [f"{prefix[kind]}{record['id']}:sr{int(k)}" for k in sorted(record["cuts"], key=int)]
     return out
 
 
@@ -598,13 +632,20 @@ class StartPicker:
     def midgame(self, games):
         """``(game, k)``: the picked game among ``games`` (tuples whose first item is the id and third the cuts)
         and its Stock Round k, or None (the caller's uniform choice)."""
-        label = self._take("midgame")
+        return self._cut("midgame", MIDGAME_PREFIX, games)
+
+    def practice(self, games):
+        """As :meth:`midgame`, for practice cuts (``practice:<id>:sr<k>``)."""
+        return self._cut("practice", PRACTICE_PREFIX, games)
+
+    def _cut(self, kind: str, prefix: str, games):
+        label = self._take(kind)
         if label is None:
             return None
-        game_id, _, k = label[len(MIDGAME_PREFIX) :].rpartition(":sr")
+        game_id, _, k = label[len(prefix) :].rpartition(":sr")
         game = next((g for g in games if str(g[0]) == game_id), None)
         if game is None or not k.isdigit() or int(k) not in game[2]:
-            self.counts["midgame_missing"] += 1
+            self.counts[f"{kind}_missing"] += 1
             return None
         return game, int(k)
 
@@ -655,13 +696,16 @@ class StartPriorities:
         self._dist: dict = {}
 
     @classmethod
-    def for_run(cls, counts, start_template, midgame_template, **kwargs) -> "StartPriorities":
+    def for_run(cls, counts, start_template, midgame_template, practice_template=None, **kwargs) -> "StartPriorities":
         """The library of a run's player counts from its start-file templates (``{n}``: the count)."""
 
         def fill(template, n):
             return template.replace("{n}", str(int(n))) if template else template
 
-        libraries = {int(n): start_labels(fill(start_template, n), fill(midgame_template, n), n) for n in counts}
+        libraries = {
+            int(n): start_labels(fill(start_template, n), fill(midgame_template, n), n, fill(practice_template, n))
+            for n in counts
+        }
         return cls(libraries, **kwargs)
 
     def observe_game(self, num_players: int, label: Optional[str]) -> None:
@@ -1006,6 +1050,7 @@ __all__ = [
     "ReplayedGame",
     "TitlePlay",
     "OPENS_WITH_STOCK_ROUND",
+    "PRACTICE_PREFIX",
     "PRIORITIZED_KINDS",
     "START_SCORES",
     "StartPicker",

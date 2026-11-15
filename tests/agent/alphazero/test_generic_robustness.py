@@ -518,3 +518,112 @@ def test_exploiter_mode_plays_only_the_frozen_main(tmp_path, checkpoint, start_f
         assert labels and set(labels) == {str(main)}
     state = json.loads((run_dir / "state.json").read_text())
     assert list(state["league"]["by_count"]["4"]["stats"]) == [str(main)]  # no own snapshot joined
+
+
+# ---------------------------------------------------------------------------------------------------
+# A5p: practice starts (a mid-game-format file; drawn before the rest of the mix; off by default)
+# ---------------------------------------------------------------------------------------------------
+
+
+def test_practice_starts_off_draw_exactly_as_before_and_on_draw_practice_cuts(library_files):
+    sfile, mfile = library_files
+    for seed in range(30):  # fraction 0 (or no file): not one draw more -- the legacy starts exactly
+        kwargs = dict(midgame_path=mfile, midgame_fraction=0.3, auction_fraction=0.2)
+        base = sp.sample_start_position(4, sfile, 0.2, rng=random.Random(seed), **kwargs)
+        for practice in (dict(practice_path=mfile, practice_fraction=0.0),
+                         dict(practice_path=None, practice_fraction=0.5)):  # fmt: skip
+            assert sp.sample_start_position(4, sfile, 0.2, rng=random.Random(seed), **kwargs, **practice) == base
+        g = gp.sample_start("1830", 4, sfile, 0.2, rng=random.Random(seed), **kwargs)
+        assert gp.sample_start("1830", 4, sfile, 0.2, rng=random.Random(seed), practice_path=mfile,
+                               practice_fraction=0.0, **kwargs) == g  # fmt: skip
+    # fraction 1: always a practice cut of the count (labels practice:<id>:sr<k>, the prefix up to the cut)
+    seen = set()
+    cuts = {"m0": {2: 10, 3: 20}, "m1": {2: 12, 4: 25}}
+    for seed in range(40):
+        s = sp.sample_start_position(4, sfile, 0.2, rng=random.Random(seed), practice_path=mfile, practice_fraction=1.0)
+        game_id, _, k = s.label[len(sp.PRACTICE_PREFIX):].rpartition(":sr")
+        assert s.label.startswith("practice:") and len(s.actions) == cuts[game_id][int(k)]
+        seen.add(s.label)
+        g = gp.sample_start("1830", 4, sfile, 0.2, rng=random.Random(seed), practice_path=mfile, practice_fraction=1.0)
+        assert g.label.startswith("practice:")
+    assert seen == {"practice:m0:sr2", "practice:m0:sr3", "practice:m1:sr2", "practice:m1:sr4"}
+    # a count without practice games falls through to the rest of the mix
+    s = sp.sample_start_position(2, sfile, 1.0, rng=random.Random(0), practice_path=mfile, practice_fraction=1.0)
+    assert s.label == "random"
+    # the picker chooses practice cuts as it does mid-game cuts
+    picker = gp.StartPicker({"practice": ["practice:m1:sr4", "practice:m0:sr9", None]})
+    s = sp.sample_start_position(4, sfile, 0.2, rng=random.Random(0), practice_path=mfile, practice_fraction=1.0,
+                                 picker=picker)  # fmt: skip
+    assert s.label == "practice:m1:sr4" and len(s.actions) == 25
+    for _ in range(2):
+        assert sp.sample_start_position(4, sfile, 0.2, rng=random.Random(1), practice_path=mfile,
+                                        practice_fraction=1.0, picker=picker).label.startswith("practice:m")
+    assert picker.counts == {"practice_prioritized": 2, "practice_missing": 1, "practice_uniform": 1}
+    assert gp.start_kind("practice:m1:sr4") == "practice" and gp.start_kind("midgame:m1:sr4") == "midgame"
+
+
+def test_practice_library_in_the_start_priorities(library_files):
+    sfile, mfile = library_files
+    without = gp.StartPriorities.for_run([4], sfile, mfile)
+    assert set(without.libraries[4]) == {"human", "midgame"}
+    assert set(without.picks(4, 3, np.random.default_rng(0))) == {"human", "midgame"}
+    prio = gp.StartPriorities.for_run([3, 4], sfile.replace("4p", "{n}p"), mfile.replace("4p", "{n}p"),
+                                      mfile.replace("4p", "{n}p"), uniform=0.0, staleness=0.0)  # fmt: skip
+    assert prio.libraries[4]["practice"] == ["practice:m0:sr2", "practice:m0:sr3", "practice:m1:sr2",
+                                             "practice:m1:sr4"]  # fmt: skip
+    assert prio.picks(4, 2, np.random.default_rng(0))["practice"] == [None, None]  # nothing scored: uniform
+
+    def row(label, adv):
+        return gpg.PGRow(tokens=b"", rows=None, price_range=None, choice=0, old_logp=0.0, price_cell=-1, seat=0,
+                         num_players=4, advantage=adv, start=label)  # fmt: skip
+
+    prio.observe_game(4, "practice:m1:sr4")
+    assert prio.observe_rows([row("practice:m1:sr4", -0.6), row("midgame:m1:sr4", 0.1)]) == 2
+    assert prio.picks(4, 3, np.random.default_rng(0))["practice"] == ["practice:m1:sr4"] * 3
+    assert prio.summary()["p4"]["practice"]["scored"] == 1
+
+
+def test_practice_config_checks(tmp_path, checkpoint, walk_files):
+    starts, mids = walk_files
+    common = dict(policy_checkpoint=checkpoint, out_dir=str(tmp_path), player_mix={3: 1, 4: 1}, start_positions=starts)
+    gpg.check_config(gpg.GenericPGConfig(**common))  # off: no file needed
+    for bad in (dict(practice_fraction=1.0, practice_positions=mids), dict(practice_fraction=-0.1),
+                dict(practice_fraction=0.2, practice_positions=mids.replace("{n}", "4")),
+                dict(practice_fraction=0.2, practice_positions=str(tmp_path / "none_{n}p.jsonl")),
+                dict(practice_fraction=0.2)):  # fmt: skip
+        with pytest.raises(SystemExit):
+            gpg.check_config(gpg.GenericPGConfig(**common, **bad))
+    gpg.check_config(gpg.GenericPGConfig(**common, practice_fraction=0.2, practice_positions=mids))
+    cfg = gpg.GenericPGConfig(**common, practice_fraction=0.2)
+    gpg.default_start_templates(cfg)
+    assert cfg.practice_positions == sp.PRACTICE_TEMPLATE == "human_games/practice_positions_1830_{n}p_v1.jsonl"
+    cfg = gpg.GenericPGConfig(**common)
+    gpg.default_start_templates(cfg)
+    assert cfg.practice_positions is None  # off: no default either
+
+
+def test_run_with_practice_starts_through_the_priorities(tmp_path, checkpoint, walk_files):
+    """A run with practice starts (the walks' mid-game file as the practice library) and A2's priorities: games
+    start at practice cuts, their rows score them, and the history counts them."""
+    _spawn()
+    starts, mids = walk_files
+    cfg = gpg.GenericPGConfig(
+        policy_checkpoint=checkpoint, out_dir=str(tmp_path / "runs"), run_name="a5p", player_mix={3: 1, 4: 1},
+        workers=2, games_per_task=3, tasks_in_flight_per_worker=1, positions_per_seat=4, max_decisions=40,
+        start_positions=starts, random_start_fraction=0.0, practice_positions=mids, practice_fraction=0.6,
+        rows_per_update=24, minibatch=16, microbatch=8, max_updates=2, snapshot_every=1, reward="placement",
+        learner_temperature=0.5, opponent_temperature=0.5, server_cpu=True, server_threads=1,
+        inference_batch_size=64, threads=2, start_priority=True, start_priority_uniform=0.2, seed=7,
+        save_game_every=1,
+    )  # fmt: skip
+    run_dir = gpg.run(cfg)
+    config = json.loads((run_dir / "config.json").read_text())
+    assert config["practice_positions"] == mids and config["practice_fraction"] == 0.6
+    history = [json.loads(line) for line in (run_dir / "history.jsonl").read_text().splitlines()]
+    assert [h["update"] for h in history] == [1, 2]
+    assert sum(h["starts"].get("practice", 0) for h in history) >= 1
+    assert all(h["starts"].get("practice", 0) + h["starts"].get("human", 0) == h["games"] for h in history)
+    assert any(k.startswith("practice_") for h in history for k in h["start_picks"])
+    assert all("practice" in h["start_priority"]["p4"] for h in history)
+    saved = [json.loads(line) for line in (run_dir / "games.jsonl").read_text().splitlines()]
+    assert any(e["start"].startswith("practice:") for e in saved)

@@ -22,6 +22,12 @@ auction and starts at Stock Round 1 from either
   (2026-10-07: trained agents' dumps hit a trainless company 10% of the time
   against humans' 38%, and bankruptcies were ~9x rarer); mid-game starts put the
   agents into such positions without rewarding any strategy.
+* a **practice start** (``practice_fraction`` of the games, drawn before everything
+  else, when a practice file is given; off by default) -- a recorded game up to the
+  beginning of a Stock Round shortly before a tactic the bots fall for (the robustness
+  plan's loot-and-dump situations: ``scripts/robustness/build_practice_positions.py``).
+  Same file format as the mid-game starts (``cuts`` per game); labels
+  ``practice:<id>:sr<k>``.
 
 Start files hold one player count's games (``human_games/start_positions_1830_<N>p_v2.jsonl``,
 ``human_games/midgame_positions_1830_<N>p_v2.jsonl``: :func:`default_start_positions` /
@@ -55,6 +61,7 @@ HUMAN_START_PREFIX = "human:"
 RANDOM_START = "random"
 AUCTION_START = "auction"  # a fresh game: the waterfall auction is played too
 MIDGAME_PREFIX = "midgame:"
+PRACTICE_PREFIX = "practice:"  # a practice start (a mid-game-format file of hand-picked situations)
 
 # What ``process_action`` reads from an auction action (bid / pass / par).
 # Everything else in a recorded action — ``user``, ``created_at``, ``id`` — is
@@ -71,6 +78,11 @@ def default_start_positions(num_players: int) -> str:
 def default_midgame_positions(num_players: int) -> str:
     """The mid-game start file of a ``num_players`` game (relative to the working directory)."""
     return f"human_games/midgame_positions_1830_{int(num_players)}p_v2.jsonl"
+
+
+#: The practice-position template (``{n}``: the player count): positions one and two Stock Rounds before the
+#: looted-broke dumps of the human corpus and Caleb's games (``scripts/robustness/build_practice_positions.py``).
+PRACTICE_TEMPLATE = "human_games/practice_positions_1830_{n}p_v1.jsonl"
 
 
 _PLAYERS_FIELD = re.compile(r'"num_players"\s*:\s*(\d+)')
@@ -488,8 +500,13 @@ def sample_start_position(
     midgame_fraction: float = 0.0,
     auction_fraction: float = 0.0,
     picker=None,
+    practice_path=None,
+    practice_fraction: float = 0.0,
 ) -> StartPosition:
-    """A start for a new ``num_players`` self-play game: with probability
+    """A start for a new ``num_players`` self-play game: with probability ``practice_fraction`` (when
+    ``practice_path`` has games for this player count; drawn first, so it scales the other kinds' shares by
+    ``1 - practice_fraction``; no draw at all at 0) a practice start -- a uniformly chosen game and one of its
+    cuts, or the picker's; else with probability
     ``auction_fraction`` the beginning of the game (the auction is played; the
     caller turns on ``auction_unlock``); else with probability ``midgame_fraction``
     (when ``midgame_path`` has games for this player count) a mid-game start -- a
@@ -500,6 +517,16 @@ def sample_start_position(
     ``picker`` (``generic_play.StartPicker``: a generic run's prioritized starts) chooses which mid-game cut or
     human start of the drawn kind (None from it: the uniform choice); the kinds' shares are unchanged."""
     rng = rng or random.Random()
+    if practice_path and practice_fraction > 0 and rng.random() < practice_fraction:
+        games = load_midgame_positions(practice_path).get(num_players, [])
+        if games:
+            picked = picker.practice(games) if picker is not None else None
+            if picked is not None:
+                (game_id, actions, cuts), stock_round = picked
+            else:
+                game_id, actions, cuts = rng.choice(games)
+                stock_round = rng.choice(sorted(cuts))
+            return StartPosition(f"{PRACTICE_PREFIX}{game_id}:sr{stock_round}", actions[: cuts[stock_round]])
     if auction_fraction > 0 and rng.random() < auction_fraction:
         return StartPosition(AUCTION_START, ())
     if midgame_path and midgame_fraction > 0 and rng.random() < midgame_fraction:
@@ -533,6 +560,8 @@ def replayed_start(
     max_draws: int = 100,
     auction_unlock: bool = True,
     picker=None,
+    practice_path=None,
+    practice_fraction: float = 0.0,
 ) -> tuple:
     """``(start, game, skipped)``: a :func:`sample_start_position` start applied to a
     new game, with ``auction_unlock`` on for an auction start (as the generators play
@@ -556,6 +585,8 @@ def replayed_start(
             midgame_fraction=midgame_fraction,
             auction_fraction=auction_fraction,
             picker=picker,
+            practice_path=practice_path,
+            practice_fraction=practice_fraction,
         )
         try:
             game = apply_actions(new_game(num_players), start.actions)
