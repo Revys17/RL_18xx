@@ -36,6 +36,7 @@ layout when it has no generator.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import random
@@ -365,42 +366,40 @@ def _record_rules(record: dict, title: str) -> tuple:
 
 
 def load_start_file(path, title: str) -> Dict[int, List[GenericStart]]:
-    """``{num_players: [GenericStart]}`` of an SR1 start file (cached per process); each start carries its line's
-    ``optional_rules`` (canonical; none = base rules)."""
+    """``{num_players: [GenericStart]}`` of an SR1 start file (indexed once per process and cached; each start's
+    actions a ``start_positions.LazyActions``, read when drawn); each start carries its line's ``optional_rules``
+    (canonical; none = base rules)."""
+    from rl18xx.agent.alphazero.start_positions import index_start_file
+
     key = ("start", str(Path(path).resolve()), str(title))
     if key not in _LOADED:
         by_players: dict = {}
-        with open(path) as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                record = json.loads(line)
-                _check_title(record, title, path)
-                label = f"{HUMAN_START_PREFIX}{record['id']}"
-                rules = _record_rules(record, title)
-                start = GenericStart(label, tuple(record["actions"]), record.get("seed"), rules)
-                by_players.setdefault(int(record["num_players"]), []).append(start)
+        for record, actions in index_start_file(key[1]):
+            _check_title(record, title, path)
+            label = f"{HUMAN_START_PREFIX}{record['id']}"
+            rules = _record_rules(record, title)
+            start = GenericStart(label, actions, record.get("seed"), rules)
+            by_players.setdefault(int(record["num_players"]), []).append(start)
         _LOADED[key] = by_players
     return _LOADED[key]
 
 
 def load_midgame_file(path, title: str) -> Dict[int, list]:
     """``{num_players: [(id, actions, {round: prefix length}, seed, optional rules)]}`` of a mid-game file
-    (cached; the rules canonical, none = base rules)."""
+    (indexed once per process and cached; ``actions`` a ``start_positions.LazyActions``, sliced: a tuple; the rules
+    canonical, none = base rules)."""
+    from rl18xx.agent.alphazero.start_positions import index_start_file
+
     key = ("midgame", str(Path(path).resolve()), str(title))
     if key not in _LOADED:
         by_players: dict = {}
-        with open(path) as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                record = json.loads(line)
-                _check_title(record, title, path)
-                cuts = {int(k): int(v) for k, v in record["cuts"].items()}
-                rules = _record_rules(record, title)
-                by_players.setdefault(int(record["num_players"]), []).append(
-                    (str(record["id"]), tuple(record["actions"]), cuts, record.get("seed"), rules)
-                )
+        for record, actions in index_start_file(key[1]):
+            _check_title(record, title, path)
+            cuts = {int(k): int(v) for k, v in record["cuts"].items()}
+            rules = _record_rules(record, title)
+            by_players.setdefault(int(record["num_players"]), []).append(
+                (str(record["id"]), actions, cuts, record.get("seed"), rules)
+            )
         _LOADED[key] = by_players
     return _LOADED[key]
 
@@ -464,7 +463,8 @@ def sample_start(
     human = [s for s in human if s.optional_rules == rules]
     if human and rng.random() >= random_fraction:
         picked = picker.human(human) if picker is not None else None
-        return picked if picked is not None else rng.choice(human)
+        chosen = picked if picked is not None else rng.choice(human)
+        return dataclasses.replace(chosen, actions=tuple(chosen.actions))  # read from the file now
     seed = rng.randrange(1 << 31)
     actions = random_opening_actions(
         title, num_players, rng, seed=seed, max_price_multiple=max_price_multiple, optional_rules=rules

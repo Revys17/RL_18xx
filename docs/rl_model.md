@@ -2557,8 +2557,23 @@ scratchpad's `robust_prep/` for the user to copy into `human_games/`; the script
   importer numbers them differently); the generic importer drops 3 games the legacy builder kept (5p 30168, 6p 27054 /
   29947). Cuts per count: 2p 1,117 (178 games; SR7-10: 315), 3p 2,581 (391; 735), 4p 11,989 (1,932; 2,917), 5p 2,735
   (438; 683), 6p 1,223 (192; 318). A drop-in `--midgame-positions` (A2 then prioritizes over SR 2-10; the uniform draw
-  takes a game, then one of its cuts, so later cuts get the share of their game). Memory: a worker that loads the 4p
-  file holds ~740 MB (v2: ~410 MB); a mixed-count worker that loads all five ~1.2 GB (v2 ~0.65 GB).
+  takes a game, then one of its cuts, so later cuts get the share of their game). Memory: start files are read
+  lazily since 2026-11-15 (below), so the file size no longer matters to the workers.
+* **Lazy start files** (`start_positions.index_start_file` / `LazyActions`, used by every 1830 and generic loader:
+  SR1 starts, mid-game and practice cuts): a process indexes each file once (per line: id, count, cuts, seed, rules,
+  byte offset; the actions parsed and dropped) and reads a line with `os.pread` when that start is drawn, through the
+  handle it indexed with (a builder's rename-over leaves the run on the old file; a file rewritten in place fails the
+  line's id check with a clear error). The lists keep their order and length and the drawn start holds a tuple, so a
+  seed draws exactly the same starts and A2's labels and scores are unchanged. One mixed-count worker's start files
+  (2-6 players, v2 SR1 starts + practice, drawing every kind; measured, RSS): SR 2-10 mid-game files **1,350 MB eager
+  -> 10 MB lazy**, v2 mid-game files 805 -> 9 MB; index + first draws 6.4 -> 1.5 s; a draw 0.03 -> 0.15 ms (a line
+  read and parsed). In a real `policy-gradient-generic` run (CPU, 2 workers, mix 2-6, v2 SR1 + SR 2-10 + practice,
+  one 60-game update) the pool workers peaked at 1,120 / 1,683 MB eager (after loading the files of the counts
+  they had drawn; all five: ~1.85 GB) and 517 / 522 MB lazy, the inference servers ~540 MB either way: ~1.3 GB
+  less per worker, ~40 GB over a 32-worker run. Checked on the real files: 3,000 `replayed_start` draws (every count, uniform and with A2-style
+  picks, practice 0.15 / mid-game 0.3 / auction 0.5 / random 0.2) identical to the eager loader's -- labels, actions,
+  skipped starts, replayed positions, picker counts (`tests/agent/alphazero/test_lazy_start_files.py` does the same
+  on synthetic files, legacy and generic samplers).
 * **Practice positions**: `practice_positions_1830_<N>p_v1.jsonl` (`scripts/robustness/build_practice_positions.py`,
   5 min on 6 workers): the start of the Stock Round one and two Stock Rounds before every looted-broke dump (M2's
   `looted_broke_dump`, found by `behaviour_stats.broke_dumps` on the Python replay) of the cleaned corpus
