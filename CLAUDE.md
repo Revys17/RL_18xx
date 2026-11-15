@@ -84,6 +84,7 @@ uv run python scripts/search_target_quality.py confidence --data <run dir> --con
     --reference-data <az1 run dir>  # which search-target departures to trust (+ `pairwise`: an independent search of both moves)
 uv run python scripts/reanalyze_siblings.py build|check|train ...  # value targets from searching each child (offline)
 uv run python scripts/count_bankruptcies.py logs/eval/<out>  # bankruptcies in an eval's saved games
+uv run python -P scripts/robustness/regression_set.py score --model <policy>+<critic>#score  # robustness M1 (+ behaviour_stats.py M2, exploiter_panel.sh M3, search_settings.sh): docs/robustness_measurement.md
 uv run python scripts/price_hindsight.py detect --collection logs/eval/<c> --policy <gen4.pth> --out logs/price_hindsight/<d>
     # then jobs / branch / report / finetune --data logs/price_hindsight/<d>: counterfactual price branching
 uv run python scripts/check_shared_split.py --pg <PG run dir> --value <value run dir>  # the AlphaGo split's runs, part by part

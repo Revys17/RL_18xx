@@ -413,13 +413,13 @@ def run(args) -> dict:
         pool = None
         results = map(_task, tasks)
     for i, rec in enumerate(results):
+        if (i + 1) % 500 == 0:
+            print(f"  {i + 1}/{len(tasks)} files, {len(records)} games kept ({time.time() - t0:.0f}s)", flush=True)
         if rec is None:
             continue
         records.append({k: v for k, v in rec.items() if k != "events"})
         if sink:
             sink.write(json.dumps(rec, default=str) + "\n")
-        if (i + 1) % 500 == 0:
-            print(f"  {i + 1}/{len(tasks)} ({time.time() - t0:.0f}s)", flush=True)
     if pool:
         pool.shutdown()
     if sink:
