@@ -554,10 +554,12 @@ class LegacySystem:
 class GenericSystem:
     """A title-generic checkpoint (``model_generic``): policy probabilities and values. Search: not yet.
 
-    TODO(generic search): no Rust/Python MCTS evaluates ``model_generic`` networks today (the generic runs play
-    policy-only; the serving work in rl18xx/agent/advisor/ is looking at it). When one exists, implement
-    :meth:`search` with the same return shape as :meth:`LegacySystem.search` (root legal indices, visits, Q, priors,
-    chosen index) -- the scorer needs nothing else."""
+    TODO(generic search): when this was written no search evaluated ``model_generic`` networks; master has since
+    gained one (e503973: ``lockstep.GenericEvaluator`` answering ``engine_rs.mcts_collect_leaf_games``' leaves, used
+    by ``eval_head_to_head``'s ``generic:<learner>+generic:<critic>[#head]@<n>`` players, and the advisor's generic
+    serving). Implement :meth:`search` on it -- one tree, a ``LockstepSearcher`` with a ``GenericEvaluator`` on
+    in-process models -- with the same return shape as :meth:`LegacySystem.search` (root legal indices, visits, Q,
+    priors, chosen index); the scorer needs nothing else."""
 
     kind = "generic"
 

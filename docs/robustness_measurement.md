@@ -70,10 +70,12 @@ positions flipped between two checkpoints).
 
 **Generic checkpoints** (`model_generic`, `generic:<ckpt>[@prior temperature]`): `GenericSystem` gives the policy's
 probabilities over the legal moves (`generic_policy.GenericPolicy`; 1830's legal indices are the factored layout's, the
-same as the legacy model's) and the win / score heads for the mover (encoder seat `(i - meta[5]) mod n`). There is no
-search for generic networks yet (TODO in `GenericSystem.search`: when the serving work gives one, return the root's
-legal indices, visits, Q, priors and the chosen index, as `LegacySystem.search` does; nothing else changes). Until then
-generic checkpoints are scored on the policy's argmax.
+same as the legacy model's) and the win / score heads for the mover (encoder seat `(i - meta[5]) mod n`). The scorer
+has no search for generic networks yet (TODO in `GenericSystem.search`): master gained one while this was built
+(`lockstep.GenericEvaluator`, `eval_head_to_head`'s `generic:<learner>+generic:<critic>[#head]@<n>` players);
+`GenericSystem.search` should run one tree on it and return the root's legal indices, visits, Q, priors and the
+chosen index, as `LegacySystem.search` does -- nothing else changes. Until then generic checkpoints are scored on the
+policy's argmax, and Step 0's matches can already take generic players.
 
 ### What the numbers mean
 
