@@ -383,6 +383,9 @@ class RustMCTSPlayer:
         failsafe = 0
         max_attempts = parallel_readouts * 2
         dedupe = bool(getattr(self.config, "dedupe_leaves", False))
+        # A network over games (``game_network.GameNetwork``: generic checkpoints) takes the leaf
+        # positions themselves, not their legacy encodings.
+        games_backend = getattr(self._backend, "evaluates_games", False) is True
         pending: set = set()
         duplicates: list[int] = []  # (dedupe) re-selected leaves: virtual loss only
         while len(leaves) < parallel_readouts and failsafe < max_attempts:
@@ -447,7 +450,7 @@ class RustMCTSPlayer:
             rust_game = self._rust_player.get_game_for_idx(idx)
             adapter = RustGameAdapter(rust_game)
             leaf_adapters.append(adapter)
-            encoded_states.append(_rust_encode(adapter))
+            encoded_states.append(None if games_backend else _rust_encode(adapter))
             leaf_active_player_idx.append(_active_player_index(adapter))
             leaf_traces.append(trace)
             if trace is not None:
@@ -462,7 +465,11 @@ class RustMCTSPlayer:
         inference_start = time.time()
         backend = self._backend
         backend_is_client = backend is not self.network
-        if backend_is_client:
+        if games_backend:
+            # Priors at the leaves' legal moves, values already in absolute seat order.
+            legal = [self._rust_player.legal_action_indices_for_idx(idx) for idx in leaves]
+            move_probs, _, values = backend.run_many_games(leaf_adapters, legal)
+        elif backend_is_client:
             # The server then ships only each leaf's legal priors.
             legal = [self._rust_player.legal_action_indices_for_idx(idx) for idx in leaves]
             move_probs, _, values = backend.run_many_encoded(encoded_states, legal_indices=legal)
@@ -499,7 +506,8 @@ class RustMCTSPlayer:
             # the leaf's active player); the Rust tree's W arrays and terminal
             # values are in absolute seat order.
             leaf_state = encoded_states[i]
-            value_np = unrotate_value(value_np, leaf_state[6], leaf_state[7])
+            if leaf_state is not None:
+                value_np = unrotate_value(value_np, leaf_state[6], leaf_state[7])
             if self.config.leaf_value_heuristic is not None:
                 w = float(self.config.leaf_value_heuristic_weight)
                 value_np = (1.0 - w) * value_np + w * self._heuristic_leaf_value(leaf_adapters[i])

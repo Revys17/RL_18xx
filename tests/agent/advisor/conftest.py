@@ -28,9 +28,8 @@ def truncated(game: dict, count: int) -> dict:
 
 
 @pytest.fixture(scope="session")
-def advisor_models(tmp_path_factory):
-    """Untrained transformer checkpoints (policy, auction policy and value), loaded on CPU."""
-    from rl18xx.agent.advisor.advisor import AdvisorModels
+def advisor_checkpoints(tmp_path_factory) -> list:
+    """Untrained transformer checkpoints: policy, auction policy and value (paths)."""
     from rl18xx.agent.alphazero import policy_gradient as pg
     from rl18xx.agent.alphazero.config import ModelTransformerConfig
     from rl18xx.agent.alphazero.model_transformer import AlphaZeroTransformerModel
@@ -43,4 +42,42 @@ def advisor_models(tmp_path_factory):
         path = directory / name / "1.pth"
         pg._save(model, path)
         paths.append(path)
-    return AdvisorModels.load(*paths, device="cpu")
+    return paths
+
+
+@pytest.fixture(scope="session")
+def advisor_models(advisor_checkpoints):
+    """The untrained transformer checkpoints (policy, auction policy and value), loaded on CPU."""
+    from rl18xx.agent.advisor.advisor import AdvisorModels
+
+    return AdvisorModels.load(*advisor_checkpoints, device="cpu")
+
+
+# A tiny title-generic model (``generic_pretrain.SMALL_CONFIG``'s sizes).
+GENERIC_SMALL = dict(
+    d_model=32, num_heads=4, hex_layers=1, entity_layers=1, fusion_layers=1, d_trunk=64, trunk_blocks=1,
+    d_head=32, d_edge=8, d_cond=16, d_id=8,
+)  # fmt: skip
+
+
+@pytest.fixture(scope="session")
+def generic_checkpoints(tmp_path_factory) -> dict:
+    """Untrained tiny generic checkpoints laid out as a generic policy-gradient run (``<run>/learner/1.pth``,
+    ``<run>/critic/1.pth``, ``config.json`` with ``learner_temperature`` 0.5): ``{"learner", "critic"}`` paths.
+    Zero-initialized output layers get random weights, so the heads aren't uniform."""
+    from rl18xx.agent.alphazero import model_generic as mg
+
+    run = tmp_path_factory.mktemp("generic_run")
+    (run / "config.json").write_text(json.dumps({"learner_temperature": 0.5, "reward": "placement"}))
+    paths = {}
+    for seed, name in ((1, "learner"), (2, "critic")):
+        torch.manual_seed(seed)
+        model = mg.GenericPolicyValueModel(mg.GenericModelConfig(**GENERIC_SMALL)).eval()
+        with torch.no_grad():
+            for p in model.parameters():
+                if p.abs().sum() == 0:
+                    p.normal_(0, 0.1)
+        path = run / name / "1.pth"
+        mg.save_checkpoint(model, path, titles=["1830"])
+        paths[name] = path
+    return paths

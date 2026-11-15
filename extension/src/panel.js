@@ -142,11 +142,13 @@
     const how =
       m.kind === 'search'
         ? `${m.visits} visits, ${pct(m.share)}`
-        : m.kind === 'implicit_pass'
-          ? 'a pass the site waits for'
-          : m.kind === 'priced'
-            ? 'only move, priced by the model'
-            : 'only move';
+        : m.kind === 'policy'
+          ? `no search, the policy's ${pct(m.share)}`
+          : m.kind === 'implicit_pass'
+            ? 'a pass the site waits for'
+            : m.kind === 'priced'
+              ? 'only move, priced by the model'
+              : 'only move';
     const id = m.id ? `<span class="note">${esc(m.id)}.</span> ` : '';
     return `<div>${id}${esc(m.actor || '')}: ${esc(m.description || '')} <span class="note">(${esc(how)})</span></div>`;
   }

@@ -305,16 +305,11 @@ def create_app(advisor: Advisor, *, port: int, debug_page: bool = False, web_sit
     return app
 
 
-def run(args) -> None:
-    """``main.py advisor``: load the checkpoints and serve on ``--host`` (127.0.0.1 by default)."""
-    import torch
-
+def load_models(args, device: str):
+    """The ``main.py advisor`` options' checkpoints (``AdvisorModels.load``)."""
     from rl18xx.agent.advisor.advisor import AdvisorModels
 
-    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    if device == "cpu" and args.cpu_threads:
-        torch.set_num_threads(args.cpu_threads)
-    models = AdvisorModels.load(
+    return AdvisorModels.load(
         args.policy,
         args.auction_policy,
         args.value,
@@ -325,15 +320,28 @@ def run(args) -> None:
         play_auction_policy=getattr(args, "play_auction_policy", None),
         play_auction_value=getattr(args, "play_auction_value", None),
         play_value_head=getattr(args, "play_value_head", None) or "win",
+        play_mode=getattr(args, "play_mode", None) or "search",
+        play_temperature=float(getattr(args, "play_temperature", 0.0) or 0.0),
     )
+
+
+def run(args) -> None:
+    """``main.py advisor``: load the checkpoints and serve on ``--host`` (127.0.0.1 by default)."""
+    import torch
+
+    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    if device == "cpu" and args.cpu_threads:
+        torch.set_num_threads(args.cpu_threads)
+    models = load_models(args, device)
     labels = models.labels
     LOGGER.info(
-        "The model plays seats with %s + value %s (%s head; private auction: %s + %s)",
+        "The model plays seats with %s + value %s (%s head; private auction: %s + %s; mode %s)",
         labels["play_policy"],
         labels["play_value"],
         labels["play_value_head"],
         labels["play_auction_policy"],
         labels["play_auction_value"],
+        labels["play_mode"],
     )
     advisor = Advisor(models)
     web_site_ports = getattr(args, "web_site_port", None) or []

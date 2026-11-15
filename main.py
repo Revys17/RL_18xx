@@ -1507,7 +1507,8 @@ def build_parser():
     )
     p.add_argument(
         "--play-policy", type=str, default=None,
-        help="Policy the model plays hotseat seats with (default: --policy); every decision is searched",
+        help="Policy the model plays hotseat seats with (default: --policy); every decision is searched. "
+        "generic:<path> = a title-generic checkpoint (model_generic), as every --play-* option takes",
     )
     p.add_argument(
         "--play-value", type=str, default=None, help="Leaf value of its searches (default: --search-value)"
@@ -1520,6 +1521,16 @@ def build_parser():
         "--play-auction-value", type=str, default=None,
         help="Leaf value of its private-auction searches (default: --play-value); most value nets never "
         "saw an auction position (gen4's critic did: its run started 15%% of games at the auction)",
+    )
+    p.add_argument(
+        "--play-mode", type=str, default="search", choices=["search", "policy"],
+        help="How the play systems pick a move: search (default; every decision searched, the most visited "
+        "move) or policy (the play policy's own move, no search: see --play-temperature)",
+    )
+    p.add_argument(
+        "--play-temperature", type=float, default=0.0,
+        help="--play-mode policy: 0 (default) plays the policy's most likely move and its price head's most "
+        "likely price cell; T > 0 samples the move from softmax(log p / T) and the price from the price head",
     )
     p.add_argument(
         "--play-value-head", type=str, default="win",

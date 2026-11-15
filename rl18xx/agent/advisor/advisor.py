@@ -33,6 +33,12 @@ advice search's networks, or others (``main.py advisor --play-policy / --play-va
 and ``--play-auction-policy / --play-auction-value`` for searches from the private
 auction: most runs start after it, and searching it with their value nets bid $315 on
 the B&O, while the supervised policy alone kept raising one private to $410).
+
+The play systems may be title-generic checkpoints (``generic:<path>``, ``model_generic``):
+their searches evaluate leaves through ``game_network.GameNetwork`` (the leaf games, not
+legacy encodings), and ``--play-mode policy`` plays the play policy's own move without a
+search (the most likely move and price cell, or sampled at ``--play-temperature``) --
+generic or legacy. The advice, the win estimates and "Think harder" stay legacy.
 """
 
 from __future__ import annotations
@@ -83,9 +89,11 @@ _AUCTION_ROUND_TYPE = 2  # encoder.ROUND_TYPE_MAP["Auction"]
 
 
 def checkpoint_label(path) -> str:
-    """A short name for a checkpoint: its last three path parts, without ``.pth``."""
-    parts = Path(path).with_suffix("").parts
-    return "/".join(parts[-3:])
+    """A short name for a checkpoint: its last three path parts, without ``.pth`` (``generic:`` kept)."""
+    from rl18xx.agent.alphazero.game_network import GENERIC_PREFIX, is_generic_spec, spec_path
+
+    parts = Path(spec_path(path)).with_suffix("").parts
+    return (GENERIC_PREFIX if is_generic_spec(path) else "") + "/".join(parts[-3:])
 
 
 def load_model(path, device):
@@ -102,6 +110,22 @@ def load_model(path, device):
     model = _load_model_from_session_checkpoint(path.parent, path, device=device)
     model.eval()
     return model
+
+
+def load_network(spec, device):
+    """A legacy checkpoint's model (:func:`load_model`), or for ``generic:<path>`` a title-generic checkpoint
+    (``game_network.GenericNetwork``)."""
+    from rl18xx.agent.alphazero.game_network import GenericNetwork, is_generic_spec, spec_path
+
+    if not is_generic_spec(spec):
+        return load_model(spec, device)
+    path = Path(spec_path(spec))
+    if not path.is_file():
+        raise FileNotFoundError(f"No generic checkpoint at {path.resolve()}.")
+    return GenericNetwork(path, device)
+
+
+PLAY_MODES = ("search", "policy")
 
 
 @dataclass
@@ -129,6 +153,11 @@ class AdvisorModels:
     # "win" (the win head), "score" (a policy-gradient critic's placement-points head: a losing seat
     # still prefers 3rd to bankruptcy) or "blend=<w>". The advice search always reads "win".
     play_value_head: str = "win"
+    # How the play systems choose a move: "search" (every decision searched, the most visited move) or
+    # "policy" (the play policy's own move, no search: its most likely move and price cell at
+    # ``play_temperature`` 0, else a move sampled from softmax(log p / T) and a price from its price head).
+    play_mode: str = "search"
+    play_temperature: float = 0.0
 
     def value_head_for(self, play: Optional[str] = None) -> str:
         """The value head a search reads: the play systems' ``play_value_head``, the advice search's win head."""
@@ -147,19 +176,38 @@ class AdvisorModels:
         play_auction_policy=None,
         play_auction_value=None,
         play_value_head: str = "win",
+        play_mode: str = "search",
+        play_temperature: float = 0.0,
     ) -> "AdvisorModels":
         """Load the checkpoints (a path given twice is loaded once). The play systems
         default to the advice search's: ``play_policy`` to ``policy``, ``play_value`` to
         the search's value, ``play_auction_policy`` to ``auction_policy`` and
-        ``play_auction_value`` to ``play_value``."""
+        ``play_auction_value`` to ``play_value``. Only the play systems take generic
+        checkpoints (``generic:<path>``)."""
+        from rl18xx.agent.alphazero.composite_model import parse_value_head
+        from rl18xx.agent.alphazero.game_network import is_generic_spec, spec_path
+
+        for name, spec in (("--policy", policy), ("--auction-policy", auction_policy), ("--value", value)):
+            if is_generic_spec(spec):
+                raise ValueError(f"{name}: generic checkpoints serve the play systems only (--play-*)")
+        if search_value and is_generic_spec(search_value):
+            raise ValueError("--search-value: generic checkpoints serve the play systems only (--play-*)")
+        if play_mode not in PLAY_MODES:
+            raise ValueError(f"play mode {play_mode!r}: one of {', '.join(PLAY_MODES)}")
+        if float(play_temperature) < 0:
+            raise ValueError("the play temperature must be >= 0")
+        parse_value_head(play_value_head)
         loaded: dict = {}
 
-        def get(path):
-            key = str(Path(path).resolve())
+        def get(spec):
+            key = ("generic:" if is_generic_spec(spec) else "") + str(Path(spec_path(spec)).resolve())
             if key not in loaded:
-                LOGGER.info("Loading %s on %s", path, device)
-                loaded[key] = load_model(path, device)
+                LOGGER.info("Loading %s on %s", spec, device)
+                loaded[key] = load_network(spec, device)
             return loaded[key]
+
+        def temperature(spec) -> float:
+            return training_temperature(spec_path(spec))
 
         play_policy = play_policy or policy
         play_value = play_value or search_value or value
@@ -179,6 +227,7 @@ class AdvisorModels:
                 "play_auction_policy": checkpoint_label(play_auction_policy),
                 "play_auction_value": checkpoint_label(play_auction_value),
                 "play_value_head": play_value_head,
+                "play_mode": play_mode if play_mode == "search" else f"policy@{float(play_temperature):g}",
             },
             search_value=get(search_value) if search_value else None,
             policy_temperature=training_temperature(policy),
@@ -187,9 +236,11 @@ class AdvisorModels:
             play_value=get(play_value),
             play_auction_policy=get(play_auction_policy),
             play_auction_value=get(play_auction_value),
-            play_policy_temperature=training_temperature(play_policy),
-            play_auction_policy_temperature=training_temperature(play_auction_policy),
+            play_policy_temperature=temperature(play_policy),
+            play_auction_policy_temperature=temperature(play_auction_policy),
             play_value_head=play_value_head,
+            play_mode=play_mode,
+            play_temperature=float(play_temperature),
         )
 
     def search_network(self, play: Optional[str] = None):
@@ -212,6 +263,48 @@ class AdvisorModels:
             self.policy, self.auction_policy, self.policy_temperature, self.auction_policy_temperature
         )
         return policy, self.search_value or self.value
+
+    def _play_parts(self, play: str) -> tuple:
+        """``(policy, auction policy, their temperatures, value)`` of a play system, as ``search_network``."""
+        if play == "auction":
+            t = self.play_auction_policy_temperature
+            policy = self.play_auction_policy or self.play_policy or self.auction_policy
+            return policy, policy, t, t, self.play_auction_value or self.play_value or self.value
+        return (
+            self.play_policy or self.policy,
+            self.play_auction_policy or self.play_policy or self.auction_policy,
+            self.play_policy_temperature,
+            self.play_auction_policy_temperature,
+            self.play_value or self.search_value or self.value,
+        )
+
+    def is_game_system(self, play: Optional[str]) -> bool:
+        """Whether a play system (``"main"`` / ``"auction"``) has a generic part, so its searches evaluate
+        leaves through ``game_network.GameNetwork``; the advice search (None) never does."""
+        from rl18xx.agent.alphazero.game_network import GenericNetwork
+
+        if play not in ("main", "auction"):
+            return False
+        policy, auction_policy, _, _, value = self._play_parts(play)
+        return any(isinstance(m, GenericNetwork) for m in (policy, auction_policy, value))
+
+    def game_network(self, play: str, lock=None):
+        """A play system as a ``game_network.GameNetwork`` (generic or legacy parts): the policy (the auction
+        policy for auction positions), the value read by ``play_value_head``."""
+        from rl18xx.agent.alphazero.game_network import GameNetwork
+
+        if play not in ("main", "auction"):
+            raise ValueError(f"play system {play!r}: main or auction")
+        policy, auction_policy, t, ta, value = self._play_parts(play)
+        return GameNetwork(
+            policy,
+            value,
+            auction_policy=auction_policy,
+            policy_temperature=t,
+            auction_policy_temperature=ta,
+            value_head=self.value_head_for(play),
+            lock=lock,
+        )
 
 
 def training_temperature(path) -> float:
@@ -455,6 +548,7 @@ class Advisor:
         self._moves: OrderedDict = OrderedDict()  # (game id, position, site's last action, seats, readouts) -> job
         self._trees: OrderedDict = OrderedDict()  # game id -> (root's position key, system, RustMCTSPlayer)
         self._trees_lock = threading.Lock()
+        self._rng = np.random.default_rng()  # --play-mode policy at a temperature
 
     # -------------------------------------------------------------- inference
     def _policy_role(self, game) -> str:
@@ -699,12 +793,17 @@ class Advisor:
         from rl18xx.agent.alphazero.composite_model import PolicyValueComposite
         from rl18xx.agent.alphazero.config import SelfPlayConfig
         from rl18xx.agent.alphazero.rust_mcts_player import RustMCTSPlayer
-        from rl18xx.agent.alphazero.self_play import _slice_price_components
 
-        network = _Locked(
-            PolicyValueComposite(*self.models.search_network(play=play), value_head=self.models.value_head_for(play)),
-            self._lock,
-        )
+        if self.models.is_game_system(play):
+            # A generic part: the leaves go to the networks as games (game_network.GameNetwork).
+            network = self.models.game_network(play, lock=self._lock)
+        else:
+            network = _Locked(
+                PolicyValueComposite(
+                    *self.models.search_network(play=play), value_head=self.models.value_head_for(play)
+                ),
+                self._lock,
+            )
         num_players = len(game.players)
         config = SelfPlayConfig(
             network=network,
@@ -722,12 +821,10 @@ class Advisor:
         player.initialize_game(game)
         tree = player._rust_player
         # Evaluate the root first, as SelfPlay.play (and eval_head_to_head) do.
-        with torch.no_grad():
-            leaf = player.root.select_leaf()
-            leaf.ensure_encoded()
-            probs, _, value = network.run_encoded(leaf.encoded_game_state)
-            components = _slice_price_components(network.last_price_components, 0)
-            leaf.incorporate_results(probs, value, leaf, price_components=components)
+        if getattr(network, "evaluates_games", False) is True:
+            player.tree_search(parallel_readouts=1)  # the root alone (as suggest_move's root evaluation)
+        else:
+            self._evaluate_root(player, network)
         while search and tree.n_at_root() < job.readouts:
             before = tree.n_at_root()
             player.tree_search()
@@ -735,6 +832,18 @@ class Advisor:
             if job.visits <= before:  # nothing left to expand (e.g. every line ends the game)
                 break
         return player
+
+    @staticmethod
+    def _evaluate_root(player, network) -> None:
+        """The legacy root evaluation (a legacy network: the root's legacy encoding)."""
+        from rl18xx.agent.alphazero.self_play import _slice_price_components
+
+        with torch.no_grad():
+            leaf = player.root.select_leaf()
+            leaf.ensure_encoded()
+            probs, _, value = network.run_encoded(leaf.encoded_game_state)
+            components = _slice_price_components(network.last_price_components, 0)
+            leaf.incorporate_results(probs, value, leaf, price_components=components)
 
     def _kept_tree(self, job: SearchJob, system: str, game):
         """The tree kept after the model's last move in ``job``'s game, moved along the moves played
@@ -940,6 +1049,8 @@ class Advisor:
         rs = game._game
         legal = [int(i) for i in rs.factored_legal_indices()]
         system = "auction" if rs.round.round_type == "Auction" else "main"
+        if self.models.play_mode == "policy":
+            return self._run_policy_move(game, legal, system, names, live, site)
         searched = is_decision(rs, legal) and len(legal) > 1
         player = self._kept_tree(job, system, game) if searched else None
         inherited = 0
@@ -982,6 +1093,72 @@ class Advisor:
             "actor": described["actor"],
             "description": described["description"],
             "win": [{"seat": i + 1, "name": names[i + 1], "probability": p} for i, p in enumerate(_normalised(q))],
+        }
+        for key in ("hex", "tile", "rotation", "map"):
+            if key in described:
+                out[key] = described[key]
+        return out
+
+    def _run_policy_move(self, game, legal: list, system: str, names: dict, live, site=None) -> dict:
+        """``--play-mode policy``: the play system's policy plays its own move, no search -- at
+        ``play_temperature`` 0 its most likely move and, for an open price, the middle price of its price
+        head's most likely cell (the advice's recommendation, :func:`price_options`); above 0 a move sampled
+        from softmax(log p / T) (``policy_selfplay.tempered``, as the policy-only evals play) and a price
+        sampled from the head's cells. ``game``: the bot's copy of the position (``bot_position``)."""
+        from rl18xx.agent.alphazero import price_pmf
+        from rl18xx.agent.alphazero.policy_selfplay import tempered
+
+        rs = game._game
+        network = self.models.game_network(system, lock=self._lock)
+        evaluation = network.evaluate([game], [legal])[0]
+        temperature = float(self.models.play_temperature)
+        if len(legal) == 1:
+            k = 0
+        elif temperature <= 0:
+            k = int(np.argmax(evaluation.probs))
+        else:
+            k = int(self._rng.choice(len(legal), p=tempered(evaluation.probs, temperature)))
+        index = int(legal[k])
+        price_range = rs.price_range_for_index(index)
+        price = None
+        open_price = has_price_choice(rs, index)
+        if price_range is not None:
+            price = int(price_range[0])
+            if open_price and temperature <= 0:
+                price = int(price_options(rs, index, evaluation.price_logits)["price"])
+            elif open_price:
+                slot_index, lo, hi = (int(x) for x in rs.price_head_slot_for_index(index))
+                cells = price_pmf.price_cells(price_pmf.SLOT_TYPES[slot_index], lo, hi)
+                probs = cells.cell_probs(evaluation.price_logits[slot_index])
+                price = int(cells.sample_price(int(self._rng.choice(len(probs), p=probs)), self._rng))
+        fixed = price_range is not None and int(price_range[0]) == int(price_range[1])
+        ctx = DescribeContext.from_game(game, names)
+        described = describe_index(game, index, price, ctx, fixed)
+        log = list(rs.raw_actions)
+        after = game.pickle_clone()  # ``game`` stays the position before the move (match_train_ids reads it)
+        after._game.apply_action_index(index, price)
+        logged = list(after._game.raw_actions)
+        if len(logged) <= len(log):
+            raise RuntimeError(f"the engine logged no action for move {index}")
+        action = dict(logged[len(log)])
+        num_players = len(game.players)
+        decision = len(legal) > 1
+        out = {
+            "kind": "policy" if decision else ("priced" if open_price else "forced"),
+            "system": system,
+            "action": match_train_ids(to_site_action(action, live, log), game, site),
+            "index": index,
+            "visits": 0,
+            "inherited": 0,
+            "share": float(evaluation.probs[k]),  # the policy's probability of the move (temperature 1)
+            "temperature": temperature,
+            "num_legal": len(legal),
+            "actor": described["actor"],
+            "description": described["description"],
+            "win": [
+                {"seat": i + 1, "name": names[i + 1], "probability": p}
+                for i, p in enumerate(_normalised(evaluation.value[:num_players]))
+            ],
         }
         for key in ("hex", "tile", "rotation", "map"):
             if key in described:
