@@ -324,12 +324,14 @@ def run(args) -> None:
         play_value=getattr(args, "play_value", None),
         play_auction_policy=getattr(args, "play_auction_policy", None),
         play_auction_value=getattr(args, "play_auction_value", None),
+        play_value_head=getattr(args, "play_value_head", None) or "win",
     )
     labels = models.labels
     LOGGER.info(
-        "The model plays seats with %s + value %s (private auction: %s + %s)",
+        "The model plays seats with %s + value %s (%s head; private auction: %s + %s)",
         labels["play_policy"],
         labels["play_value"],
+        labels["play_value_head"],
         labels["play_auction_policy"],
         labels["play_auction_value"],
     )

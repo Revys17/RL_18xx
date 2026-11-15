@@ -1521,6 +1521,12 @@ def build_parser():
         help="Leaf value of its private-auction searches (default: --play-value); most value nets never "
         "saw an auction position (gen4's critic did: its run started 15%% of games at the auction)",
     )
+    p.add_argument(
+        "--play-value-head", type=str, default="win",
+        help="Which head of the play values the seat-playing searches read: win (default), score (a "
+        "policy-gradient critic's placement points: a losing seat still prefers 3rd to going bankrupt) or "
+        "blend=<w>; the advice search always reads win",
+    )
     p.add_argument("--device", type=str, default=None, help="cuda / cpu (default: cuda if available)")
     p.add_argument("--cpu-threads", type=int, default=4, help="Torch threads when on CPU (default: 4)")
     p.add_argument(

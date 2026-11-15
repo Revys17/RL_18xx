@@ -125,6 +125,14 @@ class AdvisorModels:
     play_auction_value: object = None
     play_policy_temperature: float = 1.0
     play_auction_policy_temperature: float = 1.0
+    # Which output of the play value the play searches read (``composite_model.parse_value_head``):
+    # "win" (the win head), "score" (a policy-gradient critic's placement-points head: a losing seat
+    # still prefers 3rd to bankruptcy) or "blend=<w>". The advice search always reads "win".
+    play_value_head: str = "win"
+
+    def value_head_for(self, play: Optional[str] = None) -> str:
+        """The value head a search reads: the play systems' ``play_value_head``, the advice search's win head."""
+        return self.play_value_head if play in ("main", "auction") else "win"
 
     @classmethod
     def load(
@@ -138,6 +146,7 @@ class AdvisorModels:
         play_value=None,
         play_auction_policy=None,
         play_auction_value=None,
+        play_value_head: str = "win",
     ) -> "AdvisorModels":
         """Load the checkpoints (a path given twice is loaded once). The play systems
         default to the advice search's: ``play_policy`` to ``policy``, ``play_value`` to
@@ -169,6 +178,7 @@ class AdvisorModels:
                 "play_value": checkpoint_label(play_value),
                 "play_auction_policy": checkpoint_label(play_auction_policy),
                 "play_auction_value": checkpoint_label(play_auction_value),
+                "play_value_head": play_value_head,
             },
             search_value=get(search_value) if search_value else None,
             policy_temperature=training_temperature(policy),
@@ -179,6 +189,7 @@ class AdvisorModels:
             play_auction_value=get(play_auction_value),
             play_policy_temperature=training_temperature(play_policy),
             play_auction_policy_temperature=training_temperature(play_auction_policy),
+            play_value_head=play_value_head,
         )
 
     def search_network(self, play: Optional[str] = None):
@@ -690,7 +701,10 @@ class Advisor:
         from rl18xx.agent.alphazero.rust_mcts_player import RustMCTSPlayer
         from rl18xx.agent.alphazero.self_play import _slice_price_components
 
-        network = _Locked(PolicyValueComposite(*self.models.search_network(play=play)), self._lock)
+        network = _Locked(
+            PolicyValueComposite(*self.models.search_network(play=play), value_head=self.models.value_head_for(play)),
+            self._lock,
+        )
         num_players = len(game.players)
         config = SelfPlayConfig(
             network=network,

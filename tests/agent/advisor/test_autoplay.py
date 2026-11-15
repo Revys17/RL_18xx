@@ -148,6 +148,24 @@ def test_the_models_move_is_searched_and_given_in_the_sites_format(advisor, game
     assert advisor.start_move(live, site_view(live, last_id=267), seats=[3], readouts=16) is job
 
 
+def test_the_play_searches_can_read_the_values_placement_head(advisor_models, game):
+    """``--play-value-head score``: the seat-playing searches read the play value's score (placement points)
+    head, the advice search still reads the win head, and a move is searched and given as usual."""
+    import dataclasses
+
+    from rl18xx.agent.alphazero.composite_model import PolicyValueComposite
+
+    models = dataclasses.replace(advisor_models, play_value_head="score")
+    assert models.value_head_for("main") == models.value_head_for("auction") == "score"
+    assert models.value_head_for(None) == "win" and advisor_models.value_head_for("main") == "win"
+    composite = PolicyValueComposite(*models.search_network(play="main"), value_head=models.value_head_for("main"))
+    assert composite.value_head == "score"
+    live = LiveGame(game)
+    job = wait(Advisor(models).start_move(live, site_view(live, last_id=267), seats=[3], readouts=16))
+    assert job.status == "done" and job.kind == "move", job.error
+    assert job.result["kind"] == "search" and job.result["visits"] >= 16
+
+
 def test_the_auction_is_searched_by_the_auction_system_and_bids_by_site_id(advisor, game):
     live = LiveGame(truncated(game, 0))
     job = wait(advisor.start_move(live, site_view(live, actions=["bid", "pass"]), seats=[1, 2, 3, 4], readouts=8))
