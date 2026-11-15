@@ -40,12 +40,19 @@ A start is a list of action dicts applied to a fresh game, so both engines and
 the game's action log stay valid, and ``RustMCTSPlayer.extract_data`` rebuilds
 the positions by replaying it on an empty game. The auction is real 1830 in
 both cases: start games are built with ``auction_unlock`` off.
+
+Start files are read lazily (2026-11-15): a process keeps, per line, its id, player count, cuts and where the line
+is in the file (:class:`LazyActions`), and reads and parses a line's actions only when that start is drawn (parsed,
+the 1830 files took ~0.8 GB per mixed-count worker, ~1.35 GB with the SR 2-10 mid-game files; indexed, ~10 MB).
+The lists keep their order and length, so a seed draws the same starts; the start a sampler returns holds a tuple,
+as before.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import re
 from collections import Counter
@@ -277,25 +284,126 @@ def human_midgame_cuts(game: dict, first_round: int = 2, last_round: int = 6) ->
     return actions, cuts, None
 
 
+# ----------------------------------------------------------------- lazy start lines
+class _StartFile:
+    """A start file opened once per process for :class:`LazyActions` reads. The handle keeps the file as it was
+    indexed even if a builder replaces it meanwhile (they write a new file and rename it over the old one); a
+    file rewritten in place is caught by the id check. Pickles as its path (reopened on first read)."""
+
+    __slots__ = ("path", "_file")
+
+    def __init__(self, path: str):
+        self.path = path
+        self._file = open(path, "rb")
+
+    def read(self, offset: int, size: int) -> bytes:
+        if self._file is None:
+            self._file = open(self.path, "rb")
+        return os.pread(self._file.fileno(), size, offset)
+
+    def lines(self):
+        """``(byte offset, line)`` of every line."""
+        self._file.seek(0)
+        offset = 0
+        for line in self._file:
+            yield offset, line
+            offset += len(line)
+
+    def __getstate__(self):
+        return {"path": self.path}
+
+    def __setstate__(self, state):
+        self.path = state["path"]
+        self._file = None
+
+
+class LazyActions:
+    """A start line's ``actions``, read from its file when used: ``len`` is known (the count at indexing), indexing,
+    slicing (a tuple) and iteration read and parse the line. Equal to a tuple of the same actions. A line whose id is
+    not the indexed one (the file was rewritten under the process) raises ValueError."""
+
+    __slots__ = ("source", "offset", "size", "line_id", "count")
+
+    def __init__(self, source: _StartFile, offset: int, size: int, line_id: str, count: int):
+        self.source = source
+        self.offset = offset
+        self.size = size
+        self.line_id = line_id
+        self.count = count
+
+    def load(self) -> tuple:
+        data = self.source.read(self.offset, self.size)
+        try:
+            record = json.loads(data)
+            found = str(record.get("id"))
+        except (ValueError, AttributeError):
+            record, found = None, "not a start line"
+        if found != self.line_id:
+            raise ValueError(
+                f"{self.source.path} changed under this process: the line at byte {self.offset} is "
+                f"{found!r}, not {self.line_id!r} (restart to re-read it)"
+            )
+        return tuple(record["actions"])
+
+    def __len__(self) -> int:
+        return self.count
+
+    def __getitem__(self, index):
+        return self.load()[index]
+
+    def __iter__(self):
+        return iter(self.load())
+
+    def __eq__(self, other):
+        if isinstance(other, LazyActions):
+            return self.load() == other.load()
+        if isinstance(other, tuple):
+            return self.load() == other
+        return NotImplemented
+
+    __hash__ = None  # as a tuple of action dicts
+
+    def __repr__(self) -> str:
+        return f"LazyActions({self.source.path!r}, line {self.line_id!r}, {self.count} actions)"
+
+    def __getstate__(self):
+        return {name: getattr(self, name) for name in self.__slots__}
+
+    def __setstate__(self, state):
+        for name, value in state.items():
+            setattr(self, name, value)
+
+
+def index_start_file(path):
+    """``(record without its actions, LazyActions)`` per non-empty line of a start file (JSONL with ``id`` and
+    ``actions``): each line is parsed once here and its actions dropped."""
+    source = _StartFile(str(path))
+    for offset, line in source.lines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        actions = record.pop("actions")
+        yield record, LazyActions(source, offset, len(line), str(record["id"]), len(actions))
+
+
+def materialized(start: "StartPosition") -> "StartPosition":
+    """``start`` with its actions as a tuple (a loaded start holds :class:`LazyActions`)."""
+    return start if isinstance(start.actions, tuple) else StartPosition(start.label, tuple(start.actions))
+
+
 _LOADED_MIDGAME: dict = {}
 
 
 def load_midgame_positions(path) -> dict:
     """``{num_players: [(game id, actions, {round: prefix length}), ...]}`` from a
-    mid-game JSONL file (``scripts/build_midgame_positions.py``). Read once per
-    process and cached."""
+    mid-game JSONL file (``scripts/build_midgame_positions.py``); ``actions`` is a
+    :class:`LazyActions` (sliced: a tuple). Indexed once per process and cached."""
     key = str(Path(path).resolve())
     if key not in _LOADED_MIDGAME:
         by_players: dict = {}
-        with open(path) as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                record = json.loads(line)
-                cuts = {int(k): int(v) for k, v in record["cuts"].items()}
-                by_players.setdefault(int(record["num_players"]), []).append(
-                    (str(record["id"]), tuple(record["actions"]), cuts)
-                )
+        for record, actions in index_start_file(key):
+            cuts = {int(k): int(v) for k, v in record["cuts"].items()}
+            by_players.setdefault(int(record["num_players"]), []).append((str(record["id"]), actions, cuts))
         _LOADED_MIDGAME[key] = by_players
         LOGGER.info(
             "Loaded mid-game positions from %s: %s",
@@ -307,18 +415,15 @@ def load_midgame_positions(path) -> dict:
 
 def load_start_positions(path) -> dict:
     """``{num_players: [StartPosition, ...]}`` from a start-positions JSONL file
-    (one ``{"id", "num_players", "actions"}`` object per line). Read once per
+    (one ``{"id", "num_players", "actions"}`` object per line); each start's actions
+    are a :class:`LazyActions` (:func:`materialized`: a tuple). Indexed once per
     process and cached."""
     key = str(Path(path).resolve())
     if key not in _LOADED:
         by_players: dict = {}
-        with open(path) as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                record = json.loads(line)
-                start = StartPosition(f"{HUMAN_START_PREFIX}{record['id']}", tuple(record["actions"]))
-                by_players.setdefault(int(record["num_players"]), []).append(start)
+        for record, actions in index_start_file(key):
+            start = StartPosition(f"{HUMAN_START_PREFIX}{record['id']}", actions)
+            by_players.setdefault(int(record["num_players"]), []).append(start)
         _LOADED[key] = by_players
         LOGGER.info(
             "Loaded start positions from %s: %s",
@@ -542,7 +647,7 @@ def sample_start_position(
     human = load_start_positions(path).get(num_players, []) if path else []
     if human and rng.random() >= random_fraction:
         picked = picker.human(human) if picker is not None else None
-        return picked if picked is not None else rng.choice(human)
+        return materialized(picked if picked is not None else rng.choice(human))
     return StartPosition(RANDOM_START, tuple(random_start_actions(num_players, rng, max_price_multiple)))
 
 
