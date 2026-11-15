@@ -29,22 +29,40 @@
 #       4e-5), then adds it to the main's league file pinned at EXP_MIN_SHARE (0.1; the newest EXP_PINNED = 2 keep
 #       their pins). Exploiter runs: $OUT_DIR/<run>_mx<u>/ (every 20th game saved: mine them with M2).
 #   A4  A1 + A2 (WITH_A3=1: + A3, run name ..._a3).
+#   A5p practice positions: A0 + --practice-positions PRACTICE (the human corpus' and Caleb's looted-broke dumps, one
+#       and two Stock Rounds before; scripts/robustness/build_practice_positions.py) --practice-fraction
+#       PRACTICE_FRACTION (0.15 of starts, drawn before the rest of A0's mix: auction 0.425, ...), uniform over the
+#       practice cuts; WITH_A2=1 adds A2's prioritized starts with the practice cuts as a third library (run ..._a2).
 #
 # Departures from pg_generic_1830.sh (all arms): max updates 300 (the plan's first pass; RESUME_MAX_UPDATES extends),
 # --seed 1830 (every arm draws the same starts and seats per worker task until the policies differ; runs stay
 # asynchronous, not reproducible), a league file per run, evals every EVAL_EVERY 100 updates with two extra matches
 # (4p 1v3 alone vs the SL at T 1.0 -- M3's human-imitation opponent -- and, with exploiters, vs each loop exploiter).
 #
+# Measurements per eval round (MEASURE=1, the default; MEASURE=0: the evals above only, as before), after the
+# matches (docs/robustness_measurement.md "In the arms' evals"):
+#   M1  the regression set on the round's learner: alone (argmax) and searched with the run's critic on its score
+#       head at the bots' settings (@M1_READOUTS 400, CPU, in the background while M3 plays):
+#       $EVAL_OUT/u<U>_m1_{policy,search_score}.jsonl
+#   M3  scripts/robustness/exploiter_panel.sh with the learner @0.5 as the bot: SL ckpt 10 @1.0 / @0.5, gx2_bankrupt,
+#       gx2_rust, gen6 u2400, + every loop exploiter of the run (they replace the 400-game exploiter matches above),
+#       M3_GAMES (800) a member, M2 of each member's saved games: $EVAL_OUT/u<U>_m3/
+#   M2  behaviour stats of the round's saved 4p eval games (the matches' + M3's; A = the arm): $EVAL_OUT/u<U>_m2_eval,
+#       and of the run's saved 4p PG games since the previous round (M2_PG_SAMPLE 1000 of them): $EVAL_OUT/u<U>_m2_pg
+#   then scripts/robustness/round_summary.py: one line per round in $EVAL_OUT/rounds.txt, the rounds side by side in
+#   $EVAL_OUT/robust_status.txt.
+#
 # Environment: CPUS [24-31,56-63], TAG [20261115], SL, OUT_DIR [model_checkpoints_generic_pg], HG [human_games],
 # SEED [1830], MAX_UPDATES [300], RESUME_MAX_UPDATES, EVAL_EVERY [100], EVAL_GAMES [400], EVAL_WORKERS [16],
-# SL10 / GEN6 (the legacy outside panel), EXP_* (above), REF_KL / REF_T (A1, A4), WITH_A3 (A4).
+# SL10 / GEN6 / GX2B / GX2R (the legacy outside panel), EXP_* (above), REF_KL / REF_T (A1, A4), WITH_A3 (A4),
+# PRACTICE / PRACTICE_FRACTION / WITH_A2 (A5p), MEASURE [1], M1_READOUTS [400], M3_GAMES [800], M2_PG_SAMPLE [1000].
 set -uo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)  # the repository root
 cd "$ROOT" || exit 1
 
 ARM=${1:-}
 shift || true
-case "$ARM" in A0 | A1 | A2 | A3 | A4) ;; *) echo "usage: $0 <A0|A1|A2|A3|A4> [pg] [exploiters] [evals] [evalloop]"; exit 2 ;; esac
+case "$ARM" in A0 | A1 | A2 | A3 | A4 | A5p) ;; *) echo "usage: $0 <A0|A1|A2|A3|A4|A5p> [pg] [exploiters] [evals] [evalloop]"; exit 2 ;; esac
 STEPS=("$@")
 [ ${#STEPS[@]} -eq 0 ] && STEPS=(pg)
 
@@ -63,18 +81,24 @@ EXP_PINNED=${EXP_PINNED:-2}
 EXP_T=${EXP_T:-0.5}
 EXP_ENTROPY=${EXP_ENTROPY:-0.01}
 EXP_LR=${EXP_LR:-4e-5}
+WITH_A2=${WITH_A2:-}
+PRACTICE_FRACTION=${PRACTICE_FRACTION:-0.15}
+MEASURE=${MEASURE:-1}
 NT='{n}'  # the player-count placeholder of start-file templates
+PRACTICE=${PRACTICE:-$HG/practice_positions_1830_${NT}p_v1.jsonl}
 
 # The arm's mechanisms.
-WANT_A1= WANT_A2= WANT_A3=
+WANT_A1= WANT_A2= WANT_A3= WANT_PRACTICE=
 case "$ARM" in
   A1) WANT_A1=1 ;;
   A2) WANT_A2=1 ;;
   A3) WANT_A3=1 ;;
   A4) WANT_A1=1; WANT_A2=1; [ -n "$WITH_A3" ] && WANT_A3=1 ;;
+  A5p) WANT_PRACTICE=1; [ -n "$WITH_A2" ] && WANT_A2=1 ;;
 esac
 SUFFIX=
 [ "$ARM" = A4 ] && [ -n "$WANT_A3" ] && SUFFIX=_a3
+[ "$ARM" = A5p ] && [ -n "$WANT_A2" ] && SUFFIX=_a2
 [ -n "$WANT_A1" ] && [ -n "$REF_KL" ] && SUFFIX="${SUFFIX}_refkl$REF_KL"
 
 if [ -n "$DRY" ]; then
@@ -98,6 +122,17 @@ if [ -n "$DRY" ]; then
   # the legacy loader wants a numbered file name)
   SL10=${SL10:-$DRY_ROOT/standin/sl10/10.pth}
   GEN6=${GEN6:-$DRY_ROOT/standin/gen6/learner/2400.pth}
+  GX2B=${GX2B:-$DRY_ROOT/standin/gx2_bankrupt/learner/300.pth}
+  GX2R=${GX2R:-$DRY_ROOT/standin/gx2_rust/learner/300.pth}
+  # measurements: M1 on one position per weakness (a 6-player one among them; M1_POSITIONS=<n>: the first n) at 16
+  # readouts, M3 at exploiter_panel.sh's DRY size (4 games of max 300 decisions a member, generic players in the pool
+  # workers; M3_GENERIC_SERVER=1: on CPU generic servers), M2 on a few PG games
+  M1_READOUTS=${M1_READOUTS:-16}
+  M1_LIMIT=(--ids g21-a33 g15-a402 g21-a408 g19-a432 g12-a908)
+  [ -n "${M1_POSITIONS:-}" ] && M1_LIMIT=(--limit "$M1_POSITIONS")
+  M3_ENV=(DRY=1 DRY_ROOT="$DRY_ROOT" GENERIC_SERVER="${M3_GENERIC_SERVER:-}")
+  M2_WORKERS=${M2_WORKERS:-2}
+  M2_PG_SAMPLE=${M2_PG_SAMPLE:-20}
   PY=(taskset -c "$CPUS" nice -n 19 env OMP_NUM_THREADS=1 "$ROOT/.venv/bin/python")
 else
   OUT_DIR=${OUT_DIR:-model_checkpoints_generic_pg}
@@ -118,6 +153,15 @@ else
   EVAL_SERVER=(--generic-server)  # generic players on generic inference servers (the GPU)
   SL10=${SL10:-/home/revys/longrun/work/lr1/model_checkpoints/AlphaZeroTransformer/20261004_134558_804974562/10.pth}
   GEN6=${GEN6:-/home/revys/longrun/work/lr1/model_checkpoints_pg/gen6_20261110/learner/2400.pth}
+  GX2B=${GX2B:-/home/revys/longrun/work/lr1/model_checkpoints_pg/gx2_bankrupt_20261013/learner/300.pth}
+  GX2R=${GX2R:-/home/revys/longrun/work/lr1/model_checkpoints_pg/gx2_rust_20261013/learner/300.pth}
+  # measurements: M1 on all 59 positions at the bots' 400 readouts (CPU); M3 at 800 games a member with the generic
+  # bot on a generic inference server (the GPU); M2 on 1000 sampled PG games
+  M1_READOUTS=${M1_READOUTS:-400}
+  M1_LIMIT=()
+  M3_ENV=(GAMES="${M3_GAMES:-800}" WORKERS="${M3_WORKERS:-16}" GENERIC_SERVER=1)
+  M2_WORKERS=${M2_WORKERS:-6}
+  M2_PG_SAMPLE=${M2_PG_SAMPLE:-1000}
   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
   ulimit -n "$(ulimit -Hn)"
   PY=(taskset -c "$CPUS" nice -n 19 env OMP_NUM_THREADS=2 "$ROOT/.venv/bin/python")
@@ -157,9 +201,10 @@ dry_sl() {  # DRY: a tiny generic SL checkpoint from 60 steps of pretrain-generi
     --log-every 10 > "$(dirname "$SL")/train.log" 2>&1 || { echo "dry: pretrain failed ($(dirname "$SL")/train.log)"; return 1; }
 }
 
-dry_standins() {  # DRY: tiny legacy (AlphaZeroTransformer) checkpoints standing in for SL ckpt 10 and gen6 u2400
-  [ -z "$DRY" ] || { [ -f "$SL10" ] && [ -f "$GEN6" ]; } && return 0
-  "${PY[@]}" - "$SL10" "$GEN6" <<'PYEOF'
+dry_standins() {  # DRY: tiny legacy (AlphaZeroTransformer) checkpoints standing in for SL ckpt 10, gen6 u2400 and the
+  # gx2 exploiters
+  [ -z "$DRY" ] || { [ -f "$SL10" ] && [ -f "$GEN6" ] && [ -f "$GX2B" ] && [ -f "$GX2R" ]; } && return 0
+  "${PY[@]}" - "$SL10" "$GEN6" "$GX2B" "$GX2R" <<'PYEOF'
 import sys
 import torch
 from rl18xx.agent.alphazero.config import ModelTransformerConfig
@@ -194,6 +239,7 @@ step_pg() {
   [ -n "$WANT_A2" ] && arm+=(--start-priority --start-priority-score abs_adv --start-priority-uniform 0.3
     --start-priority-staleness 0.3 --start-priority-temperature 1.0 --start-priority-ema 0.5)
   [ -n "$WANT_A3" ] && arm+=(--population-reload-every 2)
+  [ -n "$WANT_PRACTICE" ] && arm+=(--practice-positions "$PRACTICE" --practice-fraction "$PRACTICE_FRACTION")
   "${PY[@]}" main.py policy-gradient-generic --run-name "$RUN" --out-dir "$OUT_DIR" --policy "$SL" "${GAME_ARGS[@]}" \
     "${PG_SCALE[@]}" --population "$POP" --pfsp-power 2.0 --lr 2e-5 --kl-coef 0.02 --kl-target 0.08 \
     --kl-coef-min 0.005 --entropy-coef 0.0 --learner-temperature 0.5 --opponent-temperature 0.5 \
@@ -237,10 +283,21 @@ run_eval() {  # name players a_seats B-player
   [ $status = 0 ] || echo "evals: $name failed ($status), see $EVAL_OUT/$name.log" | tee -a "$EVAL_OUT/results.txt"
 }
 
+loop_exploiters() {  # the run's loop exploiters (their checkpoints), from its league file
+  [ -n "$WANT_A3" ] && [ -f "$POP" ] || return 0
+  "${ROOT}/.venv/bin/python" -c "
+import json, sys
+data = json.load(open(sys.argv[1]))
+for m in (data['members'] if isinstance(data, dict) else data):
+    if isinstance(m, dict) and m.get('exploiter_loop'):
+        print(m['path'])" "$POP"
+}
+
 step_evals() {
   # pg_generic_1830.sh's round (policy-only, T 0.5, real-rules auction starts, 400 games): vs the generic SL (4p 2v2,
   # 1v3, 2p), the legacy outside panel (SL ckpt 10 4p 2v2 / 1v3, gen6 u2400 at 2-6 players); plus 4p 1v3 alone vs the
-  # SL at T 1.0 and vs each loop exploiter of this run (M3-style).
+  # SL at T 1.0 and vs each loop exploiter of this run (M3-style; with MEASURE, in M3's panel at its size instead).
+  # Then (MEASURE) M1, M3 and M2 of the round and its summary line.
   U=${EVAL_UPDATE:-$(newest_snapshot)}
   [ -n "$U" ] || { echo "evals: no snapshot at a multiple of $EVAL_EVERY in $RUN_DIR/learner yet"; return 1; }
   dry_standins || return 1
@@ -253,16 +310,94 @@ step_evals() {
     set -- $spec
     run_eval "u${U}_${1}p_${2}v$(( $1 - $2 ))_$4" "$1" "$2" "$3"
   done
-  if [ -n "$WANT_A3" ] && [ -f "$POP" ]; then
-    for e in $("${ROOT}/.venv/bin/python" -c "
-import json, sys
-data = json.load(open(sys.argv[1]))
-for m in (data['members'] if isinstance(data, dict) else data):
-    if isinstance(m, dict) and m.get('exploiter_loop'):
-        print(m['path'])" "$POP"); do
+  if [ "$MEASURE" = 0 ]; then
+    for e in $(loop_exploiters); do
       run_eval "u${U}_4p_1v3_$(basename "$(dirname "$(dirname "$e")")")" 4 1 "generic:$e@0.5"
     done
+    return 0
   fi
+  measure "$U"
+}
+
+# ------------------------------------------------------------------ measurements (docs/robustness_measurement.md)
+run_or_echo() {  # a measurement script run outside PY (printed instead with ECHO=1; PY echoes itself)
+  if [ -n "${ECHO:-}" ]; then echo "$@"; else "$@"; fi
+}
+
+m1_score() {  # U name model [regression_set.py score options]: M1 of one system
+  local u=$1 name=$2 model=$3
+  shift 3
+  local out="$EVAL_OUT/u${u}_m1_$name.jsonl"
+  if [ -s "$out" ]; then echo "m1 $name: done, kept"; return 0; fi
+  env CUDA_VISIBLE_DEVICES= "${PY[@]}" -P scripts/robustness/regression_set.py score --model "$model" "$@" \
+    --threads "${M1_THREADS:-4}" --label "u${u}_$name" "${M1_LIMIT[@]}" --out "$out.tmp" \
+    > "$EVAL_OUT/u${u}_m1_$name.log" 2>&1
+  local status=$?
+  if [ $status = 0 ] && [ -z "${ECHO:-}" ]; then
+    mv "$out.tmp" "$out"
+  elif [ $status != 0 ]; then
+    rm -f "$out.tmp"
+    echo "m1 $name failed ($status): $EVAL_OUT/u${u}_m1_$name.log" | tee -a "$EVAL_OUT/results.txt"
+  fi
+}
+
+m1() {  # U: the learner alone (argmax, prior T 0.5) and searched with the run's critic on its score head
+  local u=$1
+  m1_score "$u" policy "generic:$RUN_DIR/learner/$u.pth@0.5" --no-search
+  m1_score "$u" search_score "generic:$RUN_DIR/learner/$u.pth+generic:$RUN_DIR/critic/$u.pth#score" \
+    --search "@${M1_READOUTS}/0.05:mean,dedupe,par=8,ptemp=0.5"
+}
+
+m3() {  # U: exploiter_panel.sh with the learner as the bot, the run's loop exploiters as extra members
+  local u=$1 e name extra=()
+  for e in $(loop_exploiters); do
+    name=$(basename "$(dirname "$(dirname "$e")")")
+    extra+=("${name##*_}=generic:$e@0.5")
+  done
+  run_or_echo env "${M3_ENV[@]}" OUT="$EVAL_OUT/u${u}_m3" BOT="generic:$RUN_DIR/learner/$u.pth@0.5" CPUS="$CPUS" \
+    SL10="$SL10" GEN6="$GEN6" GX2B="$GX2B" GX2R="$GX2R" EXTRA="${extra[*]}" bash scripts/robustness/exploiter_panel.sh \
+    > "$EVAL_OUT/u${u}_m3.log" 2>&1 || echo "m3 failed: $EVAL_OUT/u${u}_m3.log" | tee -a "$EVAL_OUT/results.txt"
+}
+
+prev_round() {  # U: the newest earlier round with an M2 of the PG games (0: none)
+  local d u best=0
+  for d in "$EVAL_OUT"/u*_m2_pg; do
+    [ -f "$d/summary.json" ] || continue
+    u=${d##*/u}
+    u=${u%_m2_pg}
+    [ "$u" -lt "$1" ] && [ "$u" -gt "$best" ] && best=$u
+  done
+  echo "$best"
+}
+
+m2() {  # U: the round's saved 4p eval games (the matches' and M3's; A = the arm), the PG games since the last round
+  local u=$1 d dirs=() prev
+  for d in "$EVAL_OUT"/u${u}_4p_* "$EVAL_OUT"/u${u}_m3/*; do
+    [ -f "$d/games.jsonl" ] && [ -d "$d/games" ] && dirs+=("$d")
+  done
+  if [ ${#dirs[@]} -gt 0 ] && [ ! -f "$EVAL_OUT/u${u}_m2_eval/summary.json" ]; then
+    "${PY[@]}" -P scripts/robustness/behaviour_stats.py run "${dirs[@]}" --num-players 4 \
+      --workers "$M2_WORKERS" --label "u$u eval+M3 games (A = $RUN)" --out "$EVAL_OUT/u${u}_m2_eval" \
+      > "$EVAL_OUT/u${u}_m2_eval.log" 2>&1 || echo "m2 eval failed: $EVAL_OUT/u${u}_m2_eval.log"
+  fi
+  prev=$(prev_round "$u")
+  if [ -f "$RUN_DIR/games.jsonl" ] && [ ! -f "$EVAL_OUT/u${u}_m2_pg/summary.json" ]; then
+    "${PY[@]}" -P scripts/robustness/behaviour_stats.py run "$RUN_DIR" --min-update $((prev + 1)) \
+      --max-update "$u" --num-players 4 --sample "$M2_PG_SAMPLE" --workers "$M2_WORKERS" \
+      --label "u$u PG games u$((prev + 1))-$u (A = the learner)" --out "$EVAL_OUT/u${u}_m2_pg" \
+      > "$EVAL_OUT/u${u}_m2_pg.log" 2>&1 || echo "m2 pg failed: $EVAL_OUT/u${u}_m2_pg.log"
+  fi
+}
+
+measure() {  # U: M1 (CPU, in the background) while M3 plays, then M2, then the round's line and the status table
+  local u=$1 m1_pid
+  m1 "$u" &
+  m1_pid=$!
+  m3 "$u"
+  wait "$m1_pid"
+  m2 "$u"
+  "${PY[@]}" -P scripts/robustness/round_summary.py "$EVAL_OUT" --update "$u" --label "$RUN" \
+    | tee -a "$EVAL_OUT/results.txt"
 }
 
 step_evalloop() {
