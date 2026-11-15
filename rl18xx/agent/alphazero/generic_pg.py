@@ -56,6 +56,23 @@ Progress is logged per update to ``<run>/history.jsonl`` (and TensorBoard ``runs
 the learner's score against the league as a multiple of a fair share (or vs the fixed opponent / pool), the
 PPO and KL statistics, the critic's losses, games and decisions per second, starts and terminations, per-count
 stats with a player mix. Touch ``<run>/STOP`` to end after the current update.
+
+**Robustness mechanisms** (``docs/robustness_test_plan.md`` arms A1-A3; ``docs/rl_model.md`` "Robustness
+mechanisms"; every one off by default, and off the run is exactly the C2 stage):
+
+- **Tempered league members** (A1): a population entry's ``temperature`` makes the member play at its own
+  temperature (its key in the league is ``<path>@<T>``, so one checkpoint can sit in the league at two
+  temperatures); ``min_share_by_players`` pins a member's share per player count (``min_share`` /
+  ``min_share_players`` as the legacy).
+- **Reference KL** (A1, piKL-style): ``ref_kl_coef`` * KL(learner || reference) on top of the moving anchor's
+  KL, the reference a fixed checkpoint (default the starting policy) at ``ref_temperature``.
+- **Prioritized starts** (A2, ``start_priority``): prioritized level replay over the human SR1 and mid-game
+  starts (``generic_play.StartPriorities``), scored from the learner's own rows; scores persist with the run.
+- **Main-exploiter mode** (A3, ``exploiter_of``): every seat but the learner's is a frozen checkpoint (one
+  league member, no own snapshots joining); with ``population_reload_every`` a main run picks up members added
+  to (or dropped from) its population file while it runs (``scripts/launch/2026-11/bridge/exploiter_loop.py``).
+- ``seed``: seeds the trainer, the servers and each worker task (task ``i`` of two runs with one seed draws the
+  same starts and seats until their policies differ); runs stay asynchronous, not bit-reproducible.
 """
 
 from __future__ import annotations
@@ -172,6 +189,36 @@ class GenericPGConfig:
     #: Trainer device (None: cuda when available) and CPU threads.
     device: Optional[str] = None
     threads: Optional[int] = None
+    # --- Robustness mechanisms (docs/rl_model.md "Robustness mechanisms"; all off by default) ---
+    #: A1: weight of KL(learner || reference) over the legal rows and the played row's price cells (piKL-style,
+    #: fixed, on top of the moving anchor's adaptive KL). 0: off (no reference network is loaded).
+    ref_kl_coef: float = 0.0
+    #: The reference policy (a generic checkpoint; None: ``policy_checkpoint``, i.e. the supervised start).
+    ref_checkpoint: Optional[str] = None
+    #: The reference's temperature in that KL (None: ``learner_temperature``, so the KL is 0 at the start; 1.0
+    #: compares the learner as it plays with the human-imitation policy's own spread, piKL's form).
+    ref_temperature: Optional[float] = None
+    #: A2: prioritized level replay over the human SR1 and mid-game starts (``generic_play.StartPriorities``).
+    start_priority: bool = False
+    #: Per-row score (``generic_play.START_SCORES``): abs_adv = |reward - V(s)|, pos_adv = max(reward - V(s), 0).
+    start_priority_score: str = "abs_adv"
+    #: Share of prioritized-kind draws left to the uniform choice (unscored starts enter this way).
+    start_priority_uniform: float = 0.3
+    #: Weight of PLR's staleness term in the replay distribution.
+    start_priority_staleness: float = 0.3
+    #: Rank temperature: P_S proportional to (1 / rank) ** (1 / T).
+    start_priority_temperature: float = 1.0
+    #: Weight of an update's mean in a start's running score (1.0: replace, as PLR).
+    start_priority_ema: float = 0.5
+    #: A3: main-exploiter mode -- every non-learner seat is this frozen checkpoint (a one-member league, no own
+    #: snapshots joining, one opponent server for every player count).
+    exploiter_of: Optional[str] = None
+    #: Every N updates re-read the population file: members added join (even rate), members dropped from it
+    #: leave, pins follow the file; on a resume, members neither in the file nor own snapshots leave. 0: off (the
+    #: legacy semantics: the file is read at the start and its new members join on a resume).
+    population_reload_every: int = 0
+    #: Seeds the trainer, the servers and each worker task (None: unseeded).
+    seed: Optional[int] = None
 
     def __post_init__(self):
         for name in ("player_mix", "max_decisions_by_players", "auction_stall_by_players"):
@@ -191,6 +238,13 @@ RESUME_SETTINGS = tuple(s for s in pg.RESUME_SETTINGS if s != "value_follow") + 
     "server_pipeline",
     "server_threads",
     "threads",
+    "ref_kl_coef",
+    "start_priority",
+    "start_priority_uniform",
+    "start_priority_staleness",
+    "start_priority_temperature",
+    "start_priority_ema",
+    "population_reload_every",
 )
 
 
@@ -232,18 +286,169 @@ def check_config(cfg: GenericPGConfig) -> None:
     parse_reward(cfg.reward)
     if cfg.anchor_every and cfg.anchor_every % cfg.snapshot_every:
         raise SystemExit("--anchor-every must be a multiple of --snapshot-every (the anchor's checkpoint is kept)")
-    for path in [cfg.policy_checkpoint, cfg.value_checkpoint, cfg.opponent_checkpoint]:
+    for path in [cfg.policy_checkpoint, cfg.value_checkpoint, cfg.opponent_checkpoint, cfg.exploiter_of]:
         if path:
             check_generic_checkpoint(path, cfg.title)
-    if cfg.population:
-        legacy = [m for m in pg.load_population(cfg.population) if not is_generic_checkpoint(m)]
+    if cfg.ref_kl_coef < 0:
+        raise SystemExit("--ref-kl-coef must be >= 0")
+    if cfg.ref_kl_coef > 0 and cfg.ref_checkpoint:
+        check_generic_checkpoint(cfg.ref_checkpoint, cfg.title)
+    if cfg.ref_temperature is not None and cfg.ref_temperature <= 0:
+        raise SystemExit("--ref-temperature must be > 0")
+    if cfg.start_priority:
+        from rl18xx.agent.alphazero.generic_play import START_SCORES
+
+        if cfg.start_priority_score not in START_SCORES:
+            raise SystemExit(f"--start-priority-score: one of {START_SCORES}")
+        if not (
+            0.0 <= cfg.start_priority_uniform <= 1.0
+            and 0.0 <= cfg.start_priority_staleness <= 1.0
+            and cfg.start_priority_temperature > 0
+            and 0.0 < cfg.start_priority_ema <= 1.0
+        ):
+            raise SystemExit("--start-priority-*: uniform and staleness in [0, 1], temperature > 0, ema in (0, 1]")
+    if cfg.exploiter_of and not cfg.population:
+        raise SystemExit("exploiter mode: the run's population is its frozen main (set up by generic_pg.run)")
+    if cfg.population and not (cfg.exploiter_of and not Path(cfg.population).exists()):
+        # (a new exploiter run's population file is written after these checks: its member is exploiter_of)
+        members = load_members(cfg.population)
+        legacy = [m for m in members if not is_generic_checkpoint(member_path(m))]
         if legacy:
             raise SystemExit(
                 f"population {cfg.population}: {len(legacy)} member(s) are not generic checkpoints "
                 f"(e.g. {legacy[0]}); a generic run's league takes generic checkpoints of {cfg.title} only"
             )
-        for member in pg.load_population(cfg.population):
-            check_generic_checkpoint(member, cfg.title)
+        for member in members:
+            check_generic_checkpoint(member_path(member), cfg.title)
+
+
+# ---------------------------------------------------------------------------------------------------
+# League members (A1: tempered members, per-count pins; A3: population reload)
+# ---------------------------------------------------------------------------------------------------
+
+
+def member_key(path: str, temperature: Optional[float] = None) -> str:
+    """A league member's key: its checkpoint path, or ``<path>@<T>`` for a member with its own temperature."""
+    return str(path) if temperature is None else f"{path}@{float(temperature):g}"
+
+
+def member_path(member: str) -> str:
+    """The checkpoint of a member key (``<path>@<T>`` -> ``<path>``)."""
+    path, sep, tail = str(member).rpartition("@")
+    if sep and path:
+        try:
+            float(tail)
+            return path
+        except ValueError:
+            pass
+    return str(member)
+
+
+def member_temperature(member: str, default: float) -> float:
+    """The play temperature of a member key: its ``@<T>``, else ``default`` (the run's opponent temperature)."""
+    path = member_path(member)
+    return float(str(member)[len(path) + 1 :]) if path != str(member) else float(default)
+
+
+def _population_entries(path) -> list:
+    data = json.loads(Path(path).read_text())
+    return data["members"] if isinstance(data, dict) else data
+
+
+def _entry_key(entry) -> str:
+    if isinstance(entry, dict):
+        return member_key(entry["path"], entry.get("temperature"))
+    return str(entry)
+
+
+def load_members(path) -> list:
+    """Member keys of a population file (``policy_gradient.load_population``'s formats; an entry's
+    ``temperature`` gives the key ``<path>@<T>``, so one checkpoint can be two members), duplicates dropped."""
+    return list(dict.fromkeys(_entry_key(e) for e in _population_entries(path)))
+
+
+def load_member_min_shares(path, num_players: Optional[int] = None) -> dict:
+    """Key -> pinned share at ``num_players`` (``policy_gradient.load_min_shares`` with member keys):
+    ``min_share_by_players`` (``{"<n>": share}``: the pin at each listed count, none elsewhere) when an entry has
+    it, else ``min_share`` limited by ``min_share_players``; ``num_players`` None: every pin at any count."""
+    shares = {}
+    for entry in _population_entries(path):
+        if not isinstance(entry, dict):
+            continue
+        by_players = entry.get("min_share_by_players")
+        if by_players:
+            share = (
+                max(float(v) for v in by_players.values())
+                if num_players is None
+                else float({int(k): v for k, v in by_players.items()}.get(int(num_players), 0.0))
+            )
+        else:
+            counts = entry.get("min_share_players")
+            applies = num_players is None or not counts or int(num_players) in {int(n) for n in counts}
+            share = float(entry.get("min_share") or 0.0) if applies else 0.0
+        if share > 0:
+            shares[_entry_key(entry)] = share
+    return shares
+
+
+def _own_member(member: str, run_dir: Optional[Path]) -> bool:
+    """A member that is one of the run's own snapshots (``<run_dir>/learner/<u>.pth``)."""
+    if run_dir is None:
+        return False
+    path = Path(member_path(member))
+    return path.parent.name == "learner" and path.parent.parent.resolve() == Path(run_dir).resolve()
+
+
+def league_for_run(cfg: GenericPGConfig, league_state: Optional[dict], run_dir: Optional[Path] = None):
+    """``policy_gradient.league_for_run`` with member keys (tempered members) and per-count pins. With
+    ``population_reload_every`` the file is authoritative on a resume too: members neither in it nor the run's
+    own snapshots leave the restored league."""
+    if not cfg.population:
+        return None
+    kw = {"power": cfg.pfsp_power}
+    counts = pg.player_counts(cfg)
+    members = load_members(cfg.population)
+    if league_state:
+        league = pg.CountLeague.from_state(league_state, counts, **kw)
+        for member in members:
+            league.add(member)
+        if cfg.population_reload_every:
+            for member in league.members:
+                if member not in members and not _own_member(member, run_dir):
+                    league.remove(member)
+    else:
+        league = pg.CountLeague(counts, members, **kw)
+    for n in league.counts:  # the file's pins at each count, also on a resume
+        league.league(n).min_shares = load_member_min_shares(cfg.population, n)
+    if not league.members:
+        raise SystemExit(f"population {cfg.population} has no members")
+    return league
+
+
+def reload_population(league, cfg: GenericPGConfig, run_dir: Optional[Path], known: set) -> dict:
+    """Bring a running league in line with its population file: members new to the file join (at an even rate),
+    members that were in the file (``known``: the file's members at the previous read) and are no longer leave,
+    every count's pins follow the file. Own snapshots are never touched. Updates ``known``; returns
+    ``{"added": [...], "removed": [...]}``. A file that can't be read or checked is ignored (logged)."""
+    try:
+        members = load_members(cfg.population)
+        for member in members:
+            if member not in league.members:
+                check_generic_checkpoint(member_path(member), cfg.title)
+    except (OSError, ValueError, KeyError, SystemExit) as e:
+        LOGGER.warning(f"population {cfg.population}: not reloaded ({e})")
+        return {"added": [], "removed": []}
+    added = [m for m in members if m not in league.members]
+    removed = [m for m in league.members if m in known and m not in members and not _own_member(m, run_dir)]
+    for member in added:
+        league.add(member)
+    for member in removed:
+        league.remove(member)
+    for n in league.counts:
+        league.league(n).min_shares = load_member_min_shares(cfg.population, n)
+    known.clear()
+    known.update(members)
+    return {"added": added, "removed": removed}
 
 
 def is_generic_checkpoint(path) -> bool:
@@ -280,6 +485,7 @@ def check_generic_checkpoint(path, title: str) -> None:
 
 _CLIENTS: dict = {}
 _SLOT_VERSIONS: dict = {}
+_SLOT_TEMPERATURES: dict = {}
 
 
 def slot_version(slot: str) -> Optional[int]:
@@ -287,14 +493,30 @@ def slot_version(slot: str) -> Optional[int]:
     return None if value is None else int(value.value)
 
 
-def worker_init(server_queues: dict, slot_versions: Optional[dict] = None):
+def seat_temperature(name: str, settings: dict) -> float:
+    """The sampling temperature of a seat played by server ``name``: the learner's, a league slot's member's own
+    (the trainer's shared value, updated as the slot changes members; else the task's ``slot_temperatures``), or
+    the run's opponent temperature."""
+    if name == "learner":
+        return float(settings["learner_temperature"])
+    shared = _SLOT_TEMPERATURES.get(name)
+    if shared is not None:
+        return float(shared.value)
+    league = settings.get("league") or {}
+    return float((league.get("slot_temperatures") or {}).get(name, settings["opponent_temperature"]))
+
+
+def worker_init(server_queues: dict, slot_versions: Optional[dict] = None, slot_temperatures: Optional[dict] = None):
     """Pool initializer: one slot on every generic server ("learner", "sl", "pool", league "opp..."), and the
-    league slots' shared member-change counters (``policy_gradient.worker_init`` for generic clients)."""
+    league slots' shared member-change counters (``policy_gradient.worker_init`` for generic clients) and play
+    temperatures (tempered members)."""
     from rl18xx.agent.alphazero.generic_inference import GenericInferenceClient
 
     torch.set_num_threads(1)
     _SLOT_VERSIONS.clear()
     _SLOT_VERSIONS.update(slot_versions or {})
+    _SLOT_TEMPERATURES.clear()
+    _SLOT_TEMPERATURES.update(slot_temperatures or {})
     for name, (request_q, reply_qs, ticket_q) in server_queues.items():
         worker_id = ticket_q.get()
         _CLIENTS[name] = GenericInferenceClient(request_q=request_q, reply_q=reply_qs[worker_id], worker_id=worker_id)
@@ -320,6 +542,9 @@ class PGRow:
     #: (n,) each encoder seat's seating index (``generic_data.seat_order``; None: ``(arange(n) + seat) mod n``). The
     #: 1822 family reorders its players every Stock Round, so the seat frame is not a rotation of the seating order.
     order: Optional[np.ndarray] = None
+    #: The game's start label (``human:<id>``, ``midgame:<id>:sr<k>``, ``auction``, ``random``): prioritized starts
+    #: score each start from its rows.
+    start: Optional[str] = None
 
 
 @dataclass
@@ -494,6 +719,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
     from rl18xx.agent.alphazero.generic_play import (
         ALL_PASS,
         MAX_ALL_PASS_REDRAWS,
+        StartPicker,
         all_pass_opening,
         replayed_start,
         title_play,
@@ -501,8 +727,10 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
     from rl18xx.agent.alphazero.generic_tokens import encode_batch
     from rl18xx.agent.alphazero.titles import draw_rules, rules_name
 
-    rng = np.random.default_rng()
-    py_rng = random.Random()
+    seed = settings.get("seed")  # [run seed, task index] (GenericPGConfig.seed), else unseeded
+    rng = np.random.default_rng(None if seed is None else [int(x) for x in seed])
+    py_rng = random.Random() if seed is None else random.Random(":".join(str(int(x)) for x in seed))
+    picker = StartPicker(settings["start_picks"]) if settings.get("start_picks") is not None else None
     title = settings["title"]
     rules_mix = settings.get("rules_mix") or {"base": 1.0}
     play = title_play(title)
@@ -529,6 +757,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
             auction_fraction=settings.get("auction_fraction", 0.0),
             auction_unlock=settings.get("auction_unlock", True),
             optional_rules=rules,
+            picker=picker,
         )
         skipped_starts += skipped
         learner, seat_models, seat_members = pg._deal_seats(settings, py_rng)
@@ -596,7 +825,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
             tp = time.monotonic()
             t_wait += tp - tw
             is_learner = name == "learner"
-            temperature = settings["learner_temperature"] if is_learner else settings["opponent_temperature"]
+            temperature = seat_temperature(name, settings)
             offsets = arrays["legal_offsets"]
             price_of_row = {int(r): j for j, r in enumerate(arrays["price_rows"])}
             for j, i in enumerate(rows):
@@ -657,6 +886,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
                 row.advantage = float(reward[seat])
                 row.win = _seat_frame(win_share, row.seat, n_players, row.order)
                 row.score = _seat_frame(placement, row.seat, n_players, row.order)
+                row.start = g.start
                 rows.append(row)
         record = {
             "uid": g.uid,
@@ -674,6 +904,7 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
             "termination": g.termination,
             "rules": g.rules,
             "start_kind": g.start.split(":")[0] if g.start else None,
+            "start_label": g.start,
             "auction_prices": _auction_prices(title, g.start, g.termination, g.raw),
             "first_values": {},
             "rows": rows,
@@ -708,6 +939,8 @@ def play_generic_pg_games(num_games: int, settings: dict) -> dict:
                 "no_buyback_rule": bool(g.raw.no_buyback_rule) if hasattr(g.raw, "no_buyback_rule") else False,
             }
         records.append(record)
+    if picker is not None:
+        stats.update({f"start_{key}": value for key, value in picker.counts.items()})
     return {
         "games": records,
         "decisions": decisions_total,
@@ -833,8 +1066,39 @@ def batch_to_device(batch: dict, device) -> dict:
     return out
 
 
+def _policy_kl(log_p, other_out: dict, batch: dict, temperature: float, cell_lp=None) -> tuple:
+    """``(per-position KL(learner || other), mean price-cell KL)``: over the legal rows with ``other`` at
+    ``temperature`` (``log_p``: the learner's tempered row log-probabilities), plus the played row's price cells
+    (``cell_lp``: the learner's masked cell log-probabilities) for positions with an open price."""
+    from rl18xx.agent.alphazero.model_generic import segment_log_softmax
+
+    inputs = batch["inputs"]
+    pos, offsets = inputs["legal_pos"], inputs["legal_offsets"]
+    b = offsets.shape[0] - 1
+    other_log_p = segment_log_softmax(other_out["logits"].float() / temperature, pos, b)
+    kl = log_p.new_zeros(b).index_add(0, pos, log_p.exp() * (log_p - other_log_p))
+    price_kl = log_p.new_zeros(())
+    if cell_lp is not None:
+        sel, ppos = batch["price_sel"], batch["price_pos"]
+        mask = inputs["price_cell_mask"][sel]
+        other_cell_lp = other_out["price_logp"][sel].float().masked_fill(~mask, 0.0)
+        cell_kl = (cell_lp.exp() * mask * (cell_lp - other_cell_lp)).sum(dim=1)
+        kl = kl.index_add(0, ppos, cell_kl)
+        price_kl = cell_kl.mean()
+    return kl, price_kl
+
+
 def generic_pg_losses(
-    out: dict, anchor_out: dict, batch: dict, clip: float, kl_coef: float, entropy_coef: float, temperature: float = 1.0
+    out: dict,
+    anchor_out: dict,
+    batch: dict,
+    clip: float,
+    kl_coef: float,
+    entropy_coef: float,
+    temperature: float = 1.0,
+    ref_out: Optional[dict] = None,
+    ref_kl_coef: float = 0.0,
+    ref_temperature: Optional[float] = None,
 ) -> dict:
     """PPO-clipped policy gradient plus ``kl_coef`` * KL(learner || anchor), over each position's legal rows
     (``policy_gradient.pg_losses`` for the generic model's flat legal lists).
@@ -842,29 +1106,27 @@ def generic_pg_losses(
     A move's log-probability is its row's under softmax(logits / ``temperature``) over the position's legal
     rows (the map factorization included in the logits) plus, for a move with an open price, its price cell's
     (log-softmax over the range's non-empty cells) -- the probabilities it was sampled with. The KL compares
-    both policies at ``temperature`` over the legal rows and the played row's price cells."""
+    both policies at ``temperature`` over the legal rows and the played row's price cells.
+
+    ``ref_out`` (A1's reference policy, piKL-style): adds ``ref_kl_coef`` * KL(learner at ``temperature`` ||
+    reference at ``ref_temperature``, default ``temperature``) over the same rows and cells (``kl_ref``)."""
     from rl18xx.agent.alphazero.model_generic import segment_log_softmax
 
     inputs = batch["inputs"]
     pos, offsets = inputs["legal_pos"], inputs["legal_offsets"]
     b = offsets.shape[0] - 1
     log_p = segment_log_softmax(out["logits"].float() / temperature, pos, b)
-    sl_log_p = segment_log_softmax(anchor_out["logits"].float() / temperature, pos, b)
     p = log_p.exp()
-    kl = log_p.new_zeros(b).index_add(0, pos, p * (log_p - sl_log_p))
     entropy = log_p.new_zeros(b).index_add(0, pos, -(p * log_p))
     new_logp = log_p[offsets[:-1] + batch["choice"]]
 
-    price_kl = log_p.new_zeros(())
+    cell_lp = None
     if batch["price_sel"].numel():
         sel, ppos = batch["price_sel"], batch["price_pos"]
         mask = inputs["price_cell_mask"][sel]
         cell_lp = out["price_logp"][sel].float().masked_fill(~mask, 0.0)
-        sl_cell_lp = anchor_out["price_logp"][sel].float().masked_fill(~mask, 0.0)
         new_logp = new_logp.index_add(0, ppos, cell_lp.gather(1, batch["price_cell"][:, None]).squeeze(1))
-        cell_kl = (cell_lp.exp() * mask * (cell_lp - sl_cell_lp)).sum(dim=1)
-        kl = kl.index_add(0, ppos, cell_kl)
-        price_kl = cell_kl.mean()
+    kl, price_kl = _policy_kl(log_p, anchor_out, batch, temperature, cell_lp)
 
     advantage = batch["advantage"]
     log_ratio = new_logp - batch["old_logp"]
@@ -872,6 +1134,13 @@ def generic_pg_losses(
     surrogate = torch.minimum(ratio * advantage, ratio.clamp(1.0 - clip, 1.0 + clip) * advantage)
     pg_loss = -surrogate.mean()
     total = pg_loss + kl_coef * kl.mean() - entropy_coef * entropy.mean()
+    extra = {}
+    if ref_out is not None:
+        ref_kl, ref_price_kl = _policy_kl(
+            log_p, ref_out, batch, temperature if ref_temperature is None else ref_temperature, cell_lp
+        )
+        total = total + ref_kl_coef * ref_kl.mean()
+        extra = {"kl_ref": ref_kl.mean().detach(), "price_kl_ref": ref_price_kl.detach()}
     return {
         "total": total,
         "pg_loss": pg_loss.detach(),
@@ -882,6 +1151,7 @@ def generic_pg_losses(
         "approx_kl": (-log_ratio).mean().detach(),
         "ratio_max": ratio.max().detach(),
         "log_ratio_abs_mean": log_ratio.abs().mean().detach(),
+        **extra,
     }
 
 
@@ -928,14 +1198,27 @@ def subtract_baselines(critic, rows: List[PGRow], cfg: GenericPGConfig, device, 
 
 
 def _update(
-    learner, critic, anchor, learner_opt, critic_opt, rows: List[PGRow], cfg: GenericPGConfig, kl_coef, device, rng
+    learner,
+    critic,
+    anchor,
+    learner_opt,
+    critic_opt,
+    rows: List[PGRow],
+    cfg: GenericPGConfig,
+    kl_coef,
+    device,
+    rng,
+    reference=None,
 ) -> dict:
-    """One PPO pass over ``rows`` (``ppo_epochs`` times) and one critic pass (``policy_gradient._update``)."""
+    """One PPO pass over ``rows`` (``ppo_epochs`` times) and one critic pass (``policy_gradient._update``);
+    ``reference``: A1's fixed reference policy (``cfg.ref_kl_coef`` > 0)."""
     from rl18xx.agent.alphazero import model_generic as mg
 
     learner.eval()
     critic.eval()
     anchor.eval()
+    if reference is not None:
+        reference.eval()
     advantages = np.array([r.advantage for r in rows], dtype=np.float32)
     scale = (float(advantages.std()) or 1.0) if cfg.normalize_advantages else 1.0
     sums, count, first, steps = Counter(), 0, {}, 0
@@ -965,9 +1248,19 @@ def _update(
             share = n / len(minibatches[s])
             with torch.no_grad():
                 anchor_out = anchor(batch["inputs"])
+                ref_out = reference(batch["inputs"]) if reference is not None else None
             out = learner(batch["inputs"])
             losses = generic_pg_losses(
-                out, anchor_out, batch, cfg.clip, kl_coef, cfg.entropy_coef, temperature=cfg.learner_temperature
+                out,
+                anchor_out,
+                batch,
+                cfg.clip,
+                kl_coef,
+                cfg.entropy_coef,
+                temperature=cfg.learner_temperature,
+                ref_out=ref_out,
+                ref_kl_coef=cfg.ref_kl_coef,
+                ref_temperature=cfg.ref_temperature,
             )
             total = losses["total"]
             if not torch.isfinite(total):
@@ -1028,6 +1321,43 @@ def _update(
 # ---------------------------------------------------------------------------------------------------
 
 
+#: Main-exploiter mode (A3): the run's own one-member population file, and the opponent server's name.
+EXPLOITER_POPULATION = "exploiter_population.json"
+EXPLOITER_SLOT = "main"
+#: Prioritized starts (A2): the scores, written with each snapshot's state.json.
+START_PRIORITIES_FILE = "start_priorities.json"
+
+
+def _read_json(path: Path):
+    return json.loads(Path(path).read_text()) if Path(path).exists() else None
+
+
+def _write_json(path: Path, data) -> None:
+    """Write ``data`` atomically (a temporary file renamed over ``path``)."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.replace(tmp, path)
+
+
+def _mtime(path) -> Optional[float]:
+    try:
+        return Path(path).stat().st_mtime
+    except OSError:
+        return None
+
+
+def _set_slot(handles, slot, member, slot_labels, slot_versions, slot_temperatures, cfg) -> None:
+    """Load league ``member`` (a key: ``<path>`` or ``<path>@<T>``) into opponent server ``slot``: its member-change
+    counter first (games that straddle the change are not credited), then the checkpoint, then the play
+    temperature the workers read (moves answered between the reload and the temperature change -- a game that is
+    not credited anyway -- may be sampled at the previous member's temperature)."""
+    slot_versions[slot].value += 1
+    handles[slot].reload(member_path(member))
+    slot_temperatures[slot].value = member_temperature(member, cfg.opponent_temperature)
+    slot_labels[slot] = member
+
+
 def _save(model, path: Path, cfg: GenericPGConfig, role: str, update: int) -> None:
     from rl18xx.agent.alphazero import model_generic as mg
 
@@ -1075,6 +1405,7 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
         kl_coef = float(state["kl_coef"])
         anchor_update = int(state.get("anchor_update", 0))
         league_state = state.get("league")
+        priorities_state = _read_json(run_dir / state["start_priorities"]) if state.get("start_priorities") else None
         learner_path = run_dir / "learner" / f"{update}.pth"
         critic_path = run_dir / "critic" / f"{update}.pth"
     else:
@@ -1084,11 +1415,23 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
         run_dir = Path(cfg.out_dir) / name
         if run_dir.exists():
             raise SystemExit(f"{run_dir} exists; pass --resume to continue it")
+        if cfg.exploiter_of:
+            if cfg.population:
+                raise SystemExit("--exploiter-of plays the frozen main in every other seat: no --population")
+            check_generic_checkpoint(cfg.exploiter_of, cfg.title)
+            cfg.population = str(run_dir / EXPLOITER_POPULATION)
+            cfg.league_add_snapshots = False
         check_config(cfg)
         run_dir.mkdir(parents=True)
+        if cfg.exploiter_of:
+            _write_json(
+                run_dir / EXPLOITER_POPULATION,
+                {"note": "main-exploiter mode: the frozen main", "members": [{"path": str(cfg.exploiter_of)}]},
+            )
         update, kl_coef, anchor_update = 0, cfg.kl_coef, 0
         pool = [str(cfg.policy_checkpoint)] if cfg.seed_pool else []
         league_state = None
+        priorities_state = None
         learner_path = Path(cfg.policy_checkpoint)
         critic_path = Path(cfg.value_checkpoint or cfg.policy_checkpoint)
     (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
@@ -1096,11 +1439,18 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
 
     if cfg.threads:
         torch.set_num_threads(int(cfg.threads))
+    if cfg.seed is not None:
+        torch.manual_seed(int(cfg.seed))
     device = torch.device(cfg.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     anchor_path = run_dir / "learner" / f"{anchor_update}.pth" if anchor_update else Path(cfg.policy_checkpoint)
     learner, anchor, critic = _load(learner_path, device), _load(anchor_path, device), _load(critic_path, device)
     for param in anchor.parameters():
         param.requires_grad_(False)
+    reference = None
+    if cfg.ref_kl_coef > 0:  # A1: the fixed reference policy of the piKL-style pull
+        reference = _load(cfg.ref_checkpoint or cfg.policy_checkpoint, device)
+        for param in reference.parameters():
+            param.requires_grad_(False)
     learner_opt = torch.optim.AdamW(learner.parameters(), lr=cfg.lr, weight_decay=0.0)
     critic_opt = torch.optim.AdamW(critic.parameters(), lr=cfg.critic_lr, weight_decay=0.0)
     if resume and (run_dir / "optimizer.pth").exists():
@@ -1122,20 +1472,30 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
         LOGGER.warning(f"no TensorBoard writer: {e}")
     history = (run_dir / "history.jsonl").open("a")
 
-    rng = np.random.default_rng()
-    league = pg.league_for_run(cfg, league_state)
-    slot_names = pg.league_slots(cfg) if league else {}
-    if league:
-        opponents = {s: league.sample(n, rng) for n, slots in slot_names.items() for s in slots}
-        servers = {"learner": str(current_learner), **opponents}
+    rng = np.random.default_rng(cfg.seed)
+    league = league_for_run(cfg, league_state, run_dir)
+    known_members = set(load_members(cfg.population)) if league else set()
+    population_mtime = _mtime(cfg.population) if league else None
+    if league and cfg.exploiter_of:
+        # main-exploiter mode: one server holds the frozen main for every player count; it never changes
+        slot_names = {n: [EXPLOITER_SLOT] for n in league.counts}
     else:
+        slot_names = pg.league_slots(cfg) if league else {}
+    if league:
+        slot_labels = {s: league.sample(n, rng) for n, slots in slot_names.items() for s in slots}
+        servers = {"learner": str(current_learner), **{s: member_path(m) for s, m in slot_labels.items()}}
+    else:
+        slot_labels = {}
         servers = {
             "learner": str(current_learner),
             "sl": str(cfg.opponent_checkpoint or cfg.policy_checkpoint),
             "pool": pool[-1] if pool else str(cfg.policy_checkpoint),
         }
-    slot_labels = {name: path for name, path in servers.items() if name.startswith("opp")}
     slot_versions = {slot: multiprocessing.Value("q", 0, lock=False) for slot in slot_labels}
+    slot_temperatures = {
+        slot: multiprocessing.Value("d", member_temperature(member, cfg.opponent_temperature), lock=False)
+        for slot, member in slot_labels.items()
+    }
     factory = _server_factory(cfg)
     handles = {
         name: start_generic_inference_server(
@@ -1146,9 +1506,31 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
             pipeline=cfg.server_pipeline,
             replicas=cfg.server_replicas if name == "learner" else 1,
             threads=cfg.server_threads,
+            seed=None if cfg.seed is None else int(cfg.seed) * 1000 + 100 * i,
         )
-        for name, path in servers.items()
+        for i, (name, path) in enumerate(servers.items())
     }
+    priorities = None
+    if cfg.start_priority:  # A2: prioritized level replay over the human and mid-game starts
+        from rl18xx.agent.alphazero.generic_play import StartPriorities
+
+        priorities = StartPriorities.for_run(
+            pg.player_counts(cfg),
+            cfg.start_positions,
+            cfg.midgame_positions if cfg.midgame_fraction > 0 else None,
+            uniform=cfg.start_priority_uniform,
+            staleness=cfg.start_priority_staleness,
+            temperature=cfg.start_priority_temperature,
+            ema=cfg.start_priority_ema,
+            score=cfg.start_priority_score,
+        )
+        if priorities_state:
+            priorities.load_state(priorities_state)
+        LOGGER.info(
+            "Prioritized starts: library %s",
+            {n: {k: len(v) for k, v in lib.items()} for n, lib in sorted(priorities.libraries.items())},
+        )
+    task_counter = [0]
     pool_label = servers.get("pool")
     queues = {name: (h.request_q, h.reply_qs, h.ticket_q) for name, h in handles.items()}
     scores = pg._Scores(cfg.score_window)
@@ -1159,7 +1541,10 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
     def settings() -> dict:
         n = schedule.next()
         max_decisions, stall = pg.count_limits(cfg, n)
+        task_counter[0] += 1
         return {
+            "seed": None if cfg.seed is None else [int(cfg.seed), task_counter[0]],
+            "start_picks": priorities.picks(n, cfg.games_per_task + 8, rng) if priorities else None,
             "title": cfg.title,
             "num_players": n,
             "positions_per_seat": cfg.positions_per_seat,
@@ -1188,6 +1573,7 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                     "slots": list(slot_names[n]),
                     "slot_labels": {slot: slot_labels[slot] for slot in slot_names[n]},
                     "slot_versions": {slot: int(slot_versions[slot].value) for slot in slot_names[n]},
+                    "slot_temperatures": {slot: float(slot_temperatures[slot].value) for slot in slot_names[n]},
                     "learner_seat_weights": cfg.learner_seat_weights or pg.default_learner_seat_weights(n),
                 }
                 if league
@@ -1207,7 +1593,7 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
     all_pass_by_count = Counter()
     try:
         executor = ProcessPoolExecutor(
-            max_workers=cfg.workers, initializer=worker_init, initargs=(queues, slot_versions)
+            max_workers=cfg.workers, initializer=worker_init, initargs=(queues, slot_versions, slot_temperatures)
         )
         try:
             futures = {
@@ -1234,6 +1620,8 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                                 league.record(players, member, pairwise)
                         terminations[record["termination"]] += 1
                         starts[record.get("start_kind")] += 1
+                        if priorities is not None:
+                            priorities.observe_game(players, record.get("start_label"))
                         for company, price in (record.get("auction_prices") or {}).items():
                             prices[company].append(price)
                         lengths.append(record["decisions"])
@@ -1271,7 +1659,11 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                 t0 = time.time()
                 baseline_stats = subtract_baselines(critic, buffer, cfg, device)
                 baseline_seconds = time.time() - t0
-                stats = _update(learner, critic, anchor, learner_opt, critic_opt, buffer, cfg, kl_coef, device, rng)
+                if priorities is not None:  # each start's score from this update's rows (reward - V(s))
+                    baseline_stats["starts_scored_update"] = priorities.observe_rows(buffer)
+                stats = _update(
+                    learner, critic, anchor, learner_opt, critic_opt, buffer, cfg, kl_coef, device, rng, reference
+                )
                 stats.update(baseline_stats)
                 stats["baseline_seconds"] = baseline_seconds
                 train_seconds = time.time() - t0
@@ -1290,6 +1682,20 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                 for path in previous:
                     if int(path.stem) % cfg.snapshot_every != 0 and path.parent.parent == run_dir and path.exists():
                         path.unlink()
+                reloaded = None  # (before the snapshot: state.json holds the reloaded league)
+                if league and cfg.population_reload_every and update % cfg.population_reload_every == 0:
+                    mtime = _mtime(cfg.population)
+                    if mtime != population_mtime:
+                        population_mtime = mtime
+                        reloaded = reload_population(league, cfg, run_dir, known_members)
+                        if reloaded["added"] or reloaded["removed"]:
+                            LOGGER.info(f"population {cfg.population} reloaded: {reloaded}")
+                        # a slot holding a member that left takes a new one now
+                        for n, slots in slot_names.items():
+                            for slot in slots:
+                                if slot_labels[slot] in reloaded["removed"]:
+                                    _set_slot(handles, slot, league.sample(n, rng), slot_labels, slot_versions,
+                                              slot_temperatures, cfg)
                 if update % cfg.snapshot_every == 0:
                     pool.append(str(current_learner))
                     if league and cfg.league_add_snapshots and update % cfg.league_snapshot_every == 0:
@@ -1301,6 +1707,10 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                         {"learner": learner_opt.state_dict(), "critic": critic_opt.state_dict()},
                         run_dir / "optimizer.pth",
                     )
+                    extra_state = {}
+                    if priorities is not None:
+                        _write_json(run_dir / START_PRIORITIES_FILE, priorities.state())
+                        extra_state["start_priorities"] = START_PRIORITIES_FILE
                     (run_dir / "state.json").write_text(
                         json.dumps(
                             {
@@ -1310,6 +1720,7 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                                 "kl_coef": kl_coef,
                                 "anchor_update": anchor_update,
                                 "league": league.state() if league else None,
+                                **extra_state,
                             },
                             indent=2,
                         )
@@ -1317,13 +1728,11 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                 if not league and pool and update % cfg.pool_refresh_every == 0:
                     pool_label = pool[int(rng.integers(0, len(pool)))]
                     handles["pool"].reload(pool_label)
-                if league and update % cfg.slot_refresh_every == 0:
+                if league and update % cfg.slot_refresh_every == 0 and not cfg.exploiter_of:
                     for n, slots in slot_names.items():
                         slot = slots[(update // cfg.slot_refresh_every) % len(slots)]
-                        member = league.sample(n, rng)
-                        slot_versions[slot].value += 1
-                        handles[slot].reload(member)
-                        slot_labels[slot] = member
+                        _set_slot(handles, slot, league.sample(n, rng), slot_labels, slot_versions,
+                                  slot_temperatures, cfg)
 
                 if cfg.kl_target is not None:
                     if stats["kl_anchor"] > 1.5 * cfg.kl_target:
@@ -1363,6 +1772,21 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
                     "pool_size": len(pool),
                     "pool_opponent": pool_label if pool else None,
                 }
+                if stats.get("kl_ref") is not None:
+                    record["ref_kl_coef"] = cfg.ref_kl_coef
+                if reloaded is not None:
+                    record["population_reloaded"] = reloaded
+                if priorities is not None:
+                    record["start_priority"] = priorities.summary()
+                    record["start_picks"] = {
+                        k[len("worker_start_") :]: v for k, v in gen.items() if k.startswith("worker_start_")
+                    }
+                if cfg.exploiter_of:
+                    main = load_members(cfg.population)[0]
+                    record["exploiter_of"] = cfg.exploiter_of
+                    for n in league.counts:
+                        key = "vs_main_rate" if len(league.counts) == 1 else f"p{n}_vs_main_rate"
+                        record[key] = round(league.win_rate(n, main), 4)
                 if league:
                     record["league_size"] = len(league.members)
                     for n in league.counts:
@@ -1425,13 +1849,21 @@ def run(cfg: GenericPGConfig, resume: Optional[str] = None, explicit: Optional[s
 
 
 __all__ = [
+    "EXPLOITER_POPULATION",
     "GenericPGConfig",
     "PGRow",
     "RESUME_SETTINGS",
     "check_config",
     "collate_rows",
     "generic_pg_losses",
+    "league_for_run",
+    "load_member_min_shares",
+    "load_members",
+    "member_key",
+    "member_path",
+    "member_temperature",
     "play_generic_pg_games",
+    "reload_population",
     "run",
     "subtract_baselines",
 ]

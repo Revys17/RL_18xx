@@ -14,7 +14,8 @@
 # gen6's recipe (scripts/launch/2026-11/gen6_20261110/run.sh) with these departures, each named:
 # - Start: the generic 1822MX SL checkpoint; the critic from its value heads. League: the SL alone, then own
 #   snapshots (every 50, the latest 4), PFSP per player count -- no other MX agents exist.
-# - Players 3-5 (Ruby's range) by the human games' shares: 78 / 114 / 37 of 229 -> 3:34,4:50,5:16. Base rules (MX's
+# - Players 3-5 (Ruby's range) by the human games' shares: 78 / 114 / 37 of 229 -> 3:34,4:50,5:16 (every count
+#   above title_recipe.sh's 10% floor: the PG mix as is). Base rules (MX's
 #   higher_cert_limit stays out: the user's decision of 2026-11-14).
 # - Decision caps 1,650 at every count, RE-MEASURED 2026-11-14 after the NdeM fix (06afad3: the NdeM takes a new
 #   token for an 11th+ station, so games that used to dead-end in Ruby's crash run to their end): 138 self-play games
@@ -25,7 +26,7 @@
 # - Microbatch 512 (~25 MB of fp32 activations per position), server batches 512, games per task 32.
 TITLE=1822MX
 DATA_NAME=generic_1822MX_v1
-PLAYER_MIX=3:34,4:50,5:16
+PLAYER_MIX=${PLAYER_MIX:-3:34,4:50,5:16}
 CAPS=3:1650,4:1650,5:1650
 MAX_DECISIONS=1650
 MICROBATCH=512

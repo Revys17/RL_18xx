@@ -68,6 +68,9 @@ own: A2's library includes them, and A2 decides how often they matter.
 - Step 1: ~80-90 s per update for generic 1830 PG (C2's estimate) -> ~7 h per 300-update arm; A0-A4 first pass
   ~35-40 h, exploiters in A3 add ~5 h per refresh; second pass of two arms to 600 updates ~15 h.
   Total ~60-70 GPU h after the 1830 GPU check (~6-7 h).
+- Per arm, with the scripts as built (`docs/rl_model.md` "Robustness mechanisms", "GPU estimates per arm"): A0 / A2
+  ~7.3 h, A1 ~7.3 h (~7.9 h with the reference KL), A3 ~12 h (the main + two exploiters sharing the GPU), A4 ~7.9 h
+  (~12.5 h with A3): first pass ~42-47 GPU h.
 
 ## Work before the GPU (CPU)
 
@@ -76,9 +79,24 @@ own: A2's library includes them, and A2 decides how often they matter.
 2. M2: the behaviour-stats script in the repo (from the analysis scripts), runnable on eval / PG saved games.
 3. A1: pinned share + per-member temperature for league members in `policy-gradient-generic` (check what CountLeague
    pins already give); optional KL toward the SL policy.
+   **Built 2026-11-15** (details: `docs/rl_model.md` "Robustness mechanisms"): CountLeague's `min_share` /
+   `min_share_players` pins already gave a pinned share per count; added a population entry's `"temperature"` (member
+   key `<path>@<T>`: the SL can be a member at T 1.0 and at 0.5) and `"min_share_by_players"`; `--ref-kl-coef` /
+   `--ref-checkpoint` / `--ref-temperature`: a fixed piKL-style KL toward the SL on top of the anchor (default off).
 4. A2: a prioritized start sampler in the generic start-position code (regret estimates from the run's own rows).
+   **Built**: `--start-priority`, prioritized level replay over the human SR1 starts and mid-game cuts per count
+   (score = mean |reward - V(s)| of the learner's rows from that start, i.e. the critic's error; rank-based with
+   staleness 0.3, 30% uniform; the start-kind mix unchanged); scores persist in `start_priorities.json`, the top starts
+   are in the history.
 5. A3: main-exploiter mode in `policy-gradient-generic` (fixed frozen opponent, higher T, no KL) + a refresh loop.
+   **Built**: `--exploiter-of <ckpt>` (the frozen main in every other seat), `--population-reload-every` (a running
+   main picks up members added to its league file), `scripts/launch/2026-11/bridge/exploiter_loop.py` (every 100 main
+   updates an exploiter from that snapshot, 100 updates, joins pinned at 10%, the newest 2 keep their pins).
 6. Dry-run every arm on CPU at tiny size, as the title recipes were.
+   **Done**: `scripts/launch/2026-11/bridge/robust_arm.sh <A0..A4>` (`--seed 1830`, 300 updates, `pg_generic_1830.sh`'s
+   evals + 4p 1v3 vs SL@1.0 and vs each exploiter), each arm dry-run on the CPU (`DRY=1`; results in
+   `docs/rl_model.md` "Robustness mechanisms"). Also: the title recipes' player mixes now give every count >= 10%
+   (`MIX_FLOOR`).
 
 ## Open questions
 

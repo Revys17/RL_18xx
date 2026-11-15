@@ -21,7 +21,8 @@
 # - Rules: every game draws its combination from the title's default mix (titles.TitleSpec.rules_mix: proportional
 #   to the finished human games, 1822+ 77%, base 18%, tax haven alone 5%); a drawn combination without human starts
 #   of the count falls through to a random opening under its rules.
-# - Player mix by the human games' shares at 3-6 players: 149 / 254 / 98 / 24 of 525 -> 3:28,4:48,5:19,6:5.
+# - Player mix by the human games' shares at 3-6 players: 149 / 254 / 98 / 24 of 525 -> 3:28,4:48,5:19,6:5, each
+#   count raised to >= 10% (title_recipe.sh MIX_FLOOR, gen6 style) -> PG mix 3:26.5,4:45.5,5:18,6:10.
 # - Decision caps 2,200 at every count (the 1822+ proposal: ~1.5x the longest self-play game, 1,493).
 # - Starts: auction 0.5 = the fresh game (the opening Stock Round's bid boxes played by the policy, a seeded company
 #   shuffle), mid-game 0.3, random opening 0.2 (SR1 played by uniform random moves) -> ~50% fresh games, ~15% mid-game,
@@ -33,7 +34,7 @@ TITLE=1822
 DATA_NAME=generic_1822_v2
 START_SUFFIX=_v2
 RULES_MIX=default
-PLAYER_MIX=3:28,4:48,5:19,6:5
+PLAYER_MIX=${PLAYER_MIX:-3:28,4:48,5:19,6:5}
 CAPS=3:2200,4:2200,5:2200,6:2200
 MAX_DECISIONS=2200
 MICROBATCH=256

@@ -585,6 +585,18 @@ def cmd_policy_gradient_generic(args):
         reward=args.reward,
         device=args.device,
         threads=args.threads,
+        ref_kl_coef=args.ref_kl_coef,
+        ref_checkpoint=args.ref_checkpoint,
+        ref_temperature=args.ref_temperature,
+        start_priority=args.start_priority,
+        start_priority_score=args.start_priority_score,
+        start_priority_uniform=args.start_priority_uniform,
+        start_priority_staleness=args.start_priority_staleness,
+        start_priority_temperature=args.start_priority_temperature,
+        start_priority_ema=args.start_priority_ema,
+        exploiter_of=args.exploiter_of,
+        population_reload_every=args.population_reload_every,
+        seed=args.seed,
     )
     explicit = _resume_explicit(args, RESUME_SETTINGS)
     print(run(config, resume=args.resume, explicit=explicit))
@@ -1433,6 +1445,35 @@ def build_parser():
     p.add_argument("--reward", type=str, default="win", help="win or placement[:<1st>,<2nd>,...]")
     p.add_argument("--device", type=str, default=None, help="Trainer device (default: cuda if available)")
     p.add_argument("--threads", type=int, default=None, help="Torch threads of the trainer")
+    # Robustness mechanisms (docs/rl_model.md "Robustness mechanisms"; all off by default). Tempered league members
+    # and per-count pins are population-file fields ("temperature", "min_share_by_players").
+    p.add_argument(
+        "--ref-kl-coef", type=float, default=0.0,
+        help="A1: weight of KL(learner || reference) (piKL-style pull toward a fixed policy, on top of the anchor's KL)",
+    )
+    p.add_argument("--ref-checkpoint", type=str, default=None, help="The reference policy (default: --policy)")
+    p.add_argument(
+        "--ref-temperature", type=float, default=None,
+        help="The reference's temperature in that KL (default: the learner temperature; 1.0 = piKL's human spread)",
+    )
+    p.add_argument(
+        "--start-priority", action="store_true",
+        help="A2: prioritized level replay over the human SR1 and mid-game starts (generic_play.StartPriorities)",
+    )
+    p.add_argument("--start-priority-score", type=str, default="abs_adv", help="abs_adv (|A|) or pos_adv (max(A, 0))")
+    p.add_argument("--start-priority-uniform", type=float, default=0.3, help="Share of draws left uniform")
+    p.add_argument("--start-priority-staleness", type=float, default=0.3, help="Weight of PLR's staleness term")
+    p.add_argument("--start-priority-temperature", type=float, default=1.0, help="Rank temperature")
+    p.add_argument("--start-priority-ema", type=float, default=0.5, help="Weight of an update's mean in a score")
+    p.add_argument(
+        "--exploiter-of", type=str, default=None,
+        help="A3: main-exploiter mode -- every other seat is this frozen generic checkpoint (no --population)",
+    )
+    p.add_argument(
+        "--population-reload-every", type=int, default=0,
+        help="Re-read the population file every N updates (new members join, dropped ones leave); 0: off",
+    )
+    p.add_argument("--seed", type=int, default=None, help="Seed the trainer, servers and worker tasks")
 
     # refit-price-head (fit the price head on a frozen checkpoint)
     p = sub.add_parser("refit-price-head", help="Fit a fresh price head on the current-best checkpoint's frozen trunk")

@@ -487,6 +487,7 @@ def sample_start_position(
     midgame_path=None,
     midgame_fraction: float = 0.0,
     auction_fraction: float = 0.0,
+    picker=None,
 ) -> StartPosition:
     """A start for a new ``num_players`` self-play game: with probability
     ``auction_fraction`` the beginning of the game (the auction is played; the
@@ -494,19 +495,27 @@ def sample_start_position(
     (when ``midgame_path`` has games for this player count) a mid-game start -- a
     uniformly chosen game and one of its Stock Rounds; otherwise a random start with
     probability ``random_fraction`` (always, when ``path`` has no starts for this
-    player count), else a uniformly chosen human start from ``path``."""
+    player count), else a uniformly chosen human start from ``path``.
+
+    ``picker`` (``generic_play.StartPicker``: a generic run's prioritized starts) chooses which mid-game cut or
+    human start of the drawn kind (None from it: the uniform choice); the kinds' shares are unchanged."""
     rng = rng or random.Random()
     if auction_fraction > 0 and rng.random() < auction_fraction:
         return StartPosition(AUCTION_START, ())
     if midgame_path and midgame_fraction > 0 and rng.random() < midgame_fraction:
         games = load_midgame_positions(midgame_path).get(num_players, [])
         if games:
-            game_id, actions, cuts = rng.choice(games)
-            stock_round = rng.choice(sorted(cuts))
+            picked = picker.midgame(games) if picker is not None else None
+            if picked is not None:
+                (game_id, actions, cuts), stock_round = picked
+            else:
+                game_id, actions, cuts = rng.choice(games)
+                stock_round = rng.choice(sorted(cuts))
             return StartPosition(f"{MIDGAME_PREFIX}{game_id}:sr{stock_round}", actions[: cuts[stock_round]])
     human = load_start_positions(path).get(num_players, []) if path else []
     if human and rng.random() >= random_fraction:
-        return rng.choice(human)
+        picked = picker.human(human) if picker is not None else None
+        return picked if picked is not None else rng.choice(human)
     return StartPosition(RANDOM_START, tuple(random_start_actions(num_players, rng, max_price_multiple)))
 
 
@@ -523,6 +532,7 @@ def replayed_start(
     auction_fraction: float = 0.0,
     max_draws: int = 100,
     auction_unlock: bool = True,
+    picker=None,
 ) -> tuple:
     """``(start, game, skipped)``: a :func:`sample_start_position` start applied to a
     new game, with ``auction_unlock`` on for an auction start (as the generators play
@@ -545,6 +555,7 @@ def replayed_start(
             midgame_path=midgame_path,
             midgame_fraction=midgame_fraction,
             auction_fraction=auction_fraction,
+            picker=picker,
         )
         try:
             game = apply_actions(new_game(num_players), start.actions)
