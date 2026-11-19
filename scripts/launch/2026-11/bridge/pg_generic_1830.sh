@@ -31,6 +31,8 @@ cd "$(dirname "$0")/../../../.."  # the repository root (run from a checkout wit
 
 RUN=${RUN:-gpg1830_20261113}
 SL=${SL:-model_checkpoints_generic/bridge_1830_check_20261113/final.pth}  # gpu_check_1830.sh's $OUT/final.pth
+# The critic's start (main.py policy-gradient-generic --value; empty = the SL checkpoint's own value heads).
+VALUE=${VALUE:-}
 OUT_DIR=${OUT_DIR:-model_checkpoints_generic_pg}
 POP=${POP:-$OUT_DIR/populations/league_generic_1830_v1.json}
 EVAL_OUT=${EVAL_OUT:-logs/eval/$RUN}
@@ -66,7 +68,7 @@ fi
 [ -f "$SL" ] || { echo "no SL checkpoint at $SL (run gpu_check_1830.sh first)"; exit 1; }
 mkdir -p "$(dirname "$POP")"
 [ -f "$POP" ] || printf '{"members": ["%s"]}\n' "$SL" > "$POP"
-exec "${PY[@]}" main.py policy-gradient-generic "${COMMON[@]}" --policy "$SL" \
+exec "${PY[@]}" main.py policy-gradient-generic "${COMMON[@]}" --policy "$SL" ${VALUE:+--value "$VALUE"} \
   --player-mix 2:15,3:20,4:35,5:20,6:10 \
   --max-decisions 1200 --max-decisions-by-players 2:1000,3:1100,5:1300,6:1500 \
   --workers 32 --games-per-task 96 --positions-per-seat 32 \

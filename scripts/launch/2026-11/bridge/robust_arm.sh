@@ -137,6 +137,7 @@ if [ -n "$DRY" ]; then
 else
   OUT_DIR=${OUT_DIR:-model_checkpoints_generic_pg}
   SL=${SL:-model_checkpoints_generic/bridge_1830_check_20261113/final.pth}  # gpu_check_1830.sh's $OUT/final.pth
+  VALUE=${VALUE:-}  # the critic's start (--value; empty = the SL checkpoint's value heads)
   MAX_UPDATES=${MAX_UPDATES:-300}
   EVAL_EVERY=${EVAL_EVERY:-100}
   EVAL_GAMES=${EVAL_GAMES:-400}
@@ -240,7 +241,7 @@ step_pg() {
     --start-priority-staleness 0.3 --start-priority-temperature 1.0 --start-priority-ema 0.5)
   [ -n "$WANT_A3" ] && arm+=(--population-reload-every 2)
   [ -n "$WANT_PRACTICE" ] && arm+=(--practice-positions "$PRACTICE" --practice-fraction "$PRACTICE_FRACTION")
-  "${PY[@]}" main.py policy-gradient-generic --run-name "$RUN" --out-dir "$OUT_DIR" --policy "$SL" "${GAME_ARGS[@]}" \
+  "${PY[@]}" main.py policy-gradient-generic --run-name "$RUN" --out-dir "$OUT_DIR" --policy "$SL" ${VALUE:+--value "$VALUE"} "${GAME_ARGS[@]}" \
     "${PG_SCALE[@]}" --population "$POP" --pfsp-power 2.0 --lr 2e-5 --kl-coef 0.02 --kl-target 0.08 \
     --kl-coef-min 0.005 --entropy-coef 0.0 --learner-temperature 0.5 --opponent-temperature 0.5 \
     --max-updates "$MAX_UPDATES" --pool-refresh-every 5 "${arm[@]}"

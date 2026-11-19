@@ -1,4 +1,4 @@
-# 1830 training runs, November 2026: pg2p, gen5, gen6
+# 1830 training runs, November 2026: pg2p, gen5, gen6, the generic 1830 check
 
 Continues `docs/training_runs_2026_10.md` (pg1 -> gen4). All three runs are policy-only policy gradient
 (`main.py policy-gradient`) with a league, the placement reward and no search; they ran from the frozen
@@ -84,6 +84,45 @@ Results (selected):
   and vs pg2p. The user picked **u2400** for the bots.
 - Within-family progress kept going to the end (vs gen5 and pg2p), while the outside panel plateaued: the
   same split as gen5.
+
+## The generic 1830 check (step 1 of `docs/gpu_runbook_2026_11.md`, 2026-11-18)
+
+The title-generic model (`docs/rl_model.md`, default preset, 8.6M parameters) trained by supervision on SL ckpt 10's
+corpus (`human_games/generic_1830_clean_all_v1`: 2.38M training positions; validation = the same hash split), then
+compared with ckpt 10 on the same 117,053 validation decisions and played against it policy-only at T 0.5 from the
+private auction (real rules, 800 games a match). `scripts/launch/2026-11/bridge/gpu_check_1830.sh pretrain compare
+eval`; checkpoint `model_checkpoints_generic/bridge_1830_check_20261113/final.pth` (main checkout), evals in
+`logs/eval/bridge_1830_check_20261113/`, log `/home/revys/longrun/experiments/bridge_1830_check_20261118/run.log`.
+10 epochs took 63 min on the GPU (~25 steps/s of 256 positions; the 6-h estimate was far off), the compare 2 min,
+the four matches 28 min.
+
+| | generic SL | ckpt 10 |
+|---|---|---|
+| top-1 / top-5 (all decisions) | **.777** / .957 | .718 / .938 |
+| top-1 by count 2 / 3 / 4 / 5 / 6p | .756 / .765 / .781 / .771 / - | .677 / .710 / .723 / .718 / - |
+| policy NLL | .695 | .899 |
+| win CE (equal odds 1.373) / winner accuracy | 1.193 / .577 | **.929** / .578 |
+
+| Match (generic first) | Score | Fair |
+|---|---|---|
+| 4p 2v2 | **.755** +- .015 (worth share .564) | .50 |
+| 4p 1v3, generic alone | **.536** +- .018 | .25 |
+| 4p 1v3, ckpt 10 alone (ckpt 10's score) | .091 +- .010 | .25 |
+| 2p 1v1 | **.698** +- .016 | .50 |
+
+- **Far past the gate** ("within noise of ckpt 10"): the generic SL policy is much stronger than ckpt 10's.
+- **Per-family top-1 misleads where a family competes with Pass.** ckpt 10 is ahead on PlaceToken (.766 vs .255)
+  and LayTile (.410 vs .337) when the human placed / laid, because its 1830 head splits "token / tile vs pass" by a
+  fixed per-block ratio: it almost never passes there (1 of 616 human passes at token-legal positions). Humans pass
+  at 65-67% of the positions where a token is legal. Over **all** positions where the family is legal (validation,
+  first 25-40 games): token-legal top-1 generic **.691** vs ckpt 10 .281 (958 positions); lay-legal **.457** vs .416
+  (1,693; given that the human laid: .353 vs .438, given a pass: .714 vs .230). The generic head's state-dependent
+  group score (`rl_model.md` "Departures") is what wins here.
+- **The value heads are weak**: the joint run's win CE was best at epoch 1 (.951) and memorized after (1.49 at epoch
+  7); the refit on the frozen epoch-8 trunk reached only 1.193 (best at its first evaluation, train CE .63 vs
+  validation 1.19: the trunk already carries the training games' outcomes). At 3 and 5 players it is no better than
+  equal odds. Every generic PG run starts its critic from a checkpoint's value heads, so the critic gets its own start
+  (next item).
 
 ## Open threads
 
