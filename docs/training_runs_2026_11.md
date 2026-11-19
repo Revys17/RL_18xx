@@ -1,4 +1,4 @@
-# 1830 training runs, November 2026: pg2p, gen5, gen6, the generic 1830 check
+# Training runs, November 2026: pg2p, gen5, gen6, the generic 1830 check, the new titles' SL
 
 Continues `docs/training_runs_2026_10.md` (pg1 -> gen4). All three runs are policy-only policy gradient
 (`main.py policy-gradient`) with a league, the placement reward and no search; they ran from the frozen
@@ -128,7 +128,44 @@ the four matches 28 min.
   .839 / .915 / 1.174 / 1.438; ckpt 10 .395 / .735 / .898 / 1.195 / 1.385), train CE = validation (no memorization);
   its policy (top-1 ~.75) is unused. `robust_arm.sh` and `pg_generic_1830.sh` start the critic from it (`VALUE`,
   `--value`); the learner still starts from the 10-epoch SL. For 1867 / the 1822 family the same split is likely
-  needed (`title_recipe.sh` has no `VALUE` yet).
+  needed: `title_recipe.sh`'s `critic` step does it since 2026-11-18 (next section).
+
+## The new titles' SL and critic starts (steps 5-6 of the GPU runbook, 2026-11-18/19)
+
+`title_<t>.sh pretrain critic` for 1867, 1822 (the 1822+ rules mix), 1822PNW, 1822MX and 1822CA: the 1830 check's
+recipe (10 epochs, the value refit on the frozen best) and the 1-epoch critic start. Checkpoints in
+`model_checkpoints_generic/bridge_<t>_sl_20261114/` and `bridge_<t>_critic1ep_20261114/` (main checkout); each SL run's
+`family_report.txt` has the per-family table.
+
+**The first SL runs picked the wrong checkpoint.** The joint stage's best checkpoint (and its early stop) were chosen on
+the whole validation loss, value terms included. The value terms memorize the training games' outcomes within about an
+epoch and then climb, so on these small corpora they pulled the choice to epochs 2-6 while the policy kept improving to
+the end. Fixed in 05163b1 (`pretrain-generic --select-metric`, default `auto` = the loss without its value terms when the
+value refit is on; `docs/rl_model.md` stage 1). All five were rerun 2026-11-19 (`/home/revys/longrun/experiments/
+sl_rerun_20261119/`); the first runs are kept as `bridge_<t>_sl_20261114_totalsel/` (their `summary.json` paths still
+name the old directory).
+
+| Title | Train / validation games | top-1, first run (step) | **top-1, rerun** (step of 10 epochs) | policy NLL first -> rerun | critic start: win CE (equal odds) |
+|---|---|---|---|---|---|
+| 1867 | 794 / 46 | .742 (11,890) | **.745** (19,817, the last) | .829 -> .819 | .847 (1.362) |
+| 1822 (1822+ mix) | 496 / 29 | .698 (4,173) | **.715** (20,867, the last) | .964 -> .915 | .947 (1.382) |
+| 1822PNW | 395 / 22 | .687 | **.722** (14,518, the 9th epoch) | .946 -> .851 | 1.022 (1.265) |
+| 1822MX | 218 / 11 | .697 | **.710** (7,520, the 9th epoch) | .913 -> .879 | .843 (1.377) |
+| 1822CA | 114 / 10 | .619 | **.680** (5,103, the 9th epoch) | 1.174 -> 1.030 | 1.260 (1.367) |
+
+- Rerun times (all CPUs busy with step 2's evals and the auction check): 1867 62 min, 1822 83, PNW 41, MX 19, CA 32;
+  each critic start ~4-7 min.
+- 1822 and 1867 were best at the last evaluation: their policy was still improving after 10 epochs; more epochs untried.
+- Top-1 by player count is flat (1822 .713 / .715 / .712 / .745 at 3-6p; 1867 .732 / .753 / .746 / .729).
+- **The SL runs' own value heads are useless** (refit win CE = equal odds for the four 1822 titles, 1867 1.169 vs 1.362):
+  after nine epochs the trunk carries the training games' outcomes. Irrelevant for PG, whose critic starts from the
+  critic start (`VALUE`); the critic starts are informative except 1822CA's (1.260 vs 1.367 on 10 validation games; a
+  critic trained on the 1822 family's mix may serve it better, untried).
+- Families under chance (>= 20 positions): `SellShares` in every title, `BuyTrain.corp` in 1867 / 1822 / PNW / CA,
+  `PlaceToken` in the 1822 family (.05-.09 vs ~.11), `AcquireCompany` / `RedeemShares` in MX and CA. These are the
+  families that compete with a pass; as in the 1830 check, top-1 over the positions where the human made the move
+  undercounts a model that passes there most of the time. Rare families: 1867 `Par` .016 (63 positions, chance .028),
+  the 1822 titles' `Par` .12-.13 over chance .035-.05.
 
 ## Open threads
 
