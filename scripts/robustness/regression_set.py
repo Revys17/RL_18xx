@@ -514,6 +514,10 @@ class LegacySystem:
     def search(self, game, readouts: Optional[int] = None) -> dict:
         """A fresh search at ``game`` as the bots ran theirs: root evaluated, then batches until the root has
         ``readouts`` visits. Returns the root statistics (legal, visits, Q, priors, chosen index)."""
+        return root_stats(self.grown_player(game, readouts))
+
+    def grown_player(self, game, readouts: Optional[int] = None):
+        """The ``RustMCTSPlayer`` of :meth:`search` after its search (``play_move`` plays from its root)."""
         import torch
 
         from rl18xx.agent.alphazero.config import SelfPlayConfig
@@ -542,17 +546,23 @@ class LegacySystem:
                 player.tree_search()
                 if tree.n_at_root() <= before:
                     break
-        st = tree.root_target_stats()
-        return {
-            "legal": [int(x) for x in st["legal"]],
-            "child_n": [float(x) for x in st["child_n"]],
-            "child_q": [float(x) for x in st["child_q"]],
-            "child_prior": [float(x) for x in st["child_prior"]],
-            "root_value": float(st["root_value"]),
-            "raw_value": float(st["raw_value"]),
-            "root_n": float(st["root_n"]),
-            "chosen": int(tree.pick_best_action()),
-        }
+        return player
+
+
+def root_stats(player) -> dict:
+    """A searched ``RustMCTSPlayer``'s root statistics (legal, visits, Q, priors, values, the chosen index)."""
+    tree = player._rust_player
+    st = tree.root_target_stats()
+    return {
+        "legal": [int(x) for x in st["legal"]],
+        "child_n": [float(x) for x in st["child_n"]],
+        "child_q": [float(x) for x in st["child_q"]],
+        "child_prior": [float(x) for x in st["child_prior"]],
+        "root_value": float(st["root_value"]),
+        "raw_value": float(st["raw_value"]),
+        "root_n": float(st["root_n"]),
+        "chosen": int(tree.pick_best_action()),
+    }
 
 
 def _prior_temperature_suffix(spec: str):
@@ -642,6 +652,10 @@ class GenericSystem:
     def search(self, game, readouts: Optional[int] = None) -> dict:
         """A fresh search at ``game`` (as :meth:`LegacySystem.search`): the root evaluated, then batches until it
         has ``readouts`` visits; the root's statistics."""
+        return root_stats(self.grown_player(game, readouts))
+
+    def grown_player(self, game, readouts: Optional[int] = None):
+        """The ``RustMCTSPlayer`` of :meth:`search` after its search (``play_move`` plays from its root)."""
         if not self.can_search:
             raise ValueError(f"{self.spec}: a policy-only spec (sample=<t>) has no search")
         import torch
@@ -667,17 +681,7 @@ class GenericSystem:
                 player.tree_search()
                 if tree.n_at_root() <= before:
                     break
-        st = tree.root_target_stats()
-        return {
-            "legal": [int(x) for x in st["legal"]],
-            "child_n": [float(x) for x in st["child_n"]],
-            "child_q": [float(x) for x in st["child_q"]],
-            "child_prior": [float(x) for x in st["child_prior"]],
-            "root_value": float(st["root_value"]),
-            "raw_value": float(st["raw_value"]),
-            "root_n": float(st["root_n"]),
-            "chosen": int(tree.pick_best_action()),
-        }
+        return player
 
 
 class MixedSystem(GenericSystem):
