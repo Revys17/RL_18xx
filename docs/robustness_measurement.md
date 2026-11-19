@@ -303,7 +303,7 @@ arrangements, from the private auction under the real rules, argmax play; score 
 | win05 vs score05 (the head the bots searched until 11-14) | .481 +- .023 | .454 | | 42 |
 | blend05 vs score05 | **.562** +- .023 | .501 | | 48 |
 | score10 vs score05 (prior T 1.0 vs gen6's 0.5, the live head) | **.609** +- .022 | .524 | .544-.725, all six > .5 | 55 |
-| blend10 vs score10 (added 2026-11-19, `blend10_vs_score10`) | running | | | |
+| blend10 vs score10 (added 2026-11-19, `blend10_vs_score10`) | **.548** +- .023 | .494 | | 57 |
 
 - **Loosening the prior is the biggest gain**: T 1.0 beats the bots' T 0.5 by ~5 standard errors with the same head and
   budget. M1 doesn't see it (score10 = score05 = 0.46 pass): at the regression positions the critic decides what
@@ -312,9 +312,70 @@ arrangements, from the private auction under the real rules, argmax play; score 
   0.46). The score head is no weaker than the win head (.481, within noise) and passes far more M1 positions (0.46 vs
   0.19), so the 11-14 switch to it cost no strength.
 - M1 of `blend10` (the blend at T 1.0): 0.41 pass (auction .24, loot_dump .27, sellout .56, doomed .30, suitcase 1.00).
-- The bots can take a prior temperature without a code change to their checkpoints: `main.py advisor
-  --play-prior-temperature T` (2026-11-19; default = the checkpoint's training temperature, gen6 0.5). Switching the
-  live bots is the user's call.
+- At T 1.0 the blend still wins more games than the score head (.548, ~2 standard errors) but ends with no more of the
+  net worth (.494, against .524 for the temperature change) and passes fewer M1 positions (0.41 vs 0.46): it trades
+  some of the score head's weakness gains for first places.
+- `main.py advisor --play-prior-temperature T` (2026-11-19) sets the play searches' prior temperature (default = the
+  checkpoint's training temperature, gen6 0.5; the advice search keeps it).
+- **The live bots search at prior T 1.0 since 2026-11-19 11:10, score head kept** (the user's decision; the blend
+  not taken because the weaknesses are the priority): all three services (5002, 5004, 5014) moved to deployment
+  advisor-20261119 with `--play-prior-temperature 1.0`
+  (`/home/revys/longrun/experiments/step2b_blend10_20261119/swap_prior.sh`; old command lines in `swap_prior.log`
+  there, for a rollback).
+
+### gen6's search value (`search_value_gen6.sh`, 2026-11-19, GPU)
+
+`scripts/launch/2026-11/bridge/search_value_gen6.sh`: gen6 u2400's policy searched at 200 readouts (`@200/0.05:mean,
+dedupe,par=8,ptemp=0.5,budget=total`, win head) with its own critic or with lr1's v4, against gen6's policy alone at
+T 0.5; 4p 2v2, 480 games a match from human first-Stock-Round starts (+ 20% random auction endings);
+`/home/revys/longrun/experiments/step2_search_20261118/`.
+
+| Match (A vs B) | A's win share | A's worth share |
+|---|---|---|
+| gen6 + critic 2400, searched, vs gen6 alone | **.840** +- .017 | .557 |
+| gen6 + lr1 v4, searched, vs gen6 alone | **.842** +- .017 | .556 |
+| gen6 + critic vs gen6 + v4 (both searched) | .481 +- .023 | .488 |
+| control: gen6 alone at T 0.05 vs at T 0.5 | .485 +- .023 | .500 |
+
+Search is worth a great deal on top of gen6 (~.84, where greedier play alone gains nothing), and the two values are
+equal: the bots' critic (since 11-13) costs nothing against v4, which they searched with before.
+
+### The auction check (2026-11-19, CPU)
+
+`scripts/robustness/auction_check.py`: a candidate auction system holds 1 seat of a real 4-player waterfall auction,
+the bots' auction system (gen6 u2400 + its critic, score head, 400 readouts, priors at T 0.5: the bots before the
+switch above) the other 3. 400 auctions a run, each opened with 0-6 actions of a random human auction; the same
+openings and candidate seats in every run, so runs pair up against the control (all four seats the bots' system).
+Every decision searched with a fresh tree. Judged at the first Stock Round: 8 play-outs of the rest by gen6's policy
+(T 0.5) per auction, and value networks' estimates. A side's own value favours it: the play-outs, v4 and value_v2 are
+the neutral judges, and the bots' critic is the control's own value. Results `logs/robustness/auction_check/` (main
+checkout; `report.txt`), `/home/revys/longrun/experiments/auction_check_20261119/`.
+
+Paired difference from the control, the candidate seat's win share (fair .25):
+
+| Candidate (1 seat) | play-outs | v4 | value_v2 | bots' critic | human critic (its own) |
+|---|---|---|---|---|---|
+| gen6 + the human-game critic (critic1ep), score head, T 0.5 | +.017 +- .012 | +.006 +- .002 | -.013 +- .002 | +.011 +- .004 | +.013 +- .003 |
+| generic SL + critic1ep, score head, T 1.0 | +.019 +- .013 | +.017 +- .002 | -.015 +- .002 | **+.031** +- .005 | +.025 +- .003 |
+
+Mean price paid by the candidate seat vs the bots' seats (human median):
+
+| Private | control | gen6 + critic1ep | generic SL + critic1ep | human median |
+|---|---|---|---|---|
+| CS | 52 | 49 | **44** | 45 |
+| DH | 100 | 94 | **77** | 80 |
+| MH | 120 | 125 | 119 | 135 |
+| CA | 189 | 197 | 194 | 210 |
+
+- **Swapping only the value** (gen6's policy with the human-game critic) buys more of the big privates (MH, CA, B&O:
+  454 purchases by the candidate seat in 400 auctions vs the control's 293) at much the same prices, and the judges disagree on
+  it: not worth switching.
+- **The generic SL policy with the human-game critic bids like humans** (DH $77 where the bots pay $98-100, CS $44 vs
+  $52), leaves the small privates to others (SV / CS / DH 103 purchases vs the control's 274) and takes the big ones
+  (541 vs 293); every judge but value_v2 scores its auctions higher, the bots' own critic by +.031.
+  The play-outs, the most direct judge, lean the same way but within noise. Auction-only scoring can flatter a
+  system (it judges the position, not the rest of the game), so the next test is full games with only the auction
+  played by this system. A lead for weakness 1, not a switch yet.
 
 ### The generic SL start and a human-game value (2026-11-18, GPU)
 
