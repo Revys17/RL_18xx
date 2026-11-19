@@ -1592,6 +1592,13 @@ def build_parser():
         "likely price cell; T > 0 samples the move from softmax(log p / T) and the price from the price head",
     )
     p.add_argument(
+        "--play-prior-temperature", type=float, default=None,
+        help="Read the play policies at softmax(logits / T): the play searches' priors (and --play-mode policy's "
+        "probabilities). Default: each checkpoint's training temperature (a policy-gradient run's "
+        "learner_temperature, gen6 0.5; 1 for supervised checkpoints). 2026-11-19: T 1.0 beat 0.5 for gen6 + "
+        "critic @400, .609 +- .022 over 480 4p games (docs/robustness_measurement.md)",
+    )
+    p.add_argument(
         "--play-value-head", type=str, default="win",
         help="Which head of the play values the seat-playing searches read: win (default), score (a "
         "policy-gradient critic's placement points: a losing seat still prefers 3rd to going bankrupt) or "

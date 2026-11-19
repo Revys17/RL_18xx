@@ -291,6 +291,31 @@ between runs (all auction positions with near-even visits), one of them (g15-a14
 Dry run of the whole script (CPU, `DRY=1`: M1 on 3 positions at 16 readouts for each variant, the three matches at 8
 readouts, 6 games of max 300 decisions): every step ran and wrote its summary; a 6-game match took ~1.2 min.
 
+### Step 0's matches (2026-11-18/19, GPU)
+
+Step 2 of the GPU runbook (`/home/revys/longrun/experiments/step2_search_20261118/`; results
+`logs/robustness/step0_search_settings/` in the main checkout). 4-player 2v2, 480 games a match over all six seat
+arrangements, from the private auction under the real rules, argmax play; score = A's share of the wins (fair .50);
+~2 h a match with the GPU shared.
+
+| Match (A vs B) | **A's win share** | A's worth share | by arrangement | games at the length cap |
+|---|---|---|---|---|
+| win05 vs score05 (the head the bots searched until 11-14) | .481 +- .023 | .454 | | 42 |
+| blend05 vs score05 | **.562** +- .023 | .501 | | 48 |
+| score10 vs score05 (prior T 1.0 vs gen6's 0.5, the live head) | **.609** +- .022 | .524 | .544-.725, all six > .5 | 55 |
+| blend10 vs score10 (added 2026-11-19, `blend10_vs_score10`) | running | | | |
+
+- **Loosening the prior is the biggest gain**: T 1.0 beats the bots' T 0.5 by ~5 standard errors with the same head and
+  budget. M1 doesn't see it (score10 = score05 = 0.46 pass): at the regression positions the critic decides what
+  search does, but over whole games a search that can leave gen6's sharp policy plays better.
+- The blend (0.5 win + 0.5 score) beats the score head by ~2.7 standard errors but passes fewer M1 positions (0.34 vs
+  0.46). The score head is no weaker than the win head (.481, within noise) and passes far more M1 positions (0.46 vs
+  0.19), so the 11-14 switch to it cost no strength.
+- M1 of `blend10` (the blend at T 1.0): 0.41 pass (auction .24, loot_dump .27, sellout .56, doomed .30, suitcase 1.00).
+- The bots can take a prior temperature without a code change to their checkpoints: `main.py advisor
+  --play-prior-temperature T` (2026-11-19; default = the checkpoint's training temperature, gen6 0.5). Switching the
+  live bots is the user's call.
+
 ### The generic SL start and a human-game value (2026-11-18, GPU)
 
 The arms' start (`model_checkpoints_generic/bridge_1830_check_20261113/final.pth`, the generic SL) and its critic start

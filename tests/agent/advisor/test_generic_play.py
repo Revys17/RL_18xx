@@ -176,6 +176,14 @@ def test_the_command_line_serves_generic_play_systems(advisor_checkpoints, gener
     assert isinstance(models.play_auction_value, GenericNetwork) and models.labels["play_mode"] == "policy@0.5"
     default = load_models(main.build_parser().parse_args(argv), "cpu")
     assert default.play_mode == "search" and default.labels["play_mode"] == "search"
+    assert default.labels["play_prior_temperature"] == "training"
+    hot = load_models(main.build_parser().parse_args(argv + ["--play-prior-temperature", "0.7"]), "cpu")
+    assert hot.play_policy_temperature == 0.7 and hot.play_auction_policy_temperature == 0.7
+    assert hot.policy_temperature == default.policy_temperature  # the advice search keeps its own
+    assert hot.labels["play_prior_temperature"] == "0.7"
+    assert hot.game_network("main").policy_temperature == 0.7
+    with pytest.raises(ValueError, match="prior temperature"):
+        load_models(main.build_parser().parse_args(argv + ["--play-prior-temperature", "0"]), "cpu")
 
 
 def test_the_swap_script_rewrites_a_services_play_options():

@@ -322,6 +322,7 @@ def load_models(args, device: str):
         play_value_head=getattr(args, "play_value_head", None) or "win",
         play_mode=getattr(args, "play_mode", None) or "search",
         play_temperature=float(getattr(args, "play_temperature", 0.0) or 0.0),
+        play_prior_temperature=getattr(args, "play_prior_temperature", None),
     )
 
 
@@ -335,13 +336,14 @@ def run(args) -> None:
     models = load_models(args, device)
     labels = models.labels
     LOGGER.info(
-        "The model plays seats with %s + value %s (%s head; private auction: %s + %s; mode %s)",
+        "The model plays seats with %s + value %s (%s head; private auction: %s + %s; mode %s; prior T %s)",
         labels["play_policy"],
         labels["play_value"],
         labels["play_value_head"],
         labels["play_auction_policy"],
         labels["play_auction_value"],
         labels["play_mode"],
+        labels["play_prior_temperature"],
     )
     advisor = Advisor(models)
     web_site_ports = getattr(args, "web_site_port", None) or []

@@ -178,12 +178,15 @@ class AdvisorModels:
         play_value_head: str = "win",
         play_mode: str = "search",
         play_temperature: float = 0.0,
+        play_prior_temperature: Optional[float] = None,
     ) -> "AdvisorModels":
         """Load the checkpoints (a path given twice is loaded once). The play systems
         default to the advice search's: ``play_policy`` to ``policy``, ``play_value`` to
         the search's value, ``play_auction_policy`` to ``auction_policy`` and
         ``play_auction_value`` to ``play_value``. Only the play systems take generic
-        checkpoints (``generic:<path>``)."""
+        checkpoints (``generic:<path>``). ``play_prior_temperature``: the temperature T the play
+        policies are read at, softmax(logits / T) -- the play searches' priors and ``play_mode``
+        "policy"'s probabilities (None: each checkpoint's training temperature, ``training_temperature``)."""
         from rl18xx.agent.alphazero.composite_model import parse_value_head
         from rl18xx.agent.alphazero.game_network import is_generic_spec, spec_path
 
@@ -196,6 +199,8 @@ class AdvisorModels:
             raise ValueError(f"play mode {play_mode!r}: one of {', '.join(PLAY_MODES)}")
         if float(play_temperature) < 0:
             raise ValueError("the play temperature must be >= 0")
+        if play_prior_temperature is not None and not float(play_prior_temperature) > 0:
+            raise ValueError("the play prior temperature must be > 0")
         parse_value_head(play_value_head)
         loaded: dict = {}
 
@@ -207,6 +212,8 @@ class AdvisorModels:
             return loaded[key]
 
         def temperature(spec) -> float:
+            if play_prior_temperature is not None:
+                return float(play_prior_temperature)
             return training_temperature(spec_path(spec))
 
         play_policy = play_policy or policy
@@ -228,6 +235,9 @@ class AdvisorModels:
                 "play_auction_value": checkpoint_label(play_auction_value),
                 "play_value_head": play_value_head,
                 "play_mode": play_mode if play_mode == "search" else f"policy@{float(play_temperature):g}",
+                "play_prior_temperature": (
+                    "training" if play_prior_temperature is None else f"{float(play_prior_temperature):g}"
+                ),
             },
             search_value=get(search_value) if search_value else None,
             policy_temperature=training_temperature(policy),
