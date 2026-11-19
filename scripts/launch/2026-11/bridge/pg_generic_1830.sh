@@ -31,8 +31,9 @@ cd "$(dirname "$0")/../../../.."  # the repository root (run from a checkout wit
 
 RUN=${RUN:-gpg1830_20261113}
 SL=${SL:-model_checkpoints_generic/bridge_1830_check_20261113/final.pth}  # gpu_check_1830.sh's $OUT/final.pth
-# The critic's start (main.py policy-gradient-generic --value; empty = the SL checkpoint's own value heads).
-VALUE=${VALUE:-}
+# The critic's start (main.py policy-gradient-generic --value): the same recipe trained 1 epoch, value heads refit
+# (win CE .952 vs the 10-epoch SL's memorized 1.193; docs/training_runs_2026_11.md). VALUE=$SL: the SL's own heads.
+VALUE=${VALUE:-model_checkpoints_generic/bridge_1830_critic1ep_20261118/final.pth}
 OUT_DIR=${OUT_DIR:-model_checkpoints_generic_pg}
 POP=${POP:-$OUT_DIR/populations/league_generic_1830_v1.json}
 EVAL_OUT=${EVAL_OUT:-logs/eval/$RUN}

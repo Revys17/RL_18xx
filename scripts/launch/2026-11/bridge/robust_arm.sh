@@ -137,7 +137,9 @@ if [ -n "$DRY" ]; then
 else
   OUT_DIR=${OUT_DIR:-model_checkpoints_generic_pg}
   SL=${SL:-model_checkpoints_generic/bridge_1830_check_20261113/final.pth}  # gpu_check_1830.sh's $OUT/final.pth
-  VALUE=${VALUE:-}  # the critic's start (--value; empty = the SL checkpoint's value heads)
+  # The critic's start (--value): the SL recipe trained 1 epoch, value heads refit (win CE .952 vs the 10-epoch
+  # SL's memorized 1.193; docs/training_runs_2026_11.md). VALUE=$SL: the SL's own heads.
+  VALUE=${VALUE:-model_checkpoints_generic/bridge_1830_critic1ep_20261118/final.pth}
   MAX_UPDATES=${MAX_UPDATES:-300}
   EVAL_EVERY=${EVAL_EVERY:-100}
   EVAL_GAMES=${EVAL_GAMES:-400}

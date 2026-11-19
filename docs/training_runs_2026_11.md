@@ -123,6 +123,12 @@ the four matches 28 min.
   validation 1.19: the trunk already carries the training games' outcomes). At 3 and 5 players it is no better than
   equal odds. Every generic PG run starts its critic from a checkpoint's value heads, so the critic gets its own start
   (next item).
+- **The critic's start** (`model_checkpoints_generic/bridge_1830_critic1ep_20261118/final.pth`): the same recipe for 1
+  epoch (`--epochs 1 --refit-eval-steps 50 --refit-patience 8`, 7 min + a 5-min refit): win CE **.952** (2-6p .409 /
+  .839 / .915 / 1.174 / 1.438; ckpt 10 .395 / .735 / .898 / 1.195 / 1.385), train CE = validation (no memorization);
+  its policy (top-1 ~.75) is unused. `robust_arm.sh` and `pg_generic_1830.sh` start the critic from it (`VALUE`,
+  `--value`); the learner still starts from the 10-epoch SL. For 1867 / the 1822 family the same split is likely
+  needed (`title_recipe.sh` has no `VALUE` yet).
 
 ## Open threads
 
