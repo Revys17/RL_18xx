@@ -12,8 +12,8 @@
 #   bash scripts/launch/2026-11/bridge/pg_generic_1830.sh evals      # one round of policy-only evals now
 #
 # Departures from gen6's run.sh (scripts/launch/2026-11/gen6_20261110/run.sh), each named:
-# - Start: the generic SL checkpoint (gen6 started from gen5); the critic starts from the same checkpoint's
-#   value heads (gen6: gen5's critic) -- no generic PG critic exists yet.
+# - Start: the generic SL checkpoint (gen6 started from gen5); the critic starts from VALUE, the same recipe trained
+#   1 epoch with its value heads refit (gen6: gen5's critic) -- the 10-epoch SL's value heads memorized its games.
 # - League: the generic SL checkpoint alone at first, then the learner's own snapshots (every 50 updates, the
 #   latest 4) -- legacy checkpoints (gen4 .. gen6, the exploiters) cannot sit in a generic league (they need
 #   the legacy encoder and server); they are the eval panel instead. So the first updates are pg1-like

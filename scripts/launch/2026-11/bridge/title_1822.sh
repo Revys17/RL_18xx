@@ -7,7 +7,7 @@
 #   bash scripts/launch/2026-11/bridge/title_1822.sh pretrain         # ~4-4.5 GPU h; <sl>/family_report.txt
 #   nohup bash scripts/launch/2026-11/bridge/title_1822.sh pg > logs/gpg1822.log 2>&1 &   # resumes when re-run
 #   bash scripts/launch/2026-11/bridge/title_1822.sh evals | evalloop
-#   DRY=1 DRY_ROOT=<scratch> bash .../title_1822.sh pretrain pg       # the CPU dry run (tiny everything)
+#   DRY=1 DRY_ROOT=<scratch> bash .../title_1822.sh pretrain critic pg       # the CPU dry run (tiny everything)
 #
 # Run from a checkout with human_games/ (the main checkout), or set HG to its absolute path.
 #

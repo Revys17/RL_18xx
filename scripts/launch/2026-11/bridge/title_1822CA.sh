@@ -6,7 +6,7 @@
 #   bash scripts/launch/2026-11/bridge/title_1822CA.sh pretrain       # ~1.7 GPU h; <sl>/family_report.txt
 #   nohup bash scripts/launch/2026-11/bridge/title_1822CA.sh pg > logs/gpg1822CA.log 2>&1 &   # resumes when re-run
 #   bash scripts/launch/2026-11/bridge/title_1822CA.sh evals | evalloop
-#   DRY=1 DRY_ROOT=<scratch> bash .../title_1822CA.sh pretrain pg     # the CPU dry run (tiny everything)
+#   DRY=1 DRY_ROOT=<scratch> bash .../title_1822CA.sh pretrain critic pg     # the CPU dry run (tiny everything)
 #
 # Data: human_games/generic_1822CA_v1 (124 finished games, 145,928 / 12,896 positions; converted after the
 # destination-hex and P / G train fixes). Starts: human_games/{start,midgame}_positions_1822CA_{n}p.jsonl (SR1-end

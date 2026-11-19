@@ -6,7 +6,7 @@
 #   bash scripts/launch/2026-11/bridge/title_1822MX.sh pretrain       # ~1 GPU h; <sl>/family_report.txt
 #   nohup bash scripts/launch/2026-11/bridge/title_1822MX.sh pg > logs/gpg1822MX.log 2>&1 &   # resumes when re-run
 #   bash scripts/launch/2026-11/bridge/title_1822MX.sh evals | evalloop
-#   DRY=1 DRY_ROOT=<scratch> bash .../title_1822MX.sh pretrain pg     # the CPU dry run (tiny everything)
+#   DRY=1 DRY_ROOT=<scratch> bash .../title_1822MX.sh pretrain critic pg     # the CPU dry run (tiny everything)
 #
 # Data: human_games/generic_1822MX_v1 (229 finished games, 214,582 / 10,937 positions; docs/rl_model.md "1822
 # family"). Starts: human_games/{start,midgame}_positions_1822MX_{n}p.jsonl (SR1-end starts, mid-game cuts SR2-SR6).

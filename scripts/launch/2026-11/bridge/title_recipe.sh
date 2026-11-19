@@ -3,10 +3,14 @@
 # title_<title>.sh, which sets the per-title variables below and calls `title_main "$@"`. The plan, the per-title
 # settings and the GPU estimates are in docs/rl_model.md "GPU run queue".
 #
-# Steps (any subset, in this order; none = pretrain pg):
+# Steps (any subset, in this order; none = pretrain critic pg):
 #   pretrain  supervised two-stage pretraining (default-size model) on the title's human dataset, as the 1830 GPU check
 #             (gpu_check_1830.sh: 10 epochs, batch 256, lr 1e-3 cosine, patience 4, value refit), then
 #             scripts/generic_sl_report.py -> <sl run>/family_report.txt (top-1 per descriptor family vs chance)
+#   critic    the critic's start: the same recipe for 1 epoch (value refit every 50 steps, patience 8) -> CRITIC_OUT.
+#             The 10-epoch SL's value heads memorize the training games (1830: win CE 1.193 vs .952 after 1 epoch,
+#             docs/training_runs_2026_11.md "The generic 1830 check"); `pg` starts its critic from VALUE
+#             ($CRITIC_OUT/final.pth; VALUE=$SL = the SL's own heads, the behaviour before 2026-11-18)
 #   pg        policy-gradient-generic from the SL checkpoint with gen6's recipe adapted (docs/training_runs_2026_11.md;
 #             departures named in the title scripts); resumes from state.json when the run exists. Runs in the
 #             foreground: start it with nohup / systemd-run for a long run.
@@ -17,7 +21,8 @@
 #   evalloop  `evals` for every new multiple of EVAL_EVERY until the run stops (STOP file or max updates)
 #
 # Environment (defaults in brackets): CPUS [24-31,56-63], WORKERS [32], DEVICE [cuda], TAG [20261114],
-# HG [human_games] (datasets and start files), SL_OUT / SL / OUT_DIR / PG_RUN / EVAL_OUT (paths), MAX_UPDATES,
+# HG [human_games] (datasets and start files), SL_OUT / SL / CRITIC_OUT / VALUE / OUT_DIR / PG_RUN / EVAL_OUT (paths),
+# MAX_UPDATES,
 # RESUME_MAX_UPDATES (a resume's new --max-updates), EVAL_GAMES [400], EVAL_WORKERS [16], EVAL_UPDATE,
 # MIX_FLOOR [10]: every player count of the PG mix gets at least this percent of the games (gen6 style; the counts
 # above it keep their proportions; 0 = the title's PLAYER_MIX as given; PLAYER_MIX itself can be overridden too).
@@ -54,6 +59,7 @@ if [ -n "$DRY" ]; then
   DRY_ROOT=${DRY_ROOT:?DRY=1 needs DRY_ROOT (a scratch directory)}
   DEVICE=cpu
   SL_OUT=${SL_OUT:-$DRY_ROOT/$TITLE/sl}
+  CRITIC_OUT=${CRITIC_OUT:-$DRY_ROOT/$TITLE/critic}
   OUT_DIR=${OUT_DIR:-$DRY_ROOT/$TITLE/pg}
   EVAL_OUT=${EVAL_OUT:-$DRY_ROOT/$TITLE/eval}
   WORKERS=${WORKERS:-3}
@@ -67,6 +73,9 @@ if [ -n "$DRY" ]; then
   PRETRAIN_ARGS=(--model-preset small --device cpu --workers 2 --threads 2 --batch-size 32 --max-steps 60
     --eval-every 30 --train-max-games 30 --val-max-games 2 --buffer-positions 2048 --refit-max-steps 20
     --refit-eval-steps 10 --log-every 10 --final-eval --report-max-games 2)
+  CRITIC_ARGS=(--model-preset small --device cpu --workers 2 --threads 2 --batch-size 32 --max-steps 30
+    --eval-every 30 --train-max-games 30 --val-max-games 2 --buffer-positions 2048 --refit-max-steps 20
+    --refit-eval-steps 10 --refit-patience 8 --log-every 10)
   PG_SCALE=(--workers "$WORKERS" --games-per-task 2 --positions-per-seat 8 --opponent-slots 1
     --slot-refresh-every 1 --league-snapshot-every 1 --league-max-snapshots 2 --anchor-every 1
     --rows-per-update 200 --minibatch 128 --microbatch 64 --snapshot-every 1 --save-game-every 2
@@ -77,6 +86,7 @@ if [ -n "$DRY" ]; then
 else
   DEVICE=${DEVICE:-cuda}
   SL_OUT=${SL_OUT:-model_checkpoints_generic/bridge_${TITLE}_sl_$TAG}
+  CRITIC_OUT=${CRITIC_OUT:-model_checkpoints_generic/bridge_${TITLE}_critic1ep_$TAG}
   OUT_DIR=${OUT_DIR:-model_checkpoints_generic_pg}
   WORKERS=${WORKERS:-32}
   EVAL_GAMES=${EVAL_GAMES:-400}
@@ -85,6 +95,9 @@ else
   # The 1830 GPU check's settings (= the legacy SL ckpt 10 recipe) + the final evaluation on the validation split.
   PRETRAIN_ARGS=(--model-preset default --device "$DEVICE" --workers 6 --threads 4 --epochs 10 --batch-size 256
     --lr 1e-3 --final-eval)
+  # The critic's start: the same recipe for one epoch, its value heads refit before the trunk memorizes outcomes.
+  CRITIC_ARGS=(--model-preset default --device "$DEVICE" --workers 6 --threads 4 --epochs 1 --batch-size 256
+    --lr 1e-3 --refit-eval-steps 50 --refit-patience 8)
   # gen6's scale (32 workers, 32 rows per learner seat, 3 opponent slots per count, own snapshots every 50 (4 kept),
   # anchor every 50, 65,536 rows per update, minibatch 2,048, snapshot every 10, every 20th game saved), the
   # learner server in 2 replicas; microbatch and server batch per title (activation memory: docs/rl_model.md
@@ -102,6 +115,7 @@ fi
 # disposable: the steps still create their directories and the league file).
 [ -n "${ECHO:-}" ] && PY=(echo "${PY[@]}")
 SL=${SL:-$SL_OUT/final.pth}
+VALUE=${VALUE:-$CRITIC_OUT/final.pth}
 PG_RUN=${PG_RUN:-gpg${TITLE}_$TAG}
 POP=${POP:-$OUT_DIR/populations/league_generic_${TITLE}_v1.json}
 EVAL_OUT=${EVAL_OUT:-logs/eval/$PG_RUN}
@@ -158,6 +172,18 @@ step_pretrain() {
   "${PY[@]}" scripts/generic_sl_report.py "$SL_OUT" --data "$DATA" --out "$SL_OUT/family_report.txt"
 }
 
+step_critic() {
+  mkdir -p "$CRITIC_OUT"
+  if [ -e "$CRITIC_OUT/final.pth" ]; then
+    echo "critic: $CRITIC_OUT/final.pth exists, kept"
+    return
+  fi
+  [ -e "$DATA/meta.json" ] || { echo "critic: no dataset at $DATA"; return 1; }
+  "${PY[@]}" main.py pretrain-generic --data "$DATA" --out "$CRITIC_OUT" "${CRITIC_ARGS[@]}" \
+    2>&1 | tee -a "$CRITIC_OUT/train.log"
+  [ "${PIPESTATUS[0]}" = 0 ] || { echo "critic failed"; return 1; }
+}
+
 step_pg() {
   local rules=()
   [ -n "$RULES_MIX" ] && rules=(--rules-mix "$RULES_MIX")
@@ -168,11 +194,12 @@ step_pg() {
     return
   fi
   [ -f "$SL" ] || { echo "pg: no SL checkpoint at $SL (run the pretrain step first)"; return 1; }
+  [ -f "$VALUE" ] || { echo "pg: no critic start at $VALUE (run the critic step, or VALUE=\$SL for the SL's heads)"; return 1; }
   mkdir -p "$(dirname "$POP")"
   [ -f "$POP" ] || printf '{"note": "%s %s: the generic SL checkpoint (own snapshots join per run)", %s}\n' \
     "$TITLE" "$PG_RUN" "\"members\": [{\"path\": \"$SL\", \"note\": \"generic SL (pretrain step)\"}]" > "$POP"
   "${PY[@]}" main.py policy-gradient-generic --run-name "$PG_RUN" --out-dir "$OUT_DIR" --title "$TITLE" \
-    --policy "$SL" --player-mix "$PG_MIX" "${rules[@]}" \
+    --policy "$SL" --value "$VALUE" --player-mix "$PG_MIX" "${rules[@]}" \
     --max-decisions "$MAX_DECISIONS" --max-decisions-by-players "$CAPS" \
     "${PG_SCALE[@]}" --population "$POP" --pfsp-power 2.0 --reward placement \
     --ppo-epochs 1 --clip 0.2 --lr 2e-5 --critic-lr 3e-5 --kl-coef 0.02 --kl-target 0.08 --kl-coef-min 0.005 \
@@ -263,12 +290,12 @@ step_evalloop() {
 
 title_main() {
   local steps=("$@") s
-  [ ${#steps[@]} -eq 0 ] && steps=(pretrain pg)
-  echo "$TITLE recipe: steps ${steps[*]}${DRY:+ (DRY RUN under $DRY_ROOT)}; SL $SL; PG run $RUN_DIR; counts $COUNTS (PG mix $PG_MIX)"
+  [ ${#steps[@]} -eq 0 ] && steps=(pretrain critic pg)
+  echo "$TITLE recipe: steps ${steps[*]}${DRY:+ (DRY RUN under $DRY_ROOT)}; SL $SL; critic start $VALUE; PG run $RUN_DIR; counts $COUNTS (PG mix $PG_MIX)"
   for s in "${steps[@]}"; do
     case "$s" in
-      pretrain | pg | evals | evalloop) "step_$s" || { echo "$TITLE: step $s failed"; return 1; } ;;
-      *) echo "unknown step $s (pretrain pg evals evalloop)"; return 2 ;;
+      pretrain | critic | pg | evals | evalloop) "step_$s" || { echo "$TITLE: step $s failed"; return 1; } ;;
+      *) echo "unknown step $s (pretrain critic pg evals evalloop)"; return 2 ;;
     esac
   done
 }

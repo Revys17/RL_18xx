@@ -2092,7 +2092,7 @@ GPU frees up. Scripts in `scripts/launch/2026-11/bridge/`:
 | script | what |
 |---|---|
 | `title_1867.sh`, `title_1822.sh` (the 1822+ rules mix), `title_1822PNW.sh`, `title_1822MX.sh`, `title_1822CA.sh` | the per-title settings (the header names every departure from gen6), then the shared steps |
-| `title_recipe.sh` | the shared steps, sourced: `pretrain`, `pg`, `evals`, `evalloop` (no step = `pretrain pg`) |
+| `title_recipe.sh` | the shared steps, sourced: `pretrain`, `critic` (the same recipe for 1 epoch, value heads refit: the PG critic's start, `VALUE`; since 2026-11-18, `docs/training_runs_2026_11.md` "The generic 1830 check"), `pg`, `evals`, `evalloop` (no step = `pretrain critic pg`) |
 | `panel_status.py` | panel means per eval round and the plateau rule (printed, never acted on) |
 | `search_value_gen6.sh` | the pending gen6 search-value check (legacy engine and models, `scripts/eval_head_to_head.py`) |
 | `scripts/generic_sl_report.py` | a `pretrain-generic` run's top-1 per descriptor family vs chance (the `pretrain` step writes `<sl run>/family_report.txt`) |

@@ -7,7 +7,7 @@
 #   nohup bash scripts/launch/2026-11/bridge/title_1867.sh pg > logs/gpg1867.log 2>&1 &   # resumes when re-run
 #   bash scripts/launch/2026-11/bridge/title_1867.sh evals            # one eval round of the newest u%200 snapshot
 #   bash scripts/launch/2026-11/bridge/title_1867.sh evalloop         # every 200 updates until the run stops
-#   DRY=1 DRY_ROOT=<scratch> bash .../title_1867.sh pretrain pg       # the CPU dry run (tiny everything)
+#   DRY=1 DRY_ROOT=<scratch> bash .../title_1867.sh pretrain critic pg       # the CPU dry run (tiny everything)
 #
 # Run from a checkout with human_games/ (the main checkout), or set HG to its absolute path.
 #
@@ -15,7 +15,8 @@
 # human_games/{start,midgame}_positions_1867_{n}p.jsonl (SR1 after the human auction; mid-game cuts SR2-SR6).
 #
 # The recipe = gen6's (scripts/launch/2026-11/gen6_20261110/run.sh) with these departures, each named:
-# - Start: the generic 1867 SL checkpoint (gen6: gen5); the critic starts from its value heads (no 1867 critic exists).
+# - Start: the generic 1867 SL checkpoint (gen6: gen5); the critic starts from the `critic` step's 1-epoch run (its value
+#   heads before they memorize; no 1867 critic exists).
 # - League: the SL checkpoint alone at first, then the learner's own snapshots (every 50, the latest 4), PFSP per
 #   player count (CountLeague) -- no other 1867 agents exist (gen6: a 33-member league).
 # - Player mix by the human games' shares at 3-6 players: 3p 205, 4p 509, 5p 109, 6p 17 of 840 finished games ->
