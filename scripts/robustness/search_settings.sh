@@ -6,7 +6,7 @@
 #                   18:32) or (1 - w) win + w score (#blend=0.5);
 #   the prior temperature: 0.5 (gen6's learner temperature, today) or 1.0 (lets search overrule the sharp policy).
 # Variants (eval_head_to_head.py player specs, the syntax of scripts/launch/2026-11/bridge/search_value_gen6.sh):
-#   win05 / score05 / blend05: #win / #score / #blend=0.5 at ptemp 0.5;  win10 / score10: at ptemp 1.0
+#   win05 / score05 / blend05: #win / #score / #blend=0.5 at ptemp 0.5;  win10 / score10 / blend10: at ptemp 1.0
 # Two measurements:
 #   m1  -- the regression set (scripts/robustness/regression_set.py score; ~3 s a position on 4 CPU threads, 59
 #          positions: ~3 min a variant on CPU, no GPU needed)
@@ -17,6 +17,8 @@
 #            blend_vs_score    blend05 vs score05
 #            ptemp1_vs_ptemp05 score10 vs score05   prior temperature with the live head
 #            win_ptemp1        win10 vs win05       prior temperature with the win head (optional: STEPS)
+#            blend10_vs_score10 blend10 vs score10  the blend at ptemp 1.0 (optional: STEPS; added 2026-11-19 after
+#                              blend_vs_score .562 and ptemp1_vs_ptemp05 .609)
 # ~1.5-2 GPU h per 480-game match at 400 readouts with both sides searching (scaled from the 2026-11-02 @200 2v2
 # matches, ~55 min; budget=total keeps trees, so evaluations grow less than 2x): ~6-8 GPU h for the first three.
 #
@@ -61,6 +63,7 @@ declare -A VARIANT=(
   [blend05]="$GEN6L+$GEN6C#blend=0.5@$READOUTS$PUCT,ptemp=0.5"
   [win10]="$GEN6L+$GEN6C@$READOUTS$PUCT,ptemp=1.0"
   [score10]="$GEN6L+$GEN6C#score@$READOUTS$PUCT,ptemp=1.0"
+  [blend10]="$GEN6L+$GEN6C#blend=0.5@$READOUTS$PUCT,ptemp=1.0"
 )
 if [ "${STARTS:-auction}" = sr1 ]; then
   STARTS_ARGS=(--start-positions "$HG/start_positions_1830_4p_v2.jsonl" --random-start-fraction 0.2)
@@ -71,7 +74,7 @@ PY=(taskset -c "$CPUS" nice -n 19 env OMP_NUM_THREADS=2 "$ROOT/.venv/bin/python"
 for f in "$GEN6L" "$GEN6C"; do [ -f "$f" ] || { echo "missing checkpoint $f"; exit 1; }; done
 
 m1() {  # the regression set for every variant (the variant's spec minus its readouts: the scorer's --search)
-  for v in win05 score05 blend05 win10 score10; do
+  for v in win05 score05 blend05 win10 score10 blend10; do
     local spec=${VARIANT[$v]}
     local model=${spec%@*} search="@${spec##*@}"
     search=${search/,budget=total/}  # a fresh tree per position: nothing to keep
@@ -93,7 +96,8 @@ for step in "${STEPS[@]}"; do
     blend_vs_score) A=${VARIANT[blend05]}; B=${VARIANT[score05]} ;;
     ptemp1_vs_ptemp05) A=${VARIANT[score10]}; B=${VARIANT[score05]} ;;
     win_ptemp1) A=${VARIANT[win10]}; B=${VARIANT[win05]} ;;
-    *) echo "unknown step $step (m1 win_vs_score blend_vs_score ptemp1_vs_ptemp05 win_ptemp1)"; exit 2 ;;
+    blend10_vs_score10) A=${VARIANT[blend10]}; B=${VARIANT[score10]} ;;
+    *) echo "unknown step $step (m1 win_vs_score blend_vs_score ptemp1_vs_ptemp05 win_ptemp1 blend10_vs_score10)"; exit 2 ;;
   esac
   if [ -e "$OUT/$step/summary.json" ]; then echo "$step: done, kept"; continue; fi
   "${PY[@]}" scripts/eval_head_to_head.py --match "$A" "$B" --games "$GAMES" --num-players 4 --a-seats 2 \
