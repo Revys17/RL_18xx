@@ -188,6 +188,27 @@ def test_bf16_training_steps(dataset_dir, tmp_path):
         val_max_games=1,
     )
     summary = gp.pretrain(cfg)
-    assert summary["joint"]["steps"] == 6 and np.isfinite(summary["joint"]["best_val_total"])
+    assert summary["joint"]["steps"] == 6 and np.isfinite(summary["joint"]["best_val"])
+    assert summary["joint"]["select_key"] == "total"  # no value refit: the whole joint loss
     history = [json.loads(line) for line in (tmp_path / "bf16" / "history.jsonl").read_text().splitlines()]
     assert all(np.isfinite(h["total"]) for h in history if h["kind"] == "train")
+
+
+def test_select_metric():
+    """With the value refit on, the joint checkpoint is picked on the loss without its value terms: the value
+    heads are re-fit anyway and memorize the games long before the policy stops improving."""
+    base = dict(data="d", out="o")
+    assert gp.select_key(gp.GenericPretrainConfig(**base)) == "policy_total"
+    assert gp.select_key(gp.GenericPretrainConfig(**base, value_refit=False)) == "total"
+    assert gp.select_key(gp.GenericPretrainConfig(**base, select_metric="total")) == "total"
+    assert gp.select_key(gp.GenericPretrainConfig(**base, value_refit=False, select_metric="policy")) == "policy_total"
+    with pytest.raises(ValueError, match="select_metric"):
+        gp.select_key(gp.GenericPretrainConfig(**base, select_metric="value"))
+    cfg = gp.GenericPretrainConfig(**base, value_loss_weight=0.1, score_loss_weight=0.2)
+    # 1822CA's last two evaluations: the total rose (value 4.13 -> 5.07) while the policy part fell
+    a = {"total": 1.6269, "value": 4.1252, "score": 0.10}
+    b = {"total": 1.7133, "value": 5.0667, "score": 0.10}
+    for m in (a, b):
+        gp.add_policy_total(m, cfg)
+    assert a["policy_total"] == pytest.approx(1.6269 - 0.41252 - 0.02)
+    assert b["policy_total"] < a["policy_total"] and b["total"] > a["total"]

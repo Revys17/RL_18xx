@@ -464,7 +464,12 @@ The legacy recipe (`pretraining.pretrain_model` + `_refit_value_heads` with `mai
   + 0.1 win CE + 0.1 score MSE (placement points); AdamW lr 1e-3 (decay 1e-4 on matrices only, as
   `train.build_optimizer`), cosine to 0 over the planned steps, clip 1.0, batch 256, 10 epochs; bf16 autocast on
   CUDA (`--bf16 on` forces it on CPU), fp32 evaluation; validation per epoch (or `--eval-every` steps), the best
-  total validation loss saved as `best_joint.pth`, early stop after 4 evaluations without improvement.
+  validation loss saved as `best_joint.pth`, early stop after 4 evaluations without improvement. "Best" is
+  `--select-metric`: with the value refit on (default `auto`), the joint loss without its value terms (win CE,
+  score MSE; history key `policy_total`), else the total. Until 2026-11-18 it was the total, and on the smaller
+  titles the memorizing value side picked a checkpoint 1-4 epochs early and stopped the run while the policy still
+  improved (1822CA top-1 .619 selected vs .673 at the last epoch; `docs/training_runs_2026_11.md` "The new titles'
+  SL").
 * **Stage 2**: `best_joint.pth`'s value heads re-initialized (zero outputs: equal odds) and trained alone on the
   frozen network (`value_stop_grad`, value-only forwards), validated every 250 steps on the win CE (patience 4,
   at most 20k steps), the best heads saved as `refit.pth`; `final.pth` = the refit.
@@ -1206,7 +1211,7 @@ and synthetic 1867 games -- random walks over 1867's layout labelled by a test i
 * **Evaluation and selection.** `--eval-titles` (default all) are evaluated on `--select-split` (default
   `validation`) every `--eval-every` steps, each logged separately (history `{"kind": "eval", "source": label}`,
   TensorBoard `val_<label>/*`: policy CE, top-1 / top-5, top-1 per family and per player count, price NLL, win CE vs
-  the equal-odds baseline, winner accuracy). `--select-title` picks the dataset whose total loss selects
+  the equal-odds baseline, winner accuracy). `--select-title` picks the dataset whose loss (`--select-metric`) selects
   `best_joint.pth` and drives early stopping and the value refit's early stopping (default: the one dataset, else
   the mix-weighted mean over the evaluated ones). Training windows log policy CE / top-1 / share per dataset.
   The value refit (stage 2) trains on the run's mixed stream. `--final-eval` scores `final.pth` on every dataset's
@@ -2294,8 +2299,8 @@ in this queue: it waits for step 1's verdict and the user's call.
 7. **The gen6 search check's starts**: human SR1 starts (default: the bots search with v4 after the auction) or the
    private auction (`AUCTION=1`).
 8. **1822CA's supervised selection**: 114 training games; C3 found that at ~100 games early stopping on the total
-   validation loss is decided by the value side memorizing. The recipe keeps the legacy selection; selecting on policy
-   CE would need a flag.
+   validation loss is decided by the value side memorizing. **Done 2026-11-18**: it was (and on 1822 / PNW / MX too);
+   selection is on the loss without its value terms now (`--select-metric`, default with the value refit on).
 
 ## Serving generic checkpoints: the advisor and the bots (2026-11-15)
 

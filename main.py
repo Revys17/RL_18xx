@@ -471,6 +471,7 @@ def cmd_pretrain_generic(args):
         splits=splits,
         select_title=args.select_title,
         select_split=args.select_split,
+        select_metric=args.select_metric,
         eval_titles=args.eval_titles.split(",") if args.eval_titles else None,
         final_eval=args.final_eval,
         report_split=args.report_split,
@@ -1316,6 +1317,11 @@ def build_parser():
         "value refit (default: the one dataset, else the mix-weighted mean over --eval-titles)",
     )
     p.add_argument("--select-split", type=str, default="validation", help="Split evaluated during training")
+    p.add_argument(
+        "--select-metric", choices=["auto", "policy", "total"], default="auto",
+        help="What picks the best joint checkpoint and early-stops: policy = the joint loss without the value terms, "
+        "total = the whole joint loss (auto: policy with the value refit on, else total)",
+    )
     p.add_argument("--eval-titles", type=str, default=None, help="Comma-separated labels evaluated during training (default all)")
     p.add_argument("--final-eval", action="store_true", help="Evaluate final.pth on every dataset's --report-split")
     p.add_argument("--report-split", type=str, default="validation")

@@ -315,10 +315,11 @@ def test_mixed_run(mixed_run):
     assert abs(np.mean([h["by_source"]["1867"]["share"] for h in train]) - 0.5) < 0.2
     evals = [h for h in history if h["kind"] == "eval"]
     assert {h["source"] for h in evals} == {"1830", "1867"} and {h["step"] for h in evals} == {8, 16}
-    # the best checkpoint is the 1867 validation total's minimum
-    e67 = {h["step"]: h["total"] for h in evals if h["source"] == "1867"}
+    # the best checkpoint is the minimum of 1867's validation loss without the value terms (the value refit is on)
+    e67 = {h["step"]: h["policy_total"] for h in evals if h["source"] == "1867"}
+    assert summary["joint"]["select_key"] == "policy_total"
     assert summary["joint"]["best_step"] == min(e67, key=e67.get)
-    assert summary["joint"]["best_val_total"] == pytest.approx(min(e67.values()))
+    assert summary["joint"]["best_val"] == pytest.approx(min(e67.values()))
     assert any(h["kind"] == "select" for h in history)
     final = summary["final_eval"]
     assert set(final) == {"1830", "1867"}

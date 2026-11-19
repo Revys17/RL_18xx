@@ -9,8 +9,11 @@ of ``main.py pretrain``):
   CE (weight 0.1) and the score MSE on placement points (weight 0.1); AdamW (lr 1e-3, weight decay
   1e-4 on matrices only, as ``train.build_optimizer``), cosine LR to 0 over the planned steps, gradient
   clip 1.0, batch 256; bf16 autocast on CUDA, fp32 evaluation; a validation pass per epoch (or every
-  ``eval_every`` steps), the best total validation loss kept (``best_joint.pth``) and early stopping
-  after ``patience`` evaluations without improvement.
+  ``eval_every`` steps), the best validation loss kept (``best_joint.pth``) and early stopping after
+  ``patience`` evaluations without improvement. With the value refit on, "best" is the joint loss without
+  its value terms (``select_metric``): the value heads memorize the games long before the policy stops
+  improving, and on the smaller titles the total picked a checkpoint 1-4 epochs early (1822CA top-1 .619
+  selected vs .673 at the last epoch, docs/training_runs_2026_11.md "The new titles' SL").
 * **Stage 2, value refit**: the best joint checkpoint's value heads re-initialized and trained alone on
   the frozen network (``value_stop_grad``), validated every ``refit_eval_steps`` steps on the win CE,
   the best heads kept (``refit.pth``), because with a few thousand games the value head memorizes
@@ -127,6 +130,10 @@ class GenericPretrainConfig:
     #: win CE drives the value refit). None: the one dataset, or the mix-weighted mean over ``eval_titles``.
     select_title: Optional[str] = None
     select_split: str = "validation"
+    #: What picks the best joint checkpoint and drives early stopping: "policy" = the joint loss without its
+    #: value terms (smoothed policy CE, entropy bonus, price NLL: what stays after the value refit), "total" =
+    #: the whole joint loss, "auto" = policy with the value refit on, else total.
+    select_metric: str = "auto"
     #: Labels evaluated during training (None: every dataset).
     eval_titles: Optional[List[str]] = None
     #: After training, evaluate ``final.pth`` on every dataset's ``report_split`` (``summary["final_eval"]``).
@@ -445,7 +452,8 @@ def _summary_line(m: dict) -> str:
     )
     return (
         f"positions={m.get('positions')} total={m.get('total', float('nan')):.4f} "
-        f"policy_ce={m.get('policy_ce', float('nan')):.4f} top1={m.get('top1', float('nan')):.3f} "
+        + (f"(policy part {m['policy_total']:.4f}) " if "policy_total" in m else "")
+        + f"policy_ce={m.get('policy_ce', float('nan')):.4f} top1={m.get('top1', float('nan')):.3f} "
         f"top5={m.get('top5', float('nan')):.3f} (chance top1 {m.get('chance_top1', float('nan')):.3f}) "
         f"price={m.get('price_nll', float('nan')):.3f} "
         f"value={m.get('value_ce', float('nan')):.4f} (equal odds {m.get('value_baseline', float('nan')):.4f}, "
@@ -593,6 +601,27 @@ def load_init(path, model_overrides: Optional[dict], datasets: Dict[str, gd.Gene
 # ---------------------------------------------------------------------------------------------------
 
 
+SELECT_METRICS = ("auto", "policy", "total")
+
+
+def select_key(cfg: GenericPretrainConfig) -> str:
+    """The evaluation key that picks the best joint checkpoint (``cfg.select_metric``)."""
+    if cfg.select_metric not in SELECT_METRICS:
+        raise ValueError(f"select_metric {cfg.select_metric!r}: one of {SELECT_METRICS}")
+    metric = cfg.select_metric
+    if metric == "auto":
+        metric = "policy" if cfg.value_refit else "total"
+    return "policy_total" if metric == "policy" else "total"
+
+
+def add_policy_total(m: dict, cfg: GenericPretrainConfig) -> None:
+    """``m["policy_total"]``: an evaluation's joint loss without the value terms (win CE, score MSE)."""
+    if "total" in m:
+        m["policy_total"] = m["total"] - cfg.value_loss_weight * m.get("value", 0.0) - cfg.score_loss_weight * m.get(
+            "score", 0.0
+        )
+
+
 class _Selection:
     """Which number picks the best checkpoint: the selected dataset's, else the mix-weighted mean over
     the evaluated datasets (plain mean if they all have weight 0)."""
@@ -661,6 +690,7 @@ def pretrain(cfg: GenericPretrainConfig) -> dict:
                 "sources": [asdict(s) for s in sources],
                 "loader": "stream" if stream else "epochs",
                 "selection": selection.describe(),
+                "select_key": select_key(cfg),
                 "init": init_info,
             },
             indent=2,
@@ -672,13 +702,13 @@ def pretrain(cfg: GenericPretrainConfig) -> dict:
         dec = datasets[s.label].decisions()
         train_positions[s.label] = sum(dec[g] for g in s.train_ids(datasets[s.label]))
     LOGGER.info(
-        "Generic pretraining: %s parameters, device %s, bf16 %s, %s loader, data %s, selection on %s %s%s",
+        "Generic pretraining: %s parameters, device %s, bf16 %s, %s loader, data %s, selection on %s %s %s%s",
         f"{model.num_parameters():,}", device, use_amp, "stream" if stream else "epochs",
         ", ".join(
             f"{s.label}={s.path} ({train_positions[s.label]} train positions, share {s.weight / sum(x.weight for x in sources):.3f})"
             for s in sources
         ),
-        selection.describe(), cfg.select_split, f", init {cfg.init}" if cfg.init else "",
+        selection.describe(), cfg.select_split, select_key(cfg), f", init {cfg.init}" if cfg.init else "",
     )
     if stream:
         positions = sum(train_positions[s.label] for s in sources if s.weight > 0)
@@ -692,6 +722,7 @@ def pretrain(cfg: GenericPretrainConfig) -> dict:
     optimizer = build_optimizer(model, cfg.lr, cfg.weight_decay, cfg.value_lr_multiplier)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
     best_loss, best_step, evals_since = float("inf"), None, 0
+    key = select_key(cfg)
     best_path = out / "best_joint.pth"
     step, stop, started = 0, False, time.time()
     window = defaultdict(float)
@@ -710,9 +741,10 @@ def pretrain(cfg: GenericPretrainConfig) -> dict:
                 model, s.path, cfg.select_split, batch_size=cfg.batch_size, device=device, workers=cfg.workers,
                 max_games=s.val_max_games, cfg=cfg, splits=s.splits,
             )
+            add_policy_total(m, cfg)
             per[s.label] = m
         seconds = round(time.time() - t0, 1)
-        value = selection.value(per, "total")
+        value = selection.value(per, key)
         improved = value < best_loss
         for label, m in per.items():
             m.update(stage="joint", step=step, epoch=epoch, seconds=seconds)
@@ -843,8 +875,8 @@ def pretrain(cfg: GenericPretrainConfig) -> dict:
     last_extra = _extra(cfg, "joint_last", step, epoch, None, datasets, init_info)
     mg.save_checkpoint(model, out / "last_joint.pth", titles, extra=last_extra)
     summary = {
-        "joint": {"best_step": best_step, "best_val_total": best_loss, "steps": step, "evals": len(history_evals),
-                  "planned_steps": total_steps, "early_stopped": stop},
+        "joint": {"best_step": best_step, "best_val": best_loss, "select_key": key, "steps": step,
+                  "evals": len(history_evals), "planned_steps": total_steps, "early_stopped": stop},
         "best_joint": str(best_path),
         "selection": {"on": selection.describe(), "split": cfg.select_split},
         "loader": "stream" if stream else "epochs",
@@ -852,7 +884,8 @@ def pretrain(cfg: GenericPretrainConfig) -> dict:
     if multi or stream:
         summary["joint"]["curve"] = [
             {"step": h["step"], "value": h["value"],
-             **{label: {k: m.get(k) for k in ("total", "policy_ce", "top1", "value_ce")} for label, m in h["by_source"].items()}}
+             **{label: {k: m.get(k) for k in ("total", "policy_total", "policy_ce", "top1", "value_ce")}
+                for label, m in h["by_source"].items()}}
             for h in history_evals
         ]
     final = best_path
