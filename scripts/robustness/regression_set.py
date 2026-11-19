@@ -680,11 +680,50 @@ class GenericSystem:
         }
 
 
+class MixedSystem(GenericSystem):
+    """A legacy policy searched with a title-generic value: ``<legacy policy.pth>+generic:<value.pth>[#win|#score|
+    #blend=<w>]`` (``game_network.GameNetwork`` mixes the parts, as the advisor's ``--play-*`` options do). Policy: the
+    legacy model's (:meth:`LegacySystem.policy`); values: the generic network's heads; search: as
+    :class:`GenericSystem`, with ``--search``'s settings (a spec carries no ``@<n>...`` of its own)."""
+
+    kind = "mixed"
+
+    def __init__(self, spec: str, search: str = DEFAULT_SEARCH, device: str = "cpu"):
+        from eval_head_to_head import parse_player
+
+        from rl18xx.agent.alphazero.composite_model import load_policy_value
+        from rl18xx.agent.alphazero.game_network import GameNetwork, GenericNetwork
+        from rl18xx.agent.alphazero.generic_policy import GENERIC_PREFIX
+
+        self.spec = spec
+        self.search_spec = search
+        legacy, _, rest = spec.partition("+" + GENERIC_PREFIX)
+        value_path, _, head = rest.partition("#")
+        self.full_spec = legacy + search
+        _, self.overrides = parse_player(self.full_spec, default_readouts=400, num_players=4)
+        self.overrides_by_count = {4: dict(self.overrides)}
+        self.paths = {"policy": legacy, "value": value_path, "value_head": head or "win"}
+        self.can_search = True
+        self.prior_temperature = float(self.overrides.get("prior_temperature", 1.0))
+        self.readouts = int(self.overrides.get("num_readouts", 400))
+        self.legacy = LegacySystem.from_network(load_policy_value(legacy), self.overrides, label=legacy)
+        self.policy_net = self.legacy.net
+        self.value_net = GenericNetwork(value_path, device)
+        self.value_head = self.paths["value_head"]
+        # priors at temperature 1: the tree tempers them with the search's ptemp (as GenericSystem)
+        self.net = GameNetwork(self.policy_net, self.value_net, policy_temperature=1.0, value_head=self.value_head)
+
+    def policy(self, game, legal: list) -> np.ndarray:
+        return self.legacy.policy(game, legal)
+
+
 def load_system(spec: str, search: str = DEFAULT_SEARCH, device: str = "cpu"):
     from rl18xx.agent.alphazero.generic_policy import GENERIC_PREFIX
 
     if spec.startswith(GENERIC_PREFIX):
         return GenericSystem(spec, search, device)
+    if "+" + GENERIC_PREFIX in spec:
+        return MixedSystem(spec, search, device)
     return LegacySystem(spec, search, device)
 
 
@@ -906,7 +945,7 @@ def main(argv=None):
     s.add_argument("--model", required=True,
                    help="<policy.pth>+<value.pth>[#score|#blend=w] (legacy) or "
                    "generic:<policy.pth>[+generic:<value.pth>][#score|#blend=w] (generic; generic:<ckpt.pth>@<T>: "
-                   "prior temperature T)")
+                   "prior temperature T), or <legacy policy.pth>+generic:<value.pth>[#score|#blend=w] (mixed)")
     s.add_argument("--search", default=DEFAULT_SEARCH,
                    help=f"search settings in eval_head_to_head's syntax (default {DEFAULT_SEARCH}: the live bots')")
     s.add_argument("--readouts", type=int, default=None, help="override the search budget")

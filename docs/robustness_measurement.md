@@ -60,6 +60,8 @@ uv run python -P scripts/robustness/regression_set.py score --model <policy.pth>
 uv run python -P scripts/robustness/regression_set.py score \
     --model generic:<run>/learner/<u>.pth+generic:<run>/critic/<u>.pth#score --out logs/robustness/m1_<run>_u<u>.jsonl
 uv run python -P scripts/robustness/regression_set.py score --model generic:<ckpt.pth>@0.5 --no-search  # T 0.5 priors
+# mixed: a legacy policy searched with a generic value (game_network.GameNetwork, as the advisor's --play-* mixes)
+uv run python -P scripts/robustness/regression_set.py score --model <gen6 learner/2400.pth>+generic:<critic.pth>#score
 uv run python -P scripts/robustness/regression_set.py summary <results>.jsonl[.gz]... [--positions]
 uv run python -P scripts/robustness/regression_set.py list
 # rebuild: site exports (18xx.games-style; from the site DB with read-only SELECTs) -> data/caleb_games, then the fixture
@@ -288,6 +290,28 @@ between runs (all auction positions with near-even visits), one of them (g15-a14
 
 Dry run of the whole script (CPU, `DRY=1`: M1 on 3 positions at 16 readouts for each variant, the three matches at 8
 readouts, 6 games of max 300 decisions): every step ran and wrote its summary; a 6-game match took ~1.2 min.
+
+### The generic SL start and a human-game value (2026-11-18, GPU)
+
+The arms' start (`model_checkpoints_generic/bridge_1830_check_20261113/final.pth`, the generic SL) and its critic start
+(`bridge_1830_critic1ep_20261118/final.pth`: the same recipe for 1 epoch, value heads refit; win CE .952 on the human
+validation games), and gen6's policy searched with that human-game critic (`<legacy>+generic:<value>`); 400 readouts,
+the live bots' PUCT; results `logs/robustness/generic_sl_baseline/` (main checkout):
+
+| System | auction | loot_dump | sellout | doomed | suitcase | **all: pass** | value pref-bad |
+|---|---|---|---|---|---|---|---|
+| generic SL, policy alone (argmax) | 0.57 | 0.27 | 1.00 | 0.90 | 0.88 | **0.68** | +0.017 |
+| generic SL + critic1ep #score, searched (ptemp 1.0) | **0.95** | 0.45 | 1.00 | 0.80 | 0.88 | **0.83** | +0.017 |
+| gen6 u2400 + critic1ep #score | 0.52 | 0.18 | 0.67 | 0.30 | 0.62 | **0.46** | +0.017 |
+| gen6 u2400 + critic1ep #win | 0.57 | 0.18 | 0.67 | 0.10 | 0.50 | **0.42** | +0.012 |
+| (gen6 u2400 + its critic #score, the bots now) | 0.24 | 0.36 | 0.56 | 0.50 | 1.00 | 0.46 | -0.047 |
+
+- The arms start from a system that already avoids most of the tactics (0.68 alone, like SL ckpt 10's 0.71); the
+  question for step 3 is which arm keeps that while gaining strength (gen6's PG lost it: 0.39 argmax-bad -> 0.61).
+- The human-game value ranks the auction, sell-out and suitcase moves the right way round (pref - bad +0.04 / +0.06
+  on auction / sellout where gen6's critic is -0.085 / -0.084): searched with it, gen6's auction pass doubles (0.24 ->
+  0.52) while doomed / loot-and-dump get worse. Loot-and-dump is the one weakness no value here sees (pref - bad < 0
+  for every value).
 
 ## In the arms' evals (2026-11-15)
 

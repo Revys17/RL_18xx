@@ -210,3 +210,27 @@ def test_generic_score_cli(tmp_path):
     r = json.loads(out.read_text().splitlines()[0])
     assert r["label"] == "tiny" and r["search"]["readouts"] >= 8
     assert r["search_settings"].startswith("@400/0.05:") and "ptemp=0.5" in r["search_settings"]
+
+
+def test_mixed_legacy_policy_generic_value(positions, records, tmp_path, monkeypatch):
+    """``<legacy policy>+generic:<value>#score``: the legacy model's policy (a stand-in here), the generic value's
+    heads (the search reads the score head), searched in-process through GameNetwork."""
+    from rl18xx.agent.alphazero import composite_model
+    from tests.agent.alphazero.search_test_utils import HashNet
+
+    paths = _tiny_generic_run(tmp_path)
+    monkeypatch.setattr(composite_model, "load_policy_value", lambda spec: HashNet())
+    system = rs.load_system(f"/stand/in.pth+generic:{paths['critic']}#score", "@16/0.05:mean,dedupe,par=8,ptemp=0.5")
+    assert system.kind == "mixed" and system.value_head == "score" and system.prior_temperature == 0.5
+    assert system.paths["policy"] == "/stand/in.pth" and system.can_search
+    p = next(p for p in positions if p["id"] == "g21-a408")
+    game = rs.rust_game_at(records[p["game"]], p["action_index"])
+    legal = sorted(i for i, _ in rs.legal_moves(game))
+    probs = system.policy(game, legal)
+    assert len(probs) == len(legal) and abs(float(probs.sum()) - 1.0) < 1e-6
+    v = system.values(game, p["mover"]["player_id"])
+    assert set(v) == {"win", "score", "search"} and v["search"] == v["score"]
+    s = system.search(game, 16)
+    assert sorted(s["legal"]) == legal and s["chosen"] in legal and s["root_n"] >= 16
+    r = rs.score_position(system, p, records[p["game"]])
+    assert isinstance(r["pass"], bool) and r["search"]["readouts"] >= 16
