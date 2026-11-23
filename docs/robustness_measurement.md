@@ -432,6 +432,40 @@ and 276 s each with the 11 matches; M3 ~12 s a member, M2 of 48 eval + M3 games)
 exploiter (`mx2`) joined M3 as an extra member, M3 run with `M3_GENERIC_SERVER=1` (the generic bot on a CPU generic
 inference server against the legacy stand-ins on legacy servers: the GPU path's plumbing).
 
+## Step 3's first pass (2026-11-19..22, GPU)
+
+Every arm 300 updates from the generic SL with the 1-epoch critic, one after another on all 64 CPUs
+(`/home/revys/longrun/experiments/robust_arms_20261118/`: `queue.sh`, then `a4.sh` and `second_pass.sh`); A2 then
+resumed to u600. Policy alone at T 0.5, 400 games a match (+- ~.024); the h2h columns are the arm's share against
+gen6 u2400 at its own fair value; M3 is 1v3 (fair .25), 800 games a member.
+
+| arm @ update | 2p (.50) | 3p 1v2 (.33) | 4p 1v3 (.25) | 5p 2v3 (.40) | 6p 3v3 (.50) | 1v3 vs SL | M1 policy (auction / loot) | M1 searched | M3 gen6 / gx2b / gx2r |
+|---|---|---|---|---|---|---|---|---|---|
+| A0 baseline @300 | .560 | .332 | .371 | .470 | .598 | .623 | .69 (.67 / .18) | .71 | .341 / .484 / .536 |
+| A1 human-imitation seats @300 | .631 | .356 | .299 | .466 | .505 | .685 | .76 (.86 / .09) | .68 | .345 / .559 / .565 |
+| A1 + REF_KL .02 @300 | .566 | .363 | .275 | .300 | .412 | .583 | .76 (.86 / .18) | .75 | .241 / .627 / .654 |
+| A2 prioritized starts @300 | .755 | .381 | .370 | .487 | .580 | .625 | .68 (.67 / .09) | .63 | .323 / .532 / .565 |
+| A2 @600 | .715 | .445 | .395 | .534 | .675 | .632 | .68 (.67 / .09) | .71 | .409 / .479 / .569 |
+| A3 main exploiters @300 | .650 | .425 | .352 | .453 | .593 | .593 | .68 (.67 / .09) | .68 | .329 / .500 / .584 |
+| A4 = A1 + A2 @300 | .637 | .384 | .328 | .477 | .560 | .672 | .76 (.86 / .18) | .73 | .379 / .550 / .614 |
+| A5p practice positions @300 | .620 | .428 | .378 | .477 | .524 | .671 | .69 (.67 / .18) | .69 | .331 / .495 / .531 |
+
+- Every arm beats gen6's policy at every count by u300 and keeps most of the SL's behaviour (M1 .68-.76 vs gen6's
+  .27; M2 in their PG games: the CA at about $190-230 against humans' $208 and gen6's $271, >= $300 treasury handovers
+  .02-.03, buying into a trainless broke company .06-.12 against humans' .22). Most strength gaps between arms are
+  within two standard errors; A2 is the strongest (2p .755) and still gaining at u600 at 3-6 players.
+- **The A1 mechanism (the SL at T 1.0 and 0.5 pinned in the league) is what holds the auction positions**: A1, A1 +
+  REF_KL and A4 stay at .86 while every other arm falls from ~.81-.86 at u200 to .67 at u300 (A2 still .67 at u600),
+  and it raises M3 against the old exploiters (gx2b / gx2r). The reference KL holds the policy closer to the SL and
+  costs strength against gen6 (6p .412 vs A1's .505), for the best exploiter shares.
+- **Loot-and-dump is not fixed by any arm**: policy-only 1-2 of M1's 11 positions; searched, A5p @300 and A2 @600 pass
+  4 of 11 (gen6 searched: .36 too). A3's exploiters didn't make the main harder to exploit (each refresh beat its main
+  in 55-60% of its training games, the u300 one about as much as the u100 one); A5p's practice positions move only the
+  searched pass.
+- **Adopted for the plateau run (2026-11-22): A4**, resumed from u300 (`plateau.sh`, unit rl18xx-plateau-1830,
+  backstop u2000): at u300 about A2's strength (within noise at every count but 2p), with A1's auction passes and M3
+  against the old exploiters -- the test plan's rule (M1 and M3 up, the out-of-family panel kept) picks it over A2.
+
 ## Time and GPU estimates
 
 - M1: CPU, ~5 min a legacy system at 400 readouts (59 positions x ~5 s, 4 threads); policy + value only, 20 s.
