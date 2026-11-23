@@ -12,8 +12,11 @@
 #             docs/training_runs_2026_11.md "The generic 1830 check"); `pg` starts its critic from VALUE
 #             ($CRITIC_OUT/final.pth; VALUE=$SL = the SL's own heads, the behaviour before 2026-11-18)
 #   pg        policy-gradient-generic from the SL checkpoint with gen6's recipe adapted (docs/training_runs_2026_11.md;
-#             departures named in the title scripts); resumes from state.json when the run exists. Runs in the
-#             foreground: start it with nohup / systemd-run for a long run.
+#             departures named in the title scripts) plus 1830's adopted robustness arm A4 (2026-11-22,
+#             docs/robustness_measurement.md "Step 3's first pass"): the SL in the league at T 1.0 and 0.5, each
+#             pinned at 12.5% of the opponents at every count (A1), and prioritized starts over the human SR1 and
+#             mid-game starts (A2); resumes from state.json when the run exists. Runs in the foreground: start it
+#             with nohup / systemd-run for a long run.
 #   evals     one round of policy-only evals (scripts/eval_generic.py, T 0.5, every game from the opening) of a learner
 #             snapshot (EVAL_UPDATE, default the newest multiple of EVAL_EVERY): the fixed panel (4p 1v3 alone vs
 #             SL@0.5, SL@1.0 and the frozen snapshots PANEL_UPDATES), each player count vs SL@0.5, and 4p 2v2 vs the
@@ -26,6 +29,8 @@
 # RESUME_MAX_UPDATES (a resume's new --max-updates), EVAL_GAMES [400], EVAL_WORKERS [16], EVAL_UPDATE,
 # MIX_FLOOR [10]: every player count of the PG mix gets at least this percent of the games (gen6 style; the counts
 # above it keep their proportions; 0 = the title's PLAYER_MIX as given; PLAYER_MIX itself can be overridden too).
+# SL_SEATS [1]: A1's league (the SL at T 1.0 and 0.5, each pinned at SL_SEAT_SHARE [0.125]; 0 = the SL alone at the
+# opponent temperature, the recipe before 2026-11-22); START_PRIORITY [1]: A2's prioritized starts (0 = uniform).
 # DRY=1: the CPU dry run -- tiny model / steps / games, CPU servers, every output under DRY_ROOT (nothing in the
 # repository); the real settings are untouched by it.
 set -uo pipefail
@@ -117,7 +122,11 @@ fi
 SL=${SL:-$SL_OUT/final.pth}
 VALUE=${VALUE:-$CRITIC_OUT/final.pth}
 PG_RUN=${PG_RUN:-gpg${TITLE}_$TAG}
-POP=${POP:-$OUT_DIR/populations/league_generic_${TITLE}_v1.json}
+SL_SEATS=${SL_SEATS:-1}
+SL_SEAT_SHARE=${SL_SEAT_SHARE:-0.125}
+START_PRIORITY=${START_PRIORITY:-1}
+# v1: the SL alone (the recipe before 2026-11-22); v2: A1's two tempered SL seats
+POP=${POP:-$OUT_DIR/populations/league_generic_${TITLE}_$([ "$SL_SEATS" = 1 ] && echo v2 || echo v1).json}
 EVAL_OUT=${EVAL_OUT:-logs/eval/$PG_RUN}
 PANEL_DIR=${PANEL_DIR:-$OUT_DIR/panels/$PG_RUN}
 RUN_DIR=$OUT_DIR/$PG_RUN
@@ -196,8 +205,16 @@ step_pg() {
   [ -f "$SL" ] || { echo "pg: no SL checkpoint at $SL (run the pretrain step first)"; return 1; }
   [ -f "$VALUE" ] || { echo "pg: no critic start at $VALUE (run the critic step, or VALUE=\$SL for the SL's heads)"; return 1; }
   mkdir -p "$(dirname "$POP")"
-  [ -f "$POP" ] || printf '{"note": "%s %s: the generic SL checkpoint (own snapshots join per run)", %s}\n' \
-    "$TITLE" "$PG_RUN" "\"members\": [{\"path\": \"$SL\", \"note\": \"generic SL (pretrain step)\"}]" > "$POP"
+  if [ ! -f "$POP" ] && [ "$SL_SEATS" = 1 ]; then
+    printf '{"note": "%s %s: the generic SL at T 1.0 and 0.5, each pinned at %s at every count (1830 arm A1); own snapshots join per run", "members": [{"path": "%s", "temperature": 1.0, "min_share": %s, "note": "generic SL (pretrain step) at T 1.0"}, {"path": "%s", "temperature": 0.5, "min_share": %s, "note": "generic SL (pretrain step) at T 0.5"}]}\n' \
+      "$TITLE" "$PG_RUN" "$SL_SEAT_SHARE" "$SL" "$SL_SEAT_SHARE" "$SL" "$SL_SEAT_SHARE" > "$POP"
+  elif [ ! -f "$POP" ]; then
+    printf '{"note": "%s %s: the generic SL checkpoint (own snapshots join per run)", %s}\n' \
+      "$TITLE" "$PG_RUN" "\"members\": [{\"path\": \"$SL\", \"note\": \"generic SL (pretrain step)\"}]" > "$POP"
+  fi
+  local arm=()
+  [ "$START_PRIORITY" = 1 ] && arm+=(--start-priority --start-priority-score abs_adv --start-priority-uniform 0.3
+    --start-priority-staleness 0.3 --start-priority-temperature 1.0 --start-priority-ema 0.5)
   "${PY[@]}" main.py policy-gradient-generic --run-name "$PG_RUN" --out-dir "$OUT_DIR" --title "$TITLE" \
     --policy "$SL" --value "$VALUE" --player-mix "$PG_MIX" "${rules[@]}" \
     --max-decisions "$MAX_DECISIONS" --max-decisions-by-players "$CAPS" \
@@ -206,7 +223,7 @@ step_pg() {
     --entropy-coef 0.0 --learner-temperature 0.5 --opponent-temperature 0.5 --opponent-price-eps 0.0 \
     --max-updates "$MAX_UPDATES" --pool-refresh-every 5 \
     --auction-fraction 0.5 --midgame-fraction 0.3 --random-start-fraction 0.2 --auction-stall-decisions 0 \
-    --start-positions "$START_T" --midgame-positions "$MID_T"
+    --start-positions "$START_T" --midgame-positions "$MID_T" "${arm[@]}"
 }
 
 # Newest learner snapshot that is a multiple of $1 (snapshots at multiples of SNAPSHOT_EVERY are kept for good).

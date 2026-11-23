@@ -2127,7 +2127,8 @@ snapshot cadence, policy and league checkpoints): all five pass.
   resume (a failed run restarts into a fresh `SL_OUT`).
 * **`pg`**: `policy-gradient-generic --policy <SL final.pth>` with gen6's recipe adapted (next section); re-running the
   step resumes from `state.json` (`RESUME_MAX_UPDATES` sets a resume's new `--max-updates`). The league file
-  `model_checkpoints_generic_pg/populations/league_generic_<title>_v1.json` is created holding the SL checkpoint.
+  `model_checkpoints_generic_pg/populations/league_generic_<title>_v2.json` is created holding the SL checkpoint at T 1.0
+  and 0.5, each pinned at 12.5% (`SL_SEATS=0`: `..._v1.json`, the SL alone, the recipe before 2026-11-22).
 * **`evals`**: one round for the newest snapshot at a multiple of `EVAL_EVERY` (or `EVAL_UPDATE`): policy-only
   `scripts/eval_generic.py`, each side on a GPU server, T 0.5, every game from the opening (`--auction-start`: 1867's
   auction, the family's fresh game with seeded bid boxes; 1822 under its rules mix), the title's cap for the count, 400
@@ -2165,6 +2166,14 @@ Auction round); the family's all-pass openings are redrawn (the default). Depart
 the start (the generic SL checkpoint; its value heads start the critic), the league (no other agents of the title), the
 player mix (human shares with a 10% floor per count; gen6 flattened its mix), microbatch / server batch / games per task
 per title (activation memory: "Model fit across titles").
+
+**1830's adopted robustness arm A4 (2026-11-22, `docs/robustness_measurement.md` "Step 3's first pass")**, on by
+default in every title since: the SL checkpoint sits in the league twice, at T 1.0 and at T 0.5, each pinned at 12.5%
+of the opponents at every count (`SL_SEATS`, `SL_SEAT_SHARE`; A1 -- in 1830 it is what kept the auction positions and
+the play against the old exploiters), and starts are drawn by prioritized level replay over the human SR1 and mid-game
+starts (`START_PRIORITY`; A2: `--start-priority --start-priority-score abs_adv`, uniform 0.3, staleness 0.3, T 1.0,
+EMA 0.5). `SL_SEATS=0 START_PRIORITY=0` is the recipe as dry-run on 2026-11-14. 1867's first run with it:
+`gpg1867_a4_20261122`, queued behind 1830's plateau run (`/home/revys/longrun/experiments/gpg1867_20261122/queue.sh`).
 
 **Player-count floor (2026-11-15)**: `title_recipe.sh` raises every count of the PG mix to at least `MIX_FLOOR` percent
 of the games (default 10, gen6 style: gen6's smallest count, 6p, had 10%) and scales the other counts down in proportion,
