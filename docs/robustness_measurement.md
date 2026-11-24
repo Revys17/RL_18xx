@@ -517,7 +517,10 @@ auctions with 2+ bidders (humans' C&A: $208; gen6's: $271).
   sides (score head, 400 readouts, PUCT 0.05 mean-Q, dedupe, 8 a batch, kept trees, priors at T 1.0), 480 4-player
   2v2 games from the private auction: `/home/revys/longrun/experiments/search_u900_20261124/` (units
   rl18xx-search-u900, then rl18xx-search-u1528). The bots stay on gen6 until a candidate beats it there and the user
-  OKs the swap. On weakness 1 u1528 is the better of the two (below).
+  OKs the swap. On weakness 1 u1528 is the better of the two (below), so u900's match was stopped at 120 of 480
+  games (0.475 +- 0.046; `u900_vs_bots_partial120/`) and u1528's started first (2026-11-24 13:19, the user), with a
+  full u900 match queued behind it (unit rl18xx-search-u900b; `touch STOP_900` skips it). Each takes ~12-13 h
+  sharing the GPU with 1867's PG.
 
 ### Caleb's openers, played out (2026-11-24, CPU)
 
