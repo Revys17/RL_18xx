@@ -509,15 +509,67 @@ auctions with 2+ bidders (humans' C&A: $208; gen6's: $271).
   "war" (don't raise a DH / CS war far over face). Contest passes: the SL policy 12/13, A4 policy 12/13 at u300 and
   u500, 8/13 from u900 to u1400; searched u900 4/13, u1400 2/13; gen6 searched (the bots) 0/13 -- search moves away
   from contesting (the critic writes those bids off). War passes: 6-8/8 throughout (gen6 searched 5-6/8). One-move
-  positions are a proxy -- the model could bid elsewhere first and contest the C&A later -- so the next check is to
-  play out the rest of the auction from them.
+  positions are a proxy -- the model could bid elsewhere first and contest the C&A later -- so the auctions were then
+  played out from the user's openings ("Caleb's openers, played out" below): u1528 contests them most.
 - M3 kept rising slowly (gx2b .55 -> .66, gx2r .61 -> .71-.75); loot-and-dump unchanged (2 of 11 policy-only).
 - **Candidates: u900** (the best panel margin) **and u1528** (the last; within about 1-2 SE of u900 at each count, and
   consistent in its own auctions). Searched matches of both against the live bots -- the bots' settings for both
   sides (score head, 400 readouts, PUCT 0.05 mean-Q, dedupe, 8 a batch, kept trees, priors at T 1.0), 480 4-player
   2v2 games from the private auction: `/home/revys/longrun/experiments/search_u900_20261124/` (units
   rl18xx-search-u900, then rl18xx-search-u1528). The bots stay on gen6 until a candidate beats it there and the user
-  OKs the swap.
+  OKs the swap. On weakness 1 u1528 is the better of the two (below).
+
+### Caleb's openers, played out (2026-11-24, CPU)
+
+`scripts/robustness/caleb_openers.py` plays the rest of the auction from the user's openings, where M1's "contest"
+positions ask for one move.
+
+- **Openings**: the 11 four-player games in which Caleb opened with bids on the C&A / M&H (game 13 also on the D&H at
+  $75). His seat places exactly those bids on his first turns. A bid is dropped when a bot bid on that private first;
+  those cases are counted apart and are not in the n's below.
+- **Players**: after the script, the generic SL at T 1.0 plays Caleb's seat (a human imitation, not Caleb). The bots
+  hold the other three seats.
+- **Searched runs**: the live bots' settings (score head, 400 readouts, priors at T 1.0), with a fresh tree for every
+  decision where the bots keep theirs. 110 auctions, 10 per opening. A searched bot is deterministic, so its repeats
+  differ only through Caleb's seat.
+- **Policy-only runs**: T 0.5 (the SL bots at T 1.0), 440 auctions.
+- **Contested**: a bot bid on the private after Caleb's opening bid.
+- **Inconsistent**: Caleb keeps an opened private at his price while a bot pays $30+ over face for another.
+- **Output**: `logs/robustness/caleb_openers/` (`report.txt`, a `.summary.json` per run). Launcher:
+  `/home/revys/longrun/experiments/caleb_openers_20261124/run.sh`.
+- **Cost**: the searched runs took ~25 min each on 24 cores. Meanwhile 1867's PG slowed from ~2.3 to ~4.6 min an update.
+
+| bots | C&A contested (n) | M&H contested (n) | C&A / M&H price | bots over face: CS / DH | inconsistent | cash + face: Caleb / a bot |
+|---|---|---|---|---|---|---|
+| **gen6 searched (the live bots)** | 0% (81) | 0% (70) | $165 / $115 | $37 / $25 | 83% +- 4% | $592 / $580 |
+| u900 searched | 97% (60) | 0% (79) | $211 / $115 | $22 / $43 | 70% +- 4% | $586 / $562 |
+| u1528 searched | 91% (69) | 49% (76) | $221 / $129 | $13 / $43 | 40% +- 5% | $579 / $562 |
+| gen6 policy | 99% (394) | 97% (261) | $233 / $158 | $22 / $42 | 3% | $589 / $544 |
+| u900 policy | 94% (202) | 10% (112) | $219 / $118 | $9 / $14 | 18% | $577 / $577 |
+| u1528 policy | 98% (207) | 66% (110) | $233 / $136 | $19 / $30 | 7% | $579 / $553 |
+| SL policy (human imitation) | 93% (229) | 66% (114) | $226 / $136 | $8 / $18 | 7% | $573 / $574 |
+
+- **The test reproduces the site.** With the live bots' settings no bot ever bid on Caleb's C&A or M&H. He took both
+  at his price, the bots paid $37 over face for the CS, and he left the auction with $592 (his real games:
+  $590-595).
+- **The policies contest; the search stops them.** gen6's policy alone contests 97-99% of the time, paying a lot (C&A
+  $233). Searched, it contests 0%: the critic overrules the policy, rating any C&A / M&H bid a loser
+  (`docs/bot_weaknesses_2026_11.md` "1.").
+- **u900 fixes the C&A under search but never contests the M&H** (0 of 79; its policy 10%): 70% of auctions are
+  inconsistent.
+- **u1528 is the most consistent searched system**: C&A 91%, M&H 49%, inconsistent in 40% of auctions. The SL
+  contests the M&H in 66%; the human corpus' M&H has 2+ bidders in 62% of auctions. Per opening, u1528 searched contests
+  the M&H 20% of the time after game 21's opening (MH $115 then CA $165) and 70% after game 13's.
+- **The bots often bid first.** In 30-50% of the C&A scripts the generic bots and the SL bid on the C&A before Caleb's
+  seat could (gen6 searched 19%, gen6 policy 2%).
+- **Caveats**:
+  - Only 11 openings.
+  - After his script Caleb's seat is the SL; Caleb may defend his openers harder or less.
+  - The searched bots use fresh trees.
+  - "Contested" says nothing about whether the price was right.
+
+On weakness 1: u1528 > u900 > gen6. What is left is the M&H, and the war over the D&H (u1528 searched pays $43 over
+face for it).
 
 ## Time and GPU estimates
 

@@ -51,6 +51,9 @@ the bots' $18,340.
 The fault is the inconsistency, not the prices (the user, 2026-11-24): if a private is worth what the bots pay for it,
 letting another player have one at face is the mistake. Judge an auction by whether every private is contested and
 no buyer does better for having paid face (`docs/robustness_measurement.md` "Step 4"), not by how high prices go.
+Played out from the user's 11 openings (`scripts/robustness/caleb_openers.py`, 2026-11-24): searched with the bots'
+settings, gen6 never bids on his C&A / M&H (83% of auctions inconsistent), u900 contests the C&A but never the M&H
+(70%), u1528 the C&A 91% and the M&H 49% (40%). gen6's policy alone contests 97-99%: its search takes that away.
 
 Caleb took CA in 12 of 13 games ($165, once $160) and MH in 9 ($110-115), never with a second bidder. Every
 contested private was a bot-vs-bot war (11-29 bids): DH $170-215 (face 70), CS $100-180 (face 40). Contested
