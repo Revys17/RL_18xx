@@ -470,7 +470,8 @@ gen6 u2400 at its own fair value; M3 is 1v3 (fair .25), 800 games a member.
 
 A4 resumed from u300 (`plateau.sh`, all 64 CPUs, ~1.7 min an update); eval rounds every 100 updates
 (`logs/eval/robust_A4_20261118/`, summaries in `A4_plateau_evals.log`). Stopped by hand at u1528 (2026-11-24 09:12,
-`STOP`; backstop u2000) for the two reasons below; 1867's PG started behind it. Columns as step 3's table (policy-only vs
+`STOP`; backstop u2000) because its strength vs gen6 had plateaued since u900 -- and, at the time, for its rising
+auction prices, a misreading of weakness 1 (corrected below); 1867's PG started behind it. Columns as step 3's table (policy-only vs
 gen6 u2400, fair .50 / .33 / .25 / .40 / .50, +- .022-.025); M1 policy and searched as pass (auction / loot); the last
 two columns are M2 on the run's own PG games (1,000 a round): the C&A's and the M&H's mean price and the share of
 auctions with 2+ bidders (humans' C&A: $208; gen6's: $271).
@@ -493,15 +494,30 @@ auctions with 2+ bidders (humans' C&A: $208; gen6's: $271).
 - **Strength vs gen6 plateaued at about u900**: mean margin over fair .252 at u900, .250 / .243 / .208 / .228 / .231
   after (the plateau rule of `panel_status.py`: the last two rounds fail to beat the best). Against gen6 alone at 4
   players it wins ~.48 where fair is .25.
-- **After u900 the run's own auctions inflate toward gen6's** (the user's weakness 1): the C&A from ~$200 (humans
-  $208) to $259 with nearly every C&A auction contested, the M&H $121 -> $145; M1's auction positions fell from .86-.90
-  (u500-u600) to .62-.71 from u800, searched to .43 at u1400. The SL seats pinned at 25% held the auction through
-  u300 (step 3) but not through a long run: the learner's own snapshots fill the rest of the league and bid each other
-  up. Remedies to try (not run): an auction-only KL to the SL, more SL share in the auction, or the SL + human-critic
-  auction system ("The auction check").
+- **Weakness 1 is inconsistency, not overpaying** (the user, 2026-11-24): the bots bid some privates far over face
+  while letting others go at face -- if a private is worth what they pay, letting another player have one at face is
+  the mistake. Measured as each private's share of 4-player auctions with 2+ bidders and its buyer's win rate when
+  uncontested vs contested (PG games, `u<n>_m2_pg/games.jsonl`). By that measure the run got **more consistent after
+  u900, not worse**:
+  - u500: the C&A went uncontested in 45% of games ($171) and those buyers won .31 against .19 when it was bid up
+    ($222); the M&H uncontested 75% ($115), buyers .30 vs .20 -- bargains left on the table.
+  - u900: the C&A uncontested in 29% (buyers .25 vs .22); the CS / DH / MH uncontested in 79-87%.
+  - u1400: every private contested in 87-99% of games (CS $61, DH $103, MH $147, CA $259) and buyers' win rates level
+    across privates (.24-.32): no private a bargain. Prices rose toward gen6's ($271 C&A), which is not the fault.
+- **Against the user's own openings it still lets the C&A / M&H go.** M1's auction positions are two kinds: 13
+  "contest" (after the user's CA $165 or MH $115 opener, bid on it: the face-value half of the inconsistency) and 8
+  "war" (don't raise a DH / CS war far over face). Contest passes: the SL policy 12/13, A4 policy 12/13 at u300 and
+  u500, 8/13 from u900 to u1400; searched u900 4/13, u1400 2/13; gen6 searched (the bots) 0/13 -- search moves away
+  from contesting (the critic writes those bids off). War passes: 6-8/8 throughout (gen6 searched 5-6/8). One-move
+  positions are a proxy -- the model could bid elsewhere first and contest the C&A later -- so the next check is to
+  play out the rest of the auction from them.
 - M3 kept rising slowly (gx2b .55 -> .66, gx2r .61 -> .71-.75); loot-and-dump unchanged (2 of 11 policy-only).
-- **Candidate: u900** (the best panel margin, auctions still at human prices). The bots stay on gen6 until it beats
-  gen6 with both sides searching and the user OKs the swap.
+- **Candidates: u900** (the best panel margin) **and u1528** (the last; within about 1-2 SE of u900 at each count, and
+  consistent in its own auctions). Searched matches of both against the live bots -- the bots' settings for both
+  sides (score head, 400 readouts, PUCT 0.05 mean-Q, dedupe, 8 a batch, kept trees, priors at T 1.0), 480 4-player
+  2v2 games from the private auction: `/home/revys/longrun/experiments/search_u900_20261124/` (units
+  rl18xx-search-u900, then rl18xx-search-u1528). The bots stay on gen6 until a candidate beats it there and the user
+  OKs the swap.
 
 ## Time and GPU estimates
 

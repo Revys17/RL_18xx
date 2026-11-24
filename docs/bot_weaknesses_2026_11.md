@@ -48,6 +48,10 @@ the bots' $18,340.
 
 ## 1. Overpaying contested privates, uncontested ones at face: real
 
+The fault is the inconsistency, not the prices (the user, 2026-11-24): if a private is worth what the bots pay for it,
+letting another player have one at face is the mistake. Judge an auction by whether every private is contested and
+no buyer does better for having paid face (`docs/robustness_measurement.md` "Step 4"), not by how high prices go.
+
 Caleb took CA in 12 of 13 games ($165, once $160) and MH in 9 ($110-115), never with a second bidder. Every
 contested private was a bot-vs-bot war (11-29 bids): DH $170-215 (face 70), CS $100-180 (face 40). Contested
 privates went $99 over face on average, uncontested $1 over. Caleb leaves the auction with $590-595 of cash +
