@@ -466,6 +466,43 @@ gen6 u2400 at its own fair value; M3 is 1v3 (fair .25), 800 games a member.
   backstop u2000): at u300 about A2's strength (within noise at every count but 2p), with A1's auction passes and M3
   against the old exploiters -- the test plan's rule (M1 and M3 up, the out-of-family panel kept) picks it over A2.
 
+## Step 4: A4 to plateau (2026-11-22..24, GPU)
+
+A4 resumed from u300 (`plateau.sh`, all 64 CPUs, ~1.7 min an update); eval rounds every 100 updates
+(`logs/eval/robust_A4_20261118/`, summaries in `A4_plateau_evals.log`). Stopped by hand at u1528 (2026-11-24 09:12,
+`STOP`; backstop u2000) for the two reasons below; 1867's PG started behind it. Columns as step 3's table (policy-only vs
+gen6 u2400, fair .50 / .33 / .25 / .40 / .50, +- .022-.025); M1 policy and searched as pass (auction / loot); the last
+two columns are M2 on the run's own PG games (1,000 a round): the C&A's and the M&H's mean price and the share of
+auctions with 2+ bidders (humans' C&A: $208; gen6's: $271).
+
+| update | 2p | 3p | 4p 1v3 | 5p | 6p | M1 policy | M1 searched | M3 gen6 / gx2b / gx2r | C&A (PG games) | M&H |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 300 | .637 | .384 | .328 | .477 | .560 | .76 (.86 / .18) | .73 | .379 / .550 / .614 | - | - |
+| 400 | .695 | .408 | .395 | .492 | .613 | .71 (.71 / .18) | .64 (.52 / .18) | .441 / .557 / .634 | $201, 61% | $123, 28% |
+| 500 | .740 | .445 | .415 | .588 | .605 | .80 (.90 / .18) | .73 (.67 / .27) | .409 / .536 / .605 | $199, 55% | $122, 25% |
+| 600 | .698 | .490 | .458 | .557 | .662 | .78 (.86 / .18) | .71 (.62 / .27) | .422 / .587 / .676 | $195, 54% | $120, 18% |
+| 700 | .698 | .520 | .455 | .630 | .662 | .76 (.81 / .18) | .73 (.62 / .36) | .419 / .596 / .646 | $201, 61% | $121, 20% |
+| 800 | .790 | .560 | .460 | .560 | .675 | .69 (.62 / .18) | .71 (.67 / .18) | .429 / .605 / .669 | $195, 56% | $118, 12% |
+| **900** | **.823** | **.575** | **.497** | **.623** | **.725** | .71 (.67 / .18) | .68 (.57 / .18) | .472 / .640 / .696 | $206, 71% | $121, 18% |
+| 1000 | .825 | .570 | .472 | .665 | .699 | .71 (.67 / .18) | .75 (.76 / .18) | .476 / .611 / .713 | $225, 85% | $123, 25% |
+| 1100 | .790 | .613 | .463 | .632 | .698 | .71 (.67 / .18) | .71 (.71 / .18) | .487 / .616 / .688 | $235, 95% | $131, 50% |
+| 1200 | .762 | .540 | .472 | .588 | .662 | .71 (.67 / .18) | .69 (.67 / .18) | .430 / .623 / .754 | $244, 96% | $139, 73% |
+| 1300 | .757 | .547 | .490 | .593 | .735 | .73 (.71 / .18) | .68 (.57 / .18) | .434 / .654 / .738 | $254, 99% | $144, 91% |
+| 1400 | .782 | .540 | .482 | .632 | .704 | .71 (.71 / .09) | .61 (.43 / .09) | .470 / .660 / .713 | $259, 99% | $145, 93% |
+
+- **Strength vs gen6 plateaued at about u900**: mean margin over fair .252 at u900, .250 / .243 / .208 / .228 / .231
+  after (the plateau rule of `panel_status.py`: the last two rounds fail to beat the best). Against gen6 alone at 4
+  players it wins ~.48 where fair is .25.
+- **After u900 the run's own auctions inflate toward gen6's** (the user's weakness 1): the C&A from ~$200 (humans
+  $208) to $259 with nearly every C&A auction contested, the M&H $121 -> $145; M1's auction positions fell from .86-.90
+  (u500-u600) to .62-.71 from u800, searched to .43 at u1400. The SL seats pinned at 25% held the auction through
+  u300 (step 3) but not through a long run: the learner's own snapshots fill the rest of the league and bid each other
+  up. Remedies to try (not run): an auction-only KL to the SL, more SL share in the auction, or the SL + human-critic
+  auction system ("The auction check").
+- M3 kept rising slowly (gx2b .55 -> .66, gx2r .61 -> .71-.75); loot-and-dump unchanged (2 of 11 policy-only).
+- **Candidate: u900** (the best panel margin, auctions still at human prices). The bots stay on gen6 until it beats
+  gen6 with both sides searching and the user OKs the swap.
+
 ## Time and GPU estimates
 
 - M1: CPU, ~5 min a legacy system at 400 readouts (59 positions x ~5 s, 4 threads); policy + value only, 20 s.
