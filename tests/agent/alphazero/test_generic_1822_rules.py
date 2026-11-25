@@ -214,6 +214,7 @@ def test_pg_games_draw_their_rules_from_the_mix(clients, tmp_path):
         "opponent_temperature": 1.0, "opponent_price_eps": 0.05, "max_decisions": 25, "start_positions": str(empty),
         "random_start_fraction": 1.0, "auction_fraction": 1.0, "reward": "placement", "league": None,
         "save_game_every": 1, "rules_mix": {"plus+nr": 1.0, "th": 1.0},
+        "seed": [1822, 0],  # unseeded, 6 draws of a 50/50 mix were all one combination 1 time in 32
     }  # fmt: skip
     result = gpg.play_generic_pg_games(6, settings)
     seen = set()
