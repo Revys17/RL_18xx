@@ -256,7 +256,10 @@ def test_games_keep_only_learner_decisions_with_their_sampling_probabilities(sta
         assert g["termination"] in ("finished", "max_length")
         assert len(g["learner_seats"]) == 2 and g["opponent"] == "sl"
         assert math.isclose(sum(g["win_share"]), 1.0, rel_tol=1e-5)
-        assert sorted(g["reward"], reverse=True)[0] == 1.0  # placement points: 1st gets 1
+        # placement points by net worth (1st 1, 2nd .5, ...); the games are unseeded and cut at 60 decisions, so
+        # players can tie, and tied players share their places' mean: the total is what is fixed
+        assert math.isclose(sum(g["reward"]), sum(pg.default_placement_points(4)), rel_tol=1e-6)
+        assert max(g["reward"]) >= np.mean(pg.default_placement_points(4))
         for r in g["rows"]:
             assert r.seat in g["learner_seats"] and r.num_players == 4
             assert r.advantage == pytest.approx(g["reward"][r.seat])
