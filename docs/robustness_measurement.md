@@ -637,6 +637,59 @@ user's openers 97-99%, searched 0%). Probes: `scripts/robustness/auction_probe/`
   rises by about the learner's edge). Existing
   critics (gen6 2400, A4's) keep the bias until retrained; 1867's running PG (`gpg1867_a4_20261122`) too.
 
+### u1528's critic retrained on every seat (2026-11-25)
+
+The user's go-ahead ("give u1528 a critic trained on every seat, then redo the auction checks").
+
+- **Run**: `model_checkpoints_generic_pg/u1528_critic_all_20261125`, unit rl18xx-critic-all, beside 1867's PG.
+  - Launcher: `scripts/launch/2026-11/critic_all_u1528/` (`prepare.py`, `run.sh`), running from deployment
+    critic-all-d8d95ac.
+  - Setup: A4's resume state with u1528's learner and critic. The policy is frozen (lr 0 in the config and in the
+    copied optimizer state; the learner's weights are bit-identical at every snapshot). `--critic-seats all`.
+  - Kept from A4 at u1520: the league, the opponent pool, the A2 start priorities and every game setting. The league
+    and pool stop growing.
+  - About 3.7-4.3 min an update while sharing the machine (1867's PG slows from ~2 to ~3.8 min).
+- **Probes** (`scripts/robustness/auction_probe/`; `ca<N>` in `_specs.py` = u1528's policy with this run's critic N).
+  Outputs are in `/home/revys/longrun/experiments/critic_all_20261125/probes/`.
+- **The mover bias is gone by u1560** (32 updates). Placement points actual minus predicted, mover vs other seats,
+  on u1528's match games (`mover_calibration.py`; `FIRST=30` samples the auction and SR1):
+
+| positions | gen6 2400 | u1528 (old critic) | ca1560 |
+|---|---|---|---|
+| auction (1,053) | .129 +- .014 | .083 +- .014 | .005 +- .014 |
+| whole games (1,808) | -- | .057 +- .008 | .015 +- .008 |
+| stock rounds (913) | -- | .038 | -.004 |
+| operating rounds (856) | -- | .074 | .035 +- .012 |
+
+  The earlier ~.25 auction figure came from 19 positions.
+- **After the C&A $165 opener** (`root_moves.py`): the next bot still bids the D&H at $75 with either critic. The C&A
+  bid's Q gap to that move narrows from .105 to .064.
+- **Caleb's openers, played out** ("Caleb's openers, played out" above; u1528 searched, 110 auctions each):
+
+| critic | C&A contested (n) | M&H contested (n) | bots bid first on the M&H | C&A / M&H price | inconsistent | cash + face: Caleb / a bot |
+|---|---|---|---|---|---|---|
+| u1528's own | 91% (69) | 49% (76) | 3 / 79 | $221 / $129 | 40% +- 5% | $579 / $562 |
+| ca1560 | 73% (60) | 83% (30) | 50 / 80 | $225 / $141 | **19% +- 4%** | $573 / $555 |
+
+  The inconsistent auctions halve, mostly because the bots now go after the M&H: they bid on it before Caleb's script
+  in 62% of auctions (the human corpus: 62% of M&H auctions have 2+ bidders). The bots also pay more for the C&A,
+  $84 over face against $60.
+- **M1** (59 positions, the live search with priors at T 1.0):
+
+| weakness (n) | u1528's critic | ca1560 |
+|---|---|---|
+| auction (21) | .38 | .48 |
+| loot_dump (11) | .18 | .09 |
+| sellout (9) | 1.00 | 1.00 |
+| doomed (10) | .90 | .90 |
+| suitcase (8) | 1.00 | 1.00 |
+| all | .61 | .63 |
+
+  Loot-and-dump is not fixed. The policy puts .82 on the bad buy and the search follows it. The new critic narrows
+  the preferred move's margin from -.056 to -.006, but doesn't flip it. One loot-and-dump position moves the pass
+  rate 9 points.
+- **Still to measure**: a searched match against the live bots (480 games) once the critic settles.
+
 ## Time and GPU estimates
 
 - M1: CPU, ~5 min a legacy system at 400 readouts (59 positions x ~5 s, 4 threads); policy + value only, 20 s.
