@@ -9,16 +9,12 @@ torch.set_num_threads(8)
 from regression_set import load_system, legal_moves, apply_index, acting_player, match_indices, root_stats
 from rl18xx.agent.alphazero.start_positions import new_game
 
-LR1 = "/home/revys/longrun/work/lr1/model_checkpoints_pg/gen6_20261110"
-A4 = "/home/revys/workspace/RL_18xx/model_checkpoints_generic_pg/robust_A4_20261118"
-SPECS = {
-    "gen6": f"{LR1}/learner/2400.pth+{LR1}/critic/2400.pth#score",
-    "u1528": f"generic:{A4}/learner/1528.pth+generic:{A4}/critic/1528.pth#score",
-}
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+from _specs import spec, compared
 import os; SEARCH = os.environ.get("SEARCH", "@400/0.05:mean,dedupe,par=8,ptemp=1.0")
 who = sys.argv[1]
 script = [tuple(x.split(":")) for x in sys.argv[2:]]  # company:price bids played in turn order before the root
-sysm = load_system(SPECS[who], SEARCH)
+sysm = load_system(spec(who), SEARCH)
 game = new_game(4, auction_unlock=False, no_buyback_rule=True)
 for company, price in script:
     pid = acting_player(game)

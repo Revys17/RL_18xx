@@ -6,11 +6,9 @@ sys.path[:0] = [str(_R / "scripts/robustness"), str(_R / "scripts"), str(_R)]
 import torch; torch.set_num_threads(8)
 from regression_set import load_system, legal_moves, apply_index, acting_player, match_indices
 from rl18xx.agent.alphazero.start_positions import new_game
-LR1 = "/home/revys/longrun/work/lr1/model_checkpoints_pg/gen6_20261110"
-A4 = "/home/revys/workspace/RL_18xx/model_checkpoints_generic_pg/robust_A4_20261118"
-SPECS = {"gen6": f"{LR1}/learner/2400.pth+{LR1}/critic/2400.pth#score",
-         "u1528": f"generic:{A4}/learner/1528.pth+generic:{A4}/critic/1528.pth#score"}
-sysm = load_system(SPECS[sys.argv[1]], "@400/0.05:mean,dedupe,par=8,ptemp=1.0")
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+from _specs import spec, compared
+sysm = load_system(spec(sys.argv[1]), "@400/0.05:mean,dedupe,par=8,ptemp=1.0")
 game = new_game(4, auction_unlock=False, no_buyback_rule=True)
 def vals(g):
     return " ".join(f"P{p}:{sysm.values(g, p)['search']:.2f}" for p in (1, 2, 3, 4))

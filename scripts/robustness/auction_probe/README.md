@@ -2,7 +2,9 @@
 
 Ad-hoc probes behind `docs/robustness_measurement.md` "Why search stops the bots contesting". CPU, run from the repo
 root with `.venv/bin/python` (`CUDA_VISIBLE_DEVICES=`). Checkpoint paths (gen6 u2400 in lr1's work dir, A4 u1528) are
-written into the scripts.
+named in `_specs.py`: `gen6`, `u1528` and `ca<N>` (u1528's policy with the critic retrained on every seat's
+decisions, `u1528_critic_all_20261125` at update N); `ONLY=gen6,ca1578` picks the systems of the comparing probes,
+`EXTRA_SPECS="name=spec;..."` adds others.
 
 - `match_auctions.py <collection>... | <human corpus dir>`: per private, the share with 2+ bidders, mean price over
   face, and the buyer's win rate uncontested vs contested, by side (A / B of an `eval_head_to_head` collection).
