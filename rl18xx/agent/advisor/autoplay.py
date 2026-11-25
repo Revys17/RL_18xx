@@ -29,6 +29,9 @@ from typing import Optional
 LOGGER = logging.getLogger(__name__)
 
 ENTITY_TYPES = ("player", "corporation", "company")
+#: Ruby's purchase steps our 1830 can skip: it forbids buying trains and privates from other players, so a step
+#: Ruby keeps open only for those purchases has no move in our engine (as extension/src/autoplay.js).
+SKIPPED_PURCHASE_STEPS = ("BuyTrain", "BuyCompany")
 
 
 class AutoplayError(ValueError):
@@ -132,6 +135,12 @@ def plan_move(live, site: SiteView, seats) -> Plan:
             f"{live.error['message']}); undo it on the site to continue."
         )
     if live.finished:
+        # The last operating round's last company: Ruby keeps its BuyTrain step open for other players' trains,
+        # ours skips it and ends the game (dev site games 79, 164, 173, 354: Ruby ends it after the pass).
+        if site.step in SKIPPED_PURCHASE_STEPS and "pass" in site.actions:
+            action = {"type": "pass", "entity": site.entity_id, "entity_type": site.entity_type}
+            reason = f"Ruby waits for {site.entity_id} to pass ({site.step}); the engine has the game over"
+            return Plan("pass", seat, action=action, reason=reason)
         raise AutoplayError("The engine has the game over while the site doesn't.")
     site_entity = ("player", seat) if site.entity_type == "player" else (site.entity_type, str(site.entity_id))
     engine = _engine_entity(live)

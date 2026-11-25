@@ -28,11 +28,12 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from rl18xx.agent.advisor.autoplay import SKIPPED_PURCHASE_STEPS
 from rl18xx.agent.advisor.bot_hub import LOCAL, CannotMove, Connector
 from rl18xx.agent.advisor.live_game import SUPPORTED_TITLE
 
 POLL_SECONDS = 1.0  # between looks when no bot has a move to make
-IMPLICIT_PASS_STEPS = ("BuyTrain", "BuyCompany")  # as extension/src/autoplay.js
+IMPLICIT_PASS_STEPS = SKIPPED_PURCHASE_STEPS
 
 
 class SiteError(RuntimeError):

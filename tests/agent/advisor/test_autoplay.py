@@ -101,6 +101,23 @@ def test_ruby_waiting_for_a_pass_the_engine_took_is_an_implicit_pass(game):
         plan_move(live, no_pass, seats=[3])
 
 
+def test_ruby_waiting_for_a_pass_after_the_engine_ended_the_game_is_an_implicit_pass(game, monkeypatch):
+    """The last company of the last operating round: Ruby keeps its BuyTrain step open for other players' trains,
+    our 1830 skips it and ends the game (dev site games 79, 164, 173, 354; Ruby ends it after the pass)."""
+    live = LiveGame(game)
+    owner = live.user_id(live.acting()["player_id"])
+    monkeypatch.setattr(LiveGame, "finished", property(lambda self: True))
+    body = {"last_id": 909, "entity": {"id": "B&M", "type": "corporation", "player": owner}}
+    site = SiteView.parse({**body, "step": "BuyTrain", "actions": ["buy_train", "pass"]})
+    plan = plan_move(live, site, seats=[3])
+    assert plan.kind == "pass" and plan.action == {"type": "pass", "entity": "B&M", "entity_type": "corporation"}
+    assert "game over" in plan.reason
+    # anywhere else, or with no pass to make, the engines disagree
+    for step, actions in (("Track", ["lay_tile", "pass"]), ("BuyTrain", ["buy_train"])):
+        with pytest.raises(AutoplayError, match="game over while the site"):
+            plan_move(live, SiteView.parse({**body, "step": step, "actions": actions}), seats=[3])
+
+
 def test_an_action_the_engine_rejected_stops_the_model(game):
     live = LiveGame(game)
     live.error = {"action": 9, "type": "buy_train", "message": "GameError: Not a buyable train"}
