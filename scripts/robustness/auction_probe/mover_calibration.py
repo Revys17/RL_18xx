@@ -1,6 +1,6 @@
 """Calibration of the critics' search head (placement score) for the player to move vs the others, on positions of
 u1528's searched match games: mean (actual placement points - predicted), by round type."""
-import sys, json, collections
+import os, sys, json, collections
 from pathlib import Path as _P
 _R = _P(__file__).resolve().parents[3]
 sys.path[:0] = [str(_R / "scripts/robustness"), str(_R / "scripts"), str(_R)]
@@ -29,7 +29,8 @@ for g in list(recs)[:ngames]:
         ranks = [order.index(t) for t in ties]
         outcome[s] = float(np.mean([pts[k] for k in ranks]))
     acts = json.load(open(f"{D}/games/{g}.json"))
-    pick = set(rng.choice(len(acts), size=min(per_game, len(acts)), replace=False).tolist())
+    span = min(len(acts), int(os.environ.get("FIRST", len(acts))))  # FIRST=k: the first k actions (the auction)
+    pick = set(rng.choice(span, size=min(per_game, span), replace=False).tolist())
     game = new_game(4, auction_unlock=False, no_buyback_rule=True)
     for k, a in enumerate(acts):
         if k in pick and not game.finished:
