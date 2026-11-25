@@ -90,6 +90,50 @@ def test_learner_seats_play_against_one_opponent_and_only_their_decisions_are_ke
     assert clients["learner"].rotations and clients["sl"].rotations
 
 
+def test_critic_rows_sample_every_seats_decisions(monkeypatch, start_file):
+    """critic_seats "all": the critic's rows are a uniform sample of every seat's decisions (opponents' too), as
+    many as the learner keeps; the learner's PPO rows are unchanged. The default keeps no critic rows."""
+    monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Client(), "sl": _Client(), "pool": _Client()})
+    assert all(g["critic_rows"] is None for g in pg.play_pg_games(1, _settings(start_file))["games"])
+    result = pg.play_pg_games(3, _settings(start_file, critic_seats="all"))
+    movers = set()
+    for game in result["games"]:
+        assert len(game["critic_rows"]) == min(5 * len(game["learner_seats"]), game["decisions"])
+        for encoded, legal, choice, _, price_info, advantage, fractions, score_target in game["critic_rows"]:
+            movers.add((int(encoded[6]) in game["learner_seats"]))
+            assert choice in legal and price_info is None and advantage == 0.0
+            assert fractions.shape == (4,) and float(fractions.sum()) == pytest.approx(1.0, abs=1e-5)
+        assert all(int(r[0][6]) in game["learner_seats"] for r in game["rows"])  # PPO rows: the learner's only
+    assert movers == {True, False}  # learner and opponent positions both
+
+
+def test_update_trains_the_critic_on_its_own_rows_only(monkeypatch, start_file):
+    """With critic rows the critic trains on them alone (none: no critic step), the learner on the PPO rows."""
+    from rl18xx.agent.alphazero.config import ModelTransformerConfig
+    from rl18xx.agent.alphazero.model_transformer import AlphaZeroTransformerModel
+
+    monkeypatch.setattr(pg, "_CLIENTS", {"learner": _Client(), "sl": _Client(), "pool": _Client()})
+    game = pg.play_pg_games(1, _settings(start_file, max_decisions=12, critic_seats="all"))["games"][0]
+    rows, critic_rows = game["rows"][:6], game["critic_rows"][:6]
+    torch.manual_seed(0)
+    config = ModelTransformerConfig(device=torch.device("cpu"))
+    learner, critic, sl = [AlphaZeroTransformerModel(config) for _ in range(3)]
+    sl.load_state_dict(learner.state_dict())
+    cfg = pg.PGConfig(policy_checkpoint="", value_checkpoint="", minibatch=4, microbatch=2, lr=1e-3, critic_lr=1e-3)
+    opts = [torch.optim.AdamW(m.parameters(), lr=1e-3, weight_decay=0.0) for m in (learner, critic)]
+    start = [p.detach().clone() for p in critic.parameters()]
+
+    def critic_changed():
+        return any(not torch.equal(a, b) for a, b in zip(start, critic.parameters()))
+
+    cpu, rng = torch.device("cpu"), np.random.default_rng(0)
+    stats = pg._update(learner, critic, sl, *opts, rows, cfg, 0.02, cpu, rng, critic_rows=[])
+    assert not critic_changed() and stats["critic_rows"] == 0
+    stats = pg._update(learner, critic, sl, *opts, rows, cfg, 0.02, cpu, rng, critic_rows=critic_rows)
+    assert critic_changed() and stats["critic_rows"] == len(critic_rows)
+    assert all(math.isfinite(stats[k]) for k in ("critic_ce", "critic_mse", "pg_loss"))
+
+
 def test_games_use_the_pool_once_it_has_snapshots(monkeypatch, start_file):
     clients = {"learner": _Client(), "sl": _Client(), "pool": _Client()}
     monkeypatch.setattr(pg, "_CLIENTS", clients)

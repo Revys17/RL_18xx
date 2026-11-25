@@ -125,6 +125,13 @@ class PGConfig:
     tasks_in_flight_per_worker: int = 2
     learner_seats: int = 2
     positions_per_seat: int = 32
+    # The positions the critic trains on (2026-11-25): "all" -- a sample of every seat's decisions, as many per
+    # game as the learner's rows (positions_per_seat per learner seat); "learner" -- the learner's own rows (runs
+    # before; the default of a resumed run whose config predates the option). A critic trained on the learner's
+    # rows overrates the player to move (the mover is always the learner, usually the strongest at its table):
+    # harmless as the PPO baseline, a bias wherever any seat moves -- a search (docs/robustness_measurement.md
+    # "Why search stops the bots contesting").
+    critic_seats: str = "all"
     sl_opponent_fraction: float = 0.5
     # The fixed opponent ("sl" server); None: the starting policy.
     opponent_checkpoint: Optional[str] = None
@@ -303,6 +310,9 @@ class _PGGame:
     values: dict = field(default_factory=dict)  # learner seat -> critic value at each of its decisions
     seen: dict = field(default_factory=dict)  # learner seat -> decisions so far
     reservoir: dict = field(default_factory=dict)  # learner seat -> [(decision number, row)]
+    # critic_seats "all": every seat's decisions so far, and a reservoir of (encoded, legal, choice) over them
+    critic_seen: int = 0
+    critic_reservoir: list = field(default_factory=list)
     seat_members: dict = field(default_factory=dict)  # league mode: opponent seat -> member label
     # League mode: each opponent slot's member-change count when the game was dealt, and whether a
     # slot named another member than the task's settings say (the settings lag the trainer).
@@ -833,6 +843,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
     track_phases = parse_reward(reward_spec)[0] == "rusher"
     track_rust = parse_reward(reward_spec)[0] == "rust"
     k = settings["positions_per_seat"]
+    critic_all = settings.get("critic_seats", "learner") == "all"
     n_players = int(settings.get("num_players", NUM_PLAYERS))
     start_time = time.time()
 
@@ -912,6 +923,17 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
                         r = int(rng.integers(0, g.seen[seat]))
                         if r < k:
                             g.reservoir[seat][r] = (t, row)
+                if critic_all:
+                    # The critic's positions: a uniform sample of every seat's decisions, as many as the learner keeps.
+                    g.critic_seen += 1
+                    cap = k * len(g.values)
+                    item = (encoded[i], np.asarray(legal, dtype=np.int32), int(choice))
+                    if len(g.critic_reservoir) < cap:
+                        g.critic_reservoir.append(item)
+                    else:
+                        r = int(rng.integers(0, g.critic_seen))
+                        if r < cap:
+                            g.critic_reservoir[r] = item
                 rs = g.game._game
                 phase_before = rs.phase.name if (track_phases or track_rust) else None
                 trains_before = held_trains(rs) if track_rust else None
@@ -946,6 +968,12 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
                 advantages = seat_advantages(g.values[seat], float(reward[seat]), settings["gae_lambda"])
             for t, (enc, legal, choice, logp, price_info) in kept:
                 rows.append((enc, legal, choice, logp, price_info, float(advantages[t]), fractions, score_target))
+        # critic_seats "all": the critic's rows (the PPO row layout; only the encoding and the targets are read)
+        critic_rows = (
+            [(enc, legal, choice, 0.0, None, 0.0, fractions, score_target) for enc, legal, choice in g.critic_reservoir]
+            if critic_all
+            else None
+        )
         record = {
             "uid": g.uid,
             "num_players": n_players,
@@ -963,6 +991,7 @@ def play_pg_games(num_games: int, settings: dict) -> dict:
             "auction_prices": auction_prices(g),
             "first_values": {} if baseline_at_update else {seat: v[0] for seat, v in g.values.items() if v},
             "rows": rows,
+            "critic_rows": critic_rows,
         }
         if g.seat_members:
             # League mode: per opponent seat, the share of the learner's seats that finished
@@ -1342,6 +1371,7 @@ RESUME_SETTINGS = (
     "auction_stall_decisions",
     "population",
     "value_follow",
+    "critic_seats",
 )
 # Settings a caller without a command line (``explicit=None``) changes only when set (truthy).
 _RESUME_IF_SET = ("population", "value_follow", "policy_follow")
@@ -1380,6 +1410,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
     if resume:
         run_dir = Path(resume)
         state = json.loads((run_dir / "state.json").read_text())
+        state["config"].setdefault("critic_seats", "learner")  # the behaviour of runs before the option
         overrides = resume_overrides(cfg, state["config"], RESUME_SETTINGS, explicit)
         cfg = PGConfig(**{**state["config"], **overrides})
         check_players(cfg)
@@ -1496,6 +1527,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
         return {
             "num_players": n,
             "positions_per_seat": cfg.positions_per_seat,
+            "critic_seats": cfg.critic_seats,
             "learner_seats": learner_seats_for(cfg, n),
             "sl_opponent_fraction": cfg.sl_opponent_fraction,
             "pool_ready": bool(pool),
@@ -1528,7 +1560,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
             ),
         }
 
-    buffer, gen, total_games = [], Counter(), 0
+    buffer, critic_buffer, gen, total_games = [], [], Counter(), 0
     gen_started = run_started = time.time()
     terminations, lengths, starts = Counter(), [], Counter()
     prices = defaultdict(list)  # private -> prices paid in this update's auction games
@@ -1576,6 +1608,7 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                         for seat, value in record["first_values"].items():
                             critic_first_values.append((value, record["win_share"][int(seat)]))
                         buffer.extend(record["rows"])
+                        critic_buffer.extend(record.get("critic_rows") or [])
                         if record.get("saved_game"):
                             opponent_checkpoint = (
                                 servers.get("sl") if record["opponent"] == "sl"
@@ -1602,10 +1635,13 @@ def run(cfg: PGConfig, resume: Optional[str] = None, explicit: Optional[set] = N
                     baseline_net = learner if cfg.shared else critic
                     buffer, more = subtract_baselines(baseline_net, buffer, cfg, device)
                     baseline_stats.update(more)
-                stats = _update(learner, critic, anchor, learner_opt, critic_opt, buffer, cfg, kl_coef, device, rng)
+                stats = _update(
+                    learner, critic, anchor, learner_opt, critic_opt, buffer, cfg, kl_coef, device, rng,
+                    critic_rows=critic_buffer if cfg.critic_seats == "all" else None,
+                )
                 stats.update(baseline_stats)
                 train_seconds = time.time() - t0
-                buffer = []
+                buffer, critic_buffer = [], []
                 update += 1
 
                 previous = (current_learner,) if critic is None else (current_learner, current_critic)
@@ -1794,7 +1830,9 @@ def subtract_baselines(critic, rows: list, cfg: PGConfig, device, chunk: int = 1
     return out, {"critic_row_brier": float(np.mean((values - rewards) ** 2)) if len(rows) else float("nan")}
 
 
-def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfig, kl_coef, device, rng) -> dict:
+def _update(
+    learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfig, kl_coef, device, rng, critic_rows=None
+) -> dict:
     """One pass of PPO over ``rows`` (``cfg.ppo_epochs`` times) and one critic pass.
 
     The networks train in eval mode: the economic transformer's layers carry
@@ -1864,7 +1902,7 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfi
                     if key != "total":
                         sums[key] += float(value) * n
 
-                if epoch == 0 and critic is not None:
+                if epoch == 0 and critic is not None and critic_rows is None:
                     _, win_loss_logits, score_pred, _ = critic(
                         batch["game_state"], batch["nodes"], **_counts(batch), value_only=True
                     )
@@ -1886,12 +1924,15 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfi
             learner_opt.step()
             sums["grad_norm"] += float(norm) * len(step_rows)
             steps += 1
-            if epoch == 0 and critic is not None:
+            if epoch == 0 and critic is not None and critic_rows is None:
                 norm = torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=1.0)
                 if not torch.isfinite(norm):
                     raise RuntimeError("Critic diverged: non-finite gradient norm")
                 critic_opt.step()
     learner.value_stop_grad = False
+    if critic is not None and critic_rows is not None:
+        # critic_seats "all": one pass over every seat's sampled positions instead of the learner's rows
+        critic_sums, critic_count = _critic_pass(critic, critic_opt, critic_rows, cfg, device, rng)
     stats = {key: value / max(count, 1) for key, value in sums.items()}
     stats.update(first)
     stats.update({f"critic_{key}": value / max(critic_count, 1) for key, value in critic_sums.items()})
@@ -1903,4 +1944,39 @@ def _update(learner, critic, anchor, learner_opt, critic_opt, rows, cfg: PGConfi
         adv_abs_mean=float(np.abs(advantages).mean()),
         price_rows=sum(1 for r in rows if r[4] is not None),
     )
+    if critic_rows is not None:
+        stats["critic_rows"] = len(critic_rows)
     return stats
+
+
+def _critic_pass(critic, critic_opt, rows: list, cfg: PGConfig, device, rng) -> tuple:
+    """One pass of the critic over ``rows`` (``critic_seats="all"``: every seat's sampled positions, the PPO row
+    layout): minibatches of ``cfg.minibatch`` in random order, gradients accumulated over microbatches, one clipped
+    step each -- the critic's part of :func:`_update`'s first epoch. Returns the loss sums and the row count."""
+    critic.eval()
+    sums, count = Counter(), 0
+    micro = min(cfg.microbatch, cfg.minibatch)
+    order = rng.permutation(len(rows))
+    for start in range(0, len(rows), cfg.minibatch):
+        step_rows = order[start : start + cfg.minibatch]
+        critic_opt.zero_grad(set_to_none=True)
+        for micro_start in range(0, len(step_rows), micro):
+            batch = batch_tensors([rows[i] for i in step_rows[micro_start : micro_start + micro]], device)
+            n = len(batch["choice"])
+            _, win_loss_logits, score_pred, _ = critic(
+                batch["game_state"], batch["nodes"], **_counts(batch), value_only=True
+            )
+            c = critic_losses(win_loss_logits, score_pred, batch["fractions"], batch["score_target"])
+            loss = c["ce"] + cfg.score_loss_weight * c["mse"]
+            if not torch.isfinite(loss):
+                raise RuntimeError("Critic diverged: non-finite loss")
+            (loss * (n / len(step_rows))).backward()
+            count += n
+            sums["ce"] += float(c["ce"].detach()) * n
+            sums["mse"] += float(c["mse"].detach()) * n
+            sums["winner_hit"] += float(c["winner_hit"]) * n
+        norm = torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=1.0)
+        if not torch.isfinite(norm):
+            raise RuntimeError("Critic diverged: non-finite gradient norm")
+        critic_opt.step()
+    return sums, count

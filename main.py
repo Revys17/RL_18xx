@@ -175,6 +175,7 @@ def cmd_policy_gradient(args):
         auction_stall_by_players=_by_players(args.auction_stall_by_players, int, "--auction-stall-by-players"),
         learner_seats=args.learner_seats if args.learner_seats is not None else default_learner_seats(args.num_players),
         positions_per_seat=args.positions_per_seat,
+        critic_seats=args.critic_seats,
         sl_opponent_fraction=args.sl_opponent_fraction,
         opponent_checkpoint=(
             str(_resolve_checkpoint(args.opponent, args.model_dir)) if args.opponent else None
@@ -536,6 +537,7 @@ def cmd_policy_gradient_generic(args):
         games_per_task=args.games_per_task,
         learner_seats=args.learner_seats if args.learner_seats is not None else default_learner_seats(args.num_players),
         positions_per_seat=args.positions_per_seat,
+        critic_seats=args.critic_seats,
         sl_opponent_fraction=args.sl_opponent_fraction,
         opponent_checkpoint=args.opponent,
         anchor_every=args.anchor_every,
@@ -906,6 +908,14 @@ def build_parser():
     )
     p.add_argument("--learner-seats", type=int, default=None, help="Learner seats per game (default: half the table)")
     p.add_argument("--positions-per-seat", type=int, default=32, help="Learner decisions kept per seat per game")
+    p.add_argument(
+        "--critic-seats",
+        choices=("all", "learner"),
+        default="all",
+        help="Positions the critic trains on: all (a sample of every seat's decisions, as many as the learner's rows) "
+        "or learner (the learner's own rows, as before 2026-11-25; such a critic overrates the player to move). "
+        "A resume keeps the run's own (learner for runs before the option) unless passed",
+    )
     p.add_argument("--sl-opponent-fraction", type=float, default=0.5, help="Games against the fixed opponent")
     p.add_argument(
         "--opponent", type=str, default=None,
@@ -1399,6 +1409,12 @@ def build_parser():
     p.add_argument("--auction-stall-by-players", type=str, default=None)
     p.add_argument("--learner-seats", type=int, default=None, help="Outside league mode (default: half the table)")
     p.add_argument("--positions-per-seat", type=int, default=32)
+    p.add_argument(
+        "--critic-seats",
+        choices=("all", "learner"),
+        default="all",
+        help="As policy-gradient's: all (every seat's decisions) or learner (the learner's own rows, as before)",
+    )
     p.add_argument("--sl-opponent-fraction", type=float, default=0.5)
     p.add_argument("--opponent", type=str, default=None, help="Fixed opponent (a generic checkpoint; default --policy)")
     p.add_argument("--anchor-every", type=int, default=0)

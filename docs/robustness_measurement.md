@@ -623,6 +623,13 @@ user's openers 97-99%, searched 0%). Probes: `scripts/robustness/auction_probe/`
   in a search any seat moves, which should favour moves that keep the turn (a sale before a purchase in a stock
   round) over moves that hand it on -- possibly part of weakness 3's search-chosen sell-outs (untested). It does not
   explain the auction, where every move hands the turn on.
+- **Fixed in training (2026-11-25, the user's go-ahead)**: `policy-gradient` and `policy-gradient-generic` train the
+  critic on a uniform sample of every seat's decisions, as many per game as the learner's rows (`--critic-seats all`,
+  the default for new runs; a resumed run keeps its own setting, `learner` for runs before the option, unless the
+  flag is passed). The PPO rows are unchanged; the baseline now predicts an average seat, not the learner -- still a
+  function of the position alone, so the gradient stays unbiased (a little more variance: the advantages' mean
+  rises by about the learner's edge). Existing
+  critics (gen6 2400, A4's) keep the bias until retrained; 1867's running PG (`gpg1867_a4_20261122`) too.
 
 ## Time and GPU estimates
 

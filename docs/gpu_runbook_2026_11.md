@@ -28,6 +28,9 @@ Total: roughly 270-300 GPU h with all CPUs (11-12 days), much more on the pinned
 
 - Bots: gen6 u2400 + critic 2400, placement-score head (`--play-value-head score`), priors at T 1.0
   (`--play-prior-temperature 1.0`, since 2026-11-19), deployment advisor-20261119.
+- The bots stay on gen6 until the user is happy with the 1830 model on the whole (2026-11-25), not when a candidate
+  wins its match (u1528 searched .625 +- .022 against them).
+- PG critics train on every seat's decisions (`--critic-seats all`, 2026-11-25).
 - Order: 1830's plateau run (step 4) before 1867's PG (step 5) (2026-11-21).
 - Player-count floor 10% in every title's PG mix (`MIX_FLOOR`).
 - Unfinished games dropped from new titles' supervised data (1830 keeps ckpt 10's corpus for the check).

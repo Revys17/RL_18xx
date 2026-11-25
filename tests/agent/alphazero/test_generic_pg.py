@@ -273,6 +273,40 @@ def test_games_keep_only_learner_decisions_with_their_sampling_probabilities(sta
     assert len(batch["price_sel"]) == sum(1 for r in rows if r.price_cell >= 0)
 
 
+def test_critic_rows_sample_every_seats_decisions(start_file, clients, model):
+    """critic_seats "all": the critic's rows sample every seat's decisions (opponents' too), as many as the
+    learner keeps, with seat-frame targets; the critic trains on them alone."""
+    assert all(g["critic_rows"] is None for g in gpg.play_generic_pg_games(1, _settings(start_file))["games"])
+    result = gpg.play_generic_pg_games(3, _settings(start_file, critic_seats="all"))
+    critic_rows, seats = [], set()
+    for g in result["games"]:
+        assert len(g["critic_rows"]) == min(6 * len(g["learner_seats"]), g["decisions"])
+        for r in g["critic_rows"]:
+            seats.add(r.seat in g["learner_seats"])
+            assert r.win[0] == pytest.approx(g["win_share"][r.seat])  # seat frame: the mover first
+            assert r.score[0] == pytest.approx(g["reward"][r.seat])  # placement points
+        assert all(r.seat in g["learner_seats"] for r in g["rows"])
+        critic_rows += g["critic_rows"]
+    assert seats == {True, False}
+    rows = [r for g in result["games"] for r in g["rows"]]
+    cfg = gpg.GenericPGConfig(policy_checkpoint="unused", minibatch=16, microbatch=8, lr=1e-3, critic_lr=1e-3,
+                              reward="placement", learner_temperature=0.5)
+    critic = mg.GenericPolicyValueModel(model.config)
+    critic.load_state_dict(model.state_dict())
+    learner = mg.GenericPolicyValueModel(model.config)
+    learner.load_state_dict(model.state_dict())
+    before = {k: v.clone() for k, v in critic.state_dict().items()}
+    lo = torch.optim.AdamW(learner.parameters(), lr=cfg.lr, weight_decay=0.0)
+    co = torch.optim.AdamW(critic.parameters(), lr=cfg.critic_lr, weight_decay=0.0)
+    stats = gpg._update(learner, critic, model, lo, co, rows, cfg, 0.02, "cpu", np.random.default_rng(0),
+                        critic_rows=[])
+    assert all(torch.equal(before[k], v) for k, v in critic.state_dict().items()) and stats["critic_rows"] == 0
+    stats = gpg._update(learner, critic, model, lo, co, rows, cfg, 0.02, "cpu", np.random.default_rng(0),
+                        critic_rows=critic_rows)
+    assert any(not torch.equal(before[k], v) for k, v in critic.state_dict().items())
+    assert stats["critic_rows"] == len(critic_rows) and np.isfinite(stats["critic_ce"])
+
+
 def test_league_games_record_pairwise_results(start_file, clients):
     league = {
         "slots": ["opp0", "opp1"],
