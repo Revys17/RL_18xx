@@ -519,8 +519,12 @@ auctions with 2+ bidders (humans' C&A: $208; gen6's: $271).
   rl18xx-search-u900, then rl18xx-search-u1528). The bots stay on gen6 until a candidate beats it there and the user
   OKs the swap. On weakness 1 u1528 is the better of the two (below), so u900's match was stopped at 120 of 480
   games (0.475 +- 0.046; `u900_vs_bots_partial120/`) and u1528's started first (2026-11-24 13:19, the user), with a
-  full u900 match queued behind it (unit rl18xx-search-u900b; `touch STOP_900` skips it). Each takes ~12-13 h
+  full u900 match queued behind it (unit rl18xx-search-u900b; `touch STOP_900` skips it). Each takes ~10 h
   sharing the GPU with 1867's PG.
+- **u1528 searched beats the live bots: 0.625 +- 0.022** (fair 0.50; 480 games, 2026-11-24 13:19 - 23:06;
+  `u1528_vs_bots/`): worth share 0.537; by arrangement AABB .863, ABBA .750, BBAA .650, ABAB .588, BABA .512,
+  BAAB .388 (u1528 in the middle seats its weakest); 28 games (5.8%) at the length cap. It passes the swap gate's match;
+  the swap waits for the user's OK. u900's full match started 23:07 (`u900_vs_bots/`).
 
 ### Caleb's openers, played out (2026-11-24, CPU)
 
