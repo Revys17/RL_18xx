@@ -54,6 +54,10 @@ no buyer does better for having paid face (`docs/robustness_measurement.md` "Ste
 Played out from the user's 11 openings (`scripts/robustness/caleb_openers.py`, 2026-11-24): searched with the bots'
 settings, gen6 never bids on his C&A / M&H (83% of auctions inconsistent), u900 contests the C&A but never the M&H
 (70%), u1528 the C&A 91% and the M&H 49% (40%). gen6's policy alone contests 97-99%: its search takes that away.
+Why (2026-11-25, `docs/robustness_measurement.md` "Why search stops the bots contesting"): not the tree -- the
+critic values a standing C&A bid as the start of a war (gen6's: .19 holding $170 vs .49 owning the C&A at $170),
+and the search never reaches the private's sale to see otherwise. Also found: the critics overrate the player to
+move (trained only on the learner's turns).
 
 Caleb took CA in 12 of 13 games ($165, once $160) and MH in 9 ($110-115), never with a second bidder. Every
 contested private was a bot-vs-bot war (11-29 bids): DH $170-215 (face 70), CS $100-180 (face 40). Contested

@@ -578,6 +578,52 @@ positions ask for one move.
 On weakness 1: u1528 > u900 > gen6. What is left is the M&H, and the war over the D&H (u1528 searched pays $43 over
 face for it).
 
+### Auctions in u1528's match against the live bots (2026-11-25)
+
+The 480 games of u1528 searched vs gen6 searched (0.625 above), per private (`scripts/robustness/auction_probe/
+match_auctions.py`): contested = 2+ bidders; win rates are each side's buyers' (side averages: u1528 .312, gen6 .188).
+
+| Private | Contested | Human corpus | gen6 opened -> u1528 bid too | u1528 opened -> gen6 bid too | Buyer wins, uncontested |
+|---|---|---|---|---|---|
+| C&A | 22% | 86% | 15 of 105 | 0 of 375 | gen6 .48 (90), u1528 .33 (283) |
+| M&H | 4% | 62% | 0 of 426 | 0 of 54 | gen6 .09 (408), u1528 .48 (54) |
+| D&H | 62% | 52% | 26 of 48 | 171 of 432 | gen6 .27, u1528 .35 (contested: .26 / .37) |
+| C&St.L | 21% | 27% | 0 of 317 | 0 of 163 | |
+
+- Neither side contests the other's C&A or M&H. Every contested C&A was u1528 against u1528 (the other seat).
+- u1528 lets gen6 keep its C&A opener at $160-165 in 90 of 105 games, and gen6 wins .48 of those (its average .19):
+  the face-value bargain of weakness 1, here left by u1528. The M&H at face is no bargain in this company (gen6's
+  uncontested M&H buyers win .09). So u1528 contests the user's openers more than the live bots do (played out
+  above), but in this match it is still inconsistent.
+
+### Why search stops the bots contesting (2026-11-25)
+
+The user asked whether a search bug makes searched bots bid less than their policies (gen6's policy contests the
+user's openers 97-99%, searched 0%). Probes: `scripts/robustness/auction_probe/` (CPU).
+
+- **The tree is not at fault.** After a C&A $165 opener, gen6's live search (400 readouts, PUCT 0.05 mean-Q) gives
+  bid C&St.L $45 183 visits (Q .489), D&H $75 141 (.465), pass 33 (.461), M&H $115 3 (.328), **C&A $170 1 (.194)**.
+  The C&A bid's Q is exactly the critic's own value of that move for the mover (placement score), so the tree backs up
+  the right player's value.
+- **The critic prices a standing bid as a war.** Along a line where the bidder holds C&A $170 and nobody contests,
+  gen6's critic gives the bidder .10-.26 while the bid stands and .46-.49 once the C&A is theirs at $170 (same mover
+  status). The critic is the value of gen6's own play, where a C&A bid starts a war to ~$271 and the bidder keeps
+  raising; it never values "bid, then drop out if raised". u1528's critic marks the bid down much less (.51 to move
+  -> .36 after bidding, .57 once it owns the C&A), consistent with u1528 contesting more.
+- **More search doesn't reach the resolution.** PUCT 1.0 / 3.0 at 1,600 readouts gives the C&A bid 9-18 visits and Q
+  stays .22-.23: the C&A is sold 5-20 moves later, past what the search explores, so the critic's mid-auction number
+  decides.
+- **A real bug found on the way: the critics overrate the player to move.** On a pass that changes only whose turn
+  it is, both critics move the passer down and the next player up: +.15-.25 in the auction (scripted lines), +.06 in
+  stock rounds (466 passes, +-.003; `pass_swing.py`). Against the match's actual placement points the mover is
+  overrated by ~.05 relative to the other seats overall (920 positions; gen6 .047, u1528 .052) and ~.25 in the auction
+  (19 positions; `mover_calibration.py`). Cause: policy-gradient critics train only on the learner's own decisions
+  (`policy_gradient.py`'s critic step on the PPO rows; `generic_pg.py` the same), so the player to move is always
+  the learner, usually the strongest at its table. Harmless in PG (the critic is a baseline for the learner's moves);
+  in a search any seat moves, which should favour moves that keep the turn (a sale before a purchase in a stock
+  round) over moves that hand it on -- possibly part of weakness 3's search-chosen sell-outs (untested). It does not
+  explain the auction, where every move hands the turn on.
+
 ## Time and GPU estimates
 
 - M1: CPU, ~5 min a legacy system at 400 readouts (59 positions x ~5 s, 4 threads); policy + value only, 20 s.
